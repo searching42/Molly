@@ -1169,6 +1169,79 @@ class ModelDiagnosticsReport(BaseModel):
         return _validate_json_safe(value, "model_diagnostics_report")
 
 
+class DomainModelCandidate(BaseModel):
+    model_id: str
+    domain: str
+    property_id: str
+    aliases: list[str] = Field(default_factory=list)
+    intended_use: str
+    backend: str
+    source_run_id: str = ""
+    source_artifacts: list[str] = Field(default_factory=list)
+    metrics: dict[str, float] = Field(default_factory=dict)
+    feature_requirements: list[str] = Field(default_factory=list)
+    recommended_for: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    status: str = "candidate"
+    priority: int = 100
+    notes: list[str] = Field(default_factory=list)
+
+    @field_validator("model_id", "domain", "property_id", "intended_use", "backend")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            raise ValueError("domain model candidate text fields are required")
+        return clean
+
+    @field_validator("aliases", "source_artifacts", "feature_requirements", "recommended_for", "limitations", "notes")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for item in value:
+            clean = str(item or "").strip()
+            if clean and clean not in result:
+                result.append(clean)
+        return result
+
+    @field_validator("metrics")
+    @classmethod
+    def validate_metrics_are_finite(cls, value: dict[str, float]) -> dict[str, float]:
+        metrics: dict[str, float] = {}
+        for key, raw in value.items():
+            if isinstance(raw, bool):
+                continue
+            number = float(raw)
+            if not math.isfinite(number):
+                raise ValueError("domain model metrics must be finite")
+            metrics[str(key)] = number
+        return metrics
+
+
+class DomainModelSelection(BaseModel):
+    domain: str
+    property_id: str
+    normalized_property_id: str
+    use_case: str
+    selected_model_id: str
+    selected_model: DomainModelCandidate
+    candidates: list[DomainModelCandidate] = Field(default_factory=list)
+    missing_required_inputs: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    rationale: list[str] = Field(default_factory=list)
+    requires_user_input: bool = False
+
+    @field_validator("missing_required_inputs", "warnings", "rationale")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for item in value:
+            clean = str(item or "").strip()
+            if clean and clean not in result:
+                result.append(clean)
+        return result
+
+
 class ModelingPlanProposal(BaseModel):
     run_id: str
     goal: str
@@ -1900,6 +1973,8 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "rerun_proposal": RerunProposal,
     "target_modeling_brief": TargetModelingBrief,
     "model_diagnostics_report": ModelDiagnosticsReport,
+    "domain_model_candidate": DomainModelCandidate,
+    "domain_model_selection": DomainModelSelection,
     "modeling_plan_proposal": ModelingPlanProposal,
     "agent_tool_call": AgentToolCall,
     "planner_llm_response": PlannerLLMResponse,

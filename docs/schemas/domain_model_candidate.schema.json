@@ -1,0 +1,97 @@
+{
+  "properties": {
+    "model_id": {
+      "title": "Model Id",
+      "type": "string"
+    },
+    "domain": {
+      "title": "Domain",
+      "type": "string"
+    },
+    "property_id": {
+      "title": "Property Id",
+      "type": "string"
+    },
+    "aliases": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Aliases",
+      "type": "array"
+    },
+    "intended_use": {
+      "title": "Intended Use",
+      "type": "string"
+    },
+    "backend": {
+      "title": "Backend",
+      "type": "string"
+    },
+    "source_run_id": {
+      "default": "",
+      "title": "Source Run Id",
+      "type": "string"
+    },
+    "source_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Artifacts",
+      "type": "array"
+    },
+    "metrics": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Metrics",
+      "type": "object"
+    },
+    "feature_requirements": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Feature Requirements",
+      "type": "array"
+    },
+    "recommended_for": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Recommended For",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "status": {
+      "default": "candidate",
+      "title": "Status",
+      "type": "string"
+    },
+    "priority": {
+      "default": 100,
+      "title": "Priority",
+      "type": "integer"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "model_id",
+    "domain",
+    "property_id",
+    "intended_use",
+    "backend"
+  ],
+  "title": "DomainModelCandidate",
+  "type": "object"
+}
