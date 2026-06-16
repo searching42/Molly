@@ -1,0 +1,195 @@
+{
+  "$defs": {
+    "CandidateSourceType": {
+      "enum": [
+        "uploaded",
+        "derived_from_master",
+        "generator"
+      ],
+      "title": "CandidateSourceType",
+      "type": "string"
+    },
+    "GenerationBackend": {
+      "enum": [
+        "deterministic_stub",
+        "reinvent4"
+      ],
+      "title": "GenerationBackend",
+      "type": "string"
+    },
+    "GenerationCandidate": {
+      "properties": {
+        "candidate_id": {
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "smiles": {
+          "title": "Smiles",
+          "type": "string"
+        },
+        "source": {
+          "default": "generator",
+          "title": "Source",
+          "type": "string"
+        },
+        "rank_hint": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rank Hint"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "smiles"
+      ],
+      "title": "GenerationCandidate",
+      "type": "object"
+    },
+    "GenerationFrontierTarget": {
+      "properties": {
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "direction": {
+          "title": "Direction",
+          "type": "string"
+        },
+        "target_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Value"
+        },
+        "weight": {
+          "default": 1.0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "tolerance": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tolerance"
+        }
+      },
+      "required": [
+        "property_id",
+        "direction"
+      ],
+      "title": "GenerationFrontierTarget",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "backend": {
+      "$ref": "#/$defs/GenerationBackend"
+    },
+    "source_type": {
+      "$ref": "#/$defs/CandidateSourceType",
+      "default": "generator"
+    },
+    "requested_count": {
+      "title": "Requested Count",
+      "type": "integer"
+    },
+    "generated_count": {
+      "title": "Generated Count",
+      "type": "integer"
+    },
+    "candidate_csv": {
+      "title": "Candidate Csv",
+      "type": "string"
+    },
+    "rescore_with_screener": {
+      "default": true,
+      "title": "Rescore With Screener",
+      "type": "boolean"
+    },
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/GenerationCandidate"
+      },
+      "title": "Candidates",
+      "type": "array"
+    },
+    "diversity": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Diversity",
+      "type": "object"
+    },
+    "novelty": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Novelty",
+      "type": "object"
+    },
+    "frontier_targets": {
+      "items": {
+        "$ref": "#/$defs/GenerationFrontierTarget"
+      },
+      "title": "Frontier Targets",
+      "type": "array"
+    },
+    "frontier_strategy": {
+      "default": "",
+      "title": "Frontier Strategy",
+      "type": "string"
+    },
+    "frontier_summary": {
+      "additionalProperties": true,
+      "title": "Frontier Summary",
+      "type": "object"
+    },
+    "provenance": {
+      "additionalProperties": true,
+      "title": "Provenance",
+      "type": "object"
+    },
+    "generated_at": {
+      "default": "",
+      "title": "Generated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "backend",
+    "requested_count",
+    "generated_count",
+    "candidate_csv"
+  ],
+  "title": "GenerationReport",
+  "type": "object"
+}

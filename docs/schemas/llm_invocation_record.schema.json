@@ -1,0 +1,38 @@
+{
+  "properties": {
+    "provider": {
+      "title": "Provider",
+      "type": "string"
+    },
+    "model": {
+      "default": "",
+      "title": "Model",
+      "type": "string"
+    },
+    "prompt_version": {
+      "title": "Prompt Version",
+      "type": "string"
+    },
+    "response_id": {
+      "default": "",
+      "title": "Response Id",
+      "type": "string"
+    },
+    "raw_response": {
+      "additionalProperties": true,
+      "title": "Raw Response",
+      "type": "object"
+    },
+    "parsed_output": {
+      "additionalProperties": true,
+      "title": "Parsed Output",
+      "type": "object"
+    }
+  },
+  "required": [
+    "provider",
+    "prompt_version"
+  ],
+  "title": "LLMInvocationRecord",
+  "type": "object"
+}

@@ -1,0 +1,69 @@
+{
+  "properties": {
+    "source_count": {
+      "title": "Source Count",
+      "type": "integer"
+    },
+    "ranked_source_count": {
+      "title": "Ranked Source Count",
+      "type": "integer"
+    },
+    "doi_count": {
+      "default": 0,
+      "title": "Doi Count",
+      "type": "integer"
+    },
+    "url_count": {
+      "default": 0,
+      "title": "Url Count",
+      "type": "integer"
+    },
+    "query_count": {
+      "default": 0,
+      "title": "Query Count",
+      "type": "integer"
+    },
+    "local_source_count": {
+      "default": 0,
+      "title": "Local Source Count",
+      "type": "integer"
+    },
+    "quality_score": {
+      "default": 0.0,
+      "title": "Quality Score",
+      "type": "number"
+    },
+    "quality_level": {
+      "default": "blocked",
+      "title": "Quality Level",
+      "type": "string"
+    },
+    "missing_information": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Information",
+      "type": "array"
+    },
+    "risks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Risks",
+      "type": "array"
+    },
+    "recommended_next_actions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Recommended Next Actions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "source_count",
+    "ranked_source_count"
+  ],
+  "title": "ResearchEvidenceQuality",
+  "type": "object"
+}

@@ -1,0 +1,188 @@
+{
+  "$defs": {
+    "PlanQuestion": {
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "blocks_execution": {
+          "default": true,
+          "title": "Blocks Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    },
+    "ReportNextStep": {
+      "properties": {
+        "action": {
+          "title": "Action",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "priority": {
+          "default": "medium",
+          "title": "Priority",
+          "type": "string"
+        },
+        "required_approval": {
+          "default": false,
+          "title": "Required Approval",
+          "type": "boolean"
+        },
+        "related_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Related Artifacts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "reason"
+      ],
+      "title": "ReportNextStep",
+      "type": "object"
+    },
+    "ReportSection": {
+      "properties": {
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "risk_flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Risk Flags",
+          "type": "array"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        }
+      },
+      "required": [
+        "title",
+        "summary"
+      ],
+      "title": "ReportSection",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "goal": {
+      "title": "Goal",
+      "type": "string"
+    },
+    "status": {
+      "default": "needs_confirmation",
+      "title": "Status",
+      "type": "string"
+    },
+    "executive_summary": {
+      "title": "Executive Summary",
+      "type": "string"
+    },
+    "sections": {
+      "items": {
+        "$ref": "#/$defs/ReportSection"
+      },
+      "title": "Sections",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "next_steps": {
+      "items": {
+        "$ref": "#/$defs/ReportNextStep"
+      },
+      "title": "Next Steps",
+      "type": "array"
+    },
+    "paper_audit_outline": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Paper Audit Outline",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "goal",
+    "executive_summary"
+  ],
+  "title": "ReportSynthesisProposal",
+  "type": "object"
+}

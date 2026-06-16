@@ -1,0 +1,40 @@
+{
+  "properties": {
+    "artifact_id": {
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "relative_path": {
+      "title": "Relative Path",
+      "type": "string"
+    },
+    "exists": {
+      "title": "Exists",
+      "type": "boolean"
+    },
+    "size_bytes": {
+      "default": 0,
+      "title": "Size Bytes",
+      "type": "integer"
+    },
+    "producer_task_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Producer Task Id"
+    }
+  },
+  "required": [
+    "artifact_id",
+    "relative_path",
+    "exists"
+  ],
+  "title": "ObservedArtifact",
+  "type": "object"
+}

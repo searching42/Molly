@@ -1,0 +1,77 @@
+{
+  "properties": {
+    "chunk_id": {
+      "title": "Chunk Id",
+      "type": "string"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "paper_id": {
+      "title": "Paper Id",
+      "type": "string"
+    },
+    "page": {
+      "title": "Page",
+      "type": "integer"
+    },
+    "element_id": {
+      "title": "Element Id",
+      "type": "string"
+    },
+    "element_type": {
+      "title": "Element Type",
+      "type": "string"
+    },
+    "text": {
+      "title": "Text",
+      "type": "string"
+    },
+    "markdown": {
+      "default": "",
+      "title": "Markdown",
+      "type": "string"
+    },
+    "table_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Table Id"
+    },
+    "retrieval_channels": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Retrieval Channels",
+      "type": "array"
+    },
+    "citation_context": {
+      "default": "",
+      "title": "Citation Context",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "chunk_id",
+    "source_id",
+    "paper_id",
+    "page",
+    "element_id",
+    "element_type",
+    "text"
+  ],
+  "title": "CorpusChunk",
+  "type": "object"
+}

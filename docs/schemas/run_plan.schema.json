@@ -1,0 +1,86 @@
+{
+  "$defs": {
+    "PlannedTask": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "required_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Artifacts",
+          "type": "array"
+        },
+        "output_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Output Artifacts",
+          "type": "array"
+        },
+        "unresolved_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unresolved Requirements",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "title": "PlannedTask",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "requested_tasks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Requested Tasks",
+      "type": "array"
+    },
+    "tasks": {
+      "items": {
+        "$ref": "#/$defs/PlannedTask"
+      },
+      "title": "Tasks",
+      "type": "array"
+    },
+    "available_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Available Artifacts",
+      "type": "array"
+    },
+    "missing_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Artifacts",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "requested_tasks",
+    "tasks"
+  ],
+  "title": "RunPlan",
+  "type": "object"
+}

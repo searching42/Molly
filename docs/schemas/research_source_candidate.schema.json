@@ -1,0 +1,67 @@
+{
+  "properties": {
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "source_type": {
+      "title": "Source Type",
+      "type": "string"
+    },
+    "value": {
+      "title": "Value",
+      "type": "string"
+    },
+    "title": {
+      "default": "",
+      "title": "Title",
+      "type": "string"
+    },
+    "url": {
+      "default": "",
+      "title": "Url",
+      "type": "string"
+    },
+    "doi": {
+      "default": "",
+      "title": "Doi",
+      "type": "string"
+    },
+    "score": {
+      "default": 0.0,
+      "title": "Score",
+      "type": "number"
+    },
+    "rationale": {
+      "default": "",
+      "title": "Rationale",
+      "type": "string"
+    },
+    "risk_flags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Risk Flags",
+      "type": "array"
+    },
+    "expected_evidence": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Expected Evidence",
+      "type": "array"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "source_id",
+    "source_type",
+    "value"
+  ],
+  "title": "ResearchSourceCandidate",
+  "type": "object"
+}

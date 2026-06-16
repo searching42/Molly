@@ -1,0 +1,68 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "chunk_count": {
+      "title": "Chunk Count",
+      "type": "integer"
+    },
+    "chunks_jsonl": {
+      "title": "Chunks Jsonl",
+      "type": "string"
+    },
+    "dimension": {
+      "title": "Dimension",
+      "type": "integer"
+    },
+    "embedding_backend": {
+      "title": "Embedding Backend",
+      "type": "string"
+    },
+    "embedding_model": {
+      "default": "",
+      "title": "Embedding Model",
+      "type": "string"
+    },
+    "vectors": {
+      "additionalProperties": {
+        "items": {
+          "type": "number"
+        },
+        "type": "array"
+      },
+      "title": "Vectors",
+      "type": "object"
+    },
+    "metadata": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Metadata",
+      "type": "object"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "chunk_count",
+    "chunks_jsonl",
+    "dimension",
+    "embedding_backend",
+    "created_at"
+  ],
+  "title": "DenseRetrievalIndex",
+  "type": "object"
+}

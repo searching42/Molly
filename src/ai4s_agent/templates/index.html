@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI4S Agent 控制台</title>
+    <style>
+      :root {
+        --bg-a: #f6efe6;
+        --bg-b: #e6f0ee;
+        --ink: #172027;
+        --muted: #66747b;
+        --line: rgba(23, 32, 39, 0.14);
+        --panel: rgba(255, 250, 241, 0.94);
+        --white: rgba(255, 255, 255, 0.74);
+        --blue: #145c72;
+        --blue-2: #1f7f9b;
+        --rust: #a54d16;
+        --rust-soft: #f4d8bd;
+        --green: #2d6a4f;
+        --green-soft: #dcefe5;
+        --shadow: 0 20px 55px rgba(23, 32, 39, 0.13);
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Avenir Next", "Segoe UI", Tahoma, sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 8% 8%, rgba(165, 77, 22, 0.18), transparent 28rem),
+          radial-gradient(circle at 88% 18%, rgba(20, 92, 114, 0.18), transparent 30rem),
+          linear-gradient(135deg, var(--bg-a), var(--bg-b));
+      }
+
+      button, input, select, textarea { font: inherit; }
+      .shell { width: min(1100px, 94vw); margin: 0 auto; padding: 2rem 0 3rem; }
+      .hero { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 1.4rem; }
+      .hero h1 { margin: 0; font-size: clamp(2rem, 5vw, 4rem); line-height: 0.92; letter-spacing: -0.065em; }
+      .hero p { margin: 0.65rem 0 0; max-width: 44rem; color: var(--muted); line-height: 1.45; }
+      .pill { display: inline-flex; align-items: center; min-height: 2rem; padding: 0.35rem 0.7rem; border: 1px solid var(--line); border-radius: 999px; background: var(--white); color: var(--muted); font-size: 0.78rem; font-weight: 900; white-space: nowrap; }
+      .wizard { display: grid; gap: 0.9rem; }
+      .wizard-card, .advanced-tools, .console-card { background: var(--panel); border: 1px solid var(--line); border-radius: 24px; box-shadow: var(--shadow); overflow: hidden; backdrop-filter: blur(10px); }
+      .wizard-card[open] { border-color: rgba(20, 92, 114, 0.38); box-shadow: 0 24px 64px rgba(20, 92, 114, 0.17); }
+      .wizard-card summary, .advanced-tools summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.05rem 1.25rem; cursor: pointer; list-style: none; }
+      .wizard-card summary::-webkit-details-marker, .advanced-tools summary::-webkit-details-marker { display: none; }
+      .step-title { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); gap: 0.75rem; align-items: start; }
+      .step-number { display: grid; place-items: center; width: 2.2rem; height: 2.2rem; border-radius: 999px; background: var(--rust-soft); color: var(--rust); font-weight: 900; }
+      .wizard-card.active .step-number, .wizard-card[open] .step-number { background: var(--blue); color: #fff; }
+      .wizard-card.completed .step-number { background: var(--green-soft); color: var(--green); }
+      .wizard-card.skipped .step-number { background: rgba(102, 116, 123, 0.16); color: var(--muted); }
+      h2, h3 { margin: 0; letter-spacing: -0.02em; }
+      h2 { font-size: 1.05rem; }
+      h3 { font-size: 0.98rem; }
+      .summary-line, .small { color: var(--muted); font-size: 0.84rem; line-height: 1.45; }
+      .summary-line { margin-top: 0.25rem; }
+      .small { margin: 0.45rem 0 0; }
+      .state { color: var(--muted); font-size: 0.72rem; font-weight: 900; letter-spacing: 0.1em; text-transform: uppercase; }
+      .body { padding: 0 1.25rem 1.25rem; }
+      .two-column { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1rem; align-items: start; }
+      .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
+      .tool-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
+      .side-note, .mini-panel { border: 1px dashed var(--line); border-radius: 18px; padding: 0.9rem; background: rgba(255, 255, 255, 0.45); }
+      .mini-panel { border-style: solid; }
+      .note-list { display: grid; gap: 0.5rem; margin-top: 0.75rem; }
+      .note-list div { padding: 0.62rem 0.7rem; border: 1px solid var(--line); border-radius: 12px; background: var(--white); }
+      form { display: grid; gap: 0.6rem; }
+      label { color: #26363e; font-size: 0.78rem; font-weight: 900; }
+      input, select, textarea { width: 100%; border: 1px solid var(--line); border-radius: 14px; padding: 0.72rem 0.8rem; background: rgba(255, 255, 255, 0.82); color: var(--ink); }
+      textarea { min-height: 92px; resize: vertical; line-height: 1.45; }
+      .goal-input { min-height: 132px; font-size: 1rem; }
+      button { width: 100%; border: 0; border-radius: 14px; padding: 0.75rem 0.85rem; color: #fff; font-weight: 900; cursor: pointer; background: linear-gradient(135deg, var(--blue), var(--blue-2)); }
+      button.alt { background: linear-gradient(135deg, var(--rust), #d47728); }
+      button.ghost { border: 1px solid var(--line); color: var(--ink); background: var(--white); }
+      .button-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+      .decision-card { display: grid; gap: 0.85rem; }
+      .decision-hero { border: 1px solid rgba(20, 92, 114, 0.22); border-radius: 20px; padding: 1rem; background: rgba(255, 255, 255, 0.55); }
+      .decision-hero h3 { font-size: 1.2rem; }
+      .decision-list { display: grid; gap: 0.45rem; margin: 0.65rem 0 0; padding: 0; list-style: none; }
+      .decision-list li { border: 1px solid var(--line); border-radius: 12px; padding: 0.55rem 0.65rem; background: var(--white); color: #26363e; font-size: 0.86rem; line-height: 1.42; }
+      .log-tail { min-height: 180px; max-height: 260px; overflow: auto; border-radius: 15px; padding: 0.85rem; background: #111a1f; color: #dcefe5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; line-height: 1.45; white-space: pre-wrap; }
+      details.mini-panel summary { cursor: pointer; font-weight: 900; }
+      .advanced-tools { margin-top: 1rem; }
+      .advanced-body { display: grid; gap: 0.85rem; padding: 0 1.25rem 1.25rem; }
+      .console-card { margin-top: 1rem; padding: 1rem; }
+      .output { margin: 0.75rem 0 0; min-height: 150px; max-height: 320px; overflow: auto; border-radius: 15px; padding: 0.9rem; background: #111a1f; color: #dbedf3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; line-height: 1.5; }
+      .sr-status { margin-top: 0.55rem; color: var(--muted); font-size: 0.82rem; }
+      .launch-warning { display: none; margin: 0 0 1rem; border: 1px solid rgba(165, 77, 22, 0.35); border-radius: 18px; padding: 0.9rem 1rem; background: rgba(244, 216, 189, 0.72); color: #5f2b0e; line-height: 1.45; }
+      .launch-warning.visible { display: block; }
+      @media (max-width: 860px) { .hero { display: block; } .two-column, .split, .tool-grid, .button-row { grid-template-columns: 1fr; } .shell { width: min(100% - 1.5rem, 1100px); padding-top: 1.25rem; } }
+      @keyframes flash { from { outline: 4px solid rgba(20, 92, 114, 0.22); } to { outline: 0 solid transparent; } }
+      .wizard-card.just-opened { animation: flash 850ms ease-out; }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <h1>AI4S Agent 控制台</h1>
+          <p>用于规划、数据审阅、风险确认、运行监控和报告审阅的渐进式界面。默认只展开当前步骤。</p>
+        </div>
+        <span class="pill">渐进式流程</span>
+      </section>
+
+      <aside id="file-launch-warning" class="launch-warning" role="alert">
+        当前页面是直接从模板文件打开的，API 请求不会工作。请通过 Flask 服务打开：
+        <code>PYTHONPATH=src .venv/bin/python -m flask --app ai4s_agent.app:create_app run --port 5005</code>，
+        然后访问 <code>http://127.0.0.1:5005/</code>。
+      </aside>
+
+      <section id="primary-workflow" class="wizard" aria-label="引导式流程">
+        <details id="step-goal-card" class="wizard-card active" open>
+          <summary>
+            <div class="step-title">
+              <span class="step-number">1</span>
+              <div><h2>描述目标</h2><div id="step-goal-summary" class="summary-line">输入自然语言研究目标，生成 dry-run Agent 计划建议。</div></div>
+            </div>
+            <span id="step-goal-state" class="state">当前</span>
+          </summary>
+          <div class="body two-column">
+            <form id="agent-plan-form">
+              <div class="split">
+                <div>
+                  <label for="agent-project-id">项目 ID</label>
+                  <input id="agent-project-id" name="project_id" value="proj-oled" required />
+                </div>
+                <div>
+                  <label for="agent-run-id">系统生成运行 ID</label>
+                  <p id="run-id-preview" class="small">输入目标后自动生成。</p>
+                  <input id="agent-run-id" name="run_id" type="hidden" required />
+                </div>
+              </div>
+              <label for="agent-goal">研究目标</label>
+              <textarea id="agent-goal" name="goal" class="goal-input" required placeholder="例如：寻找高 PLQY 的 OLED 候选分子；上传数据后训练模型、排序候选分子并生成报告。"></textarea>
+              <button type="submit">生成计划并继续</button>
+              <div id="agent-plan-status" class="sr-status" aria-live="polite"></div>
+            </form>
+            <aside class="side-note">
+              <h3>本步会做什么</h3>
+              <div class="note-list">
+                <div>规划方式：规则规划默认可用；配置 LLM 后可切换为 LLM 规划</div>
+                <div>只生成计划理由和待确认问题，不执行适配器</div>
+                <div>成功后收起本卡片并自动打开下一步</div>
+              </div>
+            </aside>
+          </div>
+        </details>
+
+        <details id="step-data-card" class="wizard-card">
+          <summary>
+            <div class="step-title">
+              <span class="step-number">2</span>
+              <div><h2>审阅数据</h2><div id="step-data-summary" class="summary-line">选择本地数据集文件，上传后生成数据确认卡。</div></div>
+            </div>
+            <span id="step-data-state" class="state">下一步</span>
+          </summary>
+          <div class="body two-column">
+            <div>
+              <article class="mini-panel">
+                <h3>上传数据集</h3>
+                <p class="small">选择本地 CSV/TSV/TXT 文件。上传成功后会自动回填到数据确认卡。</p>
+                <form id="dataset-upload-form" enctype="multipart/form-data">
+                  <label for="dataset-file">数据集文件</label>
+                  <input id="dataset-file" name="file" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain" required />
+                  <input id="upload-project-id" name="project_id" type="hidden" value="proj-oled" />
+                  <button type="submit">上传数据集</button>
+                  <div id="dataset-upload-status" class="sr-status" aria-live="polite"></div>
+                </form>
+              </article>
+
+              <article class="mini-panel">
+                <h3>数据确认卡</h3>
+                <p id="dataset-path-preview" class="small">尚未上传数据集。</p>
+                <form id="data-confirmation-form">
+                  <input id="dataset-path" name="dataset_path" type="hidden" required />
+                  <input id="data-run-id" name="run_id" type="hidden" />
+                  <button type="submit">生成数据卡并继续</button>
+                </form>
+              </article>
+            </div>
+            <aside class="side-note">
+              <h3>数据检查</h3>
+              <div class="note-list">
+                <div>检测 SMILES 和性质列</div>
+                <div>生成清洗规则草案</div>
+                <div>建模前评估可训练性</div>
+              </div>
+            </aside>
+          </div>
+        </details>
+
+        <details id="step-plan-card" class="wizard-card">
+          <summary>
+            <div class="step-title">
+              <span class="step-number">3</span>
+              <div><h2>运行确认卡</h2><div id="step-plan-summary" class="summary-line">审阅依赖、风险门控和生成阈值。</div></div>
+            </div>
+            <span id="step-plan-state" class="state">排队中</span>
+          </summary>
+          <div class="body two-column">
+            <form id="run-confirmation-form">
+              <input id="run-card-id" name="run_id" type="hidden" required />
+              <label for="run-card-tasks">请求任务</label>
+              <input id="run-card-tasks" name="requested_tasks" value="train_model,predict_candidates" required />
+              <div class="split">
+                <div>
+                  <label for="run-card-training-backend">训练后端</label>
+                  <select id="run-card-training-backend" name="training_backend">
+                    <option value="baseline" selected>本地 baseline（安全默认）</option>
+                    <option value="unimol_legacy">UniMol legacy（仅生成执行计划）</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="run-card-prediction-backend">预测后端</label>
+                  <select id="run-card-prediction-backend" name="prediction_backend">
+                    <option value="baseline" selected>本地 baseline（安全默认）</option>
+                    <option value="unimol_legacy">UniMol legacy（仅生成执行计划）</option>
+                  </select>
+                </div>
+              </div>
+              <div class="split">
+                <div>
+                  <label for="run-card-generation-count">生成数量</label>
+                  <input id="run-card-generation-count" name="generation_count" value="32" />
+                </div>
+                <div>
+                  <label for="run-card-generation-backend">生成后端</label>
+                  <select id="run-card-generation-backend" name="generation_backend">
+                    <option value="deterministic_stub" selected>deterministic_stub</option>
+                    <option value="reinvent4">reinvent4</option>
+                  </select>
+                </div>
+              </div>
+              <button type="submit">生成运行确认卡并继续</button>
+            </form>
+            <aside class="side-note">
+              <h3>风险控制</h3>
+              <div class="note-list">
+                <div>高风险训练需要门控批准</div>
+                <div>高成本生成会被明确标记</div>
+                <div>执行仍由人工门控</div>
+              </div>
+            </aside>
+          </div>
+        </details>
+
+        <details id="step-submit-card" class="wizard-card">
+          <summary>
+            <div class="step-title">
+              <span class="step-number">4</span>
+              <div><h2>提交任务</h2><div id="step-submit-summary" class="summary-line">创建运行计划和后台作业记录，之后进入监控。</div></div>
+            </div>
+            <span id="step-submit-state" class="state">排队中</span>
+          </summary>
+          <div class="body two-column">
+            <form id="submit-run-form">
+              <input id="submit-run-id" name="run_id" type="hidden" required />
+              <label for="submit-prompt">任务摘要</label>
+              <textarea id="submit-prompt" name="prompt" required placeholder="这里会自动同步第一步的研究目标。"></textarea>
+              <button type="submit" class="alt">提交任务并开始监控</button>
+              <div id="submit-run-status" class="sr-status" aria-live="polite"></div>
+            </form>
+            <aside class="side-note">
+              <h3>提交后会发生什么</h3>
+              <div class="note-list">
+                <div>创建可追踪的 <code>plan.json</code> 和运行状态</div>
+                <div>不会绕过门控；高风险步骤仍需人工批准</div>
+                <div>提交成功后自动打开监控卡片</div>
+              </div>
+            </aside>
+          </div>
+        </details>
+
+        <details id="step-monitor-card" class="wizard-card">
+          <summary>
+            <div class="step-title">
+              <span class="step-number">5</span>
+              <div><h2>Agent 决策卡</h2><div id="step-monitor-summary" class="summary-line">Agent 解释当前阶段、证据、风险和建议动作，由你做最终决策。</div></div>
+            </div>
+            <span id="step-monitor-state" class="state">排队中</span>
+          </summary>
+          <div id="run-snapshot" class="body">
+            <div class="decision-card">
+              <article id="agent-decision-card" class="decision-hero">
+                <span id="agent-decision-status" class="pill">等待运行</span>
+                <h3 id="agent-decision-title">提交任务后，Agent 会在这里给出下一步建议。</h3>
+                <p id="agent-decision-summary" class="small">每一步只展示当前需要你判断的一件事，手动工具已保留在下方备用区。</p>
+                <ul id="agent-decision-evidence" class="decision-list"></ul>
+                <ul id="agent-decision-risks" class="decision-list"></ul>
+                <p id="agent-decision-recommendation" class="small"></p>
+                <p id="agent-decision-answer" class="small"></p>
+                <div class="button-row">
+                  <button id="agent-approve-button" type="button" class="alt">批准并继续</button>
+                  <button id="agent-refresh-button" type="button" class="ghost">刷新决策卡</button>
+                </div>
+              </article>
+
+              <article class="mini-panel">
+                <h3>向 Agent 追问</h3>
+                <form id="agent-question-form">
+                  <label for="agent-gate-question">问题</label>
+                  <textarea id="agent-gate-question" name="question" placeholder="例如：为什么要批准训练？会不会执行远程 UniMol？"></textarea>
+                  <button type="submit">让 Agent 解释</button>
+                </form>
+              </article>
+
+              <article class="mini-panel">
+                <h3>实时日志 tail-20</h3>
+                <pre id="run-log-tail" class="log-tail">提交任务后显示最近 20 条日志。</pre>
+                <button id="refresh-logs-button" type="button" class="ghost">刷新日志</button>
+              </article>
+
+              <details class="mini-panel">
+                <summary>高级手动工具</summary>
+                <div class="tool-grid" style="margin-top: 0.85rem;">
+                  <article class="mini-panel">
+                    <h3>运行状态</h3>
+                    <form id="status-form">
+                      <input id="status-run-id" name="run_id" type="hidden" required />
+                      <button type="submit">获取状态</button>
+                    </form>
+                    <p class="small">数据来源：<code>plan.json</code> 和 <code>gate_decisions.json</code>。</p>
+                  </article>
+
+                  <article class="mini-panel">
+                    <h3>手动批准门控</h3>
+                    <form id="gate-form">
+                      <input id="gate-run-id" name="run_id" type="hidden" required />
+                      <label for="gate-name">门控</label>
+                      <select id="gate-name" name="gate" required>
+                        {% for gate in gate_names %}
+                        <option value="{{ gate }}">{{ gate }}</option>
+                        {% endfor %}
+                      </select>
+                      <label for="actor">操作者</label>
+                      <input id="actor" name="actor" value="user" required />
+                      <label for="note">备注（可选）</label>
+                      <input id="note" name="note" />
+                      <button type="submit" class="alt">批准</button>
+                    </form>
+                  </article>
+
+                  <article class="mini-panel">
+                    <h3>阶段时间线</h3>
+                    <form id="stage-timeline-form">
+                      <label for="timeline-project-id">项目 ID</label>
+                      <input id="timeline-project-id" name="project_id" value="proj-oled" required />
+                      <input id="timeline-run-id" name="run_id" type="hidden" required />
+                      <button type="submit">加载时间线</button>
+                    </form>
+                  </article>
+
+                  <article class="mini-panel">
+                    <h3>继续</h3>
+                    <p class="small">运行生成报告工件后，继续进行最终审阅。</p>
+                    <button id="monitor-continue-button" type="button">继续到报告</button>
+                  </article>
+                </div>
+              </details>
+            </div>
+          </div>
+        </details>
+
+        <details id="step-report-card" class="wizard-card">
+          <summary>
+            <div class="step-title">
+              <span class="step-number">6</span>
+              <div><h2>审阅报告</h2><div id="step-report-summary" class="summary-line">预览最终报告并提升已确认资产。</div></div>
+            </div>
+            <span id="step-report-state" class="state">最终</span>
+          </summary>
+          <div class="body tool-grid">
+            <article class="mini-panel">
+              <h3>报告预览</h3>
+              <form id="report-preview-form">
+                <label for="preview-project-id">项目 ID</label>
+                <input id="preview-project-id" name="project_id" value="proj-oled" required />
+                <input id="preview-run-id" name="run_id" type="hidden" required />
+                <label for="preview-artifact-id">报告工件 ID</label>
+                <input id="preview-artifact-id" name="artifact_id" value="report_markdown" required />
+                <button type="submit">预览报告</button>
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>资产提升</h3>
+              <form id="asset-promotion-form">
+                <label for="promotion-project-id">项目 ID</label>
+                <input id="promotion-project-id" name="project_id" value="proj-oled" required />
+                <input id="promotion-run-id" name="run_id" type="hidden" required />
+                <label for="promotion-asset-id">资产 ID</label>
+                <input id="promotion-asset-id" name="asset_id" placeholder="report/final" required />
+                <label for="promotion-asset-type">资产类型</label>
+                <input id="promotion-asset-type" name="asset_type" placeholder="report" required />
+                <label for="promotion-version">版本</label>
+                <input id="promotion-version" name="version" value="v001" required />
+                <label for="promotion-source-artifacts">来源工件</label>
+                <input id="promotion-source-artifacts" name="source_artifacts" placeholder="05_report/final.md" />
+                <label for="promotion-actor">批准人</label>
+                <input id="promotion-actor" name="approved_by" value="user" required />
+                <button type="submit" class="alt">提升资产</button>
+              </form>
+            </article>
+          </div>
+        </details>
+      </section>
+
+      <section id="response-console" class="console-card">
+        <h2>当前响应</h2>
+        <p class="small">最近一次操作的成功结果或错误详情会显示在这里，不需要打开高级工具。</p>
+        <pre id="output" class="output">就绪。</pre>
+      </section>
+
+      <details id="advanced-tools" class="advanced-tools">
+        <summary><strong>高级工具</strong><span class="pill">原始 API 工具</span></summary>
+        <div class="advanced-body">
+          <div class="tool-grid">
+            <article class="mini-panel">
+              <h3>主流程高级参数</h3>
+              <p class="small">普通流程会自动推断；只有调试依赖和计划时才需要填写。</p>
+              <form id="advanced-workflow-defaults-form">
+                <label for="advanced-agent-available-artifacts">目标规划可用工件</label>
+                <input id="advanced-agent-available-artifacts" name="available_artifacts" placeholder="cleaned_train_dataset,property_catalog,candidate_dataset" />
+                <label for="advanced-run-card-artifacts">运行确认可用工件</label>
+                <input id="advanced-run-card-artifacts" name="available_artifacts" value="cleaned_train_dataset,trainability_report,candidate_dataset" />
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>创建计划</h3>
+              <form id="plan-form">
+                <label for="plan-run-id">运行 ID</label>
+                <input id="plan-run-id" name="run_id" required />
+                <label for="prompt">提示词</label>
+                <textarea id="prompt" name="prompt" required></textarea>
+                <button type="submit">创建计划</button>
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>依赖计划预览</h3>
+              <form id="expand-form">
+                <label for="expand-run-id">运行 ID</label>
+                <input id="expand-run-id" name="run_id" value="preview" required />
+                <label for="requested-tasks">请求任务（逗号分隔）</label>
+                <input id="requested-tasks" name="requested_tasks" value="render_report" required />
+                <label for="available-artifacts">已有工件（逗号分隔）</label>
+                <input id="available-artifacts" name="available_artifacts" value="candidate_dataset" />
+                <button type="submit">预览依赖</button>
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>运行计划差异预览</h3>
+              <form id="diff-form">
+                <label for="diff-run-id">运行 ID</label>
+                <input id="diff-run-id" name="run_id" value="preview" required />
+                <label for="before-tasks">变更前任务</label>
+                <input id="before-tasks" name="before_tasks" value="run_baseline" required />
+                <label for="after-tasks">变更后任务</label>
+                <input id="after-tasks" name="after_tasks" value="render_report" required />
+                <label for="diff-artifacts">已有工件</label>
+                <input id="diff-artifacts" name="available_artifacts" value="candidate_dataset" />
+                <button type="submit">预览差异</button>
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>原子任务工具箱</h3>
+              <p class="small">查看原子任务、工件、门控和风险等级。</p>
+              <button id="task-toolbox-button" type="button" class="ghost">加载任务工具箱</button>
+            </article>
+
+            <article class="mini-panel">
+              <h3>Agent 审阅卡</h3>
+              <form id="agent-review-form">
+                <label for="agent-review-payload">结构化 Agent 工件 JSON</label>
+                <textarea id="agent-review-payload" name="payload" required>{
+  "plan_proposal": {},
+  "verification_report": {},
+  "run_plan_revision": {}
+}</textarea>
+                <button type="submit">生成 Agent 审阅</button>
+              </form>
+            </article>
+          </div>
+        </div>
+      </details>
+    </main>
+
+    <script>
+      const output = document.getElementById("output");
+      let currentRunPlan = null;
+      let currentAgentDecisionCard = null;
+      const fileLaunchWarning = document.getElementById("file-launch-warning");
+      if (window.location.protocol === "file:") {
+        fileLaunchWarning.classList.add("visible");
+      }
+      const stateByCard = {
+        "step-goal-card": "step-goal-state",
+        "step-data-card": "step-data-state",
+        "step-plan-card": "step-plan-state",
+        "step-submit-card": "step-submit-state",
+        "step-monitor-card": "step-monitor-state",
+        "step-report-card": "step-report-state",
+      };
+      const summaryByCard = {
+        "step-goal-card": "step-goal-summary",
+        "step-data-card": "step-data-summary",
+        "step-plan-card": "step-plan-summary",
+        "step-submit-card": "step-submit-summary",
+        "step-monitor-card": "step-monitor-summary",
+        "step-report-card": "step-report-summary",
+      };
+
+      function normalizeErrorForRender(err) {
+        if (err instanceof Error) {
+          return { ok: false, error: err.message || String(err), name: err.name || "Error" };
+        }
+        if (err && typeof err === "object") return err;
+        return { ok: false, error: String(err || "Unknown error") };
+      }
+
+      function render(payload) {
+        output.textContent = JSON.stringify(normalizeErrorForRender(payload), null, 2);
+      }
+
+      function fileLaunchProblem() {
+        return {
+          ok: false,
+          error: "当前页面通过 file:// 打开，无法调用 Flask API。",
+          fix: "请启动 Flask 服务并访问 http://127.0.0.1:5005/，不要直接打开 templates/index.html。",
+        };
+      }
+
+      async function postJSON(url, payload) {
+        if (window.location.protocol === "file:") throw fileLaunchProblem();
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw data;
+        return data;
+      }
+
+      async function getJSON(url) {
+        if (window.location.protocol === "file:") throw fileLaunchProblem();
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!res.ok) throw data;
+        return data;
+      }
+
+      function csvList(value) {
+        return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+      }
+
+      function setValue(id, value) {
+        const el = document.getElementById(id);
+        if (el && value) el.value = value;
+      }
+
+      function setText(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+      }
+
+      function syncRunId(runId) {
+        ["agent-run-id", "plan-run-id", "status-run-id", "gate-run-id", "expand-run-id", "diff-run-id", "data-run-id", "run-card-id", "submit-run-id", "promotion-run-id", "timeline-run-id", "preview-run-id"].forEach((id) => setValue(id, runId));
+      }
+
+      function syncProjectId(projectId) {
+        ["upload-project-id", "promotion-project-id", "timeline-project-id", "preview-project-id"].forEach((id) => setValue(id, projectId));
+      }
+
+      function markCard(cardId, status, summary) {
+        const card = document.getElementById(cardId);
+        if (!card) return;
+        card.classList.remove("active", "completed", "skipped", "just-opened");
+        if (status) card.classList.add(status);
+        const stateId = stateByCard[cardId];
+        if (stateId) setText(stateId, status === "completed" ? "完成" : status === "skipped" ? "已跳过" : "当前");
+        const summaryId = summaryByCard[cardId];
+        if (summaryId && summary) setText(summaryId, summary);
+      }
+
+      function advanceWizard(currentCardId, nextCardId, summary) {
+        const current = document.getElementById(currentCardId);
+        const next = document.getElementById(nextCardId);
+        if (current) {
+          current.open = false;
+          markCard(currentCardId, "completed", summary || "已完成。");
+        }
+        if (next) {
+          next.open = true;
+          markCard(nextCardId, "active");
+          next.classList.add("just-opened");
+          next.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }
+
+      function advancedArtifactList(id, fallback) {
+        const el = document.getElementById(id);
+        const values = csvList(el ? el.value : "");
+        return values.length ? values : fallback;
+      }
+
+      function renderList(id, items) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.innerHTML = "";
+        (items || []).forEach((item) => {
+          const li = document.createElement("li");
+          li.textContent = String(item || "");
+          el.appendChild(li);
+        });
+      }
+
+      function renderAgentDecisionCard(card) {
+        currentAgentDecisionCard = card || null;
+        setText("agent-decision-status", card ? `${card.status || ""} · ${card.stage_label || ""}` : "等待运行");
+        setText("agent-decision-title", card?.title || "提交任务后，Agent 会在这里给出下一步建议。");
+        setText("agent-decision-summary", card?.summary || "每一步只展示当前需要你判断的一件事。");
+        setText("agent-decision-recommendation", card?.recommendation || "");
+        setText("agent-decision-answer", card?.answer || "");
+        renderList("agent-decision-evidence", card?.evidence || []);
+        renderList("agent-decision-risks", card?.risks || []);
+        const approveButton = document.getElementById("agent-approve-button");
+        if (approveButton) {
+          const canApprove = card?.primary_action === "approve_gate" && Array.isArray(card?.required_gates) && card.required_gates.length > 0;
+          approveButton.disabled = !canApprove;
+          approveButton.textContent = canApprove ? `批准并继续：${card.required_gates[0]}` : (card?.next_step || "无需批准");
+        }
+      }
+
+      function renderLogTail(logs) {
+        const el = document.getElementById("run-log-tail");
+        if (!el) return;
+        if (!Array.isArray(logs) || logs.length === 0) {
+          el.textContent = "暂无日志。";
+          return;
+        }
+        el.textContent = logs.map((entry) => {
+          const ts = String(entry.ts || "");
+          const level = String(entry.level || "");
+          const source = String(entry.source || "");
+          const message = String(entry.message || "");
+          return `${ts} [${level}] ${source}: ${message}`;
+        }).join("\n");
+      }
+
+      async function refreshRunLogs() {
+        const runId = encodeURIComponent(String(document.getElementById("gate-run-id").value || "").trim());
+        if (!runId) return { ok: false, error: "缺少运行 ID" };
+        const response = await getJSON(`/api/runs/${runId}/logs?limit=20`);
+        renderLogTail(response.logs || []);
+        return response;
+      }
+
+      async function loadAgentDecisionCard(question = "") {
+        const projectId = String(document.getElementById("agent-project-id").value || "").trim();
+        const runId = String(document.getElementById("gate-run-id").value || "").trim();
+        if (!projectId || !runId) throw { ok: false, error: "缺少项目 ID 或运行 ID" };
+        const response = await postJSON("/api/agent/decision-card", {
+          project_id: projectId,
+          run_id: runId,
+          question,
+        });
+        renderAgentDecisionCard(response.card || {});
+        renderLogTail(response.log_tail || []);
+        return response;
+      }
+
+      function buildTaskOptions() {
+        const trainingBackend = String(document.getElementById("run-card-training-backend")?.value || "baseline").trim();
+        const predictionBackend = String(document.getElementById("run-card-prediction-backend")?.value || "baseline").trim();
+        const generationBackend = String(document.getElementById("run-card-generation-backend")?.value || "deterministic_stub").trim();
+        const generationCount = Number(document.getElementById("run-card-generation-count")?.value || 32);
+        const options = {};
+        if (trainingBackend === "unimol_legacy") {
+          options.train_model = {
+            adapter: "train_model_unimol_legacy_adapter",
+            execute: false,
+            remote_host: "workstation2",
+            remote_python: "/home/lbh/miniconda3/envs/unimol/bin/python",
+            remote_tmp_base: "/tmp/ai4s-agent",
+          };
+        }
+        if (predictionBackend === "unimol_legacy") {
+          options.predict_candidates = {
+            adapter: "predict_candidates_unimol_legacy_adapter",
+            execute: false,
+            remote_host: "workstation2",
+            remote_python: "/home/lbh/miniconda3/envs/unimol/bin/python",
+            remote_tmp_base: "/tmp/ai4s-agent",
+          };
+        }
+        const generationOptions = {};
+        if (Number.isFinite(generationCount) && generationCount > 0 && generationCount !== 32) {
+          generationOptions.count = generationCount;
+        }
+        if (generationBackend === "reinvent4") {
+          Object.assign(generationOptions, {
+            backend: "reinvent4",
+            execute: false,
+            remote_host: "workstation2",
+            remote_python: "/home/lbh/miniconda3/envs/REINVENT4/bin/python",
+          });
+        }
+        if (Object.keys(generationOptions).length) {
+          options.generate_candidates = generationOptions;
+        }
+        return options;
+      }
+
+      function buildRunId(goal) {
+        const now = new Date();
+        const stamp = [
+          now.getFullYear(),
+          String(now.getMonth() + 1).padStart(2, "0"),
+          String(now.getDate()).padStart(2, "0"),
+          "T",
+          String(now.getHours()).padStart(2, "0"),
+          String(now.getMinutes()).padStart(2, "0"),
+          String(now.getSeconds()).padStart(2, "0"),
+        ].join("");
+        const tokens = (String(goal || "").toLowerCase().match(/[a-z0-9]+/g) || []).slice(0, 5);
+        const slug = tokens.join("-") || "run";
+        return `${stamp}-${slug}`.slice(0, 96);
+      }
+
+      function syncGeneratedRunId() {
+        const goal = document.getElementById("agent-goal").value;
+        const runId = buildRunId(goal);
+        syncRunId(runId);
+        setText("run-id-preview", runId);
+        return runId;
+      }
+
+      document.getElementById("agent-goal").addEventListener("input", syncGeneratedRunId);
+      document.getElementById("agent-project-id").addEventListener("input", (event) => {
+        syncProjectId(String(event.currentTarget.value || "").trim());
+      });
+      syncGeneratedRunId();
+      syncProjectId(document.getElementById("agent-project-id").value);
+
+      document.getElementById("agent-plan-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const runId = syncGeneratedRunId();
+        const projectId = String(fd.get("project_id") || "").trim();
+        const payload = {
+          project_id: projectId,
+          run_id: runId,
+          goal: String(fd.get("goal") || "").trim(),
+          available_artifacts: advancedArtifactList("advanced-agent-available-artifacts", []),
+        };
+        try {
+          if (window.location.protocol === "file:") throw fileLaunchProblem();
+          const response = await postJSON("/api/agent/plan-proposal", payload);
+          syncRunId(runId);
+          syncProjectId(projectId);
+          setValue("submit-prompt", payload.goal);
+          const proposal = response.proposal || {};
+          currentRunPlan = proposal.run_plan || null;
+          const requested = (proposal.run_plan && proposal.run_plan.requested_tasks) || [];
+          if (requested.length) setValue("run-card-tasks", requested.join(","));
+          const reviewPayload = { plan_proposal: proposal, verification_report: {}, run_plan_revision: {} };
+          setValue("agent-review-payload", JSON.stringify(reviewPayload, null, 2));
+          setText("agent-plan-status", "计划建议已生成。继续审阅数据。");
+          render(response);
+          advanceWizard("step-goal-card", "step-data-card", `计划已就绪：${runId}.`);
+        } catch (err) {
+          render(err);
+          setText("agent-plan-status", "计划生成失败；错误详情已显示在当前响应中。");
+        }
+      });
+
+      document.getElementById("dataset-upload-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const projectId = String(document.getElementById("upload-project-id").value || "").trim();
+        const file = document.getElementById("dataset-file").files[0];
+        if (!projectId || !file) {
+          render({ ok: false, error: "需要项目 ID 和数据集文件" });
+          return;
+        }
+        const body = new FormData();
+        body.append("file", file);
+        body.append("project_approved", "true");
+        body.append("actor", "user");
+        try {
+          if (window.location.protocol === "file:") throw fileLaunchProblem();
+          const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/upload`, { method: "POST", body });
+          const data = await res.json();
+          if (!res.ok) throw data;
+          setValue("dataset-path", data.path || "");
+          setText("dataset-path-preview", `已上传：${data.filename || file.name}`);
+          setText("dataset-upload-status", "上传完成，可以生成数据确认卡。");
+          render(data);
+          form.reset();
+        } catch (err) {
+          render(err);
+          setText("dataset-upload-status", "上传失败；错误详情已显示在当前响应中。");
+        }
+      });
+
+      document.getElementById("data-confirmation-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const payload = { dataset_path: String(fd.get("dataset_path") || "").trim(), run_id: String(fd.get("run_id") || "").trim() };
+        try {
+          syncRunId(payload.run_id);
+          const response = await postJSON("/api/data-confirmation-card", payload);
+          render(response);
+          advanceWizard("step-data-card", "step-plan-card", "数据已审阅，可继续运行确认。");
+        } catch (err) {
+          render(err);
+        }
+      });
+
+      document.getElementById("run-confirmation-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const payload = {
+          run_id: String(fd.get("run_id") || "").trim(),
+          requested_tasks: csvList(fd.get("requested_tasks")),
+          available_artifacts: advancedArtifactList("advanced-run-card-artifacts", ["cleaned_train_dataset", "trainability_report", "candidate_dataset"]),
+          generation_count: Number(fd.get("generation_count") || 32),
+          generation_backend: String(fd.get("generation_backend") || "deterministic_stub").trim(),
+        };
+        try {
+          syncRunId(payload.run_id);
+          const response = await postJSON("/api/run-confirmation-card", payload);
+          render(response);
+          advanceWizard("step-plan-card", "step-submit-card", "运行计划已审阅；下一步提交任务。");
+        } catch (err) {
+          render(err);
+        }
+      });
+
+      document.getElementById("submit-run-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const payload = {
+          run_id: String(fd.get("run_id") || "").trim(),
+          prompt: String(fd.get("prompt") || "").trim(),
+        };
+        try {
+          const projectId = String(document.getElementById("agent-project-id").value || "").trim();
+          const datasetPath = String(document.getElementById("dataset-path").value || "").trim();
+          if (!currentRunPlan) throw { ok: false, error: "请先生成计划。" };
+          if (!datasetPath) throw { ok: false, error: "请先上传数据集并生成数据确认卡。" };
+          syncRunId(payload.run_id);
+          const planResponse = await postJSON("/api/plan", payload);
+          const executeResponse = await postJSON("/api/run-plan/execute", {
+            project_id: projectId,
+            run_plan: currentRunPlan,
+            input_artifacts: { uploaded_dataset: datasetPath },
+            task_options: buildTaskOptions(),
+          });
+          const decisionResponse = await loadAgentDecisionCard();
+          render({ ok: true, plan: planResponse, execution: executeResponse.execution, decision_card: decisionResponse.card });
+          const executionStatus = String((executeResponse.execution || {}).status || "");
+          setText(
+            "submit-run-status",
+            executionStatus === "WAITING_USER" ? "任务已执行到门控，进入监控批准。" : "任务已执行，进入监控。"
+          );
+          advanceWizard("step-submit-card", "step-monitor-card", "任务已提交；继续监控批准和执行状态。");
+        } catch (err) {
+          render(err);
+          setText("submit-run-status", "提交失败；错误详情已显示在当前响应中。");
+        }
+      });
+
+      document.getElementById("monitor-continue-button").addEventListener("click", () => {
+        advanceWizard("step-monitor-card", "step-report-card", "监控已审阅；继续预览报告。");
+      });
+
+      document.getElementById("agent-refresh-button").addEventListener("click", async () => {
+        try { render(await loadAgentDecisionCard()); } catch (err) { render(err); }
+      });
+
+      document.getElementById("refresh-logs-button").addEventListener("click", async () => {
+        try { render(await refreshRunLogs()); } catch (err) { render(err); }
+      });
+
+      document.getElementById("agent-question-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        try { render(await loadAgentDecisionCard(String(fd.get("question") || "").trim())); } catch (err) { render(err); }
+      });
+
+      document.getElementById("agent-approve-button").addEventListener("click", async () => {
+        try {
+          const projectId = String(document.getElementById("agent-project-id").value || "").trim();
+          const gate = String((currentAgentDecisionCard?.required_gates || [])[0] || "").trim();
+          if (!currentRunPlan) throw { ok: false, error: "请先生成计划。" };
+          if (!projectId || !gate) throw { ok: false, error: "当前没有可批准的门控。" };
+          const response = await postJSON("/api/run-plan/resume", {
+            project_id: projectId,
+            run_plan: currentRunPlan,
+            approved_gates: [gate],
+            actor: "user",
+            note: "approved from Agent decision card",
+            task_options: buildTaskOptions(),
+          });
+          const decisionResponse = await loadAgentDecisionCard();
+          render({ ok: true, approval: response, decision_card: decisionResponse.card });
+          const executionStatus = String((response.execution || {}).status || "");
+          setText(
+            "submit-run-status",
+            executionStatus === "WAITING_USER" ? "门控已批准，Agent 已继续到下一张决策卡。" : "门控已批准，Agent 已继续执行。"
+          );
+        } catch (err) { render(err); }
+      });
+
+      document.getElementById("plan-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const payload = { run_id: String(fd.get("run_id") || "").trim(), prompt: String(fd.get("prompt") || "").trim() };
+        try { syncRunId(payload.run_id); render(await postJSON("/api/plan", payload)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("gate-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const payload = { run_id: String(fd.get("run_id") || "").trim(), gate: String(fd.get("gate") || "").trim(), actor: String(fd.get("actor") || "").trim(), note: String(fd.get("note") || "").trim() };
+        try {
+          const projectId = String(document.getElementById("agent-project-id").value || "").trim();
+          if (currentRunPlan && projectId) {
+            const response = await postJSON("/api/run-plan/resume", {
+              project_id: projectId,
+              run_plan: currentRunPlan,
+              approved_gates: [payload.gate],
+              actor: payload.actor,
+              note: payload.note,
+              task_options: buildTaskOptions(),
+            });
+            render(response);
+            const executionStatus = String((response.execution || {}).status || "");
+            await loadAgentDecisionCard();
+            setText(
+              "submit-run-status",
+              executionStatus === "WAITING_USER" ? "门控已批准，任务继续执行到下一门控。" : "门控已批准，任务继续执行完成。"
+            );
+            return;
+          }
+          const legacy = await postJSON("/api/gates/approve", payload);
+          render({ ...legacy, note: "gate approval fell back to legacy orchestrator" });
+        } catch (err) { render(err); }
+      });
+
+      document.getElementById("status-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
+        try { render(await getJSON(`/api/runs/${runId}`)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("expand-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const payload = { run_id: String(fd.get("run_id") || "").trim(), requested_tasks: csvList(fd.get("requested_tasks")), available_artifacts: csvList(fd.get("available_artifacts")) };
+        try { render(await postJSON("/api/run-plan/expand", payload)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("diff-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const runId = String(fd.get("run_id") || "").trim();
+        const available = csvList(fd.get("available_artifacts"));
+        const payload = { run_id: runId, before: { requested_tasks: csvList(fd.get("before_tasks")), available_artifacts: available }, after: { requested_tasks: csvList(fd.get("after_tasks")), available_artifacts: available } };
+        try { render(await postJSON("/api/run-plan/diff", payload)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("task-toolbox-button").addEventListener("click", async () => {
+        try { render(await getJSON("/api/atomic-tasks")); } catch (err) { render(err); }
+      });
+
+      document.getElementById("asset-promotion-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
+        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
+        const payload = { asset_id: String(fd.get("asset_id") || "").trim(), asset_type: String(fd.get("asset_type") || "").trim(), version: String(fd.get("version") || "").trim(), source_artifacts: csvList(fd.get("source_artifacts")), approved_by: String(fd.get("approved_by") || "").trim(), confirmed: true };
+        try { render(await postJSON(`/api/projects/${projectId}/runs/${runId}/assets/promote`, payload)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("stage-timeline-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
+        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
+        try { render(await getJSON(`/api/projects/${projectId}/runs/${runId}/stage-timeline`)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("report-preview-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
+        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
+        const artifactId = encodeURIComponent(String(fd.get("artifact_id") || "").trim());
+        try { render(await getJSON(`/api/projects/${projectId}/runs/${runId}/report-preview?artifact_id=${artifactId}`)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("agent-review-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        try { const payload = JSON.parse(String(fd.get("payload") || "{}")); render(await postJSON("/api/agent/review-card", payload)); } catch (err) { render(err instanceof SyntaxError ? { ok: false, error: err.message } : err); }
+      });
+    </script>
+  </body>
+</html>

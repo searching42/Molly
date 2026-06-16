@@ -1,0 +1,55 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "chunk_count": {
+      "title": "Chunk Count",
+      "type": "integer"
+    },
+    "chunks_jsonl": {
+      "title": "Chunks Jsonl",
+      "type": "string"
+    },
+    "indices": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": "object"
+      },
+      "title": "Indices",
+      "type": "object"
+    },
+    "channel_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Channel Counts",
+      "type": "object"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "chunk_count",
+    "chunks_jsonl",
+    "created_at"
+  ],
+  "title": "CorpusMultiIndex",
+  "type": "object"
+}

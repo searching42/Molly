@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "MultiUserBoundaryCheck": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "warn",
+            "fail"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "title": "Evidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "message"
+      ],
+      "title": "MultiUserBoundaryCheck",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "status": {
+      "enum": [
+        "ready",
+        "blocked"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    },
+    "checks": {
+      "items": {
+        "$ref": "#/$defs/MultiUserBoundaryCheck"
+      },
+      "title": "Checks",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "MultiUserDeploymentReadiness",
+  "type": "object"
+}

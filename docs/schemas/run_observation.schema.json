@@ -1,0 +1,337 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "properties": {
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "relative_path": {
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "producer_task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Producer Task Id"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "relative_path"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "AssetManifest": {
+      "properties": {
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "asset_type": {
+          "title": "Asset Type",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/AssetStatus"
+        },
+        "created_from_run_id": {
+          "title": "Created From Run Id",
+          "type": "string"
+        },
+        "source_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Artifacts",
+          "type": "array"
+        },
+        "content_hash": {
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset_id",
+        "asset_type",
+        "version",
+        "status",
+        "created_from_run_id",
+        "content_hash"
+      ],
+      "title": "AssetManifest",
+      "type": "object"
+    },
+    "AssetStatus": {
+      "enum": [
+        "candidate",
+        "confirmed",
+        "deprecated"
+      ],
+      "title": "AssetStatus",
+      "type": "string"
+    },
+    "ObservedArtifact": {
+      "properties": {
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "relative_path": {
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "exists": {
+          "title": "Exists",
+          "type": "boolean"
+        },
+        "size_bytes": {
+          "default": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "producer_task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Producer Task Id"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "relative_path",
+        "exists"
+      ],
+      "title": "ObservedArtifact",
+      "type": "object"
+    },
+    "RunStatus": {
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "WAITING_USER",
+        "PAUSED_BY_USER",
+        "SUCCEEDED",
+        "DEGRADED",
+        "FAILED",
+        "SKIPPED",
+        "CANCELLED",
+        "DONE"
+      ],
+      "title": "RunStatus",
+      "type": "string"
+    },
+    "StageHistoryItem": {
+      "properties": {
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "updated_at": {
+          "title": "Updated At",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage",
+        "status",
+        "updated_at"
+      ],
+      "title": "StageHistoryItem",
+      "type": "object"
+    },
+    "StageState": {
+      "properties": {
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "next_stage": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Stage"
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "started_at": {
+          "title": "Started At",
+          "type": "string"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ended At"
+        },
+        "updated_at": {
+          "title": "Updated At",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "history": {
+          "items": {
+            "$ref": "#/$defs/StageHistoryItem"
+          },
+          "title": "History",
+          "type": "array"
+        }
+      },
+      "required": [
+        "stage",
+        "status",
+        "started_at",
+        "updated_at"
+      ],
+      "title": "StageState",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    },
+    "stage_state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StageState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ObservedArtifact"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "logs": {
+      "items": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "title": "Logs",
+      "type": "array"
+    },
+    "reports": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Reports",
+      "type": "object"
+    },
+    "asset_manifests": {
+      "items": {
+        "$ref": "#/$defs/AssetManifest"
+      },
+      "title": "Asset Manifests",
+      "type": "array"
+    },
+    "approval_records": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Approval Records",
+      "type": "array"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "generated_at"
+  ],
+  "title": "RunObservation",
+  "type": "object"
+}

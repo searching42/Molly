@@ -1,0 +1,42 @@
+{
+  "properties": {
+    "property_id": {
+      "title": "Property Id",
+      "type": "string"
+    },
+    "metrics": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Metrics",
+      "type": "object"
+    },
+    "status": {
+      "title": "Status",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "continue",
+        "retry",
+        "replan",
+        "ask_user",
+        "abort"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    }
+  },
+  "required": [
+    "property_id",
+    "status",
+    "decision",
+    "message"
+  ],
+  "title": "ModelingMetricInterpretation",
+  "type": "object"
+}

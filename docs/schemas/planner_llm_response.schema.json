@@ -1,0 +1,136 @@
+{
+  "$defs": {
+    "AgentToolCall": {
+      "properties": {
+        "tool_name": {
+          "enum": [
+            "select_tasks",
+            "request_artifact",
+            "propose_replan"
+          ],
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": true,
+          "title": "Arguments",
+          "type": "object"
+        }
+      },
+      "required": [
+        "tool_name"
+      ],
+      "title": "AgentToolCall",
+      "type": "object"
+    },
+    "PlanQuestion": {
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "blocks_execution": {
+          "default": true,
+          "title": "Blocks Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    },
+    "PlanRationale": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "risk_level": {
+          "default": "low",
+          "title": "Risk Level",
+          "type": "string"
+        },
+        "required_gates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Gates",
+          "type": "array"
+        },
+        "skipped": {
+          "default": false,
+          "title": "Skipped",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "task_id",
+        "reason"
+      ],
+      "title": "PlanRationale",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "requested_tasks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Requested Tasks",
+      "type": "array"
+    },
+    "rationales": {
+      "items": {
+        "$ref": "#/$defs/PlanRationale"
+      },
+      "title": "Rationales",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "tool_calls": {
+      "items": {
+        "$ref": "#/$defs/AgentToolCall"
+      },
+      "title": "Tool Calls",
+      "type": "array"
+    }
+  },
+  "title": "PlannerLLMResponse",
+  "type": "object"
+}

@@ -1,0 +1,254 @@
+{
+  "$defs": {
+    "PlanQuestion": {
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "blocks_execution": {
+          "default": true,
+          "title": "Blocks Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    },
+    "PlannedTask": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "required_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Artifacts",
+          "type": "array"
+        },
+        "output_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Output Artifacts",
+          "type": "array"
+        },
+        "unresolved_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unresolved Requirements",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "title": "PlannedTask",
+      "type": "object"
+    },
+    "RunPlan": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "requested_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requested Tasks",
+          "type": "array"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/PlannedTask"
+          },
+          "title": "Tasks",
+          "type": "array"
+        },
+        "available_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Available Artifacts",
+          "type": "array"
+        },
+        "missing_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Artifacts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "requested_tasks",
+        "tasks"
+      ],
+      "title": "RunPlan",
+      "type": "object"
+    },
+    "RunPlanDiff": {
+      "properties": {
+        "added_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Added Tasks",
+          "type": "array"
+        },
+        "removed_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Removed Tasks",
+          "type": "array"
+        },
+        "unchanged_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unchanged Tasks",
+          "type": "array"
+        },
+        "changed_dependencies": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          "title": "Changed Dependencies",
+          "type": "object"
+        }
+      },
+      "title": "RunPlanDiff",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "revision_id": {
+      "title": "Revision Id",
+      "type": "string"
+    },
+    "project_id": {
+      "default": "",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "previous_plan": {
+      "$ref": "#/$defs/RunPlan"
+    },
+    "revised_plan": {
+      "$ref": "#/$defs/RunPlan"
+    },
+    "diff": {
+      "$ref": "#/$defs/RunPlanDiff"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "recovery_actions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Recovery Actions",
+      "type": "array"
+    },
+    "approvals_required": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Approvals Required",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "user_approval_required": {
+      "default": false,
+      "title": "User Approval Required",
+      "type": "boolean"
+    },
+    "high_risk_added": {
+      "default": false,
+      "title": "High Risk Added",
+      "type": "boolean"
+    },
+    "external_network_added": {
+      "default": false,
+      "title": "External Network Added",
+      "type": "boolean"
+    },
+    "removed_high_risk_tasks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Removed High Risk Tasks",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "revision_id",
+    "run_id",
+    "created_at",
+    "previous_plan",
+    "revised_plan",
+    "diff",
+    "reason"
+  ],
+  "title": "RunPlanRevision",
+  "type": "object"
+}

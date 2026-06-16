@@ -1,0 +1,30 @@
+{
+  "properties": {
+    "action": {
+      "title": "Action",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "target_tasks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Target Tasks",
+      "type": "array"
+    },
+    "requires_user_approval": {
+      "default": true,
+      "title": "Requires User Approval",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "action",
+    "reason"
+  ],
+  "title": "ModelingRetryProposal",
+  "type": "object"
+}

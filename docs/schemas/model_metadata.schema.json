@@ -1,0 +1,65 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "property_id": {
+      "title": "Property Id",
+      "type": "string"
+    },
+    "backend": {
+      "title": "Backend",
+      "type": "string"
+    },
+    "feature_type": {
+      "default": "",
+      "title": "Feature Type",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "model_dir": {
+      "title": "Model Dir",
+      "type": "string"
+    },
+    "model_file": {
+      "title": "Model File",
+      "type": "string"
+    },
+    "train_size": {
+      "title": "Train Size",
+      "type": "integer"
+    },
+    "metrics": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Metrics",
+      "type": "object"
+    },
+    "model_type": {
+      "default": "sklearn",
+      "title": "Model Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "property_id",
+    "backend",
+    "version",
+    "created_at",
+    "model_dir",
+    "model_file",
+    "train_size"
+  ],
+  "title": "ModelMetadata",
+  "type": "object"
+}

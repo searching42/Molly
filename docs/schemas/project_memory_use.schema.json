@@ -1,0 +1,43 @@
+{
+  "properties": {
+    "record_id": {
+      "title": "Record Id",
+      "type": "string"
+    },
+    "category": {
+      "enum": [
+        "user_preference",
+        "backend_choice",
+        "remote_host",
+        "parser_choice",
+        "property_alias",
+        "risk_policy"
+      ],
+      "title": "Category",
+      "type": "string"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "source_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Refs",
+      "type": "array"
+    }
+  },
+  "required": [
+    "record_id",
+    "category",
+    "summary",
+    "reason"
+  ],
+  "title": "ProjectMemoryUse",
+  "type": "object"
+}

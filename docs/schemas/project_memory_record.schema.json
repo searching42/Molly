@@ -1,0 +1,78 @@
+{
+  "properties": {
+    "record_id": {
+      "title": "Record Id",
+      "type": "string"
+    },
+    "category": {
+      "enum": [
+        "user_preference",
+        "backend_choice",
+        "remote_host",
+        "parser_choice",
+        "property_alias",
+        "risk_policy"
+      ],
+      "title": "Category",
+      "type": "string"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "value": {
+      "additionalProperties": true,
+      "title": "Value",
+      "type": "object"
+    },
+    "source_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Refs",
+      "type": "array"
+    },
+    "source_hashes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Hashes",
+      "type": "array"
+    },
+    "decision": {
+      "title": "Decision",
+      "type": "string"
+    },
+    "confirmed_by": {
+      "default": "",
+      "title": "Confirmed By",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "title": "Updated At",
+      "type": "string"
+    },
+    "disabled": {
+      "default": false,
+      "title": "Disabled",
+      "type": "boolean"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "record_id",
+    "category",
+    "summary",
+    "decision"
+  ],
+  "title": "ProjectMemoryRecord",
+  "type": "object"
+}

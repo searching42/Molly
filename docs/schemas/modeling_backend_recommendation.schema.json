@@ -1,0 +1,42 @@
+{
+  "properties": {
+    "property_id": {
+      "title": "Property Id",
+      "type": "string"
+    },
+    "backend": {
+      "title": "Backend",
+      "type": "string"
+    },
+    "confidence": {
+      "default": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "requirements": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Requirements",
+      "type": "array"
+    },
+    "risk_flags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Risk Flags",
+      "type": "array"
+    }
+  },
+  "required": [
+    "property_id",
+    "backend",
+    "reason"
+  ],
+  "title": "ModelingBackendRecommendation",
+  "type": "object"
+}

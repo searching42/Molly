@@ -1,0 +1,70 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "dataset_id": {
+      "title": "Dataset Id",
+      "type": "string"
+    },
+    "source_dataset_path": {
+      "title": "Source Dataset Path",
+      "type": "string"
+    },
+    "confirmed_dataset_path": {
+      "title": "Confirmed Dataset Path",
+      "type": "string"
+    },
+    "confirmed_by": {
+      "title": "Confirmed By",
+      "type": "string"
+    },
+    "confirmed_at": {
+      "title": "Confirmed At",
+      "type": "string"
+    },
+    "record_count": {
+      "title": "Record Count",
+      "type": "integer"
+    },
+    "conflict_count": {
+      "title": "Conflict Count",
+      "type": "integer"
+    },
+    "unknown_license_count": {
+      "title": "Unknown License Count",
+      "type": "integer"
+    },
+    "source_reports": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Source Reports",
+      "type": "object"
+    },
+    "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+    },
+    "status": {
+      "default": "confirmed",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "dataset_id",
+    "source_dataset_path",
+    "confirmed_dataset_path",
+    "confirmed_by",
+    "confirmed_at",
+    "record_count",
+    "conflict_count",
+    "unknown_license_count"
+  ],
+  "title": "ExtractionConfirmationRecord",
+  "type": "object"
+}

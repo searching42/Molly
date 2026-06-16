@@ -1,0 +1,149 @@
+{
+  "$defs": {
+    "PlanQuestion": {
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "blocks_execution": {
+          "default": true,
+          "title": "Blocks Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "goal": {
+      "title": "Goal",
+      "type": "string"
+    },
+    "property_id": {
+      "title": "Property Id",
+      "type": "string"
+    },
+    "domain": {
+      "default": "general",
+      "title": "Domain",
+      "type": "string"
+    },
+    "status": {
+      "default": "ready_for_confirmation",
+      "title": "Status",
+      "type": "string"
+    },
+    "evidence_sources": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Sources",
+      "type": "array"
+    },
+    "external_search_policy": {
+      "default": "not_used",
+      "title": "External Search Policy",
+      "type": "string"
+    },
+    "risk_flags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Risk Flags",
+      "type": "array"
+    },
+    "preprocessing_steps": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Preprocessing Steps",
+      "type": "array"
+    },
+    "split_strategy": {
+      "title": "Split Strategy",
+      "type": "string"
+    },
+    "target_transform": {
+      "default": "none",
+      "title": "Target Transform",
+      "type": "string"
+    },
+    "recommended_backend": {
+      "title": "Recommended Backend",
+      "type": "string"
+    },
+    "hyperparameters": {
+      "additionalProperties": true,
+      "title": "Hyperparameters",
+      "type": "object"
+    },
+    "acceptance_criteria": {
+      "additionalProperties": true,
+      "title": "Acceptance Criteria",
+      "type": "object"
+    },
+    "dataset_context": {
+      "additionalProperties": true,
+      "title": "Dataset Context",
+      "type": "object"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "goal",
+    "property_id",
+    "split_strategy",
+    "recommended_backend"
+  ],
+  "title": "TargetModelingBrief",
+  "type": "object"
+}

@@ -1,0 +1,70 @@
+{
+  "properties": {
+    "worker_id": {
+      "title": "Worker Id",
+      "type": "string"
+    },
+    "transport": {
+      "default": "ssh",
+      "enum": [
+        "ssh",
+        "local",
+        "manual"
+      ],
+      "title": "Transport",
+      "type": "string"
+    },
+    "host": {
+      "title": "Host",
+      "type": "string"
+    },
+    "display_name": {
+      "default": "",
+      "title": "Display Name",
+      "type": "string"
+    },
+    "capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Capabilities",
+      "type": "array"
+    },
+    "work_dir": {
+      "default": "",
+      "title": "Work Dir",
+      "type": "string"
+    },
+    "environment": {
+      "default": "",
+      "title": "Environment",
+      "type": "string"
+    },
+    "max_concurrent_jobs": {
+      "default": 1,
+      "title": "Max Concurrent Jobs",
+      "type": "integer"
+    },
+    "default_timeout_sec": {
+      "default": 3600,
+      "title": "Default Timeout Sec",
+      "type": "integer"
+    },
+    "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "worker_id",
+    "host"
+  ],
+  "title": "RemoteWorkerConfig",
+  "type": "object"
+}

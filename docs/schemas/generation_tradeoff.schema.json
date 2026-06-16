@@ -1,0 +1,40 @@
+{
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "recommendation": {
+      "title": "Recommendation",
+      "type": "string"
+    },
+    "diversity_weight": {
+      "default": 0.4,
+      "title": "Diversity Weight",
+      "type": "number"
+    },
+    "novelty_weight": {
+      "default": 0.4,
+      "title": "Novelty Weight",
+      "type": "number"
+    },
+    "exploitation_weight": {
+      "default": 0.2,
+      "title": "Exploitation Weight",
+      "type": "number"
+    },
+    "risk_flags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Risk Flags",
+      "type": "array"
+    }
+  },
+  "required": [
+    "name",
+    "recommendation"
+  ],
+  "title": "GenerationTradeoff",
+  "type": "object"
+}

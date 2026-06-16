@@ -1,0 +1,59 @@
+{
+  "$defs": {
+    "PlanStep": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "agent": {
+          "title": "Agent",
+          "type": "string"
+        },
+        "action": {
+          "title": "Action",
+          "type": "string"
+        },
+        "inputs": {
+          "additionalProperties": true,
+          "title": "Inputs",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "agent",
+        "action"
+      ],
+      "title": "PlanStep",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/PlanStep"
+      },
+      "title": "Steps",
+      "type": "array"
+    },
+    "gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Gates",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "steps",
+    "gates"
+  ],
+  "title": "PlanModel",
+  "type": "object"
+}

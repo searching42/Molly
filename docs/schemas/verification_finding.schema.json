@@ -1,0 +1,51 @@
+{
+  "properties": {
+    "finding_id": {
+      "title": "Finding Id",
+      "type": "string"
+    },
+    "category": {
+      "title": "Category",
+      "type": "string"
+    },
+    "severity": {
+      "enum": [
+        "info",
+        "warning",
+        "error",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "continue",
+        "retry",
+        "replan",
+        "ask_user",
+        "abort"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "evidence": {
+      "additionalProperties": true,
+      "title": "Evidence",
+      "type": "object"
+    }
+  },
+  "required": [
+    "finding_id",
+    "category",
+    "severity",
+    "message",
+    "decision"
+  ],
+  "title": "VerificationFinding",
+  "type": "object"
+}

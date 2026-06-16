@@ -1,0 +1,23 @@
+"""Expert agent contracts for AI4S orchestration."""
+
+from ai4s_agent.agents.evaluation import compute_autonomy_metrics
+from ai4s_agent.agents.generation import GenerationAgent
+from ai4s_agent.agents.modeling import ModelingAgent
+from ai4s_agent.agents.observer import ObserverAgent
+from ai4s_agent.agents.planner import PlannerAgent
+from ai4s_agent.agents.recovery import RecoveryAgent
+from ai4s_agent.agents.report import ReportAgent
+from ai4s_agent.agents.research import ResearchAgent
+from ai4s_agent.agents.verifier import VerifierAgent
+
+__all__ = [
+    "GenerationAgent",
+    "ModelingAgent",
+    "ObserverAgent",
+    "PlannerAgent",
+    "RecoveryAgent",
+    "ReportAgent",
+    "ResearchAgent",
+    "VerifierAgent",
+    "compute_autonomy_metrics",
+]

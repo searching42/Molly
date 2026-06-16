@@ -1,0 +1,58 @@
+{
+  "properties": {
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "source_type": {
+      "title": "Source Type",
+      "type": "string"
+    },
+    "value": {
+      "title": "Value",
+      "type": "string"
+    },
+    "status": {
+      "title": "Status",
+      "type": "string"
+    },
+    "acquisition_type": {
+      "default": "",
+      "title": "Acquisition Type",
+      "type": "string"
+    },
+    "strategy": {
+      "default": "",
+      "title": "Strategy",
+      "type": "string"
+    },
+    "local_path": {
+      "default": "",
+      "title": "Local Path",
+      "type": "string"
+    },
+    "output_path": {
+      "default": "",
+      "title": "Output Path",
+      "type": "string"
+    },
+    "message": {
+      "default": "",
+      "title": "Message",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "source_id",
+    "source_type",
+    "value",
+    "status"
+  ],
+  "title": "LiteratureAcquisitionItem",
+  "type": "object"
+}

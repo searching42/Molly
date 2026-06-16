@@ -1,0 +1,158 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "properties": {
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "relative_path": {
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "producer_task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Producer Task Id"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "relative_path"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "RunStatus": {
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "WAITING_USER",
+        "PAUSED_BY_USER",
+        "SUCCEEDED",
+        "DEGRADED",
+        "FAILED",
+        "SKIPPED",
+        "CANCELLED",
+        "DONE"
+      ],
+      "title": "RunStatus",
+      "type": "string"
+    },
+    "StageHistoryItem": {
+      "properties": {
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "updated_at": {
+          "title": "Updated At",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage",
+        "status",
+        "updated_at"
+      ],
+      "title": "StageHistoryItem",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "stage": {
+      "title": "Stage",
+      "type": "string"
+    },
+    "next_stage": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Next Stage"
+    },
+    "status": {
+      "$ref": "#/$defs/RunStatus"
+    },
+    "started_at": {
+      "title": "Started At",
+      "type": "string"
+    },
+    "ended_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ended At"
+    },
+    "updated_at": {
+      "title": "Updated At",
+      "type": "string"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error"
+    },
+    "details": {
+      "additionalProperties": true,
+      "title": "Details",
+      "type": "object"
+    },
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactRef"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "history": {
+      "items": {
+        "$ref": "#/$defs/StageHistoryItem"
+      },
+      "title": "History",
+      "type": "array"
+    }
+  },
+  "required": [
+    "stage",
+    "status",
+    "started_at",
+    "updated_at"
+  ],
+  "title": "StageState",
+  "type": "object"
+}

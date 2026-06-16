@@ -1,0 +1,176 @@
+{
+  "$defs": {
+    "RerunProposal": {
+      "properties": {
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "trigger": {
+          "title": "Trigger",
+          "type": "string"
+        },
+        "candidate_changes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Candidate Changes",
+          "type": "array"
+        },
+        "rationale": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rationale",
+          "type": "array"
+        },
+        "expected_impact": {
+          "default": "",
+          "title": "Expected Impact",
+          "type": "string"
+        },
+        "estimated_cost": {
+          "default": "medium",
+          "title": "Estimated Cost",
+          "type": "string"
+        },
+        "required_approvals": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Approvals",
+          "type": "array"
+        },
+        "fallback_policy": {
+          "default": "",
+          "title": "Fallback Policy",
+          "type": "string"
+        },
+        "requires_user_approval": {
+          "default": true,
+          "title": "Requires User Approval",
+          "type": "boolean"
+        },
+        "executable": {
+          "default": false,
+          "title": "Executable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "property_id",
+        "trigger"
+      ],
+      "title": "RerunProposal",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "goal": {
+      "default": "",
+      "title": "Goal",
+      "type": "string"
+    },
+    "property_id": {
+      "title": "Property Id",
+      "type": "string"
+    },
+    "model_id": {
+      "default": "",
+      "title": "Model Id",
+      "type": "string"
+    },
+    "readiness": {
+      "enum": [
+        "strong",
+        "promising",
+        "weak",
+        "blocked",
+        "not_evaluated"
+      ],
+      "title": "Readiness",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "accept",
+        "low_confidence_accept",
+        "rerun_recommended",
+        "blocked",
+        "not_evaluated"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "metrics": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Metrics",
+      "type": "object"
+    },
+    "baseline_comparison": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Baseline Comparison",
+      "type": "object"
+    },
+    "distribution_diagnostics": {
+      "additionalProperties": true,
+      "title": "Distribution Diagnostics",
+      "type": "object"
+    },
+    "fold_diagnostics": {
+      "additionalProperties": true,
+      "title": "Fold Diagnostics",
+      "type": "object"
+    },
+    "risk_flags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Risk Flags",
+      "type": "array"
+    },
+    "messages": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Messages",
+      "type": "array"
+    },
+    "rerun_proposal": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RerunProposal"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "property_id",
+    "readiness",
+    "decision"
+  ],
+  "title": "ModelDiagnosticsReport",
+  "type": "object"
+}

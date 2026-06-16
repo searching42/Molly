@@ -1,0 +1,33 @@
+{
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "pass",
+        "warn",
+        "fail"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    },
+    "evidence": {
+      "additionalProperties": true,
+      "title": "Evidence",
+      "type": "object"
+    }
+  },
+  "required": [
+    "name",
+    "status",
+    "message"
+  ],
+  "title": "MultiUserBoundaryCheck",
+  "type": "object"
+}

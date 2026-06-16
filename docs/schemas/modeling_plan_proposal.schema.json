@@ -1,0 +1,273 @@
+{
+  "$defs": {
+    "ModelingBackendRecommendation": {
+      "properties": {
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "backend": {
+          "title": "Backend",
+          "type": "string"
+        },
+        "confidence": {
+          "default": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requirements",
+          "type": "array"
+        },
+        "risk_flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Risk Flags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "property_id",
+        "backend",
+        "reason"
+      ],
+      "title": "ModelingBackendRecommendation",
+      "type": "object"
+    },
+    "ModelingExperimentDesign": {
+      "properties": {
+        "backend": {
+          "title": "Backend",
+          "type": "string"
+        },
+        "target_properties": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Properties",
+          "type": "array"
+        },
+        "split_strategy": {
+          "title": "Split Strategy",
+          "type": "string"
+        },
+        "validation_strategy": {
+          "title": "Validation Strategy",
+          "type": "string"
+        },
+        "required_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Artifacts",
+          "type": "array"
+        },
+        "required_gates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Gates",
+          "type": "array"
+        },
+        "budget_notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Budget Notes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "backend",
+        "split_strategy",
+        "validation_strategy"
+      ],
+      "title": "ModelingExperimentDesign",
+      "type": "object"
+    },
+    "ModelingMetricInterpretation": {
+      "properties": {
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Metrics",
+          "type": "object"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "continue",
+            "retry",
+            "replan",
+            "ask_user",
+            "abort"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "property_id",
+        "status",
+        "decision",
+        "message"
+      ],
+      "title": "ModelingMetricInterpretation",
+      "type": "object"
+    },
+    "ModelingRetryProposal": {
+      "properties": {
+        "action": {
+          "title": "Action",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "target_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Tasks",
+          "type": "array"
+        },
+        "requires_user_approval": {
+          "default": true,
+          "title": "Requires User Approval",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action",
+        "reason"
+      ],
+      "title": "ModelingRetryProposal",
+      "type": "object"
+    },
+    "PlanQuestion": {
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "blocks_execution": {
+          "default": true,
+          "title": "Blocks Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "goal": {
+      "title": "Goal",
+      "type": "string"
+    },
+    "status": {
+      "default": "needs_confirmation",
+      "title": "Status",
+      "type": "string"
+    },
+    "backend_recommendations": {
+      "items": {
+        "$ref": "#/$defs/ModelingBackendRecommendation"
+      },
+      "title": "Backend Recommendations",
+      "type": "array"
+    },
+    "experiment_design": {
+      "$ref": "#/$defs/ModelingExperimentDesign"
+    },
+    "metric_interpretations": {
+      "items": {
+        "$ref": "#/$defs/ModelingMetricInterpretation"
+      },
+      "title": "Metric Interpretations",
+      "type": "array"
+    },
+    "retry_proposals": {
+      "items": {
+        "$ref": "#/$defs/ModelingRetryProposal"
+      },
+      "title": "Retry Proposals",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "goal",
+    "experiment_design"
+  ],
+  "title": "ModelingPlanProposal",
+  "type": "object"
+}

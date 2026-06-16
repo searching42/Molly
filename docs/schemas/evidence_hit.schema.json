@@ -1,0 +1,53 @@
+{
+  "properties": {
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "page": {
+      "title": "Page",
+      "type": "integer"
+    },
+    "element_id": {
+      "title": "Element Id",
+      "type": "string"
+    },
+    "element_type": {
+      "title": "Element Type",
+      "type": "string"
+    },
+    "retrieval_channel": {
+      "title": "Retrieval Channel",
+      "type": "string"
+    },
+    "score": {
+      "title": "Score",
+      "type": "number"
+    },
+    "text_or_table_ref": {
+      "title": "Text Or Table Ref",
+      "type": "string"
+    },
+    "citation_context": {
+      "title": "Citation Context",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "source_id",
+    "page",
+    "element_id",
+    "element_type",
+    "retrieval_channel",
+    "score",
+    "text_or_table_ref",
+    "citation_context"
+  ],
+  "title": "EvidenceHit",
+  "type": "object"
+}

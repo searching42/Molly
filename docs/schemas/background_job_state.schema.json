@@ -1,0 +1,217 @@
+{
+  "$defs": {
+    "BackgroundJobBudget": {
+      "properties": {
+        "max_runtime_sec": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Runtime Sec"
+        },
+        "max_steps": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Steps"
+        },
+        "max_records": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Records"
+        },
+        "max_cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Cost Usd"
+        }
+      },
+      "title": "BackgroundJobBudget",
+      "type": "object"
+    },
+    "BackgroundJobCheckpoint": {
+      "properties": {
+        "checkpoint_id": {
+          "title": "Checkpoint Id",
+          "type": "string"
+        },
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "cursor": {
+          "additionalProperties": true,
+          "title": "Cursor",
+          "type": "object"
+        },
+        "completed_units": {
+          "default": 0,
+          "title": "Completed Units",
+          "type": "integer"
+        },
+        "runtime_sec": {
+          "default": 0,
+          "title": "Runtime Sec",
+          "type": "integer"
+        },
+        "cost_usd": {
+          "default": 0.0,
+          "title": "Cost Usd",
+          "type": "number"
+        },
+        "artifact_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Artifact Refs",
+          "type": "array"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "checkpoint_id",
+        "stage"
+      ],
+      "title": "BackgroundJobCheckpoint",
+      "type": "object"
+    },
+    "RunStatus": {
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "WAITING_USER",
+        "PAUSED_BY_USER",
+        "SUCCEEDED",
+        "DEGRADED",
+        "FAILED",
+        "SKIPPED",
+        "CANCELLED",
+        "DONE"
+      ],
+      "title": "RunStatus",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "job_id": {
+      "title": "Job Id",
+      "type": "string"
+    },
+    "project_id": {
+      "default": "",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/RunStatus",
+      "default": "RUNNING"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "title": "Updated At",
+      "type": "string"
+    },
+    "budget": {
+      "$ref": "#/$defs/BackgroundJobBudget"
+    },
+    "consumed_runtime_sec": {
+      "default": 0,
+      "title": "Consumed Runtime Sec",
+      "type": "integer"
+    },
+    "consumed_steps": {
+      "default": 0,
+      "title": "Consumed Steps",
+      "type": "integer"
+    },
+    "consumed_records": {
+      "default": 0,
+      "title": "Consumed Records",
+      "type": "integer"
+    },
+    "consumed_cost_usd": {
+      "default": 0.0,
+      "title": "Consumed Cost Usd",
+      "type": "number"
+    },
+    "budget_exhausted": {
+      "default": false,
+      "title": "Budget Exhausted",
+      "type": "boolean"
+    },
+    "checkpoints": {
+      "items": {
+        "$ref": "#/$defs/BackgroundJobCheckpoint"
+      },
+      "title": "Checkpoints",
+      "type": "array"
+    },
+    "resume_from_checkpoint_id": {
+      "default": "",
+      "title": "Resume From Checkpoint Id",
+      "type": "string"
+    },
+    "resumable": {
+      "default": true,
+      "title": "Resumable",
+      "type": "boolean"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "details": {
+      "additionalProperties": true,
+      "title": "Details",
+      "type": "object"
+    }
+  },
+  "required": [
+    "job_id",
+    "run_id",
+    "task_id",
+    "budget"
+  ],
+  "title": "BackgroundJobState",
+  "type": "object"
+}

@@ -1,0 +1,60 @@
+{
+  "$defs": {
+    "AssetStatus": {
+      "enum": [
+        "candidate",
+        "confirmed",
+        "deprecated"
+      ],
+      "title": "AssetStatus",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "asset_id": {
+      "title": "Asset Id",
+      "type": "string"
+    },
+    "asset_type": {
+      "title": "Asset Type",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/AssetStatus"
+    },
+    "created_from_run_id": {
+      "title": "Created From Run Id",
+      "type": "string"
+    },
+    "source_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Artifacts",
+      "type": "array"
+    },
+    "content_hash": {
+      "title": "Content Hash",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "asset_id",
+    "asset_type",
+    "version",
+    "status",
+    "created_from_run_id",
+    "content_hash"
+  ],
+  "title": "AssetManifest",
+  "type": "object"
+}

@@ -1,0 +1,40 @@
+{
+  "properties": {
+    "added_tasks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Added Tasks",
+      "type": "array"
+    },
+    "removed_tasks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Removed Tasks",
+      "type": "array"
+    },
+    "unchanged_tasks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Unchanged Tasks",
+      "type": "array"
+    },
+    "changed_dependencies": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": "object"
+      },
+      "title": "Changed Dependencies",
+      "type": "object"
+    }
+  },
+  "title": "RunPlanDiff",
+  "type": "object"
+}

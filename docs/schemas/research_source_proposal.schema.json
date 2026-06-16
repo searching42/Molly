@@ -1,0 +1,340 @@
+{
+  "$defs": {
+    "LiteratureCorpusSource": {
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_type": {
+          "title": "Source Type",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        },
+        "doi": {
+          "default": "",
+          "title": "Doi",
+          "type": "string"
+        },
+        "local_path": {
+          "default": "",
+          "title": "Local Path",
+          "type": "string"
+        },
+        "license": {
+          "default": "",
+          "title": "License",
+          "type": "string"
+        },
+        "status": {
+          "default": "pending_acquisition",
+          "title": "Status",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_type",
+        "value"
+      ],
+      "title": "LiteratureCorpusSource",
+      "type": "object"
+    },
+    "PlanQuestion": {
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "blocks_execution": {
+          "default": true,
+          "title": "Blocks Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    },
+    "ResearchEvidenceQuality": {
+      "properties": {
+        "source_count": {
+          "title": "Source Count",
+          "type": "integer"
+        },
+        "ranked_source_count": {
+          "title": "Ranked Source Count",
+          "type": "integer"
+        },
+        "doi_count": {
+          "default": 0,
+          "title": "Doi Count",
+          "type": "integer"
+        },
+        "url_count": {
+          "default": 0,
+          "title": "Url Count",
+          "type": "integer"
+        },
+        "query_count": {
+          "default": 0,
+          "title": "Query Count",
+          "type": "integer"
+        },
+        "local_source_count": {
+          "default": 0,
+          "title": "Local Source Count",
+          "type": "integer"
+        },
+        "quality_score": {
+          "default": 0.0,
+          "title": "Quality Score",
+          "type": "number"
+        },
+        "quality_level": {
+          "default": "blocked",
+          "title": "Quality Level",
+          "type": "string"
+        },
+        "missing_information": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Information",
+          "type": "array"
+        },
+        "risks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Risks",
+          "type": "array"
+        },
+        "recommended_next_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Next Actions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source_count",
+        "ranked_source_count"
+      ],
+      "title": "ResearchEvidenceQuality",
+      "type": "object"
+    },
+    "ResearchQueryExpansion": {
+      "properties": {
+        "original_goal": {
+          "title": "Original Goal",
+          "type": "string"
+        },
+        "expanded_queries": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Expanded Queries",
+          "type": "array"
+        },
+        "included_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Included Terms",
+          "type": "array"
+        },
+        "excluded_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Excluded Terms",
+          "type": "array"
+        },
+        "rationale": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rationale",
+          "type": "array"
+        }
+      },
+      "required": [
+        "original_goal"
+      ],
+      "title": "ResearchQueryExpansion",
+      "type": "object"
+    },
+    "ResearchSourceCandidate": {
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_type": {
+          "title": "Source Type",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        },
+        "doi": {
+          "default": "",
+          "title": "Doi",
+          "type": "string"
+        },
+        "score": {
+          "default": 0.0,
+          "title": "Score",
+          "type": "number"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "risk_flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Risk Flags",
+          "type": "array"
+        },
+        "expected_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Expected Evidence",
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_type",
+        "value"
+      ],
+      "title": "ResearchSourceCandidate",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "goal": {
+      "title": "Goal",
+      "type": "string"
+    },
+    "status": {
+      "default": "needs_confirmation",
+      "title": "Status",
+      "type": "string"
+    },
+    "query_expansion": {
+      "$ref": "#/$defs/ResearchQueryExpansion"
+    },
+    "source_candidates": {
+      "items": {
+        "$ref": "#/$defs/ResearchSourceCandidate"
+      },
+      "title": "Source Candidates",
+      "type": "array"
+    },
+    "selected_sources": {
+      "items": {
+        "$ref": "#/$defs/LiteratureCorpusSource"
+      },
+      "title": "Selected Sources",
+      "type": "array"
+    },
+    "evidence_quality": {
+      "$ref": "#/$defs/ResearchEvidenceQuality"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "goal",
+    "query_expansion",
+    "evidence_quality"
+  ],
+  "title": "ResearchSourceProposal",
+  "type": "object"
+}

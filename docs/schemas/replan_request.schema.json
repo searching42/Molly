@@ -1,0 +1,71 @@
+{
+  "properties": {
+    "project_id": {
+      "default": "",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "trigger": {
+      "enum": [
+        "failure",
+        "degraded_output",
+        "new_user_constraints",
+        "changed_artifacts",
+        "verifier_decision"
+      ],
+      "title": "Trigger",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "failed_stage": {
+      "default": "",
+      "title": "Failed Stage",
+      "type": "string"
+    },
+    "failure_category": {
+      "default": "",
+      "title": "Failure Category",
+      "type": "string"
+    },
+    "available_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Available Artifacts",
+      "type": "array"
+    },
+    "new_constraints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "New Constraints",
+      "type": "array"
+    },
+    "changed_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Changed Artifacts",
+      "type": "array"
+    },
+    "requested_strategy": {
+      "default": "auto",
+      "title": "Requested Strategy",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "trigger",
+    "reason"
+  ],
+  "title": "ReplanRequest",
+  "type": "object"
+}

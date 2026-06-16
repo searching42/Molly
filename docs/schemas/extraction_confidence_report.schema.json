@@ -1,0 +1,60 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "attempted_hit_count": {
+      "title": "Attempted Hit Count",
+      "type": "integer"
+    },
+    "extracted_record_count": {
+      "title": "Extracted Record Count",
+      "type": "integer"
+    },
+    "rejected_record_count": {
+      "title": "Rejected Record Count",
+      "type": "integer"
+    },
+    "high_confidence_count": {
+      "title": "High Confidence Count",
+      "type": "integer"
+    },
+    "medium_confidence_count": {
+      "title": "Medium Confidence Count",
+      "type": "integer"
+    },
+    "low_confidence_count": {
+      "title": "Low Confidence Count",
+      "type": "integer"
+    },
+    "confidence_threshold": {
+      "title": "Confidence Threshold",
+      "type": "number"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "attempted_hit_count",
+    "extracted_record_count",
+    "rejected_record_count",
+    "high_confidence_count",
+    "medium_confidence_count",
+    "low_confidence_count",
+    "confidence_threshold",
+    "generated_at"
+  ],
+  "title": "ExtractionConfidenceReport",
+  "type": "object"
+}
