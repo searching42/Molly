@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ai4s_agent._utils import write_json
+from ai4s_agent.domains.oled import OLED_MODEL_REGISTRY
 from ai4s_agent.schemas import (
     GateName,
     ModelDiagnosticsReport,
@@ -33,6 +34,7 @@ class ModelingAgent:
         project_memory: dict[str, Any] | None = None,
         previous_diagnostics: list[dict[str, Any]] | None = None,
         allow_external_search: bool = False,
+        available_inputs: set[str] | list[str] | tuple[str, ...] | None = None,
     ) -> TargetModelingBrief:
         clean_goal = str(goal or "").strip()
         clean_property = str(property_id or "default").strip() or "default"
@@ -66,6 +68,24 @@ class ModelingAgent:
         if allow_external_search:
             evidence_sources.append("user_approved_external_search")
 
+        model_selection = self._select_domain_model(
+            goal=clean_goal,
+            property_id=clean_property,
+            profile=profile,
+            available_inputs=available_inputs,
+        )
+        if model_selection and model_selection.requires_user_input:
+            status = "needs_clarification"
+            questions.append(
+                PlanQuestion(
+                    question_id=f"q_target_{model_selection.normalized_property_id}_missing_inputs",
+                    prompt=f"Provide required model inputs for `{model_selection.normalized_property_id}`: {', '.join(model_selection.missing_required_inputs)}.",
+                    reason="The selected reviewed model requires inputs that are not present in the current request context.",
+                    choices=["provide_missing_inputs", "use_default_context", "choose_different_model"],
+                    blocks_execution=True,
+                )
+            )
+
         dataset_context = {
             "trainability_status": str(trainability_item.get("status") or ""),
             "effective_labels": self._safe_int(trainability_item.get("effective_labels")),
@@ -95,6 +115,7 @@ class ModelingAgent:
             hyperparameters=profile["hyperparameters"],
             acceptance_criteria=profile["acceptance_criteria"],
             dataset_context=dataset_context,
+            model_selection=model_selection,
             assumptions=assumptions,
             questions=questions,
             executable=False,
@@ -555,6 +576,33 @@ class ModelingAgent:
             seen.add(proposal.action)
             result.append(proposal)
         return result
+
+    @staticmethod
+    def _select_domain_model(
+        *,
+        goal: str,
+        property_id: str,
+        profile: dict[str, Any],
+        available_inputs: set[str] | list[str] | tuple[str, ...] | None,
+    ):
+        if profile.get("domain") != "oled":
+            return None
+        normalized = f"{goal} {property_id}".lower()
+        use_case = "scalar_prediction"
+        if ModelingAgent._is_plqy_target(normalized) and ModelingAgent._is_high_value_goal(goal):
+            use_case = "high_plqy_screening"
+        inputs = available_inputs
+        if inputs is None:
+            inputs = {"canonical_smiles", "solvent"}
+        try:
+            return OLED_MODEL_REGISTRY.select(
+                domain="oled",
+                property_id=property_id,
+                use_case=use_case,
+                available_inputs=inputs,
+            )
+        except ValueError:
+            return None
 
     @staticmethod
     def _target_rule_profile(goal: str, property_id: str) -> dict[str, Any]:

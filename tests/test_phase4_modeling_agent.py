@@ -172,6 +172,25 @@ def test_modeling_agent_prepares_oled_plqy_target_modeling_brief() -> None:
     assert restored.model_dump(mode="json") == brief.model_dump(mode="json")
 
 
+def test_modeling_agent_brief_includes_registry_model_selection_and_missing_inputs() -> None:
+    brief = ModelingAgent().prepare_target_modeling_brief(
+        run_id="run-target-model-selection",
+        goal="Prioritize OLED candidates with high PLQY.",
+        property_id="quantum_yield",
+        trainability_report=_trainability_report(),
+        available_inputs={"canonical_smiles"},
+    )
+
+    assert brief.property_id == "quantum_yield"
+    assert brief.model_selection is not None
+    assert brief.model_selection.selected_model_id == "plqy_manual_weight3_ensemble"
+    assert brief.model_selection.normalized_property_id == "plqy"
+    assert brief.model_selection.missing_required_inputs == ["solvent"]
+    assert "missing_required_input:solvent" in brief.model_selection.warnings
+    assert brief.status == "needs_clarification"
+    assert any(question.question_id == "q_target_plqy_missing_inputs" for question in brief.questions)
+
+
 def test_modeling_agent_diagnoses_high_plqy_compression_with_gated_rerun() -> None:
     agent = ModelingAgent()
     brief = agent.prepare_target_modeling_brief(

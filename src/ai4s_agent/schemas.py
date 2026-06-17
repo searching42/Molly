@@ -1113,6 +1113,7 @@ class TargetModelingBrief(BaseModel):
     hyperparameters: dict[str, Any] = Field(default_factory=dict)
     acceptance_criteria: dict[str, Any] = Field(default_factory=dict)
     dataset_context: dict[str, Any] = Field(default_factory=dict)
+    model_selection: DomainModelSelection | None = None
     assumptions: list[str] = Field(default_factory=list)
     questions: list[PlanQuestion] = Field(default_factory=list)
     executable: bool = False
@@ -1204,13 +1205,17 @@ class DomainModelCandidate(BaseModel):
                 result.append(clean)
         return result
 
-    @field_validator("metrics")
+    @field_validator("metrics", mode="before")
     @classmethod
-    def validate_metrics_are_finite(cls, value: dict[str, float]) -> dict[str, float]:
+    def validate_metrics_are_finite(cls, value: Any) -> dict[str, float]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("domain model metrics must be an object")
         metrics: dict[str, float] = {}
         for key, raw in value.items():
             if isinstance(raw, bool):
-                continue
+                raise ValueError(f"domain model metric '{key}' must be a number, got bool")
             number = float(raw)
             if not math.isfinite(number):
                 raise ValueError("domain model metrics must be finite")

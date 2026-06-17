@@ -1,5 +1,172 @@
 {
   "$defs": {
+    "DomainModelCandidate": {
+      "properties": {
+        "model_id": {
+          "title": "Model Id",
+          "type": "string"
+        },
+        "domain": {
+          "title": "Domain",
+          "type": "string"
+        },
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "intended_use": {
+          "title": "Intended Use",
+          "type": "string"
+        },
+        "backend": {
+          "title": "Backend",
+          "type": "string"
+        },
+        "source_run_id": {
+          "default": "",
+          "title": "Source Run Id",
+          "type": "string"
+        },
+        "source_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Artifacts",
+          "type": "array"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Metrics",
+          "type": "object"
+        },
+        "feature_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Feature Requirements",
+          "type": "array"
+        },
+        "recommended_for": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended For",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "status": {
+          "default": "candidate",
+          "title": "Status",
+          "type": "string"
+        },
+        "priority": {
+          "default": 100,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "model_id",
+        "domain",
+        "property_id",
+        "intended_use",
+        "backend"
+      ],
+      "title": "DomainModelCandidate",
+      "type": "object"
+    },
+    "DomainModelSelection": {
+      "properties": {
+        "domain": {
+          "title": "Domain",
+          "type": "string"
+        },
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "normalized_property_id": {
+          "title": "Normalized Property Id",
+          "type": "string"
+        },
+        "use_case": {
+          "title": "Use Case",
+          "type": "string"
+        },
+        "selected_model_id": {
+          "title": "Selected Model Id",
+          "type": "string"
+        },
+        "selected_model": {
+          "$ref": "#/$defs/DomainModelCandidate"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/DomainModelCandidate"
+          },
+          "title": "Candidates",
+          "type": "array"
+        },
+        "missing_required_inputs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Required Inputs",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "rationale": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rationale",
+          "type": "array"
+        },
+        "requires_user_input": {
+          "default": false,
+          "title": "Requires User Input",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "domain",
+        "property_id",
+        "normalized_property_id",
+        "use_case",
+        "selected_model_id",
+        "selected_model"
+      ],
+      "title": "DomainModelSelection",
+      "type": "object"
+    },
     "PlanQuestion": {
       "properties": {
         "question_id": {
@@ -112,6 +279,17 @@
       "additionalProperties": true,
       "title": "Dataset Context",
       "type": "object"
+    },
+    "model_selection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DomainModelSelection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "assumptions": {
       "items": {

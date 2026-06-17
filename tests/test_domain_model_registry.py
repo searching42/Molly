@@ -1,3 +1,7 @@
+import pytest
+from pydantic import ValidationError
+
+from ai4s_agent.domains.model_registry import DomainModelRegistry
 from ai4s_agent.domains.oled import OLED_MODEL_REGISTRY
 from ai4s_agent.schemas import DomainModelCandidate, DomainModelSelection
 
@@ -62,3 +66,64 @@ def test_domain_model_registry_schema_roundtrip() -> None:
     )
     restored_selection = DomainModelSelection.model_validate_json(selection.model_dump_json())
     assert restored_selection.model_dump(mode="json") == selection.model_dump(mode="json")
+
+
+def test_registry_matches_property_aliases_from_candidates_not_global_table() -> None:
+    registry = DomainModelRegistry(
+        [
+            DomainModelCandidate(
+                model_id="phi_f_model",
+                domain="photophysics",
+                property_id="phi_f",
+                aliases=["quantum_yield"],
+                intended_use="scalar_prediction",
+                backend="baseline",
+            ),
+            DomainModelCandidate(
+                model_id="plqy_without_alias",
+                domain="photophysics",
+                property_id="plqy",
+                intended_use="scalar_prediction",
+                backend="baseline",
+            ),
+        ]
+    )
+
+    selection = registry.select(
+        domain="photophysics",
+        property_id="quantum_yield",
+        use_case="scalar_prediction",
+    )
+
+    assert selection.selected_model_id == "phi_f_model"
+    assert selection.normalized_property_id == "phi_f"
+
+    registry_without_alias = DomainModelRegistry(
+        [
+            DomainModelCandidate(
+                model_id="plqy_without_alias",
+                domain="photophysics",
+                property_id="plqy",
+                intended_use="scalar_prediction",
+                backend="baseline",
+            )
+        ]
+    )
+    with pytest.raises(ValueError, match="no model candidates"):
+        registry_without_alias.select(
+            domain="photophysics",
+            property_id="quantum_yield",
+            use_case="scalar_prediction",
+        )
+
+
+def test_domain_model_candidate_rejects_boolean_metrics() -> None:
+    with pytest.raises(ValidationError, match="must be a number, got bool"):
+        DomainModelCandidate(
+            model_id="bad_metrics",
+            domain="oled",
+            property_id="plqy",
+            intended_use="scalar_prediction",
+            backend="baseline",
+            metrics={"r2": True},
+        )

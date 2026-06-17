@@ -16,7 +16,7 @@ class DomainModelRegistry:
 
     def list_candidates(self, *, domain: str | None = None, property_id: str | None = None) -> list[DomainModelCandidate]:
         requested_domain = self._normalize(domain) if domain else ""
-        requested_property = self._normalize_property(property_id) if property_id else ""
+        requested_property = self._normalize(property_id) if property_id else ""
         result: list[DomainModelCandidate] = []
         for candidate in self._candidates:
             if requested_domain and self._normalize(candidate.domain) != requested_domain:
@@ -42,7 +42,7 @@ class DomainModelRegistry:
         available_inputs: set[str] | list[str] | tuple[str, ...] | None = None,
     ) -> DomainModelSelection:
         requested_domain = self._normalize(domain)
-        requested_property = self._normalize_property(property_id)
+        requested_property = self._normalize(property_id)
         requested_use = self._normalize(use_case)
         candidates = self.list_candidates(domain=requested_domain, property_id=requested_property)
         if not candidates:
@@ -81,25 +81,10 @@ class DomainModelRegistry:
 
     @staticmethod
     def _property_terms(candidate: DomainModelCandidate) -> set[str]:
-        terms = {DomainModelRegistry._normalize_property(candidate.property_id)}
-        terms.update(DomainModelRegistry._normalize_property(alias) for alias in candidate.aliases)
+        terms = {DomainModelRegistry._normalize(candidate.property_id)}
+        terms.update(DomainModelRegistry._normalize(alias) for alias in candidate.aliases)
         return terms
 
     @staticmethod
     def _normalize(value: str | None) -> str:
         return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
-
-    @staticmethod
-    def _normalize_property(value: str | None) -> str:
-        normalized = DomainModelRegistry._normalize(value)
-        aliases = {
-            "quantum_yield": "plqy",
-            "photoluminescence_quantum_yield": "plqy",
-            "fluorescence_quantum_yield": "plqy",
-            "qy": "plqy",
-            "lambda_em": "emission_max_nm",
-            "emission": "emission_max_nm",
-            "emission_max": "emission_max_nm",
-            "emission_wavelength": "emission_max_nm",
-        }
-        return aliases.get(normalized, normalized)
