@@ -1183,6 +1183,7 @@ class DomainModelCandidate(BaseModel):
     feature_requirements: list[str] = Field(default_factory=list)
     recommended_for: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    reuse_policy: str = "historical_prior"
     status: str = "candidate"
     priority: int = 100
     notes: list[str] = Field(default_factory=list)
@@ -1194,6 +1195,14 @@ class DomainModelCandidate(BaseModel):
         if not clean:
             raise ValueError("domain model candidate text fields are required")
         return clean
+
+    @field_validator("reuse_policy")
+    @classmethod
+    def validate_reuse_policy(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"historical_prior", "promoted_model_asset"}:
+            raise ValueError("reuse_policy must be historical_prior or promoted_model_asset")
+        return normalized
 
     @field_validator("aliases", "source_artifacts", "feature_requirements", "recommended_for", "limitations", "notes")
     @classmethod
@@ -1231,10 +1240,21 @@ class DomainModelSelection(BaseModel):
     selected_model_id: str
     selected_model: DomainModelCandidate
     candidates: list[DomainModelCandidate] = Field(default_factory=list)
+    selection_role: str = "modeling_prior"
+    can_execute_prediction: bool = False
+    reuse_requires_user_approval: bool = True
     missing_required_inputs: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     rationale: list[str] = Field(default_factory=list)
     requires_user_input: bool = False
+
+    @field_validator("selection_role")
+    @classmethod
+    def validate_selection_role(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"modeling_prior", "prediction_asset"}:
+            raise ValueError("selection_role must be modeling_prior or prediction_asset")
+        return normalized
 
     @field_validator("missing_required_inputs", "warnings", "rationale")
     @classmethod
@@ -1262,6 +1282,8 @@ class PredictionPreparation(BaseModel):
     adapter: str = ""
     adapter_payload: dict[str, Any] = Field(default_factory=dict)
     required_gates: list[str] = Field(default_factory=list)
+    requires_training: bool = False
+    reuse_requires_user_approval: bool = False
     warnings: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     questions: list[PlanQuestion] = Field(default_factory=list)

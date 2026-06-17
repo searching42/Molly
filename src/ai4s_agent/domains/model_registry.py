@@ -55,10 +55,16 @@ class DomainModelRegistry:
             if self._normalize(requirement) not in available
         ]
         warnings = [f"missing_required_input:{item}" for item in missing]
+        can_execute_prediction = selected.reuse_policy == "promoted_model_asset"
+        if not can_execute_prediction:
+            warnings.append("historical_model_prior_not_prediction_asset")
+        selection_role = "prediction_asset" if can_execute_prediction else "modeling_prior"
         rationale = [
             f"Selected `{selected.model_id}` for `{selected.property_id}` / `{selected.intended_use}`.",
             f"Backend `{selected.backend}` is the current reviewed candidate for this use case.",
         ]
+        if not can_execute_prediction:
+            rationale.append("This candidate is historical modeling evidence, not a promoted prediction asset.")
         return DomainModelSelection(
             domain=requested_domain,
             property_id=str(property_id or "").strip(),
@@ -67,6 +73,9 @@ class DomainModelRegistry:
             selected_model_id=selected.model_id,
             selected_model=selected,
             candidates=candidates,
+            selection_role=selection_role,
+            can_execute_prediction=can_execute_prediction,
+            reuse_requires_user_approval=not can_execute_prediction,
             missing_required_inputs=missing,
             warnings=warnings,
             rationale=rationale,

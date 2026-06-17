@@ -67,6 +67,11 @@
       "title": "Limitations",
       "type": "array"
     },
+    "reuse_policy": {
+      "default": "historical_prior",
+      "title": "Reuse Policy",
+      "type": "string"
+    },
     "status": {
       "default": "candidate",
       "title": "Status",

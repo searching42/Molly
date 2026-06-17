@@ -28,6 +28,7 @@ class PredictionPreparationAgent:
         output_csv: str = "",
         model_dir: str = "",
         extra_adapter_payload: dict[str, Any] | None = None,
+        allow_historical_model_reuse: bool = False,
     ) -> PredictionPreparation:
         clean_goal = str(goal or "").strip()
         clean_property = str(property_id or "").strip() or "default"
@@ -45,8 +46,11 @@ class PredictionPreparationAgent:
             use_case=clean_use_case,
             available_inputs=set(clean_inputs),
         )
+        historical_prior = not model_selection.can_execute_prediction
+        reuse_historical = historical_prior and bool(allow_historical_model_reuse)
         adapter, adapter_ready = self._adapter_for_backend(model_selection.selected_model.backend)
-        status = "needs_clarification" if model_selection.requires_user_input else "needs_confirmation"
+        needs_clarification = model_selection.requires_user_input or (historical_prior and not reuse_historical)
+        status = "needs_clarification" if needs_clarification else "needs_confirmation"
         warnings = list(model_selection.warnings)
         questions: list[PlanQuestion] = []
         if model_selection.requires_user_input:
@@ -62,28 +66,48 @@ class PredictionPreparationAgent:
                     blocks_execution=True,
                 )
             )
+        if historical_prior and not reuse_historical:
+            warnings.append("training_required_for_request")
+            questions.append(
+                PlanQuestion(
+                    question_id=f"q_prediction_{model_selection.normalized_property_id}_train_or_reuse",
+                    prompt=(
+                        f"Train a fresh model for `{model_selection.normalized_property_id}` or explicitly approve "
+                        f"reuse of historical prior `{model_selection.selected_model_id}`?"
+                    ),
+                    reason="Historical model results are modeling memory, not promoted prediction assets for new requests.",
+                    choices=["train_fresh_model", "approve_historical_reuse", "provide_promoted_model_asset"],
+                    blocks_execution=True,
+                )
+            )
+        elif reuse_historical:
+            warnings.append("historical_model_reuse_explicitly_allowed")
         if not adapter_ready:
             warnings.append(f"adapter_implementation_required:{adapter}")
-        for key, value in {
-            "candidate_csv": candidate_csv,
-            "output_csv": output_csv,
-            "model_dir": model_dir,
-        }.items():
-            if not str(value or "").strip():
-                warnings.append(f"missing_execution_field:{key}")
-
-        adapter_payload = self._adapter_payload(
-            run_id=str(run_id or "").strip(),
-            candidate_csv=candidate_csv,
-            output_csv=output_csv,
-            property_id=model_selection.normalized_property_id,
-            model_id=model_selection.selected_model_id,
-            model_backend=model_selection.selected_model.backend,
-            model_dir=model_dir,
-            input_columns=clean_columns,
-            required_inputs=model_selection.selected_model.feature_requirements,
-            extra_payload=extra_adapter_payload or {},
-        )
+        should_build_payload = model_selection.can_execute_prediction or reuse_historical
+        if should_build_payload:
+            for key, value in {
+                "candidate_csv": candidate_csv,
+                "output_csv": output_csv,
+                "model_dir": model_dir,
+            }.items():
+                if not str(value or "").strip():
+                    warnings.append(f"missing_execution_field:{key}")
+            adapter_payload = self._adapter_payload(
+                run_id=str(run_id or "").strip(),
+                candidate_csv=candidate_csv,
+                output_csv=output_csv,
+                property_id=model_selection.normalized_property_id,
+                model_id=model_selection.selected_model_id,
+                model_backend=model_selection.selected_model.backend,
+                model_dir=model_dir,
+                input_columns=clean_columns,
+                required_inputs=model_selection.selected_model.feature_requirements,
+                extra_payload=extra_adapter_payload or {},
+            )
+        else:
+            adapter = ""
+            adapter_payload = {}
 
         return PredictionPreparation(
             run_id=str(run_id or "").strip(),
@@ -99,12 +123,15 @@ class PredictionPreparationAgent:
             missing_required_inputs=model_selection.missing_required_inputs,
             adapter=adapter,
             adapter_payload=adapter_payload,
-            required_gates=[GateName.FINAL_THRESHOLD.value],
+            required_gates=[GateName.FINAL_THRESHOLD.value] if should_build_payload else [GateName.TRAIN_CONFIG.value],
+            requires_training=historical_prior and not reuse_historical,
+            reuse_requires_user_approval=historical_prior,
             warnings=warnings,
             assumptions=[
                 "PredictionPreparationAgent does not execute prediction.",
                 "Execution adapters remain the authority for file paths, model assets, and runtime checks.",
-                "Reviewed OLED models require user confirmation before downstream ranking decisions.",
+                "Historical modeling priors are not promoted prediction assets for new requests.",
+                "Fresh training is the default for new targets unless the user explicitly approves historical reuse.",
             ],
             questions=questions,
             executable=False,
@@ -253,6 +280,7 @@ class PredictionPreparationAgent:
             f"- Status: `{preparation.status}`",
             f"- Model: `{preparation.model_selection.selected_model_id}`",
             f"- Adapter: `{preparation.adapter}`",
+            f"- Requires training: `{preparation.requires_training}`",
             "",
             "## Missing Required Inputs",
         ]

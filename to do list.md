@@ -1331,11 +1331,12 @@ Core principle:
 - [x] Add `RerunProposal` as a structured artifact with candidate fixes, rationale, expected impact, cost, approval requirements, and fallback policy.
 - [x] Let the agent recommend rerun actions such as revised cleaning, low-noise filtering, target transform, solvent/context conditioning, split correction, seed ensemble, hyperparameter sweep, backend switch, more data, or low-confidence model use.
 - [x] Keep rerun execution gated: the agent may propose and explain reruns, but expensive training, external search, backend switches, data relaxation, or model promotion still require user confirmation.
-- [x] Add `DomainModelRegistry` and OLED reviewed model candidates for emission, scalar PLQY, and high-PLQY screening.
-- [x] Add `PredictionPreparation` as a non-executable pre-prediction artifact that turns a natural-language target and available input columns into reviewed model selection, missing-input questions, required gates, warnings, and draft adapter payload.
+- [x] Add `DomainModelRegistry` and OLED historical modeling priors for emission, scalar PLQY, and high-PLQY screening. These records are agent memory for future training decisions, not default prediction weights.
+- [x] Add `PredictionPreparation` as a non-executable pre-prediction artifact that turns a natural-language target and available input columns into historical prior selection, missing-input questions, required gates, training-required warnings, and draft adapter payload only when a promoted asset or explicitly approved historical reuse exists.
 - [x] Implement `predict_candidates_domain_model_adapter` bridge for solvent-aware OLED models and wire it into adapter export, API permission policy, and RunPlan adapter override allowlist.
 - [x] Add `score_domain_model_candidates.py` runtime package for domain model manifests, including input-column validation, precomputed prediction CSV merge, external-command dispatch, and standardized stdout JSON for adapter results.
-- [ ] Register reviewed OLED model assets and package real inference manifests for `plqy_solvent_pca64_seed42` and `plqy_manual_weight3_ensemble` so `predict_candidates_domain_model_adapter` can execute those models beyond plan mode.
+- [x] Prevent historical training results such as `plqy_solvent_pca64_seed42` and `plqy_manual_weight3_ensemble` from being used as default MVP prediction assets; fresh target-specific training remains the default for new user requests.
+- [ ] Add a `PromotedModelAsset` path for future models trained against a specific confirmed request, with explicit user approval, applicability limits, manifest/runtime, and rollback metadata before prediction reuse.
 
 ### 24.4 Recovery And Replanning
 

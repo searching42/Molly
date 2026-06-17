@@ -16,6 +16,11 @@ def test_oled_registry_selects_current_default_models() -> None:
     assert plqy_scalar.selected_model_id == "plqy_solvent_pca64_seed42"
     assert plqy_scalar.selected_model.property_id == "plqy"
     assert plqy_scalar.selected_model.intended_use == "scalar_prediction"
+    assert plqy_scalar.selected_model.reuse_policy == "historical_prior"
+    assert plqy_scalar.selection_role == "modeling_prior"
+    assert plqy_scalar.can_execute_prediction is False
+    assert plqy_scalar.reuse_requires_user_approval is True
+    assert "historical_model_prior_not_prediction_asset" in plqy_scalar.warnings
     assert plqy_scalar.selected_model.metrics["r2"] == 0.3883
     assert plqy_scalar.missing_required_inputs == []
 
@@ -50,6 +55,7 @@ def test_oled_registry_warns_when_solvent_conditioned_model_lacks_solvent_input(
     assert selection.selected_model_id == "plqy_solvent_pca64_seed42"
     assert selection.missing_required_inputs == ["solvent"]
     assert "missing_required_input:solvent" in selection.warnings
+    assert "historical_model_prior_not_prediction_asset" in selection.warnings
     assert selection.requires_user_input is True
 
 
@@ -78,6 +84,7 @@ def test_registry_matches_property_aliases_from_candidates_not_global_table() ->
                 aliases=["quantum_yield"],
                 intended_use="scalar_prediction",
                 backend="baseline",
+                reuse_policy="promoted_model_asset",
             ),
             DomainModelCandidate(
                 model_id="plqy_without_alias",
@@ -97,6 +104,8 @@ def test_registry_matches_property_aliases_from_candidates_not_global_table() ->
 
     assert selection.selected_model_id == "phi_f_model"
     assert selection.normalized_property_id == "phi_f"
+    assert selection.selection_role == "prediction_asset"
+    assert selection.can_execute_prediction is True
 
     registry_without_alias = DomainModelRegistry(
         [
