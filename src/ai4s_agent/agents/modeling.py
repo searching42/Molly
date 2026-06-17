@@ -17,6 +17,7 @@ from ai4s_agent.schemas import (
     ModelingRetryProposal,
     PlanQuestion,
     RerunProposal,
+    TargetEvidenceItem,
     TargetModelingBrief,
 )
 from ai4s_agent.storage import ProjectStorage
@@ -36,6 +37,7 @@ class ModelingAgent:
         previous_diagnostics: list[dict[str, Any]] | None = None,
         allow_external_search: bool = False,
         available_inputs: set[str] | list[str] | tuple[str, ...] | None = None,
+        target_evidence: list[dict[str, Any] | TargetEvidenceItem] | None = None,
     ) -> TargetModelingBrief:
         clean_goal = str(goal or "").strip()
         clean_property = str(property_id or "default").strip() or "default"
@@ -44,6 +46,14 @@ class ModelingAgent:
         diagnostics = previous_diagnostics if isinstance(previous_diagnostics, list) else []
         profile = self._target_rule_profile(clean_goal, clean_property)
         trainability_item = self._trainability_item(trainability, clean_property)
+        evidence_items = self._target_evidence_items(
+            property_id=clean_property,
+            profile=profile,
+            trainability_item=trainability_item,
+            project_memory=memory,
+            previous_diagnostics=diagnostics,
+            target_evidence=target_evidence or [],
+        )
         status = "ready_for_confirmation"
         questions: list[PlanQuestion] = []
         if str(trainability_item.get("status") or "").upper() in {"INSUFFICIENT_LABELS", "INVALID_LABELS"}:
@@ -68,6 +78,9 @@ class ModelingAgent:
         evidence_sources.append("built_in_domain_rules")
         if allow_external_search:
             evidence_sources.append("user_approved_external_search")
+        for item in evidence_items:
+            if item.source_type not in evidence_sources:
+                evidence_sources.append(item.source_type)
 
         model_selection = self._select_domain_model(
             goal=clean_goal,
@@ -92,11 +105,19 @@ class ModelingAgent:
             "effective_labels": self._safe_int(trainability_item.get("effective_labels")),
             "previous_diagnostics_count": len(diagnostics),
             "has_project_memory": bool(memory),
+            "target_evidence_count": len(evidence_items),
         }
+        if evidence_items:
+            profile["hyperparameters"] = {
+                **profile["hyperparameters"],
+                "evidence_review_policy": "source_labeled_before_training",
+            }
         assumptions = [
             "Brief is advisory and must be reviewed before expensive training.",
             "Execution adapters remain the authority for actual preprocessing and training.",
         ]
+        if allow_external_search or target_evidence:
+            assumptions.append("external_evidence_review_required")
         if profile["domain"] == "oled":
             assumptions.append("OLED-first defaults are used, while core schemas remain target-agnostic.")
 
@@ -116,6 +137,7 @@ class ModelingAgent:
             hyperparameters=profile["hyperparameters"],
             acceptance_criteria=profile["acceptance_criteria"],
             dataset_context=dataset_context,
+            evidence_items=evidence_items,
             model_selection=model_selection,
             assumptions=assumptions,
             questions=questions,
@@ -808,6 +830,120 @@ class ModelingAgent:
         return result
 
     @staticmethod
+    def _target_evidence_items(
+        *,
+        property_id: str,
+        profile: dict[str, Any],
+        trainability_item: dict[str, Any],
+        project_memory: dict[str, Any],
+        previous_diagnostics: list[dict[str, Any]],
+        target_evidence: list[dict[str, Any] | TargetEvidenceItem],
+    ) -> list[TargetEvidenceItem]:
+        items: list[TargetEvidenceItem] = []
+        if project_memory:
+            text = ModelingAgent._compact_json_summary(project_memory)
+            items.append(
+                TargetEvidenceItem(
+                    evidence_id=f"{property_id}:project_memory",
+                    source_type="project_memory",
+                    source_ref="project_memory",
+                    summary="Project memory contains prior user decisions or modeling lessons for this target.",
+                    implications=ModelingAgent._evidence_implications(text),
+                    recommended_actions=ModelingAgent._evidence_actions(text),
+                    confidence=0.7,
+                )
+            )
+        if previous_diagnostics:
+            text = ModelingAgent._compact_json_summary(previous_diagnostics)
+            items.append(
+                TargetEvidenceItem(
+                    evidence_id=f"{property_id}:previous_run_diagnostics",
+                    source_type="previous_run_diagnostics",
+                    source_ref="previous_diagnostics",
+                    summary="Previous diagnostics are available and should influence rerun or reuse decisions.",
+                    implications=ModelingAgent._evidence_implications(text),
+                    recommended_actions=ModelingAgent._evidence_actions(text),
+                    confidence=0.75,
+                )
+            )
+        if trainability_item:
+            status = str(trainability_item.get("status") or "").strip()
+            labels = ModelingAgent._safe_int(trainability_item.get("effective_labels"))
+            implications = ["trainability_available"]
+            if labels and labels < 50:
+                implications.append("low_label_count")
+            items.append(
+                TargetEvidenceItem(
+                    evidence_id=f"{property_id}:trainability_report",
+                    source_type="trainability_report",
+                    source_ref=str(trainability_item.get("property_id") or property_id),
+                    summary=f"Trainability status is `{status or 'unknown'}` with {labels} effective labels.",
+                    implications=implications,
+                    recommended_actions=["respect_trainability_status_before_training"],
+                    confidence=0.8,
+                )
+            )
+        items.append(
+            TargetEvidenceItem(
+                evidence_id=f"{property_id}:built_in_domain_rules",
+                source_type="built_in_domain_rules",
+                source_ref=str(profile.get("domain") or "general"),
+                summary="Built-in domain rules provide default preprocessing, split, transform, backend, and acceptance guidance.",
+                implications=ModelingAgent._dedup_strings(profile.get("risk_flags", [])),
+                recommended_actions=ModelingAgent._dedup_strings(profile.get("preprocessing_steps", [])),
+                confidence=0.65,
+            )
+        )
+        for raw_item in target_evidence:
+            item = raw_item if isinstance(raw_item, TargetEvidenceItem) else TargetEvidenceItem.model_validate(raw_item)
+            items.append(item)
+        return items
+
+    @staticmethod
+    def _compact_json_summary(value: Any) -> str:
+        return str(value or "").lower()
+
+    @staticmethod
+    def _evidence_implications(text: str) -> list[str]:
+        normalized = str(text or "").lower()
+        implications: list[str] = []
+        if "solvent" in normalized or "溶剂" in normalized:
+            implications.append("solvent_context_dependence")
+        if "bound" in normalized or "0-1" in normalized or "bounded" in normalized:
+            implications.append("bounded_target")
+        if ModelingAgent._contains_any(
+            normalized,
+            ("high_qy", "high-qy", "high plqy", "compression", "underpredict"),
+        ):
+            implications.append("high_value_compression_risk")
+        if "scaffold" in normalized:
+            implications.append("scaffold_split_required")
+        if "rerun" in normalized or "weak" in normalized:
+            implications.append("rerun_history")
+        return ModelingAgent._dedup_strings(implications)
+
+    @staticmethod
+    def _evidence_actions(text: str) -> list[str]:
+        normalized = str(text or "").lower()
+        actions: list[str] = []
+        if "solvent" in normalized or "溶剂" in normalized:
+            actions.append("add_solvent_descriptors_or_embeddings")
+        if "bound" in normalized or "0-1" in normalized or "bounded" in normalized:
+            actions.append("bounded_logit_or_calibrated_regression")
+        if ModelingAgent._contains_any(
+            normalized,
+            ("high_qy", "high-qy", "high plqy", "compression", "underpredict"),
+        ):
+            actions.append("review_high_value_bucket_bias")
+        if "scaffold" in normalized:
+            actions.append("scaffold_split_grouped_by_canonical_smiles")
+        return ModelingAgent._dedup_strings(actions)
+
+    @staticmethod
+    def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+        return any(term in text for term in terms)
+
+    @staticmethod
     def _safe_int(value: Any) -> int:
         if isinstance(value, bool):
             return 0
@@ -1153,6 +1289,11 @@ class ModelingAgent:
         lines.extend(f"- `{step}`" for step in brief.preprocessing_steps)
         lines.extend(["", "## Evidence Sources"])
         lines.extend(f"- `{source}`" for source in brief.evidence_sources)
+        if brief.evidence_items:
+            lines.extend(["", "## Evidence Items"])
+            for item in brief.evidence_items:
+                ref = f" ({item.source_ref})" if item.source_ref else ""
+                lines.append(f"- `{item.source_type}`{ref}: {item.summary}")
         return "\n".join(lines) + "\n"
 
     @staticmethod

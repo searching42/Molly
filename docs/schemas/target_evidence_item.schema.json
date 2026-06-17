@@ -1,0 +1,54 @@
+{
+  "properties": {
+    "evidence_id": {
+      "title": "Evidence Id",
+      "type": "string"
+    },
+    "source_type": {
+      "title": "Source Type",
+      "type": "string"
+    },
+    "source_ref": {
+      "default": "",
+      "title": "Source Ref",
+      "type": "string"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "implications": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Implications",
+      "type": "array"
+    },
+    "recommended_actions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Recommended Actions",
+      "type": "array"
+    },
+    "confidence": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Confidence"
+    }
+  },
+  "required": [
+    "evidence_id",
+    "source_type",
+    "summary"
+  ],
+  "title": "TargetEvidenceItem",
+  "type": "object"
+}

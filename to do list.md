@@ -1325,7 +1325,7 @@ Core principle:
 
 - [x] Add `TargetModelingBrief` as a first-class planning artifact for every requested training target.
 - [ ] Require `ModelingAgent` to consult project memory, previous run diagnostics, built-in domain rules, and optional user-approved web/literature search before proposing preprocessing, target transforms, split strategy, backend, and hyperparameters.
-  - MVP status: project memory, previous diagnostics, trainability context, built-in OLED rules, and `user_approved_external_search` policy labels are wired; cited web/literature evidence injection remains TODO.
+  - MVP status: project memory, previous diagnostics, trainability context, built-in OLED rules, `user_approved_external_search` policy labels, and structured `TargetEvidenceItem` injection are wired. Remaining TODO: automatically hand off cited ResearchAgent/web/literature evidence into the brief after explicit user approval.
 - [x] Record target-specific cautions such as solvent dependence, device/context dependence, bounded labels, log-scale labels, replicate variance, class imbalance, censored values, target leakage risks, and expected metric ranges.
 - [x] Add `ModelDiagnosticsReport` after training that compares the trained model to baselines, target-specific expectations, prediction range, bucket bias, and high-value compression risk.
 - [x] Add `RerunProposal` as a structured artifact with candidate fixes, rationale, expected impact, cost, approval requirements, and fallback policy.
@@ -1369,6 +1369,7 @@ Core principle:
 - [x] Add `ResearchAgent` for source discovery, query expansion, DOI/URL ranking, and evidence quality assessment.
 - [x] Add `ModelingAgent` for backend recommendation, experiment design, metric interpretation, and retry proposals.
 - [ ] Let `ResearchAgent` provide target-specific evidence only through cited summaries and structured source manifests; do not inject web/literature claims directly into preprocessing or hyperparameters without a reviewable `TargetModelingBrief`.
+  - MVP status: `TargetModelingBrief` now accepts structured `TargetEvidenceItem` records and exposes them in artifacts/review cards; direct ResearchAgent-to-ModelingAgent handoff is still TODO.
 - [x] Add `GenerationAgent` for candidate-generation strategy, frontier/constraint selection, and diversity/novelty tradeoff proposals.
 - [x] Add `ReportAgent` for run synthesis, limitations, next-step recommendations, and paper-style audit summaries.
 - [x] Keep these agents coordinated through shared schemas and artifacts, not hidden conversation state.

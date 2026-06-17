@@ -402,10 +402,16 @@ def build_target_modeling_brief_section(brief: dict[str, Any]) -> dict[str, Any]
     if not brief:
         return {}
     evidence_sources = string_list(brief.get("evidence_sources"))
+    evidence_items = list_payload(brief.get("evidence_items"))
     external_policy = str(brief.get("external_search_policy") or "").strip()
     source_labels = list(evidence_sources)
     if external_policy:
         source_labels.append(f"external_search:{external_policy}")
+    for item in evidence_items:
+        if isinstance(item, dict):
+            source_type = str(item.get("source_type") or "").strip()
+            if source_type:
+                source_labels.append(source_type)
     return {
         "run_id": str(brief.get("run_id") or ""),
         "goal": str(brief.get("goal") or ""),
@@ -418,6 +424,7 @@ def build_target_modeling_brief_section(brief: dict[str, Any]) -> dict[str, Any]
         "risk_flags": string_list(brief.get("risk_flags")),
         "preprocessing_steps": string_list(brief.get("preprocessing_steps")),
         "evidence_sources": evidence_sources,
+        "evidence_items": evidence_items,
         "external_search_policy": external_policy,
         "source_labels": dedup_strings(source_labels),
         "acceptance_criteria": object_payload(brief.get("acceptance_criteria")),

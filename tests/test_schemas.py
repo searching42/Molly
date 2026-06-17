@@ -63,6 +63,7 @@ from ai4s_agent.schemas import (
     ResearchSourceCandidate,
     ResearchSourceProposal,
     StageState,
+    TargetEvidenceItem,
     UnitNormalizationReport,
     export_json_schemas,
 )
@@ -119,6 +120,7 @@ def test_export_json_schemas(tmp_path: Path) -> None:
     assert "promoted_model_asset.schema.json" in names
     assert "prediction_preparation.schema.json" in names
     assert "model_package_review.schema.json" in names
+    assert "target_evidence_item.schema.json" in names
     assert "run_plan.schema.json" in names
     assert "run_plan_diff.schema.json" in names
 
@@ -171,6 +173,16 @@ def test_promoted_model_asset_schema_roundtrip_and_metrics_validation() -> None:
             approved_by="user",
             approved_at="2026-06-17T08:35:00Z",
             metrics={"r2": True},
+        )
+
+
+def test_target_evidence_item_rejects_bool_confidence() -> None:
+    with pytest.raises(ValidationError, match="confidence must be a number"):
+        TargetEvidenceItem(
+            evidence_id="lit-1",
+            source_type="literature_summary",
+            summary="Evidence summary.",
+            confidence=True,
         )
 
 

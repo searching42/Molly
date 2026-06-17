@@ -17,7 +17,7 @@ http://127.0.0.1:8792/
 
 The planning layer is intended to infer target properties from the user's natural-language goal plus the cleaned dataset property catalog. It should not assume a fixed `lambda_em/plqy/mw` target set.
 
-For each requested training target, the agent should first prepare a target-aware modeling brief from project memory, previous run diagnostics, built-in domain rules, dataset statistics, and optional user-approved web/literature search. That brief should drive preprocessing, split strategy, target transforms, backend choice, and hyperparameters.
+For each requested training target, the agent should first prepare a target-aware modeling brief from project memory, previous run diagnostics, built-in domain rules, dataset statistics, and optional user-approved web/literature search. Structured `TargetEvidenceItem` records keep cited summaries, implications, recommended actions, and confidence visible inside that brief before they influence preprocessing, split strategy, target transforms, backend choice, or hyperparameters.
 
 After training, the agent should diagnose model quality against baselines and target-specific expectations before using the model for prediction. Weak results should produce a reviewable rerun proposal, not a silent rerun or an unqualified model promotion.
 

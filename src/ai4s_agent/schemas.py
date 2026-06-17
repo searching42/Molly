@@ -1097,6 +1097,51 @@ class RerunProposal(BaseModel):
         return [str(item).strip() for item in value if str(item).strip()]
 
 
+class TargetEvidenceItem(BaseModel):
+    evidence_id: str
+    source_type: str
+    source_ref: str = ""
+    summary: str
+    implications: list[str] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+    confidence: float | None = None
+
+    @field_validator("evidence_id", "source_type", "summary")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            raise ValueError("target evidence item text fields are required")
+        return clean
+
+    @field_validator("source_ref")
+    @classmethod
+    def validate_optional_text(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @field_validator("implications", "recommended_actions")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for item in value:
+            clean = str(item or "").strip()
+            if clean and clean not in result:
+                result.append(clean)
+        return result
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def validate_confidence(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError("target evidence confidence must be a number, got bool")
+        number = float(value)
+        if not math.isfinite(number) or number < 0 or number > 1:
+            raise ValueError("target evidence confidence must be finite and between 0 and 1")
+        return number
+
+
 class TargetModelingBrief(BaseModel):
     run_id: str
     goal: str
@@ -1113,6 +1158,7 @@ class TargetModelingBrief(BaseModel):
     hyperparameters: dict[str, Any] = Field(default_factory=dict)
     acceptance_criteria: dict[str, Any] = Field(default_factory=dict)
     dataset_context: dict[str, Any] = Field(default_factory=dict)
+    evidence_items: list[TargetEvidenceItem] = Field(default_factory=list)
     model_selection: DomainModelSelection | None = None
     assumptions: list[str] = Field(default_factory=list)
     questions: list[PlanQuestion] = Field(default_factory=list)
@@ -2235,6 +2281,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "modeling_metric_interpretation": ModelingMetricInterpretation,
     "modeling_retry_proposal": ModelingRetryProposal,
     "rerun_proposal": RerunProposal,
+    "target_evidence_item": TargetEvidenceItem,
     "target_modeling_brief": TargetModelingBrief,
     "model_diagnostics_report": ModelDiagnosticsReport,
     "model_package_review": ModelPackageReview,

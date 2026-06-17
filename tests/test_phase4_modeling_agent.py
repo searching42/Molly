@@ -1,5 +1,11 @@
 from ai4s_agent.agents.modeling import ModelingAgent
-from ai4s_agent.schemas import ModelDiagnosticsReport, ModelPackageReview, ModelingPlanProposal, TargetModelingBrief
+from ai4s_agent.schemas import (
+    ModelDiagnosticsReport,
+    ModelPackageReview,
+    ModelingPlanProposal,
+    TargetEvidenceItem,
+    TargetModelingBrief,
+)
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -167,6 +173,77 @@ def test_modeling_agent_prepares_oled_plqy_target_modeling_brief() -> None:
     ]
     assert brief.external_search_policy == "not_used"
     assert brief.acceptance_criteria["review_high_value_bucket_bias"] is True
+
+    restored = TargetModelingBrief.model_validate_json(brief.model_dump_json())
+    assert restored.model_dump(mode="json") == brief.model_dump(mode="json")
+
+
+def test_modeling_agent_brief_records_target_evidence_items_and_implications() -> None:
+    brief = ModelingAgent().prepare_target_modeling_brief(
+        run_id="run-target-evidence",
+        goal="Train a PLQY model for OLED emitters with reliable high-value ranking.",
+        property_id="plqy",
+        trainability_report=_trainability_report(),
+        project_memory={
+            "lessons": [
+                "Previous PLQY runs improved with solvent-aware features but underpredicted high-QY samples."
+            ]
+        },
+        previous_diagnostics=[
+            {
+                "model_id": "plqy_manual_weight3_ensemble",
+                "decision": "rerun_recommended",
+                "risk_flags": ["high_value_underprediction"],
+                "metrics": {"mae": 0.1741, "r2": 0.3754},
+            }
+        ],
+        allow_external_search=True,
+        target_evidence=[
+            {
+                "evidence_id": "lit-chromophore-plqy-solvent",
+                "source_type": "literature_summary",
+                "source_ref": "doi:10.1038/s41597-020-00634-8",
+                "summary": "Chromophore PLQY records are solvent-conditioned bounded values; high-PLQY ranking should inspect upper-tail bias.",
+                "implications": [
+                    "solvent_context_dependence",
+                    "bounded_target",
+                    "high_value_compression_risk",
+                ],
+                "recommended_actions": [
+                    "preserve_solvent_conditioned_rows",
+                    "bounded_logit_or_calibrated_regression",
+                    "review_high_value_bucket_bias",
+                ],
+                "confidence": 0.86,
+            }
+        ],
+    )
+
+    source_types = [item.source_type for item in brief.evidence_items]
+    assert source_types == [
+        "project_memory",
+        "previous_run_diagnostics",
+        "trainability_report",
+        "built_in_domain_rules",
+        "literature_summary",
+    ]
+    literature = brief.evidence_items[-1]
+    assert isinstance(literature, TargetEvidenceItem)
+    assert literature.evidence_id == "lit-chromophore-plqy-solvent"
+    assert literature.source_ref == "doi:10.1038/s41597-020-00634-8"
+    assert "solvent_context_dependence" in literature.implications
+    assert "bounded_logit_or_calibrated_regression" in literature.recommended_actions
+    assert brief.evidence_sources == [
+        "project_memory",
+        "previous_run_diagnostics",
+        "trainability_report",
+        "built_in_domain_rules",
+        "user_approved_external_search",
+        "literature_summary",
+    ]
+    assert brief.dataset_context["target_evidence_count"] == 5
+    assert brief.hyperparameters["evidence_review_policy"] == "source_labeled_before_training"
+    assert "external_evidence_review_required" in brief.assumptions
 
     restored = TargetModelingBrief.model_validate_json(brief.model_dump_json())
     assert restored.model_dump(mode="json") == brief.model_dump(mode="json")
