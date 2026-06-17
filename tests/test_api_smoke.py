@@ -1520,6 +1520,49 @@ def test_adapter_execute_endpoint_allows_train_model_after_confirmation_and_gate
     assert resp.json["result"]["status"] == "planned"
 
 
+def test_adapter_execute_endpoint_runs_domain_model_prediction_after_project_approval(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path)
+    client = app.test_client()
+    payload = {
+        "run_id": "r-domain-predict",
+        "candidate_csv": str(tmp_path / "candidates.csv"),
+        "output_csv": str(tmp_path / "predictions.csv"),
+        "property_id": "plqy",
+        "model_id": "plqy_solvent_pca64_seed42",
+        "model_backend": "unimol_with_solvent_pca64",
+        "model_dir": str(tmp_path / "model"),
+        "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
+        "required_inputs": ["canonical_smiles", "solvent"],
+        "execute": False,
+    }
+
+    blocked = client.post(
+        "/api/adapters/execute",
+        json={
+            "run_id": "r-domain-predict",
+            "adapter": "predict_candidates_domain_model_adapter",
+            "payload": payload,
+        },
+    )
+
+    assert blocked.status_code == 403
+    assert blocked.json["permission"]["reason"] == "PROJECT_APPROVAL_REQUIRED"
+
+    allowed = client.post(
+        "/api/adapters/execute",
+        json={
+            "run_id": "r-domain-predict",
+            "adapter": "predict_candidates_domain_model_adapter",
+            "project_approved": True,
+            "payload": payload,
+        },
+    )
+
+    assert allowed.status_code == 200
+    assert allowed.json["result"]["status"] == "planned"
+    assert allowed.json["result"]["adapter"] == "predict_candidates_domain_model"
+
+
 def test_retry_run_refreshes_stage_start_time(tmp_path) -> None:
     storage = ProjectStorage(workspace_dir=tmp_path)
     storage.write_stage_state(

@@ -23,6 +23,7 @@ from ai4s_agent.adapters.phase1 import (
     legacy_full_flow_adapter,
     parse_task_adapter,
     predict_candidates_baseline_adapter,
+    predict_candidates_domain_model_adapter,
     predict_candidates_unimol_legacy_adapter,
     recommend_backend_service,
     render_report_adapter,
@@ -818,6 +819,50 @@ def test_legacy_adapters_are_wired() -> None:
     command = " ".join(predictor["command"])
     assert "score_unimol_property_candidates.py" in command
     assert "run_mvp_flow.py" not in command
+
+    domain = predict_candidates_domain_model_adapter(
+        {
+            "run_id": "r-domain",
+            "candidate_csv": "/tmp/candidates.csv",
+            "output_csv": "/tmp/plqy_predictions.csv",
+            "property_id": "plqy",
+            "model_id": "plqy_solvent_pca64_seed42",
+            "model_backend": "unimol_with_solvent_pca64",
+            "model_dir": "/tmp/model",
+            "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
+            "required_inputs": ["canonical_smiles", "solvent"],
+            "execute": False,
+        }
+    )
+    assert domain["status"] == "planned"
+    assert domain["adapter"] == "predict_candidates_domain_model"
+    assert domain["model_id"] == "plqy_solvent_pca64_seed42"
+    assert domain["prediction_method"] == "domain_model_remote_or_local"
+    domain_command = " ".join(domain["command"])
+    assert "score_domain_model_candidates.py" in domain_command
+    assert "--model-id plqy_solvent_pca64_seed42" in domain_command
+    assert "--input-columns-json" in domain_command
+
+
+def test_domain_model_prediction_requires_declared_input_columns() -> None:
+    result = predict_candidates_domain_model_adapter(
+        {
+            "run_id": "r-domain",
+            "candidate_csv": "/tmp/candidates.csv",
+            "output_csv": "/tmp/plqy_predictions.csv",
+            "property_id": "plqy",
+            "model_id": "plqy_solvent_pca64_seed42",
+            "model_backend": "unimol_with_solvent_pca64",
+            "model_dir": "/tmp/model",
+            "input_columns": {"canonical_smiles": "SMILES"},
+            "required_inputs": ["canonical_smiles", "solvent"],
+            "execute": False,
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "missing_required_input_columns"
+    assert result["error"]["missing_required_inputs"] == ["solvent"]
 
 
 def test_unimol_legacy_remote_training_executes_scp_and_ssh(tmp_path: Path, monkeypatch) -> None:

@@ -56,7 +56,7 @@ def test_prediction_preparation_builds_solvent_aware_plqy_payload_when_inputs_ex
         "required_inputs": ["canonical_smiles", "solvent"],
         "execute": False,
     }
-    assert "adapter_implementation_required:predict_candidates_domain_model_adapter" in preparation.warnings
+    assert "adapter_implementation_required:predict_candidates_domain_model_adapter" not in preparation.warnings
 
     restored = PredictionPreparation.model_validate_json(preparation.model_dump_json())
     assert restored.model_dump(mode="json") == preparation.model_dump(mode="json")

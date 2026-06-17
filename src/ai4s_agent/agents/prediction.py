@@ -172,7 +172,7 @@ class PredictionPreparationAgent:
         if clean_backend == "unimol":
             return "predict_candidates_unimol_legacy_adapter", True
         if clean_backend.startswith("unimol_with_"):
-            return "predict_candidates_domain_model_adapter", False
+            return "predict_candidates_domain_model_adapter", True
         return "predict_candidates_baseline_adapter", True
 
     @classmethod

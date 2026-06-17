@@ -1333,7 +1333,8 @@ Core principle:
 - [x] Keep rerun execution gated: the agent may propose and explain reruns, but expensive training, external search, backend switches, data relaxation, or model promotion still require user confirmation.
 - [x] Add `DomainModelRegistry` and OLED reviewed model candidates for emission, scalar PLQY, and high-PLQY screening.
 - [x] Add `PredictionPreparation` as a non-executable pre-prediction artifact that turns a natural-language target and available input columns into reviewed model selection, missing-input questions, required gates, warnings, and draft adapter payload.
-- [ ] Implement `predict_candidates_domain_model_adapter` for solvent-aware OLED models and connect reviewed model assets to the prediction execution chain.
+- [x] Implement `predict_candidates_domain_model_adapter` bridge for solvent-aware OLED models and wire it into adapter export, API permission policy, and RunPlan adapter override allowlist.
+- [ ] Register reviewed OLED model assets and provide the actual `score_domain_model_candidates.py` scorer/runtime package so `predict_candidates_domain_model_adapter` can execute beyond plan mode.
 
 ### 24.4 Recovery And Replanning
 

@@ -1862,6 +1862,139 @@ def predict_candidates_unimol_legacy_adapter(payload: dict[str, Any]) -> dict[st
     }
 
 
+def predict_candidates_domain_model_adapter(payload: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(payload.get("run_id") or "").strip()
+    candidate_csv = str(payload.get("candidate_csv") or "").strip()
+    output_csv = str(payload.get("output_csv") or "").strip()
+    property_id = str(payload.get("property_id") or "").strip()
+    model_id = str(payload.get("model_id") or "").strip()
+    model_backend = str(payload.get("model_backend") or "").strip()
+    model_dir = str(payload.get("model_dir") or payload.get("model_path") or "").strip()
+    input_columns = payload.get("input_columns") if isinstance(payload.get("input_columns"), dict) else {}
+    clean_input_columns = {
+        str(key).strip(): str(value).strip()
+        for key, value in input_columns.items()
+        if str(key).strip() and str(value).strip()
+    }
+    raw_required_inputs = payload.get("required_inputs", [])
+    required_inputs = [
+        str(item).strip()
+        for item in raw_required_inputs
+        if str(item).strip()
+    ] if isinstance(raw_required_inputs, list) else []
+    remote_host = str(payload.get("remote_host") or payload.get("remote_ssh_host") or "").strip()
+    remote_python = str(payload.get("remote_python") or payload.get("remote_py") or "").strip()
+    remote_tmp_base = str(payload.get("remote_tmp_base") or payload.get("remote_tmp_dir") or "").strip()
+    if not run_id or not candidate_csv or not output_csv or not property_id or not model_id or not model_backend or not model_dir:
+        return {
+            "status": "failed",
+            "adapter": "predict_candidates_domain_model",
+            "error": {
+                "code": "missing_required_fields",
+                "message": "run_id/candidate_csv/output_csv/property_id/model_id/model_backend/model_dir are required",
+            },
+        }
+    missing_inputs = [item for item in required_inputs if item not in clean_input_columns]
+    if missing_inputs:
+        return {
+            "status": "failed",
+            "adapter": "predict_candidates_domain_model",
+            "error": {
+                "code": "missing_required_input_columns",
+                "message": f"missing required input columns: {', '.join(missing_inputs)}",
+                "missing_required_inputs": missing_inputs,
+            },
+        }
+
+    scorer = _resolve_path(
+        str(payload.get("scorer_path") or "scripts/score_domain_model_candidates.py"),
+        base=WORKSPACE,
+    )
+    argv = [
+        sys.executable,
+        str(scorer),
+        candidate_csv,
+        output_csv,
+        "--property-name",
+        property_id,
+        "--model-id",
+        model_id,
+        "--model-backend",
+        model_backend,
+        "--model-dir",
+        model_dir,
+    ]
+    if clean_input_columns:
+        argv += ["--input-columns-json", json.dumps(clean_input_columns, sort_keys=True)]
+    if required_inputs:
+        argv += ["--required-inputs-json", json.dumps(required_inputs)]
+    for key, flag in [
+        ("solvent_embedding_path", "--solvent-embedding-path"),
+        ("descriptor_config", "--descriptor-config"),
+        ("calibration_json", "--calibration-json"),
+        ("objective_type", "--objective-type"),
+        ("target_center", "--target-center"),
+        ("sigma", "--sigma"),
+    ]:
+        value = payload.get(key)
+        if value not in {None, ""}:
+            argv += [flag, str(value)]
+
+    result_base = {
+        "adapter": "predict_candidates_domain_model",
+        "model_id": model_id,
+        "model_backend": model_backend,
+        "prediction_method": "domain_model_remote_or_local",
+        "command": argv,
+    }
+    if not bool(payload.get("execute", False)):
+        return {
+            **result_base,
+            "status": "planned",
+            "note": "set execute=true to run domain model candidate scorer",
+        }
+
+    timeout_sec = int(payload.get("timeout_sec", 1800))
+    if remote_host or remote_python or remote_tmp_base:
+        if not remote_host or not remote_python or not remote_tmp_base:
+            return {
+                "status": "failed",
+                "adapter": "predict_candidates_domain_model",
+                "error": {
+                    "code": "missing_remote_runtime_fields",
+                    "message": "remote_host/remote_python/remote_tmp_base are required together for remote prediction",
+                },
+            }
+        env = {
+            "DOMAIN_MODEL_REMOTE_HOST": remote_host,
+            "DOMAIN_MODEL_REMOTE_PY": remote_python,
+            "DOMAIN_MODEL_REMOTE_TMP_BASE": remote_tmp_base,
+        }
+        execution = run_argv_cmd_with_env(argv=argv, cwd=WORKSPACE, timeout_sec=timeout_sec, env=env)
+    else:
+        execution = run_argv_cmd(argv=argv, cwd=WORKSPACE, timeout_sec=timeout_sec)
+    if int(execution.get("returncode", 1)) != 0:
+        return {
+            **result_base,
+            "status": "failed",
+            "error": {
+                "code": "domain_model_predict_nonzero_exit",
+                "message": "score_domain_model_candidates.py failed",
+                "details": execution,
+            },
+        }
+    return {
+        **result_base,
+        "status": "success",
+        "output_csv": output_csv,
+        "execution": {
+            "returncode": execution.get("returncode"),
+            "stdout_tail": str(execution.get("stdout", "")).splitlines()[-20:],
+            "stderr_tail": str(execution.get("stderr", "")).splitlines()[-20:],
+        },
+    }
+
+
 def filter_rank_adapter(payload: dict[str, Any]) -> dict[str, Any]:
     prediction_csv = str(payload.get("prediction_csv") or "").strip()
     output_csv_raw = str(payload.get("output_csv") or "").strip()

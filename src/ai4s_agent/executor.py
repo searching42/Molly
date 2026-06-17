@@ -26,7 +26,11 @@ TaskOptions = dict[str, dict[str, Any]]
 _ADAPTER_OVERRIDE_ALLOWLIST: dict[str, set[str]] = {
     "train_model": {"train_model_baseline_adapter", "train_model_unimol_legacy_adapter"},
     "generate_candidates": {"generate_candidates_stub_adapter"},
-    "predict_candidates": {"predict_candidates_baseline_adapter", "predict_candidates_unimol_legacy_adapter"},
+    "predict_candidates": {
+        "predict_candidates_baseline_adapter",
+        "predict_candidates_domain_model_adapter",
+        "predict_candidates_unimol_legacy_adapter",
+    },
 }
 
 

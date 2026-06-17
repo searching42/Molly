@@ -1499,6 +1499,7 @@ def _adapter_execution_policy(adapter_name: str, adapter_payload: dict) -> tuple
     adapter_aliases = {
         "draft_cleaning_rules_adapter": "clean_dataset",
         "train_model_unimol_legacy_adapter": "train_model",
+        "predict_candidates_domain_model_adapter": "predict_candidates",
         "predict_candidates_unimol_legacy_adapter": "predict_candidates",
         "parse_pdf_folder_mineru_adapter": "parse_document",
         "parse_document_pdfplumber_adapter": "parse_document",

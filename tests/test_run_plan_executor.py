@@ -214,6 +214,16 @@ def test_run_plan_executor_rejects_adapter_override_for_unallowlisted_task(tmp_p
         )
 
 
+def test_run_plan_executor_allows_domain_model_prediction_override() -> None:
+    adapter_name = RunPlanExecutor._adapter_name_for(
+        "predict_candidates",
+        "predict_candidates_baseline_adapter",
+        {"adapter": "predict_candidates_domain_model_adapter"},
+    )
+
+    assert adapter_name == "predict_candidates_domain_model_adapter"
+
+
 def test_run_plan_executor_enables_strict_rdkit_cleaning_by_default(tmp_path: Path) -> None:
     storage = ProjectStorage(tmp_path)
     dataset = tmp_path / "input" / "train.csv"
