@@ -154,9 +154,52 @@ def test_agent_review_card_shows_modeling_artifacts_with_approval_controls() -> 
     assert card["requires_confirmation"] is True
 
 
+def test_agent_review_card_shows_model_package_review_controls() -> None:
+    review = ModelingAgent().review_model_package(
+        run_id="run-package-card",
+        goal="Predict OLED emission wavelength.",
+        model_manifest={
+            "model_id": "emission_unimol_v001",
+            "property_id": "emission_max_nm",
+            "model_backend": "unimol",
+            "metrics": {"mae": 28.5, "r2": 0.84},
+            "split_strategy": "scaffold_split_grouped_by_canonical_smiles",
+            "feature_type": "unimol_3d",
+        },
+        domain_model_manifest={
+            "domain": "oled",
+            "use_case": "scalar_prediction",
+            "feature_requirements": ["canonical_smiles"],
+            "input_columns": {"canonical_smiles": "SMILES"},
+        },
+    )
+
+    card = build_agent_review_card({"model_package_review": review.model_dump(mode="json")})
+
+    section = card["sections"]["model_package_review"]
+    assert section["model_id"] == "emission_unimol_v001"
+    assert section["decision"] == "promote_candidate"
+    assert section["required_permissions"] == ["promote_asset"]
+    assert section["promotion_draft"]["property_id"] == "emission_max_nm"
+    assert "model_package_review" in section["source_labels"]
+    assert "decision:promote_candidate" in section["source_labels"]
+    assert any(
+        control["target_type"] == "model_package_review" and control["action"] == "confirm_model_package_review"
+        for control in card["approval_controls"]
+    )
+    assert any(
+        control["target_type"] == "permission" and control["target_id"] == "promote_asset"
+        for control in card["approval_controls"]
+    )
+    assert card["requires_confirmation"] is True
+
+
 def test_agent_review_card_rejects_present_malformed_artifact() -> None:
     with pytest.raises(ValueError, match="plan_proposal must be an object"):
         build_agent_review_card({"plan_proposal": "not-an-object"})
 
     with pytest.raises(ValueError, match="target_modeling_brief"):
         build_agent_review_card({"target_modeling_brief": {"run_id": "missing-required-fields"}})
+
+    with pytest.raises(ValueError, match="model_package_review"):
+        build_agent_review_card({"model_package_review": {"run_id": "missing-required-fields"}})

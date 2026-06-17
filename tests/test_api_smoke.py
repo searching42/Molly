@@ -180,6 +180,7 @@ def test_index_page_renders_modeling_agent_review_card_sections() -> None:
     assert "target_modeling_brief" in html
     assert "model_diagnostics" in html
     assert "rerun_proposal" in html
+    assert "model_package_review" in html
     assert "approval_controls" in html
 
 
@@ -570,6 +571,7 @@ def test_agent_endpoints_reject_non_object_json_payloads(tmp_path) -> None:
         "/api/agent/replan",
         "/api/agent/research-sources",
         "/api/agent/modeling-plan",
+        "/api/agent/model-package-review",
         "/api/agent/generation-plan",
         "/api/agent/report-summary",
         "/api/agent/review-card",
@@ -797,6 +799,65 @@ def test_agent_modeling_plan_endpoint_writes_proposal(tmp_path) -> None:
         / run_id
         / "modeling_plan_proposal.json"
     ).exists()
+
+
+def test_agent_model_package_review_endpoint_writes_review(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    project_id = "proj-package-review-api"
+    run_id = "run-package-review-api"
+
+    resp = client.post(
+        "/api/agent/model-package-review",
+        json={
+            "project_id": project_id,
+            "run_id": run_id,
+            "goal": "Predict OLED emission wavelength.",
+            "model_manifest": {
+                "model_id": "emission_unimol_v001",
+                "property_id": "emission_max_nm",
+                "model_backend": "unimol",
+                "metrics": {"mae": 28.5, "r2": 0.84},
+            },
+            "domain_model_manifest": {
+                "domain": "oled",
+                "use_case": "scalar_prediction",
+                "feature_requirements": ["canonical_smiles"],
+                "input_columns": {"canonical_smiles": "SMILES"},
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    review = resp.json["review"]
+    assert review["decision"] == "promote_candidate"
+    assert review["required_permissions"] == ["promote_asset"]
+    assert "model_package_review_json" in resp.json["outputs"]
+    assert (
+        tmp_path
+        / "projects"
+        / project_id
+        / "runs"
+        / run_id
+        / "model_package_review_emission_max_nm.json"
+    ).exists()
+
+
+def test_agent_model_package_review_endpoint_rejects_non_object_manifests(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/agent/model-package-review",
+        json={
+            "run_id": "run-package-review-bad",
+            "model_manifest": [],
+            "domain_model_manifest": {},
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "model_manifest" in resp.json["error"]
 
 
 def test_agent_generation_plan_endpoint_writes_proposal(tmp_path) -> None:

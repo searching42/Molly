@@ -618,8 +618,9 @@
         const brief = sections.target_modeling_brief || {};
         const diagnostics = sections.model_diagnostics || {};
         const rerun = sections.rerun_proposal || {};
+        const packageReview = sections.model_package_review || {};
         const controls = card?.approval_controls || [];
-        const hasContent = Object.keys(brief).length || Object.keys(diagnostics).length || Object.keys(rerun).length || controls.length;
+        const hasContent = Object.keys(brief).length || Object.keys(diagnostics).length || Object.keys(rerun).length || Object.keys(packageReview).length || controls.length;
         root.hidden = !hasContent;
         if (!hasContent) return;
         if (Object.keys(brief).length) {
@@ -650,6 +651,16 @@
             ["required approvals", rerun.required_approvals],
             ["fallback", rerun.fallback_policy],
           ], rerun.source_labels);
+        }
+        if (Object.keys(packageReview).length) {
+          appendReviewSection(root, "ModelPackageReview", [
+            ["model", packageReview.model_id],
+            ["decision", packageReview.decision],
+            ["status", packageReview.status],
+            ["metrics", packageReview.metrics],
+            ["risks", packageReview.risk_flags],
+            ["required permissions", packageReview.required_permissions],
+          ], packageReview.source_labels);
         }
         if (controls.length) {
           appendReviewSection(root, "approval_controls", [

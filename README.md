@@ -21,9 +21,11 @@ For each requested training target, the agent should first prepare a target-awar
 
 After training, the agent should diagnose model quality against baselines and target-specific expectations before using the model for prediction. Weak results should produce a reviewable rerun proposal, not a silent rerun or an unqualified model promotion.
 
-`/api/agent/review-card` exposes `TargetModelingBrief`, `ModelDiagnosticsReport`, and `RerunProposal` as explicit review sections with source labels and approval controls. The local console renders these sections as lightweight cards while keeping the raw JSON response available for audit/debugging.
+`/api/agent/review-card` exposes `TargetModelingBrief`, `ModelDiagnosticsReport`, `RerunProposal`, and `ModelPackageReview` as explicit review sections with source labels and approval controls. The local console renders these sections as lightweight cards while keeping the raw JSON response available for audit/debugging.
 
 Successful training adapters write a promotable model package into the model directory, including `model_metadata.json`, `model_manifest.json`, and `domain_model_manifest.json`. These package manifests make later registration and promotion review reproducible, but they do not by themselves approve reuse.
+
+`/api/agent/model-package-review` reviews those manifests plus optional diagnostics before any registry decision. The review can recommend `promote_candidate`, `rerun_recommended`, `memory_only`, or `blocked`; promotion recommendations still require the separate `promote_asset` confirmation path.
 
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.
 

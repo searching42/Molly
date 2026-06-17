@@ -1340,6 +1340,7 @@ Core principle:
   - MVP status: schema, JSON Schema export, project storage promotion/read path, and `PredictionPreparationAgent` selection path are implemented. Confirmed promoted assets can produce draft prediction payloads; candidate/deprecated assets and historical priors still require fresh training or explicit reuse approval.
   - API/UI status: `/models/promote` exposes the confirmed model asset promotion path, and `/models/promote/draft` plus the local console draft button prefill promotion fields from registered model metadata/manifests before human confirmation.
   - Training package status: baseline training now writes `model_metadata.json`, `model_manifest.json`, and `domain_model_manifest.json`; `RunPlanExecutor` registers those artifacts so a confirmed model registration can immediately produce a promotion draft.
+  - Agent review status: `ModelPackageReview` and `/api/agent/model-package-review` now classify a trained package as `promote_candidate`, `rerun_recommended`, `memory_only`, or `blocked` from manifests, metrics, diagnostics, required inputs, and known risks; promote remains gated by `promote_asset`.
   - Remaining polish: expand metadata coverage from model diagnostics/rerun reports and add richer UI review cards for applicability, limitations, and rollback comparison.
 
 ### 24.4 Recovery And Replanning
@@ -1376,7 +1377,7 @@ Core principle:
 - [x] Show "why this plan" alongside the task timeline.
 - [x] Show agent assumptions and missing information before execution.
 - [x] Show verifier findings and proposed replans as reviewable cards.
-- [x] Show `TargetModelingBrief`, `ModelDiagnosticsReport`, and `RerunProposal` as reviewable cards with source labels and approval controls.
+- [x] Show `TargetModelingBrief`, `ModelDiagnosticsReport`, `RerunProposal`, and `ModelPackageReview` as reviewable cards with source labels and approval controls.
 - [x] Add compare view for original plan vs revised plan.
 - [x] Add approval controls for plan confirmation, replan confirmation, memory use, external acquisition, training, and generation.
 - [x] Avoid making autonomous actions look like chat suggestions; every executable action should map to a visible task/gate.

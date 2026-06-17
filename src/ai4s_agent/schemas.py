@@ -1170,6 +1170,100 @@ class ModelDiagnosticsReport(BaseModel):
         return _validate_json_safe(value, "model_diagnostics_report")
 
 
+ModelPackageDecision = Literal["promote_candidate", "rerun_recommended", "memory_only", "blocked"]
+
+
+class ModelPackageReview(BaseModel):
+    run_id: str
+    goal: str = ""
+    model_id: str
+    domain: str = "general"
+    property_id: str
+    use_case: str = "scalar_prediction"
+    backend: str
+    status: str = "needs_confirmation"
+    decision: ModelPackageDecision
+    metrics: dict[str, float] = Field(default_factory=dict)
+    applicability: dict[str, Any] = Field(default_factory=dict)
+    feature_requirements: list[str] = Field(default_factory=list)
+    input_columns: dict[str, str] = Field(default_factory=dict)
+    limitations: list[str] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
+    rationale: list[str] = Field(default_factory=list)
+    required_gates: list[str] = Field(default_factory=list)
+    required_permissions: list[str] = Field(default_factory=list)
+    promotion_draft: dict[str, Any] = Field(default_factory=dict)
+    rerun_proposal: RerunProposal | None = None
+    memory_updates: list[dict[str, Any]] = Field(default_factory=list)
+    executable: bool = False
+    generated_at: str = Field(default_factory=_now_iso)
+
+    @field_validator("model_id", "property_id", "backend")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            raise ValueError("model package review model_id/property_id/backend are required")
+        return clean
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"needs_confirmation", "memory_only", "blocked"}:
+            raise ValueError("status must be needs_confirmation, memory_only, or blocked")
+        return normalized
+
+    @field_validator("metrics", mode="before")
+    @classmethod
+    def validate_metrics_are_finite(cls, value: Any) -> dict[str, float]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("model package review metrics must be an object")
+        metrics: dict[str, float] = {}
+        for key, raw in value.items():
+            if isinstance(raw, bool):
+                raise ValueError(f"model package review metric '{key}' must be a number, got bool")
+            number = float(raw)
+            if not math.isfinite(number):
+                raise ValueError("model package review metrics must be finite")
+            metrics[str(key)] = number
+        return metrics
+
+    @field_validator("feature_requirements", "limitations", "risk_flags", "rationale", "required_gates", "required_permissions")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for item in value:
+            clean = str(item or "").strip()
+            if clean and clean not in result:
+                result.append(clean)
+        return result
+
+    @field_validator("input_columns")
+    @classmethod
+    def validate_input_columns(cls, value: dict[str, str]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for key, raw in value.items():
+            clean_key = str(key or "").strip()
+            clean_value = str(raw or "").strip()
+            if clean_key and clean_value:
+                result[clean_key] = clean_value
+        return result
+
+    @field_validator("applicability", "promotion_draft")
+    @classmethod
+    def validate_dicts_are_json_safe(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_json_safe(value, "model_package_review")
+
+    @field_validator("memory_updates")
+    @classmethod
+    def validate_memory_updates_are_json_safe(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        _validate_json_safe(value, "model_package_review.memory_updates")
+        return value
+
+
 class DomainModelCandidate(BaseModel):
     model_id: str
     domain: str
@@ -2143,6 +2237,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "rerun_proposal": RerunProposal,
     "target_modeling_brief": TargetModelingBrief,
     "model_diagnostics_report": ModelDiagnosticsReport,
+    "model_package_review": ModelPackageReview,
     "domain_model_candidate": DomainModelCandidate,
     "domain_model_selection": DomainModelSelection,
     "promoted_model_asset": PromotedModelAsset,

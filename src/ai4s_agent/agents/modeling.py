@@ -9,6 +9,7 @@ from ai4s_agent.domains.oled import OLED_MODEL_REGISTRY
 from ai4s_agent.schemas import (
     GateName,
     ModelDiagnosticsReport,
+    ModelPackageReview,
     ModelingBackendRecommendation,
     ModelingExperimentDesign,
     ModelingMetricInterpretation,
@@ -196,6 +197,178 @@ class ModelingAgent:
             executable=False,
         )
 
+    def review_model_package(
+        self,
+        *,
+        run_id: str,
+        goal: str = "",
+        model_manifest: dict[str, Any] | None = None,
+        domain_model_manifest: dict[str, Any] | None = None,
+        diagnostics_report: ModelDiagnosticsReport | dict[str, Any] | None = None,
+    ) -> ModelPackageReview:
+        model_manifest = model_manifest if isinstance(model_manifest, dict) else {}
+        domain_manifest = domain_model_manifest if isinstance(domain_model_manifest, dict) else {}
+        diagnostics = self._coerce_diagnostics_report(diagnostics_report)
+        metrics = self._numeric_metrics(domain_manifest.get("metrics", {}))
+        metrics.update(self._numeric_metrics(model_manifest.get("metrics", {})))
+        if diagnostics is not None and diagnostics.metrics:
+            metrics.update(diagnostics.metrics)
+
+        clean_run_id = str(run_id or "").strip()
+        clean_goal = str(goal or "").strip()
+        model_id = self._first_nonempty(
+            model_manifest.get("model_id"),
+            domain_manifest.get("model_id"),
+            diagnostics.model_id if diagnostics else "",
+        )
+        property_id = self._first_nonempty(
+            model_manifest.get("property_id"),
+            domain_manifest.get("property_id"),
+            diagnostics.property_id if diagnostics else "",
+        )
+        backend = self._first_nonempty(
+            model_manifest.get("model_backend"),
+            model_manifest.get("backend"),
+            domain_manifest.get("model_backend"),
+            domain_manifest.get("backend"),
+        )
+        domain = self._first_nonempty(domain_manifest.get("domain"), model_manifest.get("domain"), "general")
+        use_case = self._first_nonempty(domain_manifest.get("use_case"), model_manifest.get("use_case"), "scalar_prediction")
+        applicability = self._json_object(domain_manifest.get("applicability"))
+        feature_requirements = self._string_list(domain_manifest.get("feature_requirements"))
+        input_columns = self._string_map(domain_manifest.get("input_columns"))
+        limitations = self._string_list(domain_manifest.get("limitations"))
+
+        risk_flags: list[str] = []
+        rationale: list[str] = []
+        required_gates: list[str] = []
+        required_permissions: list[str] = []
+        rerun_proposal: RerunProposal | None = None
+
+        missing = [
+            label
+            for label, value in (
+                ("model_id", model_id),
+                ("property_id", property_id),
+                ("backend", backend),
+            )
+            if not value
+        ]
+        if missing:
+            risk_flags.extend(f"missing_package_field:{item}" for item in missing)
+            rationale.append("Model package is missing required manifest metadata.")
+
+        if not metrics:
+            risk_flags.append("missing_numeric_metrics")
+            rationale.append("No numeric validation metrics are available for promotion review.")
+
+        if not feature_requirements:
+            risk_flags.append("missing_feature_requirements")
+            rationale.append("Domain manifest does not declare required model inputs.")
+        if not input_columns:
+            risk_flags.append("missing_input_columns")
+            rationale.append("Domain manifest does not map required model inputs to dataset columns.")
+
+        readiness = self._diagnostic_readiness(metrics)
+        if diagnostics is not None:
+            risk_flags.extend(diagnostics.risk_flags)
+            if diagnostics.rerun_proposal is not None:
+                rerun_proposal = diagnostics.rerun_proposal
+            if diagnostics.decision in {"blocked", "rerun_recommended"}:
+                rationale.append(f"Model diagnostics decision is `{diagnostics.decision}`.")
+                readiness = "weak" if diagnostics.decision == "rerun_recommended" else "blocked"
+            elif diagnostics.decision == "low_confidence_accept":
+                risk_flags.append("low_confidence_diagnostics_accept")
+                rationale.append("Model diagnostics only supports low-confidence acceptance.")
+
+        critical_risks = {
+            "high_value_underprediction",
+            "prediction_range_compression",
+            "weak_generalization",
+            "low_confidence_diagnostics_accept",
+        }
+        has_critical_risk = any(flag in critical_risks for flag in risk_flags)
+        package_incomplete = not feature_requirements or not input_columns
+        blocked = bool(missing) or package_incomplete
+
+        if blocked:
+            decision = "blocked"
+            status = "blocked"
+            rationale.append("Keep the package out of reusable assets until the manifest is repaired.")
+        elif readiness == "strong" and not has_critical_risk:
+            decision = "promote_candidate"
+            status = "needs_confirmation"
+            required_permissions.append("promote_asset")
+            rationale.append("Validation metrics are strong and no blocking package risks were detected.")
+        elif readiness in {"weak", "blocked"} or has_critical_risk:
+            decision = "rerun_recommended"
+            status = "needs_confirmation"
+            required_gates.append(GateName.TRAIN_CONFIG.value)
+            rationale.append("Training should be reviewed for rerun before any model promotion.")
+            if rerun_proposal is None:
+                rerun_proposal = self._build_rerun_proposal(
+                    property_id=property_id or "default",
+                    readiness="weak",
+                    risk_flags=risk_flags,
+                    modeling_brief=None,
+                )
+        else:
+            decision = "memory_only"
+            status = "memory_only"
+            rationale.append("Model package is useful as training memory, but is not strong enough for reusable prediction.")
+
+        promotion_draft = {}
+        if decision == "promote_candidate":
+            promotion_draft = {
+                "model_id": model_id,
+                "domain": domain,
+                "property_id": property_id,
+                "use_case": use_case,
+                "backend": backend,
+                "metrics": metrics,
+                "applicability": applicability,
+                "feature_requirements": feature_requirements,
+                "input_columns": input_columns,
+                "limitations": limitations,
+            }
+
+        memory_updates = [
+            {
+                "kind": "modeling_lesson",
+                "model_id": model_id,
+                "property_id": property_id,
+                "decision": decision,
+                "metrics": metrics,
+                "risk_flags": self._dedup_strings(risk_flags),
+                "rationale": self._dedup_strings(rationale),
+            }
+        ]
+
+        return ModelPackageReview(
+            run_id=clean_run_id,
+            goal=clean_goal,
+            model_id=model_id or "unknown_model",
+            domain=domain,
+            property_id=property_id or "unknown_property",
+            use_case=use_case,
+            backend=backend or "unknown_backend",
+            status=status,
+            decision=decision,
+            metrics=metrics,
+            applicability=applicability,
+            feature_requirements=feature_requirements,
+            input_columns=input_columns,
+            limitations=limitations,
+            risk_flags=self._dedup_strings(risk_flags),
+            rationale=self._dedup_strings(rationale),
+            required_gates=self._dedup_strings(required_gates),
+            required_permissions=self._dedup_strings(required_permissions),
+            promotion_draft=promotion_draft,
+            rerun_proposal=rerun_proposal,
+            memory_updates=memory_updates,
+            executable=False,
+        )
+
     def propose_modeling_plan(
         self,
         *,
@@ -283,6 +456,24 @@ class ModelingAgent:
         md_path.write_text(self._render_diagnostics_markdown(report), encoding="utf-8")
         storage.register_artifact_path(project_id, run_id, f"model_diagnostics_report_{safe_property}_json", json_path.name)
         storage.register_artifact_path(project_id, run_id, f"model_diagnostics_report_{safe_property}_md", md_path.name)
+        return json_path, md_path
+
+    def write_model_package_review(
+        self,
+        storage: ProjectStorage,
+        project_id: str,
+        run_id: str,
+        review: ModelPackageReview,
+    ) -> tuple[Path, Path]:
+        run_dir = storage.run_dir(project_id, run_id)
+        safe_property = self._safe_property_stem(review.property_id)
+        json_name = f"model_package_review_{safe_property}.json"
+        md_name = f"model_package_review_{safe_property}.md"
+        json_path = write_json(run_dir / json_name, review.model_dump(mode="json"))
+        md_path = run_dir / md_name
+        md_path.write_text(self._render_model_package_review_markdown(review), encoding="utf-8")
+        storage.register_artifact_path(project_id, run_id, f"model_package_review_{safe_property}_json", json_path.name)
+        storage.register_artifact_path(project_id, run_id, f"model_package_review_{safe_property}_md", md_path.name)
         return json_path, md_path
 
     def _backend_recommendations(
@@ -538,6 +729,46 @@ class ModelingAgent:
                 continue
             metrics[str(key)] = number
         return metrics
+
+    @staticmethod
+    def _coerce_diagnostics_report(raw: ModelDiagnosticsReport | dict[str, Any] | None) -> ModelDiagnosticsReport | None:
+        if raw is None:
+            return None
+        if isinstance(raw, ModelDiagnosticsReport):
+            return raw
+        if isinstance(raw, dict):
+            return ModelDiagnosticsReport.model_validate(raw)
+        raise ValueError("diagnostics_report must be an object")
+
+    @staticmethod
+    def _first_nonempty(*values: Any) -> str:
+        for value in values:
+            clean = str(value or "").strip()
+            if clean:
+                return clean
+        return ""
+
+    @staticmethod
+    def _json_object(value: Any) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _string_list(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return ModelingAgent._dedup_strings([str(item or "").strip() for item in value])
+
+    @staticmethod
+    def _string_map(value: Any) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        result: dict[str, str] = {}
+        for key, raw in value.items():
+            clean_key = str(key or "").strip()
+            clean_value = str(raw or "").strip()
+            if clean_key and clean_value:
+                result[clean_key] = clean_value
+        return result
 
     @staticmethod
     def _safe_int(value: Any) -> int:
@@ -874,4 +1105,27 @@ class ModelingAgent:
         if report.rerun_proposal:
             lines.extend(["", "## Rerun Proposal"])
             lines.extend(f"- `{change}`" for change in report.rerun_proposal.candidate_changes)
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _render_model_package_review_markdown(review: ModelPackageReview) -> str:
+        lines = [
+            "# Model Package Review",
+            "",
+            f"- Run: `{review.run_id}`",
+            f"- Model: `{review.model_id}`",
+            f"- Property: `{review.property_id}`",
+            f"- Backend: `{review.backend}`",
+            f"- Decision: `{review.decision}`",
+            f"- Status: `{review.status}`",
+            "",
+            "## Rationale",
+        ]
+        lines.extend(f"- {item}" for item in review.rationale)
+        lines.extend(["", "## Risk Flags"])
+        lines.extend(f"- `{flag}`" for flag in review.risk_flags)
+        if review.required_gates or review.required_permissions:
+            lines.extend(["", "## Required Approvals"])
+            lines.extend(f"- `{gate}`" for gate in review.required_gates)
+            lines.extend(f"- `{permission}`" for permission in review.required_permissions)
         return "\n".join(lines) + "\n"

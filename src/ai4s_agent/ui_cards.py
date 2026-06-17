@@ -9,7 +9,14 @@ from ai4s_agent._utils import now_iso
 from ai4s_agent.agents.evaluation import compute_autonomy_metrics
 from ai4s_agent.data_layer import generate_property_catalog, inspect_dataset
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
-from ai4s_agent.schemas import ModelDiagnosticsReport, RerunProposal, RunPlan, StageState, TargetModelingBrief
+from ai4s_agent.schemas import (
+    ModelDiagnosticsReport,
+    ModelPackageReview,
+    RerunProposal,
+    RunPlan,
+    StageState,
+    TargetModelingBrief,
+)
 from ai4s_agent.trainability import assess_trainability
 
 
@@ -223,6 +230,7 @@ def build_agent_review_card(payload: dict[str, Any]) -> dict[str, Any]:
     target_brief = optional_validated_model_payload(payload, "target_modeling_brief", TargetModelingBrief)
     diagnostics = optional_validated_model_payload(payload, "model_diagnostics_report", ModelDiagnosticsReport)
     rerun = optional_validated_model_payload(payload, "rerun_proposal", RerunProposal)
+    package_review = optional_validated_model_payload(payload, "model_package_review", ModelPackageReview)
     if not rerun and object_payload(diagnostics.get("rerun_proposal")):
         rerun = validate_model_payload(
             object_payload(diagnostics.get("rerun_proposal")),
@@ -240,6 +248,7 @@ def build_agent_review_card(payload: dict[str, Any]) -> dict[str, Any]:
         report.get("run_id"),
         target_brief.get("run_id"),
         diagnostics.get("run_id"),
+        package_review.get("run_id"),
     )
     run_plan = object_payload(plan.get("run_plan"))
     approval_controls = build_agent_approval_controls(
@@ -252,6 +261,7 @@ def build_agent_review_card(payload: dict[str, Any]) -> dict[str, Any]:
         target_brief=target_brief,
         diagnostics=diagnostics,
         rerun=rerun,
+        package_review=package_review,
     )
     metric_payload = dict(payload)
     metric_payload["agent_review_card"] = {"approval_controls": approval_controls}
@@ -265,6 +275,7 @@ def build_agent_review_card(payload: dict[str, Any]) -> dict[str, Any]:
         "target_modeling_brief": build_target_modeling_brief_section(target_brief),
         "model_diagnostics": build_model_diagnostics_section(diagnostics),
         "rerun_proposal": build_rerun_proposal_section(rerun),
+        "model_package_review": build_model_package_review_section(package_review),
         "agent_proposals": build_agent_proposals_section(
             research=research,
             modeling=modeling,
@@ -465,6 +476,41 @@ def build_rerun_proposal_section(rerun: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_model_package_review_section(review: dict[str, Any]) -> dict[str, Any]:
+    if not review:
+        return {}
+    return {
+        "run_id": str(review.get("run_id") or ""),
+        "goal": str(review.get("goal") or ""),
+        "model_id": str(review.get("model_id") or ""),
+        "domain": str(review.get("domain") or ""),
+        "property_id": str(review.get("property_id") or ""),
+        "use_case": str(review.get("use_case") or ""),
+        "backend": str(review.get("backend") or ""),
+        "status": str(review.get("status") or ""),
+        "decision": str(review.get("decision") or ""),
+        "metrics": object_payload(review.get("metrics")),
+        "applicability": object_payload(review.get("applicability")),
+        "feature_requirements": string_list(review.get("feature_requirements")),
+        "input_columns": object_payload(review.get("input_columns")),
+        "limitations": string_list(review.get("limitations")),
+        "risk_flags": string_list(review.get("risk_flags")),
+        "rationale": string_list(review.get("rationale")),
+        "required_gates": string_list(review.get("required_gates")),
+        "required_permissions": string_list(review.get("required_permissions")),
+        "promotion_draft": object_payload(review.get("promotion_draft")),
+        "memory_updates": list_payload(review.get("memory_updates")),
+        "source_labels": dedup_strings(
+            [
+                "model_package_review",
+                f"decision:{review.get('decision')}",
+                *[f"risk:{flag}" for flag in string_list(review.get("risk_flags"))],
+            ]
+        ),
+        "executable": bool(review.get("executable")),
+    }
+
+
 def build_agent_proposals_section(
     *,
     research: dict[str, Any],
@@ -507,6 +553,7 @@ def build_agent_approval_controls(
     target_brief: dict[str, Any],
     diagnostics: dict[str, Any],
     rerun: dict[str, Any],
+    package_review: dict[str, Any],
 ) -> list[dict[str, str]]:
     controls: list[dict[str, str]] = []
     if plan:
@@ -549,7 +596,17 @@ def build_agent_approval_controls(
                 label="Confirm model rerun proposal",
             )
         )
-    for gate in collect_required_gates(plan, revision, rerun):
+    if package_review:
+        controls.append(
+            approval_control(
+                "confirm_model_package_review",
+                target_type="model_package_review",
+                target_id=artifact_target_id(run_id, package_review.get("property_id"), package_review.get("model_id")),
+                action="confirm_model_package_review",
+                label="Confirm model package review",
+            )
+        )
+    for gate in collect_required_gates(plan, revision, rerun, package_review):
         controls.append(
             approval_control(
                 f"approve_{gate}",
@@ -579,7 +636,7 @@ def build_agent_approval_controls(
                 label="Confirm revised plan",
             )
         )
-    for permission in collect_required_permissions(revision, generation, modeling, research, rerun):
+    for permission in collect_required_permissions(revision, generation, modeling, research, rerun, package_review):
         controls.append(
             approval_control(
                 f"approve_permission_{permission}",
@@ -592,7 +649,12 @@ def build_agent_approval_controls(
     return dedup_controls(controls)
 
 
-def collect_required_gates(plan: dict[str, Any], revision: dict[str, Any], rerun: dict[str, Any]) -> list[str]:
+def collect_required_gates(
+    plan: dict[str, Any],
+    revision: dict[str, Any],
+    rerun: dict[str, Any],
+    package_review: dict[str, Any],
+) -> list[str]:
     gates = string_list(plan.get("required_gates"))
     for rationale in list_payload(plan.get("rationales")):
         if isinstance(rationale, dict):
@@ -603,6 +665,8 @@ def collect_required_gates(plan: dict[str, Any], revision: dict[str, Any], rerun
     for approval in string_list(rerun.get("required_approvals")):
         if approval.startswith("gate_"):
             gates.append(approval)
+    for gate in string_list(package_review.get("required_gates")):
+        gates.append(gate)
     return dedup_strings(gates)
 
 
@@ -612,6 +676,7 @@ def collect_required_permissions(
     modeling: dict[str, Any],
     research: dict[str, Any],
     rerun: dict[str, Any],
+    package_review: dict[str, Any],
 ) -> list[str]:
     permissions: list[str] = []
     for approval in string_list(revision.get("approvals_required")):
@@ -626,6 +691,7 @@ def collect_required_permissions(
     for approval in string_list(rerun.get("required_approvals")):
         if not approval.startswith("gate_"):
             permissions.append(approval)
+    permissions.extend(string_list(package_review.get("required_permissions")))
     return dedup_strings(permissions)
 
 

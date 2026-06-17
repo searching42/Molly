@@ -118,6 +118,7 @@ def test_export_json_schemas(tmp_path: Path) -> None:
     assert "asset_manifest.schema.json" in names
     assert "promoted_model_asset.schema.json" in names
     assert "prediction_preparation.schema.json" in names
+    assert "model_package_review.schema.json" in names
     assert "run_plan.schema.json" in names
     assert "run_plan_diff.schema.json" in names
 

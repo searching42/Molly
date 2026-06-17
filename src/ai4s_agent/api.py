@@ -408,6 +408,47 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
             return jsonify({"ok": False, "error": str(exc)}), 400
         return jsonify({"ok": True, "proposal": proposal.model_dump(mode="json"), "outputs": outputs})
 
+    @app.post("/api/agent/model-package-review")
+    def agent_model_package_review():
+        try:
+            payload = _request_json_object()
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        run_id = str(payload.get("run_id") or "").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        goal = str(payload.get("goal") or payload.get("prompt") or "").strip()
+        model_manifest = payload.get("model_manifest")
+        domain_model_manifest = payload.get("domain_model_manifest")
+        diagnostics_report = payload.get("model_diagnostics_report")
+        if not run_id:
+            return jsonify({"ok": False, "error": "run_id required"}), 400
+        for label, value in (
+            ("model_manifest", model_manifest),
+            ("domain_model_manifest", domain_model_manifest),
+            ("model_diagnostics_report", diagnostics_report),
+        ):
+            if value is not None and not isinstance(value, dict):
+                return jsonify({"ok": False, "error": f"{label} must be an object"}), 400
+        try:
+            modeling = ModelingAgent()
+            review = modeling.review_model_package(
+                run_id=run_id,
+                goal=goal,
+                model_manifest=model_manifest,
+                domain_model_manifest=domain_model_manifest,
+                diagnostics_report=diagnostics_report,
+            )
+            outputs: dict[str, str] = {}
+            if project_id:
+                review_json, review_md = modeling.write_model_package_review(projects, project_id, run_id, review)
+                outputs = {
+                    "model_package_review_json": str(review_json),
+                    "model_package_review_md": str(review_md),
+                }
+        except (ValidationError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "review": review.model_dump(mode="json"), "outputs": outputs})
+
     @app.post("/api/agent/generation-plan")
     def agent_generation_plan():
         try:

@@ -1,5 +1,5 @@
 from ai4s_agent.agents.modeling import ModelingAgent
-from ai4s_agent.schemas import ModelDiagnosticsReport, ModelingPlanProposal, TargetModelingBrief
+from ai4s_agent.schemas import ModelDiagnosticsReport, ModelPackageReview, ModelingPlanProposal, TargetModelingBrief
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -236,6 +236,142 @@ def test_modeling_agent_diagnoses_high_plqy_compression_with_gated_rerun() -> No
 
     restored = ModelDiagnosticsReport.model_validate_json(report.model_dump_json())
     assert restored.model_dump(mode="json") == report.model_dump(mode="json")
+
+
+def test_modeling_agent_reviews_model_package_before_promotion() -> None:
+    agent = ModelingAgent()
+    diagnostics = agent.diagnose_model(
+        run_id="run-package-review",
+        goal="Prioritize OLED candidates with high PLQY.",
+        property_id="plqy",
+        model_id="manual_weight3_ensemble",
+        metrics={"mae": 0.1741, "r2": 0.3754, "pearson": 0.6496},
+        distribution_diagnostics={"high_qy_bias": -0.216, "high_qy_threshold": 0.7},
+        modeling_brief=agent.prepare_target_modeling_brief(
+            run_id="run-package-review",
+            goal="Prioritize OLED candidates with high PLQY.",
+            property_id="plqy",
+            trainability_report=_trainability_report(),
+        ),
+    )
+
+    review = agent.review_model_package(
+        run_id="run-package-review",
+        goal="Prioritize OLED candidates with high PLQY.",
+        model_manifest={
+            "model_id": "plqy_baseline_v001",
+            "property_id": "plqy",
+            "model_backend": "unimol_with_manual_solvent",
+            "metrics": {"mae": 0.1741, "r2": 0.3754},
+            "split_strategy": "scaffold_split_grouped_by_canonical_smiles",
+            "feature_type": "unimol+manual_solvent",
+        },
+        domain_model_manifest={
+            "domain": "oled",
+            "use_case": "high_plqy_screening",
+            "feature_requirements": ["canonical_smiles", "solvent"],
+            "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
+            "applicability": {"objective_type": "regression"},
+            "limitations": ["high PLQY compression remains monitored"],
+        },
+        diagnostics_report=diagnostics,
+    )
+
+    assert review.run_id == "run-package-review"
+    assert review.model_id == "plqy_baseline_v001"
+    assert review.decision == "rerun_recommended"
+    assert review.status == "needs_confirmation"
+    assert "high_value_underprediction" in review.risk_flags
+    assert "gate_3_train_config" in review.required_gates
+    assert "promote_asset" not in review.required_permissions
+    assert review.rerun_proposal is not None
+    assert review.promotion_draft == {}
+    assert review.memory_updates[0]["kind"] == "modeling_lesson"
+
+    restored = ModelPackageReview.model_validate_json(review.model_dump_json())
+    assert restored.model_dump(mode="json") == review.model_dump(mode="json")
+
+
+def test_modeling_agent_recommends_promote_candidate_for_strong_clean_package(tmp_path) -> None:
+    storage = ProjectStorage(tmp_path)
+    agent = ModelingAgent()
+    review = agent.review_model_package(
+        run_id="run-package-promote",
+        goal="Predict OLED emission wavelength.",
+        model_manifest={
+            "model_id": "emission_unimol_v001",
+            "property_id": "emission_max_nm",
+            "model_backend": "unimol",
+            "metrics": {"mae": 28.5, "r2": 0.84, "pearson": 0.91},
+            "split_strategy": "scaffold_split_grouped_by_canonical_smiles",
+            "feature_type": "unimol_3d",
+        },
+        domain_model_manifest={
+            "domain": "oled",
+            "use_case": "scalar_prediction",
+            "feature_requirements": ["canonical_smiles"],
+            "input_columns": {"canonical_smiles": "SMILES"},
+            "applicability": {"target_range_nm": "visible"},
+            "limitations": [],
+        },
+    )
+
+    assert review.decision == "promote_candidate"
+    assert review.status == "needs_confirmation"
+    assert review.required_gates == []
+    assert review.required_permissions == ["promote_asset"]
+    assert review.promotion_draft["model_id"] == "emission_unimol_v001"
+    assert review.promotion_draft["input_columns"] == {"canonical_smiles": "SMILES"}
+
+    json_path, md_path = agent.write_model_package_review(storage, "proj-modeling", "run-package-promote", review)
+    assert json_path.name == "model_package_review_emission_max_nm.json"
+    assert md_path.name == "model_package_review_emission_max_nm.md"
+    registry = storage.read_artifact_registry("proj-modeling", "run-package-promote")
+    assert registry["model_package_review_emission_max_nm_json"] == "model_package_review_emission_max_nm.json"
+    assert registry["model_package_review_emission_max_nm_md"] == "model_package_review_emission_max_nm.md"
+
+
+def test_modeling_agent_blocks_promotion_when_package_lacks_input_contract() -> None:
+    review = ModelingAgent().review_model_package(
+        run_id="run-package-incomplete",
+        goal="Predict OLED emission wavelength.",
+        model_manifest={
+            "model_id": "emission_unimol_v001",
+            "property_id": "emission_max_nm",
+            "model_backend": "unimol",
+            "metrics": {"mae": 28.5, "r2": 0.84},
+        },
+        domain_model_manifest={"domain": "oled", "use_case": "scalar_prediction"},
+    )
+
+    assert review.decision == "blocked"
+    assert review.status == "blocked"
+    assert "missing_feature_requirements" in review.risk_flags
+    assert "missing_input_columns" in review.risk_flags
+    assert review.required_permissions == []
+    assert review.promotion_draft == {}
+
+
+def test_modeling_agent_uses_domain_manifest_metrics_for_package_review() -> None:
+    review = ModelingAgent().review_model_package(
+        run_id="run-package-domain-metrics",
+        goal="Predict OLED emission wavelength.",
+        model_manifest={
+            "model_id": "emission_unimol_v001",
+            "property_id": "emission_max_nm",
+            "model_backend": "unimol",
+        },
+        domain_model_manifest={
+            "domain": "oled",
+            "use_case": "scalar_prediction",
+            "metrics": {"mae": 28.5, "r2": 0.84},
+            "feature_requirements": ["canonical_smiles"],
+            "input_columns": {"canonical_smiles": "SMILES"},
+        },
+    )
+
+    assert review.decision == "promote_candidate"
+    assert review.metrics["r2"] == 0.84
 
 
 def test_modeling_agent_writes_target_brief_and_diagnostics_artifacts(tmp_path) -> None:
