@@ -211,8 +211,6 @@ class ModelingAgent:
         diagnostics = self._coerce_diagnostics_report(diagnostics_report)
         metrics = self._numeric_metrics(domain_manifest.get("metrics", {}))
         metrics.update(self._numeric_metrics(model_manifest.get("metrics", {})))
-        if diagnostics is not None and diagnostics.metrics:
-            metrics.update(diagnostics.metrics)
 
         clean_run_id = str(run_id or "").strip()
         clean_goal = str(goal or "").strip()
@@ -244,6 +242,35 @@ class ModelingAgent:
         required_gates: list[str] = []
         required_permissions: list[str] = []
         rerun_proposal: RerunProposal | None = None
+        identity_mismatch = False
+
+        for label, left, right in (
+            ("model_id", model_manifest.get("model_id"), domain_manifest.get("model_id")),
+            ("property_id", model_manifest.get("property_id"), domain_manifest.get("property_id")),
+            (
+                "backend",
+                model_manifest.get("model_backend") or model_manifest.get("backend"),
+                domain_manifest.get("model_backend") or domain_manifest.get("backend"),
+            ),
+        ):
+            left_clean = str(left or "").strip()
+            right_clean = str(right or "").strip()
+            if left_clean and right_clean and left_clean != right_clean:
+                identity_mismatch = True
+                risk_flags.append(f"manifest_{label}_mismatch")
+                rationale.append(f"Model and domain manifests disagree on `{label}`.")
+
+        if diagnostics is not None:
+            if diagnostics.model_id and model_id and diagnostics.model_id != model_id:
+                identity_mismatch = True
+                risk_flags.append("diagnostics_model_id_mismatch")
+                rationale.append("Model diagnostics refer to a different model_id than the package manifest.")
+            if diagnostics.property_id and property_id and diagnostics.property_id != property_id:
+                identity_mismatch = True
+                risk_flags.append("diagnostics_property_id_mismatch")
+                rationale.append("Model diagnostics refer to a different property_id than the package manifest.")
+            if not identity_mismatch and diagnostics.metrics:
+                metrics.update(diagnostics.metrics)
 
         missing = [
             label
@@ -281,15 +308,25 @@ class ModelingAgent:
                 risk_flags.append("low_confidence_diagnostics_accept")
                 rationale.append("Model diagnostics only supports low-confidence acceptance.")
 
+        acceptance_failures = self._target_acceptance_failures(
+            goal=clean_goal,
+            property_id=property_id,
+            metrics=metrics,
+            distribution=diagnostics.distribution_diagnostics if diagnostics is not None else {},
+        )
+        if acceptance_failures:
+            risk_flags.extend(acceptance_failures)
+            rationale.append("Model metrics do not meet target-specific acceptance criteria for reusable prediction.")
+
         critical_risks = {
             "high_value_underprediction",
             "prediction_range_compression",
             "weak_generalization",
             "low_confidence_diagnostics_accept",
         }
-        has_critical_risk = any(flag in critical_risks for flag in risk_flags)
+        has_critical_risk = any(flag in critical_risks or flag.startswith("target_acceptance_criteria_failed:") for flag in risk_flags)
         package_incomplete = not feature_requirements or not input_columns
-        blocked = bool(missing) or package_incomplete
+        blocked = bool(missing) or package_incomplete or identity_mismatch
 
         if blocked:
             decision = "blocked"
@@ -916,6 +953,38 @@ class ModelingAgent:
             if str(item.get("property_id") or "").strip() == property_id:
                 return item
         return {}
+
+    @staticmethod
+    def _target_acceptance_failures(
+        *,
+        goal: str,
+        property_id: str,
+        metrics: dict[str, float],
+        distribution: dict[str, Any],
+    ) -> list[str]:
+        criteria = ModelingAgent._target_rule_profile(goal, property_id).get("acceptance_criteria", {})
+        if not isinstance(criteria, dict):
+            return []
+        failures: list[str] = []
+        r2 = ModelingAgent._safe_float(metrics.get("r2"))
+        min_r2 = ModelingAgent._safe_float(criteria.get("min_r2"))
+        if r2 is not None and min_r2 is not None and r2 < min_r2:
+            failures.append("target_acceptance_criteria_failed:min_r2")
+        mae = ModelingAgent._safe_float(metrics.get("mae"))
+        max_mae = ModelingAgent._safe_float(criteria.get("max_mae"))
+        if mae is not None and max_mae is not None and mae > max_mae:
+            failures.append("target_acceptance_criteria_failed:max_mae")
+        mae_nm = ModelingAgent._safe_float(metrics.get("mae_nm"))
+        if mae_nm is None:
+            mae_nm = mae
+        max_mae_nm = ModelingAgent._safe_float(criteria.get("max_mae_nm"))
+        if mae_nm is not None and max_mae_nm is not None and mae_nm > max_mae_nm:
+            failures.append("target_acceptance_criteria_failed:max_mae_nm")
+        high_value_bias = ModelingAgent._safe_float(distribution.get("high_qy_bias"))
+        max_abs_bias = ModelingAgent._safe_float(criteria.get("max_abs_high_value_bias"))
+        if high_value_bias is not None and max_abs_bias is not None and abs(high_value_bias) > max_abs_bias:
+            failures.append("target_acceptance_criteria_failed:max_abs_high_value_bias")
+        return failures
 
     @staticmethod
     def _diagnostic_readiness(metrics: dict[str, float]) -> str:

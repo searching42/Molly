@@ -259,7 +259,7 @@ def test_modeling_agent_reviews_model_package_before_promotion() -> None:
         run_id="run-package-review",
         goal="Prioritize OLED candidates with high PLQY.",
         model_manifest={
-            "model_id": "plqy_baseline_v001",
+            "model_id": "manual_weight3_ensemble",
             "property_id": "plqy",
             "model_backend": "unimol_with_manual_solvent",
             "metrics": {"mae": 0.1741, "r2": 0.3754},
@@ -278,7 +278,7 @@ def test_modeling_agent_reviews_model_package_before_promotion() -> None:
     )
 
     assert review.run_id == "run-package-review"
-    assert review.model_id == "plqy_baseline_v001"
+    assert review.model_id == "manual_weight3_ensemble"
     assert review.decision == "rerun_recommended"
     assert review.status == "needs_confirmation"
     assert "high_value_underprediction" in review.risk_flags
@@ -372,6 +372,63 @@ def test_modeling_agent_uses_domain_manifest_metrics_for_package_review() -> Non
 
     assert review.decision == "promote_candidate"
     assert review.metrics["r2"] == 0.84
+
+
+def test_modeling_agent_blocks_package_review_when_diagnostics_do_not_match_manifest() -> None:
+    review = ModelingAgent().review_model_package(
+        run_id="run-package-mismatch",
+        goal="Predict OLED PLQY.",
+        model_manifest={
+            "model_id": "weak_plqy_v001",
+            "property_id": "plqy",
+            "model_backend": "unimol",
+            "metrics": {"r2": 0.1},
+        },
+        domain_model_manifest={
+            "domain": "oled",
+            "use_case": "scalar_prediction",
+            "feature_requirements": ["canonical_smiles", "solvent"],
+            "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
+        },
+        diagnostics_report={
+            "run_id": "run-package-mismatch",
+            "property_id": "emission_max_nm",
+            "model_id": "strong_emission_v001",
+            "readiness": "strong",
+            "decision": "accept",
+            "metrics": {"r2": 0.84, "mae": 28.5},
+        },
+    )
+
+    assert review.decision == "blocked"
+    assert "diagnostics_model_id_mismatch" in review.risk_flags
+    assert "diagnostics_property_id_mismatch" in review.risk_flags
+    assert review.metrics == {"r2": 0.1}
+    assert review.promotion_draft == {}
+
+
+def test_modeling_agent_applies_target_acceptance_criteria_before_promotion() -> None:
+    review = ModelingAgent().review_model_package(
+        run_id="run-package-plqy-criteria",
+        goal="Predict OLED PLQY.",
+        model_manifest={
+            "model_id": "plqy_v001",
+            "property_id": "plqy",
+            "model_backend": "unimol",
+            "metrics": {"r2": 0.6, "mae": 0.35},
+        },
+        domain_model_manifest={
+            "domain": "oled",
+            "use_case": "scalar_prediction",
+            "feature_requirements": ["canonical_smiles", "solvent"],
+            "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
+        },
+    )
+
+    assert review.decision == "rerun_recommended"
+    assert review.required_gates == ["gate_3_train_config"]
+    assert "target_acceptance_criteria_failed:max_mae" in review.risk_flags
+    assert review.promotion_draft == {}
 
 
 def test_modeling_agent_writes_target_brief_and_diagnostics_artifacts(tmp_path) -> None:
