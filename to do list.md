@@ -1334,7 +1334,8 @@ Core principle:
 - [x] Add `DomainModelRegistry` and OLED reviewed model candidates for emission, scalar PLQY, and high-PLQY screening.
 - [x] Add `PredictionPreparation` as a non-executable pre-prediction artifact that turns a natural-language target and available input columns into reviewed model selection, missing-input questions, required gates, warnings, and draft adapter payload.
 - [x] Implement `predict_candidates_domain_model_adapter` bridge for solvent-aware OLED models and wire it into adapter export, API permission policy, and RunPlan adapter override allowlist.
-- [ ] Register reviewed OLED model assets and provide the actual `score_domain_model_candidates.py` scorer/runtime package so `predict_candidates_domain_model_adapter` can execute beyond plan mode.
+- [x] Add `score_domain_model_candidates.py` runtime package for domain model manifests, including input-column validation, precomputed prediction CSV merge, external-command dispatch, and standardized stdout JSON for adapter results.
+- [ ] Register reviewed OLED model assets and package real inference manifests for `plqy_solvent_pca64_seed42` and `plqy_manual_weight3_ensemble` so `predict_candidates_domain_model_adapter` can execute those models beyond plan mode.
 
 ### 24.4 Recovery And Replanning
 

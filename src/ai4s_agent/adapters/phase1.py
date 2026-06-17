@@ -1983,10 +1983,24 @@ def predict_candidates_domain_model_adapter(payload: dict[str, Any]) -> dict[str
                 "details": execution,
             },
         }
+    runtime_result: dict[str, Any] = {}
+    for line in reversed(str(execution.get("stdout", "")).splitlines()):
+        clean_line = line.strip()
+        if not clean_line:
+            continue
+        try:
+            loaded = json.loads(clean_line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(loaded, dict):
+            runtime_result = loaded
+            break
     return {
         **result_base,
         "status": "success",
-        "output_csv": output_csv,
+        "output_csv": str(runtime_result.get("output_csv") or output_csv),
+        "row_count": runtime_result.get("row_count"),
+        "runtime_result": runtime_result,
         "execution": {
             "returncode": execution.get("returncode"),
             "stdout_tail": str(execution.get("stdout", "")).splitlines()[-20:],
