@@ -1267,6 +1267,92 @@ class DomainModelSelection(BaseModel):
         return result
 
 
+class PromotedModelAsset(BaseModel):
+    asset_id: str
+    model_id: str
+    domain: str
+    property_id: str
+    aliases: list[str] = Field(default_factory=list)
+    use_case: str = "scalar_prediction"
+    backend: str
+    model_dir: str
+    manifest_path: str = "domain_model_manifest.json"
+    status: AssetStatus = AssetStatus.CONFIRMED
+    created_from_run_id: str
+    source_artifacts: list[str] = Field(default_factory=list)
+    approved_by: str
+    approved_at: str
+    metrics: dict[str, float] = Field(default_factory=dict)
+    applicability: dict[str, Any] = Field(default_factory=dict)
+    feature_requirements: list[str] = Field(default_factory=list)
+    input_columns: dict[str, str] = Field(default_factory=dict)
+    limitations: list[str] = Field(default_factory=list)
+    rollback_asset_id: str = ""
+    schema_version: str = "1.0"
+
+    @field_validator(
+        "asset_id",
+        "model_id",
+        "domain",
+        "property_id",
+        "use_case",
+        "backend",
+        "model_dir",
+        "created_from_run_id",
+        "approved_by",
+        "approved_at",
+    )
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            raise ValueError("promoted model asset text fields are required")
+        return clean
+
+    @field_validator("aliases", "source_artifacts", "feature_requirements", "limitations")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for item in value:
+            clean = str(item or "").strip()
+            if clean and clean not in result:
+                result.append(clean)
+        return result
+
+    @field_validator("metrics", mode="before")
+    @classmethod
+    def validate_metrics_are_finite(cls, value: Any) -> dict[str, float]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("promoted model asset metrics must be an object")
+        metrics: dict[str, float] = {}
+        for key, raw in value.items():
+            if isinstance(raw, bool):
+                raise ValueError(f"promoted model asset metric '{key}' must be a number, got bool")
+            number = float(raw)
+            if not math.isfinite(number):
+                raise ValueError("promoted model asset metrics must be finite")
+            metrics[str(key)] = number
+        return metrics
+
+    @field_validator("applicability")
+    @classmethod
+    def validate_applicability_is_json_safe(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_json_safe(value, "promoted_model_asset.applicability")
+
+    @field_validator("input_columns")
+    @classmethod
+    def validate_input_columns(cls, value: dict[str, str]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for key, raw in value.items():
+            clean_key = str(key or "").strip()
+            clean_value = str(raw or "").strip()
+            if clean_key and clean_value:
+                result[clean_key] = clean_value
+        return result
+
+
 class PredictionPreparation(BaseModel):
     run_id: str
     goal: str = ""
@@ -1276,6 +1362,7 @@ class PredictionPreparation(BaseModel):
     use_case: str = "scalar_prediction"
     status: str = "needs_confirmation"
     model_selection: DomainModelSelection
+    promoted_model_asset: PromotedModelAsset | None = None
     available_inputs: list[str] = Field(default_factory=list)
     input_columns: dict[str, str] = Field(default_factory=dict)
     missing_required_inputs: list[str] = Field(default_factory=list)
@@ -2058,6 +2145,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "model_diagnostics_report": ModelDiagnosticsReport,
     "domain_model_candidate": DomainModelCandidate,
     "domain_model_selection": DomainModelSelection,
+    "promoted_model_asset": PromotedModelAsset,
     "prediction_preparation": PredictionPreparation,
     "modeling_plan_proposal": ModelingPlanProposal,
     "agent_tool_call": AgentToolCall,

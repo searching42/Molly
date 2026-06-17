@@ -1,5 +1,5 @@
 from ai4s_agent.agents.prediction import PredictionPreparationAgent
-from ai4s_agent.schemas import PredictionPreparation
+from ai4s_agent.schemas import AssetStatus, PredictionPreparation, PromotedModelAsset
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -94,6 +94,96 @@ def test_prediction_preparation_can_build_historical_reuse_payload_when_explicit
         "execute": False,
     }
     assert "adapter_implementation_required:predict_candidates_domain_model_adapter" not in preparation.warnings
+
+
+def test_prediction_preparation_uses_confirmed_promoted_model_asset() -> None:
+    asset = PromotedModelAsset(
+        asset_id="model/unimol_with_solvent_pca64/plqy/v007",
+        model_id="plqy_request_specific_v007",
+        domain="oled",
+        property_id="plqy",
+        use_case="scalar_prediction",
+        backend="unimol_with_solvent_pca64",
+        model_dir="projects/proj-oled/assets/models/plqy/v007/model",
+        created_from_run_id="run-train-plqy-v007",
+        source_artifacts=["03_training/model_metadata.json", "03_training/domain_model_manifest.json"],
+        approved_by="user",
+        approved_at="2026-06-17T08:30:00Z",
+        status=AssetStatus.CONFIRMED,
+        metrics={"mae": 0.171, "r2": 0.41},
+        feature_requirements=["canonical_smiles", "solvent"],
+        input_columns={"canonical_smiles": "SMILES", "solvent": "solvent"},
+        applicability={"dataset": "chromophore solvent-conditioned", "split": "scaffold"},
+        rollback_asset_id="model/unimol_with_solvent_pca64/plqy/v006",
+    )
+
+    preparation = PredictionPreparationAgent().prepare_prediction(
+        run_id="run-predict-promoted-plqy",
+        goal="Predict PLQY for OLED candidates in toluene.",
+        property_id="quantum_yield",
+        available_inputs={"canonical_smiles", "solvent"},
+        input_columns={"canonical_smiles": "candidate_smiles", "solvent": "solvent_name"},
+        candidate_csv="04_generation/candidates.csv",
+        output_csv="04_screening/plqy_predictions.csv",
+        promoted_model_assets=[asset],
+    )
+
+    assert preparation.status == "needs_confirmation"
+    assert preparation.promoted_model_asset is not None
+    assert preparation.promoted_model_asset.asset_id == "model/unimol_with_solvent_pca64/plqy/v007"
+    assert preparation.requires_training is False
+    assert preparation.reuse_requires_user_approval is False
+    assert preparation.missing_required_inputs == []
+    assert "historical_model_prior_not_prediction_asset" not in preparation.warnings
+    assert "training_required_for_request" not in preparation.warnings
+    assert preparation.adapter == "predict_candidates_domain_model_adapter"
+    assert preparation.adapter_payload == {
+        "run_id": "run-predict-promoted-plqy",
+        "candidate_csv": "04_generation/candidates.csv",
+        "output_csv": "04_screening/plqy_predictions.csv",
+        "property_id": "plqy",
+        "model_id": "plqy_request_specific_v007",
+        "model_backend": "unimol_with_solvent_pca64",
+        "model_dir": "projects/proj-oled/assets/models/plqy/v007/model",
+        "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
+        "required_inputs": ["canonical_smiles", "solvent"],
+        "execute": False,
+    }
+
+
+def test_prediction_preparation_ignores_unconfirmed_promoted_model_asset() -> None:
+    asset = PromotedModelAsset(
+        asset_id="model/unimol_with_solvent_pca64/plqy/v008",
+        model_id="plqy_candidate_v008",
+        domain="oled",
+        property_id="plqy",
+        use_case="scalar_prediction",
+        backend="unimol_with_solvent_pca64",
+        model_dir="projects/proj-oled/assets/models/plqy/v008/model",
+        created_from_run_id="run-train-plqy-v008",
+        approved_by="user",
+        approved_at="2026-06-17T08:35:00Z",
+        status=AssetStatus.CANDIDATE,
+        feature_requirements=["canonical_smiles", "solvent"],
+    )
+
+    preparation = PredictionPreparationAgent().prepare_prediction(
+        run_id="run-predict-unconfirmed-plqy",
+        goal="Predict PLQY for OLED candidates in toluene.",
+        property_id="plqy",
+        available_inputs={"canonical_smiles", "solvent"},
+        input_columns={"canonical_smiles": "SMILES", "solvent": "solvent"},
+        candidate_csv="04_generation/candidates.csv",
+        output_csv="04_screening/plqy_predictions.csv",
+        promoted_model_assets=[asset],
+    )
+
+    assert preparation.status == "needs_clarification"
+    assert preparation.promoted_model_asset is None
+    assert preparation.requires_training is True
+    assert preparation.adapter == ""
+    assert "promoted_model_asset_not_confirmed:model/unimol_with_solvent_pca64/plqy/v008" in preparation.warnings
+    assert "training_required_for_request" in preparation.warnings
 
 
 def test_prediction_preparation_requires_training_for_historical_emission_prior_by_default() -> None:

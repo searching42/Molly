@@ -40,6 +40,7 @@ from ai4s_agent.schemas import (
     LiteratureSourceProvenance,
     MergedRecord,
     CORE_SCHEMA_MODELS,
+    PromotedModelAsset,
     RunPlan,
     RunPlanDiff,
     RunStatus,
@@ -115,6 +116,7 @@ def test_export_json_schemas(tmp_path: Path) -> None:
     exported = export_json_schemas(tmp_path)
     names = {path.name for path in exported}
     assert "asset_manifest.schema.json" in names
+    assert "promoted_model_asset.schema.json" in names
     assert "prediction_preparation.schema.json" in names
     assert "run_plan.schema.json" in names
     assert "run_plan_diff.schema.json" in names
@@ -128,6 +130,47 @@ def test_docs_schema_files_include_every_core_schema() -> None:
         if not (docs_dir / f"{name}.schema.json").exists()
     ]
     assert missing == []
+
+
+def test_promoted_model_asset_schema_roundtrip_and_metrics_validation() -> None:
+    asset = PromotedModelAsset(
+        asset_id="model/unimol_with_solvent_pca64/plqy/v007",
+        model_id="plqy_request_specific_v007",
+        domain="oled",
+        property_id="plqy",
+        use_case="scalar_prediction",
+        backend="unimol_with_solvent_pca64",
+        model_dir="projects/proj-oled/assets/models/plqy/v007/model",
+        created_from_run_id="run-train-plqy-v007",
+        source_artifacts=["03_training/domain_model_manifest.json"],
+        approved_by="user",
+        approved_at="2026-06-17T08:30:00Z",
+        metrics={"mae": 0.171, "r2": 0.41},
+        applicability={"domain": "OLED", "split": "scaffold"},
+        feature_requirements=["canonical_smiles", "solvent", "solvent"],
+        input_columns={"canonical_smiles": "SMILES", "solvent": "solvent"},
+        limitations=["not a universal molecular design model"],
+        rollback_asset_id="model/unimol_with_solvent_pca64/plqy/v006",
+    )
+
+    assert asset.feature_requirements == ["canonical_smiles", "solvent"]
+    restored = PromotedModelAsset.model_validate_json(asset.model_dump_json())
+    assert restored.model_dump(mode="json") == asset.model_dump(mode="json")
+
+    with pytest.raises(ValidationError, match="must be a number, got bool"):
+        PromotedModelAsset(
+            asset_id="bad",
+            model_id="bad",
+            domain="oled",
+            property_id="plqy",
+            use_case="scalar_prediction",
+            backend="baseline",
+            model_dir="assets/models/bad",
+            created_from_run_id="run-bad",
+            approved_by="user",
+            approved_at="2026-06-17T08:35:00Z",
+            metrics={"r2": True},
+        )
 
 
 def test_generation_report_schema_roundtrip() -> None:

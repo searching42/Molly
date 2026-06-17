@@ -7,7 +7,15 @@ from typing import Any
 
 from ai4s_agent._utils import write_json
 from ai4s_agent.domains.oled import OLED_MODEL_REGISTRY
-from ai4s_agent.schemas import GateName, PlanQuestion, PredictionPreparation
+from ai4s_agent.schemas import (
+    AssetStatus,
+    DomainModelCandidate,
+    DomainModelSelection,
+    GateName,
+    PlanQuestion,
+    PredictionPreparation,
+    PromotedModelAsset,
+)
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -29,6 +37,7 @@ class PredictionPreparationAgent:
         model_dir: str = "",
         extra_adapter_payload: dict[str, Any] | None = None,
         allow_historical_model_reuse: bool = False,
+        promoted_model_assets: Iterable[PromotedModelAsset | dict[str, Any]] | None = None,
     ) -> PredictionPreparation:
         clean_goal = str(goal or "").strip()
         clean_property = str(property_id or "").strip() or "default"
@@ -46,12 +55,21 @@ class PredictionPreparationAgent:
             use_case=clean_use_case,
             available_inputs=set(clean_inputs),
         )
+        promoted_asset, promoted_warnings = self._select_promoted_model_asset(
+            assets=promoted_model_assets or [],
+            domain=clean_domain,
+            property_id=model_selection.normalized_property_id,
+            use_case=clean_use_case,
+            available_inputs=set(clean_inputs),
+        )
+        if promoted_asset is not None:
+            model_selection = self._selection_for_promoted_model_asset(model_selection, promoted_asset)
         historical_prior = not model_selection.can_execute_prediction
         reuse_historical = historical_prior and bool(allow_historical_model_reuse)
         adapter, adapter_ready = self._adapter_for_backend(model_selection.selected_model.backend)
         needs_clarification = model_selection.requires_user_input or (historical_prior and not reuse_historical)
         status = "needs_clarification" if needs_clarification else "needs_confirmation"
-        warnings = list(model_selection.warnings)
+        warnings = list(model_selection.warnings) + promoted_warnings
         questions: list[PlanQuestion] = []
         if model_selection.requires_user_input:
             questions.append(
@@ -86,10 +104,21 @@ class PredictionPreparationAgent:
             warnings.append(f"adapter_implementation_required:{adapter}")
         should_build_payload = model_selection.can_execute_prediction or reuse_historical
         if should_build_payload:
+            payload_model_dir = promoted_asset.model_dir if promoted_asset is not None else model_dir
+            payload_input_columns = (
+                promoted_asset.input_columns
+                if promoted_asset is not None and promoted_asset.input_columns
+                else clean_columns
+            )
+            payload_required_inputs = (
+                promoted_asset.feature_requirements
+                if promoted_asset is not None and promoted_asset.feature_requirements
+                else model_selection.selected_model.feature_requirements
+            )
             for key, value in {
                 "candidate_csv": candidate_csv,
                 "output_csv": output_csv,
-                "model_dir": model_dir,
+                "model_dir": payload_model_dir,
             }.items():
                 if not str(value or "").strip():
                     warnings.append(f"missing_execution_field:{key}")
@@ -100,9 +129,9 @@ class PredictionPreparationAgent:
                 property_id=model_selection.normalized_property_id,
                 model_id=model_selection.selected_model_id,
                 model_backend=model_selection.selected_model.backend,
-                model_dir=model_dir,
-                input_columns=clean_columns,
-                required_inputs=model_selection.selected_model.feature_requirements,
+                model_dir=payload_model_dir,
+                input_columns=payload_input_columns,
+                required_inputs=payload_required_inputs,
                 extra_payload=extra_adapter_payload or {},
             )
         else:
@@ -118,6 +147,7 @@ class PredictionPreparationAgent:
             use_case=clean_use_case,
             status=status,
             model_selection=model_selection,
+            promoted_model_asset=promoted_asset,
             available_inputs=clean_inputs,
             input_columns=clean_columns,
             missing_required_inputs=model_selection.missing_required_inputs,
@@ -132,6 +162,7 @@ class PredictionPreparationAgent:
                 "Execution adapters remain the authority for file paths, model assets, and runtime checks.",
                 "Historical modeling priors are not promoted prediction assets for new requests.",
                 "Fresh training is the default for new targets unless the user explicitly approves historical reuse.",
+                "Promoted model assets can be reused only within their recorded applicability limits.",
             ],
             questions=questions,
             executable=False,
@@ -240,6 +271,104 @@ class PredictionPreparationAgent:
         payload["execute"] = False
         payload.update(extra_payload)
         return payload
+
+    @classmethod
+    def _select_promoted_model_asset(
+        cls,
+        *,
+        assets: Iterable[PromotedModelAsset | dict[str, Any]],
+        domain: str,
+        property_id: str,
+        use_case: str,
+        available_inputs: set[str],
+    ) -> tuple[PromotedModelAsset | None, list[str]]:
+        warnings: list[str] = []
+        matches: list[PromotedModelAsset] = []
+        requested_domain = cls._normalize_input_name(domain)
+        requested_property = cls._normalize_input_name(property_id)
+        requested_use_case = cls._normalize_input_name(use_case)
+        normalized_inputs = {cls._normalize_input_name(item) for item in available_inputs}
+        for raw_asset in assets:
+            asset = (
+                raw_asset
+                if isinstance(raw_asset, PromotedModelAsset)
+                else PromotedModelAsset.model_validate(raw_asset)
+            )
+            if cls._normalize_input_name(asset.domain) != requested_domain:
+                continue
+            property_terms = {cls._normalize_input_name(asset.property_id)}
+            property_terms.update(cls._normalize_input_name(alias) for alias in asset.aliases)
+            if requested_property not in property_terms:
+                continue
+            if cls._normalize_input_name(asset.use_case) != requested_use_case:
+                continue
+            if asset.status != AssetStatus.CONFIRMED:
+                warnings.append(f"promoted_model_asset_not_confirmed:{asset.asset_id}")
+                continue
+            missing = [
+                requirement
+                for requirement in asset.feature_requirements
+                if cls._normalize_input_name(requirement) not in normalized_inputs
+            ]
+            if missing:
+                warnings.extend(
+                    f"promoted_model_asset_missing_required_input:{asset.asset_id}:{item}"
+                    for item in missing
+                )
+                continue
+            matches.append(asset)
+        if not matches:
+            return None, warnings
+        matches.sort(key=lambda item: (item.approved_at, item.asset_id), reverse=True)
+        return matches[0], warnings
+
+    @classmethod
+    def _selection_for_promoted_model_asset(
+        cls,
+        base_selection: DomainModelSelection,
+        asset: PromotedModelAsset,
+    ) -> DomainModelSelection:
+        candidate = DomainModelCandidate(
+            model_id=asset.model_id,
+            domain=asset.domain,
+            property_id=asset.property_id,
+            aliases=asset.aliases,
+            intended_use=asset.use_case,
+            backend=asset.backend,
+            source_run_id=asset.created_from_run_id,
+            source_artifacts=asset.source_artifacts,
+            metrics=asset.metrics,
+            feature_requirements=asset.feature_requirements,
+            limitations=asset.limitations,
+            reuse_policy="promoted_model_asset",
+            status=asset.status.value,
+            priority=0,
+            notes=[
+                f"promoted_asset_id:{asset.asset_id}",
+                f"rollback_asset_id:{asset.rollback_asset_id}",
+            ],
+        )
+        candidates = [candidate]
+        candidates.extend(base_selection.candidates)
+        return DomainModelSelection(
+            domain=base_selection.domain,
+            property_id=base_selection.property_id,
+            normalized_property_id=asset.property_id,
+            use_case=base_selection.use_case,
+            selected_model_id=asset.model_id,
+            selected_model=candidate,
+            candidates=candidates,
+            selection_role="prediction_asset",
+            can_execute_prediction=True,
+            reuse_requires_user_approval=False,
+            missing_required_inputs=[],
+            warnings=[],
+            rationale=[
+                f"Selected promoted model asset `{asset.asset_id}` for prediction.",
+                "The asset has explicit approval, runtime metadata, and applicability metadata.",
+            ],
+            requires_user_input=False,
+        )
 
     @classmethod
     def _clean_input_columns(cls, value: dict[str, str]) -> dict[str, str]:

@@ -1336,7 +1336,8 @@ Core principle:
 - [x] Implement `predict_candidates_domain_model_adapter` bridge for solvent-aware OLED models and wire it into adapter export, API permission policy, and RunPlan adapter override allowlist.
 - [x] Add `score_domain_model_candidates.py` runtime package for domain model manifests, including input-column validation, precomputed prediction CSV merge, external-command dispatch, and standardized stdout JSON for adapter results.
 - [x] Prevent historical training results such as `plqy_solvent_pca64_seed42` and `plqy_manual_weight3_ensemble` from being used as default MVP prediction assets; fresh target-specific training remains the default for new user requests.
-- [ ] Add a `PromotedModelAsset` path for future models trained against a specific confirmed request, with explicit user approval, applicability limits, manifest/runtime, and rollback metadata before prediction reuse.
+- [x] Add a `PromotedModelAsset` path for future models trained against a specific confirmed request, with explicit user approval, applicability limits, manifest/runtime, and rollback metadata before prediction reuse.
+  - MVP status: schema, JSON Schema export, and `PredictionPreparationAgent` selection path are implemented. Confirmed promoted assets can produce draft prediction payloads; candidate/deprecated assets and historical priors still require fresh training or explicit reuse approval.
 
 ### 24.4 Recovery And Replanning
 
