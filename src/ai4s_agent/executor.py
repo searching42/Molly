@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ai4s_agent import adapters
+from ai4s_agent.agents.modeling import ModelingAgent
 from ai4s_agent._utils import now_iso, strict_smiles_cleaning_enabled
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import (
@@ -520,6 +521,14 @@ class RunPlanExecutor:
                 if manifest_path.exists():
                     self._register(project_id, run_id, artifact_id, self._relative(run_dir, manifest_path))
                     artifact_paths[artifact_id] = str(manifest_path)
+            self._write_training_review_artifacts(
+                project_id=project_id,
+                run_id=run_id,
+                run_dir=run_dir,
+                model_path=model_path,
+                metadata=metadata,
+                artifact_paths=artifact_paths,
+            )
             return
         if task_id == "generate_candidates":
             outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
@@ -609,6 +618,68 @@ class RunPlanExecutor:
             return str(Path(trained_model) / "model.pkl")
         raise ValueError("could not infer model_path from model_metadata")
 
+    def _write_training_review_artifacts(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        run_dir: Path,
+        model_path: Path,
+        metadata: dict[str, Any],
+        artifact_paths: dict[str, str],
+    ) -> None:
+        model_manifest_path = model_path / "model_manifest.json"
+        domain_manifest_path = model_path / "domain_model_manifest.json"
+        if not model_manifest_path.exists() or not domain_manifest_path.exists():
+            return
+        model_manifest = self._read_json_file(model_manifest_path)
+        domain_manifest = self._read_json_file(domain_manifest_path)
+        if not model_manifest or not domain_manifest:
+            return
+        property_id = self._first_nonempty(
+            model_manifest.get("property_id"),
+            domain_manifest.get("property_id"),
+            metadata.get("property_id"),
+        )
+        if not property_id:
+            return
+        model_id = self._first_nonempty(
+            model_manifest.get("model_id"),
+            domain_manifest.get("model_id"),
+            metadata.get("model_id"),
+        )
+        metrics = (
+            metadata.get("metrics")
+            if isinstance(metadata.get("metrics"), dict)
+            else model_manifest.get("metrics")
+            if isinstance(model_manifest.get("metrics"), dict)
+            else domain_manifest.get("metrics")
+            if isinstance(domain_manifest.get("metrics"), dict)
+            else {}
+        )
+        goal = f"Review trained model package for `{property_id}`."
+        agent = ModelingAgent()
+        diagnostics = agent.diagnose_model(
+            run_id=run_id,
+            goal=goal,
+            property_id=str(property_id),
+            model_id=str(model_id or ""),
+            metrics=metrics,
+        )
+        diagnostics_json, _ = agent.write_model_diagnostics_report(self.storage, project_id, run_id, diagnostics)
+        self._register(project_id, run_id, "model_diagnostics_report", self._relative(run_dir, diagnostics_json))
+        artifact_paths["model_diagnostics_report"] = str(diagnostics_json)
+        review = agent.review_model_package(
+            run_id=run_id,
+            goal=goal,
+            model_manifest=model_manifest,
+            domain_model_manifest=domain_manifest,
+            diagnostics_report=diagnostics,
+        )
+        review_json, _ = agent.write_model_package_review(self.storage, project_id, run_id, review)
+        self._register(project_id, run_id, "model_package_review", self._relative(run_dir, review_json))
+        artifact_paths["model_package_review"] = str(review_json)
+
     @staticmethod
     def _read_json_file(path: Path) -> dict[str, Any]:
         try:
@@ -616,6 +687,14 @@ class RunPlanExecutor:
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
         return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _first_nonempty(*values: Any) -> str:
+        for value in values:
+            clean = str(value or "").strip()
+            if clean:
+                return clean
+        return ""
 
     def _register(self, project_id: str, run_id: str, artifact_id: str, relative_path: str) -> None:
         self.storage.register_artifact_path(project_id, run_id, artifact_id, relative_path)

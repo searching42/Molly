@@ -148,13 +148,25 @@ def test_run_plan_executor_resume_runs_waiting_task_after_gate_approval(tmp_path
     assert "model_metadata" in registry
     assert "model_manifest" in registry
     assert "domain_model_manifest" in registry
+    assert "model_diagnostics_report" in registry
+    assert "model_package_review" in registry
     assert (storage.run_dir("proj-exec", "r-resume-train") / registry["trained_model"]).is_dir()
     assert (storage.run_dir("proj-exec", "r-resume-train") / registry["model_metadata"]).is_file()
     assert (storage.run_dir("proj-exec", "r-resume-train") / registry["model_manifest"]).is_file()
     assert (storage.run_dir("proj-exec", "r-resume-train") / registry["domain_model_manifest"]).is_file()
+    assert (storage.run_dir("proj-exec", "r-resume-train") / registry["model_diagnostics_report"]).is_file()
+    assert (storage.run_dir("proj-exec", "r-resume-train") / registry["model_package_review"]).is_file()
     run_dir = storage.run_dir("proj-exec", "r-resume-train")
     model_dir = run_dir / registry["trained_model"]
     model_metadata = json.loads((run_dir / registry["model_metadata"]).read_text(encoding="utf-8"))
+    diagnostics = json.loads((run_dir / registry["model_diagnostics_report"]).read_text(encoding="utf-8"))
+    review = json.loads((run_dir / registry["model_package_review"]).read_text(encoding="utf-8"))
+    assert diagnostics["property_id"] == "plqy"
+    assert diagnostics["model_id"] == "plqy_baseline_v001"
+    assert review["model_id"] == "plqy_baseline_v001"
+    assert review["executable"] is False
+    assert review["decision"] in {"promote_candidate", "rerun_recommended", "memory_only", "blocked"}
+    assert review["promotion_draft"] == {} or review["required_permissions"] == ["promote_asset"]
     _, version_dir = storage.register_model_asset(
         "proj-exec",
         "r-resume-train",

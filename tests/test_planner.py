@@ -46,6 +46,8 @@ def test_train_model_task_declares_promotable_model_package_outputs() -> None:
     assert "model_metadata" in spec.output_artifacts
     assert "model_manifest" in spec.output_artifacts
     assert "domain_model_manifest" in spec.output_artifacts
+    assert "model_diagnostics_report" in spec.output_artifacts
+    assert "model_package_review" in spec.output_artifacts
 
 
 def test_expand_run_plan_tracks_missing_artifacts_without_producers() -> None:

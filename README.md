@@ -27,6 +27,8 @@ Successful training adapters write a promotable model package into the model dir
 
 `/api/agent/model-package-review` reviews those manifests plus optional diagnostics before any registry decision. The review can recommend `promote_candidate`, `rerun_recommended`, `memory_only`, or `blocked`; promotion recommendations still require the separate `promote_asset` confirmation path.
 
+When `RunPlanExecutor` completes baseline training with model package manifests, it also writes `ModelDiagnosticsReport` and `ModelPackageReview` artifacts automatically, so every trained package has a simple review record before registration or promotion.
+
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.
 
 `PromotedModelAsset` is the reuse contract for that exception: it records the approved model id, backend, runtime directory, required inputs, metrics, applicability notes, source run, and rollback asset. `PredictionPreparationAgent` will build a draft prediction payload only for a confirmed promoted asset, or for historical reuse that the user explicitly approves for a controlled run.

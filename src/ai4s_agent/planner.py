@@ -46,7 +46,14 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     AtomicTaskSpec(
         task_id="train_model",
         required_artifacts=["cleaned_train_dataset", "trainability_report"],
-        output_artifacts=["trained_model", "model_metadata", "model_manifest", "domain_model_manifest"],
+        output_artifacts=[
+            "trained_model",
+            "model_metadata",
+            "model_manifest",
+            "domain_model_manifest",
+            "model_diagnostics_report",
+            "model_package_review",
+        ],
         risk_level=RiskLevel.HIGH,
         gates=[GateName.TRAIN_CONFIG.value],
         default_adapter="train_model_baseline_adapter",
