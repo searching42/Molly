@@ -903,6 +903,26 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
             }
         )
 
+    @app.post("/api/projects/<project_id>/runs/<run_id>/models/promote/draft")
+    def draft_promoted_model_asset(project_id: str, run_id: str):
+        clean_project_id = str(project_id or "").strip()
+        clean_run_id = str(run_id or "").strip()
+        if not clean_project_id or not clean_run_id:
+            return jsonify({"ok": False, "error": "project_id and run_id required"}), 400
+        payload = request.get_json(silent=True) or {}
+        version_dir_raw = str(payload.get("version_dir") or "").strip()
+        if not version_dir_raw:
+            return jsonify({"ok": False, "error": "version_dir required"}), 400
+        try:
+            draft = projects.build_promoted_model_asset_draft(
+                clean_project_id,
+                Path(version_dir_raw),
+                overrides=_promotion_draft_overrides(payload),
+            )
+        except (ValueError, FileNotFoundError, ValidationError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "draft": draft})
+
     @app.post("/api/projects/<project_id>/runs/<run_id>/models/promote")
     def promote_model_asset(project_id: str, run_id: str):
         clean_project_id = str(project_id or "").strip()
@@ -1339,6 +1359,23 @@ def _string_dict_field(value: object, field_name: str) -> dict[str, str]:
         if clean_key and clean_value:
             result[clean_key] = clean_value
     return result
+
+
+def _promotion_draft_overrides(payload: dict[str, Any]) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    for key in ("model_id", "domain", "use_case", "rollback_asset_id"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            overrides[key] = value
+    for key in ("metrics", "applicability", "input_columns"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            overrides[key] = value
+    for key in ("feature_requirements", "limitations"):
+        value = _string_list(payload.get(key))
+        if value:
+            overrides[key] = value
+    return overrides
 
 
 def _task_options(value: object) -> dict[str, dict[str, object]]:

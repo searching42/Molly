@@ -1264,6 +1264,53 @@ def test_promoted_model_asset_api_requires_confirmation_and_writes_asset(tmp_pat
     assert promoted_path.name == "promoted_model_asset.json"
 
 
+def test_promoted_model_asset_draft_api_prefills_from_registered_model(tmp_path) -> None:
+    storage = ProjectStorage(workspace_dir=tmp_path)
+    model_dir = storage.run_dir("proj-a", "run-1") / "03_training" / "source_model"
+    model_dir.mkdir(parents=True)
+    write_json(
+        model_dir / "domain_model_manifest.json",
+        {
+            "model_id": "plqy_promoted_v001",
+            "model_backend": "unimol_with_solvent_pca64",
+            "domain": "oled",
+            "property_id": "plqy",
+            "use_case": "scalar_prediction",
+            "metrics": {"mae": 0.171, "r2": 0.41},
+            "feature_requirements": ["canonical_smiles", "solvent"],
+            "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
+        },
+    )
+    (model_dir / "weights.pt").write_bytes(b"fake-weights")
+    _, version_dir = storage.register_model_asset(
+        "proj-a",
+        "run-1",
+        model_dir,
+        property_id="plqy",
+        backend="unimol_with_solvent_pca64",
+        content_hash="sha256:model",
+        approved_by="user",
+    )
+
+    app = create_app(base_runs_dir=tmp_path)
+    client = app.test_client()
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "生成草案".encode() in page.data
+
+    draft = client.post(
+        "/api/projects/proj-a/runs/run-1/models/promote/draft",
+        json={"version_dir": str(version_dir)},
+    )
+
+    assert draft.status_code == 200
+    assert draft.json["draft"]["model_id"] == "plqy_promoted_v001"
+    assert draft.json["draft"]["backend"] == "unimol_with_solvent_pca64"
+    assert draft.json["draft"]["property_id"] == "plqy"
+    assert draft.json["draft"]["metrics"] == {"mae": 0.171, "r2": 0.41}
+    assert draft.json["draft"]["input_columns"] == {"canonical_smiles": "SMILES", "solvent": "solvent"}
+
+
 def test_stage_timeline_component_endpoint_and_ui(tmp_path) -> None:
     storage = ProjectStorage(workspace_dir=tmp_path)
     storage.write_stage_state(

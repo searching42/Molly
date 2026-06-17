@@ -222,6 +222,117 @@ def test_promote_registered_model_asset_writes_confirmed_promoted_asset(tmp_path
     assert record_path.exists()
 
 
+def test_promoted_model_asset_draft_infers_fields_from_model_metadata(tmp_path: Path) -> None:
+    storage = ProjectStorage(workspace_dir=tmp_path)
+    model_dir = storage.run_dir("proj-a", "run-1") / "03_training" / "source_model"
+    model_dir.mkdir(parents=True)
+    write_json(
+        model_dir / "domain_model_manifest.json",
+        {
+            "model_id": "plqy_promoted_v001",
+            "model_backend": "unimol_with_solvent_pca64",
+            "domain": "oled",
+            "property_id": "plqy",
+            "use_case": "scalar_prediction",
+            "metrics": {"mae": 0.171, "r2": 0.41},
+            "applicability": {"split": "scaffold", "dataset": "chromophore solvent-conditioned"},
+            "feature_requirements": ["canonical_smiles", "solvent"],
+            "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
+            "limitations": ["high PLQY compression remains monitored"],
+        },
+    )
+    write_json(model_dir / "model_metadata.json", {"train_size": 13049, "metrics": {"pearson": 0.64}})
+    (model_dir / "weights.pt").write_bytes(b"fake-weights")
+    _, version_dir = storage.register_model_asset(
+        "proj-a",
+        "run-1",
+        model_dir,
+        property_id="plqy",
+        backend="unimol_with_solvent_pca64",
+        content_hash="sha256:model",
+        approved_by="user",
+    )
+
+    draft = storage.build_promoted_model_asset_draft("proj-a", version_dir)
+
+    assert draft["version_dir"] == str(version_dir)
+    assert draft["model_id"] == "plqy_promoted_v001"
+    assert draft["domain"] == "oled"
+    assert draft["property_id"] == "plqy"
+    assert draft["use_case"] == "scalar_prediction"
+    assert draft["backend"] == "unimol_with_solvent_pca64"
+    assert draft["metrics"] == {"mae": 0.171, "r2": 0.41, "pearson": 0.64}
+    assert draft["applicability"]["split"] == "scaffold"
+    assert draft["applicability"]["train_size"] == 13049
+    assert draft["feature_requirements"] == ["canonical_smiles", "solvent"]
+    assert draft["input_columns"] == {"canonical_smiles": "SMILES", "solvent": "solvent"}
+    assert draft["limitations"] == ["high PLQY compression remains monitored"]
+    assert draft["warnings"] == []
+
+
+def test_promoted_model_asset_draft_allows_explicit_overrides(tmp_path: Path) -> None:
+    storage = ProjectStorage(workspace_dir=tmp_path)
+    model_dir = storage.run_dir("proj-a", "run-1") / "03_training" / "source_model"
+    model_dir.mkdir(parents=True)
+    write_json(model_dir / "model_metadata.json", {"model_id": "raw_model", "metrics": {"r2": 0.2}})
+    (model_dir / "model.pkl").write_bytes(b"fake-model")
+    _, version_dir = storage.register_model_asset(
+        "proj-a",
+        "run-1",
+        model_dir,
+        property_id="plqy",
+        backend="baseline",
+        content_hash="sha256:model",
+        approved_by="user",
+    )
+
+    draft = storage.build_promoted_model_asset_draft(
+        "proj-a",
+        version_dir,
+        overrides={
+            "model_id": "reviewed_model",
+            "domain": "oled",
+            "property_id": "emission_max_nm",
+            "use_case": "high_plqy_screening",
+            "backend": "other_backend",
+            "metrics": {"r2": 0.31, "bad": True},
+            "feature_requirements": ["canonical_smiles"],
+        },
+    )
+
+    assert draft["model_id"] == "reviewed_model"
+    assert draft["domain"] == "oled"
+    assert draft["property_id"] == "plqy"
+    assert draft["backend"] == "baseline"
+    assert draft["use_case"] == "high_plqy_screening"
+    assert draft["metrics"] == {"r2": 0.31}
+    assert draft["feature_requirements"] == ["canonical_smiles"]
+
+
+def test_promoted_model_asset_draft_skips_nonfinite_metrics(tmp_path: Path) -> None:
+    storage = ProjectStorage(workspace_dir=tmp_path)
+    model_dir = storage.run_dir("proj-a", "run-1") / "03_training" / "source_model"
+    model_dir.mkdir(parents=True)
+    write_json(
+        model_dir / "model_metadata.json",
+        {"model_id": "raw_model", "metrics": {"r2": float("nan"), "mae": 0.17}},
+    )
+    (model_dir / "model.pkl").write_bytes(b"fake-model")
+    _, version_dir = storage.register_model_asset(
+        "proj-a",
+        "run-1",
+        model_dir,
+        property_id="plqy",
+        backend="baseline",
+        content_hash="sha256:model",
+        approved_by="user",
+    )
+
+    draft = storage.build_promoted_model_asset_draft("proj-a", version_dir)
+
+    assert draft["metrics"] == {"mae": 0.17}
+
+
 def test_promote_registered_model_asset_rejects_non_model_manifest(tmp_path: Path) -> None:
     storage = ProjectStorage(workspace_dir=tmp_path)
     manifest = AssetManifest(

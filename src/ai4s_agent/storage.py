@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,46 @@ def _parse_version_name(name: str) -> int | None:
 
 def _normalize_token(value: str | None) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _clean_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        clean = str(item or "").strip()
+        if clean and clean not in result:
+            result.append(clean)
+    return result
+
+
+def _clean_string_dict(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, str] = {}
+    for key, raw in value.items():
+        clean_key = str(key or "").strip()
+        clean_value = str(raw or "").strip()
+        if clean_key and clean_value:
+            result[clean_key] = clean_value
+    return result
+
+
+def _clean_numeric_dict(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, float] = {}
+    for key, raw in value.items():
+        if isinstance(raw, bool):
+            continue
+        try:
+            number = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(number):
+            continue
+        result[str(key)] = number
+    return result
 
 
 class ArtifactStore:
@@ -277,6 +318,83 @@ class ProjectStorage:
         )
         return manifest, version_dir
 
+    def build_promoted_model_asset_draft(
+        self,
+        project_id: str,
+        version_dir: Path,
+        *,
+        overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        version_path, model_path, manifest = self._registered_model_asset_context(project_id, version_dir)
+        backend, property_id = self._registered_model_terms(manifest)
+        model_payloads = self._read_model_asset_payloads(model_path)
+        merged: dict[str, Any] = {}
+        merged_metrics: dict[str, float] = {}
+        for payload in model_payloads:
+            merged_metrics.update(_clean_numeric_dict(payload.get("metrics")))
+            merged.update(payload)
+
+        domain = str(merged.get("domain") or "oled").strip() or "oled"
+        use_case = str(merged.get("use_case") or merged.get("intended_use") or "").strip() or "scalar_prediction"
+        model_id = str(merged.get("model_id") or "").strip() or f"{property_id}_{manifest.version}"
+        metrics = merged_metrics
+        applicability = merged.get("applicability") if isinstance(merged.get("applicability"), dict) else {}
+        applicability = {str(key): value for key, value in applicability.items()}
+        for key in ("train_size", "split", "dataset", "dataset_id", "target_transform", "objective_type"):
+            if key in merged and key not in applicability:
+                applicability[key] = merged[key]
+        feature_requirements = (
+            _clean_string_list(merged.get("feature_requirements"))
+            or _clean_string_list(merged.get("required_inputs"))
+            or list(_clean_string_dict(merged.get("input_columns")).keys())
+        )
+        input_columns = _clean_string_dict(merged.get("input_columns"))
+        limitations = _clean_string_list(merged.get("limitations"))
+        warnings: list[str] = []
+        if not model_payloads:
+            warnings.append("no_model_metadata_found")
+        if not input_columns and feature_requirements:
+            warnings.append("input_columns_not_found")
+
+        draft: dict[str, Any] = {
+            "version_dir": str(version_path),
+            "asset_id": f"{manifest.asset_id}/{manifest.version}",
+            "model_id": model_id,
+            "domain": domain,
+            "property_id": property_id,
+            "use_case": use_case,
+            "backend": backend,
+            "model_dir": str(model_path),
+            "metrics": metrics,
+            "applicability": applicability,
+            "feature_requirements": feature_requirements,
+            "input_columns": input_columns,
+            "limitations": limitations,
+            "rollback_asset_id": str((overrides or {}).get("rollback_asset_id") or ""),
+            "warnings": warnings,
+        }
+        for key, value in (overrides or {}).items():
+            if key == "metrics":
+                if isinstance(value, dict):
+                    draft[key] = _clean_numeric_dict(value)
+                continue
+            if key == "input_columns":
+                if isinstance(value, dict):
+                    draft[key] = _clean_string_dict(value)
+                continue
+            if key == "applicability":
+                if isinstance(value, dict):
+                    draft[key] = {str(item_key): item_value for item_key, item_value in value.items()}
+                continue
+            if key in {"feature_requirements", "limitations"}:
+                draft[key] = _clean_string_list(value)
+                continue
+            if key in {"backend", "property_id"}:
+                continue
+            if key in draft and value not in (None, ""):
+                draft[key] = value
+        return draft
+
     def promote_registered_model_asset(
         self,
         project_id: str,
@@ -300,22 +418,13 @@ class ProjectStorage:
         actor = str(approved_by or "").strip()
         if not actor:
             raise ValueError("model promotion requires user confirmation")
-        asset_root = self.assets_dir(project_id)
-        version_path = version_dir.expanduser().resolve()
-        _ensure_relative(asset_root, version_path, "model_asset_version")
-        if not version_path.exists() or not version_path.is_dir():
-            raise FileNotFoundError(f"model asset version not found: {version_path}")
-        model_path = (version_path / "model").resolve()
-        _ensure_relative(version_path, model_path, "promoted_model_dir")
-        if not model_path.exists() or not model_path.is_dir():
-            raise FileNotFoundError(f"model payload directory not found: {model_path}")
-
-        manifest_payload = self._read_json(version_path, "asset_manifest.json")
-        if not manifest_payload:
-            raise FileNotFoundError(f"asset_manifest.json not found: {version_path}")
-        manifest = AssetManifest.model_validate(manifest_payload)
-        if manifest.asset_type != "trained_model":
-            raise ValueError("model promotion requires an asset_manifest with asset_type trained_model")
+        version_path, model_path, manifest = self._registered_model_asset_context(project_id, version_dir)
+        registered_backend, registered_property = self._registered_model_terms(manifest)
+        if registered_backend != backend or registered_property != property_id:
+            raise ValueError(
+                "model promotion metadata must match registered model asset "
+                f"{manifest.asset_id}"
+            )
         expected_asset_id = f"model/{backend}/{property_id}"
         if manifest.asset_id != expected_asset_id:
             raise ValueError(
@@ -391,6 +500,50 @@ class ProjectStorage:
                 continue
             assets.append(asset)
         return sorted(assets, key=lambda item: (item.approved_at, item.asset_id), reverse=True)
+
+    def _registered_model_asset_context(
+        self,
+        project_id: str,
+        version_dir: Path,
+    ) -> tuple[Path, Path, AssetManifest]:
+        asset_root = self.assets_dir(project_id)
+        version_path = version_dir.expanduser().resolve()
+        _ensure_relative(asset_root, version_path, "model_asset_version")
+        if not version_path.exists() or not version_path.is_dir():
+            raise FileNotFoundError(f"model asset version not found: {version_path}")
+        model_path = (version_path / "model").resolve()
+        _ensure_relative(version_path, model_path, "promoted_model_dir")
+        if not model_path.exists() or not model_path.is_dir():
+            raise FileNotFoundError(f"model payload directory not found: {model_path}")
+        manifest_payload = self._read_json(version_path, "asset_manifest.json")
+        if not manifest_payload:
+            raise FileNotFoundError(f"asset_manifest.json not found: {version_path}")
+        manifest = AssetManifest.model_validate(manifest_payload)
+        if manifest.asset_type != "trained_model":
+            raise ValueError("model promotion requires an asset_manifest with asset_type trained_model")
+        return version_path, model_path, manifest
+
+    @staticmethod
+    def _registered_model_terms(manifest: AssetManifest) -> tuple[str, str]:
+        parts = manifest.asset_id.split("/")
+        if len(parts) != 3 or parts[0] != "model":
+            raise ValueError(f"invalid registered model asset_id: {manifest.asset_id}")
+        return parts[1], parts[2]
+
+    @staticmethod
+    def _read_model_asset_payloads(model_path: Path) -> list[dict[str, Any]]:
+        payloads: list[dict[str, Any]] = []
+        for name in ("model_metadata.json", "model_manifest.json", "domain_model_manifest.json"):
+            path = model_path / name
+            if not path.exists():
+                continue
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(loaded, dict):
+                payloads.append(loaded)
+        return payloads
 
     def _write_json(self, base_path: Path, filename: str, payload: dict[str, Any]) -> Path:
         path = (base_path / filename).resolve()

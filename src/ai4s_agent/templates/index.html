@@ -412,6 +412,7 @@
                 <input id="model-promotion-run-id" name="run_id" type="hidden" required />
                 <label for="model-promotion-version-dir">模型版本目录</label>
                 <input id="model-promotion-version-dir" name="version_dir" placeholder="projects/proj-oled/assets/models/backend/property/v001" required />
+                <button type="button" id="model-promotion-draft-button">生成草案</button>
                 <label for="model-promotion-model-id">模型 ID</label>
                 <input id="model-promotion-model-id" name="model_id" placeholder="plqy_promoted_v001" required />
                 <label for="model-promotion-domain">领域</label>
@@ -611,6 +612,26 @@
       function setText(id, value) {
         const el = document.getElementById(id);
         if (el) el.textContent = value;
+      }
+
+      function fillModelPromotionDraft(draft) {
+        const mappings = {
+          "model-promotion-model-id": draft.model_id,
+          "model-promotion-domain": draft.domain,
+          "model-promotion-property-id": draft.property_id,
+          "model-promotion-use-case": draft.use_case,
+          "model-promotion-backend": draft.backend,
+          "model-promotion-feature-requirements": (draft.feature_requirements || []).join(", "),
+          "model-promotion-input-columns": JSON.stringify(draft.input_columns || {}),
+          "model-promotion-metrics": JSON.stringify(draft.metrics || {}),
+          "model-promotion-applicability": JSON.stringify(draft.applicability || {}),
+          "model-promotion-limitations": (draft.limitations || []).join(", "),
+          "model-promotion-rollback-asset-id": draft.rollback_asset_id || "",
+        };
+        Object.entries(mappings).forEach(([id, value]) => {
+          const el = document.getElementById(id);
+          if (el) el.value = value == null ? "" : String(value);
+        });
       }
 
       function syncRunId(runId) {
@@ -1033,6 +1054,19 @@
         const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
         const payload = { asset_id: String(fd.get("asset_id") || "").trim(), asset_type: String(fd.get("asset_type") || "").trim(), version: String(fd.get("version") || "").trim(), source_artifacts: csvList(fd.get("source_artifacts")), approved_by: String(fd.get("approved_by") || "").trim(), confirmed: true };
         try { render(await postJSON(`/api/projects/${projectId}/runs/${runId}/assets/promote`, payload)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("model-promotion-draft-button").addEventListener("click", async () => {
+        const form = document.getElementById("model-asset-promotion-form");
+        const fd = new FormData(form);
+        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
+        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
+        try {
+          const payload = { version_dir: String(fd.get("version_dir") || "").trim() };
+          const response = await postJSON(`/api/projects/${projectId}/runs/${runId}/models/promote/draft`, payload);
+          fillModelPromotionDraft(response.draft || {});
+          render(response);
+        } catch (err) { render(err); }
       });
 
       document.getElementById("model-asset-promotion-form").addEventListener("submit", async (event) => {
