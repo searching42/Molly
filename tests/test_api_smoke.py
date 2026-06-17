@@ -168,6 +168,21 @@ def test_index_page_uses_agent_decision_card_and_log_tail() -> None:
     assert "批准并继续" in html
 
 
+def test_index_page_renders_modeling_agent_review_card_sections() -> None:
+    app = create_app()
+    client = app.test_client()
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    html = resp.data.decode("utf-8")
+    assert 'id="agent-review-card-output"' in html
+    assert "function renderAgentReviewCard" in html
+    assert "target_modeling_brief" in html
+    assert "model_diagnostics" in html
+    assert "rerun_proposal" in html
+    assert "approval_controls" in html
+
+
 def test_index_page_exposes_explicit_backend_task_options_without_auto_execute() -> None:
     app = create_app()
     client = app.test_client()
@@ -1014,6 +1029,14 @@ def test_agent_review_card_endpoint_rejects_malformed_artifacts(tmp_path) -> Non
 
     assert resp.status_code == 400
     assert "plan_proposal must be an object" in resp.json["error"]
+
+    modeling = client.post(
+        "/api/agent/review-card",
+        json={"target_modeling_brief": {"run_id": "missing-required-fields"}},
+    )
+
+    assert modeling.status_code == 400
+    assert "target_modeling_brief" in modeling.json["error"]
 
 
 def test_background_job_api_creates_checkpoints_and_resume_plan(tmp_path) -> None:

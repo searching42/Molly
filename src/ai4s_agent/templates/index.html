@@ -86,6 +86,14 @@
       .advanced-body { display: grid; gap: 0.85rem; padding: 0 1.25rem 1.25rem; }
       .console-card { margin-top: 1rem; padding: 1rem; }
       .output { margin: 0.75rem 0 0; min-height: 150px; max-height: 320px; overflow: auto; border-radius: 15px; padding: 0.9rem; background: #111a1f; color: #dbedf3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; line-height: 1.5; }
+      .review-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; margin-top: 0.85rem; }
+      .review-card-grid[hidden] { display: none; }
+      .review-section { border: 1px solid var(--line); border-radius: 16px; padding: 0.85rem; background: rgba(255, 255, 255, 0.55); }
+      .review-section dl { display: grid; gap: 0.45rem; margin: 0.65rem 0 0; }
+      .review-section div { min-width: 0; }
+      .review-section dt { color: var(--muted); font-size: 0.72rem; font-weight: 900; text-transform: uppercase; }
+      .review-section dd { margin: 0.1rem 0 0; color: #26363e; font-size: 0.86rem; line-height: 1.42; word-break: break-word; }
+      .review-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.65rem; }
       .sr-status { margin-top: 0.55rem; color: var(--muted); font-size: 0.82rem; }
       .launch-warning { display: none; margin: 0 0 1rem; border: 1px solid rgba(165, 77, 22, 0.35); border-radius: 18px; padding: 0.9rem 1rem; background: rgba(244, 216, 189, 0.72); color: #5f2b0e; line-height: 1.45; }
       .launch-warning.visible { display: block; }
@@ -448,6 +456,7 @@
         <h2>当前响应</h2>
         <p class="small">最近一次操作的成功结果或错误详情会显示在这里，不需要打开高级工具。</p>
         <pre id="output" class="output">就绪。</pre>
+        <div id="agent-review-card-output" class="review-card-grid" hidden></div>
       </section>
 
       <details id="advanced-tools" class="advanced-tools">
@@ -562,6 +571,91 @@
 
       function render(payload) {
         output.textContent = JSON.stringify(normalizeErrorForRender(payload), null, 2);
+        renderAgentReviewCard(null);
+      }
+
+      function renderValue(value) {
+        if (Array.isArray(value)) return value.length ? value.join(", ") : "无";
+        if (value && typeof value === "object") return Object.keys(value).length ? JSON.stringify(value) : "无";
+        return value === undefined || value === null || value === "" ? "无" : String(value);
+      }
+
+      function appendReviewSection(root, title, rows, sourceLabels) {
+        const article = document.createElement("article");
+        article.className = "review-section";
+        const heading = document.createElement("h3");
+        heading.textContent = title;
+        article.appendChild(heading);
+        const dl = document.createElement("dl");
+        rows.forEach(([label, value]) => {
+          const wrapper = document.createElement("div");
+          const dt = document.createElement("dt");
+          const dd = document.createElement("dd");
+          dt.textContent = label;
+          dd.textContent = renderValue(value);
+          wrapper.appendChild(dt);
+          wrapper.appendChild(dd);
+          dl.appendChild(wrapper);
+        });
+        article.appendChild(dl);
+        const tags = document.createElement("div");
+        tags.className = "review-tags";
+        (sourceLabels || []).forEach((label) => {
+          const tag = document.createElement("span");
+          tag.className = "pill";
+          tag.textContent = String(label);
+          tags.appendChild(tag);
+        });
+        if (tags.childElementCount) article.appendChild(tags);
+        root.appendChild(article);
+      }
+
+      function renderAgentReviewCard(card) {
+        const root = document.getElementById("agent-review-card-output");
+        if (!root) return;
+        root.innerHTML = "";
+        const sections = card?.sections || {};
+        const brief = sections.target_modeling_brief || {};
+        const diagnostics = sections.model_diagnostics || {};
+        const rerun = sections.rerun_proposal || {};
+        const controls = card?.approval_controls || [];
+        const hasContent = Object.keys(brief).length || Object.keys(diagnostics).length || Object.keys(rerun).length || controls.length;
+        root.hidden = !hasContent;
+        if (!hasContent) return;
+        if (Object.keys(brief).length) {
+          appendReviewSection(root, "TargetModelingBrief", [
+            ["property", brief.property_id],
+            ["backend", brief.recommended_backend],
+            ["split", brief.split_strategy],
+            ["target transform", brief.target_transform],
+            ["risks", brief.risk_flags],
+            ["preprocessing", brief.preprocessing_steps],
+          ], brief.source_labels);
+        }
+        if (Object.keys(diagnostics).length) {
+          appendReviewSection(root, "ModelDiagnosticsReport", [
+            ["model", diagnostics.model_id],
+            ["readiness", diagnostics.readiness],
+            ["decision", diagnostics.decision],
+            ["metrics", diagnostics.metrics],
+            ["risks", diagnostics.risk_flags],
+            ["messages", diagnostics.messages],
+          ], diagnostics.source_labels);
+        }
+        if (Object.keys(rerun).length) {
+          appendReviewSection(root, "RerunProposal", [
+            ["trigger", rerun.trigger],
+            ["candidate changes", rerun.candidate_changes],
+            ["expected impact", rerun.expected_impact],
+            ["required approvals", rerun.required_approvals],
+            ["fallback", rerun.fallback_policy],
+          ], rerun.source_labels);
+        }
+        if (controls.length) {
+          appendReviewSection(root, "approval_controls", [
+            ["controls", controls.map((control) => `${control.action}:${control.target_id}`)],
+          ], []);
+        }
       }
 
       function fileLaunchProblem() {
@@ -1115,7 +1209,12 @@
       document.getElementById("agent-review-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         const fd = new FormData(event.currentTarget);
-        try { const payload = JSON.parse(String(fd.get("payload") || "{}")); render(await postJSON("/api/agent/review-card", payload)); } catch (err) { render(err instanceof SyntaxError ? { ok: false, error: err.message } : err); }
+        try {
+          const payload = JSON.parse(String(fd.get("payload") || "{}"));
+          const response = await postJSON("/api/agent/review-card", payload);
+          render(response);
+          renderAgentReviewCard(response.card || {});
+        } catch (err) { render(err instanceof SyntaxError ? { ok: false, error: err.message } : err); }
       });
     </script>
   </body>

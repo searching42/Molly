@@ -1375,7 +1375,7 @@ Core principle:
 - [x] Show "why this plan" alongside the task timeline.
 - [x] Show agent assumptions and missing information before execution.
 - [x] Show verifier findings and proposed replans as reviewable cards.
-- [ ] Show `TargetModelingBrief`, `ModelDiagnosticsReport`, and `RerunProposal` as reviewable cards with source labels and approval controls.
+- [x] Show `TargetModelingBrief`, `ModelDiagnosticsReport`, and `RerunProposal` as reviewable cards with source labels and approval controls.
 - [x] Add compare view for original plan vs revised plan.
 - [x] Add approval controls for plan confirmation, replan confirmation, memory use, external acquisition, training, and generation.
 - [x] Avoid making autonomous actions look like chat suggestions; every executable action should map to a visible task/gate.
