@@ -831,6 +831,7 @@ def test_legacy_adapters_are_wired() -> None:
             "model_dir": "/tmp/model",
             "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
             "required_inputs": ["canonical_smiles", "solvent"],
+            "allow_missing_predictions": True,
             "execute": False,
         }
     )
@@ -842,6 +843,7 @@ def test_legacy_adapters_are_wired() -> None:
     assert "score_domain_model_candidates.py" in domain_command
     assert "--model-id plqy_solvent_pca64_seed42" in domain_command
     assert "--input-columns-json" in domain_command
+    assert "--allow-missing-predictions" in domain["command"]
 
 
 def test_domain_model_prediction_requires_declared_input_columns() -> None:

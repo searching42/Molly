@@ -22,6 +22,23 @@ from ai4s_agent.storage import ProjectStorage
 class PredictionPreparationAgent:
     """Prepare reviewed model selection and adapter payloads before prediction."""
 
+    def prepare_prediction_for_project(
+        self,
+        storage: ProjectStorage,
+        project_id: str,
+        **kwargs: Any,
+    ) -> PredictionPreparation:
+        extra_assets = kwargs.pop("promoted_model_assets", None)
+        promoted_assets: list[PromotedModelAsset | dict[str, Any]] = list(
+            storage.list_promoted_model_assets(str(project_id or "").strip())
+        )
+        if extra_assets:
+            promoted_assets.extend(extra_assets)
+        return self.prepare_prediction(
+            **kwargs,
+            promoted_model_assets=promoted_assets,
+        )
+
     def prepare_prediction(
         self,
         *,

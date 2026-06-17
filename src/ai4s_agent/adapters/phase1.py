@@ -1928,6 +1928,8 @@ def predict_candidates_domain_model_adapter(payload: dict[str, Any]) -> dict[str
         argv += ["--input-columns-json", json.dumps(clean_input_columns, sort_keys=True)]
     if required_inputs:
         argv += ["--required-inputs-json", json.dumps(required_inputs)]
+    if _as_bool(payload.get("allow_missing_predictions")):
+        argv.append("--allow-missing-predictions")
     for key, flag in [
         ("solvent_embedding_path", "--solvent-embedding-path"),
         ("descriptor_config", "--descriptor-config"),

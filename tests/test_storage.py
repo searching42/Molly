@@ -8,6 +8,7 @@ from ai4s_agent.schemas import (
     AssetStatus,
     GateName,
     PlanModel,
+    PromotedModelAsset,
     RunStatus,
     StageState,
 )
@@ -163,6 +164,62 @@ def test_register_model_asset_creates_versioned_manifest(tmp_path: Path) -> None
     assert (version_dir / "model" / "model.pkl").exists()
     assert (version_dir / "asset_manifest.json").exists()
     assert (version_dir / "model_registration_record.json").exists()
+
+
+def test_promote_registered_model_asset_writes_confirmed_promoted_asset(tmp_path: Path) -> None:
+    storage = ProjectStorage(workspace_dir=tmp_path)
+    model_dir = storage.run_dir("proj-a", "run-1") / "03_training" / "source_model"
+    model_dir.mkdir(parents=True)
+    write_json(
+        model_dir / "domain_model_manifest.json",
+        {"model_id": "plqy_promoted_v001", "model_backend": "unimol_with_solvent_pca64"},
+    )
+    (model_dir / "weights.pt").write_bytes(b"fake-weights")
+    _, version_dir = storage.register_model_asset(
+        "proj-a",
+        "run-1",
+        model_dir,
+        property_id="plqy",
+        backend="unimol_with_solvent_pca64",
+        content_hash="sha256:model",
+        approved_by="user",
+    )
+
+    promoted, promoted_path = storage.promote_registered_model_asset(
+        "proj-a",
+        "run-1",
+        version_dir,
+        model_id="plqy_promoted_v001",
+        domain="oled",
+        property_id="plqy",
+        use_case="scalar_prediction",
+        backend="unimol_with_solvent_pca64",
+        approved_by="user",
+        metrics={"mae": 0.171, "r2": 0.41},
+        applicability={"split": "scaffold", "dataset": "chromophore solvent-conditioned"},
+        feature_requirements=["canonical_smiles", "solvent"],
+        input_columns={"canonical_smiles": "SMILES", "solvent": "solvent"},
+        limitations=["high PLQY compression remains monitored"],
+        rollback_asset_id="model/unimol_with_solvent_pca64/plqy/v000",
+    )
+
+    assert promoted.asset_id == "model/unimol_with_solvent_pca64/plqy/v001"
+    assert promoted.status == AssetStatus.CONFIRMED
+    assert promoted.model_dir == str(version_dir / "model")
+    assert promoted.created_from_run_id == "run-1"
+    assert promoted.source_artifacts == [str(model_dir)]
+    assert promoted_path == version_dir / "promoted_model_asset.json"
+    restored = PromotedModelAsset.model_validate_json(promoted_path.read_text(encoding="utf-8"))
+    assert restored.model_dump(mode="json") == promoted.model_dump(mode="json")
+
+    manifest_payload = (version_dir / "asset_manifest.json").read_text(encoding="utf-8")
+    manifest = AssetManifest.model_validate_json(manifest_payload)
+    assert manifest.status == AssetStatus.CONFIRMED
+
+    listed = storage.list_promoted_model_assets("proj-a", domain="oled", property_id="plqy")
+    assert [asset.asset_id for asset in listed] == [promoted.asset_id]
+    record_path = tmp_path / "projects" / "proj-a" / "runs" / "run-1" / "asset_promotion_records.json"
+    assert record_path.exists()
 
 
 def test_register_model_asset_copies_nested_model_directories(tmp_path: Path) -> None:

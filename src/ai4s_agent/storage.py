@@ -5,7 +5,14 @@ from pathlib import Path
 from typing import Any
 
 from ai4s_agent._utils import now_iso
-from ai4s_agent.schemas import AssetManifest, AssetPromotionRecord, AssetStatus, GateDecision, StageState
+from ai4s_agent.schemas import (
+    AssetManifest,
+    AssetPromotionRecord,
+    AssetStatus,
+    GateDecision,
+    PromotedModelAsset,
+    StageState,
+)
 
 
 def _ensure_relative(parent: Path, child: Path, label: str) -> None:
@@ -17,6 +24,10 @@ def _parse_version_name(name: str) -> int | None:
     if len(name) >= 4 and name.startswith("v") and name[1:].isdigit():
         return int(name[1:])
     return None
+
+
+def _normalize_token(value: str | None) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 class ArtifactStore:
@@ -265,6 +276,113 @@ class ProjectStorage:
             },
         )
         return manifest, version_dir
+
+    def promote_registered_model_asset(
+        self,
+        project_id: str,
+        run_id: str,
+        version_dir: Path,
+        *,
+        model_id: str,
+        domain: str,
+        property_id: str,
+        use_case: str,
+        backend: str,
+        approved_by: str,
+        metrics: dict[str, float] | None = None,
+        applicability: dict[str, Any] | None = None,
+        feature_requirements: list[str] | None = None,
+        input_columns: dict[str, str] | None = None,
+        limitations: list[str] | None = None,
+        rollback_asset_id: str = "",
+        note: str = "",
+    ) -> tuple[PromotedModelAsset, Path]:
+        actor = str(approved_by or "").strip()
+        if not actor:
+            raise ValueError("model promotion requires user confirmation")
+        asset_root = self.assets_dir(project_id)
+        version_path = version_dir.expanduser().resolve()
+        _ensure_relative(asset_root, version_path, "model_asset_version")
+        if not version_path.exists() or not version_path.is_dir():
+            raise FileNotFoundError(f"model asset version not found: {version_path}")
+        model_path = (version_path / "model").resolve()
+        _ensure_relative(version_path, model_path, "promoted_model_dir")
+        if not model_path.exists() or not model_path.is_dir():
+            raise FileNotFoundError(f"model payload directory not found: {model_path}")
+
+        manifest_payload = self._read_json(version_path, "asset_manifest.json")
+        if not manifest_payload:
+            raise FileNotFoundError(f"asset_manifest.json not found: {version_path}")
+        manifest = AssetManifest.model_validate(manifest_payload)
+        promoted_at = now_iso()
+        asset = PromotedModelAsset(
+            asset_id=f"{manifest.asset_id}/{manifest.version}",
+            model_id=model_id,
+            domain=domain,
+            property_id=property_id,
+            use_case=use_case,
+            backend=backend,
+            model_dir=str(model_path),
+            status=AssetStatus.CONFIRMED,
+            created_from_run_id=manifest.created_from_run_id or run_id,
+            source_artifacts=manifest.source_artifacts,
+            approved_by=actor,
+            approved_at=promoted_at,
+            metrics=metrics or {},
+            applicability=applicability or {},
+            feature_requirements=feature_requirements or [],
+            input_columns=input_columns or {},
+            limitations=limitations or [],
+            rollback_asset_id=rollback_asset_id,
+        )
+        promoted_path = self._write_json(
+            version_path,
+            "promoted_model_asset.json",
+            asset.model_dump(mode="json"),
+        )
+        confirmed_manifest = manifest.model_copy(update={"status": AssetStatus.CONFIRMED})
+        self._write_json(version_path, "asset_manifest.json", confirmed_manifest.model_dump(mode="json"))
+        self.append_asset_promotion_record(
+            project_id,
+            run_id,
+            AssetPromotionRecord(
+                run_id=run_id,
+                asset_id=asset.asset_id,
+                asset_type="promoted_model_asset",
+                version=manifest.version,
+                source_artifacts=asset.source_artifacts,
+                approved_by=actor,
+                approved_at=promoted_at,
+                note=str(note or ""),
+            ),
+        )
+        return asset, promoted_path
+
+    def list_promoted_model_assets(
+        self,
+        project_id: str,
+        *,
+        domain: str | None = None,
+        property_id: str | None = None,
+        use_case: str | None = None,
+    ) -> list[PromotedModelAsset]:
+        requested_domain = _normalize_token(domain)
+        requested_property = _normalize_token(property_id)
+        requested_use_case = _normalize_token(use_case)
+        assets: list[PromotedModelAsset] = []
+        for path in sorted(self.assets_dir(project_id).rglob("promoted_model_asset.json")):
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                continue
+            asset = PromotedModelAsset.model_validate(loaded)
+            if requested_domain and _normalize_token(asset.domain) != requested_domain:
+                continue
+            if requested_property and _normalize_token(asset.property_id) != requested_property:
+                continue
+            if requested_use_case and _normalize_token(asset.use_case) != requested_use_case:
+                continue
+            assets.append(asset)
+        return sorted(assets, key=lambda item: (item.approved_at, item.asset_id), reverse=True)
 
     def _write_json(self, base_path: Path, filename: str, payload: dict[str, Any]) -> Path:
         path = (base_path / filename).resolve()

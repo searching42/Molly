@@ -25,6 +25,8 @@ Historical training results are modeling priors for future agent decisions, not 
 
 `PromotedModelAsset` is the reuse contract for that exception: it records the approved model id, backend, runtime directory, required inputs, metrics, applicability notes, source run, and rollback asset. `PredictionPreparationAgent` will build a draft prediction payload only for a confirmed promoted asset, or for historical reuse that the user explicitly approves for a controlled run.
 
+Registered model packages can be promoted into project assets via `ProjectStorage.promote_registered_model_asset()`. Project-level prediction preparation can then load those confirmed assets from storage before deciding whether a fresh training run is still required.
+
 Create a plan:
 
 ```bash

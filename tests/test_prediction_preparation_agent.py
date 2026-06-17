@@ -186,6 +186,54 @@ def test_prediction_preparation_ignores_unconfirmed_promoted_model_asset() -> No
     assert "training_required_for_request" in preparation.warnings
 
 
+def test_prediction_preparation_reads_project_promoted_model_assets(tmp_path) -> None:
+    storage = ProjectStorage(tmp_path)
+    source_model_dir = storage.run_dir("proj-predict", "run-train") / "03_training" / "model"
+    source_model_dir.mkdir(parents=True)
+    (source_model_dir / "domain_model_manifest.json").write_text("{}", encoding="utf-8")
+    _, version_dir = storage.register_model_asset(
+        "proj-predict",
+        "run-train",
+        source_model_dir,
+        property_id="plqy",
+        backend="unimol_with_solvent_pca64",
+        content_hash="sha256:model",
+        approved_by="user",
+    )
+    promoted, _ = storage.promote_registered_model_asset(
+        "proj-predict",
+        "run-train",
+        version_dir,
+        model_id="plqy_project_promoted_v001",
+        domain="oled",
+        property_id="plqy",
+        use_case="scalar_prediction",
+        backend="unimol_with_solvent_pca64",
+        approved_by="user",
+        feature_requirements=["canonical_smiles", "solvent"],
+        input_columns={"canonical_smiles": "SMILES", "solvent": "solvent"},
+    )
+
+    preparation = PredictionPreparationAgent().prepare_prediction_for_project(
+        storage,
+        "proj-predict",
+        run_id="run-predict",
+        goal="Predict PLQY for OLED candidates.",
+        property_id="plqy",
+        available_inputs={"canonical_smiles", "solvent"},
+        input_columns={"canonical_smiles": "candidate_smiles", "solvent": "solvent_name"},
+        candidate_csv="04_generation/candidates.csv",
+        output_csv="04_screening/plqy.csv",
+    )
+
+    assert preparation.promoted_model_asset is not None
+    assert preparation.promoted_model_asset.asset_id == promoted.asset_id
+    assert preparation.requires_training is False
+    assert preparation.adapter_payload["model_id"] == "plqy_project_promoted_v001"
+    assert preparation.adapter_payload["model_dir"] == promoted.model_dir
+    assert preparation.adapter_payload["input_columns"] == {"canonical_smiles": "SMILES", "solvent": "solvent"}
+
+
 def test_prediction_preparation_requires_training_for_historical_emission_prior_by_default() -> None:
     preparation = PredictionPreparationAgent().prepare_prediction(
         run_id="run-predict-emission",

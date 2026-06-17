@@ -58,6 +58,7 @@ def score_candidates(args: argparse.Namespace) -> dict[str, Any]:
             model_dir=model_dir,
             manifest=manifest,
             property_name=args.property_name,
+            allow_missing_predictions=bool(args.allow_missing_predictions),
         )
     elif mode == "external_command":
         row_count = _run_external_command(
@@ -98,6 +99,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--objective-type", default="")
     parser.add_argument("--target-center", default="")
     parser.add_argument("--sigma", default="")
+    parser.add_argument("--allow-missing-predictions", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -149,6 +151,7 @@ def _merge_precomputed_predictions(
     model_dir: Path,
     manifest: dict[str, Any],
     property_name: str,
+    allow_missing_predictions: bool,
 ) -> int:
     prediction_csv_raw = (
         manifest.get("prediction_csv")
@@ -176,6 +179,8 @@ def _merge_precomputed_predictions(
     for row in candidates:
         key = str(row.get(join_key) or "").strip()
         if key not in by_key:
+            if allow_missing_predictions:
+                continue
             raise ScorerError("missing_candidate_prediction", f"no prediction found for candidate key: {key}")
         output = dict(row)
         output[prediction_column] = by_key[key]
@@ -210,7 +215,7 @@ def _run_external_command(
         "input_columns_json": json.dumps(input_columns, sort_keys=True),
         "required_inputs_json": json.dumps(required_inputs),
     }
-    argv = [str(part).format(**replacements) for part in command]
+    argv = [_replace_external_command_tokens(str(part), replacements) for part in command]
     completed = subprocess.run(argv, cwd=str(model_dir), text=True, capture_output=True, check=False)
     if completed.returncode != 0:
         raise ScorerError(
@@ -220,6 +225,13 @@ def _run_external_command(
         )
     rows, _ = _read_csv(output_csv)
     return len(rows)
+
+
+def _replace_external_command_tokens(part: str, replacements: dict[str, str]) -> str:
+    result = str(part)
+    for key, value in replacements.items():
+        result = result.replace("{" + key + "}", value)
+    return result
 
 
 def _json_object_arg(raw: str, flag: str) -> dict[str, Any]:

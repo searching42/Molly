@@ -88,6 +88,168 @@ def test_domain_model_scorer_merges_precomputed_predictions(tmp_path: Path) -> N
     ]
 
 
+def test_domain_model_scorer_can_skip_missing_precomputed_predictions(tmp_path: Path) -> None:
+    candidate_csv = tmp_path / "candidates.csv"
+    output_csv = tmp_path / "predictions.csv"
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    _write_csv(
+        candidate_csv,
+        [
+            {"candidate_id": "c1", "SMILES": "CCO"},
+            {"candidate_id": "c2", "SMILES": "CCN"},
+        ],
+    )
+    _write_csv(model_dir / "predictions.csv", [{"candidate_id": "c1", "plqy_pred": "0.72"}])
+    (model_dir / "domain_model_manifest.json").write_text(
+        json.dumps(
+            {
+                "model_id": "demo_plqy",
+                "model_backend": "csv_lookup",
+                "prediction_mode": "precomputed_csv",
+                "prediction_csv": "predictions.csv",
+                "join_key": "candidate_id",
+                "prediction_column": "plqy_pred",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    scorer = Path(__file__).resolve().parents[1] / "scripts" / "score_domain_model_candidates.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(scorer),
+            str(candidate_csv),
+            str(output_csv),
+            "--property-name",
+            "plqy",
+            "--model-id",
+            "demo_plqy",
+            "--model-backend",
+            "csv_lookup",
+            "--model-dir",
+            str(model_dir),
+            "--allow-missing-predictions",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["row_count"] == 1
+    assert _read_csv(output_csv) == [{"candidate_id": "c1", "SMILES": "CCO", "plqy_pred": "0.72"}]
+
+
+def test_domain_model_scorer_keeps_strict_missing_prediction_default(tmp_path: Path) -> None:
+    candidate_csv = tmp_path / "candidates.csv"
+    output_csv = tmp_path / "predictions.csv"
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    _write_csv(candidate_csv, [{"candidate_id": "c1", "SMILES": "CCO"}])
+    _write_csv(model_dir / "predictions.csv", [{"candidate_id": "other", "plqy_pred": "0.72"}])
+    (model_dir / "domain_model_manifest.json").write_text(
+        json.dumps(
+            {
+                "model_id": "demo_plqy",
+                "model_backend": "csv_lookup",
+                "prediction_mode": "precomputed_csv",
+                "prediction_csv": "predictions.csv",
+                "join_key": "candidate_id",
+                "prediction_column": "plqy_pred",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    scorer = Path(__file__).resolve().parents[1] / "scripts" / "score_domain_model_candidates.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(scorer),
+            str(candidate_csv),
+            str(output_csv),
+            "--property-name",
+            "plqy",
+            "--model-id",
+            "demo_plqy",
+            "--model-backend",
+            "csv_lookup",
+            "--model-dir",
+            str(model_dir),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert json.loads(result.stderr)["error"]["code"] == "missing_candidate_prediction"
+
+
+def test_domain_model_scorer_external_command_preserves_literal_braces(tmp_path: Path) -> None:
+    candidate_csv = tmp_path / "candidates.csv"
+    output_csv = tmp_path / "predictions.csv"
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    _write_csv(candidate_csv, [{"candidate_id": "c1", "SMILES": "CCO"}])
+    script = (
+        "import csv,sys;"
+        "inp,out,prop,note=sys.argv[1:5];"
+        "f=open(inp,newline='',encoding='utf-8');rows=list(csv.DictReader(f));f.close();"
+        "headers=list(rows[0])+[prop+'_pred','note'];"
+        "[row.__setitem__(prop+'_pred','0.5') or row.__setitem__('note',note) for row in rows];"
+        "g=open(out,'w',newline='',encoding='utf-8');"
+        "w=csv.DictWriter(g,fieldnames=headers);w.writeheader();w.writerows(rows);g.close()"
+    )
+    (model_dir / "domain_model_manifest.json").write_text(
+        json.dumps(
+            {
+                "model_id": "demo_plqy",
+                "model_backend": "external_demo",
+                "prediction_mode": "external_command",
+                "external_command": [
+                    sys.executable,
+                    "-c",
+                    script,
+                    "{candidate_csv}",
+                    "{output_csv}",
+                    "{property_name}",
+                    "literal={name}",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    scorer = Path(__file__).resolve().parents[1] / "scripts" / "score_domain_model_candidates.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(scorer),
+            str(candidate_csv),
+            str(output_csv),
+            "--property-name",
+            "plqy",
+            "--model-id",
+            "demo_plqy",
+            "--model-backend",
+            "external_demo",
+            "--model-dir",
+            str(model_dir),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _read_csv(output_csv) == [
+        {"candidate_id": "c1", "SMILES": "CCO", "plqy_pred": "0.5", "note": "literal={name}"}
+    ]
+
+
 def test_domain_model_adapter_executes_scorer_package(tmp_path: Path) -> None:
     candidate_csv = tmp_path / "candidates.csv"
     output_csv = tmp_path / "predictions.csv"
