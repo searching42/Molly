@@ -65,6 +65,23 @@ def _write_candidate_dataset(path: Path) -> None:
         writer.writerows(rows)
 
 
+def _write_custom_smiles_training_dataset(path: Path) -> None:
+    rows = []
+    for i in range(36):
+        rows.append(
+            {
+                "mol_id": f"m{i + 1}",
+                "Chromophore": "C" * (i + 2),
+                "plqy": f"{0.35 + (i % 20) * 0.02:.3f}",
+                "split_group": "train" if i < 24 else "valid" if i < 30 else "test",
+            }
+        )
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def test_parse_task_adapter_uses_legacy_nl_parser() -> None:
     before_path = list(sys.path)
     result = parse_task_adapter(
@@ -122,6 +139,31 @@ def test_validate_adapter_command_contract_runs_json_adapter(tmp_path: Path) -> 
     out = validate_adapter_command_contract(cmd=cmd, payload={"x": 7}, workspace_root=tmp_path)
     assert out["status"] == "success"
     assert out["echo"] == 7
+
+
+def test_baseline_training_package_uses_declared_input_column_and_feature_size(tmp_path: Path) -> None:
+    train_csv = tmp_path / "train_custom.csv"
+    _write_custom_smiles_training_dataset(train_csv)
+
+    result = train_model_baseline_adapter(
+        {
+            "run_id": "r-custom-smiles",
+            "cleaned_master_csv": str(train_csv),
+            "property_id": "plqy",
+            "model_root": str(tmp_path / "models"),
+            "smiles_col": "Chromophore",
+            "n_bits": 64,
+        }
+    )
+
+    assert result["status"] == "success"
+    metadata = result["model_metadata"]
+    assert metadata["n_bits"] == 64
+    model_dir = Path(metadata["model_dir"])
+    domain_manifest = json.loads((model_dir / "domain_model_manifest.json").read_text(encoding="utf-8"))
+    model_manifest = json.loads((model_dir / "model_manifest.json").read_text(encoding="utf-8"))
+    assert domain_manifest["input_columns"] == {"canonical_smiles": "Chromophore"}
+    assert model_manifest["feature_type"] == metadata["feature_type"]
 
 
 def test_phase1_adapter_chain_smoke(tmp_path: Path) -> None:
@@ -204,6 +246,19 @@ def test_phase1_adapter_chain_smoke(tmp_path: Path) -> None:
     model_path = train_model["model_metadata"]["model_path"]
     assert Path(model_path).exists()
     assert train_model["model_metadata"]["model_type"] != "mean_baseline"
+    model_dir = Path(train_model["model_metadata"]["model_dir"])
+    model_manifest = json.loads((model_dir / "model_manifest.json").read_text(encoding="utf-8"))
+    domain_manifest = json.loads((model_dir / "domain_model_manifest.json").read_text(encoding="utf-8"))
+    assert model_manifest["model_id"] == "plqy_baseline_v001"
+    assert model_manifest["model_backend"] == train_model["model_metadata"]["backend"]
+    assert model_manifest["model_file"] == "model.pkl"
+    assert domain_manifest["property_id"] == "plqy"
+    assert domain_manifest["use_case"] == "scalar_prediction"
+    assert domain_manifest["feature_requirements"] == ["canonical_smiles"]
+    assert domain_manifest["input_columns"] == {"canonical_smiles": "SMILES"}
+    assert domain_manifest["metrics"] == train_model["model_metadata"]["metrics"]
+    assert train_model["outputs"]["model_manifest_json"] == str(model_dir / "model_manifest.json")
+    assert train_model["outputs"]["domain_model_manifest_json"] == str(model_dir / "domain_model_manifest.json")
 
     pred_csv = tmp_path / "pred.csv"
     pred = predict_candidates_baseline_adapter(

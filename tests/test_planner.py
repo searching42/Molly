@@ -39,6 +39,15 @@ def test_expand_run_plan_adds_required_dependencies() -> None:
     assert plan.missing_artifacts == []
 
 
+def test_train_model_task_declares_promotable_model_package_outputs() -> None:
+    spec = AtomicTaskRegistry().get("train_model")
+
+    assert "trained_model" in spec.output_artifacts
+    assert "model_metadata" in spec.output_artifacts
+    assert "model_manifest" in spec.output_artifacts
+    assert "domain_model_manifest" in spec.output_artifacts
+
+
 def test_expand_run_plan_tracks_missing_artifacts_without_producers() -> None:
     registry = AtomicTaskRegistry(
         [

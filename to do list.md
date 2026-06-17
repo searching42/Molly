@@ -1339,6 +1339,7 @@ Core principle:
 - [x] Add a `PromotedModelAsset` path for future models trained against a specific confirmed request, with explicit user approval, applicability limits, manifest/runtime, and rollback metadata before prediction reuse.
   - MVP status: schema, JSON Schema export, project storage promotion/read path, and `PredictionPreparationAgent` selection path are implemented. Confirmed promoted assets can produce draft prediction payloads; candidate/deprecated assets and historical priors still require fresh training or explicit reuse approval.
   - API/UI status: `/models/promote` exposes the confirmed model asset promotion path, and `/models/promote/draft` plus the local console draft button prefill promotion fields from registered model metadata/manifests before human confirmation.
+  - Training package status: baseline training now writes `model_metadata.json`, `model_manifest.json`, and `domain_model_manifest.json`; `RunPlanExecutor` registers those artifacts so a confirmed model registration can immediately produce a promotion draft.
   - Remaining polish: expand metadata coverage from model diagnostics/rerun reports and add richer UI review cards for applicability, limitations, and rollback comparison.
 
 ### 24.4 Recovery And Replanning

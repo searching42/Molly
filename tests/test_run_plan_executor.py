@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import ai4s_agent.adapters as adapter_exports
@@ -145,8 +146,31 @@ def test_run_plan_executor_resume_runs_waiting_task_after_gate_approval(tmp_path
     registry = storage.read_artifact_registry("proj-exec", "r-resume-train")
     assert "trained_model" in registry
     assert "model_metadata" in registry
+    assert "model_manifest" in registry
+    assert "domain_model_manifest" in registry
     assert (storage.run_dir("proj-exec", "r-resume-train") / registry["trained_model"]).is_dir()
     assert (storage.run_dir("proj-exec", "r-resume-train") / registry["model_metadata"]).is_file()
+    assert (storage.run_dir("proj-exec", "r-resume-train") / registry["model_manifest"]).is_file()
+    assert (storage.run_dir("proj-exec", "r-resume-train") / registry["domain_model_manifest"]).is_file()
+    run_dir = storage.run_dir("proj-exec", "r-resume-train")
+    model_dir = run_dir / registry["trained_model"]
+    model_metadata = json.loads((run_dir / registry["model_metadata"]).read_text(encoding="utf-8"))
+    _, version_dir = storage.register_model_asset(
+        "proj-exec",
+        "r-resume-train",
+        model_dir,
+        property_id="plqy",
+        backend=model_metadata["backend"],
+        content_hash="sha256:test-model",
+        approved_by="user",
+    )
+    draft = storage.build_promoted_model_asset_draft("proj-exec", version_dir)
+    assert draft["model_id"] == "plqy_baseline_v001"
+    assert draft["property_id"] == "plqy"
+    assert draft["backend"] == model_metadata["backend"]
+    assert draft["feature_requirements"] == ["canonical_smiles"]
+    assert draft["input_columns"] == {"canonical_smiles": "SMILES"}
+    assert draft["metrics"] == model_metadata["metrics"]
     decisions = storage.read_gate_decisions("proj-exec", "r-resume-train")
     assert decisions[0]["gate"] == GateName.TRAIN_CONFIG.value
     assert decisions[0]["actor"] == "user"

@@ -131,6 +131,88 @@ def _write_markdown_report(path: Path, title: str, sections: dict[str, Any]) -> 
     return path
 
 
+def _write_model_package_manifests(
+    *,
+    model_dir: Path,
+    metadata: dict[str, Any],
+    domain: str = "general",
+    use_case: str = "scalar_prediction",
+    input_columns: dict[str, str] | None = None,
+    feature_requirements: list[str] | None = None,
+    applicability: dict[str, Any] | None = None,
+    limitations: list[str] | None = None,
+) -> dict[str, str]:
+    model_dir = model_dir.expanduser().resolve()
+    property_id = str(metadata.get("property_id") or "").strip()
+    backend = str(metadata.get("backend") or metadata.get("model_backend") or "").strip()
+    version = str(metadata.get("version") or model_dir.name or "v001").strip()
+    model_id = str(metadata.get("model_id") or "").strip()
+    if not model_id and property_id:
+        model_id = f"{property_id}_baseline_{version}"
+    clean_columns = {
+        str(key).strip(): str(value).strip()
+        for key, value in (input_columns or {}).items()
+        if str(key).strip() and str(value).strip()
+    }
+    clean_requirements = [
+        str(item).strip()
+        for item in (feature_requirements or list(clean_columns.keys()))
+        if str(item).strip()
+    ]
+    clean_limitations = [str(item).strip() for item in (limitations or []) if str(item).strip()]
+    metrics = metadata.get("metrics") if isinstance(metadata.get("metrics"), dict) else {}
+    manifest_common = {
+        "schema_version": "1.0",
+        "model_id": model_id,
+        "model_backend": backend,
+        "property_id": property_id,
+        "run_id": str(metadata.get("run_id") or ""),
+        "version": version,
+        "created_at": str(metadata.get("created_at") or _now_iso()),
+        "metrics": metrics,
+    }
+    model_manifest = {
+        **manifest_common,
+        "model_dir": str(model_dir),
+        "model_file": Path(str(metadata.get("model_file") or metadata.get("model_path") or "model.pkl")).name,
+        "model_type": str(metadata.get("model_type") or ""),
+        "feature_type": str(metadata.get("feature_type") or ""),
+        "train_size": metadata.get("train_size"),
+        "valid_size": metadata.get("valid_size"),
+        "split_strategy": str(metadata.get("split_strategy") or ""),
+        "runtime": {
+            "adapter": "train_model_baseline",
+            "prediction_adapter": "predict_candidates_baseline_adapter",
+        },
+    }
+    clean_applicability = dict(applicability or {})
+    for key, source_key in {
+        "train_size": "train_size",
+        "valid_size": "valid_size",
+        "split": "split_strategy",
+        "split_fallback_reason": "split_fallback_reason",
+        "feature_type": "feature_type",
+    }.items():
+        value = metadata.get(source_key)
+        if value not in (None, "") and key not in clean_applicability:
+            clean_applicability[key] = value
+    domain_manifest = {
+        **manifest_common,
+        "domain": str(domain or "general").strip() or "general",
+        "use_case": str(use_case or "scalar_prediction").strip() or "scalar_prediction",
+        "applicability": clean_applicability,
+        "feature_requirements": clean_requirements,
+        "input_columns": clean_columns,
+        "limitations": clean_limitations,
+    }
+    model_manifest_path = _write_json(model_dir / "model_manifest.json", model_manifest)
+    domain_manifest_path = _write_json(model_dir / "domain_model_manifest.json", domain_manifest)
+    return {
+        "model_manifest_json": str(model_manifest_path),
+        "domain_model_manifest_json": str(domain_manifest_path),
+    }
+
+
 def _ssh_scp_options(*, timeout_sec: int | None = None) -> list[str]:
     opts = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
     if timeout_sec is not None:
@@ -1456,6 +1538,12 @@ def train_model_baseline_adapter(payload: dict[str, Any]) -> dict[str, Any]:
 
     csv_path = _resolve_path(cleaned_master_csv, base=WORKSPACE)
     model_root = _resolve_path(model_root_raw, base=WORKSPACE)
+    smiles_col = str(payload.get("smiles_col") or "SMILES").strip() or "SMILES"
+    split_col = str(payload.get("split_col") or "split_group").strip() or "split_group"
+    try:
+        n_bits = int(payload.get("n_bits") or 256)
+    except (TypeError, ValueError):
+        n_bits = 256
 
     scope = _ensure_dir(model_root / property_id / "baseline")
     versions = [x.name for x in scope.iterdir() if x.is_dir() and x.name.startswith("v") and x.name[1:].isdigit()]
@@ -1467,6 +1555,9 @@ def train_model_baseline_adapter(payload: dict[str, Any]) -> dict[str, Any]:
             property_id=property_id,
             model_dir=model_dir,
             run_id=run_id,
+            smiles_col=smiles_col,
+            split_col=split_col,
+            n_bits=n_bits,
         )
     except Exception as exc:
         return {
@@ -1475,6 +1566,21 @@ def train_model_baseline_adapter(payload: dict[str, Any]) -> dict[str, Any]:
             "error": {"code": "baseline_training_failed", "message": str(exc)},
         }
     markdown_path = Path(str(metadata.get("model_dir") or model_dir)) / "train_model_report.md"
+    package_outputs = _write_model_package_manifests(
+        model_dir=Path(str(metadata.get("model_dir") or model_dir)),
+        metadata=metadata,
+        domain=str(payload.get("domain") or "general"),
+        use_case=str(payload.get("use_case") or "scalar_prediction"),
+        input_columns={"canonical_smiles": smiles_col},
+        feature_requirements=["canonical_smiles"],
+        applicability={
+            "dataset": str(csv_path),
+            "objective_type": "regression",
+        },
+        limitations=[
+            "Baseline model package; review diagnostics before promotion or reuse.",
+        ],
+    )
     _write_markdown_report(
         markdown_path,
         "Baseline Training Report",
@@ -1492,7 +1598,10 @@ def train_model_baseline_adapter(payload: dict[str, Any]) -> dict[str, Any]:
         "status": "success",
         "adapter": "train_model_baseline",
         "model_metadata": metadata,
-        "outputs": {"markdown": str(markdown_path)},
+        "outputs": {
+            "markdown": str(markdown_path),
+            **package_outputs,
+        },
     }
 
 

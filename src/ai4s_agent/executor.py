@@ -512,6 +512,14 @@ class RunPlanExecutor:
             else:
                 self._register(project_id, run_id, "model_metadata", result_rel)
                 artifact_paths["model_metadata"] = str(result_path)
+            for artifact_id, filename in (
+                ("model_manifest", "model_manifest.json"),
+                ("domain_model_manifest", "domain_model_manifest.json"),
+            ):
+                manifest_path = model_path / filename
+                if manifest_path.exists():
+                    self._register(project_id, run_id, artifact_id, self._relative(run_dir, manifest_path))
+                    artifact_paths[artifact_id] = str(manifest_path)
             return
         if task_id == "generate_candidates":
             outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
