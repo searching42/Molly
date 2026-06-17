@@ -1,0 +1,268 @@
+from __future__ import annotations
+
+import re
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
+
+from ai4s_agent._utils import write_json
+from ai4s_agent.domains.oled import OLED_MODEL_REGISTRY
+from ai4s_agent.schemas import GateName, PlanQuestion, PredictionPreparation
+from ai4s_agent.storage import ProjectStorage
+
+
+class PredictionPreparationAgent:
+    """Prepare reviewed model selection and adapter payloads before prediction."""
+
+    def prepare_prediction(
+        self,
+        *,
+        run_id: str,
+        property_id: str,
+        goal: str = "",
+        domain: str | None = None,
+        use_case: str | None = None,
+        available_inputs: Iterable[str] | None = None,
+        input_columns: dict[str, str] | None = None,
+        candidate_csv: str = "",
+        output_csv: str = "",
+        model_dir: str = "",
+        extra_adapter_payload: dict[str, Any] | None = None,
+    ) -> PredictionPreparation:
+        clean_goal = str(goal or "").strip()
+        clean_property = str(property_id or "").strip() or "default"
+        clean_domain = self._infer_domain(clean_goal, clean_property, domain)
+        clean_use_case = self._infer_use_case(clean_goal, clean_property, use_case)
+        clean_inputs = self._dedup_strings(self._normalize_input_name(item) for item in (available_inputs or []))
+        clean_columns = self._clean_input_columns(input_columns or {})
+
+        if clean_domain != "oled":
+            raise ValueError("prediction preparation currently supports the reviewed OLED registry only")
+
+        model_selection = OLED_MODEL_REGISTRY.select(
+            domain=clean_domain,
+            property_id=clean_property,
+            use_case=clean_use_case,
+            available_inputs=set(clean_inputs),
+        )
+        adapter, adapter_ready = self._adapter_for_backend(model_selection.selected_model.backend)
+        status = "needs_clarification" if model_selection.requires_user_input else "needs_confirmation"
+        warnings = list(model_selection.warnings)
+        questions: list[PlanQuestion] = []
+        if model_selection.requires_user_input:
+            questions.append(
+                PlanQuestion(
+                    question_id=f"q_prediction_{model_selection.normalized_property_id}_missing_inputs",
+                    prompt=(
+                        f"Provide required prediction inputs for `{model_selection.normalized_property_id}`: "
+                        f"{', '.join(model_selection.missing_required_inputs)}."
+                    ),
+                    reason="The selected reviewed model requires inputs that are not present in the prediction context.",
+                    choices=["provide_missing_inputs", "use_default_context", "choose_different_model"],
+                    blocks_execution=True,
+                )
+            )
+        if not adapter_ready:
+            warnings.append(f"adapter_implementation_required:{adapter}")
+        for key, value in {
+            "candidate_csv": candidate_csv,
+            "output_csv": output_csv,
+            "model_dir": model_dir,
+        }.items():
+            if not str(value or "").strip():
+                warnings.append(f"missing_execution_field:{key}")
+
+        adapter_payload = self._adapter_payload(
+            run_id=str(run_id or "").strip(),
+            candidate_csv=candidate_csv,
+            output_csv=output_csv,
+            property_id=model_selection.normalized_property_id,
+            model_id=model_selection.selected_model_id,
+            model_backend=model_selection.selected_model.backend,
+            model_dir=model_dir,
+            input_columns=clean_columns,
+            required_inputs=model_selection.selected_model.feature_requirements,
+            extra_payload=extra_adapter_payload or {},
+        )
+
+        return PredictionPreparation(
+            run_id=str(run_id or "").strip(),
+            goal=clean_goal,
+            domain=clean_domain,
+            property_id=clean_property,
+            normalized_property_id=model_selection.normalized_property_id,
+            use_case=clean_use_case,
+            status=status,
+            model_selection=model_selection,
+            available_inputs=clean_inputs,
+            input_columns=clean_columns,
+            missing_required_inputs=model_selection.missing_required_inputs,
+            adapter=adapter,
+            adapter_payload=adapter_payload,
+            required_gates=[GateName.FINAL_THRESHOLD.value],
+            warnings=warnings,
+            assumptions=[
+                "PredictionPreparationAgent does not execute prediction.",
+                "Execution adapters remain the authority for file paths, model assets, and runtime checks.",
+                "Reviewed OLED models require user confirmation before downstream ranking decisions.",
+            ],
+            questions=questions,
+            executable=False,
+        )
+
+    def write_prediction_preparation(
+        self,
+        storage: ProjectStorage,
+        project_id: str,
+        run_id: str,
+        preparation: PredictionPreparation,
+    ) -> tuple[Path, Path]:
+        run_dir = storage.run_dir(project_id, run_id)
+        safe_property = self._safe_property_stem(preparation.normalized_property_id or preparation.property_id)
+        json_name = f"prediction_preparation_{safe_property}.json"
+        md_name = f"prediction_preparation_{safe_property}.md"
+        json_path = write_json(run_dir / json_name, preparation.model_dump(mode="json"))
+        md_path = run_dir / md_name
+        md_path.write_text(self._render_markdown(preparation), encoding="utf-8")
+        storage.register_artifact_path(project_id, run_id, f"prediction_preparation_{safe_property}_json", json_path.name)
+        storage.register_artifact_path(project_id, run_id, f"prediction_preparation_{safe_property}_md", md_path.name)
+        return json_path, md_path
+
+    @classmethod
+    def _infer_domain(cls, goal: str, property_id: str, domain: str | None) -> str:
+        clean_domain = cls._normalize_input_name(domain)
+        if clean_domain:
+            return clean_domain
+        normalized_property = cls._normalize_input_name(property_id)
+        if OLED_MODEL_REGISTRY.list_candidates(domain="oled", property_id=normalized_property):
+            return "oled"
+        normalized_goal = cls._normalize_input_name(goal)
+        if any(term in normalized_goal for term in ("oled", "emitter", "plqy", "emission", "chromophore")):
+            return "oled"
+        return "oled"
+
+    @classmethod
+    def _infer_use_case(cls, goal: str, property_id: str, use_case: str | None) -> str:
+        clean_use_case = cls._normalize_input_name(use_case)
+        if clean_use_case:
+            return clean_use_case
+        normalized_goal = cls._normalize_input_name(goal)
+        normalized_property = cls._normalize_input_name(property_id)
+        candidates = OLED_MODEL_REGISTRY.list_candidates(domain="oled", property_id=normalized_property)
+        is_plqy = any(candidate.property_id == "plqy" for candidate in candidates)
+        high_screening_terms = (
+            "high",
+            "top",
+            "prioritize",
+            "screen",
+            "screening",
+            "recall",
+            "maximize",
+            "高",
+            "筛选",
+            "优先",
+        )
+        if is_plqy and any(term in normalized_goal for term in high_screening_terms):
+            return "high_plqy_screening"
+        return "scalar_prediction"
+
+    @staticmethod
+    def _adapter_for_backend(backend: str) -> tuple[str, bool]:
+        clean_backend = str(backend or "").strip()
+        if clean_backend == "unimol":
+            return "predict_candidates_unimol_legacy_adapter", True
+        if clean_backend.startswith("unimol_with_"):
+            return "predict_candidates_domain_model_adapter", False
+        return "predict_candidates_baseline_adapter", True
+
+    @classmethod
+    def _adapter_payload(
+        cls,
+        *,
+        run_id: str,
+        candidate_csv: str,
+        output_csv: str,
+        property_id: str,
+        model_id: str,
+        model_backend: str,
+        model_dir: str,
+        input_columns: dict[str, str],
+        required_inputs: list[str],
+        extra_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"run_id": run_id}
+        for key, value in {
+            "candidate_csv": candidate_csv,
+            "output_csv": output_csv,
+        }.items():
+            clean = str(value or "").strip()
+            if clean:
+                payload[key] = clean
+        payload.update(
+            {
+                "property_id": property_id,
+                "model_id": model_id,
+                "model_backend": model_backend,
+            }
+        )
+        clean_model_dir = str(model_dir or "").strip()
+        if clean_model_dir:
+            payload["model_dir"] = clean_model_dir
+        payload["input_columns"] = input_columns
+        payload["required_inputs"] = list(required_inputs)
+        payload["execute"] = False
+        payload.update(extra_payload)
+        return payload
+
+    @classmethod
+    def _clean_input_columns(cls, value: dict[str, str]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for key, raw in value.items():
+            clean_key = cls._normalize_input_name(key)
+            clean_value = str(raw or "").strip()
+            if clean_key and clean_value:
+                result[clean_key] = clean_value
+        return result
+
+    @staticmethod
+    def _dedup_strings(values: Iterable[str]) -> list[str]:
+        result: list[str] = []
+        for value in values:
+            clean = str(value or "").strip()
+            if clean and clean not in result:
+                result.append(clean)
+        return result
+
+    @staticmethod
+    def _normalize_input_name(value: str | None) -> str:
+        return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    @staticmethod
+    def _safe_property_stem(property_id: str) -> str:
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(property_id or "property").strip()) or "property"
+
+    @staticmethod
+    def _render_markdown(preparation: PredictionPreparation) -> str:
+        lines = [
+            "# Prediction Preparation",
+            "",
+            f"- Run: `{preparation.run_id}`",
+            f"- Property: `{preparation.normalized_property_id}`",
+            f"- Domain: `{preparation.domain}`",
+            f"- Use case: `{preparation.use_case}`",
+            f"- Status: `{preparation.status}`",
+            f"- Model: `{preparation.model_selection.selected_model_id}`",
+            f"- Adapter: `{preparation.adapter}`",
+            "",
+            "## Missing Required Inputs",
+        ]
+        if preparation.missing_required_inputs:
+            lines.extend(f"- `{item}`" for item in preparation.missing_required_inputs)
+        else:
+            lines.append("- None")
+        lines.extend(["", "## Warnings"])
+        if preparation.warnings:
+            lines.extend(f"- `{item}`" for item in preparation.warnings)
+        else:
+            lines.append("- None")
+        return "\n".join(lines) + "\n"

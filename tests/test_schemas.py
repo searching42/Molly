@@ -51,6 +51,7 @@ from ai4s_agent.schemas import (
     ModelingRetryProposal,
     MultiUserBoundaryCheck,
     MultiUserDeploymentReadiness,
+    PredictionPreparation,
     ReportNextStep,
     ReportSection,
     ReportSynthesisProposal,
@@ -114,6 +115,7 @@ def test_export_json_schemas(tmp_path: Path) -> None:
     exported = export_json_schemas(tmp_path)
     names = {path.name for path in exported}
     assert "asset_manifest.schema.json" in names
+    assert "prediction_preparation.schema.json" in names
     assert "run_plan.schema.json" in names
     assert "run_plan_diff.schema.json" in names
 

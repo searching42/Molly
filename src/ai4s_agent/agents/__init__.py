@@ -5,6 +5,7 @@ from ai4s_agent.agents.generation import GenerationAgent
 from ai4s_agent.agents.modeling import ModelingAgent
 from ai4s_agent.agents.observer import ObserverAgent
 from ai4s_agent.agents.planner import PlannerAgent
+from ai4s_agent.agents.prediction import PredictionPreparationAgent
 from ai4s_agent.agents.recovery import RecoveryAgent
 from ai4s_agent.agents.report import ReportAgent
 from ai4s_agent.agents.research import ResearchAgent
@@ -15,6 +16,7 @@ __all__ = [
     "ModelingAgent",
     "ObserverAgent",
     "PlannerAgent",
+    "PredictionPreparationAgent",
     "RecoveryAgent",
     "ReportAgent",
     "ResearchAgent",

@@ -4,6 +4,7 @@ def test_agents_package_exports_public_agent_classes() -> None:
         ModelingAgent,
         ObserverAgent,
         PlannerAgent,
+        PredictionPreparationAgent,
         RecoveryAgent,
         ReportAgent,
         ResearchAgent,
@@ -13,6 +14,7 @@ def test_agents_package_exports_public_agent_classes() -> None:
 
     assert GenerationAgent.__name__ == "GenerationAgent"
     assert ModelingAgent.__name__ == "ModelingAgent"
+    assert PredictionPreparationAgent.__name__ == "PredictionPreparationAgent"
     assert PlannerAgent.__name__ == "PlannerAgent"
     assert ObserverAgent.__name__ == "ObserverAgent"
     assert RecoveryAgent.__name__ == "RecoveryAgent"

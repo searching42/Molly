@@ -1,0 +1,319 @@
+{
+  "$defs": {
+    "DomainModelCandidate": {
+      "properties": {
+        "model_id": {
+          "title": "Model Id",
+          "type": "string"
+        },
+        "domain": {
+          "title": "Domain",
+          "type": "string"
+        },
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "intended_use": {
+          "title": "Intended Use",
+          "type": "string"
+        },
+        "backend": {
+          "title": "Backend",
+          "type": "string"
+        },
+        "source_run_id": {
+          "default": "",
+          "title": "Source Run Id",
+          "type": "string"
+        },
+        "source_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Artifacts",
+          "type": "array"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Metrics",
+          "type": "object"
+        },
+        "feature_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Feature Requirements",
+          "type": "array"
+        },
+        "recommended_for": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended For",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "status": {
+          "default": "candidate",
+          "title": "Status",
+          "type": "string"
+        },
+        "priority": {
+          "default": 100,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "model_id",
+        "domain",
+        "property_id",
+        "intended_use",
+        "backend"
+      ],
+      "title": "DomainModelCandidate",
+      "type": "object"
+    },
+    "DomainModelSelection": {
+      "properties": {
+        "domain": {
+          "title": "Domain",
+          "type": "string"
+        },
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "normalized_property_id": {
+          "title": "Normalized Property Id",
+          "type": "string"
+        },
+        "use_case": {
+          "title": "Use Case",
+          "type": "string"
+        },
+        "selected_model_id": {
+          "title": "Selected Model Id",
+          "type": "string"
+        },
+        "selected_model": {
+          "$ref": "#/$defs/DomainModelCandidate"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/DomainModelCandidate"
+          },
+          "title": "Candidates",
+          "type": "array"
+        },
+        "missing_required_inputs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Required Inputs",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "rationale": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rationale",
+          "type": "array"
+        },
+        "requires_user_input": {
+          "default": false,
+          "title": "Requires User Input",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "domain",
+        "property_id",
+        "normalized_property_id",
+        "use_case",
+        "selected_model_id",
+        "selected_model"
+      ],
+      "title": "DomainModelSelection",
+      "type": "object"
+    },
+    "PlanQuestion": {
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "blocks_execution": {
+          "default": true,
+          "title": "Blocks Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "goal": {
+      "default": "",
+      "title": "Goal",
+      "type": "string"
+    },
+    "domain": {
+      "default": "general",
+      "title": "Domain",
+      "type": "string"
+    },
+    "property_id": {
+      "title": "Property Id",
+      "type": "string"
+    },
+    "normalized_property_id": {
+      "title": "Normalized Property Id",
+      "type": "string"
+    },
+    "use_case": {
+      "default": "scalar_prediction",
+      "title": "Use Case",
+      "type": "string"
+    },
+    "status": {
+      "default": "needs_confirmation",
+      "title": "Status",
+      "type": "string"
+    },
+    "model_selection": {
+      "$ref": "#/$defs/DomainModelSelection"
+    },
+    "available_inputs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Available Inputs",
+      "type": "array"
+    },
+    "input_columns": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Input Columns",
+      "type": "object"
+    },
+    "missing_required_inputs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Required Inputs",
+      "type": "array"
+    },
+    "adapter": {
+      "default": "",
+      "title": "Adapter",
+      "type": "string"
+    },
+    "adapter_payload": {
+      "additionalProperties": true,
+      "title": "Adapter Payload",
+      "type": "object"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "property_id",
+    "normalized_property_id",
+    "model_selection"
+  ],
+  "title": "PredictionPreparation",
+  "type": "object"
+}

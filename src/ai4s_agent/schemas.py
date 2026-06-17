@@ -1247,6 +1247,62 @@ class DomainModelSelection(BaseModel):
         return result
 
 
+class PredictionPreparation(BaseModel):
+    run_id: str
+    goal: str = ""
+    domain: str = "general"
+    property_id: str
+    normalized_property_id: str
+    use_case: str = "scalar_prediction"
+    status: str = "needs_confirmation"
+    model_selection: DomainModelSelection
+    available_inputs: list[str] = Field(default_factory=list)
+    input_columns: dict[str, str] = Field(default_factory=dict)
+    missing_required_inputs: list[str] = Field(default_factory=list)
+    adapter: str = ""
+    adapter_payload: dict[str, Any] = Field(default_factory=dict)
+    required_gates: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    questions: list[PlanQuestion] = Field(default_factory=list)
+    executable: bool = False
+    generated_at: str = Field(default_factory=_now_iso)
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"needs_confirmation", "needs_clarification", "blocked"}:
+            raise ValueError("status must be needs_confirmation, needs_clarification, or blocked")
+        return normalized
+
+    @field_validator("available_inputs", "missing_required_inputs", "required_gates", "warnings", "assumptions")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for item in value:
+            clean = str(item or "").strip()
+            if clean and clean not in result:
+                result.append(clean)
+        return result
+
+    @field_validator("input_columns")
+    @classmethod
+    def validate_input_columns(cls, value: dict[str, str]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for key, raw in value.items():
+            clean_key = str(key or "").strip()
+            clean_value = str(raw or "").strip()
+            if clean_key and clean_value:
+                result[clean_key] = clean_value
+        return result
+
+    @field_validator("adapter_payload")
+    @classmethod
+    def validate_adapter_payload_is_json_safe(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_json_safe(value, "prediction_preparation.adapter_payload")
+
+
 class ModelingPlanProposal(BaseModel):
     run_id: str
     goal: str
@@ -1980,6 +2036,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "model_diagnostics_report": ModelDiagnosticsReport,
     "domain_model_candidate": DomainModelCandidate,
     "domain_model_selection": DomainModelSelection,
+    "prediction_preparation": PredictionPreparation,
     "modeling_plan_proposal": ModelingPlanProposal,
     "agent_tool_call": AgentToolCall,
     "planner_llm_response": PlannerLLMResponse,

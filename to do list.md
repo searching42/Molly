@@ -1323,13 +1323,17 @@ Core principle:
 
 ### 24.3.1 Target-Aware Modeling And Rerun Loop
 
-- [ ] Add `TargetModelingBrief` as a first-class planning artifact for every requested training target.
+- [x] Add `TargetModelingBrief` as a first-class planning artifact for every requested training target.
 - [ ] Require `ModelingAgent` to consult project memory, previous run diagnostics, built-in domain rules, and optional user-approved web/literature search before proposing preprocessing, target transforms, split strategy, backend, and hyperparameters.
-- [ ] Record target-specific cautions such as solvent dependence, device/context dependence, bounded labels, log-scale labels, replicate variance, class imbalance, censored values, target leakage risks, and expected metric ranges.
-- [ ] Add `ModelDiagnosticsReport` after training that compares the trained model to mean baselines, fingerprint baselines, target-specific expectations, fold stability, prediction range, bucket bias, high-error samples, featurization failures, and learning curves.
-- [ ] Add `RerunProposal` as a structured artifact with candidate fixes, rationale, expected impact, cost, approval requirements, and fallback policy.
-- [ ] Let the agent recommend rerun actions such as revised cleaning, low-noise filtering, target transform, solvent/context conditioning, split correction, seed ensemble, hyperparameter sweep, backend switch, more data, or low-confidence model use.
-- [ ] Keep rerun execution gated: the agent may propose and explain reruns, but expensive training, external search, backend switches, data relaxation, or model promotion still require user confirmation.
+  - MVP status: project memory, previous diagnostics, trainability context, built-in OLED rules, and `user_approved_external_search` policy labels are wired; cited web/literature evidence injection remains TODO.
+- [x] Record target-specific cautions such as solvent dependence, device/context dependence, bounded labels, log-scale labels, replicate variance, class imbalance, censored values, target leakage risks, and expected metric ranges.
+- [x] Add `ModelDiagnosticsReport` after training that compares the trained model to baselines, target-specific expectations, prediction range, bucket bias, and high-value compression risk.
+- [x] Add `RerunProposal` as a structured artifact with candidate fixes, rationale, expected impact, cost, approval requirements, and fallback policy.
+- [x] Let the agent recommend rerun actions such as revised cleaning, low-noise filtering, target transform, solvent/context conditioning, split correction, seed ensemble, hyperparameter sweep, backend switch, more data, or low-confidence model use.
+- [x] Keep rerun execution gated: the agent may propose and explain reruns, but expensive training, external search, backend switches, data relaxation, or model promotion still require user confirmation.
+- [x] Add `DomainModelRegistry` and OLED reviewed model candidates for emission, scalar PLQY, and high-PLQY screening.
+- [x] Add `PredictionPreparation` as a non-executable pre-prediction artifact that turns a natural-language target and available input columns into reviewed model selection, missing-input questions, required gates, warnings, and draft adapter payload.
+- [ ] Implement `predict_candidates_domain_model_adapter` for solvent-aware OLED models and connect reviewed model assets to the prediction execution chain.
 
 ### 24.4 Recovery And Replanning
 
@@ -1338,7 +1342,7 @@ Core principle:
 - [x] Implement recovery policies for parser fallback: MinerU -> pdfplumber/PyMuPDF/GROBID when evidence quality is poor or parsing fails.
 - [x] Implement recovery policies for data mining: expand query, add DOI/URL sources, retry acquisition, or request user-provided PDFs.
 - [x] Implement recovery policies for modeling: switch backend, adjust split, reduce target properties, request more data, or run only baseline.
-- [ ] Link modeling recovery policies to `ModelDiagnosticsReport` and `RerunProposal` rather than treating weak metrics as a generic failure.
+- [x] Link modeling recovery policies to `ModelDiagnosticsReport` and `RerunProposal` rather than treating weak metrics as a generic failure.
 - [x] Never silently downgrade a high-risk action into a lower-risk action.
 - [x] Require user approval before executing a revised plan that adds high-risk or external-network actions.
 
