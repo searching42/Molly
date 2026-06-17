@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -228,10 +229,8 @@ def _run_external_command(
 
 
 def _replace_external_command_tokens(part: str, replacements: dict[str, str]) -> str:
-    result = str(part)
-    for key, value in replacements.items():
-        result = result.replace("{" + key + "}", value)
-    return result
+    pattern = re.compile(r"\{(" + "|".join(re.escape(key) for key in replacements) + r")\}")
+    return pattern.sub(lambda match: replacements[match.group(1)], str(part))
 
 
 def _json_object_arg(raw: str, flag: str) -> dict[str, Any]:

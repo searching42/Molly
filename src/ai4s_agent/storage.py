@@ -314,6 +314,14 @@ class ProjectStorage:
         if not manifest_payload:
             raise FileNotFoundError(f"asset_manifest.json not found: {version_path}")
         manifest = AssetManifest.model_validate(manifest_payload)
+        if manifest.asset_type != "trained_model":
+            raise ValueError("model promotion requires an asset_manifest with asset_type trained_model")
+        expected_asset_id = f"model/{backend}/{property_id}"
+        if manifest.asset_id != expected_asset_id:
+            raise ValueError(
+                "model promotion metadata must match registered model asset "
+                f"{manifest.asset_id}"
+            )
         promoted_at = now_iso()
         asset = PromotedModelAsset(
             asset_id=f"{manifest.asset_id}/{manifest.version}",

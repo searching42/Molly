@@ -250,6 +250,67 @@ def test_domain_model_scorer_external_command_preserves_literal_braces(tmp_path:
     ]
 
 
+def test_domain_model_scorer_external_command_does_not_rewrite_tokens_inside_replacements(tmp_path: Path) -> None:
+    candidate_dir = tmp_path / "literal_{output_csv}"
+    candidate_dir.mkdir()
+    candidate_csv = candidate_dir / "candidates.csv"
+    output_csv = tmp_path / "predictions.csv"
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    _write_csv(candidate_csv, [{"candidate_id": "c1", "SMILES": "CCO"}])
+    script = (
+        "import csv,sys;"
+        "inp,out,prop=sys.argv[1:4];"
+        "f=open(inp,newline='',encoding='utf-8');rows=list(csv.DictReader(f));f.close();"
+        "headers=list(rows[0])+[prop+'_pred'];"
+        "[row.__setitem__(prop+'_pred','0.5') for row in rows];"
+        "g=open(out,'w',newline='',encoding='utf-8');"
+        "w=csv.DictWriter(g,fieldnames=headers);w.writeheader();w.writerows(rows);g.close()"
+    )
+    (model_dir / "domain_model_manifest.json").write_text(
+        json.dumps(
+            {
+                "model_id": "demo_plqy",
+                "model_backend": "external_demo",
+                "prediction_mode": "external_command",
+                "external_command": [
+                    sys.executable,
+                    "-c",
+                    script,
+                    "{candidate_csv}",
+                    "{output_csv}",
+                    "{property_name}",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    scorer = Path(__file__).resolve().parents[1] / "scripts" / "score_domain_model_candidates.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(scorer),
+            str(candidate_csv),
+            str(output_csv),
+            "--property-name",
+            "plqy",
+            "--model-id",
+            "demo_plqy",
+            "--model-backend",
+            "external_demo",
+            "--model-dir",
+            str(model_dir),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _read_csv(output_csv)[0]["plqy_pred"] == "0.5"
+
+
 def test_domain_model_adapter_executes_scorer_package(tmp_path: Path) -> None:
     candidate_csv = tmp_path / "candidates.csv"
     output_csv = tmp_path / "predictions.csv"

@@ -222,6 +222,35 @@ def test_promote_registered_model_asset_writes_confirmed_promoted_asset(tmp_path
     assert record_path.exists()
 
 
+def test_promote_registered_model_asset_rejects_non_model_manifest(tmp_path: Path) -> None:
+    storage = ProjectStorage(workspace_dir=tmp_path)
+    manifest = AssetManifest(
+        asset_id="dataset/cleaned/train",
+        asset_type="cleaned_dataset",
+        version="v001",
+        status=AssetStatus.CANDIDATE,
+        created_from_run_id="run-1",
+        source_artifacts=["02_data/cleaned.csv"],
+        content_hash="sha256:data",
+    )
+    storage.write_asset_manifest("proj-a", ["datasets", "cleaned", "train"], "v001", manifest)
+    version_dir = tmp_path / "projects" / "proj-a" / "assets" / "datasets" / "cleaned" / "train" / "v001"
+    (version_dir / "model").mkdir()
+
+    with pytest.raises(ValueError, match="trained_model"):
+        storage.promote_registered_model_asset(
+            "proj-a",
+            "run-1",
+            version_dir,
+            model_id="bad_model",
+            domain="oled",
+            property_id="plqy",
+            use_case="scalar_prediction",
+            backend="baseline",
+            approved_by="user",
+        )
+
+
 def test_register_model_asset_copies_nested_model_directories(tmp_path: Path) -> None:
     storage = ProjectStorage(workspace_dir=tmp_path)
     model_dir = storage.run_dir("proj-a", "run-1") / "03_training" / "source_model"

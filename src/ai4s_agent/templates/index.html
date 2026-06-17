@@ -403,6 +403,42 @@
                 <button type="submit" class="alt">提升资产</button>
               </form>
             </article>
+
+            <article class="mini-panel">
+              <h3>模型资产提升</h3>
+              <form id="model-asset-promotion-form">
+                <label for="model-promotion-project-id">项目 ID</label>
+                <input id="model-promotion-project-id" name="project_id" value="proj-oled" required />
+                <input id="model-promotion-run-id" name="run_id" type="hidden" required />
+                <label for="model-promotion-version-dir">模型版本目录</label>
+                <input id="model-promotion-version-dir" name="version_dir" placeholder="projects/proj-oled/assets/models/backend/property/v001" required />
+                <label for="model-promotion-model-id">模型 ID</label>
+                <input id="model-promotion-model-id" name="model_id" placeholder="plqy_promoted_v001" required />
+                <label for="model-promotion-domain">领域</label>
+                <input id="model-promotion-domain" name="domain" value="oled" required />
+                <label for="model-promotion-property-id">指标</label>
+                <input id="model-promotion-property-id" name="property_id" value="plqy" required />
+                <label for="model-promotion-use-case">用途</label>
+                <input id="model-promotion-use-case" name="use_case" value="scalar_prediction" required />
+                <label for="model-promotion-backend">后端</label>
+                <input id="model-promotion-backend" name="backend" placeholder="unimol_with_solvent_pca64" required />
+                <label for="model-promotion-feature-requirements">必需输入</label>
+                <input id="model-promotion-feature-requirements" name="feature_requirements" value="canonical_smiles, solvent" />
+                <label for="model-promotion-input-columns">输入列 JSON</label>
+                <input id="model-promotion-input-columns" name="input_columns" value='{"canonical_smiles":"SMILES","solvent":"solvent"}' />
+                <label for="model-promotion-metrics">指标 JSON</label>
+                <input id="model-promotion-metrics" name="metrics" placeholder='{"mae":0.17,"r2":0.41}' />
+                <label for="model-promotion-applicability">适用范围 JSON</label>
+                <input id="model-promotion-applicability" name="applicability" placeholder='{"split":"scaffold"}' />
+                <label for="model-promotion-limitations">限制</label>
+                <input id="model-promotion-limitations" name="limitations" placeholder="high PLQY compression remains monitored" />
+                <label for="model-promotion-rollback-asset-id">回滚资产</label>
+                <input id="model-promotion-rollback-asset-id" name="rollback_asset_id" placeholder="model/backend/property/v000" />
+                <label for="model-promotion-actor">批准人</label>
+                <input id="model-promotion-actor" name="approved_by" value="user" required />
+                <button type="submit" class="alt">提升模型</button>
+              </form>
+            </article>
           </div>
         </details>
       </section>
@@ -559,6 +595,14 @@
         return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
       }
 
+      function jsonObject(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("JSON field must be an object");
+        return parsed;
+      }
+
       function setValue(id, value) {
         const el = document.getElementById(id);
         if (el && value) el.value = value;
@@ -570,11 +614,11 @@
       }
 
       function syncRunId(runId) {
-        ["agent-run-id", "plan-run-id", "status-run-id", "gate-run-id", "expand-run-id", "diff-run-id", "data-run-id", "run-card-id", "submit-run-id", "promotion-run-id", "timeline-run-id", "preview-run-id"].forEach((id) => setValue(id, runId));
+        ["agent-run-id", "plan-run-id", "status-run-id", "gate-run-id", "expand-run-id", "diff-run-id", "data-run-id", "run-card-id", "submit-run-id", "promotion-run-id", "model-promotion-run-id", "timeline-run-id", "preview-run-id"].forEach((id) => setValue(id, runId));
       }
 
       function syncProjectId(projectId) {
-        ["upload-project-id", "promotion-project-id", "timeline-project-id", "preview-project-id"].forEach((id) => setValue(id, projectId));
+        ["upload-project-id", "promotion-project-id", "model-promotion-project-id", "timeline-project-id", "preview-project-id"].forEach((id) => setValue(id, projectId));
       }
 
       function markCard(cardId, status, summary) {
@@ -989,6 +1033,32 @@
         const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
         const payload = { asset_id: String(fd.get("asset_id") || "").trim(), asset_type: String(fd.get("asset_type") || "").trim(), version: String(fd.get("version") || "").trim(), source_artifacts: csvList(fd.get("source_artifacts")), approved_by: String(fd.get("approved_by") || "").trim(), confirmed: true };
         try { render(await postJSON(`/api/projects/${projectId}/runs/${runId}/assets/promote`, payload)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("model-asset-promotion-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
+        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
+        try {
+          const payload = {
+            version_dir: String(fd.get("version_dir") || "").trim(),
+            model_id: String(fd.get("model_id") || "").trim(),
+            domain: String(fd.get("domain") || "").trim(),
+            property_id: String(fd.get("property_id") || "").trim(),
+            use_case: String(fd.get("use_case") || "").trim(),
+            backend: String(fd.get("backend") || "").trim(),
+            feature_requirements: csvList(fd.get("feature_requirements")),
+            input_columns: jsonObject(fd.get("input_columns")),
+            metrics: jsonObject(fd.get("metrics")),
+            applicability: jsonObject(fd.get("applicability")),
+            limitations: csvList(fd.get("limitations")),
+            rollback_asset_id: String(fd.get("rollback_asset_id") || "").trim(),
+            approved_by: String(fd.get("approved_by") || "").trim(),
+            confirmed: true,
+          };
+          render(await postJSON(`/api/projects/${projectId}/runs/${runId}/models/promote`, payload));
+        } catch (err) { render(err instanceof Error ? { ok: false, error: err.message } : err); }
       });
 
       document.getElementById("stage-timeline-form").addEventListener("submit", async (event) => {

@@ -1338,7 +1338,7 @@ Core principle:
 - [x] Prevent historical training results such as `plqy_solvent_pca64_seed42` and `plqy_manual_weight3_ensemble` from being used as default MVP prediction assets; fresh target-specific training remains the default for new user requests.
 - [x] Add a `PromotedModelAsset` path for future models trained against a specific confirmed request, with explicit user approval, applicability limits, manifest/runtime, and rollback metadata before prediction reuse.
   - MVP status: schema, JSON Schema export, project storage promotion/read path, and `PredictionPreparationAgent` selection path are implemented. Confirmed promoted assets can produce draft prediction payloads; candidate/deprecated assets and historical priors still require fresh training or explicit reuse approval.
-  - Remaining polish: expose promoted model asset creation/review in the API/UI instead of calling the storage helper directly.
+  - API/UI status: `/models/promote` exposes the confirmed model asset promotion path, and the local console includes a model asset promotion form. Further polish can derive more fields automatically from diagnostics/model metadata.
 
 ### 24.4 Recovery And Replanning
 
