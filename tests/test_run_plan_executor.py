@@ -6,6 +6,7 @@ from pathlib import Path
 import ai4s_agent.adapters as adapter_exports
 import ai4s_agent.executor as executor_module
 import pytest
+from ai4s_agent.agents.prediction import PredictionPreparationAgent
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.app import create_app
 from ai4s_agent.planner import expand_run_plan
@@ -186,6 +187,106 @@ def test_run_plan_executor_resume_runs_waiting_task_after_gate_approval(tmp_path
     decisions = storage.read_gate_decisions("proj-exec", "r-resume-train")
     assert decisions[0]["gate"] == GateName.TRAIN_CONFIG.value
     assert decisions[0]["actor"] == "user"
+
+
+def test_training_review_promotion_and_prediction_preparation_acceptance(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    dataset = tmp_path / "input" / "train.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    run_plan = expand_run_plan(
+        run_id="r-e2e-promote",
+        requested_tasks=["train_model"],
+        available_artifacts=[],
+    )
+    executor = RunPlanExecutor(storage=storage)
+    first = executor.execute(
+        project_id="proj-e2e",
+        run_plan=run_plan,
+        input_artifacts={"uploaded_dataset": str(dataset)},
+    )
+    assert first["status"] == RunStatus.WAITING_USER.value
+
+    trained = executor.resume_after_gate(
+        project_id="proj-e2e",
+        run_plan=run_plan,
+        approved_gates=[GateName.TRAIN_CONFIG.value],
+        actor="user",
+        note="approve local acceptance training",
+    )
+
+    assert trained["status"] == RunStatus.SUCCEEDED.value
+    registry = storage.read_artifact_registry("proj-e2e", "r-e2e-promote")
+    run_dir = storage.run_dir("proj-e2e", "r-e2e-promote")
+    model_dir = run_dir / registry["trained_model"]
+    metadata = json.loads((run_dir / registry["model_metadata"]).read_text(encoding="utf-8"))
+    review = json.loads((run_dir / registry["model_package_review"]).read_text(encoding="utf-8"))
+    assert review["model_id"] == "plqy_baseline_v001"
+    assert review["decision"] in {"promote_candidate", "rerun_recommended", "memory_only", "blocked"}
+
+    _, version_dir = storage.register_model_asset(
+        "proj-e2e",
+        "r-e2e-promote",
+        model_dir,
+        property_id="plqy",
+        backend=metadata["backend"],
+        content_hash="sha256:e2e-local-model",
+        approved_by="user",
+        approval_note="acceptance test registration",
+    )
+    draft = storage.build_promoted_model_asset_draft("proj-e2e", version_dir)
+    promoted, promoted_path = storage.promote_registered_model_asset(
+        "proj-e2e",
+        "r-e2e-promote",
+        version_dir,
+        model_id=draft["model_id"],
+        domain="oled",
+        property_id=draft["property_id"],
+        use_case=draft["use_case"],
+        backend=draft["backend"],
+        approved_by="user",
+        metrics=draft["metrics"],
+        applicability=draft["applicability"],
+        feature_requirements=draft["feature_requirements"],
+        input_columns=draft["input_columns"],
+        limitations=draft["limitations"],
+        note="acceptance test promotion",
+    )
+    assert promoted_path.is_file()
+    assert promoted.status.value == "confirmed"
+
+    candidate_csv = tmp_path / "input" / "candidates.csv"
+    output_csv = tmp_path / "output" / "predictions.csv"
+    candidate_csv.write_text("SMILES\nCCO\n", encoding="utf-8")
+    preparation = PredictionPreparationAgent().prepare_prediction_for_project(
+        storage=storage,
+        project_id="proj-e2e",
+        run_id="r-e2e-predict",
+        goal="Predict quantum yield for OLED candidates with the approved model asset.",
+        domain="oled",
+        property_id="quantum_yield",
+        use_case="scalar_prediction",
+        available_inputs={"canonical_smiles"},
+        input_columns={"canonical_smiles": "candidate_smiles"},
+        candidate_csv=str(candidate_csv),
+        output_csv=str(output_csv),
+    )
+
+    assert preparation.status == "needs_confirmation"
+    assert preparation.promoted_model_asset is not None
+    assert preparation.promoted_model_asset.asset_id == promoted.asset_id
+    assert preparation.model_selection.selection_role == "prediction_asset"
+    assert preparation.model_selection.selected_model.reuse_policy == "promoted_model_asset"
+    assert preparation.requires_training is False
+    assert preparation.reuse_requires_user_approval is False
+    assert preparation.required_gates == [GateName.FINAL_THRESHOLD.value]
+    assert "training_required_for_request" not in preparation.warnings
+    assert preparation.adapter == "predict_candidates_baseline_adapter"
+    assert preparation.adapter_payload["model_id"] == "plqy_baseline_v001"
+    assert preparation.adapter_payload["model_backend"] == metadata["backend"]
+    assert preparation.adapter_payload["model_dir"] == promoted.model_dir
+    assert preparation.adapter_payload["input_columns"] == {"canonical_smiles": "SMILES"}
+    assert preparation.adapter_payload["required_inputs"] == ["canonical_smiles"]
 
 
 def test_run_plan_executor_unimol_training_option_plans_without_registering_fake_model(tmp_path: Path) -> None:

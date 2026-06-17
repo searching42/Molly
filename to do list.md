@@ -1341,6 +1341,7 @@ Core principle:
   - API/UI status: `/models/promote` exposes the confirmed model asset promotion path, and `/models/promote/draft` plus the local console draft button prefill promotion fields from registered model metadata/manifests before human confirmation.
   - Training package status: baseline training now writes `model_metadata.json`, `model_manifest.json`, and `domain_model_manifest.json`; `RunPlanExecutor` registers those artifacts so a confirmed model registration can immediately produce a promotion draft.
   - Agent review status: `ModelPackageReview` and `/api/agent/model-package-review` now classify a trained package as `promote_candidate`, `rerun_recommended`, `memory_only`, or `blocked` from manifests, metrics, diagnostics, required inputs, and known risks; `RunPlanExecutor` automatically writes `ModelDiagnosticsReport` and `ModelPackageReview` artifacts after baseline training with manifests; promote remains gated by `promote_asset`.
+  - Acceptance status: local pytest now covers train -> auto diagnostics/review -> register model asset -> confirmed promotion -> `PredictionPreparationAgent.prepare_prediction_for_project()` selecting the confirmed asset without requiring fresh training.
   - Remaining polish: expand metadata coverage from model diagnostics/rerun reports and add richer UI review cards for applicability, limitations, and rollback comparison.
 
 ### 24.4 Recovery And Replanning
@@ -1392,6 +1393,7 @@ Core principle:
 - [x] Add acceptance scenario: parsing fails and agent proposes a parser fallback replan.
 - [x] Add acceptance scenario: extraction has high conflict rate and agent asks for human review before promotion.
 - [x] Add acceptance scenario: model metrics are weak and agent proposes more data or a different backend.
+- [x] Add acceptance scenario: a trained model package is reviewed, registered, explicitly promoted, and then reused by prediction preparation only as a confirmed model asset.
 - [x] Track agent autonomy metrics: tasks selected by agent, replans proposed, user confirmations required, verifier catches, and failed autonomous decisions.
 - [x] Add integration tests for the conservative `RunPlan` executor and invalid execution payloads.
 - [x] Add integration tests for gate-approved resume through training, generation, prediction, ranking, and reporting.
