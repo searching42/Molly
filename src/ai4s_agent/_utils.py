@@ -40,12 +40,7 @@ def truthy(value: Any) -> bool:
 
 
 def strict_bool(value: Any, *, key: str = "value") -> bool:
-    """Only accept a Python bool.  Reject strings, ints, and None.
-
-    All adapter and executor ``execute`` / ``confirmed`` flags must pass
-    through this check so that string ``\"false\"`` and ``\"0\"`` are never
-    interpreted as truthy by the downstream ``bool(...)`` call.
-    """
+    """Only accept a Python bool."""
     if isinstance(value, bool):
         return value
     raise ValueError(f"{key} must be a boolean, got {type(value).__name__}")
@@ -61,6 +56,11 @@ PROTECTED_PAYLOAD_KEYS: frozenset[str] = frozenset(
         "model_path",
         "model_dir",
         "property_catalog_json",
+        "output_csv",
+        "output_dir",
+        "model_root",
+        "save_dir",
+        "log_dir",
     }
 )
 
