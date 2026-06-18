@@ -13,6 +13,7 @@ from ai4s_agent.schemas import (
     ResearchQueryExpansion,
     ResearchSourceCandidate,
     ResearchSourceProposal,
+    TargetEvidenceItem,
 )
 from ai4s_agent.storage import ProjectStorage
 
@@ -71,6 +72,53 @@ class ResearchAgent:
         storage.register_artifact_path(project_id, run_id, "research_source_proposal_json", json_path.name)
         storage.register_artifact_path(project_id, run_id, "research_source_proposal_md", md_path.name)
         return json_path, md_path
+
+    def prepare_target_evidence_items(
+        self,
+        *,
+        goal: str,
+        property_id: str,
+        cited_summaries: list[dict[str, Any] | TargetEvidenceItem],
+        user_approved_external_search: bool = False,
+    ) -> list[TargetEvidenceItem]:
+        """Convert cited research summaries into modeling-brief evidence items."""
+
+        clean_goal = str(goal or "").strip()
+        clean_property = str(property_id or "target").strip() or "target"
+        items: list[TargetEvidenceItem] = []
+        for index, raw in enumerate(cited_summaries or [], start=1):
+            if isinstance(raw, TargetEvidenceItem):
+                item = raw
+            else:
+                source_ref = self._target_source_ref(raw)
+                if not source_ref:
+                    raise ValueError("target evidence requires source_ref, doi, url, or source_id")
+                source_type = str(raw.get("source_type") or "literature_summary").strip() or "literature_summary"
+                if self._is_external_target_evidence(source_type) and not user_approved_external_search:
+                    raise ValueError("external target evidence requires user_approved_external_search=True")
+                summary = str(raw.get("summary") or raw.get("cited_summary") or "").strip()
+                evidence_id = str(raw.get("evidence_id") or "").strip()
+                if not evidence_id:
+                    evidence_id = self._source_id(f"{clean_property}:{source_type}:{index}", source_ref)
+                text = f"{clean_goal} {summary}"
+                implications = self._dedup(raw.get("implications") or self._target_implications(text))
+                actions = self._dedup(raw.get("recommended_actions") or self._target_actions(text))
+                confidence = raw.get("confidence", raw.get("score", None))
+                item = TargetEvidenceItem(
+                    evidence_id=evidence_id,
+                    source_type=source_type,
+                    source_ref=source_ref,
+                    summary=summary,
+                    implications=implications,
+                    recommended_actions=actions,
+                    confidence=confidence,
+                )
+            if self._is_external_target_evidence(item.source_type) and not user_approved_external_search:
+                raise ValueError("external target evidence requires user_approved_external_search=True")
+            if not item.source_ref:
+                raise ValueError("target evidence requires source_ref, doi, url, or source_id")
+            items.append(item)
+        return items
 
     @staticmethod
     def _coerce_seed_sources(sources: list[LiteratureCorpusSource | dict[str, Any]]) -> list[LiteratureCorpusSource]:
@@ -302,6 +350,63 @@ class ResearchAgent:
     def _source_id(prefix: str, value: str) -> str:
         digest = hashlib.sha1(str(value).encode("utf-8")).hexdigest()[:10]
         return f"{prefix}_{digest}"
+
+    @staticmethod
+    def _target_source_ref(item: dict[str, Any]) -> str:
+        for key in ("source_ref", "doi", "url", "source_id"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    @staticmethod
+    def _is_external_target_evidence(source_type: str) -> bool:
+        normalized = str(source_type or "").strip().lower()
+        internal_sources = {
+            "project_memory",
+            "previous_run_diagnostics",
+            "trainability_report",
+            "built_in_domain_rules",
+        }
+        return normalized not in internal_sources
+
+    @staticmethod
+    def _target_implications(text: str) -> list[str]:
+        normalized = str(text or "").lower()
+        implications: list[str] = []
+        if "solvent" in normalized or "溶剂" in normalized:
+            implications.append("solvent_context_dependence")
+        if "bounded" in normalized or "bound" in normalized or "0-1" in normalized:
+            implications.append("bounded_target")
+        if ResearchAgent._contains_any(
+            normalized,
+            ("high plqy", "high-plqy", "high_qy", "upper-tail", "compression", "underpredict", "bias"),
+        ):
+            implications.append("high_value_compression_risk")
+        if "scaffold" in normalized:
+            implications.append("scaffold_split_required")
+        return ResearchAgent._dedup(implications)
+
+    @staticmethod
+    def _target_actions(text: str) -> list[str]:
+        normalized = str(text or "").lower()
+        actions: list[str] = []
+        if "solvent" in normalized or "溶剂" in normalized:
+            actions.append("add_solvent_descriptors_or_embeddings")
+        if "bounded" in normalized or "bound" in normalized or "0-1" in normalized:
+            actions.append("bounded_logit_or_calibrated_regression")
+        if ResearchAgent._contains_any(
+            normalized,
+            ("high plqy", "high-plqy", "high_qy", "upper-tail", "compression", "underpredict", "bias"),
+        ):
+            actions.append("review_high_value_bucket_bias")
+        if "scaffold" in normalized:
+            actions.append("scaffold_split_grouped_by_canonical_smiles")
+        return ResearchAgent._dedup(actions)
+
+    @staticmethod
+    def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+        return any(term in text for term in terms)
 
     @staticmethod
     def _dedup(values: Any) -> list[str]:
