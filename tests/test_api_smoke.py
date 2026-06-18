@@ -1877,6 +1877,19 @@ def test_adapter_execute_endpoint_rejects_unknown_adapter(tmp_path) -> None:
     assert "unknown adapter" in resp.json["error"]
 
 
+def test_adapter_execute_endpoint_rejects_exported_adapter_without_policy(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/adapters/execute",
+        json={"run_id": "r-adapter", "adapter": "legacy_full_flow_adapter", "payload": {"run_id": "r-adapter"}},
+    )
+
+    assert resp.status_code == 400
+    assert "adapter is not registered for direct execution" in resp.json["error"]
+
+
 def test_adapter_execute_endpoint_requires_confirmation_for_high_risk_adapter(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path)
     client = app.test_client()

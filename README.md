@@ -31,6 +31,10 @@ Ordinary dialogue is the primary interface for collecting user intent, cited sou
 
 `/api/agent/modeling-plan` accepts `property_id`, `cited_target_evidence`, `project_memory`, `previous_diagnostics`, `available_inputs`, and `user_approved_external_search`. When a target property or cited evidence is supplied, the endpoint returns and writes a `TargetModelingBrief` alongside the modeling plan proposal so preprocessing and hyperparameter decisions remain traceable to reviewable evidence.
 
+`RunPlanExecutor` binds each explicit gate approval to an `execution_snapshot` written in `stage.json` when the run pauses. The snapshot hashes the current task, adapter, run plan, frozen task options, and normalized payload, and gate decisions record the approved snapshot id/hash. Resume requests may approve that frozen execution content, but they cannot swap the current task's adapter, training parameters, input artifacts, or run plan after the approval boundary.
+
+Direct `/api/adapters/execute` calls are closed to the atomic task registry. Exported helper or legacy adapters are not executable through the API unless they map to a registered task policy with permission and gate checks. High-risk registered tasks must declare at least one gate; literature acquisition and literature-derived dataset confirmation use the data-mining gate.
+
 After training, the agent should diagnose model quality against baselines and target-specific expectations before using the model for prediction. Weak results should produce a reviewable rerun proposal, not a silent rerun or an unqualified model promotion.
 
 `/api/agent/review-card` exposes `TargetModelingBrief`, `ModelDiagnosticsReport`, `RerunProposal`, and `ModelPackageReview` as explicit review sections with source labels and approval controls. The local console renders these sections as lightweight cards while keeping the raw JSON response available for audit/debugging.

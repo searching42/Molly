@@ -890,46 +890,47 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
             policy = _adapter_execution_policy(adapter_name, adapter_payload)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
-        if policy is not None:
-            action, required_gates = policy
-            actor = str(
-                payload.get("actor")
-                or payload.get("approved_by")
-                or adapter_payload.get("actor")
-                or adapter_payload.get("approved_by")
-                or ""
-            )
-            decision = permissions.decide(
-                action,
-                project_id=str(payload.get("project_id") or adapter_payload.get("project_id") or ""),
-                run_id=run_id,
-                project_approved=_as_bool(payload.get("project_approved"))
-                or _as_bool(adapter_payload.get("project_approved")),
-                confirmed=_as_bool(payload.get("confirmed")) or _as_bool(adapter_payload.get("confirmed")),
-                actor=actor,
-            )
-            if not decision.allowed:
-                return jsonify(
-                    {
-                        "ok": False,
-                        "error": "adapter execution requires permission",
-                        "permission": decision.model_dump(mode="json"),
-                    }
-                ), 403
-            missing_gates = [
-                gate
-                for gate in required_gates
-                if not _gate_approved(orch.read_status(run_id), gate)
-            ]
-            if missing_gates:
-                return jsonify(
-                    {
-                        "ok": False,
-                        "error": "gate approval required before adapter execution",
-                        "missing_gates": missing_gates,
-                        "permission": decision.model_dump(mode="json"),
-                    }
-                ), 403
+        if policy is None:
+            return jsonify({"ok": False, "error": f"adapter is not registered for direct execution: {adapter_name}"}), 400
+        action, required_gates = policy
+        actor = str(
+            payload.get("actor")
+            or payload.get("approved_by")
+            or adapter_payload.get("actor")
+            or adapter_payload.get("approved_by")
+            or ""
+        )
+        decision = permissions.decide(
+            action,
+            project_id=str(payload.get("project_id") or adapter_payload.get("project_id") or ""),
+            run_id=run_id,
+            project_approved=_as_bool(payload.get("project_approved"))
+            or _as_bool(adapter_payload.get("project_approved")),
+            confirmed=_as_bool(payload.get("confirmed")) or _as_bool(adapter_payload.get("confirmed")),
+            actor=actor,
+        )
+        if not decision.allowed:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "adapter execution requires permission",
+                    "permission": decision.model_dump(mode="json"),
+                }
+            ), 403
+        missing_gates = [
+            gate
+            for gate in required_gates
+            if not _gate_approved(orch.read_status(run_id), gate)
+        ]
+        if missing_gates:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "gate approval required before adapter execution",
+                    "missing_gates": missing_gates,
+                    "permission": decision.model_dump(mode="json"),
+                }
+            ), 403
         jobs.add_log(run_id, "INFO", "adapter", f"Starting adapter: {adapter_name}")
         try:
             result = adapter(adapter_payload)

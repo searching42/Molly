@@ -126,7 +126,8 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         task_id="acquire_literature_sources",
         required_artifacts=["corpus_source_manifest"],
         output_artifacts=["pdf_corpus", "structured_datasets", "acquisition_manifest"],
-        risk_level=RiskLevel.LOW,
+        risk_level=RiskLevel.HIGH,
+        gates=[GateName.DATA_MINING.value],
         default_adapter="acquire_literature_sources_adapter",
     ),
     AtomicTaskSpec(
@@ -210,6 +211,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         ],
         output_artifacts=["confirmed_training_dataset", "extraction_confirmation_record"],
         risk_level=RiskLevel.HIGH,
+        gates=[GateName.DATA_MINING.value],
         default_adapter="confirm_extracted_dataset_adapter",
     ),
     AtomicTaskSpec(
@@ -228,6 +230,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
             "workflow_report",
         ],
         risk_level=RiskLevel.HIGH,
+        gates=[GateName.DATA_MINING.value],
         default_adapter="literature_to_dataset_workflow_adapter",
     ),
     AtomicTaskSpec(
@@ -243,11 +246,22 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
 class AtomicTaskRegistry:
     def __init__(self, tasks: Iterable[AtomicTaskSpec] | None = None) -> None:
         source = list(tasks or DEFAULT_ATOMIC_TASKS)
+        self._validate_tasks(source)
         self._tasks = {task.task_id: task for task in source}
         self._artifact_producers: dict[str, str] = {}
         for task in source:
             for artifact in task.output_artifacts:
                 self._artifact_producers.setdefault(artifact, task.task_id)
+
+    @staticmethod
+    def _validate_tasks(tasks: list[AtomicTaskSpec]) -> None:
+        valid_gates = {gate.value for gate in GateName}
+        for task in tasks:
+            if task.risk_level == RiskLevel.HIGH and not task.gates:
+                raise ValueError(f"high-risk task requires gate: {task.task_id}")
+            unknown_gates = [gate for gate in task.gates if gate not in valid_gates]
+            if unknown_gates:
+                raise ValueError(f"unknown gate on task {task.task_id}: {', '.join(unknown_gates)}")
 
     def list_tasks(self) -> list[AtomicTaskSpec]:
         return [self._tasks[k] for k in sorted(self._tasks)]

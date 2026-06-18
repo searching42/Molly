@@ -54,9 +54,9 @@ def test_planner_agent_proposes_literature_to_dataset_dry_run_plan() -> None:
     assert "literature_to_dataset_workflow" in task_ids
     assert "pdf_corpus" not in proposal.run_plan.missing_artifacts
     assert any(r.task_id == "literature_to_dataset_workflow" for r in proposal.rationales)
-    assert proposal.rationales[0].required_gates == ["gate_3_train_config"]
+    assert proposal.rationales[0].required_gates == ["gate_2_data_mining"]
     assert any("No adapters are executed" in item for item in proposal.assumptions)
-    assert "gate_3_train_config" in proposal.required_gates
+    assert "gate_2_data_mining" in proposal.required_gates
 
 
 def test_planner_agent_asks_question_for_underspecified_goal() -> None:

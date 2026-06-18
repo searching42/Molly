@@ -3,7 +3,7 @@ import pytest
 import ai4s_agent.planner as planner
 import ai4s_agent.adapters as adapters
 from ai4s_agent.planner import AtomicTaskRegistry, build_plan, diff_run_plans, expand_run_plan
-from ai4s_agent.schemas import AtomicTaskSpec
+from ai4s_agent.schemas import AtomicTaskSpec, GateName, RiskLevel
 
 
 def test_build_plan_has_phase1_steps() -> None:
@@ -119,6 +119,19 @@ def test_expand_run_plan_rejects_self_referencing_artifacts() -> None:
         expand_run_plan(run_id="r1", requested_tasks=["bad_task"], registry=registry)
 
 
+def test_atomic_task_registry_rejects_high_risk_tasks_without_gates() -> None:
+    with pytest.raises(ValueError, match="high-risk task requires gate: unsafe_task"):
+        AtomicTaskRegistry([AtomicTaskSpec(task_id="unsafe_task", risk_level=RiskLevel.HIGH)])
+
+
+def test_default_high_risk_tasks_declare_gates() -> None:
+    registry = AtomicTaskRegistry()
+
+    for task in registry.list_tasks():
+        if task.risk_level == RiskLevel.HIGH:
+            assert task.gates
+
+
 def test_expand_run_plan_can_generate_missing_candidate_dataset() -> None:
     plan = expand_run_plan(
         run_id="r1",
@@ -157,6 +170,8 @@ def test_phase3_acquire_literature_sources_task_is_registered() -> None:
 
     assert task.required_artifacts == ["corpus_source_manifest"]
     assert task.output_artifacts == ["pdf_corpus", "structured_datasets", "acquisition_manifest"]
+    assert task.risk_level == RiskLevel.HIGH
+    assert task.gates == [GateName.DATA_MINING.value]
     assert task.default_adapter == "acquire_literature_sources_adapter"
     assert callable(getattr(adapters, task.default_adapter))
 
@@ -231,6 +246,7 @@ def test_phase3_confirmation_atomic_task_is_registered() -> None:
         "citation_provenance_report",
     ]
     assert task.output_artifacts == ["confirmed_training_dataset", "extraction_confirmation_record"]
+    assert task.gates == [GateName.DATA_MINING.value]
     assert task.default_adapter == "confirm_extracted_dataset_adapter"
     assert callable(getattr(adapters, task.default_adapter))
 
@@ -252,6 +268,7 @@ def test_phase3_literature_to_dataset_workflow_task_is_registered() -> None:
         "candidate_training_dataset",
         "workflow_report",
     ]
+    assert task.gates == [GateName.DATA_MINING.value]
     assert task.default_adapter == "literature_to_dataset_workflow_adapter"
     assert callable(getattr(adapters, task.default_adapter))
 

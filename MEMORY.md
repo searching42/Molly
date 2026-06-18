@@ -120,6 +120,15 @@ http://127.0.0.1:8792/
   confirmation records matter.
 - Remote Uni-Mol, REINVENT4, network acquisition, expensive generation, model
   registration, and asset promotion require explicit gates or approvals.
+- Gate approval must be snapshot-bound. `RunPlanExecutor` writes an
+  `execution_snapshot` at each gate pause and records the approved snapshot
+  id/hash in `gate_decisions.json`; resume must not accept changed current-task
+  adapters, options, artifacts, or run plans after the approval boundary.
+- Direct adapter execution is closed to the atomic task registry. Exported
+  helpers and legacy adapters are not API-executable unless they map to a
+  registered task policy with permission and gate checks.
+- High-risk atomic tasks must declare at least one gate. Literature acquisition
+  and literature-derived training dataset confirmation are data-mining-gated.
 - Existing deterministic adapters should remain usable without depending on
   hidden conversation state.
 - Generated candidates must pass through the same prediction and filtering chain

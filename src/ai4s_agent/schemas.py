@@ -202,6 +202,8 @@ class GateDecision(BaseModel):
     actor: str
     note: str = ""
     approved_at: str = ""
+    approved_snapshot_id: str = ""
+    approved_snapshot_hash: str = ""
 
 
 class ArtifactRef(BaseModel):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -99,6 +100,19 @@ class RunPlanExecutor:
         missing = [gate for gate in spec.gates if gate not in approved]
         if missing:
             raise ValueError(f"gate approval required: {', '.join(missing)}")
+
+        run_dir = self.storage.run_dir(project_id, run_id)
+        artifact_paths = self._artifact_paths_from_registry(project_id, run_id, run_dir)
+        artifact_paths.update({str(k): str(v) for k, v in (input_artifacts or {}).items()})
+        normalized_task_options = self._normalize_task_options(task_options)
+        normalized_task_options, approved_snapshot = self._validate_waiting_execution_snapshot(
+            state=state,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            approved_gates=approved,
+            task_options=normalized_task_options,
+        )
         for gate in spec.gates:
             self.storage.append_gate_decision(
                 project_id,
@@ -109,12 +123,11 @@ class RunPlanExecutor:
                     actor=clean_actor,
                     note=note,
                     approved_at=now_iso(),
+                    approved_snapshot_id=str(approved_snapshot.get("snapshot_id") or ""),
+                    approved_snapshot_hash=str(approved_snapshot.get("snapshot_hash") or ""),
                 ),
             )
 
-        run_dir = self.storage.run_dir(project_id, run_id)
-        artifact_paths = self._artifact_paths_from_registry(project_id, run_id, run_dir)
-        artifact_paths.update({str(k): str(v) for k, v in (input_artifacts or {}).items()})
         previous_executed = state.details.get("executed_tasks", [])
         executed = [str(item) for item in previous_executed] if isinstance(previous_executed, list) else []
         return self._execute_from(
@@ -126,7 +139,7 @@ class RunPlanExecutor:
             approved_gates=approved,
             actor=clean_actor,
             executed=executed,
-            task_options=self._normalize_task_options(task_options),
+            task_options=normalized_task_options,
         )
 
     def _execute_from(
@@ -148,13 +161,26 @@ class RunPlanExecutor:
             spec = self.registry.get(task.task_id)
             next_stage = run_plan.tasks[index + 1].task_id if index + 1 < len(run_plan.tasks) else None
             if spec.gates and any(gate not in approved_gates for gate in spec.gates):
+                snapshot = self._execution_snapshot(
+                    task_id=task.task_id,
+                    spec_default_adapter=spec.default_adapter,
+                    run_plan=run_plan,
+                    run_dir=run_dir,
+                    artifact_paths=artifact_paths,
+                    approved_gates=approved_gates,
+                    options=task_options.get(task.task_id, {}),
+                )
                 self._write_stage(
                     project_id=project_id,
                     run_id=run_id,
                     stage=task.task_id,
                     status=RunStatus.WAITING_USER,
                     next_stage=next_stage,
-                    details={"required_gates": list(spec.gates), "executed_tasks": executed},
+                    details={
+                        "required_gates": list(spec.gates),
+                        "executed_tasks": executed,
+                        "execution_snapshot": snapshot,
+                    },
                 )
                 return {
                     "ok": True,
@@ -163,6 +189,10 @@ class RunPlanExecutor:
                     "waiting_task": task.task_id,
                     "required_gates": list(spec.gates),
                     "executed_tasks": executed,
+                    "execution_snapshot": {
+                        "snapshot_id": snapshot["snapshot_id"],
+                        "snapshot_hash": snapshot["snapshot_hash"],
+                    },
                 }
 
             options = task_options.get(task.task_id, {})
@@ -294,6 +324,104 @@ class RunPlanExecutor:
             if isinstance(options, dict):
                 normalized[str(task_id)] = {str(key): value for key, value in options.items()}
         return normalized
+
+    def _validate_waiting_execution_snapshot(
+        self,
+        *,
+        state: StageState,
+        run_plan: RunPlan,
+        run_dir: Path,
+        artifact_paths: dict[str, str],
+        approved_gates: set[str],
+        task_options: TaskOptions,
+    ) -> tuple[TaskOptions, dict[str, Any]]:
+        stored_snapshot = state.details.get("execution_snapshot")
+        if not isinstance(stored_snapshot, dict) or not stored_snapshot.get("snapshot_hash"):
+            raise ValueError("execution snapshot missing; restart run-plan execution before approving gate")
+
+        merged_task_options: TaskOptions = {
+            task_id: dict(options) for task_id, options in task_options.items()
+        }
+        if state.stage not in merged_task_options:
+            frozen_options = stored_snapshot.get("task_options")
+            merged_task_options[state.stage] = (
+                {str(key): value for key, value in frozen_options.items()}
+                if isinstance(frozen_options, dict)
+                else {}
+            )
+        spec = self.registry.get(state.stage)
+        candidate_snapshot = self._execution_snapshot(
+            task_id=state.stage,
+            spec_default_adapter=spec.default_adapter,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            approved_gates=approved_gates,
+            options=merged_task_options.get(state.stage, {}),
+        )
+        if candidate_snapshot["snapshot_hash"] != str(stored_snapshot.get("snapshot_hash") or ""):
+            raise ValueError("execution snapshot changed; restart run-plan execution before approving gate")
+        return merged_task_options, stored_snapshot
+
+    def _execution_snapshot(
+        self,
+        *,
+        task_id: str,
+        spec_default_adapter: str | None,
+        run_plan: RunPlan,
+        run_dir: Path,
+        artifact_paths: dict[str, str],
+        approved_gates: set[str],
+        options: dict[str, Any],
+    ) -> dict[str, Any]:
+        spec = self.registry.get(task_id)
+        clean_options = self._json_safe({str(key): value for key, value in options.items()})
+        adapter_name = self._adapter_name_for(task_id, spec_default_adapter, clean_options)
+        required_gates = set(spec.gates)
+        payload = self._payload_for(
+            task_id,
+            run_id=run_plan.run_id,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            actor="",
+            approved_gates=set(approved_gates) | required_gates,
+            options=clean_options,
+        )
+        material = {
+            "schema_version": 1,
+            "run_id": run_plan.run_id,
+            "task_id": task_id,
+            "adapter": adapter_name or "",
+            "run_plan": run_plan.model_dump(mode="json"),
+            "task_options": clean_options,
+            "payload": self._json_safe(payload),
+            "approved_gates": sorted(required_gates),
+        }
+        snapshot_hash = hashlib.sha256(self._canonical_json(material).encode("utf-8")).hexdigest()
+        return {
+            "snapshot_id": f"{run_plan.run_id}:{task_id}:{snapshot_hash[:16]}",
+            "snapshot_hash": snapshot_hash,
+            **material,
+        }
+
+    @classmethod
+    def _canonical_json(cls, value: Any) -> str:
+        return json.dumps(cls._json_safe(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def _json_safe(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                str(key): cls._json_safe(item)
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            }
+        if isinstance(value, list):
+            return [cls._json_safe(item) for item in value]
+        if isinstance(value, tuple):
+            return [cls._json_safe(item) for item in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
 
     @staticmethod
     def _adapter_name_for(task_id: str, default_adapter: str | None, options: dict[str, Any]) -> str | None:

@@ -42,6 +42,8 @@ Current B1 artifacts:
 
 - `plan.json`: serialized `PlanModel`
 - `gate_decisions.json`: ordered gate approval decisions
+- `stage.json`: current `RunPlanExecutor` stage, including `execution_snapshot`
+  when execution is paused at a gate
 
 Planned downstream artifacts:
 
@@ -52,6 +54,22 @@ Planned downstream artifacts:
 - `rerun_proposal.json`
 - `screening_report.json`
 - `generation_result.json`
+
+## Execution Approval Boundary
+
+The agentic `RunPlanExecutor` treats a gate approval as approval for a frozen
+execution snapshot, not as approval for a mutable resume request. When a run
+pauses at a gated atomic task, `stage.json` records the current task, default or
+approved adapter, run plan, task options, normalized payload, required gates,
+and snapshot hash. `/api/run-plan/resume` validates that the current task's
+execution content still matches that snapshot before appending
+`gate_decisions.json`; the gate decision records the approved snapshot id and
+hash.
+
+Direct adapter execution is closed to the atomic task registry. `/api/adapters/execute`
+may call only adapters that map to a registered task policy, then applies the
+same permission and gate checks. Exported legacy helpers remain importable for
+tests or fallback code but are not API-executable unless registered.
 
 ## Target-Aware Modeling Loop
 

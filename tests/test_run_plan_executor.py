@@ -76,6 +76,11 @@ def test_run_plan_executor_pauses_before_high_risk_task_without_gate(tmp_path: P
     assert state is not None
     assert state.stage == "train_model"
     assert state.status == RunStatus.WAITING_USER
+    snapshot = state.details["execution_snapshot"]
+    assert snapshot["task_id"] == "train_model"
+    assert snapshot["snapshot_id"].startswith("r-exec-gate:train_model:")
+    assert snapshot["snapshot_hash"]
+    assert snapshot["approved_gates"] == [GateName.TRAIN_CONFIG.value]
     registry = storage.read_artifact_registry("proj-exec", "r-exec-gate")
     assert "cleaned_train_dataset" in registry
     assert "model_metadata" not in registry
@@ -187,6 +192,47 @@ def test_run_plan_executor_resume_runs_waiting_task_after_gate_approval(tmp_path
     decisions = storage.read_gate_decisions("proj-exec", "r-resume-train")
     assert decisions[0]["gate"] == GateName.TRAIN_CONFIG.value
     assert decisions[0]["actor"] == "user"
+    assert decisions[0]["approved_snapshot_id"].startswith("r-resume-train:train_model:")
+    assert decisions[0]["approved_snapshot_hash"]
+
+
+def test_run_plan_executor_resume_rejects_changed_task_options_after_gate(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    dataset = tmp_path / "input" / "train.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    run_plan = expand_run_plan(
+        run_id="r-resume-snapshot-change",
+        requested_tasks=["train_model"],
+        available_artifacts=[],
+    )
+    executor = RunPlanExecutor(storage=storage)
+    first = executor.execute(
+        project_id="proj-exec",
+        run_plan=run_plan,
+        input_artifacts={"uploaded_dataset": str(dataset)},
+    )
+    assert first["status"] == RunStatus.WAITING_USER.value
+
+    with pytest.raises(ValueError, match="execution snapshot changed"):
+        executor.resume_after_gate(
+            project_id="proj-exec",
+            run_plan=run_plan,
+            approved_gates=[GateName.TRAIN_CONFIG.value],
+            actor="user",
+            task_options={
+                "train_model": {
+                    "adapter": "train_model_unimol_legacy_adapter",
+                    "execute": False,
+                    "remote_host": "workstation2",
+                }
+            },
+        )
+
+    state = storage.read_stage_state("proj-exec", "r-resume-snapshot-change")
+    assert state is not None
+    assert state.stage == "train_model"
+    assert state.status == RunStatus.WAITING_USER
 
 
 def test_training_review_promotion_and_prediction_preparation_acceptance(tmp_path: Path) -> None:
@@ -300,10 +346,20 @@ def test_run_plan_executor_unimol_training_option_plans_without_registering_fake
         available_artifacts=[],
     )
     executor = RunPlanExecutor(storage=storage)
+    task_options = {
+        "train_model": {
+            "adapter": "train_model_unimol_legacy_adapter",
+            "execute": False,
+            "remote_host": "workstation2",
+            "remote_python": "/home/lbh/miniconda3/envs/unimol/bin/python",
+            "remote_tmp_base": "/tmp/ai4s-agent",
+        }
+    }
     executor.execute(
         project_id="proj-exec",
         run_plan=run_plan,
         input_artifacts={"uploaded_dataset": str(dataset)},
+        task_options=task_options,
     )
 
     result = executor.resume_after_gate(
@@ -311,15 +367,6 @@ def test_run_plan_executor_unimol_training_option_plans_without_registering_fake
         run_plan=run_plan,
         approved_gates=[GateName.TRAIN_CONFIG.value],
         actor="user",
-        task_options={
-            "train_model": {
-                "adapter": "train_model_unimol_legacy_adapter",
-                "execute": False,
-                "remote_host": "workstation2",
-                "remote_python": "/home/lbh/miniconda3/envs/unimol/bin/python",
-                "remote_tmp_base": "/tmp/ai4s-agent",
-            }
-        },
     )
 
     assert result["status"] == RunStatus.WAITING_USER.value
@@ -446,16 +493,26 @@ def test_run_plan_executor_reinvent4_generation_option_plans_without_registering
         available_artifacts=[],
     )
     executor = RunPlanExecutor(storage=storage)
+    task_options = {
+        "generate_candidates": {
+            "backend": "reinvent4",
+            "execute": False,
+            "remote_host": "workstation2",
+            "remote_python": "/home/lbh/miniconda3/envs/REINVENT4/bin/python",
+        }
+    }
     executor.execute(
         project_id="proj-exec",
         run_plan=run_plan,
         input_artifacts={"uploaded_dataset": str(dataset)},
+        task_options=task_options,
     )
     after_train = executor.resume_after_gate(
         project_id="proj-exec",
         run_plan=run_plan,
         approved_gates=[GateName.TRAIN_CONFIG.value],
         actor="user",
+        task_options=task_options,
     )
     assert after_train["waiting_task"] == "generate_candidates"
 
@@ -464,14 +521,6 @@ def test_run_plan_executor_reinvent4_generation_option_plans_without_registering
         run_plan=run_plan,
         approved_gates=[GateName.FINAL_THRESHOLD.value],
         actor="user",
-        task_options={
-            "generate_candidates": {
-                "backend": "reinvent4",
-                "execute": False,
-                "remote_host": "workstation2",
-                "remote_python": "/home/lbh/miniconda3/envs/REINVENT4/bin/python",
-            }
-        },
     )
 
     assert result["status"] == RunStatus.WAITING_USER.value
@@ -698,11 +747,54 @@ def test_run_plan_resume_endpoint_approves_gate_and_continues_execution(tmp_path
     assert "trained_model" in storage.read_artifact_registry("proj-resume-api", "r-resume-api")
 
 
-def test_run_plan_resume_endpoint_accepts_task_options_for_unimol_plan(tmp_path: Path) -> None:
+def test_run_plan_resume_endpoint_uses_preapproved_task_options_for_unimol_plan(tmp_path: Path) -> None:
     dataset = tmp_path / "input" / "train.csv"
     dataset.parent.mkdir(parents=True)
     _write_training_csv(dataset)
     run_plan = expand_run_plan(run_id="r-resume-api-unimol", requested_tasks=["train_model"], available_artifacts=[])
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    task_options = {
+        "train_model": {
+            "adapter": "train_model_unimol_legacy_adapter",
+            "execute": False,
+            "remote_host": "workstation2",
+            "remote_python": "/home/lbh/miniconda3/envs/unimol/bin/python",
+            "remote_tmp_base": "/tmp/ai4s-agent",
+        }
+    }
+    client.post(
+        "/api/run-plan/execute",
+        json={
+            "project_id": "proj-resume-api",
+            "run_plan": run_plan.model_dump(mode="json"),
+            "input_artifacts": {"uploaded_dataset": str(dataset)},
+            "task_options": task_options,
+        },
+    )
+
+    resp = client.post(
+        "/api/run-plan/resume",
+        json={
+            "project_id": "proj-resume-api",
+            "run_plan": run_plan.model_dump(mode="json"),
+            "approved_gates": [GateName.TRAIN_CONFIG.value],
+            "actor": "user",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json["execution"]["status"] == RunStatus.WAITING_USER.value
+    assert resp.json["execution"]["planned_task"] == "train_model"
+    storage = ProjectStorage(tmp_path)
+    assert "trained_model" not in storage.read_artifact_registry("proj-resume-api", "r-resume-api-unimol")
+
+
+def test_run_plan_resume_endpoint_rejects_task_options_changed_after_gate(tmp_path: Path) -> None:
+    dataset = tmp_path / "input" / "train.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    run_plan = expand_run_plan(run_id="r-resume-api-changed-options", requested_tasks=["train_model"], available_artifacts=[])
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     client = app.test_client()
     client.post(
@@ -726,18 +818,13 @@ def test_run_plan_resume_endpoint_accepts_task_options_for_unimol_plan(tmp_path:
                     "adapter": "train_model_unimol_legacy_adapter",
                     "execute": False,
                     "remote_host": "workstation2",
-                    "remote_python": "/home/lbh/miniconda3/envs/unimol/bin/python",
-                    "remote_tmp_base": "/tmp/ai4s-agent",
                 }
             },
         },
     )
 
-    assert resp.status_code == 200
-    assert resp.json["execution"]["status"] == RunStatus.WAITING_USER.value
-    assert resp.json["execution"]["planned_task"] == "train_model"
-    storage = ProjectStorage(tmp_path)
-    assert "trained_model" not in storage.read_artifact_registry("proj-resume-api", "r-resume-api-unimol")
+    assert resp.status_code == 400
+    assert "execution snapshot changed" in resp.json["error"]
 
 
 def test_run_plan_resume_endpoint_rejects_missing_gate_approval(tmp_path: Path) -> None:

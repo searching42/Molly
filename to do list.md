@@ -1390,6 +1390,10 @@ Core principle:
 - [x] Avoid making autonomous actions look like chat suggestions; every executable action should map to a visible task/gate.
 - [x] Add a conservative `RunPlan` execution bridge that runs confirmed low-risk tasks and pauses at explicit gates.
 - [x] Add gate-approved `RunPlan` resume so confirmed tasks continue from the current waiting stage.
+- [x] Bind gate-approved resume to a frozen `execution_snapshot` so approvals cover the exact current task, adapter, run plan, task options, and normalized payload.
+- [x] Record approved execution snapshot id/hash in `gate_decisions.json`.
+- [x] Reject direct adapter API execution unless the adapter maps to a registered atomic task policy with permission and gate checks.
+- [x] Enforce that high-risk atomic tasks declare gates; external literature acquisition and literature-derived dataset confirmation are guarded by `gate_2_data_mining`.
 
 ### 24.8 Evaluation And Acceptance
 
@@ -1403,6 +1407,7 @@ Core principle:
 - [x] Track agent autonomy metrics: tasks selected by agent, replans proposed, user confirmations required, verifier catches, and failed autonomous decisions.
 - [x] Add integration tests for the conservative `RunPlan` executor and invalid execution payloads.
 - [x] Add integration tests for gate-approved resume through training, generation, prediction, ranking, and reporting.
+- [x] Add regression tests for snapshot-bound gate resume, closed direct adapter execution, and high-risk task gate invariants.
 
 ### 24.9 Later Deployment
 
