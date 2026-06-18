@@ -11,8 +11,21 @@ def default_workspace() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
+def repository_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 def claude_scripts_dir() -> Path:
-    return default_workspace() / "claude" / "scripts"
+    """Return the legacy script directory, with a repository-local fallback.
+
+    Development workspaces may still provide ``../claude/scripts``. A clean
+    clone of Molly is self-contained and uses the compatibility scripts under
+    ``Molly/scripts`` instead.
+    """
+    legacy = default_workspace() / "claude" / "scripts"
+    if legacy.exists() and legacy.is_dir():
+        return legacy
+    return repository_root() / "scripts"
 
 
 WORKSPACE = default_workspace()
@@ -21,10 +34,11 @@ CLAUDE_SCRIPTS = claude_scripts_dir()
 
 def build_run_mvp_flow_cmd(run_id: str, input_csv: str, config_json: str) -> list[str]:
     workspace = default_workspace()
-    claude_scripts = workspace / "claude" / "scripts"
+    scripts = claude_scripts_dir()
+    output_root = workspace / "claude"
     return [
         "python3",
-        str(claude_scripts / "run_mvp_flow.py"),
+        str(scripts / "run_mvp_flow.py"),
         "--run-id",
         run_id,
         "--input-csv",
@@ -42,7 +56,7 @@ def build_run_mvp_flow_cmd(run_id: str, input_csv: str, config_json: str) -> lis
         "--model-choice",
         "unimol",
         "--output-root",
-        str(workspace / "claude"),
+        str(output_root),
         "--output-dir",
-        str(workspace / "claude" / "reports"),
+        str(output_root / "reports"),
     ]
