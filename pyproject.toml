@@ -12,7 +12,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = [
+  "pytest>=8.0",
+  "rdkit>=2023.9.1",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
