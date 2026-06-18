@@ -48,6 +48,43 @@ def test_index_page_prioritizes_primary_workflow_before_advanced_tools() -> None
     assert html.index('id="primary-workflow"') < html.index('id="advanced-tools"')
 
 
+def test_index_page_uses_project_sidebar_and_chat_workspace() -> None:
+    app = create_app()
+    client = app.test_client()
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    html = resp.data.decode("utf-8")
+    assert 'id="app-shell"' in html
+    assert 'id="project-sidebar"' in html
+    assert 'id="project-list"' in html
+    assert 'id="new-project-form"' in html
+    assert 'id="project-workspace"' in html
+    assert 'id="project-chat"' in html
+    assert 'id="conversation-stream"' in html
+    assert 'id="conversation-form"' in html
+    assert 'id="conversation-input"' in html
+    assert 'id="chat-review-artifacts"' in html
+
+
+def test_index_page_wires_project_chat_to_agent_payload_bridge() -> None:
+    app = create_app()
+    client = app.test_client()
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    html = resp.data.decode("utf-8")
+    assert "async function loadProjects" in html
+    assert 'getJSON("/api/projects")' in html
+    assert 'postJSON("/api/projects"' in html
+    assert "function selectProject" in html
+    assert "let conversationMessages" in html
+    assert 'postJSON("/api/agent/conversation/modeling-payload"' in html
+    assert 'postJSON("/api/agent/modeling-plan"' in html
+    assert "pending_cited_target_evidence" in html
+    assert "agent_questions" in html
+
+
 def test_index_page_uses_progressive_wizard_cards() -> None:
     app = create_app()
     client = app.test_client()

@@ -890,6 +890,7 @@ Recovery:
 - Default to simple interface.
 - Keep advanced options collapsible.
 - Keep old wizard/toolbox operations reachable from collapsed advanced tools instead of the primary path.
+- Phase 1 status: project sidebar, project creation/selection, project chat composer, conversation-to-modeling payload call, explicit modeling-plan action, and collapsed compatibility workflow tools are implemented in the Flask web UI. Remaining UI work is visual polish, richer inline artifact rendering, and persistent conversation history.
 - Show uploaded train and candidate files at the top.
 - Put optional evaluation dataset under advanced options.
 - Remove absolute path inputs from the main UI.

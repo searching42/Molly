@@ -6,20 +6,21 @@
     <title>AI4S Agent 控制台</title>
     <style>
       :root {
-        --bg-a: #f6efe6;
-        --bg-b: #e6f0ee;
+        --bg-a: #f5f6f7;
+        --bg-b: #e9eef1;
         --ink: #172027;
         --muted: #66747b;
         --line: rgba(23, 32, 39, 0.14);
-        --panel: rgba(255, 250, 241, 0.94);
-        --white: rgba(255, 255, 255, 0.74);
+        --panel: rgba(255, 255, 255, 0.94);
+        --white: rgba(255, 255, 255, 0.78);
         --blue: #145c72;
         --blue-2: #1f7f9b;
         --rust: #a54d16;
         --rust-soft: #f4d8bd;
         --green: #2d6a4f;
         --green-soft: #dcefe5;
-        --shadow: 0 20px 55px rgba(23, 32, 39, 0.13);
+        --shadow: 0 12px 34px rgba(23, 32, 39, 0.10);
+        --radius: 8px;
       }
 
       * { box-sizing: border-box; }
@@ -29,25 +30,44 @@
         min-height: 100vh;
         font-family: "Avenir Next", "Segoe UI", Tahoma, sans-serif;
         color: var(--ink);
-        background:
-          radial-gradient(circle at 8% 8%, rgba(165, 77, 22, 0.18), transparent 28rem),
-          radial-gradient(circle at 88% 18%, rgba(20, 92, 114, 0.18), transparent 30rem),
-          linear-gradient(135deg, var(--bg-a), var(--bg-b));
+        background: linear-gradient(135deg, var(--bg-a), var(--bg-b));
       }
 
       button, input, select, textarea { font: inherit; }
-      .shell { width: min(1100px, 94vw); margin: 0 auto; padding: 2rem 0 3rem; }
-      .hero { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 1.4rem; }
-      .hero h1 { margin: 0; font-size: clamp(2rem, 5vw, 4rem); line-height: 0.92; letter-spacing: -0.065em; }
-      .hero p { margin: 0.65rem 0 0; max-width: 44rem; color: var(--muted); line-height: 1.45; }
-      .pill { display: inline-flex; align-items: center; min-height: 2rem; padding: 0.35rem 0.7rem; border: 1px solid var(--line); border-radius: 999px; background: var(--white); color: var(--muted); font-size: 0.78rem; font-weight: 900; white-space: nowrap; }
+      .app-shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 1rem; min-height: 100vh; width: min(1420px, 100%); margin: 0 auto; padding: 1rem; }
+      .project-sidebar, .project-workspace { min-width: 0; }
+      .project-sidebar { position: sticky; top: 1rem; align-self: start; display: grid; gap: 0.85rem; max-height: calc(100vh - 2rem); overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem; background: rgba(255, 255, 255, 0.86); box-shadow: var(--shadow); }
+      .project-workspace { display: grid; gap: 0.85rem; }
+      .sidebar-header h1 { margin: 0; font-size: 1.05rem; line-height: 1.15; }
+      .sidebar-header p, .workspace-topbar p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
+      .workspace-topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem 1rem; background: var(--panel); box-shadow: var(--shadow); }
+      .workspace-topbar h2 { font-size: 1.05rem; }
+      .project-list { display: grid; gap: 0.45rem; max-height: 34vh; overflow: auto; }
+      .project-row { width: 100%; display: grid; gap: 0.15rem; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.55rem 0.65rem; background: rgba(255, 255, 255, 0.58); color: var(--ink); text-align: left; }
+      .project-row.active { border-color: rgba(20, 92, 114, 0.55); background: rgba(220, 239, 229, 0.75); }
+      .project-row strong { font-size: 0.86rem; }
+      .project-row span { color: var(--muted); font-size: 0.74rem; }
+      .sidebar-section { display: grid; gap: 0.55rem; }
+      .sidebar-section h2 { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; }
+      .pill { display: inline-flex; align-items: center; min-height: 1.75rem; padding: 0.28rem 0.55rem; border: 1px solid var(--line); border-radius: 999px; background: var(--white); color: var(--muted); font-size: 0.74rem; font-weight: 900; white-space: nowrap; }
+      .chat-panel { display: grid; grid-template-rows: minmax(260px, 1fr) auto; min-height: 520px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+      .conversation-stream { display: grid; align-content: start; gap: 0.75rem; padding: 1rem; overflow: auto; }
+      .chat-message { max-width: min(760px, 92%); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.75rem 0.85rem; background: rgba(255, 255, 255, 0.72); line-height: 1.45; white-space: pre-wrap; }
+      .chat-message.user { justify-self: end; background: rgba(220, 239, 229, 0.88); }
+      .chat-message.agent, .chat-message.system { justify-self: start; }
+      .chat-message.system { border-style: dashed; color: var(--muted); }
+      .conversation-composer { display: grid; gap: 0.65rem; border-top: 1px solid var(--line); padding: 0.85rem; background: rgba(246, 247, 248, 0.84); }
+      .composer-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.6rem; align-items: center; }
+      .composer-actions button { width: auto; min-width: 8.5rem; }
+      .artifact-tray { margin-top: 0; }
+      .workflow-tools { margin-top: 0; }
       .wizard { display: grid; gap: 0.9rem; }
-      .wizard-card, .advanced-tools, .console-card { background: var(--panel); border: 1px solid var(--line); border-radius: 24px; box-shadow: var(--shadow); overflow: hidden; backdrop-filter: blur(10px); }
+      .wizard-card, .advanced-tools, .console-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; backdrop-filter: blur(10px); }
       .wizard-card[open] { border-color: rgba(20, 92, 114, 0.38); box-shadow: 0 24px 64px rgba(20, 92, 114, 0.17); }
       .wizard-card summary, .advanced-tools summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.05rem 1.25rem; cursor: pointer; list-style: none; }
       .wizard-card summary::-webkit-details-marker, .advanced-tools summary::-webkit-details-marker { display: none; }
       .step-title { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); gap: 0.75rem; align-items: start; }
-      .step-number { display: grid; place-items: center; width: 2.2rem; height: 2.2rem; border-radius: 999px; background: var(--rust-soft); color: var(--rust); font-weight: 900; }
+      .step-number { display: grid; place-items: center; width: 2.2rem; height: 2.2rem; border-radius: var(--radius); background: var(--rust-soft); color: var(--rust); font-weight: 900; }
       .wizard-card.active .step-number, .wizard-card[open] .step-number { background: var(--blue); color: #fff; }
       .wizard-card.completed .step-number { background: var(--green-soft); color: var(--green); }
       .wizard-card.skipped .step-number { background: rgba(102, 116, 123, 0.16); color: var(--muted); }
@@ -62,61 +82,118 @@
       .two-column { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1rem; align-items: start; }
       .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
       .tool-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
-      .side-note, .mini-panel { border: 1px dashed var(--line); border-radius: 18px; padding: 0.9rem; background: rgba(255, 255, 255, 0.45); }
+      .side-note, .mini-panel { border: 1px dashed var(--line); border-radius: var(--radius); padding: 0.9rem; background: rgba(255, 255, 255, 0.45); }
       .mini-panel { border-style: solid; }
       .note-list { display: grid; gap: 0.5rem; margin-top: 0.75rem; }
-      .note-list div { padding: 0.62rem 0.7rem; border: 1px solid var(--line); border-radius: 12px; background: var(--white); }
+      .note-list div { padding: 0.62rem 0.7rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--white); }
       form { display: grid; gap: 0.6rem; }
       label { color: #26363e; font-size: 0.78rem; font-weight: 900; }
-      input, select, textarea { width: 100%; border: 1px solid var(--line); border-radius: 14px; padding: 0.72rem 0.8rem; background: rgba(255, 255, 255, 0.82); color: var(--ink); }
+      input, select, textarea { width: 100%; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.72rem 0.8rem; background: rgba(255, 255, 255, 0.82); color: var(--ink); }
       textarea { min-height: 92px; resize: vertical; line-height: 1.45; }
       .goal-input { min-height: 132px; font-size: 1rem; }
-      button { width: 100%; border: 0; border-radius: 14px; padding: 0.75rem 0.85rem; color: #fff; font-weight: 900; cursor: pointer; background: linear-gradient(135deg, var(--blue), var(--blue-2)); }
-      button.alt { background: linear-gradient(135deg, var(--rust), #d47728); }
+      button { width: 100%; border: 0; border-radius: var(--radius); padding: 0.75rem 0.85rem; color: #fff; font-weight: 900; cursor: pointer; background: var(--blue); }
+      button.alt { background: var(--rust); }
       button.ghost { border: 1px solid var(--line); color: var(--ink); background: var(--white); }
       .button-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
       .decision-card { display: grid; gap: 0.85rem; }
-      .decision-hero { border: 1px solid rgba(20, 92, 114, 0.22); border-radius: 20px; padding: 1rem; background: rgba(255, 255, 255, 0.55); }
+      .decision-hero { border: 1px solid rgba(20, 92, 114, 0.22); border-radius: var(--radius); padding: 1rem; background: rgba(255, 255, 255, 0.55); }
       .decision-hero h3 { font-size: 1.2rem; }
       .decision-list { display: grid; gap: 0.45rem; margin: 0.65rem 0 0; padding: 0; list-style: none; }
-      .decision-list li { border: 1px solid var(--line); border-radius: 12px; padding: 0.55rem 0.65rem; background: var(--white); color: #26363e; font-size: 0.86rem; line-height: 1.42; }
-      .log-tail { min-height: 180px; max-height: 260px; overflow: auto; border-radius: 15px; padding: 0.85rem; background: #111a1f; color: #dcefe5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; line-height: 1.45; white-space: pre-wrap; }
+      .decision-list li { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.55rem 0.65rem; background: var(--white); color: #26363e; font-size: 0.86rem; line-height: 1.42; }
+      .log-tail { min-height: 180px; max-height: 260px; overflow: auto; border-radius: var(--radius); padding: 0.85rem; background: #111a1f; color: #dcefe5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; line-height: 1.45; white-space: pre-wrap; }
       details.mini-panel summary { cursor: pointer; font-weight: 900; }
       .advanced-tools { margin-top: 1rem; }
       .advanced-body { display: grid; gap: 0.85rem; padding: 0 1.25rem 1.25rem; }
       .console-card { margin-top: 1rem; padding: 1rem; }
-      .output { margin: 0.75rem 0 0; min-height: 150px; max-height: 320px; overflow: auto; border-radius: 15px; padding: 0.9rem; background: #111a1f; color: #dbedf3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; line-height: 1.5; }
+      .output { margin: 0.75rem 0 0; min-height: 150px; max-height: 320px; overflow: auto; border-radius: var(--radius); padding: 0.9rem; background: #111a1f; color: #dbedf3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; line-height: 1.5; }
       .review-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; margin-top: 0.85rem; }
       .review-card-grid[hidden] { display: none; }
-      .review-section { border: 1px solid var(--line); border-radius: 16px; padding: 0.85rem; background: rgba(255, 255, 255, 0.55); }
+      .review-section { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.85rem; background: rgba(255, 255, 255, 0.55); }
       .review-section dl { display: grid; gap: 0.45rem; margin: 0.65rem 0 0; }
       .review-section div { min-width: 0; }
       .review-section dt { color: var(--muted); font-size: 0.72rem; font-weight: 900; text-transform: uppercase; }
       .review-section dd { margin: 0.1rem 0 0; color: #26363e; font-size: 0.86rem; line-height: 1.42; word-break: break-word; }
       .review-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.65rem; }
       .sr-status { margin-top: 0.55rem; color: var(--muted); font-size: 0.82rem; }
-      .launch-warning { display: none; margin: 0 0 1rem; border: 1px solid rgba(165, 77, 22, 0.35); border-radius: 18px; padding: 0.9rem 1rem; background: rgba(244, 216, 189, 0.72); color: #5f2b0e; line-height: 1.45; }
+      .launch-warning { display: none; margin: 0; border: 1px solid rgba(165, 77, 22, 0.35); border-radius: var(--radius); padding: 0.9rem 1rem; background: rgba(244, 216, 189, 0.72); color: #5f2b0e; line-height: 1.45; }
       .launch-warning.visible { display: block; }
-      @media (max-width: 860px) { .hero { display: block; } .two-column, .split, .tool-grid, .button-row { grid-template-columns: 1fr; } .shell { width: min(100% - 1.5rem, 1100px); padding-top: 1.25rem; } }
+      @media (max-width: 900px) { .app-shell { grid-template-columns: 1fr; padding: 0.75rem; } .project-sidebar { position: static; max-height: none; } .workspace-topbar, .composer-actions { grid-template-columns: 1fr; display: grid; } .composer-actions button { width: 100%; } .two-column, .split, .tool-grid, .button-row { grid-template-columns: 1fr; } }
       @keyframes flash { from { outline: 4px solid rgba(20, 92, 114, 0.22); } to { outline: 0 solid transparent; } }
       .wizard-card.just-opened { animation: flash 850ms ease-out; }
     </style>
   </head>
   <body>
-    <main class="shell">
-      <section class="hero">
-        <div>
+    <main id="app-shell" class="app-shell">
+      <aside id="project-sidebar" class="project-sidebar" aria-label="项目管理">
+        <header class="sidebar-header">
           <h1>AI4S Agent 控制台</h1>
-          <p>用于规划、数据审阅、风险确认、运行监控和报告审阅的渐进式界面。默认只展开当前步骤。</p>
-        </div>
-        <span class="pill">渐进式流程</span>
-      </section>
+          <p>本地项目工作区</p>
+        </header>
+
+        <section class="sidebar-section" aria-label="新建项目">
+          <h2>新建项目</h2>
+          <form id="new-project-form">
+            <label for="new-project-name">项目名称</label>
+            <input id="new-project-name" name="name" placeholder="OLED PLQY screening" />
+            <label for="new-project-id">项目 ID</label>
+            <input id="new-project-id" name="project_id" placeholder="proj-oled" />
+            <button type="submit">新建并选择</button>
+            <div id="new-project-status" class="sr-status" aria-live="polite"></div>
+          </form>
+        </section>
+
+        <section class="sidebar-section" aria-label="项目列表">
+          <h2>项目</h2>
+          <div id="project-list" class="project-list" aria-live="polite">
+            <p class="small">正在加载项目...</p>
+          </div>
+        </section>
+
+        <section class="sidebar-section" aria-label="当前项目">
+          <h2>当前项目</h2>
+          <div class="mini-panel">
+            <strong id="active-project-name">proj-oled</strong>
+            <p id="active-project-id" class="small">proj-oled</p>
+            <p id="active-project-run" class="small">尚未生成运行。</p>
+          </div>
+        </section>
+      </aside>
+
+      <section id="project-workspace" class="project-workspace" aria-label="当前项目对话工作区">
+        <header class="workspace-topbar">
+          <div>
+            <h2 id="workspace-project-title">proj-oled</h2>
+            <p id="workspace-status">通过对话描述目标、补充证据、审阅结构化计划。</p>
+          </div>
+          <span id="workspace-run-pill" class="pill">等待运行 ID</span>
+        </header>
 
       <aside id="file-launch-warning" class="launch-warning" role="alert">
         当前页面是直接从模板文件打开的，API 请求不会工作。请通过 Flask 服务打开：
         <code>PYTHONPATH=src .venv/bin/python -m flask --app ai4s_agent.app:create_app run --port 5005</code>，
         然后访问 <code>http://127.0.0.1:5005/</code>。
       </aside>
+
+      <section id="project-chat" class="chat-panel" aria-label="项目对话">
+        <div id="conversation-stream" class="conversation-stream" aria-live="polite">
+          <article class="chat-message agent">描述你的目标、数据背景或可引用来源。Agent 会先整理可审阅 payload，不会直接执行训练或外部检索。</article>
+        </div>
+        <form id="conversation-form" class="conversation-composer">
+          <label for="conversation-input">和 Agent 对话</label>
+          <textarea id="conversation-input" name="message" placeholder="例如：我想训练 OLED PLQY 模型，优先改善高 PLQY 候选的排序；可以参考 DOI 10.1038/s41597-020-00634-8。"></textarea>
+          <div class="composer-actions">
+            <p id="conversation-status" class="small">Enter 换行，点击发送整理结构化计划输入。</p>
+            <button id="conversation-submit-button" type="submit">发送</button>
+            <button id="prepare-modeling-plan-button" type="button" class="ghost">生成建模计划</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="chat-review-artifacts" class="review-card-grid artifact-tray" hidden></section>
+
+      <details id="workflow-tools" class="advanced-tools workflow-tools">
+        <summary><strong>流程工具</strong><span class="pill">兼容向导</span></summary>
+        <div class="advanced-body">
 
       <section id="primary-workflow" class="wizard" aria-label="引导式流程">
         <details id="step-goal-card" class="wizard-card active" open>
@@ -451,6 +528,8 @@
           </div>
         </details>
       </section>
+        </div>
+      </details>
 
       <section id="response-console" class="console-card">
         <h2>当前响应</h2>
@@ -534,12 +613,17 @@
           </div>
         </div>
       </details>
+      </section>
     </main>
 
     <script>
       const output = document.getElementById("output");
       let currentRunPlan = null;
       let currentAgentDecisionCard = null;
+      let activeProject = { project_id: "proj-oled", name: "proj-oled" };
+      let knownProjects = [];
+      let conversationMessages = [];
+      let currentModelingPlanPayload = null;
       const fileLaunchWarning = document.getElementById("file-launch-warning");
       if (window.location.protocol === "file:") {
         fileLaunchWarning.classList.add("visible");
@@ -572,6 +656,116 @@
       function render(payload) {
         output.textContent = JSON.stringify(normalizeErrorForRender(payload), null, 2);
         renderAgentReviewCard(null);
+      }
+
+      function updateActiveProjectDisplay(project) {
+        const projectId = String(project?.project_id || "proj-oled").trim() || "proj-oled";
+        const name = String(project?.name || projectId).trim() || projectId;
+        activeProject = { project_id: projectId, name };
+        setText("active-project-name", name);
+        setText("active-project-id", projectId);
+        setText("workspace-project-title", name);
+        setText("workspace-status", `当前项目：${projectId}`);
+      }
+
+      function renderProjectList(projects) {
+        const root = document.getElementById("project-list");
+        if (!root) return;
+        root.innerHTML = "";
+        const items = Array.isArray(projects) ? projects : [];
+        if (!items.length) {
+          const empty = document.createElement("p");
+          empty.className = "small";
+          empty.textContent = "暂无项目。新建项目后开始对话。";
+          root.appendChild(empty);
+          return;
+        }
+        items.forEach((project) => {
+          const row = document.createElement("button");
+          const projectId = String(project.project_id || "").trim();
+          const name = String(project.name || projectId || "未命名项目");
+          row.type = "button";
+          row.className = `project-row${projectId === activeProject.project_id ? " active" : ""}`;
+          const title = document.createElement("strong");
+          title.textContent = name;
+          const meta = document.createElement("span");
+          meta.textContent = projectId;
+          row.appendChild(title);
+          row.appendChild(meta);
+          row.addEventListener("click", () => selectProject({ project_id: projectId, name }));
+          root.appendChild(row);
+        });
+      }
+
+      function selectProject(project) {
+        updateActiveProjectDisplay(project);
+        setValue("agent-project-id", activeProject.project_id);
+        syncProjectId(activeProject.project_id);
+        conversationMessages = [];
+        currentModelingPlanPayload = null;
+        const stream = document.getElementById("conversation-stream");
+        if (stream) {
+          stream.innerHTML = "";
+          appendConversationMessage("agent", `已选择项目 ${activeProject.project_id}。直接描述目标或粘贴引用来源即可。`);
+        }
+        renderProjectList(knownProjects.length ? knownProjects : [activeProject]);
+      }
+
+      async function loadProjects() {
+        try {
+          const response = await getJSON("/api/projects");
+          const projects = response.projects || [];
+          knownProjects = projects;
+          renderProjectList(projects);
+          if (projects.length && !projects.some((project) => project.project_id === activeProject.project_id)) {
+            selectProject(projects[0]);
+          } else {
+            updateActiveProjectDisplay(activeProject);
+          }
+          return response;
+        } catch (err) {
+          render(err);
+          const root = document.getElementById("project-list");
+          if (root) root.innerHTML = '<p class="small">项目列表加载失败。</p>';
+          return normalizeErrorForRender(err);
+        }
+      }
+
+      function appendConversationMessage(role, content) {
+        const stream = document.getElementById("conversation-stream");
+        if (!stream) return;
+        const article = document.createElement("article");
+        article.className = `chat-message ${role}`;
+        article.textContent = String(content || "");
+        stream.appendChild(article);
+        stream.scrollTop = stream.scrollHeight;
+      }
+
+      function renderConversationArtifact(title, payload) {
+        const root = document.getElementById("chat-review-artifacts");
+        if (!root) return;
+        root.hidden = false;
+        const article = document.createElement("article");
+        article.className = "review-section";
+        const heading = document.createElement("h3");
+        heading.textContent = title;
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        const pre = document.createElement("pre");
+        summary.textContent = "查看 JSON";
+        pre.className = "output";
+        pre.textContent = JSON.stringify(payload || {}, null, 2);
+        details.appendChild(summary);
+        details.appendChild(pre);
+        article.appendChild(heading);
+        article.appendChild(details);
+        root.prepend(article);
+      }
+
+      function renderAgentQuestions(questions) {
+        (questions || []).forEach((question) => {
+          appendConversationMessage("system", `${question.prompt || "需要补充信息"}\n${question.reason || ""}`);
+        });
       }
 
       function renderValue(value) {
@@ -741,10 +935,17 @@
 
       function syncRunId(runId) {
         ["agent-run-id", "plan-run-id", "status-run-id", "gate-run-id", "expand-run-id", "diff-run-id", "data-run-id", "run-card-id", "submit-run-id", "promotion-run-id", "model-promotion-run-id", "timeline-run-id", "preview-run-id"].forEach((id) => setValue(id, runId));
+        if (runId) {
+          setText("active-project-run", `运行：${runId}`);
+          setText("workspace-run-pill", runId);
+        }
       }
 
       function syncProjectId(projectId) {
-        ["upload-project-id", "promotion-project-id", "model-promotion-project-id", "timeline-project-id", "preview-project-id"].forEach((id) => setValue(id, projectId));
+        ["agent-project-id", "upload-project-id", "promotion-project-id", "model-promotion-project-id", "timeline-project-id", "preview-project-id"].forEach((id) => setValue(id, projectId));
+        if (projectId && activeProject.project_id !== projectId) {
+          updateActiveProjectDisplay({ project_id: projectId, name: projectId });
+        }
       }
 
       function markCard(cardId, status, summary) {
@@ -917,6 +1118,79 @@
       });
       syncGeneratedRunId();
       syncProjectId(document.getElementById("agent-project-id").value);
+
+      document.getElementById("new-project-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const rawName = String(fd.get("name") || "").trim();
+        const rawId = String(fd.get("project_id") || "").trim();
+        const payload = { name: rawName || rawId || "Untitled project", project_id: rawId };
+        try {
+          const response = await postJSON("/api/projects", payload);
+          const project = { project_id: response.project_id, name: response.name || response.project_id };
+          if (!knownProjects.some((item) => item.project_id === project.project_id)) knownProjects.unshift(project);
+          selectProject(project);
+          setText("new-project-status", `已选择项目：${project.project_id}`);
+          render(response);
+        } catch (err) {
+          setText("new-project-status", "新建项目失败。");
+          render(err);
+        }
+      });
+
+      document.getElementById("conversation-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const input = document.getElementById("conversation-input");
+        const message = String(input.value || "").trim();
+        if (!message) return;
+        const runId = syncGeneratedRunId();
+        const projectId = activeProject.project_id || String(document.getElementById("agent-project-id").value || "").trim();
+        conversationMessages.push({ role: "user", content: message });
+        appendConversationMessage("user", message);
+        input.value = "";
+        try {
+          const response = await postJSON("/api/agent/conversation/modeling-payload", {
+            project_id: projectId,
+            run_id: runId,
+            messages: conversationMessages,
+          });
+          currentModelingPlanPayload = response.modeling_plan_payload || null;
+          const pendingEvidence = currentModelingPlanPayload?.pending_cited_target_evidence || [];
+          const agentQuestions = currentModelingPlanPayload?.agent_questions || [];
+          setText("conversation-status", agentQuestions.length ? "需要回答 Agent 追问。" : "已整理建模 payload，可生成建模计划。");
+          appendConversationMessage("agent", "已整理为可审阅的建模计划输入。");
+          if (pendingEvidence.length) appendConversationMessage("system", `检测到 ${pendingEvidence.length} 条 pending_cited_target_evidence，批准前不会进入建模证据。`);
+          renderConversationArtifact("modeling_plan_payload", currentModelingPlanPayload);
+          renderAgentQuestions(agentQuestions);
+          render(response);
+        } catch (err) {
+          appendConversationMessage("system", "对话整理失败，详情见当前响应。");
+          render(err);
+        }
+      });
+
+      document.getElementById("prepare-modeling-plan-button").addEventListener("click", async () => {
+        if (!currentModelingPlanPayload) {
+          render({ ok: false, error: "请先发送一条对话，让 Agent 整理 modeling_plan_payload。" });
+          return;
+        }
+        if ((currentModelingPlanPayload.agent_questions || []).length) {
+          render({ ok: false, error: "仍有待回答的 agent_questions，不能生成建模计划。", agent_questions: currentModelingPlanPayload.agent_questions });
+          return;
+        }
+        try {
+          const response = await postJSON("/api/agent/modeling-plan", currentModelingPlanPayload);
+          appendConversationMessage("agent", "建模计划草案已生成，请审阅 artifact 后再决定是否执行。");
+          renderConversationArtifact("modeling_plan_proposal", response.proposal || {});
+          if (response.target_modeling_brief) renderConversationArtifact("target_modeling_brief", response.target_modeling_brief);
+          render(response);
+        } catch (err) {
+          appendConversationMessage("system", "建模计划生成失败，详情见当前响应。");
+          render(err);
+        }
+      });
+
+      loadProjects();
 
       document.getElementById("agent-plan-form").addEventListener("submit", async (event) => {
         event.preventDefault();
