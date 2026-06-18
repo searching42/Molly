@@ -866,6 +866,40 @@ def test_agent_conversation_modeling_payload_endpoint_prepares_payload(tmp_path)
     assert resp.json["modeling_plan_payload"]["cited_target_evidence"][0]["doi"] == "10.1038/s41597-020-00634-8"
 
 
+def test_agent_conversation_next_turn_endpoint_returns_decision(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/agent/conversation/next-turn",
+        json={
+            "project_id": "proj-conversation-next-turn",
+            "run_id": "run-conversation-next-turn",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Train OLED PLQY. DOI 10.1038/s41597-020-00634-8 "
+                        "says solvent matters."
+                    ),
+                },
+                {"role": "user", "content": "Yes, use this external literature evidence."},
+            ],
+            "project_memory": {"backend_preference": "baseline-first"},
+            "previous_diagnostics": [{"property_id": "plqy", "decision": "rerun_recommended"}],
+            "available_inputs": ["SMILES", "solvent"],
+        },
+    )
+
+    assert resp.status_code == 200
+    decision = resp.json["decision"]
+    assert decision["decision"] == "ready_for_modeling_plan"
+    assert decision["requires_user_response"] is False
+    assert "generate_modeling_plan" in decision["next_actions"]
+    assert decision["modeling_plan_payload"]["property_id"] == "plqy"
+    assert decision["modeling_plan_payload"]["project_memory"]["backend_preference"] == "baseline-first"
+
+
 def test_agent_modeling_plan_endpoint_includes_cited_target_evidence(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     client = app.test_client()

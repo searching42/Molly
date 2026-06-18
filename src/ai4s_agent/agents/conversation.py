@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ai4s_agent.agents.research import DOI_RE, URL_RE
-from ai4s_agent.schemas import PlanQuestion
+from ai4s_agent.schemas import ConversationTurnDecision, PlanQuestion
 
 
 class ConversationAgent:
@@ -48,6 +48,73 @@ class ConversationAgent:
         if project_id is not None:
             payload["project_id"] = str(project_id or "").strip()
         return payload
+
+    def decide_next_turn(
+        self,
+        *,
+        run_id: str,
+        messages: list[dict[str, Any]],
+        project_id: str | None = None,
+        project_memory: dict[str, Any] | None = None,
+        previous_diagnostics: list[dict[str, Any]] | None = None,
+        available_inputs: list[Any] | None = None,
+    ) -> ConversationTurnDecision:
+        modeling_payload = self.prepare_modeling_plan_payload(
+            run_id=run_id,
+            messages=messages,
+            project_id=project_id,
+        )
+        if project_memory is not None:
+            if not isinstance(project_memory, dict):
+                raise ValueError("project_memory must be an object")
+            modeling_payload["project_memory"] = project_memory
+        if previous_diagnostics is not None:
+            if not isinstance(previous_diagnostics, list) or any(
+                not isinstance(item, dict) for item in previous_diagnostics
+            ):
+                raise ValueError("previous_diagnostics must be a list of objects")
+            modeling_payload["previous_diagnostics"] = previous_diagnostics
+        if available_inputs is not None:
+            if not isinstance(available_inputs, list):
+                raise ValueError("available_inputs must be a list")
+            modeling_payload["available_inputs"] = [str(item).strip() for item in available_inputs if str(item).strip()]
+
+        questions = [
+            PlanQuestion.model_validate(question)
+            for question in modeling_payload.get("agent_questions", [])
+        ]
+        pending_evidence = list(modeling_payload.get("pending_cited_target_evidence") or [])
+        property_id = str(modeling_payload.get("property_id") or "").strip()
+        if not property_id:
+            status = "needs_clarification"
+            summary = "The dialogue does not yet identify a trainable target property."
+            next_actions = ["answer_agent_questions", "resubmit_conversation_turn"]
+            blocked_reasons = ["target property is missing"]
+        elif pending_evidence:
+            status = "needs_evidence_approval"
+            summary = "The dialogue cites external evidence that needs explicit approval before use."
+            next_actions = ["approve_or_ignore_external_target_evidence", "resubmit_conversation_turn"]
+            blocked_reasons = ["external target evidence needs explicit approval"]
+        else:
+            status = "ready_for_modeling_plan"
+            summary = "The dialogue is ready to generate a reviewable modeling plan proposal."
+            next_actions = ["review_modeling_plan_payload", "generate_modeling_plan"]
+            blocked_reasons = []
+
+        return ConversationTurnDecision(
+            project_id=str(project_id or "").strip(),
+            run_id=str(run_id or "").strip(),
+            status=status,
+            decision=status,
+            summary=summary,
+            modeling_plan_payload=modeling_payload,
+            questions=questions,
+            pending_cited_target_evidence=pending_evidence,
+            next_actions=next_actions,
+            blocked_reasons=blocked_reasons,
+            requires_user_response=status != "ready_for_modeling_plan",
+            executable=False,
+        )
 
     @classmethod
     def _coerce_messages(cls, messages: list[dict[str, Any]]) -> list[dict[str, str]]:

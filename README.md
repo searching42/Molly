@@ -23,6 +23,8 @@ For each requested training target, the agent should first prepare a target-awar
 
 Ordinary dialogue is the primary interface for collecting user intent, cited source summaries, approvals, and follow-up answers. `ConversationAgent.prepare_modeling_plan_payload()` turns those conversation turns into a non-executable modeling-plan payload, keeping unapproved external DOI/URL evidence in `pending_cited_target_evidence` until the user explicitly approves it. `/api/agent/conversation/modeling-payload` exposes that bridge for clients without requiring a dedicated evidence input form.
 
+`ConversationAgent.decide_next_turn()` and `/api/agent/conversation/next-turn` wrap that payload in a `ConversationTurnDecision` so clients can distinguish `needs_clarification`, `needs_evidence_approval`, and `ready_for_modeling_plan` before calling `/api/agent/modeling-plan`. The decision object is review-only and never executes training, web acquisition, or model promotion by itself.
+
 `/api/agent/modeling-plan` accepts `property_id`, `cited_target_evidence`, `project_memory`, `previous_diagnostics`, `available_inputs`, and `user_approved_external_search`. When a target property or cited evidence is supplied, the endpoint returns and writes a `TargetModelingBrief` alongside the modeling plan proposal so preprocessing and hyperparameter decisions remain traceable to reviewable evidence.
 
 After training, the agent should diagnose model quality against baselines and target-specific expectations before using the model for prediction. Weak results should produce a reviewable rerun proposal, not a silent rerun or an unqualified model promotion.

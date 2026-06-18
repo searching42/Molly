@@ -814,6 +814,65 @@ class PlanQuestion(BaseModel):
     blocks_execution: bool = True
 
 
+ConversationTurnStatus = Literal["needs_clarification", "needs_evidence_approval", "ready_for_modeling_plan"]
+
+
+class ConversationTurnDecision(BaseModel):
+    project_id: str = ""
+    run_id: str
+    status: ConversationTurnStatus
+    decision: ConversationTurnStatus
+    summary: str
+    modeling_plan_payload: dict[str, Any] = Field(default_factory=dict)
+    questions: list[PlanQuestion] = Field(default_factory=list)
+    pending_cited_target_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
+    blocked_reasons: list[str] = Field(default_factory=list)
+    requires_user_response: bool = True
+    executable: bool = False
+
+    @field_validator("project_id")
+    @classmethod
+    def validate_project_id(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @field_validator("run_id", "summary")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            raise ValueError("conversation turn decision text fields are required")
+        return clean
+
+    @field_validator("modeling_plan_payload")
+    @classmethod
+    def validate_modeling_payload_is_json_safe(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_json_safe(value, "modeling_plan_payload")
+
+    @field_validator("pending_cited_target_evidence")
+    @classmethod
+    def validate_pending_evidence_is_json_safe(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return _validate_json_safe(value, "pending_cited_target_evidence")
+
+    @field_validator("next_actions", "blocked_reasons")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for item in value:
+            clean = str(item or "").strip()
+            if clean and clean not in result:
+                result.append(clean)
+        return result
+
+    @model_validator(mode="after")
+    def validate_status_matches_decision(self) -> ConversationTurnDecision:
+        if self.status != self.decision:
+            raise ValueError("conversation turn status and decision must match")
+        if self.executable:
+            raise ValueError("conversation turn decisions are review-only and cannot be executable")
+        return self
+
+
 class GenerationConstraint(BaseModel):
     constraint_id: str
     property_id: str
@@ -2272,6 +2331,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "run_plan_diff": RunPlanDiff,
     "plan_rationale": PlanRationale,
     "plan_question": PlanQuestion,
+    "conversation_turn_decision": ConversationTurnDecision,
     "research_query_expansion": ResearchQueryExpansion,
     "research_source_candidate": ResearchSourceCandidate,
     "research_evidence_quality": ResearchEvidenceQuality,

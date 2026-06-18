@@ -22,6 +22,7 @@ from ai4s_agent.schemas import (
     CitationLicenseReport,
     ConflictGroup,
     ConflictReport,
+    ConversationTurnDecision,
     GenerationBackend,
     GenerationCandidate,
     GenerationConstraint,
@@ -121,8 +122,32 @@ def test_export_json_schemas(tmp_path: Path) -> None:
     assert "prediction_preparation.schema.json" in names
     assert "model_package_review.schema.json" in names
     assert "target_evidence_item.schema.json" in names
+    assert "conversation_turn_decision.schema.json" in names
     assert "run_plan.schema.json" in names
     assert "run_plan_diff.schema.json" in names
+
+
+def test_conversation_turn_decision_schema_roundtrip() -> None:
+    decision = ConversationTurnDecision(
+        project_id="proj-dialogue",
+        run_id="run-dialogue",
+        status="ready_for_modeling_plan",
+        decision="ready_for_modeling_plan",
+        summary="Target and approved evidence are ready for modeling plan generation.",
+        modeling_plan_payload={
+            "run_id": "run-dialogue",
+            "goal": "Train OLED PLQY.",
+            "property_id": "plqy",
+        },
+        next_actions=["review_modeling_plan_payload", "generate_modeling_plan"],
+        requires_user_response=False,
+        executable=False,
+    )
+
+    restored = ConversationTurnDecision.model_validate_json(decision.model_dump_json())
+
+    assert restored.model_dump(mode="json") == decision.model_dump(mode="json")
+    assert "conversation_turn_decision" in CORE_SCHEMA_MODELS
 
 
 def test_docs_schema_files_include_every_core_schema() -> None:

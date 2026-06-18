@@ -389,6 +389,30 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
             return jsonify({"ok": False, "error": str(exc)}), 400
         return jsonify({"ok": True, "modeling_plan_payload": modeling_payload})
 
+    @app.post("/api/agent/conversation/next-turn")
+    def agent_conversation_next_turn():
+        try:
+            payload = _request_json_object()
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        run_id = str(payload.get("run_id") or "").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        messages = payload.get("messages")
+        if not run_id:
+            return jsonify({"ok": False, "error": "run_id required"}), 400
+        try:
+            decision = ConversationAgent().decide_next_turn(
+                run_id=run_id,
+                project_id=project_id or None,
+                messages=messages,
+                project_memory=payload.get("project_memory"),
+                previous_diagnostics=payload.get("previous_diagnostics"),
+                available_inputs=payload.get("available_inputs"),
+            )
+        except (ValidationError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "decision": decision.model_dump(mode="json")})
+
     @app.post("/api/agent/modeling-plan")
     def agent_modeling_plan():
         try:
