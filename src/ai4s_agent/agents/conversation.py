@@ -15,8 +15,31 @@ class ConversationAgent:
         ("absorption_max_nm", ("lambda_abs", "absorption", "absorption max")),
     )
     TRAINING_TERMS = ("train", "training", "model", "predict", "optimize", "screen")
-    APPROVAL_TERMS = ("yes", "approve", "approved", "allow", "allowed", "permission", "use this", "use that")
-    EXTERNAL_TERMS = ("external", "literature", "evidence", "source", "search", "doi", "url", "paper")
+    EXPLICIT_APPROVAL_TERMS = ("approve", "approved", "allow", "allowed", "permission")
+    EVIDENCE_USE_TERMS = ("use this", "use that", "use the", "use cited", "use external", "use literature")
+    EVIDENCE_SCOPE_TERMS = (
+        "external evidence",
+        "external literature",
+        "literature evidence",
+        "cited evidence",
+        "cited source",
+        "target evidence",
+        "doi",
+        "url",
+        "source",
+    )
+    EVIDENCE_REJECTION_TERMS = (
+        "do not use",
+        "don't use",
+        "do not approve",
+        "don't approve",
+        "not approve",
+        "ignore external",
+        "ignore this evidence",
+        "ignore that evidence",
+        "no, do not",
+        "no, don't",
+    )
 
     def prepare_modeling_plan_payload(
         self,
@@ -116,6 +139,40 @@ class ConversationAgent:
             executable=False,
         )
 
+    def prepare_research_source_payload(
+        self,
+        *,
+        run_id: str,
+        messages: list[dict[str, Any]],
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        clean_messages = self._coerce_messages(messages)
+        goal = self._research_goal_from_messages(clean_messages)
+        approved = self._external_evidence_approved(clean_messages)
+        seed_sources = self._extract_seed_sources(clean_messages)
+        questions: list[PlanQuestion] = []
+        if not approved:
+            questions.append(
+                PlanQuestion(
+                    question_id="approve_external_acquisition_scope",
+                    prompt="May the agent prepare an external literature/database acquisition scope from this conversation?",
+                    reason="External acquisition must stay reviewable and explicitly approved before any network or database action.",
+                    choices=["approve_external_acquisition_scope", "use_local_sources_only", "provide_seed_sources"],
+                    blocks_execution=True,
+                )
+            )
+
+        payload: dict[str, Any] = {
+            "run_id": str(run_id or "").strip(),
+            "goal": goal,
+            "seed_sources": seed_sources,
+            "user_approved_external_search": approved,
+            "agent_questions": [question.model_dump(mode="json") for question in questions],
+        }
+        if project_id is not None:
+            payload["project_id"] = str(project_id or "").strip()
+        return payload
+
     @classmethod
     def _coerce_messages(cls, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         if not isinstance(messages, list):
@@ -143,6 +200,17 @@ class ConversationAgent:
         return user_messages[-1] if user_messages else ""
 
     @classmethod
+    def _research_goal_from_messages(cls, messages: list[dict[str, str]]) -> str:
+        user_messages = [message["content"] for message in messages if message["role"] == "user"]
+        for content in user_messages:
+            lowered = content.lower()
+            if cls._message_has_source_ref(content) or any(
+                term in lowered for term in ("find", "source", "sources", "paper", "literature", "doi", "url")
+            ):
+                return content
+        return user_messages[-1] if user_messages else ""
+
+    @classmethod
     def _detect_property(cls, text: str) -> str:
         lowered = text.lower()
         for property_id, aliases in cls.PROPERTY_ALIASES:
@@ -152,15 +220,35 @@ class ConversationAgent:
 
     @classmethod
     def _external_evidence_approved(cls, messages: list[dict[str, str]]) -> bool:
+        if not any(cls._message_has_source_ref(message["content"]) for message in messages):
+            return False
+        approved = False
         for message in messages:
             if message["role"] != "user":
                 continue
             lowered = message["content"].lower()
-            if any(term in lowered for term in cls.APPROVAL_TERMS) and any(
-                term in lowered for term in cls.EXTERNAL_TERMS
-            ):
-                return True
-        return False
+            if cls._rejects_external_evidence(lowered):
+                approved = False
+                continue
+            if cls._approves_external_evidence(lowered):
+                approved = True
+        return approved
+
+    @staticmethod
+    def _message_has_source_ref(content: str) -> bool:
+        return bool(DOI_RE.search(str(content or "")) or URL_RE.search(str(content or "")))
+
+    @classmethod
+    def _rejects_external_evidence(cls, lowered: str) -> bool:
+        return any(term in lowered for term in cls.EVIDENCE_REJECTION_TERMS)
+
+    @classmethod
+    def _approves_external_evidence(cls, lowered: str) -> bool:
+        if any(term in lowered for term in cls.EXPLICIT_APPROVAL_TERMS):
+            return True
+        has_use_intent = any(term in lowered for term in cls.EVIDENCE_USE_TERMS)
+        has_evidence_scope = any(term in lowered for term in cls.EVIDENCE_SCOPE_TERMS)
+        return has_use_intent and has_evidence_scope
 
     @classmethod
     def _extract_cited_evidence(cls, messages: list[dict[str, str]]) -> list[dict[str, Any]]:
@@ -182,6 +270,30 @@ class ConversationAgent:
                 items.append(item)
         return items
 
+    @classmethod
+    def _extract_seed_sources(cls, messages: list[dict[str, str]]) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        seen_refs: set[tuple[str, str]] = set()
+        for message in messages:
+            content = message["content"]
+            refs = [(match.group(0).rstrip(".,;)"), "doi") for match in DOI_RE.finditer(content)]
+            refs.extend((match.group(0).rstrip(".,;)"), "url") for match in URL_RE.finditer(content))
+            for source_ref, source_type in refs:
+                key = (source_type, source_ref)
+                if key in seen_refs:
+                    continue
+                seen_refs.add(key)
+                source = {
+                    "source_id": f"conversation_{source_type}_{len(items) + 1}",
+                    "source_type": source_type,
+                    "value": source_ref,
+                    "status": "pending_acquisition",
+                    "metadata": {"source": "conversation"},
+                }
+                source[source_type] = source_ref
+                items.append(source)
+        return items
+
     @staticmethod
     def _evidence_summary(content: str, source_ref: str) -> str:
         clean = " ".join(str(content or "").strip().split())
@@ -189,6 +301,10 @@ class ConversationAgent:
         if marker < 0:
             return clean
         summary = clean[marker + len(source_ref) :].strip(" :;,-")
+        next_ref_markers = [match.start() for match in DOI_RE.finditer(summary)]
+        next_ref_markers.extend(match.start() for match in URL_RE.finditer(summary))
+        if next_ref_markers:
+            summary = summary[: min(next_ref_markers)].strip(" :;,-")
         for prefix in ("it says", "says", "indicates", "shows", "reports", "that"):
             if summary.lower().startswith(prefix):
                 summary = summary[len(prefix) :].strip(" :;,-")

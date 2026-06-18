@@ -368,6 +368,50 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
             return jsonify({"ok": False, "error": str(exc)}), 400
         return jsonify({"ok": True, "proposal": proposal.model_dump(mode="json"), "outputs": outputs})
 
+    @app.post("/api/agent/conversation/research-sources")
+    def agent_conversation_research_sources():
+        try:
+            payload = _request_json_object()
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        run_id = str(payload.get("run_id") or "").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        messages = payload.get("messages")
+        if not run_id:
+            return jsonify({"ok": False, "error": "run_id required"}), 400
+        try:
+            research_payload = ConversationAgent().prepare_research_source_payload(
+                run_id=run_id,
+                project_id=project_id or None,
+                messages=messages,
+            )
+            goal = str(research_payload.get("goal") or "").strip()
+            if not goal:
+                return jsonify({"ok": False, "error": "conversation research goal required"}), 400
+            seed_sources = [
+                LiteratureCorpusSource.model_validate(item)
+                for item in research_payload.get("seed_sources", [])
+            ]
+            research = ResearchAgent()
+            proposal = research.propose_sources(run_id=run_id, goal=goal, seed_sources=seed_sources)
+            outputs: dict[str, str] = {}
+            if project_id:
+                proposal_json, proposal_md = research.write_proposal(projects, project_id, run_id, proposal)
+                outputs = {
+                    "research_source_proposal_json": str(proposal_json),
+                    "research_source_proposal_md": str(proposal_md),
+                }
+        except (ValidationError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify(
+            {
+                "ok": True,
+                "research_source_payload": research_payload,
+                "proposal": proposal.model_dump(mode="json"),
+                "outputs": outputs,
+            }
+        )
+
     @app.post("/api/agent/conversation/modeling-payload")
     def agent_conversation_modeling_payload():
         try:

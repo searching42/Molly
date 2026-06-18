@@ -68,6 +68,35 @@ def test_conversation_turn_decision_asks_for_missing_property() -> None:
     assert any(question.question_id == "select_modeling_property" for question in decision.questions)
 
 
+def test_conversation_bridge_prepares_research_source_payload_from_dialogue() -> None:
+    agent = ConversationAgent()
+
+    payload = agent.prepare_research_source_payload(
+        run_id="run-dialogue-research",
+        project_id="proj-dialogue-research",
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "Find OLED PLQY sources. Start from DOI 10.1038/s41597-020-00634-8 "
+                    "and https://example.org/chromophore-data."
+                ),
+            },
+            {"role": "user", "content": "Approve external acquisition planning."},
+        ],
+    )
+
+    assert payload["run_id"] == "run-dialogue-research"
+    assert payload["project_id"] == "proj-dialogue-research"
+    assert "OLED PLQY" in payload["goal"]
+    assert payload["user_approved_external_search"] is True
+    assert payload["seed_sources"][0]["source_type"] == "doi"
+    assert payload["seed_sources"][0]["doi"] == "10.1038/s41597-020-00634-8"
+    assert payload["seed_sources"][1]["source_type"] == "url"
+    assert payload["seed_sources"][1]["url"] == "https://example.org/chromophore-data"
+    assert payload["agent_questions"] == []
+
+
 def test_conversation_bridge_builds_modeling_payload_from_dialogue() -> None:
     agent = ConversationAgent()
 
@@ -113,6 +142,38 @@ def test_conversation_bridge_asks_before_using_unapproved_external_evidence() ->
     assert payload["agent_questions"][0]["question_id"] == "approve_external_target_evidence"
 
 
+def test_conversation_bridge_does_not_treat_unrelated_yes_as_external_evidence_approval() -> None:
+    agent = ConversationAgent()
+
+    payload = agent.prepare_modeling_plan_payload(
+        run_id="run-dialogue-unrelated-yes",
+        messages=[
+            {"role": "user", "content": "Train PLQY. DOI 10.1038/s41597-020-00634-8 says solvent matters."},
+            {"role": "user", "content": "Yes, I use this paper notebook daily."},
+        ],
+    )
+
+    assert payload["user_approved_external_search"] is False
+    assert payload["cited_target_evidence"] == []
+    assert payload["pending_cited_target_evidence"][0]["doi"] == "10.1038/s41597-020-00634-8"
+
+
+def test_conversation_bridge_keeps_external_evidence_pending_when_user_rejects_use() -> None:
+    agent = ConversationAgent()
+
+    payload = agent.prepare_modeling_plan_payload(
+        run_id="run-dialogue-rejects-external-evidence",
+        messages=[
+            {"role": "user", "content": "Train PLQY. DOI 10.1038/s41597-020-00634-8 says solvent matters."},
+            {"role": "user", "content": "No, do not use external literature evidence."},
+        ],
+    )
+
+    assert payload["user_approved_external_search"] is False
+    assert payload["cited_target_evidence"] == []
+    assert payload["pending_cited_target_evidence"][0]["doi"] == "10.1038/s41597-020-00634-8"
+
+
 def test_conversation_bridge_strips_trailing_punctuation_from_doi() -> None:
     agent = ConversationAgent()
 
@@ -128,3 +189,29 @@ def test_conversation_bridge_strips_trailing_punctuation_from_doi() -> None:
     )
 
     assert payload["cited_target_evidence"][0]["doi"] == "10.1038/s41597-020-00634-8"
+
+
+def test_conversation_bridge_splits_evidence_summary_before_next_reference() -> None:
+    agent = ConversationAgent()
+
+    payload = agent.prepare_modeling_plan_payload(
+        run_id="run-dialogue-multiple-doi-summary",
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "Train PLQY. DOI 10.1000/first says solvent matters. "
+                    "DOI 10.2000/second says scaffold split matters."
+                ),
+            },
+            {"role": "user", "content": "Yes, use this external literature evidence."},
+        ],
+    )
+
+    first = payload["cited_target_evidence"][0]
+    second = payload["cited_target_evidence"][1]
+    assert first["doi"] == "10.1000/first"
+    assert "solvent matters" in first["summary"]
+    assert "10.2000/second" not in first["summary"]
+    assert second["doi"] == "10.2000/second"
+    assert "scaffold split matters" in second["summary"]

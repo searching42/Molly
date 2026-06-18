@@ -750,6 +750,48 @@ def test_agent_research_sources_endpoint_writes_proposal(tmp_path) -> None:
     ).exists()
 
 
+def test_agent_conversation_research_sources_endpoint_returns_proposal(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    project_id = "proj-conversation-research-api"
+    run_id = "run-conversation-research-api"
+
+    resp = client.post(
+        "/api/agent/conversation/research-sources",
+        json={
+            "project_id": project_id,
+            "run_id": run_id,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Find OLED PLQY sources. Start from DOI 10.3000/conversation "
+                        "and https://example.org/oled-conversation.pdf"
+                    ),
+                },
+                {"role": "user", "content": "Approve external acquisition planning."},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json["research_source_payload"]["seed_sources"][0]["doi"] == "10.3000/conversation"
+    proposal = resp.json["proposal"]
+    assert proposal["status"] == "needs_confirmation"
+    assert proposal["executable"] is False
+    assert proposal["evidence_quality"]["doi_count"] == 1
+    assert proposal["evidence_quality"]["url_count"] == 1
+    assert "research_source_proposal_json" in resp.json["outputs"]
+    assert (
+        tmp_path
+        / "projects"
+        / project_id
+        / "runs"
+        / run_id
+        / "research_source_proposal.json"
+    ).exists()
+
+
 def test_agent_research_sources_endpoint_rejects_non_list_seed_sources(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     client = app.test_client()
