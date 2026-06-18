@@ -19,7 +19,7 @@ _ACTIVE_JOB_STATUSES = {
 class JobManager:
     """Persist job metadata and logs under each run directory.
 
-    The manager still does not own or supervise subprocesses.  It provides a
+    The manager still does not own or supervise subprocesses. It provides a
     durable control-plane record so API processes can restart without losing
     active/paused job state, attempts, transitions, or logs.
     """
@@ -298,7 +298,10 @@ class JobManager:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def _safe_run_dir(self, run_id: str) -> Path:
-        run_path = (self.runs_dir / run_id).resolve()
+        clean_run_id = str(run_id or "").strip()
+        if not clean_run_id or "/" in clean_run_id or "\\" in clean_run_id or Path(clean_run_id).name != clean_run_id:
+            raise ValueError("run_id must be a single path segment")
+        run_path = (self.runs_dir / clean_run_id).resolve()
         if not run_path.is_relative_to(self.runs_dir):
             raise ValueError("run_id escapes runs_dir")
         return run_path
