@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from ai4s_agent import adapters
-from ai4s_agent.api import create_app
+from ai4s_agent.app import create_app
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import GateName
 

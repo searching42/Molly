@@ -9,6 +9,11 @@
 - **修复提交**: `cfcf565`
 - Phase 1 plan-capable adapter 的 `execute` 仅接受 JSON boolean；字符串 `"false"`、`"0"`、`"off"`、`"true"` 均被拒绝
 
+### OPEN-019: 无 CI 测试记录
+- **状态**: Resolved in `fix/job-state-and-ci`
+- GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
+- PR #3 的 CI run #18 已验证 `481 passed, 0 failed, 0 errors, 0 skipped`
+
 ### OPEN-020: Bug 清单仅存本地
 - **状态**: Resolved
 - **修复提交**: `cfcf565`, `b34dda4`
@@ -19,6 +24,11 @@
 - MinerU、PDF-folder MinerU 和 GROBID adapter 在 package boundary 严格校验 `execute` 为 JSON boolean
 - `parse_document` 与 `parse_document_grobid` task 需要 `gate_2_data_mining`，direct API 不再执行远程 SSH/SCP 或 GROBID HTTP 请求
 - 统一 Execution Policy Registry 仍由 OPEN-006 跟踪
+
+### OPEN-022: 独立 checkout 依赖仓库外部 legacy scripts
+- **状态**: Resolved in `fix/job-state-and-ci`
+- Phase 1 过去默认依赖工作区同级的 `claude/scripts`，导致干净 GitHub runner 无法运行 parser、cleaning 和 RunPlan 测试
+- 现在优先兼容 legacy workspace；缺失时回退到随 `ai4s_agent` 打包的 deterministic parser 与 cleaning contract，并在 dev dependencies 中声明 RDKit
 
 ## A. 执行与审批边界
 
@@ -62,9 +72,12 @@
 
 ### OPEN-011: JobManager 非 durable executor
 - **MVP**: P2 / **生产**: P0
+- **已完成子项**: 普通 Job 的状态、attempt 和 transition history 已持久化到 `job_state.json`；API 进程重启后可读取、暂停、恢复、停止和完成已有 Job
+- **仍未解决**: JobManager 不拥有实际 worker 任务，缺少外部任务标识、heartbeat、lease 和 worker 重启接管；`executable` 仍为 `false`
 
 ### OPEN-012: Job key 非 `(project_id, run_id)`
 - **MVP**: P2 / **生产**: P0/P1
+- Job 状态仍以 legacy `runs/<run_id>` 路径存储；需同步迁移 API、日志和 background job 调用到 project-scoped key
 
 ### OPEN-013: JSON 原子替换无并发保护
 - **MVP**: P2 / **生产**: P1
@@ -89,9 +102,6 @@
 
 ### OPEN-018: api.py 单体路由
 - **MVP**: P2 / **生产**: P2
-
-### OPEN-019: 无 CI 测试记录
-- **MVP**: P1 / **生产**: P0/P1
 
 ---
 

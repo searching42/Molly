@@ -9,66 +9,115 @@ from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.schemas import BackgroundJobBudget, BackgroundJobCheckpoint, BackgroundJobState, RunStatus
 
 
+_ACTIVE_JOB_STATUSES = {
+    RunStatus.PENDING.value,
+    RunStatus.RUNNING.value,
+    RunStatus.PAUSED_BY_USER.value,
+}
+
+
 class JobManager:
+    """Persist job metadata and logs under each run directory.
+
+    The manager still does not own or supervise subprocesses. It provides a
+    durable control-plane record so API processes can restart without losing
+    active/paused job state, attempts, transitions, or logs.
+    """
+
     def __init__(self, runs_dir: Path) -> None:
         self.runs_dir = runs_dir.resolve()
         self.runs_dir.mkdir(parents=True, exist_ok=True)
-        self._active: dict[str, dict[str, Any]] = {}
         self._logs: dict[str, list[dict[str, str]]] = defaultdict(list)
 
     def start_job(self, run_id: str, *, details: dict[str, Any] | None = None) -> dict[str, Any]:
         self._safe_run_dir(run_id)
-        if run_id in self._active:
+        existing = self.read_job_state(run_id)
+        if existing and str(existing.get("status") or "") in _ACTIVE_JOB_STATUSES:
             raise ValueError(f"job already active: {run_id}")
+
         now = now_iso()
+        attempt = int(existing.get("attempt") or 0) + 1 if existing else 1
+        history = self._job_history(existing)
+        history.append(
+            {
+                "status": RunStatus.RUNNING.value,
+                "updated_at": now,
+                "event": "started" if attempt == 1 else "restarted",
+                "attempt": attempt,
+            }
+        )
         job = {
+            "schema_version": 1,
             "run_id": run_id,
             "status": RunStatus.RUNNING.value,
+            "attempt": attempt,
+            "created_at": str(existing.get("created_at") or now) if existing else now,
             "started_at": now,
             "updated_at": now,
             "details": details or {},
+            "history": history,
+            "durable_state": True,
+            "executable": False,
         }
-        self._active[run_id] = job
-        self._emit_log(run_id, "INFO", "job_started", f"Job {run_id} started")
+        self._write_job_state(run_id, job)
+        self._emit_log(run_id, "INFO", "job_started", f"Job {run_id} started (attempt {attempt})")
         return dict(job)
 
     def pause_job(self, run_id: str) -> dict[str, Any]:
         job = self._require_active(run_id)
-        job["status"] = RunStatus.PAUSED_BY_USER.value
-        job["updated_at"] = now_iso()
+        updated = self._transition_job(job, RunStatus.PAUSED_BY_USER, event="paused")
         self._emit_log(run_id, "INFO", "job_paused", f"Job {run_id} paused by user")
-        return dict(job)
+        return updated
 
     def resume_job(self, run_id: str) -> dict[str, Any]:
         job = self._require_active(run_id)
-        job["status"] = RunStatus.RUNNING.value
-        job["updated_at"] = now_iso()
+        updated = self._transition_job(job, RunStatus.RUNNING, event="resumed")
         self._emit_log(run_id, "INFO", "job_resumed", f"Job {run_id} resumed")
-        return dict(job)
+        return updated
 
     def stop_job(self, run_id: str) -> dict[str, Any]:
         job = self._require_active(run_id)
-        job["status"] = RunStatus.CANCELLED.value
-        job["updated_at"] = now_iso()
+        updated = self._transition_job(job, RunStatus.CANCELLED, event="cancelled")
         self._emit_log(run_id, "INFO", "job_cancelled", f"Job {run_id} cancelled")
         self.save_job_log(run_id)
-        del self._active[run_id]
-        return dict(job)
+        return updated
 
     def complete_job(self, run_id: str, status: RunStatus = RunStatus.SUCCEEDED) -> dict[str, Any]:
         job = self._require_active(run_id)
-        job["status"] = status.value
-        job["updated_at"] = now_iso()
+        updated = self._transition_job(job, status, event="completed")
         self._emit_log(run_id, "INFO", "job_completed", f"Job {run_id} completed: {status.value}")
         self.save_job_log(run_id)
-        self._active.pop(run_id, None)
-        return dict(job)
+        return updated
 
     def get_job(self, run_id: str) -> dict[str, Any] | None:
-        return dict(self._active.get(run_id, {}))
+        """Return an active job, preserving the legacy API contract."""
+        job = self.read_job_state(run_id)
+        if not job or str(job.get("status") or "") not in _ACTIVE_JOB_STATUSES:
+            return None
+        return dict(job)
+
+    def read_job_state(self, run_id: str) -> dict[str, Any] | None:
+        """Read active or terminal job state from disk."""
+        path = self._job_state_path(run_id)
+        if not path.exists():
+            return None
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(loaded, dict) or str(loaded.get("run_id") or "") != run_id:
+            return None
+        return {str(key): value for key, value in loaded.items()}
 
     def list_jobs(self) -> list[dict[str, Any]]:
-        return [dict(job) for job in self._active.values()]
+        jobs: list[dict[str, Any]] = []
+        for child in sorted(self.runs_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            job = self.read_job_state(child.name)
+            if job and str(job.get("status") or "") in _ACTIVE_JOB_STATUSES:
+                jobs.append(job)
+        return jobs
 
     def start_background_job(
         self,
@@ -86,11 +135,7 @@ class JobManager:
             budget.model_dump(mode="json") if isinstance(budget, BackgroundJobBudget) else budget
         )
         existing = self.get_background_job(run_id)
-        if existing and existing.get("status") in {
-            RunStatus.PENDING.value,
-            RunStatus.RUNNING.value,
-            RunStatus.PAUSED_BY_USER.value,
-        }:
+        if existing and existing.get("status") in _ACTIVE_JOB_STATUSES:
             raise ValueError(f"background job already active: {run_id}")
         now = now_iso()
         state = BackgroundJobState(
@@ -198,6 +243,33 @@ class JobManager:
         self._logs.pop(run_id, None)
         return log_path
 
+    def _transition_job(self, job: dict[str, Any], status: RunStatus, *, event: str) -> dict[str, Any]:
+        run_id = str(job.get("run_id") or "").strip()
+        if not run_id:
+            raise ValueError("job state missing run_id")
+        now = now_iso()
+        updated = dict(job)
+        updated["status"] = status.value
+        updated["updated_at"] = now
+        history = self._job_history(updated)
+        history.append(
+            {
+                "status": status.value,
+                "updated_at": now,
+                "event": event,
+                "attempt": int(updated.get("attempt") or 1),
+            }
+        )
+        updated["history"] = history
+        self._write_job_state(run_id, updated)
+        return updated
+
+    @staticmethod
+    def _job_history(job: dict[str, Any] | None) -> list[dict[str, Any]]:
+        if not job or not isinstance(job.get("history"), list):
+            return []
+        return [dict(item) for item in job["history"] if isinstance(item, dict)]
+
     def _read_background_job_state(self, run_id: str) -> BackgroundJobState:
         path = self._background_job_path(run_id)
         if not path.exists():
@@ -208,10 +280,14 @@ class JobManager:
     def _write_background_job_state(self, state: BackgroundJobState) -> Path:
         return write_json(self._background_job_path(state.run_id), state.model_dump(mode="json"))
 
+    def _write_job_state(self, run_id: str, job: dict[str, Any]) -> Path:
+        return write_json(self._job_state_path(run_id), job)
+
     def _require_active(self, run_id: str) -> dict[str, Any]:
-        if run_id not in self._active:
+        job = self.read_job_state(run_id)
+        if not job or str(job.get("status") or "") not in _ACTIVE_JOB_STATUSES:
             raise KeyError(f"no active job: {run_id}")
-        return self._active[run_id]
+        return job
 
     def _emit_log(self, run_id: str, level: str, source: str, message: str) -> None:
         entry = {"ts": now_iso(), "level": level, "source": source, "message": message}
@@ -222,10 +298,16 @@ class JobManager:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def _safe_run_dir(self, run_id: str) -> Path:
-        run_path = (self.runs_dir / run_id).resolve()
+        clean_run_id = str(run_id or "").strip()
+        if not clean_run_id or "/" in clean_run_id or "\\" in clean_run_id or Path(clean_run_id).name != clean_run_id:
+            raise ValueError("run_id must be a single path segment")
+        run_path = (self.runs_dir / clean_run_id).resolve()
         if not run_path.is_relative_to(self.runs_dir):
             raise ValueError("run_id escapes runs_dir")
         return run_path
+
+    def _job_state_path(self, run_id: str) -> Path:
+        return self._safe_run_dir(run_id) / "job_state.json"
 
     def _background_job_path(self, run_id: str) -> Path:
         return self._safe_run_dir(run_id) / "background_job_state.json"
@@ -251,8 +333,7 @@ class JobManager:
             if not line:
                 continue
             try:
-                import json as _json
-                entry = _json.loads(line)
+                entry = json.loads(line)
                 if isinstance(entry, dict):
                     entries.append(
                         {
@@ -262,6 +343,6 @@ class JobManager:
                             "message": str(entry.get("message", "")),
                         }
                     )
-            except Exception:
-                pass
+            except (TypeError, json.JSONDecodeError):
+                continue
         return entries
