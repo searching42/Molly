@@ -153,7 +153,7 @@ git diff --check -- .
 
 Expected: all tests pass and diff check is clean.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Stage and commit:
 
