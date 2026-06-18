@@ -92,6 +92,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         required_artifacts=["pdf_corpus"],
         output_artifacts=["parsed_document", "parsed_tables", "parser_audit"],
         risk_level=RiskLevel.MEDIUM,
+        gates=[GateName.DATA_MINING.value],
         default_adapter="parse_document_mineru_adapter",
     ),
     AtomicTaskSpec(
@@ -113,6 +114,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         required_artifacts=["pdf_corpus"],
         output_artifacts=["parsed_document", "parsed_tables", "parser_audit"],
         risk_level=RiskLevel.MEDIUM,
+        gates=[GateName.DATA_MINING.value],
         default_adapter="parse_document_grobid_adapter",
     ),
     AtomicTaskSpec(
