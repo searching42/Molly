@@ -7,8 +7,10 @@ from typing import Any
 
 from ai4s_agent._utils import write_json
 from ai4s_agent.schemas import (
+    GateName,
     LiteratureCorpusSource,
     PlanQuestion,
+    ResearchAcquisitionPreparation,
     ResearchEvidenceQuality,
     ResearchQueryExpansion,
     ResearchSourceCandidate,
@@ -71,6 +73,100 @@ class ResearchAgent:
         md_path.write_text(self._render_markdown(proposal), encoding="utf-8")
         storage.register_artifact_path(project_id, run_id, "research_source_proposal_json", json_path.name)
         storage.register_artifact_path(project_id, run_id, "research_source_proposal_md", md_path.name)
+        return json_path, md_path
+
+    def prepare_acquisition(
+        self,
+        *,
+        run_id: str,
+        proposal: ResearchSourceProposal | dict[str, Any] | None = None,
+        selected_sources: list[LiteratureCorpusSource | dict[str, Any]] | None = None,
+        goal: str = "",
+        output_dir: str = "",
+        local_mirror: dict[str, str] | None = None,
+        user_confirmed_external_acquisition: bool = False,
+    ) -> ResearchAcquisitionPreparation:
+        clean_run_id = str(run_id or "").strip()
+        clean_output_dir = str(output_dir or "").strip()
+        if proposal is not None:
+            proposal_obj = proposal if isinstance(proposal, ResearchSourceProposal) else ResearchSourceProposal.model_validate(proposal)
+            sources = list(proposal_obj.selected_sources)
+            clean_goal = str(goal or proposal_obj.goal or "").strip()
+        else:
+            sources = self._coerce_seed_sources(selected_sources or [])
+            clean_goal = str(goal or "").strip()
+
+        warnings: list[str] = []
+        questions: list[PlanQuestion] = []
+        required_permissions: list[str] = []
+        required_gates = [GateName.DATA_MINING.value] if sources else []
+        needs_external_confirmation = self._needs_external_acquisition_confirmation(sources)
+        if needs_external_confirmation and not user_confirmed_external_acquisition:
+            required_permissions.append("external_acquisition_scope")
+            questions.append(
+                PlanQuestion(
+                    question_id="q_confirm_external_acquisition_scope",
+                    prompt="Confirm the external acquisition scope before running acquisition adapters.",
+                    reason="DOI, URL, search-query, registry, and database sources can require network or provider-specific terms.",
+                    choices=["confirm_external_acquisition_scope", "provide_local_mirrors", "revise_sources"],
+                    blocks_execution=True,
+                )
+            )
+        if not sources:
+            warnings.append("missing_research_sources")
+        if not clean_output_dir:
+            warnings.append("missing_output_dir")
+
+        status = "needs_clarification" if warnings else "needs_confirmation"
+        output_root = Path(clean_output_dir) if clean_output_dir else Path(f"runs/{clean_run_id}/research_acquisition")
+        source_manifest_payload: dict[str, Any] = {}
+        acquisition_payload_template: dict[str, Any] = {}
+        if sources and clean_output_dir:
+            source_manifest_payload = {
+                "run_id": clean_run_id,
+                "output_dir": str(output_root / "sources"),
+                "sources": [source.model_dump(mode="json") for source in sources],
+            }
+            acquisition_payload_template = {
+                "run_id": clean_run_id,
+                "corpus_source_manifest_json": "<corpus_source_manifest_json>",
+                "output_dir": str(output_root / "acquired"),
+                "local_mirror": dict(local_mirror or {}),
+            }
+
+        return ResearchAcquisitionPreparation(
+            run_id=clean_run_id,
+            goal=clean_goal,
+            status=status,
+            source_count=len(sources),
+            selected_sources=sources,
+            source_manifest_payload=source_manifest_payload,
+            acquisition_payload_template=acquisition_payload_template,
+            required_gates=required_gates,
+            required_permissions=required_permissions,
+            warnings=warnings,
+            assumptions=[
+                "Research acquisition preparation does not execute adapters.",
+                "prepare_literature_corpus_sources_adapter records source intent only.",
+                "acquire_literature_sources_adapter remains a separate confirmed action.",
+            ],
+            questions=questions,
+            executable=False,
+        )
+
+    def write_acquisition_preparation(
+        self,
+        storage: ProjectStorage,
+        project_id: str,
+        run_id: str,
+        preparation: ResearchAcquisitionPreparation,
+    ) -> tuple[Path, Path]:
+        run_dir = storage.run_dir(project_id, run_id)
+        json_path = write_json(run_dir / "research_acquisition_preparation.json", preparation.model_dump(mode="json"))
+        md_path = run_dir / "research_acquisition_preparation.md"
+        md_path.write_text(self._render_acquisition_preparation_markdown(preparation), encoding="utf-8")
+        storage.register_artifact_path(project_id, run_id, "research_acquisition_preparation_json", json_path.name)
+        storage.register_artifact_path(project_id, run_id, "research_acquisition_preparation_md", md_path.name)
         return json_path, md_path
 
     def prepare_target_evidence_items(
@@ -409,6 +505,15 @@ class ResearchAgent:
         return any(term in text for term in terms)
 
     @staticmethod
+    def _needs_external_acquisition_confirmation(sources: list[LiteratureCorpusSource]) -> bool:
+        for source in sources:
+            if source.source_type != "uploaded_pdf_folder":
+                return True
+            if not source.local_path:
+                return True
+        return False
+
+    @staticmethod
     def _dedup(values: Any) -> list[str]:
         result: list[str] = []
         for value in values:
@@ -446,4 +551,27 @@ class ResearchAgent:
             lines.append(f"- `{candidate.source_type}` {candidate.value} (score={candidate.score:.2f})")
         lines.extend(["", "## Missing Information"])
         lines.extend(f"- {item}" for item in proposal.evidence_quality.missing_information)
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _render_acquisition_preparation_markdown(preparation: ResearchAcquisitionPreparation) -> str:
+        lines = [
+            "# Research Acquisition Preparation",
+            "",
+            f"- Run: `{preparation.run_id}`",
+            f"- Status: `{preparation.status}`",
+            f"- Sources: {preparation.source_count}",
+            f"- Source manifest adapter: `{preparation.source_manifest_adapter}`",
+            f"- Acquisition adapter: `{preparation.acquisition_adapter}`",
+            f"- Executable: `{preparation.executable}`",
+            "",
+            "## Required Gates",
+        ]
+        lines.extend(f"- `{gate}`" for gate in preparation.required_gates)
+        lines.extend(["", "## Required Permissions"])
+        lines.extend(f"- `{permission}`" for permission in preparation.required_permissions)
+        lines.extend(["", "## Sources"])
+        for source in preparation.selected_sources:
+            lines.append(f"- `{source.source_type}` {source.value}")
+        lines.extend(["", "Adapters are not executed by this preparation artifact."])
         return "\n".join(lines) + "\n"

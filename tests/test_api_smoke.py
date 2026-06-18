@@ -792,6 +792,52 @@ def test_agent_conversation_research_sources_endpoint_returns_proposal(tmp_path)
     ).exists()
 
 
+def test_agent_research_acquisition_prepare_endpoint_writes_preparation(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    project_id = "proj-research-acquisition-api"
+    run_id = "run-research-acquisition-api"
+
+    source_resp = client.post(
+        "/api/agent/research-sources",
+        json={
+            "project_id": project_id,
+            "run_id": run_id,
+            "goal": "Find OLED PLQY papers. Include DOI 10.3000/acq and https://example.org/acq.pdf",
+        },
+    )
+    assert source_resp.status_code == 200
+
+    resp = client.post(
+        "/api/agent/research-acquisition/prepare",
+        json={
+            "project_id": project_id,
+            "run_id": run_id,
+            "proposal": source_resp.json["proposal"],
+            "output_dir": str(tmp_path / "prepared-acquisition"),
+            "user_confirmed_external_acquisition": "false",
+        },
+    )
+
+    assert resp.status_code == 200
+    preparation = resp.json["preparation"]
+    assert preparation["status"] == "needs_confirmation"
+    assert preparation["executable"] is False
+    assert preparation["source_manifest_adapter"] == "prepare_literature_corpus_sources_adapter"
+    assert preparation["acquisition_adapter"] == "acquire_literature_sources_adapter"
+    assert "external_acquisition_scope" in preparation["required_permissions"]
+    assert preparation["source_manifest_payload"]["output_dir"] == str(tmp_path / "prepared-acquisition" / "sources")
+    assert "research_acquisition_preparation_json" in resp.json["outputs"]
+    assert (
+        tmp_path
+        / "projects"
+        / project_id
+        / "runs"
+        / run_id
+        / "research_acquisition_preparation.json"
+    ).exists()
+
+
 def test_agent_research_sources_endpoint_rejects_non_list_seed_sources(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     client = app.test_client()

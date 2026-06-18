@@ -60,6 +60,7 @@ from ai4s_agent.schemas import (
     RemoteWorkerAssignment,
     RemoteWorkerConfig,
     RemoteWorkerRequest,
+    ResearchAcquisitionPreparation,
     ResearchQueryExpansion,
     ResearchSourceCandidate,
     ResearchSourceProposal,
@@ -123,8 +124,46 @@ def test_export_json_schemas(tmp_path: Path) -> None:
     assert "model_package_review.schema.json" in names
     assert "target_evidence_item.schema.json" in names
     assert "conversation_turn_decision.schema.json" in names
+    assert "research_acquisition_preparation.schema.json" in names
     assert "run_plan.schema.json" in names
     assert "run_plan_diff.schema.json" in names
+
+
+def test_research_acquisition_preparation_schema_roundtrip() -> None:
+    source = LiteratureCorpusSource(
+        source_id="doi_1",
+        source_type="doi",
+        value="10.1000/acq",
+        doi="10.1000/acq",
+    )
+    preparation = ResearchAcquisitionPreparation(
+        run_id="run-acq",
+        goal="Find OLED PLQY sources.",
+        status="needs_confirmation",
+        source_count=1,
+        selected_sources=[source],
+        source_manifest_adapter="prepare_literature_corpus_sources_adapter",
+        source_manifest_payload={
+            "run_id": "run-acq",
+            "output_dir": "runs/run-acq/sources",
+            "sources": [source.model_dump(mode="json")],
+        },
+        acquisition_adapter="acquire_literature_sources_adapter",
+        acquisition_payload_template={
+            "run_id": "run-acq",
+            "corpus_source_manifest_json": "<corpus_source_manifest_json>",
+            "output_dir": "runs/run-acq/acquired",
+            "local_mirror": {},
+        },
+        required_gates=["gate_2_data_mining"],
+        required_permissions=["external_acquisition_scope"],
+        executable=False,
+    )
+
+    restored = ResearchAcquisitionPreparation.model_validate_json(preparation.model_dump_json())
+
+    assert restored.model_dump(mode="json") == preparation.model_dump(mode="json")
+    assert "research_acquisition_preparation" in CORE_SCHEMA_MODELS
 
 
 def test_conversation_turn_decision_schema_roundtrip() -> None:

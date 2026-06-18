@@ -27,6 +27,8 @@ Ordinary dialogue is the primary interface for collecting user intent, cited sou
 
 `ConversationAgent.prepare_research_source_payload()` and `/api/agent/conversation/research-sources` let chat messages generate a dry-run `ResearchSourceProposal` with DOI/URL seed sources and query scopes. This is acquisition planning only: it may write proposal artifacts for review, but network/database acquisition remains a separate explicit action.
 
+`ResearchAgent.prepare_acquisition()` and `/api/agent/research-acquisition/prepare` convert an approved source proposal into a review-only `ResearchAcquisitionPreparation`. It exposes the `prepare_literature_corpus_sources_adapter` payload, the later `acquire_literature_sources_adapter` payload template, required gates, and external acquisition permissions; it never runs either adapter.
+
 `/api/agent/modeling-plan` accepts `property_id`, `cited_target_evidence`, `project_memory`, `previous_diagnostics`, `available_inputs`, and `user_approved_external_search`. When a target property or cited evidence is supplied, the endpoint returns and writes a `TargetModelingBrief` alongside the modeling plan proposal so preprocessing and hyperparameter decisions remain traceable to reviewable evidence.
 
 After training, the agent should diagnose model quality against baselines and target-specific expectations before using the model for prediction. Weak results should produce a reviewable rerun proposal, not a silent rerun or an unqualified model promotion.

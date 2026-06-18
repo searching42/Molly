@@ -37,6 +37,7 @@ from ai4s_agent.schemas import (
     RemoteWorkerConfig,
     RemoteWorkerRequest,
     ReplanRequest,
+    ResearchSourceProposal,
     RunPlan,
     RunStatus,
     StageHistoryItem,
@@ -411,6 +412,56 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
                 "outputs": outputs,
             }
         )
+
+    @app.post("/api/agent/research-acquisition/prepare")
+    def agent_research_acquisition_prepare():
+        try:
+            payload = _request_json_object()
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        run_id = str(payload.get("run_id") or "").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        if not run_id:
+            return jsonify({"ok": False, "error": "run_id required"}), 400
+        proposal_raw = payload.get("proposal")
+        selected_sources_raw = payload.get("selected_sources")
+        if proposal_raw is not None and not isinstance(proposal_raw, dict):
+            return jsonify({"ok": False, "error": "proposal must be an object"}), 400
+        if selected_sources_raw is not None and not isinstance(selected_sources_raw, list):
+            return jsonify({"ok": False, "error": "selected_sources must be a list"}), 400
+        output_dir = str(payload.get("output_dir") or "").strip()
+        if not output_dir and project_id:
+            output_dir = str(projects.run_dir(project_id, run_id) / "research_acquisition")
+        try:
+            proposal = ResearchSourceProposal.model_validate(proposal_raw) if proposal_raw is not None else None
+            selected_sources = [
+                LiteratureCorpusSource.model_validate(item)
+                for item in (selected_sources_raw or [])
+            ]
+            preparation = ResearchAgent().prepare_acquisition(
+                run_id=run_id,
+                proposal=proposal,
+                selected_sources=selected_sources,
+                goal=str(payload.get("goal") or "").strip(),
+                output_dir=output_dir,
+                local_mirror=payload.get("local_mirror") if isinstance(payload.get("local_mirror"), dict) else None,
+                user_confirmed_external_acquisition=_as_bool(payload.get("user_confirmed_external_acquisition")),
+            )
+            outputs: dict[str, str] = {}
+            if project_id:
+                preparation_json, preparation_md = ResearchAgent().write_acquisition_preparation(
+                    projects,
+                    project_id,
+                    run_id,
+                    preparation,
+                )
+                outputs = {
+                    "research_acquisition_preparation_json": str(preparation_json),
+                    "research_acquisition_preparation_md": str(preparation_md),
+                }
+        except (ValidationError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "preparation": preparation.model_dump(mode="json"), "outputs": outputs})
 
     @app.post("/api/agent/conversation/modeling-payload")
     def agent_conversation_modeling_payload():

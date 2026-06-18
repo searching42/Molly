@@ -74,6 +74,34 @@ def test_research_agent_accepts_seed_sources_and_writes_artifact(tmp_path) -> No
     assert registry["research_source_proposal_md"] == "research_source_proposal.md"
 
 
+def test_research_agent_prepares_acquisition_payload_from_source_proposal(tmp_path) -> None:
+    proposal = ResearchAgent().propose_sources(
+        run_id="run-acquisition-prep",
+        goal="Find OLED PLQY papers. Start with DOI 10.1000/acq and https://example.org/acq.pdf",
+    )
+
+    preparation = ResearchAgent().prepare_acquisition(
+        run_id="run-acquisition-prep",
+        proposal=proposal,
+        output_dir=str(tmp_path / "acquisition"),
+    )
+
+    assert preparation.run_id == "run-acquisition-prep"
+    assert preparation.status == "needs_confirmation"
+    assert preparation.executable is False
+    assert preparation.source_count == len(proposal.selected_sources)
+    assert preparation.required_gates == ["gate_2_data_mining"]
+    assert "external_acquisition_scope" in preparation.required_permissions
+    assert preparation.source_manifest_adapter == "prepare_literature_corpus_sources_adapter"
+    assert preparation.source_manifest_payload["run_id"] == "run-acquisition-prep"
+    assert preparation.source_manifest_payload["output_dir"] == str(tmp_path / "acquisition" / "sources")
+    assert preparation.source_manifest_payload["sources"][0]["source_type"] == "doi"
+    assert preparation.acquisition_adapter == "acquire_literature_sources_adapter"
+    assert preparation.acquisition_payload_template["run_id"] == "run-acquisition-prep"
+    assert preparation.acquisition_payload_template["corpus_source_manifest_json"] == "<corpus_source_manifest_json>"
+    assert preparation.acquisition_payload_template["output_dir"] == str(tmp_path / "acquisition" / "acquired")
+
+
 def test_research_agent_prepares_cited_target_evidence_for_modeling_brief() -> None:
     evidence_items = ResearchAgent().prepare_target_evidence_items(
         goal="Train OLED PLQY model with reliable high-value ranking.",

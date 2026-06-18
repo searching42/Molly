@@ -1071,6 +1071,63 @@ class ResearchSourceProposal(BaseModel):
         return [str(item).strip() for item in value if str(item).strip()]
 
 
+class ResearchAcquisitionPreparation(BaseModel):
+    run_id: str
+    goal: str = ""
+    status: str = "needs_confirmation"
+    source_count: int = 0
+    selected_sources: list[LiteratureCorpusSource] = Field(default_factory=list)
+    source_manifest_adapter: str = "prepare_literature_corpus_sources_adapter"
+    source_manifest_payload: dict[str, Any] = Field(default_factory=dict)
+    acquisition_adapter: str = "acquire_literature_sources_adapter"
+    acquisition_payload_template: dict[str, Any] = Field(default_factory=dict)
+    required_gates: list[str] = Field(default_factory=list)
+    required_permissions: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    questions: list[PlanQuestion] = Field(default_factory=list)
+    executable: bool = False
+    generated_at: str = Field(default_factory=_now_iso)
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"needs_confirmation", "needs_clarification", "blocked"}:
+            raise ValueError("status must be needs_confirmation, needs_clarification, or blocked")
+        return normalized
+
+    @field_validator("source_count")
+    @classmethod
+    def validate_source_count(cls, value: int) -> int:
+        if isinstance(value, bool) or value < 0:
+            raise ValueError("source_count must be a non-negative integer")
+        return value
+
+    @field_validator("required_gates", "required_permissions", "warnings", "assumptions")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for item in value:
+            clean = str(item or "").strip()
+            if clean and clean not in result:
+                result.append(clean)
+        return result
+
+    @field_validator("source_manifest_payload", "acquisition_payload_template")
+    @classmethod
+    def validate_payloads_are_json_safe(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_json_safe(value, "research_acquisition_preparation.payload")
+
+    @model_validator(mode="after")
+    def validate_not_executable(self) -> ResearchAcquisitionPreparation:
+        if self.executable:
+            raise ValueError("research acquisition preparation is review-only and cannot be executable")
+        if self.source_count != len(self.selected_sources):
+            raise ValueError("source_count must match selected_sources length")
+        return self
+
+
 class ModelingBackendRecommendation(BaseModel):
     property_id: str
     backend: str
@@ -2336,6 +2393,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "research_source_candidate": ResearchSourceCandidate,
     "research_evidence_quality": ResearchEvidenceQuality,
     "research_source_proposal": ResearchSourceProposal,
+    "research_acquisition_preparation": ResearchAcquisitionPreparation,
     "modeling_backend_recommendation": ModelingBackendRecommendation,
     "modeling_experiment_design": ModelingExperimentDesign,
     "modeling_metric_interpretation": ModelingMetricInterpretation,
