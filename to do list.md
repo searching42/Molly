@@ -885,10 +885,11 @@ Recovery:
 
 - Build new lightweight UI inside `workspace/agent`.
 - Keep `claude/ui` only as reference.
-- Use Chat + Wizard Cards + Stage Timeline.
+- Use Project Sidebar + Project Chat Workspace + Review Artifacts.
 - Add Advanced Toolbox for atomic tasks.
 - Default to simple interface.
 - Keep advanced options collapsible.
+- Keep old wizard/toolbox operations reachable from collapsed advanced tools instead of the primary path.
 - Show uploaded train and candidate files at the top.
 - Put optional evaluation dataset under advanced options.
 - Remove absolute path inputs from the main UI.
