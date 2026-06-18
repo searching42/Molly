@@ -54,7 +54,7 @@ def test_direct_remote_document_execute_requires_run_plan_snapshot(
         json={
             "run_id": f"run-{adapter_name}",
             "adapter": adapter_name,
-            "project_approved": True,
+            "confirmed": True,
             "actor": "test-user",
             "payload": {"execute": True},
         },
