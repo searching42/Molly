@@ -57,7 +57,7 @@
       .chat-message.agent, .chat-message.system { justify-self: start; }
       .chat-message.system { border-style: dashed; color: var(--muted); }
       .conversation-composer { display: grid; gap: 0.65rem; border-top: 1px solid var(--line); padding: 0.85rem; background: rgba(246, 247, 248, 0.84); }
-      .composer-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.6rem; align-items: center; }
+      .composer-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 0.6rem; align-items: center; }
       .composer-actions button { width: auto; min-width: 8.5rem; }
       .artifact-tray { margin-top: 0; }
       .advanced-tools, .console-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; backdrop-filter: blur(10px); }
@@ -168,6 +168,7 @@
           <div class="composer-actions">
             <p id="conversation-status" class="small">Enter 换行，点击发送整理结构化计划输入。</p>
             <button id="conversation-submit-button" type="submit">发送</button>
+            <button id="prepare-research-sources-button" type="button" class="ghost">准备文献来源</button>
             <button id="prepare-modeling-plan-button" type="button" class="ghost">生成建模计划</button>
           </div>
         </form>
@@ -348,7 +349,9 @@
       let activeProject = { project_id: "proj-oled", name: "proj-oled" };
       let knownProjects = [];
       let conversationMessages = [];
+      let currentConversationDecision = null;
       let currentModelingPlanPayload = null;
+      let currentResearchSourceProposal = null;
       const fileLaunchWarning = document.getElementById("file-launch-warning");
       if (window.location.protocol === "file:") {
         fileLaunchWarning.classList.add("visible");
@@ -410,7 +413,9 @@
         updateActiveProjectDisplay(project);
         syncProjectId(activeProject.project_id);
         conversationMessages = [];
+        currentConversationDecision = null;
         currentModelingPlanPayload = null;
+        currentResearchSourceProposal = null;
         const stream = document.getElementById("conversation-stream");
         if (stream) {
           stream.innerHTML = "";
@@ -713,18 +718,21 @@
         appendConversationMessage("user", message);
         input.value = "";
         try {
-          const response = await postJSON("/api/agent/conversation/modeling-payload", {
+          const response = await postJSON("/api/agent/conversation/next-turn", {
             project_id: projectId,
             run_id: runId,
             messages: conversationMessages,
           });
-          currentModelingPlanPayload = response.modeling_plan_payload || null;
-          const pendingEvidence = currentModelingPlanPayload?.pending_cited_target_evidence || [];
-          const agentQuestions = currentModelingPlanPayload?.agent_questions || [];
-          setText("conversation-status", agentQuestions.length ? "需要回答 Agent 追问。" : "已整理建模 payload，可生成建模计划。");
-          appendConversationMessage("agent", "已整理为可审阅的建模计划输入。");
+          currentConversationDecision = response.decision || null;
+          currentModelingPlanPayload = currentConversationDecision?.modeling_plan_payload || null;
+          const pendingEvidence = currentConversationDecision?.pending_cited_target_evidence || currentModelingPlanPayload?.pending_cited_target_evidence || [];
+          const agentQuestions = currentConversationDecision?.questions || currentModelingPlanPayload?.agent_questions || [];
+          const ready = currentConversationDecision?.decision === "ready_for_modeling_plan";
+          setText("conversation-status", ready ? "已通过 next-turn 决策，可生成建模计划或准备文献来源。" : "需要回答 Agent 追问或批准外部证据。");
+          appendConversationMessage("agent", currentConversationDecision?.summary || "已整理为可审阅的下一步决策。");
           if (pendingEvidence.length) appendConversationMessage("system", `检测到 ${pendingEvidence.length} 条 pending_cited_target_evidence，批准前不会进入建模证据。`);
-          renderConversationArtifact("modeling_plan_payload", currentModelingPlanPayload);
+          renderConversationArtifact("conversation_turn_decision", currentConversationDecision);
+          if (currentModelingPlanPayload) renderConversationArtifact("modeling_plan_payload", currentModelingPlanPayload);
           renderAgentQuestions(agentQuestions);
           render(response);
         } catch (err) {
@@ -733,9 +741,39 @@
         }
       });
 
+      document.getElementById("prepare-research-sources-button").addEventListener("click", async () => {
+        if (!conversationMessages.length) {
+          render({ ok: false, error: "请先发送一条对话，让 Agent 识别研究目标和可能的 DOI/URL 来源。" });
+          return;
+        }
+        const runId = String(document.getElementById("workspace-run-pill")?.textContent || "").trim();
+        if (!runId || runId === "等待运行 ID") {
+          render({ ok: false, error: "缺少运行 ID，请先发送一条对话。" });
+          return;
+        }
+        try {
+          const response = await postJSON("/api/agent/conversation/research-sources", {
+            project_id: activeProject.project_id,
+            run_id: runId,
+            messages: conversationMessages,
+          });
+          currentResearchSourceProposal = response.proposal || null;
+          appendConversationMessage("agent", "文献来源 proposal 已生成，仅供审阅，不会执行外部采集。");
+          renderConversationArtifact("research_source_proposal", currentResearchSourceProposal);
+          render(response);
+        } catch (err) {
+          appendConversationMessage("system", "文献来源准备失败，详情见当前响应。");
+          render(err);
+        }
+      });
+
       document.getElementById("prepare-modeling-plan-button").addEventListener("click", async () => {
         if (!currentModelingPlanPayload) {
-          render({ ok: false, error: "请先发送一条对话，让 Agent 整理 modeling_plan_payload。" });
+          render({ ok: false, error: "请先发送一条对话，让 Agent 通过 next-turn 决策整理 modeling_plan_payload。" });
+          return;
+        }
+        if (currentConversationDecision?.requires_user_response) {
+          render({ ok: false, error: "当前 next-turn 决策仍需要用户补充或批准，不能生成建模计划。", decision: currentConversationDecision });
           return;
         }
         if ((currentModelingPlanPayload.agent_questions || []).length) {

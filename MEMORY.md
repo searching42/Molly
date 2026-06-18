@@ -129,6 +129,9 @@ http://127.0.0.1:8792/
 - The local UI should stay simple and conversation-first: project sidebar,
   project chat, review artifacts, response console, and collapsed advanced raw
   tools. Do not reintroduce the old wizard-card primary workflow.
+- Chat UI should call the `ConversationTurnDecision` boundary before modeling
+  plan generation. Research-source proposal preparation from chat is review-only
+  and must not perform external acquisition.
 
 ## Documentation Notes
 

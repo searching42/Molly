@@ -80,10 +80,17 @@ def test_index_page_wires_project_chat_to_agent_payload_bridge() -> None:
     assert 'postJSON("/api/projects"' in html
     assert "function selectProject" in html
     assert "let conversationMessages" in html
-    assert 'postJSON("/api/agent/conversation/modeling-payload"' in html
+    assert "let currentConversationDecision" in html
+    assert "let currentResearchSourceProposal" in html
+    assert 'postJSON("/api/agent/conversation/next-turn"' in html
+    assert 'postJSON("/api/agent/conversation/research-sources"' in html
     assert 'postJSON("/api/agent/modeling-plan"' in html
+    assert 'id="prepare-research-sources-button"' in html
+    assert "conversation_turn_decision" in html
+    assert "research_source_proposal" in html
     assert "pending_cited_target_evidence" in html
     assert "agent_questions" in html
+    assert 'postJSON("/api/run-plan/execute"' not in html
 
 
 def test_index_page_removes_legacy_wizard_cards() -> None:
