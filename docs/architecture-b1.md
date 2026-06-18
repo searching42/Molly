@@ -71,6 +71,14 @@ may call only adapters that map to a registered task policy, then applies the
 same permission and gate checks. Exported legacy helpers remain importable for
 tests or fallback code but are not API-executable unless registered.
 
+Project-scoped run state is authoritative when a request includes `project_id`.
+Status and direct adapter gate checks read `projects/<project_id>/runs/<run_id>`
+for `stage.json`, `gate_decisions.json`, and `artifact_registry.json`, while
+legacy `runs/<run_id>` remains a compatibility fallback for older endpoints.
+JSON state writes use same-directory temporary files plus atomic replacement.
+Project uploads reject duplicate filenames and enforce a configurable upload
+size limit so existing artifacts are not silently overwritten.
+
 ## Target-Aware Modeling Loop
 
 The planning layer should treat each requested target property as a modeling

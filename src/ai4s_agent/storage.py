@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from ai4s_agent._utils import now_iso
+from ai4s_agent._utils import now_iso, write_json as atomic_write_json
 from ai4s_agent.schemas import (
     AssetManifest,
     AssetPromotionRecord,
@@ -93,9 +93,7 @@ class ArtifactStore:
 
     def write_json(self, run_id: str, filename: str, payload: dict[str, Any]) -> Path:
         path = self._safe_path(run_id, filename)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        return path
+        return atomic_write_json(path, payload)
 
     def read_json(self, run_id: str, filename: str) -> dict[str, Any]:
         path = self._safe_path(run_id, filename)
@@ -548,9 +546,7 @@ class ProjectStorage:
     def _write_json(self, base_path: Path, filename: str, payload: dict[str, Any]) -> Path:
         path = (base_path / filename).resolve()
         _ensure_relative(base_path, path, "json_path")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        return path
+        return atomic_write_json(path, payload)
 
     def _read_json(self, base_path: Path, filename: str) -> dict[str, Any]:
         path = (base_path / filename).resolve()

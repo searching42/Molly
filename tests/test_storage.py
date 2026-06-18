@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import ai4s_agent._utils as utils
 from ai4s_agent.schemas import (
     AssetManifest,
     AssetPromotionRecord,
@@ -26,6 +27,57 @@ def test_artifact_store_writes_json(tmp_path: Path) -> None:
     store.write_json("r1", "plan.json", {"ok": True})
     payload = store.read_json("r1", "plan.json")
     assert payload["ok"] is True
+
+
+def test_write_json_replaces_from_same_directory_temp_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "payload.json"
+    calls: list[tuple[Path, Path]] = []
+    original_replace = utils.os.replace
+
+    def recording_replace(src: object, dst: object) -> None:
+        calls.append((Path(src), Path(dst)))
+        original_replace(src, dst)
+
+    monkeypatch.setattr(utils.os, "replace", recording_replace)
+
+    write_json(path, {"ok": True})
+
+    assert path.read_text(encoding="utf-8").strip().startswith("{")
+    assert calls
+    temp_path, dest_path = calls[0]
+    assert temp_path.parent == path.parent
+    assert temp_path != path
+    assert dest_path == path
+    assert not temp_path.exists()
+
+
+def test_project_storage_stage_writes_use_atomic_json_replace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[Path, Path]] = []
+    original_replace = utils.os.replace
+
+    def recording_replace(src: object, dst: object) -> None:
+        calls.append((Path(src), Path(dst)))
+        original_replace(src, dst)
+
+    monkeypatch.setattr(utils.os, "replace", recording_replace)
+    storage = ProjectStorage(workspace_dir=tmp_path)
+
+    storage.write_stage_state(
+        "proj-a",
+        "run-1",
+        StageState(
+            stage="inspect_dataset",
+            status=RunStatus.SUCCEEDED,
+            started_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
+        ),
+    )
+
+    assert calls
+    assert calls[0][1].name == "stage.json"
 
 
 def test_artifact_store_rejects_path_traversal(tmp_path: Path) -> None:

@@ -127,6 +127,12 @@ http://127.0.0.1:8792/
 - Direct adapter execution is closed to the atomic task registry. Exported
   helpers and legacy adapters are not API-executable unless they map to a
   registered task policy with permission and gate checks.
+- API paths that receive `project_id` should read run state and gate decisions
+  from `projects/<project_id>/runs/<run_id>` first, falling back to legacy
+  `runs/<run_id>` only for old endpoints and compatibility.
+- JSON state writes should use atomic same-directory replacement. Project
+  uploads should reject duplicate filenames and enforce an upload size limit
+  instead of silently overwriting existing files.
 - High-risk atomic tasks must declare at least one gate. Literature acquisition
   and literature-derived training dataset confirmation are data-mining-gated.
 - Existing deterministic adapters should remain usable without depending on

@@ -8,7 +8,7 @@ from typing import Any
 
 from ai4s_agent import adapters
 from ai4s_agent.agents.modeling import ModelingAgent
-from ai4s_agent._utils import now_iso, strict_smiles_cleaning_enabled
+from ai4s_agent._utils import now_iso, strict_smiles_cleaning_enabled, write_json
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import (
     ArtifactRef,
@@ -832,8 +832,7 @@ class RunPlanExecutor:
         result_dir = run_dir / task_id
         result_dir.mkdir(parents=True, exist_ok=True)
         path = result_dir / "adapter_result.json"
-        path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-        return path
+        return write_json(path, result)
 
     def _write_stage(
         self,

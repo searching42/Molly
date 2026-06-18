@@ -57,10 +57,24 @@ from ai4s_agent.ui_cards import (
 DEFAULT_RUNS_DIR = Path(__file__).resolve().parents[2] / "runs"
 DEFAULT_WORKSPACE = Path(__file__).resolve().parents[2]
 ALLOWED_EXTENSIONS = {"csv", "json", "sdf", "mol", "smi"}
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+UPLOAD_COPY_CHUNK_BYTES = 1024 * 1024
 
 
 def _allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def _copy_upload_stream(src: Any, dest: Any, *, max_bytes: int) -> None:
+    total = 0
+    while True:
+        chunk = src.read(UPLOAD_COPY_CHUNK_BYTES)
+        if not chunk:
+            return
+        total += len(chunk)
+        if max_bytes > 0 and total > max_bytes:
+            raise ValueError(f"upload exceeds size limit: {max_bytes} bytes")
+        dest.write(chunk)
 
 
 def _request_json_object() -> dict[str, Any]:
@@ -869,7 +883,11 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
         clean_run_id = str(run_id or "").strip()
         if not clean_run_id:
             return jsonify({"ok": False, "error": "run_id required"}), 400
-        status = orch.read_status(clean_run_id)
+        project_id = str(request.args.get("project_id") or "").strip()
+        try:
+            status = _read_run_status(orch, projects, clean_run_id, project_id=project_id)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
         job = jobs.get_job(clean_run_id)
         return jsonify({"ok": True, "job": job, **status})
 
@@ -893,6 +911,7 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
         if policy is None:
             return jsonify({"ok": False, "error": f"adapter is not registered for direct execution: {adapter_name}"}), 400
         action, required_gates = policy
+        project_id = str(payload.get("project_id") or adapter_payload.get("project_id") or "")
         actor = str(
             payload.get("actor")
             or payload.get("approved_by")
@@ -902,7 +921,7 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
         )
         decision = permissions.decide(
             action,
-            project_id=str(payload.get("project_id") or adapter_payload.get("project_id") or ""),
+            project_id=project_id,
             run_id=run_id,
             project_approved=_as_bool(payload.get("project_approved"))
             or _as_bool(adapter_payload.get("project_approved")),
@@ -917,10 +936,14 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
                     "permission": decision.model_dump(mode="json"),
                 }
             ), 403
+        try:
+            status = _read_run_status(orch, projects, run_id, project_id=project_id)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
         missing_gates = [
             gate
             for gate in required_gates
-            if not _gate_approved(orch.read_status(run_id), gate)
+            if not _gate_approved(status, gate)
         ]
         if missing_gates:
             return jsonify(
@@ -1068,6 +1091,16 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
                     "permission": decision.model_dump(mode="json"),
                 }
             ), 403
+        max_upload_bytes = int(app.config.get("AI4S_MAX_UPLOAD_BYTES", MAX_UPLOAD_BYTES) or MAX_UPLOAD_BYTES)
+        content_length = request.content_length
+        if max_upload_bytes > 0 and content_length is not None and content_length > max_upload_bytes:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": f"upload exceeds size limit: {max_upload_bytes} bytes",
+                    "max_upload_bytes": max_upload_bytes,
+                }
+            ), 413
         if "file" not in request.files:
             return jsonify({"ok": False, "error": "no file part"}), 400
         f = request.files["file"]
@@ -1085,7 +1118,16 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
         dest = upload_dir / filename
         if dest.exists() and dest.is_dir():
             return jsonify({"ok": False, "error": "invalid filename target"}), 400
-        f.save(str(dest))
+        if dest.exists():
+            return jsonify({"ok": False, "error": f"upload filename already exists: {filename}"}), 409
+        try:
+            with dest.open("xb") as out:
+                _copy_upload_stream(f.stream, out, max_bytes=max_upload_bytes)
+        except FileExistsError:
+            return jsonify({"ok": False, "error": f"upload filename already exists: {filename}"}), 409
+        except ValueError as exc:
+            dest.unlink(missing_ok=True)
+            return jsonify({"ok": False, "error": str(exc), "max_upload_bytes": max_upload_bytes}), 413
         return jsonify({"ok": True, "path": str(dest), "filename": filename})
 
     @app.post("/api/projects/<project_id>/runs/<run_id>/models/register")
@@ -1910,6 +1952,77 @@ def _adapter_execution_policy(adapter_name: str, adapter_payload: dict) -> tuple
         if backend != "deterministic_stub" or count >= 128:
             action = "generate_candidates_expensive"
     return action, list(task.gates)
+
+
+def _read_run_status(
+    orch: Orchestrator,
+    projects: ProjectStorage,
+    run_id: str,
+    *,
+    project_id: str = "",
+) -> dict[str, object]:
+    legacy_status = dict(orch.read_status(run_id))
+    clean_project_id = str(project_id or "").strip()
+    if not clean_project_id:
+        return {**legacy_status, "state_source": "legacy"}
+
+    project_status = _read_project_run_status(projects, clean_project_id, run_id)
+    if not project_status:
+        return {
+            **legacy_status,
+            "project_id": clean_project_id,
+            "state_source": "legacy",
+        }
+    return {
+        **legacy_status,
+        **project_status,
+        "legacy_plan_exists": bool(legacy_status.get("plan_exists")),
+    }
+
+
+def _read_project_run_status(projects: ProjectStorage, project_id: str, run_id: str) -> dict[str, object]:
+    run_path = _project_run_dir_if_exists(projects, project_id, run_id)
+    if run_path is None:
+        return {}
+
+    stage = _read_json(run_path / "stage.json")
+    gate_payload = _read_json(run_path / "gate_decisions.json")
+    artifact_payload = _read_json(run_path / "artifact_registry.json")
+    decisions = gate_payload.get("decisions", [])
+    if not isinstance(decisions, list):
+        decisions = []
+    artifacts = artifact_payload.get("artifacts", {})
+    if not isinstance(artifacts, dict):
+        artifacts = {}
+
+    status: dict[str, object] = {
+        "run_id": run_id,
+        "project_id": project_id,
+        "state_source": "project",
+        "plan_exists": bool(_read_json(run_path / "run_plan.json") or _read_json(run_path / "plan.json")),
+        "gate_decisions": [decision for decision in decisions if isinstance(decision, dict)],
+        "artifacts": {str(key): str(value) for key, value in artifacts.items()},
+    }
+    if stage:
+        status["stage"] = stage
+        status["stage_status"] = str(stage.get("status") or "")
+    return status
+
+
+def _project_run_dir_if_exists(projects: ProjectStorage, project_id: str, run_id: str) -> Path | None:
+    clean_project_id = str(project_id or "").strip()
+    clean_run_id = str(run_id or "").strip()
+    if not clean_project_id or not clean_run_id:
+        return None
+
+    project_path = (projects.projects_root / clean_project_id).resolve()
+    if not project_path.is_relative_to(projects.projects_root):
+        raise ValueError("project_id escapes base directory")
+    runs_base = (project_path / "runs").resolve()
+    run_path = (runs_base / clean_run_id).resolve()
+    if not run_path.is_relative_to(runs_base):
+        raise ValueError("run_id escapes base directory")
+    return run_path if run_path.exists() else None
 
 
 def _gate_approved(status: dict[str, object], gate: str) -> bool:

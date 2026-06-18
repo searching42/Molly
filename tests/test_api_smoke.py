@@ -5,7 +5,16 @@ from ai4s_agent.app import create_app
 from ai4s_agent.api import DEFAULT_RUNS_DIR, _as_bool, _workspace_from_config
 from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.planner import expand_run_plan
-from ai4s_agent.schemas import ArtifactRef, GateName, RunStatus, StageHistoryItem, StageState, VerificationFinding, VerificationReport
+from ai4s_agent.schemas import (
+    ArtifactRef,
+    GateDecision,
+    GateName,
+    RunStatus,
+    StageHistoryItem,
+    StageState,
+    VerificationFinding,
+    VerificationReport,
+)
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -1789,6 +1798,51 @@ def test_upload_rejects_empty_or_unsafe_secure_filename(tmp_path) -> None:
     assert not (tmp_path / "projects" / "proj-a" / "uploads" / "csv").exists()
 
 
+def test_upload_rejects_duplicate_filename_without_overwrite(tmp_path) -> None:
+    from io import BytesIO
+
+    app = create_app(base_runs_dir=tmp_path)
+    client = app.test_client()
+    client.post("/api/projects", json={"project_id": "proj-a"})
+
+    first = client.post(
+        "/api/projects/proj-a/upload",
+        data={"file": (BytesIO(b"SMILES,value\nCCO,1\n"), "dataset.csv"), "project_approved": "true"},
+        content_type="multipart/form-data",
+    )
+    duplicate = client.post(
+        "/api/projects/proj-a/upload",
+        data={"file": (BytesIO(b"SMILES,value\nCCN,2\n"), "dataset.csv"), "project_approved": "true"},
+        content_type="multipart/form-data",
+    )
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 409
+    assert "already exists" in duplicate.json["error"]
+    uploaded = tmp_path / "projects" / "proj-a" / "uploads" / "dataset.csv"
+    assert "CCO" in uploaded.read_text(encoding="utf-8")
+    assert "CCN" not in uploaded.read_text(encoding="utf-8")
+
+
+def test_upload_rejects_payload_over_size_limit(tmp_path) -> None:
+    from io import BytesIO
+
+    app = create_app(base_runs_dir=tmp_path)
+    app.config["AI4S_MAX_UPLOAD_BYTES"] = 64
+    client = app.test_client()
+    client.post("/api/projects", json={"project_id": "proj-a"})
+
+    resp = client.post(
+        "/api/projects/proj-a/upload",
+        data={"file": (BytesIO(b"SMILES,value\n" + b"C" * 256), "large.csv"), "project_approved": "true"},
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 413
+    assert "upload exceeds size limit" in resp.json["error"]
+    assert not (tmp_path / "projects" / "proj-a" / "uploads" / "large.csv").exists()
+
+
 def test_default_runs_dir_is_repo_relative() -> None:
     expected = Path(__file__).resolve().parents[1] / "runs"
     assert DEFAULT_RUNS_DIR == expected
@@ -1840,6 +1894,46 @@ def test_run_status_endpoint(tmp_path) -> None:
     assert resp.json["run_id"] == "r1"
     assert resp.json["plan_exists"] is True
     assert len(resp.json["gate_decisions"]) == 1
+
+
+def test_run_status_endpoint_reads_project_run_state_when_project_id_supplied(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    storage = ProjectStorage(tmp_path)
+    storage.write_stage_state(
+        "proj-a",
+        "run-project",
+        StageState(
+            stage="train_model",
+            status=RunStatus.WAITING_USER,
+            started_at=now_iso(),
+            updated_at=now_iso(),
+            details={"required_gates": [GateName.TRAIN_CONFIG.value]},
+        ),
+    )
+    storage.append_gate_decision(
+        "proj-a",
+        "run-project",
+        GateDecision(
+            gate=GateName.TRAIN_CONFIG,
+            approved=True,
+            actor="user",
+            approved_at=now_iso(),
+            approved_snapshot_id="run-project:train_model:test",
+            approved_snapshot_hash="sha256:test",
+        ),
+    )
+
+    resp = client.get("/api/runs/run-project?project_id=proj-a")
+
+    assert resp.status_code == 200
+    assert resp.json["ok"] is True
+    assert resp.json["run_id"] == "run-project"
+    assert resp.json["project_id"] == "proj-a"
+    assert resp.json["state_source"] == "project"
+    assert resp.json["stage"]["stage"] == "train_model"
+    assert resp.json["stage"]["status"] == RunStatus.WAITING_USER.value
+    assert resp.json["gate_decisions"][0]["gate"] == GateName.TRAIN_CONFIG.value
 
 
 def test_adapter_execute_endpoint_runs_exported_adapter(tmp_path) -> None:
@@ -1936,6 +2030,48 @@ def test_adapter_execute_endpoint_requires_gate_for_train_model_adapter(tmp_path
 
     assert resp.status_code == 403
     assert "gate approval required" in resp.json["error"]
+
+
+def test_adapter_execute_endpoint_uses_project_gate_decisions_when_project_id_supplied(tmp_path) -> None:
+    train_csv = tmp_path / "train.csv"
+    train_csv.write_text("SMILES,plqy\nCCO,0.8\n", encoding="utf-8")
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    storage = ProjectStorage(tmp_path)
+    storage.append_gate_decision(
+        "proj-a",
+        "r-project-train",
+        GateDecision(
+            gate=GateName.TRAIN_CONFIG,
+            approved=True,
+            actor="user",
+            approved_at=now_iso(),
+            approved_snapshot_id="r-project-train:train_model:test",
+            approved_snapshot_hash="sha256:test",
+        ),
+    )
+
+    resp = client.post(
+        "/api/adapters/execute",
+        json={
+            "project_id": "proj-a",
+            "run_id": "r-project-train",
+            "adapter": "train_model_unimol_legacy_adapter",
+            "confirmed": True,
+            "actor": "user",
+            "payload": {
+                "run_id": "r-project-train",
+                "property_id": "plqy",
+                "train_csv": str(train_csv),
+                "save_dir": str(tmp_path / "model"),
+                "log_dir": str(tmp_path / "logs"),
+                "execute": False,
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json["result"]["status"] == "planned"
 
 
 def test_adapter_execute_endpoint_allows_train_model_after_confirmation_and_gate(tmp_path) -> None:

@@ -19,7 +19,12 @@ from typing import Any
 
 from ai4s_agent.adapters.claude_scripts import CLAUDE_SCRIPTS, WORKSPACE, build_run_mvp_flow_cmd
 from ai4s_agent.adapters.runtime import run_argv_cmd, run_argv_cmd_with_env
-from ai4s_agent._utils import read_csv_dict_rows, strict_smiles_cleaning_enabled, truthy
+from ai4s_agent._utils import (
+    read_csv_dict_rows,
+    strict_smiles_cleaning_enabled,
+    truthy,
+    write_json as atomic_write_json,
+)
 from ai4s_agent.schemas import (
     CandidateSourceType,
     GenerationBackend,
@@ -104,9 +109,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) ->
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
-    _ensure_dir(path.parent)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+    return atomic_write_json(path, payload)
 
 
 def _write_markdown_report(path: Path, title: str, sections: dict[str, Any]) -> Path:

@@ -35,6 +35,8 @@ Ordinary dialogue is the primary interface for collecting user intent, cited sou
 
 Direct `/api/adapters/execute` calls are closed to the atomic task registry. Exported helper or legacy adapters are not executable through the API unless they map to a registered task policy with permission and gate checks. High-risk registered tasks must declare at least one gate; literature acquisition and literature-derived dataset confirmation use the data-mining gate.
 
+When `project_id` is supplied, `/api/runs/<run_id>` and direct adapter gate checks read project-scoped run state from `projects/<project_id>/runs/<run_id>` before falling back to legacy `runs/<run_id>`. JSON state writes use atomic same-directory replacement, and uploads reject duplicate filenames plus oversized requests instead of silently overwriting project files.
+
 After training, the agent should diagnose model quality against baselines and target-specific expectations before using the model for prediction. Weak results should produce a reviewable rerun proposal, not a silent rerun or an unqualified model promotion.
 
 `/api/agent/review-card` exposes `TargetModelingBrief`, `ModelDiagnosticsReport`, `RerunProposal`, and `ModelPackageReview` as explicit review sections with source labels and approval controls. The local console renders these sections as lightweight cards while keeping the raw JSON response available for audit/debugging.

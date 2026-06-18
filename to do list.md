@@ -1394,6 +1394,9 @@ Core principle:
 - [x] Record approved execution snapshot id/hash in `gate_decisions.json`.
 - [x] Reject direct adapter API execution unless the adapter maps to a registered atomic task policy with permission and gate checks.
 - [x] Enforce that high-risk atomic tasks declare gates; external literature acquisition and literature-derived dataset confirmation are guarded by `gate_2_data_mining`.
+- [x] Make project-aware `/api/runs/<run_id>?project_id=...` and direct adapter gate checks read project-scoped `stage.json` / `gate_decisions.json` before legacy run state.
+- [x] Use atomic same-directory JSON replacement for shared JSON writes, project storage, artifact storage, and executor adapter results.
+- [x] Reject duplicate project upload filenames and oversized upload requests instead of silently overwriting files.
 
 ### 24.8 Evaluation And Acceptance
 
@@ -1408,6 +1411,7 @@ Core principle:
 - [x] Add integration tests for the conservative `RunPlan` executor and invalid execution payloads.
 - [x] Add integration tests for gate-approved resume through training, generation, prediction, ranking, and reporting.
 - [x] Add regression tests for snapshot-bound gate resume, closed direct adapter execution, and high-risk task gate invariants.
+- [x] Add regression tests for project-scoped run status/gate decisions, atomic JSON replacement, and upload duplicate/size limits.
 
 ### 24.9 Later Deployment
 
