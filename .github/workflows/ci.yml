@@ -40,9 +40,28 @@ jobs:
         run: python -m compileall -q src tests
 
       - name: Run test suite
+        id: pytest
         env:
           PYTHONPATH: src
-        run: python -m pytest -q
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q --junitxml=pytest-results.xml > pytest.log 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          tail -n 80 pytest.log
+          exit 0
+
+      - name: Upload pytest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            pytest.log
+            pytest-results.xml
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Check whitespace errors
         shell: bash
@@ -52,3 +71,14 @@ jobs:
           else
             git diff --check
           fi
+
+      - name: Enforce pytest result
+        if: always()
+        shell: bash
+        run: |
+          status="${{ steps.pytest.outputs.exit_code }}"
+          if [ -z "$status" ]; then
+            echo "pytest did not report an exit code" >&2
+            exit 1
+          fi
+          exit "$status"
