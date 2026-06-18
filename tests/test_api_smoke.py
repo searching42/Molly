@@ -801,6 +801,34 @@ def test_agent_modeling_plan_endpoint_writes_proposal(tmp_path) -> None:
     ).exists()
 
 
+def test_agent_conversation_modeling_payload_endpoint_prepares_payload(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/agent/conversation/modeling-payload",
+        json={
+            "project_id": "proj-conversation",
+            "run_id": "run-conversation",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Train OLED PLQY. DOI 10.1038/s41597-020-00634-8 "
+                        "says solvent matters."
+                    ),
+                },
+                {"role": "user", "content": "Yes, use this external literature evidence."},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json["modeling_plan_payload"]["property_id"] == "plqy"
+    assert resp.json["modeling_plan_payload"]["user_approved_external_search"] is True
+    assert resp.json["modeling_plan_payload"]["cited_target_evidence"][0]["doi"] == "10.1038/s41597-020-00634-8"
+
+
 def test_agent_modeling_plan_endpoint_includes_cited_target_evidence(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     client = app.test_client()

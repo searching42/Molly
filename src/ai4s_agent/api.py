@@ -10,6 +10,7 @@ from werkzeug.utils import secure_filename
 
 import ai4s_agent.adapters as adapter_exports
 from ai4s_agent._utils import now_iso, write_json
+from ai4s_agent.agents.conversation import ConversationAgent
 from ai4s_agent.agents.generation import GenerationAgent
 from ai4s_agent.agents.modeling import ModelingAgent
 from ai4s_agent.agents.observer import ObserverAgent
@@ -366,6 +367,27 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
         except (ValidationError, ValueError) as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         return jsonify({"ok": True, "proposal": proposal.model_dump(mode="json"), "outputs": outputs})
+
+    @app.post("/api/agent/conversation/modeling-payload")
+    def agent_conversation_modeling_payload():
+        try:
+            payload = _request_json_object()
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        run_id = str(payload.get("run_id") or "").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        messages = payload.get("messages")
+        if not run_id:
+            return jsonify({"ok": False, "error": "run_id required"}), 400
+        try:
+            modeling_payload = ConversationAgent().prepare_modeling_plan_payload(
+                run_id=run_id,
+                project_id=project_id or None,
+                messages=messages,
+            )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "modeling_plan_payload": modeling_payload})
 
     @app.post("/api/agent/modeling-plan")
     def agent_modeling_plan():
