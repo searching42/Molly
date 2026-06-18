@@ -33,19 +33,20 @@ def test_index_page_available() -> None:
     assert "Agent 审阅卡".encode() in resp.data
 
 
-def test_index_page_prioritizes_primary_workflow_before_advanced_tools() -> None:
+def test_index_page_prioritizes_chat_workspace_before_advanced_tools() -> None:
     app = create_app()
     client = app.test_client()
     resp = client.get("/")
 
     assert resp.status_code == 200
     html = resp.data.decode("utf-8")
-    assert 'id="primary-workflow"' in html
-    assert 'id="run-snapshot"' in html
+    assert 'id="primary-workflow"' not in html
+    assert 'id="workflow-tools"' not in html
+    assert 'class="wizard-card' not in html
+    assert 'id="project-chat"' in html
     assert '<details id="advanced-tools"' in html
-    assert "描述目标" in html
     assert "高级工具" in html
-    assert html.index('id="primary-workflow"') < html.index('id="advanced-tools"')
+    assert html.index('id="project-chat"') < html.index('id="advanced-tools"')
 
 
 def test_index_page_uses_project_sidebar_and_chat_workspace() -> None:
@@ -85,38 +86,36 @@ def test_index_page_wires_project_chat_to_agent_payload_bridge() -> None:
     assert "agent_questions" in html
 
 
-def test_index_page_uses_progressive_wizard_cards() -> None:
+def test_index_page_removes_legacy_wizard_cards() -> None:
     app = create_app()
     client = app.test_client()
     resp = client.get("/")
 
     assert resp.status_code == 200
     html = resp.data.decode("utf-8")
-    assert '<details id="step-goal-card" class="wizard-card active" open>' in html
-    assert '<details id="step-data-card" class="wizard-card"' in html
-    assert '<details id="step-plan-card" class="wizard-card"' in html
-    assert '<details id="step-submit-card" class="wizard-card"' in html
-    assert '<details id="step-monitor-card" class="wizard-card"' in html
-    assert '<details id="step-report-card" class="wizard-card"' in html
-    assert 'class="wizard-card" open' not in html
-    assert "advanceWizard" in html
-    assert "当前" in html
-    assert "提交任务" in html
+    assert "wizard-card" not in html
+    assert "advanceWizard" not in html
+    for card_id in [
+        "step-goal-card",
+        "step-data-card",
+        "step-plan-card",
+        "step-submit-card",
+        "step-monitor-card",
+        "step-report-card",
+    ]:
+        assert f'id="{card_id}"' not in html
 
 
-def test_index_page_uses_file_upload_without_visible_manual_path() -> None:
+def test_index_page_removes_wizard_file_upload_surface() -> None:
     app = create_app()
     client = app.test_client()
     resp = client.get("/")
 
     assert resp.status_code == 200
     html = resp.data.decode("utf-8")
-    assert 'id="dataset-upload-form"' in html
-    assert 'type="file"' in html
-    assert 'id="dataset-file"' in html
-    assert 'name="file"' in html
-    assert 'id="dataset-path"' in html
-    assert 'type="hidden"' in html
+    assert 'id="dataset-upload-form"' not in html
+    assert 'id="dataset-file"' not in html
+    assert 'id="dataset-path"' not in html
     assert "手动路径备用" not in html
 
 
@@ -129,80 +128,68 @@ def test_index_page_surfaces_upload_errors_and_serializes_js_errors() -> None:
     html = resp.data.decode("utf-8")
     assert "function normalizeErrorForRender" in html
     assert "err instanceof Error" in html
-    assert "上传失败；错误详情已显示在当前响应中。" in html
-    assert "提交失败；错误详情已显示在当前响应中。" in html
     assert "请查看响应控制台" not in html
     assert "请查看高级工具中的响应" not in html
 
 
-def test_index_page_generates_run_id_from_goal_and_hides_main_run_id_inputs() -> None:
+def test_index_page_generates_run_id_for_chat_and_advanced_tools() -> None:
     app = create_app()
     client = app.test_client()
     resp = client.get("/")
 
     assert resp.status_code == 200
     html = resp.data.decode("utf-8")
-    assert 'id="run-id-preview"' in html
-    assert "系统生成运行 ID" in html
     assert "function buildRunId" in html
     assert "function syncGeneratedRunId" in html
-    assert 'id="agent-run-id" name="run_id" type="hidden"' in html
     for field_id in [
-        "data-run-id",
-        "run-card-id",
-        "submit-run-id",
-        "status-run-id",
-        "gate-run-id",
-        "timeline-run-id",
-        "preview-run-id",
         "promotion-run-id",
+        "model-promotion-run-id",
+        "plan-run-id",
+        "expand-run-id",
+        "diff-run-id",
     ]:
-        assert f'id="{field_id}" name="run_id" type="hidden"' in html
+        assert f'id="{field_id}"' in html
 
 
-def test_index_page_submit_task_executes_current_run_plan() -> None:
+def test_index_page_removes_wizard_submit_execution_path() -> None:
     app = create_app()
     client = app.test_client()
     resp = client.get("/")
 
     assert resp.status_code == 200
     html = resp.data.decode("utf-8")
-    assert "let currentRunPlan" in html
-    assert 'currentRunPlan = proposal.run_plan || null' in html
-    assert 'postJSON("/api/run-plan/execute"' in html
-    assert 'input_artifacts: { uploaded_dataset: datasetPath }' in html
-    assert "task_options: buildTaskOptions()" in html
+    assert 'id="submit-run-form"' not in html
+    assert 'id="run-confirmation-form"' not in html
+    assert 'id="data-confirmation-form"' not in html
+    assert 'postJSON("/api/run-plan/execute"' not in html
+    assert "input_artifacts: { uploaded_dataset: datasetPath }" not in html
 
 
-def test_index_page_gate_approval_resumes_current_run_plan() -> None:
+def test_index_page_removes_wizard_gate_approval_controls() -> None:
     app = create_app()
     client = app.test_client()
     resp = client.get("/")
 
     assert resp.status_code == 200
     html = resp.data.decode("utf-8")
-    assert 'postJSON("/api/run-plan/resume"' in html
-    assert "approved_gates: [payload.gate]" in html
-    assert "task_options: buildTaskOptions()" in html
-    assert "gate approval fell back to legacy orchestrator" in html
+    assert 'id="gate-form"' not in html
+    assert 'id="agent-approve-button"' not in html
+    assert 'postJSON("/api/run-plan/resume"' not in html
+    assert "gate approval fell back to legacy orchestrator" not in html
 
 
-def test_index_page_uses_agent_decision_card_and_log_tail() -> None:
+def test_index_page_removes_wizard_decision_card_surface() -> None:
     app = create_app()
     client = app.test_client()
     resp = client.get("/")
 
     assert resp.status_code == 200
     html = resp.data.decode("utf-8")
-    assert 'id="agent-decision-card"' in html
-    assert "Agent 决策卡" in html
-    assert 'id="agent-gate-question"' in html
-    assert 'id="run-log-tail"' in html
-    assert "function loadAgentDecisionCard" in html
-    assert "function refreshRunLogs" in html
-    assert 'postJSON("/api/agent/decision-card"' in html
-    assert "/api/runs/${runId}/logs?limit=20" in html
-    assert "批准并继续" in html
+    assert 'id="agent-decision-card"' not in html
+    assert 'id="agent-gate-question"' not in html
+    assert 'id="run-log-tail"' not in html
+    assert "function loadAgentDecisionCard" not in html
+    assert "function refreshRunLogs" not in html
 
 
 def test_index_page_renders_modeling_agent_review_card_sections() -> None:
@@ -221,21 +208,20 @@ def test_index_page_renders_modeling_agent_review_card_sections() -> None:
     assert "approval_controls" in html
 
 
-def test_index_page_exposes_explicit_backend_task_options_without_auto_execute() -> None:
+def test_index_page_removes_wizard_backend_task_options_from_ui() -> None:
     app = create_app()
     client = app.test_client()
     resp = client.get("/")
 
     assert resp.status_code == 200
     html = resp.data.decode("utf-8")
-    assert 'id="run-card-training-backend"' in html
-    assert 'id="run-card-prediction-backend"' in html
-    assert "function buildTaskOptions" in html
-    assert "train_model_unimol_legacy_adapter" in html
-    assert "predict_candidates_unimol_legacy_adapter" in html
-    assert "backend: \"reinvent4\"" in html
-    assert "execute: false" in html
-    assert "workstation2" in html
+    assert 'id="run-card-training-backend"' not in html
+    assert 'id="run-card-prediction-backend"' not in html
+    assert "function buildTaskOptions" not in html
+    assert "train_model_unimol_legacy_adapter" not in html
+    assert "predict_candidates_unimol_legacy_adapter" not in html
+    assert "execute: false" not in html
+    assert "workstation2" not in html
 
 
 def test_index_page_hides_artifact_inputs_and_keeps_response_near_workflow() -> None:
@@ -249,9 +235,8 @@ def test_index_page_hides_artifact_inputs_and_keeps_response_near_workflow() -> 
     assert 'id="run-card-artifacts"' not in html
     assert 'id="advanced-agent-available-artifacts"' in html
     assert 'id="advanced-run-card-artifacts"' in html
-    assert html.index('id="primary-workflow"') < html.index('id="response-console"')
+    assert html.index('id="project-chat"') < html.index('id="response-console"')
     assert html.index('id="response-console"') < html.index('id="advanced-tools"')
-    assert "计划生成失败；错误详情已显示在当前响应中。" in html
 
 
 def test_index_page_warns_when_opened_as_file_url() -> None:
@@ -380,7 +365,7 @@ def test_atomic_task_toolbox_endpoint_and_ui(tmp_path) -> None:
     assert "candidate_dataset" in generate_task["output_artifacts"]
 
 
-def test_data_confirmation_card_endpoint_and_ui(tmp_path) -> None:
+def test_data_confirmation_card_endpoint_without_legacy_ui_card(tmp_path) -> None:
     dataset = tmp_path / "train.csv"
     dataset.write_text(
         "SMILES,PLQY (%),lambda_em_nm,split\n"
@@ -395,7 +380,9 @@ def test_data_confirmation_card_endpoint_and_ui(tmp_path) -> None:
 
     page = client.get("/")
     assert page.status_code == 200
-    assert "数据确认卡".encode() in page.data
+    page_html = page.data.decode("utf-8")
+    assert "数据确认卡" not in page_html
+    assert 'id="data-confirmation-form"' not in page_html
 
     resp = client.post(
         "/api/data-confirmation-card",
@@ -435,14 +422,16 @@ def test_data_confirmation_card_rejects_dataset_outside_workspace(tmp_path) -> N
     assert "workspace" in resp.json["error"]
 
 
-def test_run_confirmation_card_endpoint_and_ui(tmp_path) -> None:
+def test_run_confirmation_card_endpoint_without_legacy_ui_card(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path)
     client = app.test_client()
 
     page = client.get("/")
     assert page.status_code == 200
-    assert "运行确认卡".encode() in page.data
-    assert "生成数量".encode() in page.data
+    page_html = page.data.decode("utf-8")
+    assert "运行确认卡" not in page_html
+    assert "生成数量" not in page_html
+    assert 'id="run-confirmation-form"' not in page_html
 
     resp = client.post(
         "/api/run-confirmation-card",

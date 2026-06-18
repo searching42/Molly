@@ -126,6 +126,9 @@ http://127.0.0.1:8792/
   before ranking/reporting.
 - Literature-derived data cannot become confirmed training data without human
   confirmation.
+- The local UI should stay simple and conversation-first: project sidebar,
+  project chat, review artifacts, response console, and collapsed advanced raw
+  tools. Do not reintroduce the old wizard-card primary workflow.
 
 ## Documentation Notes
 
@@ -152,4 +155,3 @@ Files:
 - `output/pdf/ai4s_oled_review_paper.pdf`
 - `output/pdf/ai4s_oled_review_paper.md`
 - `output/pdf/generate_ai4s_oled_review_pdf.py`
-

@@ -68,10 +68,10 @@ This document captures the agreed direction for `workspace/agent` as the final m
 - Pre-design APIs so a later phase can add a remote worker.
 - Use a new lightweight UI in `workspace/agent`.
 - Use `claude/ui` only as a reference for features and behavior.
-- Main UI pattern is Chat + Wizard Cards + Stage Timeline.
+- Main UI pattern is Project Sidebar + Project Chat + Review Artifacts + collapsed Advanced Tools.
 - Chat handles intent, explanation, and follow-up questions.
-- Wizard Cards handle structured confirmation.
-- Stage Timeline shows progress, logs, failure location, retry state, and artifacts.
+- Structured confirmation should be rendered as reviewable artifacts and explicit gates, not as a wizard-card primary flow.
+- Stage Timeline should show progress, logs, failure location, retry state, and artifacts when execution UI is added back.
 
 ### 2.1 Phase 1 Main Workflow
 
@@ -889,8 +889,8 @@ Recovery:
 - Add Advanced Toolbox for atomic tasks.
 - Default to simple interface.
 - Keep advanced options collapsible.
-- Keep old wizard/toolbox operations reachable from collapsed advanced tools instead of the primary path.
-- Phase 1 status: project sidebar, project creation/selection, project chat composer, conversation-to-modeling payload call, explicit modeling-plan action, and collapsed compatibility workflow tools are implemented in the Flask web UI. Remaining UI work is visual polish, richer inline artifact rendering, and persistent conversation history.
+- Remove the old wizard/card compatibility workflow from the primary Flask UI.
+- Phase 1 status: project sidebar, project creation/selection, project chat composer, conversation-to-modeling payload call, explicit modeling-plan action, response console, review artifacts, and collapsed advanced raw API tools are implemented in the Flask web UI. Remaining UI work is visual polish, richer inline artifact rendering, persistent conversation history, and a simple execution/gate review surface.
 - Show uploaded train and candidate files at the top.
 - Put optional evaluation dataset under advanced options.
 - Remove absolute path inputs from the main UI.
