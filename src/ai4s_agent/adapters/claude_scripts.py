@@ -11,21 +11,16 @@ def default_workspace() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
-def repository_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+def package_compat_scripts_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "compat_scripts"
 
 
 def claude_scripts_dir() -> Path:
-    """Return the legacy script directory, with a repository-local fallback.
-
-    Development workspaces may still provide ``../claude/scripts``. A clean
-    clone of Molly is self-contained and uses the compatibility scripts under
-    ``Molly/scripts`` instead.
-    """
+    """Prefer legacy workspace scripts, otherwise use packaged compatibility scripts."""
     legacy = default_workspace() / "claude" / "scripts"
     if legacy.exists() and legacy.is_dir():
         return legacy
-    return repository_root() / "scripts"
+    return package_compat_scripts_dir()
 
 
 WORKSPACE = default_workspace()
