@@ -21,6 +21,8 @@ For each requested training target, the agent should first prepare a target-awar
 
 `ResearchAgent.prepare_target_evidence_items()` converts cited summaries into `TargetEvidenceItem` records for that handoff. External summaries must carry a source reference such as a DOI, URL, or source id and require explicit `user_approved_external_search=True`; the method does not perform network access.
 
+`/api/agent/modeling-plan` accepts `property_id`, `cited_target_evidence`, `project_memory`, `previous_diagnostics`, `available_inputs`, and `user_approved_external_search`. When a target property or cited evidence is supplied, the endpoint returns and writes a `TargetModelingBrief` alongside the modeling plan proposal so preprocessing and hyperparameter decisions remain traceable to reviewable evidence.
+
 After training, the agent should diagnose model quality against baselines and target-specific expectations before using the model for prediction. Weak results should produce a reviewable rerun proposal, not a silent rerun or an unqualified model promotion.
 
 `/api/agent/review-card` exposes `TargetModelingBrief`, `ModelDiagnosticsReport`, `RerunProposal`, and `ModelPackageReview` as explicit review sections with source labels and approval controls. The local console renders these sections as lightweight cards while keeping the raw JSON response available for audit/debugging.

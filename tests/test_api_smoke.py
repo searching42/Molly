@@ -801,6 +801,76 @@ def test_agent_modeling_plan_endpoint_writes_proposal(tmp_path) -> None:
     ).exists()
 
 
+def test_agent_modeling_plan_endpoint_includes_cited_target_evidence(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    project_id = "proj-modeling-evidence-api"
+    run_id = "run-modeling-evidence-api"
+
+    resp = client.post(
+        "/api/agent/modeling-plan",
+        json={
+            "project_id": project_id,
+            "run_id": run_id,
+            "goal": "Train OLED PLQY model with reliable high-value ranking.",
+            "property_id": "plqy",
+            "user_approved_external_search": True,
+            "cited_target_evidence": [
+                {
+                    "source_type": "literature_summary",
+                    "doi": "10.1038/s41597-020-00634-8",
+                    "summary": (
+                        "Chromophore PLQY measurements are solvent-conditioned bounded values; "
+                        "high-PLQY ranking should inspect upper-tail bias."
+                    ),
+                    "confidence": 0.86,
+                }
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    brief = resp.json["target_modeling_brief"]
+    assert brief["property_id"] == "plqy"
+    assert "literature_summary" in brief["evidence_sources"]
+    assert "user_approved_external_search" in brief["evidence_sources"]
+    assert brief["evidence_items"][-1]["source_ref"] == "10.1038/s41597-020-00634-8"
+    assert "solvent_context_dependence" in brief["evidence_items"][-1]["implications"]
+    assert "target_modeling_brief_plqy_json" in resp.json["outputs"]
+    assert (
+        tmp_path
+        / "projects"
+        / project_id
+        / "runs"
+        / run_id
+        / "target_modeling_brief_plqy.json"
+    ).exists()
+
+
+def test_agent_modeling_plan_endpoint_rejects_unapproved_external_target_evidence(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/agent/modeling-plan",
+        json={
+            "run_id": "run-modeling-evidence-reject-api",
+            "goal": "Train OLED PLQY model.",
+            "property_id": "plqy",
+            "cited_target_evidence": [
+                {
+                    "source_type": "literature_summary",
+                    "doi": "10.1038/s41597-020-00634-8",
+                    "summary": "PLQY depends on solvent context.",
+                }
+            ],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "user_approved_external_search=True" in resp.json["error"]
+
+
 def test_agent_model_package_review_endpoint_writes_review(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     client = app.test_client()
