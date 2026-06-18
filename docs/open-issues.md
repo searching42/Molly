@@ -11,8 +11,8 @@
 
 ### OPEN-019: 无 CI 测试记录
 - **状态**: Resolved in `fix/job-state-and-ci`
-- GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest，并检查提交 diff 的空白错误
-- CI 首次实际运行结果以对应 Pull Request checks 为准
+- GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
+- PR #3 的 CI run #18 已验证 `481 passed, 0 failed, 0 errors, 0 skipped`
 
 ### OPEN-020: Bug 清单仅存本地
 - **状态**: Resolved
@@ -24,6 +24,11 @@
 - MinerU、PDF-folder MinerU 和 GROBID adapter 在 package boundary 严格校验 `execute` 为 JSON boolean
 - `parse_document` 与 `parse_document_grobid` task 需要 `gate_2_data_mining`，direct API 不再执行远程 SSH/SCP 或 GROBID HTTP 请求
 - 统一 Execution Policy Registry 仍由 OPEN-006 跟踪
+
+### OPEN-022: 独立 checkout 依赖仓库外部 legacy scripts
+- **状态**: Resolved in `fix/job-state-and-ci`
+- Phase 1 过去默认依赖工作区同级的 `claude/scripts`，导致干净 GitHub runner 无法运行 parser、cleaning 和 RunPlan 测试
+- 现在优先兼容 legacy workspace；缺失时回退到随 `ai4s_agent` 打包的 deterministic parser 与 cleaning contract，并在 dev dependencies 中声明 RDKit
 
 ## A. 执行与审批边界
 
