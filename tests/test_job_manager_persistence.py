@@ -88,3 +88,11 @@ def test_list_jobs_restores_active_jobs_only(tmp_path: Path) -> None:
     restored = JobManager(runs_dir=tmp_path).list_jobs()
 
     assert [job["run_id"] for job in restored] == ["active-a", "active-b"]
+
+
+@pytest.mark.parametrize("run_id", ["", "nested/run", r"nested\run", "../escape"])
+def test_job_state_rejects_non_segment_run_ids(tmp_path: Path, run_id: str) -> None:
+    manager = JobManager(runs_dir=tmp_path)
+
+    with pytest.raises(ValueError, match="single path segment"):
+        manager.start_job(run_id)
