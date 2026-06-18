@@ -9,6 +9,17 @@
 - **修复提交**: `cfcf565`
 - Phase 1 plan-capable adapter 的 `execute` 仅接受 JSON boolean；字符串 `"false"`、`"0"`、`"off"`、`"true"` 均被拒绝
 
+### OPEN-002: Task options 可覆盖输出路径
+- **状态**: Resolved in `fix/open-002-019-output-paths-ci`
+- 当前 executor 使用的 `output_csv`, `output_dir`, `model_root`, `save_dir`, `log_dir` 已加入 protected payload keys
+- 调用者不能再通过 `task_options` 替换这些 executor-owned 输出位置
+- 后续新增带输出路径的 adapter 时，仍应同步更新 typed option schema 或 protected-key policy
+
+### OPEN-019: 无 CI 测试记录
+- **状态**: Resolved in `fix/open-002-019-output-paths-ci`
+- GitHub Actions 在 pull request 和 main push 上运行 Python 3.10/3.12 测试矩阵
+- CI 执行 editable install、`compileall`、完整 pytest 和 committed diff whitespace 检查
+
 ### OPEN-020: Bug 清单仅存本地
 - **状态**: Resolved
 - **修复提交**: `cfcf565`, `b34dda4`
@@ -21,11 +32,6 @@
 - 统一 Execution Policy Registry 仍由 OPEN-006 跟踪
 
 ## A. 执行与审批边界
-
-### OPEN-002: Task options 仍可覆盖输出路径
-- **MVP**: P1 / **生产**: P0
-- 输出路径 (`output_csv`, `save_dir` 等) 可通过 `task_options` 覆盖，写出到 run directory 外部
-- 建议: typed task options + pre-execution path validation
 
 ### OPEN-003: 辅助资源未进入 snapshot hash
 - **MVP**: P1 / **生产**: P1
@@ -90,29 +96,24 @@
 ### OPEN-018: api.py 单体路由
 - **MVP**: P2 / **生产**: P2
 
-### OPEN-019: 无 CI 测试记录
-- **MVP**: P1 / **生产**: P0/P1
-
 ---
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-002
-2. OPEN-007
-3. OPEN-008
-4. OPEN-009
-5. OPEN-003
-6. OPEN-004
-7. OPEN-005
-8. OPEN-006
+1. OPEN-007
+2. OPEN-008
+3. OPEN-009
+4. OPEN-003
+5. OPEN-004
+6. OPEN-005
+7. OPEN-006
 
 ## Remote / Multi-user Production Blockers
 
-1. OPEN-002
-2. OPEN-004
-3. OPEN-015
-4. OPEN-011
-5. OPEN-012
-6. OPEN-003
-7. OPEN-005
-8. OPEN-006
+1. OPEN-004
+2. OPEN-015
+3. OPEN-011
+4. OPEN-012
+5. OPEN-003
+6. OPEN-005
+7. OPEN-006
