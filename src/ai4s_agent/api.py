@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from werkzeug.utils import secure_filename
 
 import ai4s_agent.adapters as adapter_exports
-from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, write_json
+from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, strict_bool, write_json
 from ai4s_agent.agents.conversation import ConversationAgent
 from ai4s_agent.agents.generation import GenerationAgent
 from ai4s_agent.agents.modeling import ModelingAgent
@@ -946,7 +946,11 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
                     "permission": decision.model_dump(mode="json"),
                 }
             ), 400
-        if _adapter_requires_snapshot_for_execute(adapter_name, adapter_payload):
+        try:
+            snapshot_required = _adapter_requires_snapshot_for_execute(adapter_name, adapter_payload)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        if snapshot_required:
             return jsonify(
                 {
                     "ok": False,
@@ -1987,11 +1991,16 @@ def _adapter_requires_snapshot_for_execute(adapter_name: str, adapter_payload: d
     Remote / heavyweight adapters that accept ``execute`` must go through
     the RunPlan executor so that every execution records a snapshot,
     approval audit, and content-hash verification.
+
+    Only accepts Python ``bool`` for ``execute``.
+    String ``\"false\"``, ``\"0\"``, and missing keys are treated as ``False``.
     """
     if adapter_name not in _CANNOT_DIRECT_EXECUTE:
         return False
-    execute_flag = adapter_payload.get("execute")
-    return bool(execute_flag) and str(execute_flag).strip().lower() not in {"false", "0", "no", "off", ""}
+    execute_raw = adapter_payload.get("execute")
+    if execute_raw is None:
+        return False
+    return strict_bool(execute_raw, key="execute")
 
 
 def _read_run_status(

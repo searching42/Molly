@@ -39,6 +39,18 @@ def truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "project-approved"}
 
 
+def strict_bool(value: Any, *, key: str = "value") -> bool:
+    """Only accept a Python bool.  Reject strings, ints, and None.
+
+    All adapter and executor ``execute`` / ``confirmed`` flags must pass
+    through this check so that string ``\"false\"`` and ``\"0\"`` are never
+    interpreted as truthy by the downstream ``bool(...)`` call.
+    """
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"{key} must be a boolean, got {type(value).__name__}")
+
+
 PROTECTED_PAYLOAD_KEYS: frozenset[str] = frozenset(
     {
         "run_id",

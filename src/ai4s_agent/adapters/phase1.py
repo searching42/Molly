@@ -21,6 +21,7 @@ from ai4s_agent.adapters.claude_scripts import CLAUDE_SCRIPTS, WORKSPACE, build_
 from ai4s_agent.adapters.runtime import run_argv_cmd, run_argv_cmd_with_env
 from ai4s_agent._utils import (
     read_csv_dict_rows,
+    strict_bool,
     strict_smiles_cleaning_enabled,
     truthy,
     write_json as atomic_write_json,
@@ -484,7 +485,7 @@ def _generate_candidates_reinvent4_backend(
     inferred_mode = "preflight"
     if str(payload.get("reinvent4_output_csv") or payload.get("source_csv") or payload.get("source_output_csv") or "").strip():
         inferred_mode = "existing_output"
-    elif _as_bool(payload.get("execute", False)):
+    elif strict_bool(payload.get("execute", False), key="execute"):
         inferred_mode = "remote"
     mode = str(payload.get("reinvent4_mode") or payload.get("mode") or os.environ.get("AI4S_REINVENT4_MODE") or inferred_mode).strip().lower()
     if mode not in {"preflight", "remote", "existing_output"}:
@@ -589,6 +590,22 @@ def _generate_candidates_reinvent4_backend(
             "fetch_output": fetch_output,
         },
     }
+
+
+def _execute_flag(payload: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
+    """Return (execute: bool, error: dict | None).
+
+    Safely extracts the ``execute`` flag from a payload, rejecting
+    non-boolean strings that Python would otherwise treat as truthy.
+    """
+    try:
+        return strict_bool(payload.get("execute", False), key="execute"), None
+    except ValueError as exc:
+        return False, {
+            "status": "failed",
+            "adapter": payload.get("adapter", "adapter"),
+            "error": {"code": "invalid_execute_flag", "message": str(exc)},
+        }
 
 
 def _as_bool(value: object) -> bool:
@@ -1494,7 +1511,10 @@ def legacy_full_flow_adapter(payload: dict[str, Any]) -> dict[str, Any]:
     if bool(payload.get("dry_run", True)):
         cmd.append("--dry-run")
 
-    if not bool(payload.get("execute", False)):
+    execute, execute_error = _execute_flag(payload)
+    if execute_error:
+        return execute_error
+    if not execute:
         return {
             "status": "planned",
             "adapter": "legacy_full_flow_adapter",
@@ -1658,7 +1678,10 @@ def train_model_unimol_legacy_adapter(payload: dict[str, Any]) -> dict[str, Any]
         if value not in {None, ""}:
             argv += [flag, str(value)]
 
-    if not bool(payload.get("execute", False)):
+    execute, execute_error = _execute_flag(payload)
+    if execute_error:
+        return execute_error
+    if not execute:
         return {
             "status": "planned",
             "adapter": "train_model_unimol_legacy",
@@ -1922,7 +1945,10 @@ def predict_candidates_unimol_legacy_adapter(payload: dict[str, Any]) -> dict[st
         if value not in {None, ""}:
             argv += [flag, str(value)]
 
-    if not bool(payload.get("execute", False)):
+    execute, execute_error = _execute_flag(payload)
+    if execute_error:
+        return execute_error
+    if not execute:
         return {
             "status": "planned",
             "adapter": "predict_candidates_unimol_legacy",
@@ -2061,7 +2087,10 @@ def predict_candidates_domain_model_adapter(payload: dict[str, Any]) -> dict[str
         "prediction_method": "domain_model_remote_or_local",
         "command": argv,
     }
-    if not bool(payload.get("execute", False)):
+    execute, execute_error = _execute_flag(payload)
+    if execute_error:
+        return execute_error
+    if not execute:
         return {
             **result_base,
             "status": "planned",

@@ -2407,3 +2407,51 @@ def test_direct_remote_prediction_execute_rejected_by_snapshot_policy(tmp_path) 
     )
     assert blocked_legacy.status_code == 400
     assert "requires run-plan snapshot approval when execute=true" in blocked_legacy.json["error"]
+
+
+def test_direct_execute_rejects_string_false_zero_and_off(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    base_payload = {
+        "run_id": "r-execute-string",
+        "candidate_csv": str(tmp_path / "candidates.csv"),
+        "output_csv": str(tmp_path / "predictions.csv"),
+        "property_id": "plqy",
+        "model_id": "plqy_solvent_pca64_seed42",
+        "model_backend": "unimol_with_solvent_pca64",
+        "model_dir": str(tmp_path / "model"),
+        "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
+        "required_inputs": ["canonical_smiles", "solvent"],
+    }
+
+    for string_value in ("false", "0", "off", "no"):
+        blocked = client.post(
+            "/api/adapters/execute",
+            json={
+                "run_id": f"r-execute-string-{string_value}",
+                "adapter": "predict_candidates_domain_model_adapter",
+                "project_approved": True,
+                "payload": {**base_payload, "execute": string_value},
+            },
+        )
+        assert blocked.status_code == 400, f"expected 400 for execute={string_value!r}"
+        assert "must be a boolean" in blocked.json["error"], f"expected boolean error for {string_value!r}"
+
+
+def test_adapter_execute_rejects_non_boolean() -> None:
+    # Train adapter should also reject string execute
+    from ai4s_agent.adapters.phase1 import train_model_unimol_legacy_adapter
+
+    result = train_model_unimol_legacy_adapter(
+        {
+            "run_id": "r-bool",
+            "property_id": "plqy",
+            "train_csv": "/tmp/train.csv",
+            "save_dir": "/tmp/model",
+            "log_dir": "/tmp/logs",
+            "execute": "true",
+        }
+    )
+    assert result["status"] == "failed"
+    assert "must be a boolean" in result["error"]["message"]
