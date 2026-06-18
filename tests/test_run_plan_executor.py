@@ -9,8 +9,8 @@ import pytest
 from ai4s_agent.agents.prediction import PredictionPreparationAgent
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.app import create_app
-from ai4s_agent.planner import expand_run_plan
-from ai4s_agent.schemas import GateName, RunStatus
+from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
+from ai4s_agent.schemas import AtomicTaskSpec, GateName, RiskLevel, RunStatus
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -116,6 +116,39 @@ def test_run_plan_executor_resume_requires_current_gate_approval(tmp_path: Path)
         assert "gate approval required: gate_3_train_config" in str(exc)
 
     state = storage.read_stage_state("proj-exec", "r-resume-missing-gate")
+    assert state is not None
+    assert state.stage == "train_model"
+    assert state.status == RunStatus.WAITING_USER
+
+
+def test_run_plan_executor_resume_rejects_extraneous_future_gates(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    dataset = tmp_path / "input" / "train.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    run_plan = expand_run_plan(
+        run_id="r-resume-extra-gate",
+        requested_tasks=["render_report"],
+        available_artifacts=[],
+    )
+    executor = RunPlanExecutor(storage=storage)
+    first = executor.execute(
+        project_id="proj-exec",
+        run_plan=run_plan,
+        input_artifacts={"uploaded_dataset": str(dataset)},
+    )
+    assert first["status"] == RunStatus.WAITING_USER.value
+    assert first["waiting_task"] == "train_model"
+
+    with pytest.raises(ValueError, match="unexpected gate approval"):
+        executor.resume_after_gate(
+            project_id="proj-exec",
+            run_plan=run_plan,
+            approved_gates=[GateName.TRAIN_CONFIG.value, GateName.FINAL_THRESHOLD.value],
+            actor="user",
+        )
+
+    state = storage.read_stage_state("proj-exec", "r-resume-extra-gate")
     assert state is not None
     assert state.stage == "train_model"
     assert state.status == RunStatus.WAITING_USER
@@ -233,6 +266,97 @@ def test_run_plan_executor_resume_rejects_changed_task_options_after_gate(tmp_pa
     assert state is not None
     assert state.stage == "train_model"
     assert state.status == RunStatus.WAITING_USER
+
+
+def test_run_plan_executor_resume_rejects_changed_artifact_content_after_gate(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    dataset = tmp_path / "input" / "train.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    run_plan = expand_run_plan(
+        run_id="r-resume-artifact-change",
+        requested_tasks=["train_model"],
+        available_artifacts=[],
+    )
+    executor = RunPlanExecutor(storage=storage)
+    first = executor.execute(
+        project_id="proj-exec",
+        run_plan=run_plan,
+        input_artifacts={"uploaded_dataset": str(dataset)},
+    )
+    assert first["status"] == RunStatus.WAITING_USER.value
+    registry = storage.read_artifact_registry("proj-exec", "r-resume-artifact-change")
+    run_dir = storage.run_dir("proj-exec", "r-resume-artifact-change")
+    cleaned_path = run_dir / registry["cleaned_train_dataset"]
+    with cleaned_path.open("a", encoding="utf-8") as f:
+        f.write("CCN,0.999,777,train\n")
+
+    with pytest.raises(ValueError, match="execution snapshot changed"):
+        executor.resume_after_gate(
+            project_id="proj-exec",
+            run_plan=run_plan,
+            approved_gates=[GateName.TRAIN_CONFIG.value],
+            actor="user",
+        )
+
+    state = storage.read_stage_state("proj-exec", "r-resume-artifact-change")
+    assert state is not None
+    assert state.stage == "train_model"
+    assert state.status == RunStatus.WAITING_USER
+
+
+def test_run_plan_executor_same_gate_name_requires_new_snapshot_for_each_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path)
+    monkeypatch.setattr(
+        adapter_exports,
+        "test_success_adapter",
+        lambda payload: {"status": "success", "adapter": "test_success"},
+        raising=False,
+    )
+    registry = AtomicTaskRegistry(
+        [
+            AtomicTaskSpec(
+                task_id="first_data_gate",
+                output_artifacts=["first_done"],
+                risk_level=RiskLevel.HIGH,
+                gates=[GateName.DATA_MINING.value],
+                default_adapter="test_success_adapter",
+            ),
+            AtomicTaskSpec(
+                task_id="second_data_gate",
+                output_artifacts=["second_done"],
+                risk_level=RiskLevel.HIGH,
+                gates=[GateName.DATA_MINING.value],
+                default_adapter="test_success_adapter",
+            ),
+        ]
+    )
+    run_plan = expand_run_plan(
+        run_id="r-same-gate",
+        requested_tasks=["first_data_gate", "second_data_gate"],
+        registry=registry,
+    )
+    executor = RunPlanExecutor(storage=storage, registry=registry)
+    first = executor.execute(project_id="proj-exec", run_plan=run_plan)
+    assert first["status"] == RunStatus.WAITING_USER.value
+    assert first["waiting_task"] == "first_data_gate"
+
+    after_first = executor.resume_after_gate(
+        project_id="proj-exec",
+        run_plan=run_plan,
+        approved_gates=[GateName.DATA_MINING.value],
+        actor="user",
+    )
+
+    assert after_first["status"] == RunStatus.WAITING_USER.value
+    assert after_first["waiting_task"] == "second_data_gate"
+    state = storage.read_stage_state("proj-exec", "r-same-gate")
+    assert state is not None
+    assert state.stage == "second_data_gate"
+    assert state.details["execution_snapshot"]["task_id"] == "second_data_gate"
 
 
 def test_training_review_promotion_and_prediction_preparation_acceptance(tmp_path: Path) -> None:
@@ -380,6 +504,11 @@ def test_run_plan_executor_unimol_training_option_plans_without_registering_fake
     assert state.stage == "train_model"
     assert state.status == RunStatus.WAITING_USER
     assert state.details["planned_adapter"] == "train_model_unimol_legacy"
+    execution_snapshot = state.details["execution_snapshot"]
+    assert execution_snapshot["task_id"] == "train_model"
+    assert execution_snapshot["task_options"]["execute"] is True
+    assert execution_snapshot["payload"]["execute"] is True
+    assert execution_snapshot["payload"]["remote_host"] == "workstation2"
 
 
 def test_run_plan_executor_rejects_adapter_override_for_unallowlisted_task(tmp_path: Path) -> None:
@@ -534,6 +663,11 @@ def test_run_plan_executor_reinvent4_generation_option_plans_without_registering
     assert state.stage == "generate_candidates"
     assert state.status == RunStatus.WAITING_USER
     assert state.details["planned_adapter"] == "generate_candidates_reinvent4"
+    execution_snapshot = state.details["execution_snapshot"]
+    assert execution_snapshot["task_id"] == "generate_candidates"
+    assert execution_snapshot["task_options"]["execute"] is True
+    assert execution_snapshot["payload"]["execute"] is True
+    assert execution_snapshot["payload"]["remote_host"] == "workstation2"
 
 
 def test_run_plan_executor_unimol_prediction_option_plans_without_registering_fake_predictions(tmp_path: Path) -> None:

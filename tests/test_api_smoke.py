@@ -167,6 +167,19 @@ def test_index_page_generates_run_id_for_chat_and_advanced_tools() -> None:
         assert f'id="{field_id}"' in html
 
 
+def test_index_page_keeps_chat_run_id_stable_across_turns() -> None:
+    app = create_app()
+    client = app.test_client()
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    html = resp.data.decode("utf-8")
+    assert 'let currentRunId = "";' in html
+    assert "if (!currentRunId)" in html
+    assert "currentRunId = buildRunId(goal);" in html
+    assert "currentRunId = \"\";" in html
+
+
 def test_index_page_removes_wizard_submit_execution_path() -> None:
     app = create_app()
     client = app.test_client()
@@ -957,6 +970,29 @@ def test_agent_conversation_modeling_payload_endpoint_prepares_payload(tmp_path)
     assert resp.json["modeling_plan_payload"]["property_id"] == "plqy"
     assert resp.json["modeling_plan_payload"]["user_approved_external_search"] is True
     assert resp.json["modeling_plan_payload"]["cited_target_evidence"][0]["doi"] == "10.1038/s41597-020-00634-8"
+
+
+def test_agent_conversation_modeling_payload_endpoint_uses_available_inputs(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/agent/conversation/modeling-payload",
+        json={
+            "project_id": "proj-conversation-homo",
+            "run_id": "run-conversation-homo",
+            "messages": [
+                {"role": "user", "content": "Train a HOMO prediction model for this molecule set."},
+            ],
+            "available_inputs": ["SMILES", "HOMO", "LUMO", "solvent"],
+        },
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json["modeling_plan_payload"]
+    assert payload["property_id"] == "homo"
+    assert payload["available_inputs"] == ["SMILES", "HOMO", "LUMO", "solvent"]
+    assert payload["agent_questions"] == []
 
 
 def test_agent_conversation_next_turn_endpoint_returns_decision(tmp_path) -> None:
@@ -2028,11 +2064,11 @@ def test_adapter_execute_endpoint_requires_gate_for_train_model_adapter(tmp_path
         },
     )
 
-    assert resp.status_code == 403
-    assert "gate approval required" in resp.json["error"]
+    assert resp.status_code == 400
+    assert "gated adapter execution requires run-plan snapshot approval" in resp.json["error"]
 
 
-def test_adapter_execute_endpoint_uses_project_gate_decisions_when_project_id_supplied(tmp_path) -> None:
+def test_adapter_execute_endpoint_rejects_project_gate_decision_without_snapshot_match(tmp_path) -> None:
     train_csv = tmp_path / "train.csv"
     train_csv.write_text("SMILES,plqy\nCCO,0.8\n", encoding="utf-8")
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
@@ -2070,11 +2106,11 @@ def test_adapter_execute_endpoint_uses_project_gate_decisions_when_project_id_su
         },
     )
 
-    assert resp.status_code == 200
-    assert resp.json["result"]["status"] == "planned"
+    assert resp.status_code == 400
+    assert "gated adapter execution requires run-plan snapshot approval" in resp.json["error"]
 
 
-def test_adapter_execute_endpoint_allows_train_model_after_confirmation_and_gate(tmp_path) -> None:
+def test_adapter_execute_endpoint_rejects_legacy_gate_for_gated_adapter(tmp_path) -> None:
     train_csv = tmp_path / "train.csv"
     train_csv.write_text("SMILES,plqy\nCCO,0.8\n", encoding="utf-8")
     app = create_app(base_runs_dir=tmp_path)
@@ -2105,8 +2141,8 @@ def test_adapter_execute_endpoint_allows_train_model_after_confirmation_and_gate
         },
     )
 
-    assert resp.status_code == 200
-    assert resp.json["result"]["status"] == "planned"
+    assert resp.status_code == 400
+    assert "gated adapter execution requires run-plan snapshot approval" in resp.json["error"]
 
 
 def test_adapter_execute_endpoint_runs_domain_model_prediction_after_project_approval(tmp_path) -> None:

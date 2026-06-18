@@ -97,9 +97,13 @@ class RunPlanExecutor:
 
         spec = self.registry.get(state.stage)
         approved = {str(gate).strip() for gate in approved_gates if str(gate).strip()}
+        expected_gates = set(spec.gates)
         missing = [gate for gate in spec.gates if gate not in approved]
         if missing:
             raise ValueError(f"gate approval required: {', '.join(missing)}")
+        unexpected = sorted(approved - expected_gates)
+        if unexpected:
+            raise ValueError(f"unexpected gate approval for {state.stage}: {', '.join(unexpected)}")
 
         run_dir = self.storage.run_dir(project_id, run_id)
         artifact_paths = self._artifact_paths_from_registry(project_id, run_id, run_dir)
@@ -140,6 +144,7 @@ class RunPlanExecutor:
             actor=clean_actor,
             executed=executed,
             task_options=normalized_task_options,
+            approved_task_id=state.stage,
         )
 
     def _execute_from(
@@ -154,20 +159,26 @@ class RunPlanExecutor:
         actor: str,
         executed: list[str],
         task_options: TaskOptions,
+        approved_task_id: str | None = None,
     ) -> dict[str, Any]:
         run_id = run_plan.run_id
 
         for index, task in enumerate(run_plan.tasks[start_index:], start=start_index):
             spec = self.registry.get(task.task_id)
             next_stage = run_plan.tasks[index + 1].task_id if index + 1 < len(run_plan.tasks) else None
-            if spec.gates and any(gate not in approved_gates for gate in spec.gates):
+            task_approval_applies = (
+                bool(spec.gates)
+                and approved_task_id == task.task_id
+                and all(gate in approved_gates for gate in spec.gates)
+            )
+            if spec.gates and not task_approval_applies:
                 snapshot = self._execution_snapshot(
                     task_id=task.task_id,
                     spec_default_adapter=spec.default_adapter,
                     run_plan=run_plan,
                     run_dir=run_dir,
                     artifact_paths=artifact_paths,
-                    approved_gates=approved_gates,
+                    approved_gates=set(),
                     options=task_options.get(task.task_id, {}),
                 )
                 self._write_stage(
@@ -204,7 +215,7 @@ class RunPlanExecutor:
                 run_dir=run_dir,
                 artifact_paths=artifact_paths,
                 actor=actor,
-                approved_gates=approved_gates,
+                approved_gates=approved_gates if task_approval_applies else set(),
                 options=options,
             )
             self._write_stage(
@@ -243,6 +254,16 @@ class RunPlanExecutor:
             result_status = str(result.get("status") or "")
             if result_status == "planned":
                 rel = self._relative(run_dir, result_path)
+                execution_options = self._planned_execution_options(options)
+                execution_snapshot = self._execution_snapshot(
+                    task_id=task.task_id,
+                    spec_default_adapter=spec.default_adapter,
+                    run_plan=run_plan,
+                    run_dir=run_dir,
+                    artifact_paths=artifact_paths,
+                    approved_gates=set(),
+                    options=execution_options,
+                )
                 self._write_stage(
                     project_id=project_id,
                     run_id=run_id,
@@ -254,6 +275,7 @@ class RunPlanExecutor:
                         "planned_adapter": str(result.get("adapter") or adapter_name),
                         "adapter_result": rel,
                         "executed_tasks": executed,
+                        "execution_snapshot": execution_snapshot,
                     },
                 )
                 return {
@@ -325,6 +347,12 @@ class RunPlanExecutor:
                 normalized[str(task_id)] = {str(key): value for key, value in options.items()}
         return normalized
 
+    @staticmethod
+    def _planned_execution_options(options: dict[str, Any]) -> dict[str, Any]:
+        execution_options = {str(key): value for key, value in options.items()}
+        execution_options["execute"] = True
+        return execution_options
+
     def _validate_waiting_execution_snapshot(
         self,
         *,
@@ -395,6 +423,7 @@ class RunPlanExecutor:
             "run_plan": run_plan.model_dump(mode="json"),
             "task_options": clean_options,
             "payload": self._json_safe(payload),
+            "input_artifacts": self._artifact_manifest_for_payload(artifact_paths, payload),
             "approved_gates": sorted(required_gates),
         }
         snapshot_hash = hashlib.sha256(self._canonical_json(material).encode("utf-8")).hexdigest()
@@ -422,6 +451,118 @@ class RunPlanExecutor:
         if isinstance(value, (str, int, float, bool)) or value is None:
             return value
         return str(value)
+
+    def _artifact_manifest_for_payload(self, artifact_paths: dict[str, str], payload: dict[str, Any]) -> dict[str, Any]:
+        payload_paths = self._payload_path_strings(payload)
+        referenced: dict[str, str] = {}
+        for artifact_id, path_raw in artifact_paths.items():
+            artifact_path = Path(str(path_raw)).expanduser()
+            if self._artifact_path_referenced(artifact_path, payload_paths):
+                referenced[str(artifact_id)] = str(artifact_path)
+        return self._artifact_manifest(referenced)
+
+    @classmethod
+    def _payload_path_strings(cls, value: Any) -> set[str]:
+        result: set[str] = set()
+        if isinstance(value, dict):
+            for item in value.values():
+                result.update(cls._payload_path_strings(item))
+        elif isinstance(value, list | tuple):
+            for item in value:
+                result.update(cls._payload_path_strings(item))
+        elif isinstance(value, str) and ("/" in value or "\\" in value):
+            result.add(value)
+        return result
+
+    @staticmethod
+    def _artifact_path_referenced(artifact_path: Path, payload_paths: set[str]) -> bool:
+        try:
+            resolved_artifact = artifact_path.resolve()
+        except FileNotFoundError:
+            resolved_artifact = artifact_path.absolute()
+        for payload_path_raw in payload_paths:
+            payload_path = Path(payload_path_raw).expanduser()
+            try:
+                resolved_payload = payload_path.resolve()
+            except FileNotFoundError:
+                resolved_payload = payload_path.absolute()
+            if resolved_payload == resolved_artifact:
+                return True
+            if resolved_artifact.is_dir() and resolved_payload.is_relative_to(resolved_artifact):
+                return True
+        return False
+
+    def _artifact_manifest(self, artifact_paths: dict[str, str]) -> dict[str, Any]:
+        manifest: dict[str, Any] = {}
+        for artifact_id, path_raw in sorted(artifact_paths.items(), key=lambda item: str(item[0])):
+            path = Path(str(path_raw)).expanduser()
+            entry: dict[str, Any] = {"path": str(path)}
+            try:
+                stat = path.lstat()
+            except FileNotFoundError:
+                manifest[str(artifact_id)] = {**entry, "exists": False}
+                continue
+            entry["exists"] = True
+            if path.is_symlink():
+                manifest[str(artifact_id)] = {
+                    **entry,
+                    "kind": "symlink",
+                    "target": str(path.readlink()),
+                }
+            elif path.is_file():
+                manifest[str(artifact_id)] = {
+                    **entry,
+                    "kind": "file",
+                    "size_bytes": stat.st_size,
+                    "sha256": self._file_sha256(path),
+                }
+            elif path.is_dir():
+                directory_manifest = self._directory_manifest(path)
+                manifest[str(artifact_id)] = {
+                    **entry,
+                    "kind": "directory",
+                    **directory_manifest,
+                }
+            else:
+                manifest[str(artifact_id)] = {**entry, "kind": "other", "size_bytes": stat.st_size}
+        return manifest
+
+    @staticmethod
+    def _file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _directory_manifest(self, path: Path) -> dict[str, Any]:
+        digest = hashlib.sha256()
+        file_count = 0
+        total_size = 0
+        for child in sorted(path.rglob("*"), key=lambda item: str(item.relative_to(path))):
+            rel = str(child.relative_to(path))
+            try:
+                stat = child.lstat()
+            except FileNotFoundError:
+                continue
+            digest.update(rel.encode("utf-8"))
+            if child.is_symlink():
+                digest.update(b"symlink")
+                digest.update(str(child.readlink()).encode("utf-8"))
+                continue
+            if child.is_file():
+                file_count += 1
+                total_size += stat.st_size
+                digest.update(b"file")
+                digest.update(str(stat.st_size).encode("utf-8"))
+                digest.update(self._file_sha256(child).encode("utf-8"))
+            elif child.is_dir():
+                digest.update(b"dir")
+        return {
+            "file_count": file_count,
+            "size_bytes": total_size,
+            "manifest_sha256": digest.hexdigest(),
+        }
 
     @staticmethod
     def _adapter_name_for(task_id: str, default_adapter: str | None, options: dict[str, Any]) -> str | None:

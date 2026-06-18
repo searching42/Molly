@@ -349,6 +349,7 @@
       let activeProject = { project_id: "proj-oled", name: "proj-oled" };
       let knownProjects = [];
       let conversationMessages = [];
+      let currentRunId = "";
       let currentConversationDecision = null;
       let currentModelingPlanPayload = null;
       let currentResearchSourceProposal = null;
@@ -413,9 +414,11 @@
         updateActiveProjectDisplay(project);
         syncProjectId(activeProject.project_id);
         conversationMessages = [];
+        currentRunId = "";
         currentConversationDecision = null;
         currentModelingPlanPayload = null;
         currentResearchSourceProposal = null;
+        syncRunId("");
         const stream = document.getElementById("conversation-stream");
         if (stream) {
           stream.innerHTML = "";
@@ -651,6 +654,9 @@
         if (runId) {
           setText("active-project-run", `运行：${runId}`);
           setText("workspace-run-pill", runId);
+        } else {
+          setText("active-project-run", "运行：尚未创建");
+          setText("workspace-run-pill", "未创建");
         }
       }
 
@@ -680,12 +686,14 @@
       function syncGeneratedRunId(seedText = "") {
         const input = document.getElementById("conversation-input");
         const goal = String(seedText || input?.value || activeProject.project_id || "run").trim();
-        const runId = buildRunId(goal);
-        syncRunId(runId);
-        return runId;
+        if (!currentRunId) {
+          currentRunId = buildRunId(goal);
+        }
+        syncRunId(currentRunId);
+        return currentRunId;
       }
 
-      syncGeneratedRunId(activeProject.project_id);
+      syncRunId("");
       syncProjectId(activeProject.project_id);
 
       document.getElementById("new-project-form").addEventListener("submit", async (event) => {

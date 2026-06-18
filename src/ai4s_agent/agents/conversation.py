@@ -14,19 +14,64 @@ class ConversationAgent:
         ("emission_max_nm", ("lambda_em", "emission", "emission max", "fluorescence wavelength")),
         ("absorption_max_nm", ("lambda_abs", "absorption", "absorption max")),
     )
+    DEFAULT_PROPERTY_CHOICES = ("plqy", "emission_max_nm", "absorption_max_nm")
+    NON_TARGET_INPUTS = {
+        "canonical_smiles",
+        "smiles",
+        "mol",
+        "molecule",
+        "molecule_id",
+        "molid",
+        "mol_id",
+        "id",
+        "dataset_id",
+        "candidate_id",
+        "split",
+        "split_group",
+        "scaffold",
+        "solvent",
+        "reference",
+        "source",
+        "doi",
+        "url",
+    }
     TRAINING_TERMS = ("train", "training", "model", "predict", "optimize", "screen")
-    EXPLICIT_APPROVAL_TERMS = ("approve", "approved", "allow", "allowed", "permission")
-    EVIDENCE_USE_TERMS = ("use this", "use that", "use the", "use cited", "use external", "use literature")
+    EXPLICIT_APPROVAL_TERMS = ("approve", "approved", "allow", "allowed", "permission", "批准", "同意", "允许")
+    EVIDENCE_USE_TERMS = (
+        "use this",
+        "use that",
+        "use the",
+        "use cited",
+        "use external",
+        "use literature",
+        "使用这些",
+        "使用这个",
+        "使用该",
+        "用这些",
+        "用这个",
+        "用该",
+    )
     EVIDENCE_SCOPE_TERMS = (
         "external evidence",
         "external literature",
+        "external acquisition",
+        "acquisition scope",
         "literature evidence",
         "cited evidence",
         "cited source",
         "target evidence",
+        "literature/database",
         "doi",
         "url",
         "source",
+        "外部证据",
+        "文献证据",
+        "引用证据",
+        "目标证据",
+        "外部文献",
+        "这些文献",
+        "这个 doi",
+        "该 doi",
     )
     EVIDENCE_REJECTION_TERMS = (
         "do not use",
@@ -34,11 +79,24 @@ class ConversationAgent:
         "do not approve",
         "don't approve",
         "not approve",
+        "not the literature evidence",
+        "not literature evidence",
+        "not external evidence",
+        "not the cited evidence",
         "ignore external",
         "ignore this evidence",
         "ignore that evidence",
         "no, do not",
         "no, don't",
+        "不要使用",
+        "不使用",
+        "不同意",
+        "不批准",
+        "忽略外部",
+        "忽略这个证据",
+        "忽略该证据",
+        "忽略这个 doi",
+        "忽略该 doi",
     )
 
     def prepare_modeling_plan_payload(
@@ -47,15 +105,19 @@ class ConversationAgent:
         run_id: str,
         messages: list[dict[str, Any]],
         project_id: str | None = None,
+        available_inputs: list[Any] | None = None,
     ) -> dict[str, Any]:
         clean_messages = self._coerce_messages(messages)
+        clean_available_inputs = self._clean_available_inputs(available_inputs)
+        property_choices = self._available_property_choices(clean_available_inputs)
         goal = self._goal_from_messages(clean_messages)
         full_text = "\n".join(message["content"] for message in clean_messages)
-        property_id = self._detect_property(full_text)
+        property_id = self._detect_property(full_text, available_properties=property_choices)
         approved = self._external_evidence_approved(clean_messages)
         evidence = self._extract_cited_evidence(clean_messages)
         questions = self._questions(
             property_id=property_id,
+            property_choices=property_choices,
             has_pending_external_evidence=bool(evidence and not approved),
         )
 
@@ -70,6 +132,8 @@ class ConversationAgent:
         }
         if project_id is not None:
             payload["project_id"] = str(project_id or "").strip()
+        if available_inputs is not None:
+            payload["available_inputs"] = clean_available_inputs
         return payload
 
     def decide_next_turn(
@@ -86,6 +150,7 @@ class ConversationAgent:
             run_id=run_id,
             messages=messages,
             project_id=project_id,
+            available_inputs=available_inputs,
         )
         if project_memory is not None:
             if not isinstance(project_memory, dict):
@@ -97,11 +162,6 @@ class ConversationAgent:
             ):
                 raise ValueError("previous_diagnostics must be a list of objects")
             modeling_payload["previous_diagnostics"] = previous_diagnostics
-        if available_inputs is not None:
-            if not isinstance(available_inputs, list):
-                raise ValueError("available_inputs must be a list")
-            modeling_payload["available_inputs"] = [str(item).strip() for item in available_inputs if str(item).strip()]
-
         questions = [
             PlanQuestion.model_validate(question)
             for question in modeling_payload.get("agent_questions", [])
@@ -211,12 +271,61 @@ class ConversationAgent:
         return user_messages[-1] if user_messages else ""
 
     @classmethod
-    def _detect_property(cls, text: str) -> str:
+    def _detect_property(cls, text: str, *, available_properties: list[str] | None = None) -> str:
         lowered = text.lower()
         for property_id, aliases in cls.PROPERTY_ALIASES:
             if any(alias in lowered for alias in aliases):
                 return property_id
+        searchable = f" {cls._search_text(text)} "
+        for property_id in available_properties or []:
+            variants = {
+                property_id,
+                property_id.replace("_", " "),
+                property_id.replace("-", " "),
+            }
+            if any((needle := cls._search_text(variant)) and f" {needle} " in searchable for variant in variants):
+                return property_id
         return ""
+
+    @classmethod
+    def _clean_available_inputs(cls, available_inputs: list[Any] | None) -> list[str]:
+        if available_inputs is None:
+            return []
+        if not isinstance(available_inputs, list):
+            raise ValueError("available_inputs must be a list")
+        return [str(item).strip() for item in available_inputs if str(item).strip()]
+
+    @classmethod
+    def _available_property_choices(cls, available_inputs: list[str]) -> list[str]:
+        choices: list[str] = []
+        seen: set[str] = set()
+        for item in available_inputs:
+            property_id = cls._canonical_property_token(item)
+            if not property_id or property_id in cls.NON_TARGET_INPUTS or property_id in seen:
+                continue
+            seen.add(property_id)
+            choices.append(property_id)
+        return choices
+
+    @classmethod
+    def _canonical_property_token(cls, value: str) -> str:
+        normalized = cls._property_token(value)
+        if not normalized:
+            return ""
+        for property_id, aliases in cls.PROPERTY_ALIASES:
+            terms = (property_id, *aliases)
+            if normalized in {cls._property_token(term) for term in terms}:
+                return property_id
+        return normalized
+
+    @staticmethod
+    def _property_token(value: str) -> str:
+        token = "".join(char.lower() if char.isalnum() else "_" for char in str(value or "").strip())
+        return "_".join(part for part in token.split("_") if part)
+
+    @staticmethod
+    def _search_text(value: str) -> str:
+        return " ".join("".join(char.lower() if char.isalnum() else " " for char in str(value or "")).split())
 
     @classmethod
     def _external_evidence_approved(cls, messages: list[dict[str, str]]) -> bool:
@@ -244,11 +353,10 @@ class ConversationAgent:
 
     @classmethod
     def _approves_external_evidence(cls, lowered: str) -> bool:
-        if any(term in lowered for term in cls.EXPLICIT_APPROVAL_TERMS):
-            return True
+        has_approval_intent = any(term in lowered for term in cls.EXPLICIT_APPROVAL_TERMS)
         has_use_intent = any(term in lowered for term in cls.EVIDENCE_USE_TERMS)
         has_evidence_scope = any(term in lowered for term in cls.EVIDENCE_SCOPE_TERMS)
-        return has_use_intent and has_evidence_scope
+        return (has_approval_intent or has_use_intent) and has_evidence_scope
 
     @classmethod
     def _extract_cited_evidence(cls, messages: list[dict[str, str]]) -> list[dict[str, Any]]:
@@ -311,16 +419,26 @@ class ConversationAgent:
                 break
         return summary or clean
 
-    @staticmethod
-    def _questions(*, property_id: str, has_pending_external_evidence: bool) -> list[PlanQuestion]:
+    @classmethod
+    def _questions(
+        cls,
+        *,
+        property_id: str,
+        property_choices: list[str] | None = None,
+        has_pending_external_evidence: bool,
+    ) -> list[PlanQuestion]:
         questions: list[PlanQuestion] = []
         if not property_id:
+            choices = list(property_choices or cls.DEFAULT_PROPERTY_CHOICES)
+            choices = choices[:8]
+            if "revise_goal" not in choices:
+                choices.append("revise_goal")
             questions.append(
                 PlanQuestion(
                     question_id="select_modeling_property",
                     prompt="Which target property should this modeling plan train?",
                     reason="The dialogue did not contain a clear trainable target property.",
-                    choices=["plqy", "emission_max_nm", "absorption_max_nm", "revise_goal"],
+                    choices=choices,
                     blocks_execution=True,
                 )
             )

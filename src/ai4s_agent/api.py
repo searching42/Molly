@@ -493,6 +493,7 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
                 run_id=run_id,
                 project_id=project_id or None,
                 messages=messages,
+                available_inputs=payload.get("available_inputs"),
             )
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
@@ -936,6 +937,15 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
                     "permission": decision.model_dump(mode="json"),
                 }
             ), 403
+        if required_gates:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "gated adapter execution requires run-plan snapshot approval",
+                    "required_gates": required_gates,
+                    "permission": decision.model_dump(mode="json"),
+                }
+            ), 400
         try:
             status = _read_run_status(orch, projects, run_id, project_id=project_id)
         except ValueError as exc:

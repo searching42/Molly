@@ -60,16 +60,22 @@ Planned downstream artifacts:
 The agentic `RunPlanExecutor` treats a gate approval as approval for a frozen
 execution snapshot, not as approval for a mutable resume request. When a run
 pauses at a gated atomic task, `stage.json` records the current task, default or
-approved adapter, run plan, task options, normalized payload, required gates,
-and snapshot hash. `/api/run-plan/resume` validates that the current task's
-execution content still matches that snapshot before appending
-`gate_decisions.json`; the gate decision records the approved snapshot id and
-hash.
+approved adapter, run plan, task options, normalized payload, referenced input
+artifact content digests, required gates, and snapshot hash.
+`/api/run-plan/resume` validates that the current task's execution content still
+matches that snapshot before appending `gate_decisions.json`; the gate decision
+records the approved snapshot id and hash. Approval is scoped to the paused
+task only: resume rejects extra future gates, consumes the approval after that
+task, and requires a new snapshot if a later task uses the same gate name.
+Plan-only remote tasks that return `status=planned` also write an execute-ready
+snapshot so the user can resume through the same approval boundary.
 
 Direct adapter execution is closed to the atomic task registry. `/api/adapters/execute`
 may call only adapters that map to a registered task policy, then applies the
-same permission and gate checks. Exported legacy helpers remain importable for
-tests or fallback code but are not API-executable unless registered.
+same permission and gate checks. Gated adapters still cannot be executed
+directly; they must go through `RunPlanExecutor` snapshot approval. Exported
+legacy helpers remain importable for tests or fallback code but are not
+API-executable unless registered.
 
 Project-scoped run state is authoritative when a request includes `project_id`.
 Status and direct adapter gate checks read `projects/<project_id>/runs/<run_id>`

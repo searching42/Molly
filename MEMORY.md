@@ -123,10 +123,15 @@ http://127.0.0.1:8792/
 - Gate approval must be snapshot-bound. `RunPlanExecutor` writes an
   `execution_snapshot` at each gate pause and records the approved snapshot
   id/hash in `gate_decisions.json`; resume must not accept changed current-task
-  adapters, options, artifacts, or run plans after the approval boundary.
+  adapters, options, referenced artifact content, or run plans after the
+  approval boundary. Approval applies only to the paused task snapshot: reject
+  extra future gates, consume the approval after the task, and pause again if a
+  later task uses the same gate name.
 - Direct adapter execution is closed to the atomic task registry. Exported
   helpers and legacy adapters are not API-executable unless they map to a
-  registered task policy with permission and gate checks.
+  registered task policy with permission and gate checks. Gated adapters must
+  run through `RunPlanExecutor` snapshot approval, not direct
+  `/api/adapters/execute`.
 - API paths that receive `project_id` should read run state and gate decisions
   from `projects/<project_id>/runs/<run_id>` first, falling back to legacy
   `runs/<run_id>` only for old endpoints and compatibility.
@@ -147,6 +152,11 @@ http://127.0.0.1:8792/
 - Chat UI should call the `ConversationTurnDecision` boundary before modeling
   plan generation. Research-source proposal preparation from chat is review-only
   and must not perform external acquisition.
+- Chat `run_id` should remain stable across messages in one selected project
+  conversation.
+- Conversation target-property detection must use `available_inputs` /
+  property catalogs for dynamic targets such as `homo`, `lumo`, and `soc_rate`,
+  not only the built-in OLED `plqy`/emission/absorption aliases.
 
 ## Documentation Notes
 

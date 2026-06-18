@@ -68,6 +68,38 @@ def test_conversation_turn_decision_asks_for_missing_property() -> None:
     assert any(question.question_id == "select_modeling_property" for question in decision.questions)
 
 
+def test_conversation_bridge_detects_property_from_available_inputs() -> None:
+    agent = ConversationAgent()
+
+    payload = agent.prepare_modeling_plan_payload(
+        run_id="run-dialogue-homo",
+        messages=[
+            {"role": "user", "content": "Train a HOMO prediction model for this molecule set."},
+        ],
+        available_inputs=["SMILES", "HOMO", "LUMO", "solvent"],
+    )
+
+    assert payload["property_id"] == "homo"
+    assert payload["available_inputs"] == ["SMILES", "HOMO", "LUMO", "solvent"]
+    assert payload["agent_questions"] == []
+
+
+def test_conversation_bridge_uses_available_inputs_for_property_clarification_choices() -> None:
+    agent = ConversationAgent()
+
+    decision = agent.decide_next_turn(
+        run_id="run-dialogue-dynamic-target-choice",
+        messages=[
+            {"role": "user", "content": "Please build a model for these molecules."},
+        ],
+        available_inputs=["SMILES", "HOMO", "LUMO", "SOC rate", "solvent"],
+    )
+
+    question = next(item for item in decision.questions if item.question_id == "select_modeling_property")
+    assert question.choices == ["homo", "lumo", "soc_rate", "revise_goal"]
+    assert decision.modeling_plan_payload["available_inputs"] == ["SMILES", "HOMO", "LUMO", "SOC rate", "solvent"]
+
+
 def test_conversation_bridge_prepares_research_source_payload_from_dialogue() -> None:
     agent = ConversationAgent()
 
@@ -172,6 +204,47 @@ def test_conversation_bridge_keeps_external_evidence_pending_when_user_rejects_u
     assert payload["user_approved_external_search"] is False
     assert payload["cited_target_evidence"] == []
     assert payload["pending_cited_target_evidence"][0]["doi"] == "10.1038/s41597-020-00634-8"
+
+
+def test_conversation_bridge_does_not_treat_training_approval_as_evidence_approval() -> None:
+    agent = ConversationAgent()
+
+    payload = agent.prepare_modeling_plan_payload(
+        run_id="run-dialogue-approve-training-not-evidence",
+        messages=[
+            {"role": "user", "content": "Train PLQY. DOI 10.1038/s41597-020-00634-8 says solvent matters."},
+            {"role": "user", "content": "I approve baseline training, but not the literature evidence."},
+        ],
+    )
+
+    assert payload["user_approved_external_search"] is False
+    assert payload["cited_target_evidence"] == []
+    assert payload["pending_cited_target_evidence"][0]["doi"] == "10.1038/s41597-020-00634-8"
+
+
+def test_conversation_bridge_supports_chinese_evidence_approval_and_rejection() -> None:
+    agent = ConversationAgent()
+
+    approved = agent.prepare_modeling_plan_payload(
+        run_id="run-dialogue-chinese-approval",
+        messages=[
+            {"role": "user", "content": "训练 PLQY。DOI 10.1038/s41597-020-00634-8 说溶剂很重要。"},
+            {"role": "user", "content": "同意使用这些文献证据。"},
+        ],
+    )
+    rejected = agent.prepare_modeling_plan_payload(
+        run_id="run-dialogue-chinese-rejection",
+        messages=[
+            {"role": "user", "content": "训练 PLQY。DOI 10.1038/s41597-020-00634-8 说溶剂很重要。"},
+            {"role": "user", "content": "不要使用这个 DOI。"},
+        ],
+    )
+
+    assert approved["user_approved_external_search"] is True
+    assert approved["cited_target_evidence"][0]["doi"] == "10.1038/s41597-020-00634-8"
+    assert rejected["user_approved_external_search"] is False
+    assert rejected["cited_target_evidence"] == []
+    assert rejected["pending_cited_target_evidence"][0]["doi"] == "10.1038/s41597-020-00634-8"
 
 
 def test_conversation_bridge_strips_trailing_punctuation_from_doi() -> None:
