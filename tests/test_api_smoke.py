@@ -2334,3 +2334,76 @@ def test_project_memory_enabled_endpoint_requires_explicit_boolean(tmp_path) -> 
 
     assert missing.status_code == 400
     assert invalid.status_code == 400
+
+
+def test_direct_remote_prediction_execute_rejected_by_snapshot_policy(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    # Plan-only is still allowed
+    planned = client.post(
+        "/api/adapters/execute",
+        json={
+            "run_id": "r-direct-remote-predict-plan",
+            "adapter": "predict_candidates_domain_model_adapter",
+            "project_approved": True,
+            "payload": {
+                "run_id": "r-direct-remote-predict-plan",
+                "candidate_csv": str(tmp_path / "candidates.csv"),
+                "output_csv": str(tmp_path / "predictions.csv"),
+                "property_id": "plqy",
+                "model_id": "plqy_solvent_pca64_seed42",
+                "model_backend": "unimol_with_solvent_pca64",
+                "model_dir": str(tmp_path / "model"),
+                "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
+                "required_inputs": ["canonical_smiles", "solvent"],
+                "execute": False,
+            },
+        },
+    )
+    assert planned.status_code == 200
+    assert planned.json["result"]["status"] == "planned"
+
+    # But execute=true must go through snapshot
+    blocked = client.post(
+        "/api/adapters/execute",
+        json={
+            "run_id": "r-direct-remote-predict-blocked",
+            "adapter": "predict_candidates_domain_model_adapter",
+            "project_approved": True,
+            "payload": {
+                "run_id": "r-direct-remote-predict-blocked",
+                "candidate_csv": str(tmp_path / "candidates.csv"),
+                "output_csv": str(tmp_path / "predictions.csv"),
+                "property_id": "plqy",
+                "model_id": "plqy_solvent_pca64_seed42",
+                "model_backend": "unimol_with_solvent_pca64",
+                "model_dir": str(tmp_path / "model"),
+                "input_columns": {"canonical_smiles": "SMILES", "solvent": "solvent"},
+                "required_inputs": ["canonical_smiles", "solvent"],
+                "execute": True,
+            },
+        },
+    )
+    assert blocked.status_code == 400
+    assert "requires run-plan snapshot approval when execute=true" in blocked.json["error"]
+
+    # Legacy Uni-Mol prediction adapter also blocked when execute=true
+    blocked_legacy = client.post(
+        "/api/adapters/execute",
+        json={
+            "run_id": "r-direct-legacy-predict-blocked",
+            "adapter": "predict_candidates_unimol_legacy_adapter",
+            "project_approved": True,
+            "payload": {
+                "run_id": "r-direct-legacy-predict-blocked",
+                "candidate_csv": str(tmp_path / "candidates.csv"),
+                "output_csv": str(tmp_path / "predictions.csv"),
+                "property_id": "lambda_em",
+                "model_dir": str(tmp_path / "model"),
+                "execute": True,
+            },
+        },
+    )
+    assert blocked_legacy.status_code == 400
+    assert "requires run-plan snapshot approval when execute=true" in blocked_legacy.json["error"]

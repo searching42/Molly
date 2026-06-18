@@ -989,3 +989,43 @@ def test_run_plan_resume_endpoint_rejects_missing_gate_approval(tmp_path: Path) 
 
     assert resp.status_code == 400
     assert "gate approval required: gate_3_train_config" in resp.json["error"]
+
+
+def test_task_options_rejects_artifact_identity_key_override(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    dataset = tmp_path / "input" / "train.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    run_plan = expand_run_plan(
+        run_id="r-protected-keys",
+        requested_tasks=["train_model"],
+        available_artifacts=[],
+    )
+    executor = RunPlanExecutor(storage=storage)
+    with pytest.raises(ValueError, match="cannot override artifact identity keys"):
+        executor.execute(
+            project_id="proj-exec",
+            run_plan=run_plan,
+            input_artifacts={"uploaded_dataset": str(dataset)},
+            task_options={"train_model": {"train_csv": "/tmp/override.csv"}},
+        )
+
+
+def test_task_options_allows_non_protected_keys_and_safe_overrides(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    dataset = tmp_path / "input" / "train.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    run_plan = expand_run_plan(
+        run_id="r-safe-options",
+        requested_tasks=["train_model"],
+        available_artifacts=[],
+    )
+    executor = RunPlanExecutor(storage=storage)
+    result = executor.execute(
+        project_id="proj-exec",
+        run_plan=run_plan,
+        input_artifacts={"uploaded_dataset": str(dataset)},
+        task_options={"train_model": {"epochs": 20, "batch_size": 16, "adapter": "train_model_unimol_legacy_adapter", "execute": False}},
+    )
+    assert result["status"] == RunStatus.WAITING_USER.value

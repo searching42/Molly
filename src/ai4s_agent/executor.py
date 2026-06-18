@@ -8,7 +8,7 @@ from typing import Any
 
 from ai4s_agent import adapters
 from ai4s_agent.agents.modeling import ModelingAgent
-from ai4s_agent._utils import now_iso, strict_smiles_cleaning_enabled, write_json
+from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, strict_smiles_cleaning_enabled, write_json
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import (
     ArtifactRef,
@@ -688,6 +688,9 @@ class RunPlanExecutor:
     def _payload_options(options: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(options, dict):
             return {}
+        protected = [key for key in options if str(key) in PROTECTED_PAYLOAD_KEYS]
+        if protected:
+            raise ValueError(f"task options cannot override artifact identity keys: {protected}")
         return {str(key): value for key, value in options.items() if str(key) != "adapter"}
 
     def _planned_external_result(self, task_id: str, adapter_name: str | None, payload: dict[str, Any]) -> dict[str, Any] | None:

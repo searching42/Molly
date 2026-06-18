@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from werkzeug.utils import secure_filename
 
 import ai4s_agent.adapters as adapter_exports
-from ai4s_agent._utils import now_iso, write_json
+from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, write_json
 from ai4s_agent.agents.conversation import ConversationAgent
 from ai4s_agent.agents.generation import GenerationAgent
 from ai4s_agent.agents.modeling import ModelingAgent
@@ -943,6 +943,14 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
                     "ok": False,
                     "error": "gated adapter execution requires run-plan snapshot approval",
                     "required_gates": required_gates,
+                    "permission": decision.model_dump(mode="json"),
+                }
+            ), 400
+        if _adapter_requires_snapshot_for_execute(adapter_name, adapter_payload):
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "this adapter requires run-plan snapshot approval when execute=true",
                     "permission": decision.model_dump(mode="json"),
                 }
             ), 400
@@ -1962,6 +1970,28 @@ def _adapter_execution_policy(adapter_name: str, adapter_payload: dict) -> tuple
         if backend != "deterministic_stub" or count >= 128:
             action = "generate_candidates_expensive"
     return action, list(task.gates)
+
+
+_CANNOT_DIRECT_EXECUTE = frozenset(
+    {
+        "predict_candidates_unimol_legacy_adapter",
+        "predict_candidates_domain_model_adapter",
+        "train_model_unimol_legacy_adapter",
+    }
+)
+
+
+def _adapter_requires_snapshot_for_execute(adapter_name: str, adapter_payload: dict) -> bool:
+    """Return True when a plan-capable adapter requests execute=true directly.
+
+    Remote / heavyweight adapters that accept ``execute`` must go through
+    the RunPlan executor so that every execution records a snapshot,
+    approval audit, and content-hash verification.
+    """
+    if adapter_name not in _CANNOT_DIRECT_EXECUTE:
+        return False
+    execute_flag = adapter_payload.get("execute")
+    return bool(execute_flag) and str(execute_flag).strip().lower() not in {"false", "0", "no", "off", ""}
 
 
 def _read_run_status(

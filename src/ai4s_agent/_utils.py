@@ -39,6 +39,20 @@ def truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "project-approved"}
 
 
+PROTECTED_PAYLOAD_KEYS: frozenset[str] = frozenset(
+    {
+        "run_id",
+        "input_csv",
+        "train_csv",
+        "cleaned_master_csv",
+        "candidate_csv",
+        "model_path",
+        "model_dir",
+        "property_catalog_json",
+    }
+)
+
+
 def strict_smiles_cleaning_enabled(payload: dict[str, Any]) -> bool:
     if "strict_smiles_cleaning" in payload:
         return truthy(payload.get("strict_smiles_cleaning"))
