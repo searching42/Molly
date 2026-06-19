@@ -32,6 +32,12 @@
 - `actor`, `confirmed`, `note`, `approved_at` 等 audit-only 字段被拆分到 `audit_metadata`，不进入 canonical snapshot hash
 - OPEN-004 仍会继续补充独立 `ExecutionConfirmation` 审计记录
 
+### OPEN-007: Phase 3 executor payload builder 缺失
+- **状态**: Resolved in `phase3-7`
+- RunPlanExecutor 现在支持 Phase 3 文献源、采集、解析、索引、检索、抽取、归一化、溯源、合并、确认和泄漏检查任务的 payload builder
+- Phase 3 adapter outputs 会注册为稳定 artifact id，例如 `corpus_source_manifest`, `pdf_corpus`, `parsed_document`, `parser_audit`, `corpus_index`, `evidence_hits`, `extracted_records`, `candidate_training_dataset`, `citation_provenance_report`, `conflict_report`
+- Gated `parse_document` 仍通过 snapshot / gate approval / resume 路径执行，并在 resume 后注册 parser artifacts
+
 ### OPEN-008: Chat UI 未传入 property catalog
 - **状态**: Resolved in `chat8` / GitHub Issue #8
 - ConversationAgent 在 API 请求未显式传入 `available_inputs` 时，会从当前 project/run 的 artifact registry 自动读取 `property_catalog`
@@ -74,10 +80,6 @@
 - 建议: 建立单一 registry，统一 task alias、execution mode、effective risk、required gates 与 direct-executable 策略
 
 ## B. 科研工作流集成
-
-### OPEN-007: Phase 3 executor payload builder 缺失
-- **MVP**: P1 / **生产**: P1
-- Phase 3 task 已进入 registry，但 generic executor 还缺少对应 payload builder 与 artifact collection 分支
 
 ### OPEN-010: 证据批准与 acquisition scope 共用布尔值
 - **MVP**: P2 / **生产**: P1
@@ -122,9 +124,8 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-007 — Phase 3 executor payload builder 与 artifact collection
-2. OPEN-006 — 统一 Execution Policy Registry
-3. OPEN-010 — evidence approval 与 acquisition scope 拆分
+1. OPEN-006 — 统一 Execution Policy Registry
+2. OPEN-010 — evidence approval 与 acquisition scope 拆分
 
 ## Remote / Multi-user Production Blockers
 
