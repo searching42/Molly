@@ -10,6 +10,7 @@ from werkzeug.utils import secure_filename
 from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.memory import PermissionPolicy
 from ai4s_agent.schemas import AssetManifest, AssetStatus
+from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -28,10 +29,12 @@ def install_immutable_upload_assets() -> None:
         runs = Path(base_runs_dir or api_module.DEFAULT_RUNS_DIR).resolve()
         projects = ProjectStorage(workspace_dir=workspace)
         permissions = PermissionPolicy()
+        server_permissions = ServerPermissionStore(workspace_dir=workspace)
         app.view_functions["upload_file"] = _upload_file_view(
             app=app,
             projects=projects,
             permissions=permissions,
+            server_permissions=server_permissions,
             allowed_file=api_module._allowed_file,
             max_upload_bytes_default=api_module.MAX_UPLOAD_BYTES,
             chunk_bytes=api_module.UPLOAD_COPY_CHUNK_BYTES,
@@ -47,6 +50,7 @@ def _upload_file_view(
     app: Any,
     projects: ProjectStorage,
     permissions: PermissionPolicy,
+    server_permissions: ServerPermissionStore,
     allowed_file: Any,
     max_upload_bytes_default: int,
     chunk_bytes: int,
@@ -56,19 +60,27 @@ def _upload_file_view(
         clean_id = str(project_id or "").strip()
         if not clean_id:
             return jsonify({"ok": False, "error": "project_id required"}), 400
-        decision = permissions.decide(
-            "upload_dataset",
-            project_id=clean_id,
-            project_approved=_as_bool(request.form.get("project_approved"))
-            or _as_bool(request.headers.get("X-Project-Approved")),
-            actor=str(request.form.get("actor") or request.headers.get("X-Actor") or ""),
-        )
-        if not decision.allowed:
+        actor = str(request.form.get("actor") or request.headers.get("X-Actor") or "").strip()
+        legacy_project_approved = _as_bool(request.form.get("project_approved")) or _as_bool(request.headers.get("X-Project-Approved"))
+        allow_legacy_flags = _config_bool(app.config.get("AI4S_ALLOW_CLIENT_PERMISSION_FLAGS", True), default=True)
+        try:
+            decision = decide_server_permission(
+                server_permissions,
+                permissions,
+                "upload_dataset",
+                project_id=clean_id,
+                actor=actor,
+                legacy_project_approved=legacy_project_approved,
+                allow_legacy_client_flags=allow_legacy_flags,
+            )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        if not decision["allowed"]:
             return jsonify(
                 {
                     "ok": False,
-                    "error": "project approval required for dataset upload",
-                    "permission": decision.model_dump(mode="json"),
+                    "error": "server permission grant required for dataset upload",
+                    "permission": decision,
                 }
             ), 403
         max_upload_bytes = int(app.config.get("AI4S_MAX_UPLOAD_BYTES", max_upload_bytes_default) or max_upload_bytes_default)
@@ -112,7 +124,8 @@ def _upload_file_view(
                 "ok": True,
                 "path": asset["legacy_path"],
                 "filename": filename,
-                "asset": asset,
+                "asset": {**asset, "permission": decision},
+                "permission": decision,
             }
         )
 
@@ -230,3 +243,18 @@ def _as_bool(value: Any) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _config_bool(value: Any, *, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value != 0
+    clean = str(value).strip().lower()
+    if clean in {"false", "0", "no", "n", "off"}:
+        return False
+    if clean in {"true", "1", "yes", "y", "on"}:
+        return True
+    return default
