@@ -30,7 +30,6 @@ _TASK_ADAPTER_OVERRIDES: dict[str, tuple[str, ...]] = {
     ),
     "parse_document": (
         "parse_document_mineru_adapter",
-        "parse_pdf_folder_mineru_adapter",
         "parse_document_pdfplumber_adapter",
         "parse_document_pymupdf_adapter",
         "parse_document_grobid_adapter",
