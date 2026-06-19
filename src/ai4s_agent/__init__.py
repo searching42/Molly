@@ -10,6 +10,7 @@ from ai4s_agent.external_approval_compat import install_external_approval_error_
 from ai4s_agent.external_approvals import install_external_approval_split
 from ai4s_agent.json_rmw_lock import install_json_rmw_locks
 from ai4s_agent.phase3_executor import install_phase3_executor_support
+from ai4s_agent.project_job_routes import install_project_scoped_job_routes
 from ai4s_agent.project_scoped_jobs import install_project_scoped_jobs
 from ai4s_agent.snapshot_material import install_run_plan_executor_snapshot_builder
 
@@ -24,3 +25,4 @@ install_external_approval_error_compat()
 install_durable_job_control()
 install_project_scoped_jobs()
 install_json_rmw_locks()
+install_project_scoped_job_routes()
