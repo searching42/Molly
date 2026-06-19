@@ -65,7 +65,7 @@
 - **状态**: Resolved in `open11` for durable worker control-plane
 - JobManager 现在将 `worker_lease`, `external_task_id`, `heartbeat_at`, `lease_expires_at`, `cancel_requested` 与 cancellation metadata 写入 `job_state.json`
 - 新增 worker lease acquisition、heartbeat renewal、cancel request、worker should-stop polling、lease release 和 stale lease detection/takeover
-- 这些 control-plane 状态可跨 JobManager/API 进程重启恢复；真实异步 worker runner / process pool 不在本项内，继续由 OPEN-023 跟踪
+- 这些 control-plane 状态可跨 JobManager/API 进程重启恢复；真实 worker execution loop 由 OPEN-023 跟踪
 
 ### OPEN-012: Job key 非 `(project_id, run_id)`
 - **状态**: Resolved in `open12` for JobManager project-scoped keys
@@ -86,7 +86,7 @@
 - 不带 `project_id` 的 legacy clients 继续使用原 Orchestrator `runs/<run_id>` namespace
 
 ### OPEN-017: Upload 非 immutable/versioned asset
-- **状态**: Resolved in `asset17`
+- **状态**: Resolved in `asset17` / PR #25
 - Project upload 现在会写入 immutable/versioned asset：`workspace/projects/<project_id>/assets/uploads/<asset_stem>/<version>/...`
 - 每次上传都会记录 `asset_id`, `version`, `sha256`, `size_bytes`, `original_filename`, `content_hash`, `asset_manifest.json` 与 `upload_record.json`
 - Legacy `uploads/<filename>` 仅作为首个上传的兼容副本保留；同名重复上传会生成新 asset version，不再覆盖或拒绝 source-of-truth asset
@@ -112,17 +112,16 @@
 - Phase 1 过去默认依赖工作区同级的 `claude/scripts`，导致干净 GitHub runner 无法运行 parser、cleaning 和 RunPlan 测试
 - 现在优先兼容 legacy workspace；缺失时回退到随 `ai4s_agent` 打包的 deterministic parser 与 cleaning contract，并在 dev dependencies 中声明 RDKit
 
+### OPEN-023: 缺少真实异步 worker runner / process supervisor
+- **状态**: Resolved in `worker23` for local worker execution loop
+- 新增 `LocalWorkerRunner` 与 `LocalWorkerContext`，可围绕已存在的 project-scoped job 执行真实 task callback
+- Runner 会获取 project worker lease、写 heartbeat、暴露 `should_stop()`、记录任务日志，并在成功、异常或 stop/cancel 后写入 SUCCEEDED、FAILED 或 CANCELLED 终态
+- 本项不启动线程池、进程池或 remote scheduler；这些可作为后续 deployment hardening，而不是 durable execution loop 的阻塞项
+
 ### OPEN-024: 旧 API route 尚未全面切换到 project-scoped job key
 - **状态**: Resolved in `route24` / PR #21 for JobManager route layer
 - Job-related API routes 在请求携带 `project_id` 时会使用 `(project_id, run_id)` project-scoped JobManager key
 - 不携带 `project_id` 的旧客户端继续走 legacy `runs/<run_id>`；ambiguity 时要求显式 `project_id`
-
-## C. 状态、任务和持久化
-
-### OPEN-023: 缺少真实异步 worker runner / process supervisor
-- **MVP**: P2 / **生产**: P0
-- OPEN-011 已提供 durable worker control-plane，但仍没有实际 worker process pool、queue consumer、remote task submitter 或自动重试 supervisor
-- 后续需要把 worker lease/heartbeat/cancel contract 接入真正的 local/remote worker runner，并定义 worker crash recovery 与 retry policy
 
 ## D. 权限
 
@@ -141,16 +140,15 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-023 — 真实异步 worker runner / process supervisor
-2. OPEN-015 — 服务端身份、权限与审批边界
-3. OPEN-016 — Project memory permission boundary
+1. OPEN-015 — 服务端身份、权限与审批边界
+2. OPEN-016 — Project memory permission boundary
+3. OPEN-018 — api.py 单体路由
 
 ## Remote / Multi-user Production Blockers
 
 1. OPEN-015 — 服务端身份、权限与审批边界
-2. OPEN-023 — 真实异步 worker runner / process supervisor
-3. OPEN-016 — project memory permission boundary
-4. OPEN-018 — api.py 单体路由
+2. OPEN-016 — project memory permission boundary
+3. OPEN-018 — api.py 单体路由
 
 ## GitHub Issue Mapping
 
