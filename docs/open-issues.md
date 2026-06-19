@@ -73,6 +73,12 @@
 - 同一个 `run_id` 可在不同 project 下并存；duplicate active job 只在同一 `(project_id, run_id)` 内拒绝
 - Legacy `runs/<run_id>` API 仍保留兼容；旧 route 的全面切换继续由 OPEN-024 跟踪
 
+### OPEN-013: JSON 原子替换无并发保护
+- **状态**: Resolved in `atomic13` for ProjectStorage hot-path RMW files
+- 为 `artifact_registry.json`, `gate_decisions.json`, `asset_promotion_records.json` 增加 locked read-modify-write 更新路径，避免并发 register/append 时 lost update
+- 锁实现使用同路径 `.lock` 文件与进程内 fallback lock，并在锁内完成 read -> mutate -> atomic write
+- 新增并发测试覆盖 artifact registry、gate decisions 与 asset promotion records；更大范围的事务化/SQLite 化仍可作为后续 production hardening
+
 ### OPEN-019: 无 CI 测试记录
 - **状态**: Resolved in `fix/job-state-and-ci`
 - GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
@@ -95,10 +101,6 @@
 - 现在优先兼容 legacy workspace；缺失时回退到随 `ai4s_agent` 打包的 deterministic parser 与 cleaning contract，并在 dev dependencies 中声明 RDKit
 
 ## C. 状态、任务和持久化
-
-### OPEN-013: JSON 原子替换无并发保护
-- **MVP**: P2 / **生产**: P1
-- Artifact registry、gate decision、promotion record 等 JSON read-modify-write 仍没有 file lock、compare-and-swap 或 SQLite transaction 保护
 
 ### OPEN-014: Project/legacy run state 未统一
 - **MVP**: P2 / **生产**: P1
@@ -135,17 +137,17 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-013 — JSON RMW concurrency control
-2. OPEN-024 — 旧 API route 迁移到 project-scoped job key
-3. OPEN-023 — 真实异步 worker runner / process supervisor
+1. OPEN-024 — 旧 API route 迁移到 project-scoped job key
+2. OPEN-023 — 真实异步 worker runner / process supervisor
+3. OPEN-014 — Project/legacy run state 统一
 
 ## Remote / Multi-user Production Blockers
 
 1. OPEN-015 — 服务端身份、权限与审批边界
 2. OPEN-023 — 真实异步 worker runner / process supervisor
 3. OPEN-024 — 旧 API route 迁移到 project-scoped job key
-4. OPEN-013 — JSON RMW concurrency control
-5. OPEN-016 — project memory permission boundary
+4. OPEN-016 — project memory permission boundary
+5. OPEN-014 — Project/legacy run state 统一
 
 ## GitHub Issue Mapping
 
