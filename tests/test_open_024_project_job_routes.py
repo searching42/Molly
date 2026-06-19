@@ -23,6 +23,42 @@ def test_plan_route_uses_project_scoped_job_key_when_project_id_is_present(tmp_p
     assert listed.json["jobs"][0]["job_key"] == {"project_id": "project_a", "run_id": "route24-plan"}
 
 
+def test_project_plan_route_rejects_invalid_project_key_before_legacy_plan_write(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    response = client.post(
+        "/api/plan",
+        json={"project_id": "..", "run_id": "route24-invalid-project", "prompt": "Train a model."},
+    )
+
+    assert response.status_code == 400
+    assert "project_id" in response.json["error"]
+    assert not (tmp_path / "runs" / "route24-invalid-project" / "plan.json").exists()
+    assert not (tmp_path / "runs" / "projects" / ".." / "runs" / "route24-invalid-project" / "job_state.json").exists()
+
+
+def test_project_plan_route_documents_legacy_run_id_namespace_limit(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    first = client.post(
+        "/api/plan",
+        json={"project_id": "project_a", "run_id": "shared-plan", "prompt": "Train first model."},
+    )
+    second = client.post(
+        "/api/plan",
+        json={"project_id": "project_b", "run_id": "shared-plan", "prompt": "Train second model."},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert "legacy plan namespace" in second.json["error"]
+    assert (tmp_path / "runs" / "shared-plan" / "plan.json").exists()
+    assert (tmp_path / "runs" / "projects" / "project_a" / "runs" / "shared-plan" / "job_state.json").exists()
+    assert not (tmp_path / "runs" / "projects" / "project_b" / "runs" / "shared-plan" / "job_state.json").exists()
+
+
 def test_project_scoped_log_and_job_control_routes(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     client = app.test_client()
