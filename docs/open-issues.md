@@ -94,9 +94,9 @@
 
 ### OPEN-016: Project memory 修改无权限边界
 - **状态**: Resolved in `mem16`
-- Project memory create/update/delete/enabled 写操作现在要求 `project_memory_write` server grant，并通过 permission audit 记录 action、actor、grant_id、allowed/reason
-- 读操作和 export 保持不变；写操作默认不接受客户端 `project_approved` fallback
-- 仅在显式设置 `AI4S_ALLOW_MEMORY_CLIENT_PERMISSION_FLAGS=true` 时允许 legacy client flag，并会审计标记 `legacy_client_flag`
+- Project memory create/update/delete/enabled 写操作现在接入 `project_memory_write` server grant 和 permission audit，记录 action、actor、grant_id、allowed/reason
+- 读操作和 export 保持不变；legacy memory write fallback 会被审计标记为 `legacy_client_flag`
+- 可通过 `AI4S_ALLOW_MEMORY_CLIENT_PERMISSION_FLAGS=false` 禁用 memory 客户端布尔 fallback，使写操作必须使用 server grant
 
 ### OPEN-017: Upload 非 immutable/versioned asset
 - **状态**: Resolved in `asset17` / PR #25
