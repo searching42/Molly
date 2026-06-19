@@ -306,6 +306,9 @@ def test_api_job_control_endpoints(tmp_path: Path) -> None:
         assert resp.status_code == 409
 
         client.post("/api/runs/r1/stop")
+        project_plan = client.post("/api/plan", json={"project_id": "proj-a", "run_id": "r1", "prompt": "project retry"})
+        assert project_plan.status_code == 200
+        assert client.post("/api/projects/proj-a/runs/r1/stop").status_code == 200
         storage = ProjectStorage(workspace_dir=tmp_path)
         storage.write_stage_state(
             "proj-a",
@@ -357,8 +360,9 @@ def test_api_retry_rejects_non_retryable_or_non_latest_failed_stage(tmp_path: Pa
     storage = ProjectStorage(workspace_dir=tmp_path)
 
     with app.test_client() as client:
-        client.post("/api/plan", json={"run_id": "r1", "prompt": "test"})
-        client.post("/api/runs/r1/stop")
+        project_plan = client.post("/api/plan", json={"project_id": "proj-a", "run_id": "r1", "prompt": "test"})
+        assert project_plan.status_code == 200
+        assert client.post("/api/projects/proj-a/runs/r1/stop").status_code == 200
 
         storage.write_stage_state(
             "proj-a",
