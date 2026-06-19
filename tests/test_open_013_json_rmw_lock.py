@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from ai4s_agent._utils import now_iso
 from ai4s_agent.schemas import AssetPromotionRecord, GateDecision, GateName
 from ai4s_agent.storage import ProjectStorage
@@ -72,3 +74,18 @@ def test_asset_promotion_records_concurrent_appends_do_not_drop_entries(tmp_path
     records = payload["records"]
     assert len(records) == 40
     assert {item["version"] for item in records} == {f"v{index:03d}" for index in range(40)}
+
+
+def test_locked_rmw_preserves_storage_containment_for_symlink_json(tmp_path) -> None:
+    storage = ProjectStorage(tmp_path)
+    run_path = storage.run_dir("project", "run")
+    outside = tmp_path / "outside_registry.json"
+    outside.write_text(json.dumps({"artifacts": {"outside": "do-not-touch"}}), encoding="utf-8")
+    symlink = run_path / "artifact_registry.json"
+    symlink.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="escapes base directory"):
+        storage.register_artifact_path("project", "run", "new_artifact", "outputs/new.json")
+
+    assert json.loads(outside.read_text(encoding="utf-8")) == {"artifacts": {"outside": "do-not-touch"}}
+    assert symlink.is_symlink()
