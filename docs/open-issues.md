@@ -20,6 +20,11 @@
 - GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
 - PR #3 的 CI run #18 已验证 `481 passed, 0 failed, 0 errors, 0 skipped`
 
+### OPEN-020: Backlog 尚未同步为 GitHub Issues / CI 可引用检查项
+- **状态**: Resolved in `docs/open-020-github-issue-sync`
+- 已为当前高优先级 implementation backlog 创建 GitHub Issues，并在本文档末尾维护 OPEN id 到 issue number 的映射
+- 后续 PR 应同时引用 OPEN id 和对应 GitHub issue number；低优先级 backlog 可继续先留在本文档中
+
 ### OPEN-021: Phase 3 remote adapter 未纳入严格 execute/gate 策略
 - **状态**: Resolved in `fix/open-006-021-execution-policy`
 - MinerU、PDF-folder MinerU 和 GROBID adapter 在 package boundary 严格校验 `execute` 为 JSON boolean
@@ -34,17 +39,20 @@
 ## A. 执行与审批边界
 
 ### OPEN-003: 辅助资源未进入 snapshot hash
+- **GitHub Issue**: #6
 - **MVP**: P1 / **生产**: P1
 - Snapshot 只 hash 了 payload 中引用并能匹配 artifact registry 的路径
 - `scorer_path`, `calibration_json`, `solvent_embedding_path`, `descriptor_config`, wrapper/script path 等临时或外部辅助资源没有统一进入 content manifest
 - 建议: 统一 snapshot material/resource reference；所有影响计算结果的文件都记录 sha256、size、role 和 resolved path
 
 ### OPEN-004: execute-ready resume 的审计记录边界不清
+- **GitHub Issue**: #7
 - **MVP**: P1 / **生产**: P0/P1
 - 真正问题不是所有 ungated task 都必须有 domain gate approval，而是 plan-only / execute-ready resume 需要明确区分 gate approval 与 execution confirmation
 - 建议: 引入 `ExecutionConfirmation` 或同等 audit record，记录 actor、snapshot id/hash、task、adapter、confirmed_at、note；domain `GateDecision` 只表示领域风险门禁通过
 
 ### OPEN-005: Snapshot 计算 payload 与审计 metadata 未分层
+- **GitHub Issue**: #6
 - **MVP**: P1 / **生产**: P1
 - 主要风险不是 actor 本身，而是 snapshot 构造时常用 `actor=""`，实际执行 payload 可能带 `actor` / `confirmed` 等非计算字段，导致被审批内容与执行输入边界不清
 - 建议: 拆分 `execution_payload` 与 `audit_metadata`；只有计算 payload 进入 snapshot hash，actor/confirmed/note/approved_at 进入 execution confirmation audit record
@@ -62,10 +70,12 @@
 - Phase 3 task 已进入 registry，但 generic executor 还缺少对应 payload builder 与 artifact collection 分支
 
 ### OPEN-008: Chat UI 未传入 property catalog
+- **GitHub Issue**: #8
 - **MVP**: P1 / **生产**: P1
 - 后端 `ConversationAgent` 已支持 `available_inputs`，但当前 Chat UI 调用 `/api/agent/conversation/next-turn` 时没有自动携带项目 property catalog / available inputs
 
 ### OPEN-009: Chat proposal 未连接 gated execution 闭环
+- **GitHub Issue**: #8
 - **MVP**: P1 / **生产**: P1
 - Chat 当前主要生成 review payload / modeling plan；尚未连接到 RunPlan preview、snapshot、gate confirmation、resume、monitoring 和 artifact feedback
 
@@ -108,12 +118,6 @@
 ### OPEN-018: api.py 单体路由
 - **MVP**: P2 / **生产**: P2
 
-### OPEN-020: Backlog 尚未同步为 GitHub Issues / CI 可引用检查项
-- **MVP**: P2 / **生产**: P2
-- 原“bug 清单仅存本地”问题已解决：`docs/open-issues.md` 已是 tracked 文件
-- 仍未解决的是这些 OPEN items 尚未同步为 GitHub Issues、labels、milestones 或 CI 可引用的检查项
-- 建议: 将高优先级 OPEN items 建为 GitHub Issues，并在 PR template / CI summary 中引用 issue id
-
 ---
 
 ## Localhost MVP 修复顺序
@@ -135,3 +139,12 @@
 5. OPEN-012 — `(project_id, run_id)` job key
 6. OPEN-013 — JSON RMW concurrency control
 7. OPEN-016 — project memory permission boundary
+
+## GitHub Issue Mapping
+
+| OPEN id | GitHub Issue | Notes |
+| --- | --- | --- |
+| OPEN-003 / OPEN-005 | #6 | Snapshot material coverage and execution payload/audit metadata split |
+| OPEN-004 | #7 | Execution confirmation audit record for execute-ready resume |
+| OPEN-008 / OPEN-009 | #8 | Chat property catalog and gated RunPlan execution loop |
+| OPEN-020 | #9 | Backlog-to-GitHub-Issues tracking |
