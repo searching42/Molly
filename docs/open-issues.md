@@ -92,6 +92,12 @@
 - Project upload 现在优先使用 server grant；旧 `project_approved` 仅作为 compatibility fallback，并会被审计标记为 `legacy_client_flag`
 - 可通过 `AI4S_ALLOW_CLIENT_PERMISSION_FLAGS=false` 禁用客户端布尔 fallback，使上传必须使用 server grant
 
+### OPEN-016: Project memory 修改无权限边界
+- **状态**: Resolved in `mem16`
+- Project memory create/update/delete/enabled 写操作现在接入 `project_memory_write` server grant 和 permission audit，记录 action、actor、grant_id、allowed/reason
+- 读操作和 export 保持不变；仅在显式设置 `AI4S_ALLOW_MEMORY_CLIENT_PERMISSION_FLAGS=true` 且请求携带 `project_approved` / `X-Project-Approved` 时允许 legacy memory write fallback，并会审计标记 `legacy_client_flag`
+- 默认配置下，无 server grant 且无显式 legacy flag 的 memory write 会返回 403
+
 ### OPEN-017: Upload 非 immutable/versioned asset
 - **状态**: Resolved in `asset17` / PR #25
 - Project upload 现在会写入 immutable/versioned asset：`workspace/projects/<project_id>/assets/uploads/<asset_stem>/<version>/...`
@@ -130,11 +136,6 @@
 - Job-related API routes 在请求携带 `project_id` 时会使用 `(project_id, run_id)` project-scoped JobManager key
 - 不携带 `project_id` 的旧客户端继续走 legacy `runs/<run_id>`；ambiguity 时要求显式 `project_id`
 
-## D. 权限
-
-### OPEN-016: Project memory 修改无权限边界
-- **MVP**: P2 / **生产**: P0/P1
-
 ## F. 代码结构与追踪
 
 ### OPEN-018: api.py 单体路由
@@ -144,13 +145,11 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-016 — Project memory permission boundary
-2. OPEN-018 — api.py 单体路由
+1. OPEN-018 — api.py 单体路由
 
 ## Remote / Multi-user Production Blockers
 
-1. OPEN-016 — project memory permission boundary
-2. OPEN-018 — api.py 单体路由
+1. OPEN-018 — api.py 单体路由
 
 ## GitHub Issue Mapping
 
