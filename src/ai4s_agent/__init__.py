@@ -13,8 +13,7 @@ from ai4s_agent.snapshot_material import install_run_plan_executor_snapshot_buil
 install_run_plan_executor_snapshot_builder()
 install_execution_confirmation_audit()
 install_chat_project_context()
-install_chat_runplan_routes = install_chat_run_plan_routes
-install_chat_runplan_routes()
+install_chat_run_plan_routes()
 install_phase3_executor_support()
 install_execution_policy_registry()
 install_external_approval_split()
