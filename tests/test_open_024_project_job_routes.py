@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from ai4s_agent._utils import now_iso
 from ai4s_agent.app import create_app
+from ai4s_agent.schemas import RunStatus, StageHistoryItem, StageState
+from ai4s_agent.storage import ProjectStorage
 
 
 def test_plan_route_uses_project_scoped_job_key_when_project_id_is_present(tmp_path) -> None:
@@ -72,6 +75,70 @@ def test_project_plan_route_allows_same_run_id_in_different_projects(tmp_path) -
     assert status_b.json["status"]["plan_exists"] is True
     assert status_a.json["status"]["plan_scope"] == "project"
     assert status_b.json["status"]["plan_scope"] == "project"
+
+
+def test_project_gate_approval_does_not_write_or_read_legacy_namespace(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    assert client.post("/api/plan", json={"project_id": "project_a", "run_id": "shared-gate", "prompt": "Train A."}).status_code == 200
+    assert client.post("/api/plan", json={"project_id": "project_b", "run_id": "shared-gate", "prompt": "Train B."}).status_code == 200
+
+    approved_a = client.post(
+        "/api/gates/approve",
+        json={"project_id": "project_a", "run_id": "shared-gate", "gate": "gate_1_task_parse", "actor": "alice"},
+    )
+    assert approved_a.status_code == 200
+    assert approved_a.json["plan_scope"] == "project"
+    assert approved_a.json["next_gate"] == "gate_2_data_mining"
+
+    status_a = client.get("/api/projects/project_a/runs/shared-gate/status")
+    status_b = client.get("/api/projects/project_b/runs/shared-gate/status")
+    assert len(status_a.json["status"]["gate_decisions"]) == 1
+    assert status_a.json["status"]["gate_decisions"][0]["actor"] == "alice"
+    assert status_b.json["status"]["gate_decisions"] == []
+    assert not (tmp_path / "runs" / "shared-gate" / "gate_decisions.json").exists()
+
+    approved_b = client.post(
+        "/api/gates/approve",
+        json={"project_id": "project_b", "run_id": "shared-gate", "gate": "gate_1_task_parse", "actor": "bob"},
+    )
+    assert approved_b.status_code == 200
+    status_b_after = client.get("/api/projects/project_b/runs/shared-gate/status")
+    assert status_b_after.json["status"]["gate_decisions"][0]["actor"] == "bob"
+
+
+def test_project_retry_reads_project_plan_status_not_legacy_orchestrator(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    assert client.post(
+        "/api/plan",
+        json={"project_id": "project_a", "run_id": "project-retry", "prompt": "Train model."},
+    ).status_code == 200
+    assert not (tmp_path / "runs" / "project-retry" / "plan.json").exists()
+    assert client.post("/api/projects/project_a/runs/project-retry/stop").status_code == 200
+
+    now = now_iso()
+    ProjectStorage(workspace_dir=tmp_path).write_stage_state(
+        "project_a",
+        "project-retry",
+        StageState(
+            stage="train_model",
+            status=RunStatus.FAILED,
+            started_at=now,
+            updated_at=now,
+            error={"retryable": True},
+            details={},
+            history=[StageHistoryItem(stage="train_model", status=RunStatus.FAILED, updated_at=now, note="failed")],
+        ),
+    )
+
+    retry = client.post("/api/runs/project-retry/retry", json={"project_id": "project_a"})
+    assert retry.status_code == 200
+    assert retry.json["job_key"] == {"project_id": "project_a", "run_id": "project-retry"}
+    assert retry.json["retry_stage"] == "train_model"
+    state = ProjectStorage(workspace_dir=tmp_path).read_stage_state("project_a", "project-retry")
+    assert state is not None
+    assert state.status == RunStatus.PENDING
 
 
 def test_project_scoped_log_and_job_control_routes(tmp_path) -> None:
