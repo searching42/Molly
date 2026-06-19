@@ -54,6 +54,13 @@
 - 新增 `/api/agent/conversation/execution-feedback`，可把 RunPlan stage、snapshot、artifact registry、gate decisions 和 execution confirmations 回传给 chat 决策层
 - 该闭环仍不绕过 `/api/run-plan/execute` 与 `/api/run-plan/resume` 的 snapshot/gate confirmation 路径
 
+### OPEN-010: 证据批准与 acquisition scope 共用布尔值
+- **状态**: Resolved in `open10`
+- Target evidence approval 拆为 `user_approved_external_evidence`，只允许已引用证据进入 modeling brief
+- External search scope 拆为 `user_approved_external_search_scope`，不会被 target evidence approval 隐式授权
+- Acquisition scope 继续使用 `user_confirmed_external_acquisition`，不会被 evidence approval 或 search approval 隐式授权
+- `/api/agent/modeling-plan` 返回 `external_approval_policy`，并在 target modeling brief 的 dataset context 中记录实际使用的 approval split
+
 ### OPEN-019: 无 CI 测试记录
 - **状态**: Resolved in `fix/job-state-and-ci`
 - GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
@@ -74,11 +81,6 @@
 - **状态**: Resolved in `fix/job-state-and-ci`
 - Phase 1 过去默认依赖工作区同级的 `claude/scripts`，导致干净 GitHub runner 无法运行 parser、cleaning 和 RunPlan 测试
 - 现在优先兼容 legacy workspace；缺失时回退到随 `ai4s_agent` 打包的 deterministic parser 与 cleaning contract，并在 dev dependencies 中声明 RDKit
-
-## B. 科研工作流集成
-
-### OPEN-010: 证据批准与 acquisition scope 共用布尔值
-- **MVP**: P2 / **生产**: P1
 
 ## C. 状态、任务和持久化
 
@@ -120,7 +122,9 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-010 — evidence approval 与 acquisition scope 拆分
+1. OPEN-011 — durable worker / lease / heartbeat / cancellation
+2. OPEN-012 — `(project_id, run_id)` job key
+3. OPEN-013 — JSON RMW concurrency control
 
 ## Remote / Multi-user Production Blockers
 
