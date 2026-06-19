@@ -76,3 +76,12 @@ def test_project_scoped_job_ids_reject_path_segments(tmp_path: Path) -> None:
         manager.start_project_job("nested/project", "run")
     with pytest.raises(ValueError, match="run_id"):
         manager.start_project_job("project", "nested/run")
+    with pytest.raises(ValueError, match="project_id"):
+        manager.start_project_job("..", "run")
+    with pytest.raises(ValueError, match="run_id"):
+        manager.start_project_job("project", "..")
+    with pytest.raises(ValueError, match="project_id"):
+        manager.start_project_background_job("..", "run", task_id="retrieve_evidence", budget=BackgroundJobBudget(max_steps=1))
+
+    assert not (tmp_path / "job_state.json").exists()
+    assert not (tmp_path.parent / "runs" / "job_state.json").exists()
