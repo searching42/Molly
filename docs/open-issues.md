@@ -38,6 +38,12 @@
 - 自动上下文会提取 artifact id、property_id 与 source_column，使 `/api/agent/conversation/next-turn` 和 `/api/agent/conversation/modeling-payload` 能识别项目数据中的目标属性
 - 显式传入的 `available_inputs` 仍优先，不会被项目上下文覆盖
 
+### OPEN-009: Chat proposal 未连接 gated execution 闭环
+- **状态**: Resolved in `chat9` / GitHub Issue #8
+- 新增 `/api/agent/conversation/run-plan-preview`，可将 chat/modeling payload 转换为 reviewable RunPlan preview，并返回 required gates、missing artifacts、task risk 与受控执行提示
+- 新增 `/api/agent/conversation/execution-feedback`，可把 RunPlan stage、snapshot、artifact registry、gate decisions 和 execution confirmations 回传给 chat 决策层
+- 该闭环仍不绕过 `/api/run-plan/execute` 与 `/api/run-plan/resume` 的 snapshot/gate confirmation 路径
+
 ### OPEN-019: 无 CI 测试记录
 - **状态**: Resolved in `fix/job-state-and-ci`
 - GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
@@ -72,11 +78,6 @@
 ### OPEN-007: Phase 3 executor payload builder 缺失
 - **MVP**: P1 / **生产**: P1
 - Phase 3 task 已进入 registry，但 generic executor 还缺少对应 payload builder 与 artifact collection 分支
-
-### OPEN-009: Chat proposal 未连接 gated execution 闭环
-- **GitHub Issue**: #8
-- **MVP**: P1 / **生产**: P1
-- Chat 当前主要生成 review payload / modeling plan；尚未连接到 RunPlan preview、snapshot、gate confirmation、resume、monitoring 和 artifact feedback
 
 ### OPEN-010: 证据批准与 acquisition scope 共用布尔值
 - **MVP**: P2 / **生产**: P1
@@ -121,10 +122,9 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-009 — Chat proposal 接入 gated RunPlan preview / resume / artifact feedback
-2. OPEN-007 — Phase 3 executor payload builder 与 artifact collection
-3. OPEN-006 — 统一 Execution Policy Registry
-4. OPEN-010 — evidence approval 与 acquisition scope 拆分
+1. OPEN-007 — Phase 3 executor payload builder 与 artifact collection
+2. OPEN-006 — 统一 Execution Policy Registry
+3. OPEN-010 — evidence approval 与 acquisition scope 拆分
 
 ## Remote / Multi-user Production Blockers
 
