@@ -3,6 +3,7 @@ __version__ = "0.1.0"
 
 from ai4s_agent.chat_context import install_chat_project_context
 from ai4s_agent.chat_runplan import install_chat_run_plan_routes
+from ai4s_agent.durable_job_control import install_durable_job_control
 from ai4s_agent.execution_confirmation import install_execution_confirmation_audit
 from ai4s_agent.execution_policy import install_execution_policy_registry
 from ai4s_agent.external_approval_compat import install_external_approval_error_compat
@@ -18,3 +19,4 @@ install_phase3_executor_support()
 install_execution_policy_registry()
 install_external_approval_split()
 install_external_approval_error_compat()
+install_durable_job_control()

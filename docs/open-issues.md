@@ -61,6 +61,12 @@
 - Acquisition scope 继续使用 `user_confirmed_external_acquisition`，不会被 evidence approval 或 search approval 隐式授权
 - `/api/agent/modeling-plan` 返回 `external_approval_policy`，并在 target modeling brief 的 dataset context 中记录实际使用的 approval split
 
+### OPEN-011: JobManager 非 durable executor
+- **状态**: Resolved in `open11` for durable worker control-plane
+- JobManager 现在将 `worker_lease`, `external_task_id`, `heartbeat_at`, `lease_expires_at`, `cancel_requested` 与 cancellation metadata 写入 `job_state.json`
+- 新增 worker lease acquisition、heartbeat renewal、cancel request、worker should-stop polling、lease release 和 stale lease detection/takeover
+- 这些 control-plane 状态可跨 JobManager/API 进程重启恢复；真实异步 worker runner / process pool 不在本项内，继续由 OPEN-023 跟踪
+
 ### OPEN-019: 无 CI 测试记录
 - **状态**: Resolved in `fix/job-state-and-ci`
 - GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
@@ -84,11 +90,6 @@
 
 ## C. 状态、任务和持久化
 
-### OPEN-011: JobManager 非 durable executor
-- **MVP**: P2 / **生产**: P0
-- **已完成子项**: 普通 Job 的状态、attempt 和 transition history 已持久化到 `job_state.json`；API 进程重启后可读取、暂停、恢复、停止和完成已有 Job
-- **仍未解决**: JobManager 不拥有实际 worker 任务，缺少外部任务标识、heartbeat、lease 和 worker 重启接管；`executable` 仍为 `false`
-
 ### OPEN-012: Job key 非 `(project_id, run_id)`
 - **MVP**: P2 / **生产**: P0/P1
 - Job 状态仍以 legacy `runs/<run_id>` 路径存储；需同步迁移 API、日志和 background job 调用到 project-scoped key
@@ -99,6 +100,11 @@
 
 ### OPEN-014: Project/legacy run state 未统一
 - **MVP**: P2 / **生产**: P1
+
+### OPEN-023: 缺少真实异步 worker runner / process supervisor
+- **MVP**: P2 / **生产**: P0
+- OPEN-011 已提供 durable worker control-plane，但仍没有实际 worker process pool、queue consumer、remote task submitter 或自动重试 supervisor
+- 后续需要把 worker lease/heartbeat/cancel contract 接入真正的 local/remote worker runner，并定义 worker crash recovery 与 retry policy
 
 ## D. 权限
 
@@ -122,14 +128,14 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-011 — durable worker / lease / heartbeat / cancellation
-2. OPEN-012 — `(project_id, run_id)` job key
-3. OPEN-013 — JSON RMW concurrency control
+1. OPEN-012 — `(project_id, run_id)` job key
+2. OPEN-013 — JSON RMW concurrency control
+3. OPEN-023 — 真实异步 worker runner / process supervisor
 
 ## Remote / Multi-user Production Blockers
 
 1. OPEN-015 — 服务端身份、权限与审批边界
-2. OPEN-011 — durable worker / lease / heartbeat / cancellation
+2. OPEN-023 — 真实异步 worker runner / process supervisor
 3. OPEN-012 — `(project_id, run_id)` job key
 4. OPEN-013 — JSON RMW concurrency control
 5. OPEN-016 — project memory permission boundary
