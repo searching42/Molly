@@ -85,6 +85,13 @@
 - Project-scoped status、gate approval 和 retry 都读取或写入 project namespace；同一个 `run_id` 可在不同 project 下独立使用
 - 不带 `project_id` 的 legacy clients 继续使用原 Orchestrator `runs/<run_id>` namespace
 
+### OPEN-015: 权限由客户端自行声明
+- **状态**: Resolved in `perm15` for server-side grant and audit layer
+- 新增 project-scoped server permission grants：`/api/projects/<project_id>/permissions/grants`
+- 新增 permission audit：`/api/projects/<project_id>/permissions/audit`，记录 action、actor、grant_id、allowed/reason 和是否使用 legacy client flag
+- Project upload 现在优先使用 server grant；旧 `project_approved` 仅作为 compatibility fallback，并会被审计标记为 `legacy_client_flag`
+- 可通过 `AI4S_ALLOW_CLIENT_PERMISSION_FLAGS=false` 禁用客户端布尔 fallback，使上传必须使用 server grant
+
 ### OPEN-017: Upload 非 immutable/versioned asset
 - **状态**: Resolved in `asset17` / PR #25
 - Project upload 现在会写入 immutable/versioned asset：`workspace/projects/<project_id>/assets/uploads/<asset_stem>/<version>/...`
@@ -125,9 +132,6 @@
 
 ## D. 权限
 
-### OPEN-015: 权限由客户端自行声明
-- **MVP**: P2 / **生产**: P0
-
 ### OPEN-016: Project memory 修改无权限边界
 - **MVP**: P2 / **生产**: P0/P1
 
@@ -140,15 +144,13 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-015 — 服务端身份、权限与审批边界
-2. OPEN-016 — Project memory permission boundary
-3. OPEN-018 — api.py 单体路由
+1. OPEN-016 — Project memory permission boundary
+2. OPEN-018 — api.py 单体路由
 
 ## Remote / Multi-user Production Blockers
 
-1. OPEN-015 — 服务端身份、权限与审批边界
-2. OPEN-016 — project memory permission boundary
-3. OPEN-018 — api.py 单体路由
+1. OPEN-016 — project memory permission boundary
+2. OPEN-018 — api.py 单体路由
 
 ## GitHub Issue Mapping
 
