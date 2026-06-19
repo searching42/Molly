@@ -54,13 +54,13 @@ class LocalWorkerRunner:
         try:
             stop = context.should_stop()
             if stop["should_stop"]:
-                final = self.jobs.complete_project_job(project, run, status=RunStatus.CANCELLED)
+                final = _finish_cancelled_or_current(self.jobs, project, run)
                 return LocalWorkerResult(project, run, self.worker_id, str(final.get("status") or RunStatus.CANCELLED.value), should_stop_reason=str(stop.get("reason") or ""))
             context.heartbeat()
             result = task(context) or {}
             stop = context.should_stop()
             if stop["should_stop"]:
-                final = self.jobs.complete_project_job(project, run, status=RunStatus.CANCELLED)
+                final = _finish_cancelled_or_current(self.jobs, project, run)
                 self.jobs.add_project_log(project, run, "WARN", "local_worker", f"Local worker stopped: {stop.get('reason')}")
                 return LocalWorkerResult(project, run, self.worker_id, str(final.get("status") or RunStatus.CANCELLED.value), result=result, should_stop_reason=str(stop.get("reason") or ""))
             final = self.jobs.complete_project_job(project, run, status=RunStatus.SUCCEEDED)
@@ -213,6 +213,16 @@ def project_worker_should_stop(
         if _lease_expired(lease, now=_utc_now()):
             return {"project_id": project, "run_id": run, "should_stop": True, "reason": "lease_expired"}
     return {"project_id": project, "run_id": run, "should_stop": False, "reason": ""}
+
+
+def _finish_cancelled_or_current(jobs: JobManager, project_id: str, run_id: str) -> dict[str, Any]:
+    try:
+        return jobs.complete_project_job(project_id, run_id, status=RunStatus.CANCELLED)
+    except KeyError:
+        current = jobs.read_project_job_state(project_id, run_id)
+        if current:
+            return current
+        return {"project_id": project_id, "run_id": run_id, "status": RunStatus.CANCELLED.value}
 
 
 def _fail_project_job(jobs: JobManager, project_id: str, run_id: str, *, worker_id: str, error: str, traceback_text: str = "") -> dict[str, Any]:
