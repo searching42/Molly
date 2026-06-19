@@ -53,14 +53,34 @@ def strict_bool(value: Any, *, key: str = "value") -> bool:
 
 PROTECTED_PAYLOAD_KEYS: frozenset[str] = frozenset(
     {
+        # Run / artifact identity. These are produced by storage and artifact
+        # registry state, not by user-supplied task options.
         "run_id",
         "input_csv",
         "train_csv",
         "cleaned_master_csv",
         "candidate_csv",
+        "prediction_csv",
+        "reference_csv",
         "model_path",
         "model_dir",
         "property_catalog_json",
+        # Output locations. RunPlanExecutor constructs these under the run
+        # directory; allowing task_options to override them can write artifacts
+        # outside the approved run directory.
+        "output_dir",
+        "output_csv",
+        "output_root",
+        "save_dir",
+        "model_root",
+        "log_dir",
+        "report_dir",
+        "artifact_dir",
+        "artifacts_dir",
+        "work_dir",
+        "working_dir",
+        "tmp_dir",
+        "temp_dir",
     }
 )
 
