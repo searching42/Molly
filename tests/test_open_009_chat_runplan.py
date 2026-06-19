@@ -4,7 +4,6 @@ from pathlib import Path
 
 from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.app import create_app
-from ai4s_agent.planner import expand_run_plan
 from ai4s_agent.schemas import ArtifactRef, GateName, RunStatus, StageHistoryItem, StageState
 from ai4s_agent.storage import ProjectStorage
 
@@ -58,8 +57,8 @@ def test_conversation_run_plan_preview_reports_missing_artifacts(tmp_path: Path)
         json={
             "project_id": "proj-missing-artifacts",
             "run_id": "run-missing-artifacts",
-            "modeling_plan_payload": {"run_id": "run-missing-artifacts", "goal": "Train model", "property_id": "plqy"},
-            "requested_tasks": ["predict_candidates"],
+            "modeling_plan_payload": {"run_id": "run-missing-artifacts", "goal": "Parse uploaded papers", "property_id": "plqy"},
+            "requested_tasks": ["parse_document"],
             "available_artifacts": [],
         },
     )
@@ -67,8 +66,7 @@ def test_conversation_run_plan_preview_reports_missing_artifacts(tmp_path: Path)
     assert resp.status_code == 200
     preview = resp.json["preview"]
     assert preview["status"] == "blocked_missing_artifacts"
-    assert "trained_model" in preview["missing_artifacts"]
-    assert "candidate_dataset" in preview["missing_artifacts"]
+    assert "pdf_corpus" in preview["missing_artifacts"]
     assert preview["next_actions"] == ["provide_missing_artifacts", "regenerate_run_plan_preview"]
 
 
@@ -77,13 +75,14 @@ def test_conversation_execution_feedback_surfaces_waiting_snapshot_and_audit_rec
     storage = ProjectStorage(workspace)
     project_id = "proj-feedback"
     run_id = "run-feedback"
-    run_dir = storage.run_dir(project_id, run_id)
+    storage.run_dir(project_id, run_id)
     storage.register_artifact_path(project_id, run_id, "cleaned_train_dataset", "cleaned.csv")
     now = now_iso()
     state = StageState(
         run_id=run_id,
         stage="train_model",
         status=RunStatus.WAITING_USER,
+        started_at=now,
         updated_at=now,
         history=[StageHistoryItem(stage="train_model", status=RunStatus.WAITING_USER, updated_at=now)],
         details={
@@ -126,6 +125,7 @@ def test_conversation_execution_feedback_surfaces_succeeded_artifacts(tmp_path: 
         run_id=run_id,
         stage="render_report",
         status=RunStatus.SUCCEEDED,
+        started_at=now,
         updated_at=now,
         history=[StageHistoryItem(stage="render_report", status=RunStatus.SUCCEEDED, updated_at=now)],
         artifacts=[ArtifactRef(artifact_id="render_report_result", relative_path="render_report/adapter_result.json")],
