@@ -25,6 +25,8 @@ def test_execution_policy_registry_resolves_adapter_aliases_and_gates() -> None:
     assert folder is not None
     assert folder.task_id == "parse_document"
     assert folder.required_gates == (GateName.DATA_MINING.value,)
+    assert folder.allowed_override_for == ()
+    assert folder.validate_execute_boolean is True
     assert grobid is not None
     assert grobid.task_id == "parse_document_grobid"
     assert grobid.required_gates == (GateName.DATA_MINING.value,)
@@ -59,6 +61,17 @@ def test_run_plan_executor_uses_policy_registry_for_adapter_overrides(tmp_path: 
             "render_report",
             "render_report_adapter",
             {"adapter": "parse_document_grobid_adapter"},
+        )
+
+
+def test_folder_mineru_adapter_cannot_override_parse_document_contract(tmp_path: Path) -> None:
+    executor = RunPlanExecutor(storage=ProjectStorage(tmp_path))
+
+    with pytest.raises(ValueError, match="adapter override not allowed"):
+        executor._adapter_name_for(
+            "parse_document",
+            "parse_document_mineru_adapter",
+            {"adapter": "parse_pdf_folder_mineru_adapter"},
         )
 
 
