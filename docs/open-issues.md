@@ -67,6 +67,12 @@
 - 新增 worker lease acquisition、heartbeat renewal、cancel request、worker should-stop polling、lease release 和 stale lease detection/takeover
 - 这些 control-plane 状态可跨 JobManager/API 进程重启恢复；真实异步 worker runner / process pool 不在本项内，继续由 OPEN-023 跟踪
 
+### OPEN-012: Job key 非 `(project_id, run_id)`
+- **状态**: Resolved in `open12` for JobManager project-scoped keys
+- JobManager 新增 project-scoped foreground/background job 方法，使用 `job_key = {project_id, run_id}` 并把状态写到 `runs/projects/<project_id>/runs/<run_id>/...`
+- 同一个 `run_id` 可在不同 project 下并存；duplicate active job 只在同一 `(project_id, run_id)` 内拒绝
+- Legacy `runs/<run_id>` API 仍保留兼容；旧 route 的全面切换继续由 OPEN-024 跟踪
+
 ### OPEN-019: 无 CI 测试记录
 - **状态**: Resolved in `fix/job-state-and-ci`
 - GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
@@ -90,10 +96,6 @@
 
 ## C. 状态、任务和持久化
 
-### OPEN-012: Job key 非 `(project_id, run_id)`
-- **MVP**: P2 / **生产**: P0/P1
-- Job 状态仍以 legacy `runs/<run_id>` 路径存储；需同步迁移 API、日志和 background job 调用到 project-scoped key
-
 ### OPEN-013: JSON 原子替换无并发保护
 - **MVP**: P2 / **生产**: P1
 - Artifact registry、gate decision、promotion record 等 JSON read-modify-write 仍没有 file lock、compare-and-swap 或 SQLite transaction 保护
@@ -105,6 +107,11 @@
 - **MVP**: P2 / **生产**: P0
 - OPEN-011 已提供 durable worker control-plane，但仍没有实际 worker process pool、queue consumer、remote task submitter 或自动重试 supervisor
 - 后续需要把 worker lease/heartbeat/cancel contract 接入真正的 local/remote worker runner，并定义 worker crash recovery 与 retry policy
+
+### OPEN-024: 旧 API route 尚未全面切换到 project-scoped job key
+- **MVP**: P2 / **生产**: P1
+- OPEN-012 已提供 JobManager project-scoped key 方法，但 `/api/plan`、legacy logs 与部分 background job 调用仍兼容旧 `run_id` key
+- 后续应在不破坏 legacy clients 的前提下，把 route 层调用迁移到显式 `(project_id, run_id)`
 
 ## D. 权限
 
@@ -128,15 +135,15 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-012 — `(project_id, run_id)` job key
-2. OPEN-013 — JSON RMW concurrency control
+1. OPEN-013 — JSON RMW concurrency control
+2. OPEN-024 — 旧 API route 迁移到 project-scoped job key
 3. OPEN-023 — 真实异步 worker runner / process supervisor
 
 ## Remote / Multi-user Production Blockers
 
 1. OPEN-015 — 服务端身份、权限与审批边界
 2. OPEN-023 — 真实异步 worker runner / process supervisor
-3. OPEN-012 — `(project_id, run_id)` job key
+3. OPEN-024 — 旧 API route 迁移到 project-scoped job key
 4. OPEN-013 — JSON RMW concurrency control
 5. OPEN-016 — project memory permission boundary
 
