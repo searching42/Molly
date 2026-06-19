@@ -20,6 +20,12 @@
 - Snapshot material 现在包含 `resource_manifest`，会记录 payload 中影响计算的路径型资源，包括未注册为 artifact 的 `scorer_path`, `calibration_json`, `solvent_embedding_path`, `descriptor_config`, wrapper/script path 等辅助文件
 - Manifest 记录 resolved path、存在性、kind、size 和 sha256 / directory digest；辅助资源内容变化会导致 resume 阶段出现 `execution snapshot changed`
 
+### OPEN-004: execute-ready resume 的审计记录边界不清
+- **状态**: Resolved in `confirm7` / GitHub Issue #7
+- `GateDecision` 继续只表达领域/风险 gate approval
+- 新增 `ExecutionConfirmation` 审计记录，单独记录 actor、task、adapter、snapshot id/hash、confirmed_at、note 和 approved_gates
+- `resume_after_gate` 成功继续执行后会写入 `execution_confirmations.json`，用于证明用户确认执行的是同一个已验证 snapshot
+
 ### OPEN-005: Snapshot 计算 payload 与审计 metadata 未分层
 - **状态**: Resolved in `snapshot6` / GitHub Issue #6
 - Snapshot material 现在使用 `execution_payload` 作为计算输入，并保留 `payload` 兼容别名
@@ -49,16 +55,10 @@
 
 ## A. 执行与审批边界
 
-### OPEN-004: execute-ready resume 的审计记录边界不清
-- **GitHub Issue**: #7
-- **MVP**: P1 / **生产**: P0/P1
-- 真正问题不是所有 ungated task 都必须有 domain gate approval，而是 plan-only / execute-ready resume 需要明确区分 gate approval 与 execution confirmation
-- 建议: 引入 `ExecutionConfirmation` 或同等 audit record，记录 actor、snapshot id/hash、task、adapter、confirmed_at、note；domain `GateDecision` 只表示领域风险门禁通过
-
 ### OPEN-006: Execution policy 硬编码 adapter set
 - **MVP**: P2 / **生产**: P1
 - `_CANNOT_DIRECT_EXECUTE` 与 adapter alias 手动维护，新增 remote/heavy adapter 容易遗漏
-- 当前 gated adapter 已被挡住，因此优先级低于 OPEN-004
+- 当前 gated adapter 已被挡住，因此优先级低于 Chat-to-RunPlan 闭环
 - 建议: 建立单一 registry，统一 task alias、execution mode、effective risk、required gates 与 direct-executable 策略
 
 ## B. 科研工作流集成
@@ -120,21 +120,19 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-004 — execute-ready resume 的 execution confirmation / audit record
-2. OPEN-008 — Chat UI 自动携带 property catalog / available inputs
-3. OPEN-009 — Chat proposal 接入 gated RunPlan preview / resume / artifact feedback
-4. OPEN-007 — Phase 3 executor payload builder 与 artifact collection
-5. OPEN-006 — 统一 Execution Policy Registry
-6. OPEN-010 — evidence approval 与 acquisition scope 拆分
+1. OPEN-008 — Chat UI 自动携带 property catalog / available inputs
+2. OPEN-009 — Chat proposal 接入 gated RunPlan preview / resume / artifact feedback
+3. OPEN-007 — Phase 3 executor payload builder 与 artifact collection
+4. OPEN-006 — 统一 Execution Policy Registry
+5. OPEN-010 — evidence approval 与 acquisition scope 拆分
 
 ## Remote / Multi-user Production Blockers
 
-1. OPEN-004 — execution confirmation audit
-2. OPEN-015 — 服务端身份、权限与审批边界
-3. OPEN-011 — durable worker / lease / heartbeat / cancellation
-4. OPEN-012 — `(project_id, run_id)` job key
-5. OPEN-013 — JSON RMW concurrency control
-6. OPEN-016 — project memory permission boundary
+1. OPEN-015 — 服务端身份、权限与审批边界
+2. OPEN-011 — durable worker / lease / heartbeat / cancellation
+3. OPEN-012 — `(project_id, run_id)` job key
+4. OPEN-013 — JSON RMW concurrency control
+5. OPEN-016 — project memory permission boundary
 
 ## GitHub Issue Mapping
 
