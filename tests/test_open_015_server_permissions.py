@@ -116,6 +116,31 @@ def test_legacy_project_approval_flag_is_audited_as_legacy_fallback(tmp_path) ->
     assert any(item["legacy_client_flag"] is True and item["reason"] == "LEGACY_CLIENT_PROJECT_APPROVED" for item in audit.json["audit"])
 
 
+def test_permission_grant_requires_literal_json_true_confirmation(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    client.post("/api/projects", json={"project_id": "proj-a"})
+
+    for value in ["false", "0", "no", "true", 1, False, None]:
+        response = client.post(
+            "/api/projects/proj-a/permissions/grants",
+            json={"action": "upload_dataset", "actor": "alice", "confirmed": value},
+        )
+        assert response.status_code == 403
+
+    grants = client.get("/api/projects/proj-a/permissions/grants")
+    assert grants.status_code == 200
+    assert grants.json["grants"] == []
+
+    created = client.post(
+        "/api/projects/proj-a/permissions/grants",
+        json={"action": "upload_dataset", "actor": "alice", "confirmed": True},
+    )
+    assert created.status_code == 200
+    grants_after = client.get("/api/projects/proj-a/permissions/grants")
+    assert len(grants_after.json["grants"]) == 1
+
+
 def test_permission_grant_requires_actor_and_confirmation(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     client = app.test_client()
