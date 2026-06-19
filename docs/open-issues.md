@@ -32,6 +32,12 @@
 - `actor`, `confirmed`, `note`, `approved_at` 等 audit-only 字段被拆分到 `audit_metadata`，不进入 canonical snapshot hash
 - OPEN-004 仍会继续补充独立 `ExecutionConfirmation` 审计记录
 
+### OPEN-008: Chat UI 未传入 property catalog
+- **状态**: Resolved in `chat8` / GitHub Issue #8
+- ConversationAgent 在 API 请求未显式传入 `available_inputs` 时，会从当前 project/run 的 artifact registry 自动读取 `property_catalog`
+- 自动上下文会提取 artifact id、property_id 与 source_column，使 `/api/agent/conversation/next-turn` 和 `/api/agent/conversation/modeling-payload` 能识别项目数据中的目标属性
+- 显式传入的 `available_inputs` 仍优先，不会被项目上下文覆盖
+
 ### OPEN-019: 无 CI 测试记录
 - **状态**: Resolved in `fix/job-state-and-ci`
 - GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
@@ -66,11 +72,6 @@
 ### OPEN-007: Phase 3 executor payload builder 缺失
 - **MVP**: P1 / **生产**: P1
 - Phase 3 task 已进入 registry，但 generic executor 还缺少对应 payload builder 与 artifact collection 分支
-
-### OPEN-008: Chat UI 未传入 property catalog
-- **GitHub Issue**: #8
-- **MVP**: P1 / **生产**: P1
-- 后端 `ConversationAgent` 已支持 `available_inputs`，但当前 Chat UI 调用 `/api/agent/conversation/next-turn` 时没有自动携带项目 property catalog / available inputs
 
 ### OPEN-009: Chat proposal 未连接 gated execution 闭环
 - **GitHub Issue**: #8
@@ -120,11 +121,10 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-008 — Chat UI 自动携带 property catalog / available inputs
-2. OPEN-009 — Chat proposal 接入 gated RunPlan preview / resume / artifact feedback
-3. OPEN-007 — Phase 3 executor payload builder 与 artifact collection
-4. OPEN-006 — 统一 Execution Policy Registry
-5. OPEN-010 — evidence approval 与 acquisition scope 拆分
+1. OPEN-009 — Chat proposal 接入 gated RunPlan preview / resume / artifact feedback
+2. OPEN-007 — Phase 3 executor payload builder 与 artifact collection
+3. OPEN-006 — 统一 Execution Policy Registry
+4. OPEN-010 — evidence approval 与 acquisition scope 拆分
 
 ## Remote / Multi-user Production Blockers
 
