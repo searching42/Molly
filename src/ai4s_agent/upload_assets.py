@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+from typing import Any
+
+from flask import jsonify, request
+from werkzeug.utils import secure_filename
+
+from ai4s_agent._utils import now_iso, write_json
+from ai4s_agent.memory import PermissionPolicy
+from ai4s_agent.schemas import AssetManifest, AssetStatus
+from ai4s_agent.storage import ProjectStorage
+
+
+def install_immutable_upload_assets() -> None:
+    """Route project uploads through immutable, versioned asset storage."""
+
+    import ai4s_agent.api as api_module
+
+    original_register_routes = api_module.register_routes
+    if getattr(original_register_routes, "_immutable_upload_assets", False):
+        return
+
+    def register_routes_with_immutable_uploads(app: Any, base_runs_dir: Path | None = None, workspace_dir: Path | None = None) -> None:
+        original_register_routes(app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
+        workspace = api_module._workspace_from_config(base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
+        projects = ProjectStorage(workspace_dir=workspace)
+        permissions = PermissionPolicy()
+        app.view_functions["upload_file"] = _upload_file_view(
+            app=app,
+            projects=projects,
+            permissions=permissions,
+            allowed_file=api_module._allowed_file,
+            max_upload_bytes_default=api_module.MAX_UPLOAD_BYTES,
+            chunk_bytes=api_module.UPLOAD_COPY_CHUNK_BYTES,
+        )
+
+    register_routes_with_immutable_uploads._immutable_upload_assets = True  # type: ignore[attr-defined]
+    api_module.register_routes = register_routes_with_immutable_uploads  # type: ignore[method-assign]
+
+
+def _upload_file_view(
+    *,
+    app: Any,
+    projects: ProjectStorage,
+    permissions: PermissionPolicy,
+    allowed_file: Any,
+    max_upload_bytes_default: int,
+    chunk_bytes: int,
+):
+    def upload_file(project_id: str):
+        clean_id = str(project_id or "").strip()
+        if not clean_id:
+            return jsonify({"ok": False, "error": "project_id required"}), 400
+        decision = permissions.decide(
+            "upload_dataset",
+            project_id=clean_id,
+            project_approved=_as_bool(request.form.get("project_approved"))
+            or _as_bool(request.headers.get("X-Project-Approved")),
+            actor=str(request.form.get("actor") or request.headers.get("X-Actor") or ""),
+        )
+        if not decision.allowed:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "project approval required for dataset upload",
+                    "permission": decision.model_dump(mode="json"),
+                }
+            ), 403
+        max_upload_bytes = int(app.config.get("AI4S_MAX_UPLOAD_BYTES", max_upload_bytes_default) or max_upload_bytes_default)
+        content_length = request.content_length
+        if max_upload_bytes > 0 and content_length is not None and content_length > max_upload_bytes:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": f"upload exceeds size limit: {max_upload_bytes} bytes",
+                    "max_upload_bytes": max_upload_bytes,
+                }
+            ), 413
+        if "file" not in request.files:
+            return jsonify({"ok": False, "error": "no file part"}), 400
+        uploaded = request.files["file"]
+        if not uploaded.filename or not allowed_file(uploaded.filename):
+            return jsonify({"ok": False, "error": "unsupported file type"}), 400
+        filename = secure_filename(uploaded.filename)
+        if not filename or not allowed_file(filename):
+            return jsonify({"ok": False, "error": "invalid filename after sanitization"}), 400
+        try:
+            asset = _write_uploaded_asset(
+                projects=projects,
+                project_id=clean_id,
+                filename=filename,
+                original_filename=str(uploaded.filename or ""),
+                stream=uploaded.stream,
+                max_bytes=max_upload_bytes,
+                chunk_bytes=chunk_bytes,
+            )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc), "max_upload_bytes": max_upload_bytes}), 413 if "size limit" in str(exc) else 400
+        except FileExistsError:
+            return jsonify({"ok": False, "error": "asset version already exists; retry upload"}), 409
+        return jsonify(
+            {
+                "ok": True,
+                "path": asset["legacy_path"],
+                "filename": filename,
+                "asset": asset,
+            }
+        )
+
+    return upload_file
+
+
+def _write_uploaded_asset(
+    *,
+    projects: ProjectStorage,
+    project_id: str,
+    filename: str,
+    original_filename: str,
+    stream: Any,
+    max_bytes: int,
+    chunk_bytes: int,
+) -> dict[str, Any]:
+    project_dir = projects.project_dir(project_id)
+    stem = _asset_stem(filename)
+    scope = ["uploads", stem]
+    version_dir = projects.create_asset_version_dir(project_id, scope)
+    version = version_dir.name
+    data_path = (version_dir / filename).resolve()
+    if not data_path.is_relative_to(version_dir.resolve()):
+        raise ValueError("upload asset path escapes version directory")
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with data_path.open("xb") as out:
+            while True:
+                chunk = stream.read(chunk_bytes)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if max_bytes > 0 and total > max_bytes:
+                    raise ValueError(f"upload exceeds size limit: {max_bytes} bytes")
+                digest.update(chunk)
+                out.write(chunk)
+    except Exception:
+        data_path.unlink(missing_ok=True)
+        raise
+    content_hash = f"sha256:{digest.hexdigest()}"
+    asset_id = f"upload/{stem}"
+    manifest = AssetManifest(
+        asset_id=asset_id,
+        asset_type="uploaded_dataset",
+        version=version,
+        status=AssetStatus.CANDIDATE,
+        created_from_run_id="",
+        source_artifacts=[filename],
+        content_hash=content_hash,
+    )
+    manifest_path = projects.write_asset_manifest(project_id, scope, version, manifest)
+    record = {
+        "asset_id": asset_id,
+        "asset_type": manifest.asset_type,
+        "version": version,
+        "project_id": project_id,
+        "filename": filename,
+        "original_filename": original_filename,
+        "content_hash": content_hash,
+        "sha256": digest.hexdigest(),
+        "size_bytes": total,
+        "path": str(data_path),
+        "relative_path": str(data_path.relative_to(project_dir)),
+        "manifest_path": str(manifest_path),
+        "created_at": now_iso(),
+        "immutable": True,
+    }
+    write_json(version_dir / "upload_record.json", record)
+    legacy_path = _write_legacy_upload_compat(project_dir, filename, data_path)
+    return {**record, "legacy_path": str(legacy_path)}
+
+
+def _write_legacy_upload_compat(project_dir: Path, filename: str, source_path: Path) -> Path:
+    upload_dir = (project_dir / "uploads").resolve()
+    if not upload_dir.is_relative_to(project_dir.resolve()):
+        raise ValueError("legacy upload path escapes project directory")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    legacy_path = (upload_dir / filename).resolve()
+    if not legacy_path.is_relative_to(upload_dir):
+        raise ValueError("legacy upload path escapes upload directory")
+    if legacy_path.exists():
+        return legacy_path
+    with source_path.open("rb") as src, legacy_path.open("xb") as dest:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            dest.write(chunk)
+    return legacy_path
+
+
+def _asset_stem(filename: str) -> str:
+    stem = Path(filename).stem.strip().lower().replace(" ", "_").replace("-", "_")
+    clean = "".join(ch if ch.isalnum() or ch in {"_", "."} else "_" for ch in stem).strip("._")
+    return clean or "upload"
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
