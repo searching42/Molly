@@ -123,7 +123,14 @@ def _job_control_view(*, jobs: JobManager, action: str):
             return jsonify({"ok": False, "error": "run_id required"}), 400
         project_id = _request_project_id()
         try:
-            job = _apply_project_job_action(jobs, project_id, clean_run_id, action) if project_id else _apply_legacy_job_action(jobs, clean_run_id, action)
+            if project_id:
+                job = _apply_project_job_action(jobs, project_id, clean_run_id, action)
+            else:
+                try:
+                    job = _apply_legacy_job_action(jobs, clean_run_id, action)
+                except KeyError:
+                    project_id = _unique_project_for_active_run(jobs, clean_run_id)
+                    job = _apply_project_job_action(jobs, project_id, clean_run_id, action)
         except KeyError:
             return jsonify({"ok": False, "error": "no active job"}), 404
         except ValueError as exc:
@@ -329,6 +336,16 @@ def _list_jobs_view(*, jobs: JobManager):
         return jsonify({"ok": True, "jobs": jobs.list_jobs()})
 
     return list_jobs
+
+
+def _unique_project_for_active_run(jobs: JobManager, run_id: str) -> str:
+    matches = [str(job.get("project_id")) for job in jobs.list_project_jobs() if str(job.get("run_id") or "") == run_id]
+    matches = [item for item in matches if item]
+    if not matches:
+        raise KeyError(f"no active project job: {run_id}")
+    if len(set(matches)) > 1:
+        raise ValueError("project_id required for ambiguous project-scoped job")
+    return matches[0]
 
 
 def _unique_project_for_background_run(jobs: JobManager, run_id: str) -> str:
