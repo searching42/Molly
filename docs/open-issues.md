@@ -79,6 +79,18 @@
 - 锁实现使用同路径 `.lock` 文件与进程内 fallback lock，并在锁内完成 read -> mutate -> atomic write
 - 新增并发测试覆盖 artifact registry、gate decisions 与 asset promotion records；更大范围的事务化/SQLite 化仍可作为后续 production hardening
 
+### OPEN-014: Project/legacy run state 未统一
+- **状态**: Resolved in `state14c` / PR #24 for project plan, status, gate, and retry namespaces
+- 带 `project_id` 的 `/api/plan` 现在把 plan state 写到 `workspace/projects/<project_id>/runs/<run_id>/plan.json`，不再写 legacy `runs/<run_id>/plan.json`
+- Project-scoped status、gate approval 和 retry 都读取或写入 project namespace；同一个 `run_id` 可在不同 project 下独立使用
+- 不带 `project_id` 的 legacy clients 继续使用原 Orchestrator `runs/<run_id>` namespace
+
+### OPEN-017: Upload 非 immutable/versioned asset
+- **状态**: Resolved in `asset17`
+- Project upload 现在会写入 immutable/versioned asset：`workspace/projects/<project_id>/assets/uploads/<asset_stem>/<version>/...`
+- 每次上传都会记录 `asset_id`, `version`, `sha256`, `size_bytes`, `original_filename`, `content_hash`, `asset_manifest.json` 与 `upload_record.json`
+- Legacy `uploads/<filename>` 仅作为首个上传的兼容副本保留；同名重复上传会生成新 asset version，不再覆盖或拒绝 source-of-truth asset
+
 ### OPEN-019: 无 CI 测试记录
 - **状态**: Resolved in `fix/job-state-and-ci`
 - GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
@@ -100,20 +112,17 @@
 - Phase 1 过去默认依赖工作区同级的 `claude/scripts`，导致干净 GitHub runner 无法运行 parser、cleaning 和 RunPlan 测试
 - 现在优先兼容 legacy workspace；缺失时回退到随 `ai4s_agent` 打包的 deterministic parser 与 cleaning contract，并在 dev dependencies 中声明 RDKit
 
-## C. 状态、任务和持久化
+### OPEN-024: 旧 API route 尚未全面切换到 project-scoped job key
+- **状态**: Resolved in `route24` / PR #21 for JobManager route layer
+- Job-related API routes 在请求携带 `project_id` 时会使用 `(project_id, run_id)` project-scoped JobManager key
+- 不携带 `project_id` 的旧客户端继续走 legacy `runs/<run_id>`；ambiguity 时要求显式 `project_id`
 
-### OPEN-014: Project/legacy run state 未统一
-- **MVP**: P2 / **生产**: P1
+## C. 状态、任务和持久化
 
 ### OPEN-023: 缺少真实异步 worker runner / process supervisor
 - **MVP**: P2 / **生产**: P0
 - OPEN-011 已提供 durable worker control-plane，但仍没有实际 worker process pool、queue consumer、remote task submitter 或自动重试 supervisor
 - 后续需要把 worker lease/heartbeat/cancel contract 接入真正的 local/remote worker runner，并定义 worker crash recovery 与 retry policy
-
-### OPEN-024: 旧 API route 尚未全面切换到 project-scoped job key
-- **MVP**: P2 / **生产**: P1
-- OPEN-012 已提供 JobManager project-scoped key 方法，但 `/api/plan`、legacy logs 与部分 background job 调用仍兼容旧 `run_id` key
-- 后续应在不破坏 legacy clients 的前提下，把 route 层调用迁移到显式 `(project_id, run_id)`
 
 ## D. 权限
 
@@ -122,11 +131,6 @@
 
 ### OPEN-016: Project memory 修改无权限边界
 - **MVP**: P2 / **生产**: P0/P1
-
-## E. 数据与资产
-
-### OPEN-017: Upload 非 immutable/versioned asset
-- **MVP**: P2 / **生产**: P1
 
 ## F. 代码结构与追踪
 
@@ -137,17 +141,16 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-024 — 旧 API route 迁移到 project-scoped job key
-2. OPEN-023 — 真实异步 worker runner / process supervisor
-3. OPEN-014 — Project/legacy run state 统一
+1. OPEN-023 — 真实异步 worker runner / process supervisor
+2. OPEN-015 — 服务端身份、权限与审批边界
+3. OPEN-016 — Project memory permission boundary
 
 ## Remote / Multi-user Production Blockers
 
 1. OPEN-015 — 服务端身份、权限与审批边界
 2. OPEN-023 — 真实异步 worker runner / process supervisor
-3. OPEN-024 — 旧 API route 迁移到 project-scoped job key
-4. OPEN-016 — project memory permission boundary
-5. OPEN-014 — Project/legacy run state 统一
+3. OPEN-016 — project memory permission boundary
+4. OPEN-018 — api.py 单体路由
 
 ## GitHub Issue Mapping
 
