@@ -5,6 +5,7 @@ from ai4s_agent.chat_context import install_chat_project_context
 from ai4s_agent.chat_runplan import install_chat_run_plan_routes
 from ai4s_agent.execution_confirmation import install_execution_confirmation_audit
 from ai4s_agent.execution_policy import install_execution_policy_registry
+from ai4s_agent.external_approvals import install_external_approval_split
 from ai4s_agent.phase3_executor import install_phase3_executor_support
 from ai4s_agent.snapshot_material import install_run_plan_executor_snapshot_builder
 
@@ -14,3 +15,4 @@ install_chat_project_context()
 install_chat_run_plan_routes()
 install_phase3_executor_support()
 install_execution_policy_registry()
+install_external_approval_split()
