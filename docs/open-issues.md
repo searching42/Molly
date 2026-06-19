@@ -9,6 +9,12 @@
 - **修复提交**: `cfcf565`
 - Phase 1 plan-capable adapter 的 `execute` 仅接受 JSON boolean；字符串 `"false"`、`"0"`、`"off"`、`"true"` 均被拒绝
 
+### OPEN-002: RunPlan task_options 可覆盖输出路径
+- **状态**: Resolved in `fix/open-002-output-path-containment`
+- `task_options` 不再允许覆盖 `output_dir`, `output_csv`, `save_dir`, `model_root`, `log_dir` 等输出路径或 input/artifact identity key
+- RunPlanExecutor 生成的默认输出路径继续位于 `ProjectStorage.run_dir(project_id, run_id)` 下；用户参数只能覆盖 epochs、batch size、remote host 等非路径执行参数
+- Direct adapter API 的自由-form payload 输出路径治理仍归入 OPEN-006 / OPEN-015 的统一 execution policy 与服务端权限边界
+
 ### OPEN-019: 无 CI 测试记录
 - **状态**: Resolved in `fix/job-state-and-ci`
 - GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
@@ -26,12 +32,6 @@
 - 现在优先兼容 legacy workspace；缺失时回退到随 `ai4s_agent` 打包的 deterministic parser 与 cleaning contract，并在 dev dependencies 中声明 RDKit
 
 ## A. 执行与审批边界
-
-### OPEN-002: Task options 仍可覆盖输出路径
-- **MVP**: P0/P1 / **生产**: P0
-- `task_options` 目前仍可覆盖 `save_dir`, `output_csv`, `output_dir`, `model_root`, `log_dir` 等输出路径
-- 当前只保护了部分 input / identity key，例如 `input_csv`, `train_csv`, `candidate_csv`, `model_path`；尚未对所有 adapter 输出路径做 run directory containment validation
-- 建议: typed task options + pre-execution path validation；所有输出路径必须 resolve 后位于 run dir 或 approved asset dir
 
 ### OPEN-003: 辅助资源未进入 snapshot hash
 - **MVP**: P1 / **生产**: P1
@@ -52,7 +52,7 @@
 ### OPEN-006: Execution policy 硬编码 adapter set
 - **MVP**: P2 / **生产**: P1
 - `_CANNOT_DIRECT_EXECUTE` 与 adapter alias 手动维护，新增 remote/heavy adapter 容易遗漏
-- 当前 gated adapter 已被挡住，因此优先级低于 OPEN-002/003/004/005
+- 当前 gated adapter 已被挡住，因此优先级低于 OPEN-003/004/005
 - 建议: 建立单一 registry，统一 task alias、execution mode、effective risk、required gates 与 direct-executable 策略
 
 ## B. 科研工作流集成
@@ -118,22 +118,20 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-002 — typed task options + output path containment
-2. OPEN-003 / OPEN-005 — snapshot material 完整化 + execution payload 与 audit metadata 分层
-3. OPEN-004 — execute-ready resume 的 execution confirmation / audit record
-4. OPEN-008 — Chat UI 自动携带 property catalog / available inputs
-5. OPEN-009 — Chat proposal 接入 gated RunPlan preview / resume / artifact feedback
-6. OPEN-007 — Phase 3 executor payload builder 与 artifact collection
-7. OPEN-006 — 统一 Execution Policy Registry
-8. OPEN-010 — evidence approval 与 acquisition scope 拆分
+1. OPEN-003 / OPEN-005 — snapshot material 完整化 + execution payload 与 audit metadata 分层
+2. OPEN-004 — execute-ready resume 的 execution confirmation / audit record
+3. OPEN-008 — Chat UI 自动携带 property catalog / available inputs
+4. OPEN-009 — Chat proposal 接入 gated RunPlan preview / resume / artifact feedback
+5. OPEN-007 — Phase 3 executor payload builder 与 artifact collection
+6. OPEN-006 — 统一 Execution Policy Registry
+7. OPEN-010 — evidence approval 与 acquisition scope 拆分
 
 ## Remote / Multi-user Production Blockers
 
-1. OPEN-002 — output path containment
-2. OPEN-003 / OPEN-005 — snapshot material 与 payload identity
-3. OPEN-004 — execution confirmation audit
-4. OPEN-015 — 服务端身份、权限与审批边界
-5. OPEN-011 — durable worker / lease / heartbeat / cancellation
-6. OPEN-012 — `(project_id, run_id)` job key
-7. OPEN-013 — JSON RMW concurrency control
-8. OPEN-016 — project memory permission boundary
+1. OPEN-003 / OPEN-005 — snapshot material 与 payload identity
+2. OPEN-004 — execution confirmation audit
+3. OPEN-015 — 服务端身份、权限与审批边界
+4. OPEN-011 — durable worker / lease / heartbeat / cancellation
+5. OPEN-012 — `(project_id, run_id)` job key
+6. OPEN-013 — JSON RMW concurrency control
+7. OPEN-016 — project memory permission boundary
