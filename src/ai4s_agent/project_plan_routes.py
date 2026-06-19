@@ -120,7 +120,9 @@ def _retry_run_view(*, jobs: JobManager, orch: Orchestrator, projects: ProjectSt
             except ValueError as exc:
                 return jsonify({"ok": False, "error": str(exc)}), 400
             if not project_status.get("plan_exists"):
-                return jsonify({"ok": False, "error": "no project plan found for run"}), 404
+                legacy_status = orch.read_status(clean_run_id)
+                if not legacy_status.get("plan_exists"):
+                    return jsonify({"ok": False, "error": "no project plan found for run"}), 404
             if jobs.get_project_job(project_id, clean_run_id):
                 return jsonify({"ok": False, "error": "run is active; pause or stop before retry"}), 409
         else:
