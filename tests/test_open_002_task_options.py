@@ -4,6 +4,7 @@ import pytest
 
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.planner import expand_run_plan
+from ai4s_agent.schemas import RunStatus
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -74,10 +75,10 @@ def test_task_options_still_allow_non_path_execution_parameters(tmp_path: Path) 
                 "adapter": "train_model_unimol_legacy_adapter",
                 "execute": False,
                 "remote_host": "workstation2",
-                "remote_python": "/home/lbh/miniconda3/envs/unimol/bin/python",
+                "remote_python": "python3",
             }
         },
     )
 
-    assert result["status"] == "waiting_user"
+    assert result["status"] == RunStatus.WAITING_USER.value
     assert result["waiting_task"] == "train_model"
