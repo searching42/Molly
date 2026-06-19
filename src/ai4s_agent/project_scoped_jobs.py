@@ -34,8 +34,12 @@ def install_project_scoped_jobs() -> None:
 def project_run_dir(self: Any, project_id: str, run_id: str) -> Path:
     project = _clean_segment(project_id, "project_id")
     run = _clean_segment(run_id, "run_id")
-    base = (self.runs_dir / "projects" / project / "runs").resolve()
-    path = (base / run).resolve()
+    projects_root = (self.runs_dir / "projects").resolve()
+    project_base = (projects_root / project).resolve()
+    runs_base = (project_base / "runs").resolve()
+    path = (runs_base / run).resolve()
+    _ensure_contained(projects_root, project_base, "project_id")
+    _ensure_contained(runs_base, path, "run_id")
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -99,14 +103,14 @@ def list_project_jobs(self: Any, project_id: str | None = None) -> list[dict[str
     root = self.runs_dir / "projects"
     if not root.exists():
         return []
-    projects = [_clean_segment(project_id, "project_id")] if project_id else [child.name for child in sorted(root.iterdir()) if child.is_dir()]
+    projects = [_clean_segment(project_id, "project_id")] if project_id else [child.name for child in sorted(root.iterdir()) if child.is_dir() and child.name not in {".", ".."}]
     jobs: list[dict[str, Any]] = []
     for project in projects:
         runs_base = root / project / "runs"
         if not runs_base.exists():
             continue
         for run_dir in sorted(runs_base.iterdir()):
-            if not run_dir.is_dir():
+            if not run_dir.is_dir() or run_dir.name in {".", ".."}:
                 continue
             job = self.read_project_job_state(project, run_dir.name)
             if job and str(job.get("status") or "") in _ACTIVE_JOB_STATUSES:
@@ -185,6 +189,11 @@ def _job_history(job: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 def _clean_segment(value: str, label: str) -> str:
     clean = str(value or "").strip()
-    if not clean or Path(clean).name != clean:
-        raise ValueError(f"{label} must be a single path segment")
+    if not clean or clean in {".", ".."} or Path(clean).name != clean:
+        raise ValueError(f"{label} must be a single safe path segment")
     return clean
+
+
+def _ensure_contained(base: Path, child: Path, label: str) -> None:
+    if child != base and not child.is_relative_to(base):
+        raise ValueError(f"{label} escapes project-scoped jobs directory")
