@@ -26,8 +26,9 @@ def test_execution_policy_registry_resolves_adapter_aliases_and_gates() -> None:
     assert folder.task_id == "parse_document"
     assert folder.required_gates == (GateName.DATA_MINING.value,)
     assert grobid is not None
-    assert grobid.task_id == "parse_document"
+    assert grobid.task_id == "parse_document_grobid"
     assert grobid.required_gates == (GateName.DATA_MINING.value,)
+    assert grobid.validate_execute_boolean is True
 
 
 def test_execution_policy_registry_handles_dynamic_generation_action() -> None:
