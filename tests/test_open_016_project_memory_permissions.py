@@ -18,8 +18,9 @@ def _record_payload(**extra):
     return payload
 
 
-def test_project_memory_write_requires_server_grant_by_default(tmp_path) -> None:
+def test_project_memory_write_requires_server_grant_when_legacy_flags_disabled(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    app.config["AI4S_ALLOW_MEMORY_CLIENT_PERMISSION_FLAGS"] = "false"
     client = app.test_client()
     client.post("/api/projects", json={"project_id": "proj-a"})
 
@@ -70,7 +71,7 @@ def test_project_memory_record_create_update_delete_with_server_grant(tmp_path) 
     assert reasons.count("SERVER_GRANT") >= 4
 
 
-def test_project_memory_legacy_flag_requires_explicit_opt_in_and_is_audited(tmp_path) -> None:
+def test_project_memory_legacy_flag_is_audited_and_can_be_disabled(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     app.config["AI4S_ALLOW_MEMORY_CLIENT_PERMISSION_FLAGS"] = "true"
     client = app.test_client()
