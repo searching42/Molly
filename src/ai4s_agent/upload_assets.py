@@ -25,6 +25,7 @@ def install_immutable_upload_assets() -> None:
     def register_routes_with_immutable_uploads(app: Any, base_runs_dir: Path | None = None, workspace_dir: Path | None = None) -> None:
         original_register_routes(app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
         workspace = api_module._workspace_from_config(base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
+        runs = Path(base_runs_dir or api_module.DEFAULT_RUNS_DIR).resolve()
         projects = ProjectStorage(workspace_dir=workspace)
         permissions = PermissionPolicy()
         app.view_functions["upload_file"] = _upload_file_view(
@@ -34,6 +35,7 @@ def install_immutable_upload_assets() -> None:
             allowed_file=api_module._allowed_file,
             max_upload_bytes_default=api_module.MAX_UPLOAD_BYTES,
             chunk_bytes=api_module.UPLOAD_COPY_CHUNK_BYTES,
+            reject_legacy_duplicate_filename=(workspace == runs),
         )
 
     register_routes_with_immutable_uploads._immutable_upload_assets = True  # type: ignore[attr-defined]
@@ -48,6 +50,7 @@ def _upload_file_view(
     allowed_file: Any,
     max_upload_bytes_default: int,
     chunk_bytes: int,
+    reject_legacy_duplicate_filename: bool,
 ):
     def upload_file(project_id: str):
         clean_id = str(project_id or "").strip()
@@ -87,6 +90,10 @@ def _upload_file_view(
         if not filename or not allowed_file(filename):
             return jsonify({"ok": False, "error": "invalid filename after sanitization"}), 400
         try:
+            if reject_legacy_duplicate_filename:
+                legacy_path = _legacy_upload_path(projects.project_dir(clean_id), filename)
+                if legacy_path.exists():
+                    return jsonify({"ok": False, "error": f"upload filename already exists: {filename}"}), 409
             asset = _write_uploaded_asset(
                 projects=projects,
                 project_id=clean_id,
@@ -145,6 +152,10 @@ def _write_uploaded_asset(
                 out.write(chunk)
     except Exception:
         data_path.unlink(missing_ok=True)
+        try:
+            version_dir.rmdir()
+        except OSError:
+            pass
         raise
     content_hash = f"sha256:{digest.hexdigest()}"
     asset_id = f"upload/{stem}"
@@ -179,6 +190,13 @@ def _write_uploaded_asset(
     return {**record, "legacy_path": str(legacy_path)}
 
 
+def _legacy_upload_path(project_dir: Path, filename: str) -> Path:
+    upload_dir = (project_dir / "uploads").resolve()
+    if not upload_dir.is_relative_to(project_dir.resolve()):
+        raise ValueError("legacy upload path escapes project directory")
+    return (upload_dir / filename).resolve()
+
+
 def _write_legacy_upload_compat(project_dir: Path, filename: str, source_path: Path) -> Path:
     upload_dir = (project_dir / "uploads").resolve()
     if not upload_dir.is_relative_to(project_dir.resolve()):
@@ -188,6 +206,8 @@ def _write_legacy_upload_compat(project_dir: Path, filename: str, source_path: P
     if not legacy_path.is_relative_to(upload_dir):
         raise ValueError("legacy upload path escapes upload directory")
     if legacy_path.exists():
+        if legacy_path.is_dir():
+            raise ValueError("invalid filename target")
         return legacy_path
     with source_path.open("rb") as src, legacy_path.open("xb") as dest:
         while True:
