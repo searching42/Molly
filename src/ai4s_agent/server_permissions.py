@@ -244,7 +244,7 @@ def _create_permission_grant_view(*, store: ServerPermissionStore):
         payload = request.get_json(silent=True) or {}
         action = str(payload.get("action") or "").strip()
         actor = str(payload.get("actor") or payload.get("approved_by") or "").strip()
-        confirmed = bool(payload.get("confirmed"))
+        confirmed = payload.get("confirmed") is True
         if not action:
             return jsonify({"ok": False, "error": "action required"}), 400
         if not confirmed or not actor:
