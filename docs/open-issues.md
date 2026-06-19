@@ -12,8 +12,7 @@
 ### OPEN-002: RunPlan task_options 可覆盖输出路径
 - **状态**: Resolved in `fix/open-002-output-path-containment`
 - `task_options` 不再允许覆盖 `output_dir`, `output_csv`, `save_dir`, `model_root`, `log_dir` 等输出路径或 input/artifact identity key
-- RunPlanExecutor 生成的默认输出路径继续位于 `ProjectStorage.run_dir(project_id, run_id)` 下；用户参数只能覆盖 epochs、batch size、remote host 等非路径执行参数
-- Direct adapter API 的自由-form payload 输出路径治理仍归入 OPEN-006 / OPEN-015 的统一 execution policy 与服务端权限边界
+- Direct adapter API 的自由-form payload 输出路径治理仍归入 OPEN-015 的服务端权限边界
 
 ### OPEN-003: 辅助资源未进入 snapshot hash
 - **状态**: Resolved in `snapshot6` / GitHub Issue #6
@@ -30,7 +29,12 @@
 - **状态**: Resolved in `snapshot6` / GitHub Issue #6
 - Snapshot material 现在使用 `execution_payload` 作为计算输入，并保留 `payload` 兼容别名
 - `actor`, `confirmed`, `note`, `approved_at` 等 audit-only 字段被拆分到 `audit_metadata`，不进入 canonical snapshot hash
-- OPEN-004 仍会继续补充独立 `ExecutionConfirmation` 审计记录
+
+### OPEN-006: Execution policy 硬编码 adapter set
+- **状态**: Resolved in `policy6`
+- 新增 `ExecutionPolicyRegistry`，统一维护 adapter alias、task override allowlist、dynamic action、required gates、execute bool 校验和 execute=true snapshot requirement
+- RunPlanExecutor adapter override、direct adapter API policy、remote parser package-boundary execute 校验现在都从同一个 registry 派生
+- 新增测试覆盖 remote parser gate aliases、generation expensive action、parse_document adapter override、direct API snapshot guard 与 execute bool 校验
 
 ### OPEN-007: Phase 3 executor payload builder 缺失
 - **状态**: Resolved in `phase3-7`
@@ -70,14 +74,6 @@
 - **状态**: Resolved in `fix/job-state-and-ci`
 - Phase 1 过去默认依赖工作区同级的 `claude/scripts`，导致干净 GitHub runner 无法运行 parser、cleaning 和 RunPlan 测试
 - 现在优先兼容 legacy workspace；缺失时回退到随 `ai4s_agent` 打包的 deterministic parser 与 cleaning contract，并在 dev dependencies 中声明 RDKit
-
-## A. 执行与审批边界
-
-### OPEN-006: Execution policy 硬编码 adapter set
-- **MVP**: P2 / **生产**: P1
-- `_CANNOT_DIRECT_EXECUTE` 与 adapter alias 手动维护，新增 remote/heavy adapter 容易遗漏
-- 当前 gated adapter 已被挡住，因此优先级低于 Chat-to-RunPlan 闭环
-- 建议: 建立单一 registry，统一 task alias、execution mode、effective risk、required gates 与 direct-executable 策略
 
 ## B. 科研工作流集成
 
@@ -124,8 +120,7 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-006 — 统一 Execution Policy Registry
-2. OPEN-010 — evidence approval 与 acquisition scope 拆分
+1. OPEN-010 — evidence approval 与 acquisition scope 拆分
 
 ## Remote / Multi-user Production Blockers
 
