@@ -127,8 +127,8 @@ def _authorize_memory_write(
 ) -> tuple[dict[str, Any], Any | None]:
     clean_project = str(project_id or "").strip()
     actor = str(payload.get("actor") or payload.get("confirmed_by") or request.headers.get("X-Actor") or "").strip()
-    allow_legacy_client_flags = _config_bool(app.config.get("AI4S_ALLOW_MEMORY_CLIENT_PERMISSION_FLAGS", True), default=True)
-    legacy_project_approved = _as_bool(payload.get("project_approved")) or _as_bool(request.headers.get("X-Project-Approved")) or allow_legacy_client_flags
+    allow_legacy_client_flags = _config_bool(app.config.get("AI4S_ALLOW_MEMORY_CLIENT_PERMISSION_FLAGS", False), default=False)
+    legacy_project_approved = _as_bool(payload.get("project_approved")) or _as_bool(request.headers.get("X-Project-Approved"))
     try:
         decision = decide_server_permission(
             store,
@@ -169,7 +169,7 @@ def _as_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _config_bool(value: Any, *, default: bool = True) -> bool:
+def _config_bool(value: Any, *, default: bool = False) -> bool:
     if value is None:
         return default
     if isinstance(value, bool):
