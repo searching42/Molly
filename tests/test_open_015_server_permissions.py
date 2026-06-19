@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 
+from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.app import create_app
 from ai4s_agent.memory import PermissionPolicy
 from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
@@ -67,7 +68,8 @@ def test_string_false_disables_legacy_client_permission_flags(tmp_path) -> None:
 
 def test_run_scoped_permission_grant_does_not_authorize_project_level_request(tmp_path) -> None:
     store = ServerPermissionStore(workspace_dir=tmp_path)
-    store.projects.create_project("proj-a")
+    project_dir = store.projects.project_dir("proj-a")
+    write_json(project_dir / "project.json", {"project_id": "proj-a", "name": "proj-a", "created_at": now_iso()})
     grant = store.create_grant("proj-a", "upload_dataset", actor="alice", run_id="run-1")
 
     project_level = decide_server_permission(
