@@ -1,0 +1,386 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from flask import jsonify, request
+from pydantic import ValidationError
+
+from ai4s_agent._utils import now_iso
+from ai4s_agent.job_manager import JobManager
+from ai4s_agent.orchestrator import Orchestrator
+from ai4s_agent.schemas import BackgroundJobBudget, RunStatus, StageHistoryItem
+from ai4s_agent.storage import ProjectStorage
+
+
+def install_project_scoped_job_routes() -> None:
+    import ai4s_agent.api as api_module
+
+    original_register_routes = api_module.register_routes
+    if getattr(original_register_routes, "_project_scoped_job_routes", False):
+        return
+
+    def register_routes_with_project_jobs(app: Any, base_runs_dir: Path | None = None, workspace_dir: Path | None = None) -> None:
+        original_register_routes(app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
+        runs = Path(base_runs_dir or api_module.DEFAULT_RUNS_DIR).resolve()
+        workspace = api_module._workspace_from_config(base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
+        jobs = JobManager(runs_dir=runs)
+        orch = Orchestrator(base_runs_dir=runs)
+        projects = ProjectStorage(workspace_dir=workspace)
+        _replace_legacy_job_views(app, jobs=jobs, orch=orch, projects=projects)
+        _add_project_job_routes(app, jobs=jobs)
+
+    register_routes_with_project_jobs._project_scoped_job_routes = True  # type: ignore[attr-defined]
+    api_module.register_routes = register_routes_with_project_jobs  # type: ignore[method-assign]
+
+
+def _replace_legacy_job_views(app: Any, *, jobs: JobManager, orch: Orchestrator, projects: ProjectStorage) -> None:
+    app.view_functions["create_plan"] = _create_plan_view(jobs=jobs, orch=orch)
+    app.view_functions["run_logs"] = _run_logs_view(jobs=jobs)
+    app.view_functions["pause_run"] = _job_control_view(jobs=jobs, action="pause")
+    app.view_functions["resume_run"] = _job_control_view(jobs=jobs, action="resume")
+    app.view_functions["stop_run"] = _job_control_view(jobs=jobs, action="stop")
+    app.view_functions["create_background_job"] = _create_background_job_view(jobs=jobs)
+    app.view_functions["get_background_job"] = _get_background_job_view(jobs=jobs)
+    app.view_functions["record_background_checkpoint"] = _record_background_checkpoint_view(jobs=jobs)
+    app.view_functions["background_resume_plan"] = _background_resume_plan_view(jobs=jobs)
+    app.view_functions["retry_run"] = _retry_run_view(jobs=jobs, orch=orch, projects=projects)
+    app.view_functions["list_jobs"] = _list_jobs_view(jobs=jobs)
+
+
+def _add_project_job_routes(app: Any, *, jobs: JobManager) -> None:
+    app.add_url_rule(
+        "/api/projects/<project_id>/runs/<run_id>/logs",
+        endpoint="project_run_logs",
+        view_func=_project_run_logs_view(jobs=jobs),
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/projects/<project_id>/runs/<run_id>/pause",
+        endpoint="project_pause_run",
+        view_func=_project_job_control_view(jobs=jobs, action="pause"),
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/projects/<project_id>/runs/<run_id>/resume",
+        endpoint="project_resume_run",
+        view_func=_project_job_control_view(jobs=jobs, action="resume"),
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/projects/<project_id>/runs/<run_id>/stop",
+        endpoint="project_stop_run",
+        view_func=_project_job_control_view(jobs=jobs, action="stop"),
+        methods=["POST"],
+    )
+
+
+def _create_plan_view(*, jobs: JobManager, orch: Orchestrator):
+    def create_plan():
+        payload = request.get_json(silent=True) or {}
+        run_id = str(payload.get("run_id") or "").strip()
+        prompt = str(payload.get("prompt") or "").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        if not run_id or not prompt:
+            return jsonify({"ok": False, "error": "run_id and prompt required"}), 400
+        try:
+            if project_id:
+                if jobs.get_project_job(project_id, run_id):
+                    return jsonify({"ok": False, "error": f"job already active: {project_id}/{run_id}"}), 409
+                status = orch.start_run(run_id=run_id, prompt=prompt)
+                job = jobs.start_project_job(project_id, run_id, details={"gate": status.get("gate")})
+                return jsonify({"ok": True, **status, "job": job, "job_key": job.get("job_key")})
+            if jobs.get_job(run_id):
+                return jsonify({"ok": False, "error": f"job already active: {run_id}"}), 409
+            status = orch.start_run(run_id=run_id, prompt=prompt)
+            jobs.start_job(run_id, details={"gate": status.get("gate")})
+        except ValueError as exc:
+            message = str(exc)
+            status_code = 409 if "already active" in message or "already exists" in message else 400
+            return jsonify({"ok": False, "error": message}), status_code
+        except KeyError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, **status})
+
+    return create_plan
+
+
+def _run_logs_view(*, jobs: JobManager):
+    def run_logs(run_id: str):
+        clean_run_id = _clean_run_id(run_id)
+        if not clean_run_id:
+            return jsonify({"ok": False, "error": "run_id required"}), 400
+        project_id = _request_project_id()
+        limit = int(request.args.get("limit", 50))
+        if project_id:
+            entries = jobs.get_project_logs(project_id, clean_run_id, limit=limit)
+            return jsonify({"ok": True, "project_id": project_id, "run_id": clean_run_id, "job_key": {"project_id": project_id, "run_id": clean_run_id}, "logs": entries})
+        entries = jobs.get_logs(clean_run_id, limit=limit)
+        return jsonify({"ok": True, "run_id": clean_run_id, "logs": entries})
+
+    return run_logs
+
+
+def _project_run_logs_view(*, jobs: JobManager):
+    def project_run_logs(project_id: str, run_id: str):
+        clean_project_id = str(project_id or "").strip()
+        clean_run_id = _clean_run_id(run_id)
+        if not clean_project_id or not clean_run_id:
+            return jsonify({"ok": False, "error": "project_id and run_id required"}), 400
+        limit = int(request.args.get("limit", 50))
+        try:
+            entries = jobs.get_project_logs(clean_project_id, clean_run_id, limit=limit)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "project_id": clean_project_id, "run_id": clean_run_id, "job_key": {"project_id": clean_project_id, "run_id": clean_run_id}, "logs": entries})
+
+    return project_run_logs
+
+
+def _job_control_view(*, jobs: JobManager, action: str):
+    def control(run_id: str):
+        clean_run_id = _clean_run_id(run_id)
+        if not clean_run_id:
+            return jsonify({"ok": False, "error": "run_id required"}), 400
+        project_id = _request_project_id()
+        try:
+            if project_id:
+                job = _apply_project_job_action(jobs, project_id, clean_run_id, action)
+            else:
+                job = _apply_legacy_job_action(jobs, clean_run_id, action)
+        except KeyError:
+            return jsonify({"ok": False, "error": "no active job"}), 404
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "job": job})
+
+    return control
+
+
+def _project_job_control_view(*, jobs: JobManager, action: str):
+    def control(project_id: str, run_id: str):
+        clean_project_id = str(project_id or "").strip()
+        clean_run_id = _clean_run_id(run_id)
+        if not clean_project_id or not clean_run_id:
+            return jsonify({"ok": False, "error": "project_id and run_id required"}), 400
+        try:
+            job = _apply_project_job_action(jobs, clean_project_id, clean_run_id, action)
+        except KeyError:
+            return jsonify({"ok": False, "error": "no active job"}), 404
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "job": job})
+
+    return control
+
+
+def _create_background_job_view(*, jobs: JobManager):
+    def create_background_job():
+        try:
+            payload = _request_json_object()
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        project_id = str(payload.get("project_id") or "").strip()
+        run_id = str(payload.get("run_id") or "").strip()
+        task_id = str(payload.get("task_id") or "").strip()
+        budget_payload = payload.get("budget")
+        details_payload = payload.get("details")
+        if not run_id or not task_id:
+            return jsonify({"ok": False, "error": "run_id and task_id required"}), 400
+        if not isinstance(budget_payload, dict):
+            return jsonify({"ok": False, "error": "budget object required"}), 400
+        if details_payload is not None and not isinstance(details_payload, dict):
+            return jsonify({"ok": False, "error": "details must be an object"}), 400
+        try:
+            budget = BackgroundJobBudget.model_validate(budget_payload)
+            if project_id:
+                job = jobs.start_project_background_job(project_id, run_id, task_id=task_id, budget=budget, details=details_payload if isinstance(details_payload, dict) else None)
+            else:
+                job = jobs.start_background_job(run_id, project_id=project_id, task_id=task_id, budget=budget, details=details_payload if isinstance(details_payload, dict) else None)
+        except ValidationError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except ValueError as exc:
+            status_code = 409 if "already active" in str(exc) else 400
+            return jsonify({"ok": False, "error": str(exc)}), status_code
+        return jsonify({"ok": True, "job": job})
+
+    return create_background_job
+
+
+def _get_background_job_view(*, jobs: JobManager):
+    def get_background_job(run_id: str):
+        clean_run_id = _clean_run_id(run_id)
+        if not clean_run_id:
+            return jsonify({"ok": False, "error": "run_id required"}), 400
+        project_id = _request_project_id()
+        try:
+            job = jobs.get_project_background_job(project_id, clean_run_id) if project_id else jobs.get_background_job(clean_run_id)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        if job is None:
+            return jsonify({"ok": False, "error": "no background job"}), 404
+        return jsonify({"ok": True, "job": job})
+
+    return get_background_job
+
+
+def _record_background_checkpoint_view(*, jobs: JobManager):
+    def record_background_checkpoint(run_id: str):
+        clean_run_id = _clean_run_id(run_id)
+        if not clean_run_id:
+            return jsonify({"ok": False, "error": "run_id required"}), 400
+        try:
+            payload = _request_json_object()
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        project_id = str(payload.get("project_id") or request.args.get("project_id") or "").strip()
+        stage = str(payload.get("stage") or "").strip()
+        cursor = payload.get("cursor")
+        artifact_refs = payload.get("artifact_refs")
+        if not stage:
+            return jsonify({"ok": False, "error": "stage required"}), 400
+        if cursor is not None and not isinstance(cursor, dict):
+            return jsonify({"ok": False, "error": "cursor must be an object"}), 400
+        if artifact_refs is not None and not isinstance(artifact_refs, list):
+            return jsonify({"ok": False, "error": "artifact_refs must be a list"}), 400
+        try:
+            kwargs = {
+                "stage": stage,
+                "cursor": cursor if isinstance(cursor, dict) else None,
+                "completed_units": payload.get("completed_units", 0),
+                "runtime_sec": payload.get("runtime_sec", 0),
+                "cost_usd": payload.get("cost_usd", 0.0),
+                "artifact_refs": [str(item) for item in artifact_refs] if isinstance(artifact_refs, list) else None,
+            }
+            checkpoint = jobs.record_project_background_checkpoint(project_id, clean_run_id, **kwargs) if project_id else jobs.record_background_checkpoint(clean_run_id, **kwargs)
+        except KeyError:
+            return jsonify({"ok": False, "error": "no background job"}), 404
+        except (ValidationError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "checkpoint": checkpoint})
+
+    return record_background_checkpoint
+
+
+def _background_resume_plan_view(*, jobs: JobManager):
+    def background_resume_plan(run_id: str):
+        clean_run_id = _clean_run_id(run_id)
+        if not clean_run_id:
+            return jsonify({"ok": False, "error": "run_id required"}), 400
+        project_id = _request_project_id()
+        try:
+            resume_plan = jobs.project_background_resume_plan(project_id, clean_run_id) if project_id else jobs.background_resume_plan(clean_run_id)
+        except KeyError:
+            return jsonify({"ok": False, "error": "no background job"}), 404
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "resume_plan": resume_plan})
+
+    return background_resume_plan
+
+
+def _retry_run_view(*, jobs: JobManager, orch: Orchestrator, projects: ProjectStorage):
+    def retry_run(run_id: str):
+        clean_run_id = _clean_run_id(run_id)
+        if not clean_run_id:
+            return jsonify({"ok": False, "error": "run_id required"}), 400
+        payload = request.get_json(silent=True) or {}
+        stage = str(payload.get("stage") or "").strip()
+        project_id = str(payload.get("project_id") or "").strip()
+        status = orch.read_status(clean_run_id)
+        if not status.get("plan_exists"):
+            return jsonify({"ok": False, "error": "no plan found for run"}), 404
+        if not project_id:
+            return jsonify({"ok": False, "error": "project_id required for failed-stage retry"}), 400
+        if jobs.get_project_job(project_id, clean_run_id):
+            return jsonify({"ok": False, "error": "run is active; pause or stop before retry"}), 409
+        try:
+            state = projects.read_stage_state(project_id, clean_run_id)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        if state is None:
+            return jsonify({"ok": False, "error": "no stage state found for run"}), 404
+        if state.status != RunStatus.FAILED:
+            return jsonify({"ok": False, "error": "latest stage has not failed"}), 409
+        error = state.error if isinstance(state.error, dict) else {}
+        retryable_stages = error.get("retryable_stages", [])
+        if not isinstance(retryable_stages, list):
+            retryable_stages = []
+        requested_stage = stage or state.stage
+        explicitly_retryable = requested_stage in {str(item) for item in retryable_stages}
+        if requested_stage != state.stage and not explicitly_retryable:
+            return jsonify({"ok": False, "error": "retry is limited to latest failed stage or explicitly retryable stage", "latest_failed_stage": state.stage}), 400
+        if not bool(error.get("retryable")) and not explicitly_retryable:
+            return jsonify({"ok": False, "error": "latest failed stage is not retryable"}), 409
+        now = now_iso()
+        details = dict(state.details)
+        details["retry_requested_at"] = now
+        details["retry_stage"] = requested_stage
+        details["retry_count"] = int(details.get("retry_count") or 0) + 1
+        state.status = RunStatus.PENDING
+        state.started_at = now
+        state.updated_at = now
+        state.ended_at = None
+        state.details = details
+        state.history.append(StageHistoryItem(stage=requested_stage, status=RunStatus.PENDING, updated_at=now, note="retry requested"))
+        projects.write_stage_state(project_id, clean_run_id, state)
+        try:
+            job = jobs.start_project_job(project_id, clean_run_id, details={"retry": True, "retry_stage": requested_stage, "project_id": project_id})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        jobs.add_project_log(project_id, clean_run_id, "INFO", "retry", f"Retry requested for stage: {requested_stage}")
+        return jsonify({"ok": True, "project_id": project_id, "run_id": clean_run_id, "retry_stage": requested_stage, "job": job, "job_key": job.get("job_key")})
+
+    return retry_run
+
+
+def _list_jobs_view(*, jobs: JobManager):
+    def list_jobs():
+        project_id = _request_project_id()
+        if project_id:
+            return jsonify({"ok": True, "project_id": project_id, "jobs": jobs.list_project_jobs(project_id)})
+        return jsonify({"ok": True, "jobs": jobs.list_jobs()})
+
+    return list_jobs
+
+
+def _apply_project_job_action(jobs: JobManager, project_id: str, run_id: str, action: str) -> dict[str, Any]:
+    if action == "pause":
+        return jobs.pause_project_job(project_id, run_id)
+    if action == "resume":
+        return jobs.resume_project_job(project_id, run_id)
+    if action == "stop":
+        return jobs.stop_project_job(project_id, run_id)
+    raise ValueError(f"unsupported job action: {action}")
+
+
+def _apply_legacy_job_action(jobs: JobManager, run_id: str, action: str) -> dict[str, Any]:
+    if action == "pause":
+        return jobs.pause_job(run_id)
+    if action == "resume":
+        return jobs.resume_job(run_id)
+    if action == "stop":
+        return jobs.stop_job(run_id)
+    raise ValueError(f"unsupported job action: {action}")
+
+
+def _request_project_id() -> str:
+    payload = request.get_json(silent=True) if request.method != "GET" else None
+    if isinstance(payload, dict):
+        value = payload.get("project_id")
+        if value:
+            return str(value).strip()
+    return str(request.args.get("project_id") or "").strip()
+
+
+def _request_json_object() -> dict[str, Any]:
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be an object")
+    return payload
+
+
+def _clean_run_id(run_id: str) -> str:
+    return str(run_id or "").strip()
