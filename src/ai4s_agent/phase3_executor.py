@@ -82,7 +82,7 @@ _OUTPUT_ARTIFACTS: dict[str, dict[str, str]] = {
     },
     "normalize_extracted_units": {
         "normalized_extracted_records_jsonl": "normalized_extracted_records",
-        "candidate_training_dataset_csv": "candidate_training_dataset",
+        "normalized_candidate_training_dataset_csv": "candidate_training_dataset",
         "unit_normalization_report_json": "unit_normalization_report",
     },
     "track_citation_provenance": {
@@ -99,7 +99,7 @@ _OUTPUT_ARTIFACTS: dict[str, dict[str, str]] = {
     },
     "confirm_extracted_dataset": {
         "confirmed_training_dataset_csv": "confirmed_training_dataset",
-        "extraction_confirmation_record_json": "extraction_confirmation_record",
+        "confirmation_record_json": "extraction_confirmation_record",
     },
     "literature_to_dataset_workflow": {
         "corpus_manifest_json": "corpus_manifest",
