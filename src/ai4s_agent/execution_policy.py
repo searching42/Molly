@@ -144,8 +144,13 @@ class ExecutionPolicyRegistry:
     @staticmethod
     def _generation_action(adapter_payload: dict[str, Any]) -> str:
         backend = str(adapter_payload.get("backend") or "deterministic_stub").strip().lower()
+        count_raw = adapter_payload.get("count")
+        if count_raw is None:
+            count_raw = adapter_payload.get("num_candidates")
+        if count_raw is None:
+            count_raw = 32
         try:
-            count = int(adapter_payload.get("count") or adapter_payload.get("num_candidates") or 32)
+            count = int(count_raw)
         except (TypeError, ValueError) as exc:
             raise ValueError("generation count must be a positive integer") from exc
         if count <= 0:
