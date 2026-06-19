@@ -68,7 +68,7 @@ class ServerPermissionStore:
             if not bool(grant.get("active", True)):
                 continue
             grant_run = str(grant.get("run_id") or "").strip()
-            if grant_run and clean_run and grant_run != clean_run:
+            if grant_run and grant_run != clean_run:
                 continue
             return grant
         return None
