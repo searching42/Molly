@@ -38,13 +38,13 @@ def test_project_scoped_log_and_job_control_routes(tmp_path) -> None:
 
     paused = client.post("/api/projects/project_a/runs/route24-control/pause")
     assert paused.status_code == 200
-    assert paused.json["job"]["status"] == "paused_by_user"
+    assert paused.json["job"]["status"] == "PAUSED_BY_USER"
     resumed = client.post("/api/runs/route24-control/resume", json={"project_id": "project_a"})
     assert resumed.status_code == 200
-    assert resumed.json["job"]["status"] == "running"
+    assert resumed.json["job"]["status"] == "RUNNING"
     stopped = client.post("/api/runs/route24-control/stop?project_id=project_a")
     assert stopped.status_code == 200
-    assert stopped.json["job"]["status"] == "cancelled"
+    assert stopped.json["job"]["status"] == "CANCELLED"
 
 
 def test_background_job_routes_use_project_scoped_keys_when_project_id_is_present(tmp_path) -> None:
@@ -82,3 +82,19 @@ def test_background_job_routes_use_project_scoped_keys_when_project_id_is_presen
     assert fetched.status_code == 200
     assert fetched.json["job"]["task_id"] == "extract_records"
     assert fetched.json["job"]["checkpoints"] == []
+
+
+def test_legacy_background_checkpoint_falls_back_to_single_project_match(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    created = client.post(
+        "/api/background-jobs",
+        json={"project_id": "project_a", "run_id": "single-bg", "task_id": "retrieve_evidence", "budget": {"max_steps": 3}},
+    )
+    assert created.status_code == 200
+    checkpoint = client.post("/api/background-jobs/single-bg/checkpoints", json={"stage": "retrieval", "completed_units": 1})
+    assert checkpoint.status_code == 200
+    resume_plan = client.get("/api/background-jobs/single-bg/resume-plan")
+    assert resume_plan.status_code == 200
+    assert resume_plan.json["resume_plan"]["job_key"] == {"project_id": "project_a", "run_id": "single-bg"}
