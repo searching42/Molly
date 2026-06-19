@@ -14,6 +14,7 @@ from ai4s_agent.project_job_routes import install_project_scoped_job_routes
 from ai4s_agent.project_plan_guard import install_project_plan_route_guard
 from ai4s_agent.project_plan_routes import install_project_scoped_plan_routes
 from ai4s_agent.project_scoped_jobs import install_project_scoped_jobs
+from ai4s_agent.server_permissions import install_server_permission_routes
 from ai4s_agent.snapshot_material import install_run_plan_executor_snapshot_builder
 from ai4s_agent.upload_assets import install_immutable_upload_assets
 
@@ -32,3 +33,4 @@ install_project_plan_route_guard()
 install_project_scoped_job_routes()
 install_project_scoped_plan_routes()
 install_immutable_upload_assets()
+install_server_permission_routes()
