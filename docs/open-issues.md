@@ -15,6 +15,17 @@
 - RunPlanExecutor 生成的默认输出路径继续位于 `ProjectStorage.run_dir(project_id, run_id)` 下；用户参数只能覆盖 epochs、batch size、remote host 等非路径执行参数
 - Direct adapter API 的自由-form payload 输出路径治理仍归入 OPEN-006 / OPEN-015 的统一 execution policy 与服务端权限边界
 
+### OPEN-003: 辅助资源未进入 snapshot hash
+- **状态**: Resolved in `snapshot6` / GitHub Issue #6
+- Snapshot material 现在包含 `resource_manifest`，会记录 payload 中影响计算的路径型资源，包括未注册为 artifact 的 `scorer_path`, `calibration_json`, `solvent_embedding_path`, `descriptor_config`, wrapper/script path 等辅助文件
+- Manifest 记录 resolved path、存在性、kind、size 和 sha256 / directory digest；辅助资源内容变化会导致 resume 阶段出现 `execution snapshot changed`
+
+### OPEN-005: Snapshot 计算 payload 与审计 metadata 未分层
+- **状态**: Resolved in `snapshot6` / GitHub Issue #6
+- Snapshot material 现在使用 `execution_payload` 作为计算输入，并保留 `payload` 兼容别名
+- `actor`, `confirmed`, `note`, `approved_at` 等 audit-only 字段被拆分到 `audit_metadata`，不进入 canonical snapshot hash
+- OPEN-004 仍会继续补充独立 `ExecutionConfirmation` 审计记录
+
 ### OPEN-019: 无 CI 测试记录
 - **状态**: Resolved in `fix/job-state-and-ci`
 - GitHub Actions 在 Pull Request、`main` push 和手动触发时安装 `.[dev]`、编译 `src/tests`、运行完整 pytest、上传 JUnit/日志证据，并检查提交 diff 的空白错误
@@ -38,29 +49,16 @@
 
 ## A. 执行与审批边界
 
-### OPEN-003: 辅助资源未进入 snapshot hash
-- **GitHub Issue**: #6
-- **MVP**: P1 / **生产**: P1
-- Snapshot 只 hash 了 payload 中引用并能匹配 artifact registry 的路径
-- `scorer_path`, `calibration_json`, `solvent_embedding_path`, `descriptor_config`, wrapper/script path 等临时或外部辅助资源没有统一进入 content manifest
-- 建议: 统一 snapshot material/resource reference；所有影响计算结果的文件都记录 sha256、size、role 和 resolved path
-
 ### OPEN-004: execute-ready resume 的审计记录边界不清
 - **GitHub Issue**: #7
 - **MVP**: P1 / **生产**: P0/P1
 - 真正问题不是所有 ungated task 都必须有 domain gate approval，而是 plan-only / execute-ready resume 需要明确区分 gate approval 与 execution confirmation
 - 建议: 引入 `ExecutionConfirmation` 或同等 audit record，记录 actor、snapshot id/hash、task、adapter、confirmed_at、note；domain `GateDecision` 只表示领域风险门禁通过
 
-### OPEN-005: Snapshot 计算 payload 与审计 metadata 未分层
-- **GitHub Issue**: #6
-- **MVP**: P1 / **生产**: P1
-- 主要风险不是 actor 本身，而是 snapshot 构造时常用 `actor=""`，实际执行 payload 可能带 `actor` / `confirmed` 等非计算字段，导致被审批内容与执行输入边界不清
-- 建议: 拆分 `execution_payload` 与 `audit_metadata`；只有计算 payload 进入 snapshot hash，actor/confirmed/note/approved_at 进入 execution confirmation audit record
-
 ### OPEN-006: Execution policy 硬编码 adapter set
 - **MVP**: P2 / **生产**: P1
 - `_CANNOT_DIRECT_EXECUTE` 与 adapter alias 手动维护，新增 remote/heavy adapter 容易遗漏
-- 当前 gated adapter 已被挡住，因此优先级低于 OPEN-003/004/005
+- 当前 gated adapter 已被挡住，因此优先级低于 OPEN-004
 - 建议: 建立单一 registry，统一 task alias、execution mode、effective risk、required gates 与 direct-executable 策略
 
 ## B. 科研工作流集成
@@ -122,23 +120,21 @@
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-003 / OPEN-005 — snapshot material 完整化 + execution payload 与 audit metadata 分层
-2. OPEN-004 — execute-ready resume 的 execution confirmation / audit record
-3. OPEN-008 — Chat UI 自动携带 property catalog / available inputs
-4. OPEN-009 — Chat proposal 接入 gated RunPlan preview / resume / artifact feedback
-5. OPEN-007 — Phase 3 executor payload builder 与 artifact collection
-6. OPEN-006 — 统一 Execution Policy Registry
-7. OPEN-010 — evidence approval 与 acquisition scope 拆分
+1. OPEN-004 — execute-ready resume 的 execution confirmation / audit record
+2. OPEN-008 — Chat UI 自动携带 property catalog / available inputs
+3. OPEN-009 — Chat proposal 接入 gated RunPlan preview / resume / artifact feedback
+4. OPEN-007 — Phase 3 executor payload builder 与 artifact collection
+5. OPEN-006 — 统一 Execution Policy Registry
+6. OPEN-010 — evidence approval 与 acquisition scope 拆分
 
 ## Remote / Multi-user Production Blockers
 
-1. OPEN-003 / OPEN-005 — snapshot material 与 payload identity
-2. OPEN-004 — execution confirmation audit
-3. OPEN-015 — 服务端身份、权限与审批边界
-4. OPEN-011 — durable worker / lease / heartbeat / cancellation
-5. OPEN-012 — `(project_id, run_id)` job key
-6. OPEN-013 — JSON RMW concurrency control
-7. OPEN-016 — project memory permission boundary
+1. OPEN-004 — execution confirmation audit
+2. OPEN-015 — 服务端身份、权限与审批边界
+3. OPEN-011 — durable worker / lease / heartbeat / cancellation
+4. OPEN-012 — `(project_id, run_id)` job key
+5. OPEN-013 — JSON RMW concurrency control
+6. OPEN-016 — project memory permission boundary
 
 ## GitHub Issue Mapping
 
