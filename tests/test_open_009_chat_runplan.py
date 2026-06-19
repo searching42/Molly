@@ -48,26 +48,31 @@ def test_conversation_run_plan_preview_builds_gated_run_plan_from_chat_payload(t
     assert body["execution_control"]["execute_endpoint"] == "/api/run-plan/execute"
 
 
-def test_conversation_run_plan_preview_reports_missing_artifacts(tmp_path: Path) -> None:
+def test_conversation_run_plan_preview_builds_controlled_literature_chain(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     app = create_app(base_runs_dir=workspace / "runs", workspace_dir=workspace)
     client = app.test_client()
     resp = client.post(
         "/api/agent/conversation/run-plan-preview",
         json={
-            "project_id": "proj-missing-artifacts",
-            "run_id": "run-missing-artifacts",
-            "modeling_plan_payload": {"run_id": "run-missing-artifacts", "goal": "Parse uploaded papers", "property_id": "plqy"},
+            "project_id": "proj-literature-preview",
+            "run_id": "run-literature-preview",
+            "modeling_plan_payload": {"run_id": "run-literature-preview", "goal": "Parse uploaded papers", "property_id": "plqy"},
             "requested_tasks": ["parse_document"],
             "available_artifacts": [],
         },
     )
 
     assert resp.status_code == 200
-    preview = resp.json["preview"]
-    assert preview["status"] == "blocked_missing_artifacts"
-    assert "pdf_corpus" in preview["missing_artifacts"]
-    assert preview["next_actions"] == ["provide_missing_artifacts", "regenerate_run_plan_preview"]
+    body = resp.json
+    preview = body["preview"]
+    task_ids = [task["task_id"] for task in body["run_plan"]["tasks"]]
+    assert preview["status"] == "ready_for_controlled_execution"
+    assert task_ids[-1] == "parse_document"
+    assert "prepare_literature_corpus_sources" in task_ids
+    assert "acquire_literature_sources" in task_ids
+    assert GateName.DATA_MINING.value in preview["required_gates"]
+    assert "confirm_required_gates_before_resume" in preview["next_actions"]
 
 
 def test_conversation_execution_feedback_surfaces_waiting_snapshot_and_audit_records(tmp_path: Path) -> None:
