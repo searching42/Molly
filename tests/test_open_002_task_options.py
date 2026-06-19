@@ -15,6 +15,12 @@ def _write_training_csv(path: Path) -> None:
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
+@pytest.mark.parametrize("option_key", ["output_dir", "save_dir", "model_root", "log_dir", "output_csv"])
+def test_payload_options_reject_output_path_keys(option_key: str, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="task options cannot override artifact identity keys"):
+        RunPlanExecutor._payload_options({option_key: str(tmp_path / "outside" / option_key)})
+
+
 @pytest.mark.parametrize(
     ("task_id", "option_key"),
     [
@@ -22,10 +28,9 @@ def _write_training_csv(path: Path) -> None:
         ("train_model", "save_dir"),
         ("train_model", "model_root"),
         ("train_model", "log_dir"),
-        ("predict_candidates", "output_csv"),
     ],
 )
-def test_task_options_cannot_override_output_paths(
+def test_run_plan_execution_rejects_output_path_overrides_before_adapter_call(
     tmp_path: Path,
     task_id: str,
     option_key: str,
