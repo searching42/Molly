@@ -4,6 +4,7 @@ import json
 
 from ai4s_agent.api_route_extensions import INSTALLER_NAMES, api_route_installers
 import ai4s_agent.api_route_extensions as route_extensions
+import ai4s_agent.app as app_module
 from ai4s_agent.app import create_app
 from ai4s_agent.routes.agents import register_agent_routes
 from ai4s_agent.routes.core import register_core_routes
@@ -49,6 +50,24 @@ def test_api_route_extension_metadata_is_observable_and_ordered() -> None:
 
     payload = [spec.as_dict() for spec in specs]
     assert json.loads(json.dumps(payload))[0]["extension_id"] == specs[0].extension_id
+
+
+def test_create_app_exposes_installed_route_extension_metadata(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+
+    configured = app.config["AI4S_ROUTE_EXTENSIONS"]
+    installed = app_module.installed_route_extensions(app)
+
+    assert isinstance(configured, tuple)
+    assert installed == configured
+    assert tuple(item["installer_name"] for item in installed) == INSTALLER_NAMES
+    assert json.loads(json.dumps(installed))[0]["extension_id"] == installed[0]["extension_id"]
+
+    installed[0]["extension_id"] = "mutated"
+    installed[0]["depends_on"].append("mutated")
+    fresh = app_module.installed_route_extensions(app)
+    assert fresh[0]["extension_id"] != "mutated"
+    assert "mutated" not in fresh[0]["depends_on"]
 
 
 def test_low_coupling_base_routes_are_registered_from_route_module(tmp_path) -> None:
