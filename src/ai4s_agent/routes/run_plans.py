@@ -93,17 +93,17 @@ def register_run_plan_routes(app: Flask, *, projects: ProjectStorage, jobs: JobM
         run_plan: RunPlan | None = None
         try:
             run_plan = RunPlan.model_validate(run_plan_payload)
-            jobs.add_log(run_plan.run_id, "INFO", "run_plan", "RunPlan execution started")
+            _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution started")
             execution = RunPlanExecutor(storage=projects).execute(
                 project_id=project_id,
                 run_plan=run_plan,
                 input_artifacts={str(k): str(v) for k, v in input_artifacts.items()},
                 task_options=_task_options(task_options),
             )
-            _log_run_plan_execution_result(jobs, run_plan.run_id, execution)
+            _log_run_plan_execution_result(jobs, project_id, run_plan.run_id, execution)
         except (ValidationError, ValueError, FileNotFoundError) as exc:
             if run_plan is not None:
-                jobs.add_log(run_plan.run_id, "ERROR", "run_plan", f"RunPlan execution failed: {exc}")
+                _add_run_plan_log(jobs, project_id, run_plan.run_id, "ERROR", f"RunPlan execution failed: {exc}")
             return jsonify({"ok": False, "error": str(exc)}), 400
         return jsonify({"ok": True, "execution": execution})
 
@@ -140,7 +140,7 @@ def register_run_plan_routes(app: Flask, *, projects: ProjectStorage, jobs: JobM
         run_plan: RunPlan | None = None
         try:
             run_plan = RunPlan.model_validate(run_plan_payload)
-            jobs.add_log(run_plan.run_id, "INFO", "run_plan", "RunPlan resume requested")
+            _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan resume requested")
             execution = RunPlanExecutor(storage=projects).resume_after_gate(
                 project_id=project_id,
                 run_plan=run_plan,
@@ -150,10 +150,10 @@ def register_run_plan_routes(app: Flask, *, projects: ProjectStorage, jobs: JobM
                 input_artifacts={str(k): str(v) for k, v in input_artifacts.items()},
                 task_options=_task_options(task_options),
             )
-            _log_run_plan_execution_result(jobs, run_plan.run_id, execution)
+            _log_run_plan_execution_result(jobs, project_id, run_plan.run_id, execution)
         except (ValidationError, ValueError, FileNotFoundError) as exc:
             if run_plan is not None:
-                jobs.add_log(run_plan.run_id, "ERROR", "run_plan", f"RunPlan resume failed: {exc}")
+                _add_run_plan_log(jobs, project_id, run_plan.run_id, "ERROR", f"RunPlan resume failed: {exc}")
             return jsonify({"ok": False, "error": str(exc)}), 400
         return jsonify({"ok": True, "execution": execution})
 
@@ -193,20 +193,27 @@ def _task_options(value: object) -> dict[str, dict[str, object]]:
     return normalized
 
 
-def _log_run_plan_execution_result(jobs: JobManager, run_id: str, execution: dict[str, Any]) -> None:
+def _log_run_plan_execution_result(jobs: JobManager, project_id: str, run_id: str, execution: dict[str, Any]) -> None:
     status = str(execution.get("status") or "")
     if status == RunStatus.WAITING_USER.value:
         task = str(execution.get("waiting_task") or execution.get("planned_task") or "").strip()
         suffix = f" at {task}" if task else ""
-        jobs.add_log(run_id, "INFO", "run_plan", f"RunPlan waiting for user{suffix}")
+        _add_run_plan_log(jobs, project_id, run_id, "INFO", f"RunPlan waiting for user{suffix}")
     elif status == RunStatus.FAILED.value:
         task = str(execution.get("failed_task") or "").strip()
         suffix = f" at {task}" if task else ""
-        jobs.add_log(run_id, "ERROR", "run_plan", f"RunPlan execution failed{suffix}")
+        _add_run_plan_log(jobs, project_id, run_id, "ERROR", f"RunPlan execution failed{suffix}")
     elif status in {RunStatus.SUCCEEDED.value, RunStatus.DONE.value}:
-        jobs.add_log(run_id, "INFO", "run_plan", f"RunPlan execution completed: {status}")
+        _add_run_plan_log(jobs, project_id, run_id, "INFO", f"RunPlan execution completed: {status}")
     else:
-        jobs.add_log(run_id, "INFO", "run_plan", f"RunPlan execution status: {status or 'unknown'}")
+        _add_run_plan_log(jobs, project_id, run_id, "INFO", f"RunPlan execution status: {status or 'unknown'}")
+
+
+def _add_run_plan_log(jobs: JobManager, project_id: str, run_id: str, level: str, message: str) -> None:
+    jobs.add_log(run_id, level, "run_plan", message)
+    clean_project_id = str(project_id or "").strip()
+    if clean_project_id and hasattr(jobs, "add_project_log"):
+        jobs.add_project_log(clean_project_id, run_id, level, "run_plan", message)
 
 
 def _expand_plan_from_payload(payload: dict) -> RunPlan:
