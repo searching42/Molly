@@ -140,6 +140,9 @@
 
 ### OPEN-018: api.py 单体路由
 - **MVP**: P2 / **生产**: P2
+- **状态**: In progress
+- 已完成前置拆分：route extension registry 已集中安装顺序；base routes 已开始迁出 `src/ai4s_agent/api.py`，包括 core、worker/deployment、review/permission、project memory/upload base、project model/asset promotion routes
+- 剩余工作：run-plan execution/resume、agent proposal/conversation、gate/adapter execution、project run status/report/verification、legacy job/background-job routes 仍在 `api.py`
 
 ---
 

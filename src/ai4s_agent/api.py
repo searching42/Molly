@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, request
 from pydantic import ValidationError
-from werkzeug.utils import secure_filename
 
 import ai4s_agent.adapters as adapter_exports
 from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, strict_bool, write_json
@@ -19,23 +17,22 @@ from ai4s_agent.agents.recovery import RecoveryAgent
 from ai4s_agent.agents.report import ReportAgent
 from ai4s_agent.agents.research import ResearchAgent
 from ai4s_agent.agents.verifier import VerifierAgent
-from ai4s_agent.deployment import assess_multi_user_deployment
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.job_manager import JobManager
 from ai4s_agent.llm_provider import LLMProvider, LLMProviderError, create_llm_provider
 from ai4s_agent.memory import PermissionPolicy, ProjectMemory
 from ai4s_agent.orchestrator import Orchestrator
 from ai4s_agent.planner import AtomicTaskRegistry, build_plan, diff_run_plans, expand_run_plan
-from ai4s_agent.remote_worker import RemoteWorkerRegistry
+from ai4s_agent.routes.core import register_core_routes
+from ai4s_agent.routes.project_assets import register_project_asset_routes
+from ai4s_agent.routes.projects import register_project_routes
+from ai4s_agent.routes.review import register_review_routes
+from ai4s_agent.routes.worker_deployment import register_worker_deployment_routes
 from ai4s_agent.schemas import (
-    AssetPromotionRecord,
     BackgroundJobBudget,
     GateName,
     LLMProviderConfig,
     LiteratureCorpusSource,
-    ProjectMemoryRecord,
-    RemoteWorkerConfig,
-    RemoteWorkerRequest,
     ReplanRequest,
     ResearchSourceProposal,
     RunPlan,
@@ -47,9 +44,7 @@ from ai4s_agent.schemas import (
 from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.ui_cards import (
     build_agent_review_card,
-    build_data_confirmation_card,
     build_report_preview,
-    build_run_confirmation_card,
     build_stage_timeline,
 )
 
@@ -104,16 +99,9 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
     jobs = JobManager(runs_dir=runs)
     projects = ProjectStorage(workspace_dir=workspace)
     project_memory = ProjectMemory(workspace_dir=workspace)
-    remote_workers = RemoteWorkerRegistry(workspace_dir=workspace)
     permissions = PermissionPolicy()
 
-    @app.get("/")
-    def index():
-        return render_template("index.html", gate_names=[gate.value for gate in GateName])
-
-    @app.get("/healthz")
-    def healthz():
-        return jsonify({"status": "ok"})
+    register_core_routes(app)
 
     # --- Plan ---
 
@@ -779,85 +767,8 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
         )
         return jsonify({"ok": True, "card": card, "log_tail": log_tail})
 
-    @app.get("/api/workers")
-    def list_remote_workers():
-        include_disabled = _as_bool(request.args.get("include_disabled"))
-        workers = remote_workers.list_workers(include_disabled=include_disabled)
-        return jsonify({"ok": True, "workers": [worker.model_dump(mode="json") for worker in workers]})
-
-    @app.post("/api/workers")
-    def save_remote_worker():
-        payload = request.get_json(silent=True) or {}
-        if not isinstance(payload, dict):
-            return jsonify({"ok": False, "error": "payload must be an object"}), 400
-        try:
-            worker = remote_workers.save_worker(RemoteWorkerConfig.model_validate(payload))
-        except (ValidationError, ValueError) as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, "worker": worker.model_dump(mode="json")})
-
-    @app.post("/api/workers/assignment")
-    def plan_remote_worker_assignment():
-        payload = request.get_json(silent=True) or {}
-        if not isinstance(payload, dict):
-            return jsonify({"ok": False, "error": "payload must be an object"}), 400
-        try:
-            assignment = remote_workers.plan_assignment(RemoteWorkerRequest.model_validate(payload))
-        except (ValidationError, ValueError) as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, "assignment": assignment.model_dump(mode="json")})
-
-    @app.get("/api/deployment/multi-user-readiness")
-    def multi_user_readiness():
-        readiness = assess_multi_user_deployment(workspace_dir=workspace, runs_dir=runs)
-        return jsonify({"ok": True, "readiness": readiness.model_dump(mode="json")})
-
-    @app.get("/api/atomic-tasks")
-    def list_atomic_tasks():
-        registry = AtomicTaskRegistry()
-        return jsonify(
-            {
-                "ok": True,
-                "tasks": [task.model_dump(mode="json") for task in registry.list_tasks()],
-            }
-        )
-
-    @app.post("/api/data-confirmation-card")
-    def data_confirmation_card():
-        payload = request.get_json(silent=True) or {}
-        dataset_path_raw = str(payload.get("dataset_path") or "").strip()
-        if not dataset_path_raw:
-            return jsonify({"ok": False, "error": "dataset_path required"}), 400
-        try:
-            card = build_data_confirmation_card(payload, base=workspace)
-        except (FileNotFoundError, ValueError) as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, "card": card})
-
-    @app.post("/api/run-confirmation-card")
-    def run_confirmation_card():
-        payload = request.get_json(silent=True) or {}
-        try:
-            card = build_run_confirmation_card(payload)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, "card": card})
-
-    @app.post("/api/permissions/resolve")
-    def resolve_permission():
-        payload = request.get_json(silent=True) or {}
-        action = str(payload.get("action") or "").strip()
-        if not action:
-            return jsonify({"ok": False, "error": "action required"}), 400
-        decision = permissions.decide(
-            action,
-            project_id=str(payload.get("project_id") or ""),
-            run_id=str(payload.get("run_id") or ""),
-            project_approved=_as_bool(payload.get("project_approved")),
-            confirmed=_as_bool(payload.get("confirmed")),
-            actor=str(payload.get("actor") or payload.get("approved_by") or ""),
-        )
-        return jsonify({"ok": True, **decision.model_dump(mode="json")})
+    register_worker_deployment_routes(app, workspace=workspace, runs=runs)
+    register_review_routes(app, workspace=workspace, permissions=permissions)
 
     @app.post("/api/gates/approve")
     def approve_gate():
@@ -987,370 +898,16 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
         jobs.add_log(run_id, level, "adapter", f"Adapter {adapter_name} finished: {status or 'unknown'}")
         return jsonify({"ok": True, "adapter": adapter_name, "result": result})
 
-    # --- Projects ---
-
-    @app.post("/api/projects")
-    def create_project():
-        payload = request.get_json(silent=True) or {}
-        project_id = str(payload.get("project_id") or uuid.uuid4().hex[:8]).strip()
-        name = str(payload.get("name") or project_id).strip()
-        if not project_id:
-            return jsonify({"ok": False, "error": "project_id required"}), 400
-        try:
-            project_dir = projects.project_dir(project_id)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        write_json(project_dir / "project.json", {
-            "project_id": project_id,
-            "name": name,
-            "created_at": now_iso(),
-        })
-        return jsonify({"ok": True, "project_id": project_id, "name": name})
-
-    @app.get("/api/projects")
-    def list_projects():
-        projects_root = projects.projects_root
-        result = []
-        if projects_root.exists():
-            for child in sorted(projects_root.iterdir()):
-                if not child.is_dir():
-                    continue
-                meta = _read_json(child / "project.json")
-                result.append({
-                    "project_id": child.name,
-                    "name": meta.get("name", child.name),
-                    "created_at": meta.get("created_at", ""),
-                })
-        return jsonify({"ok": True, "projects": result})
-
-    @app.get("/api/projects/<project_id>/memory")
-    def list_project_memory(project_id: str):
-        try:
-            records = project_memory.list_project_records(str(project_id or "").strip())
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify(
-            {
-                "ok": True,
-                "project_id": project_id,
-                "enabled": project_memory.project_memory_enabled(str(project_id or "").strip()),
-                "records": [record.model_dump(mode="json") for record in records],
-            }
-        )
-
-    @app.post("/api/projects/<project_id>/memory/records")
-    def create_project_memory_record(project_id: str):
-        payload = request.get_json(silent=True) or {}
-        try:
-            record = ProjectMemoryRecord.model_validate(payload)
-            saved = project_memory.save_project_record(str(project_id or "").strip(), record)
-        except (ValidationError, ValueError) as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, "record": saved.model_dump(mode="json")})
-
-    @app.patch("/api/projects/<project_id>/memory/records/<record_id>")
-    def update_project_memory_record(project_id: str, record_id: str):
-        payload = request.get_json(silent=True) or {}
-        if not isinstance(payload, dict):
-            return jsonify({"ok": False, "error": "payload must be an object"}), 400
-        try:
-            updated = project_memory.update_project_record(str(project_id or "").strip(), record_id, payload)
-        except (ValidationError, ValueError) as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        if updated is None:
-            return jsonify({"ok": False, "error": "memory record not found"}), 404
-        return jsonify({"ok": True, "record": updated.model_dump(mode="json")})
-
-    @app.delete("/api/projects/<project_id>/memory/records/<record_id>")
-    def delete_project_memory_record(project_id: str, record_id: str):
-        try:
-            deleted = project_memory.delete_project_record(str(project_id or "").strip(), record_id)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, "deleted": deleted})
-
-    @app.get("/api/projects/<project_id>/memory/export")
-    def export_project_memory(project_id: str):
-        try:
-            exported = project_memory.export_project_records(str(project_id or "").strip())
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, "export": exported})
-
-    @app.post("/api/projects/<project_id>/memory/enabled")
-    def set_project_memory_enabled(project_id: str):
-        payload = request.get_json(silent=True) or {}
-        if not isinstance(payload, dict):
-            return jsonify({"ok": False, "error": "payload must be an object"}), 400
-        if not isinstance(payload.get("enabled"), bool):
-            return jsonify({"ok": False, "error": "enabled boolean required"}), 400
-        enabled = payload["enabled"]
-        try:
-            project_memory.set_project_memory_enabled(str(project_id or "").strip(), enabled)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, "project_id": project_id, "enabled": enabled})
-
-    # --- Upload ---
-
-    @app.post("/api/projects/<project_id>/upload")
-    def upload_file(project_id: str):
-        clean_id = str(project_id or "").strip()
-        if not clean_id:
-            return jsonify({"ok": False, "error": "project_id required"}), 400
-        decision = permissions.decide(
-            "upload_dataset",
-            project_id=clean_id,
-            project_approved=_as_bool(request.form.get("project_approved"))
-            or _as_bool(request.headers.get("X-Project-Approved")),
-            actor=str(request.form.get("actor") or request.headers.get("X-Actor") or ""),
-        )
-        if not decision.allowed:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "project approval required for dataset upload",
-                    "permission": decision.model_dump(mode="json"),
-                }
-            ), 403
-        max_upload_bytes = int(app.config.get("AI4S_MAX_UPLOAD_BYTES", MAX_UPLOAD_BYTES) or MAX_UPLOAD_BYTES)
-        content_length = request.content_length
-        if max_upload_bytes > 0 and content_length is not None and content_length > max_upload_bytes:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": f"upload exceeds size limit: {max_upload_bytes} bytes",
-                    "max_upload_bytes": max_upload_bytes,
-                }
-            ), 413
-        if "file" not in request.files:
-            return jsonify({"ok": False, "error": "no file part"}), 400
-        f = request.files["file"]
-        if not f.filename or not _allowed_file(f.filename):
-            return jsonify({"ok": False, "error": "unsupported file type"}), 400
-        filename = secure_filename(f.filename)
-        if not filename or not _allowed_file(filename):
-            return jsonify({"ok": False, "error": "invalid filename after sanitization"}), 400
-        try:
-            project_dir = projects.project_dir(clean_id)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        upload_dir = project_dir / "uploads"
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        dest = upload_dir / filename
-        if dest.exists() and dest.is_dir():
-            return jsonify({"ok": False, "error": "invalid filename target"}), 400
-        if dest.exists():
-            return jsonify({"ok": False, "error": f"upload filename already exists: {filename}"}), 409
-        try:
-            with dest.open("xb") as out:
-                _copy_upload_stream(f.stream, out, max_bytes=max_upload_bytes)
-        except FileExistsError:
-            return jsonify({"ok": False, "error": f"upload filename already exists: {filename}"}), 409
-        except ValueError as exc:
-            dest.unlink(missing_ok=True)
-            return jsonify({"ok": False, "error": str(exc), "max_upload_bytes": max_upload_bytes}), 413
-        return jsonify({"ok": True, "path": str(dest), "filename": filename})
-
-    @app.post("/api/projects/<project_id>/runs/<run_id>/models/register")
-    def register_model(project_id: str, run_id: str):
-        clean_project_id = str(project_id or "").strip()
-        clean_run_id = str(run_id or "").strip()
-        if not clean_project_id or not clean_run_id:
-            return jsonify({"ok": False, "error": "project_id and run_id required"}), 400
-        payload = request.get_json(silent=True) or {}
-        actor = str(payload.get("approved_by") or payload.get("actor") or "").strip()
-        decision = permissions.decide(
-            "register_model",
-            project_id=clean_project_id,
-            run_id=clean_run_id,
-            confirmed=_as_bool(payload.get("confirmed")),
-            actor=actor,
-        )
-        if not decision.allowed:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "model registration requires per-action confirmation",
-                    "permission": decision.model_dump(mode="json"),
-                }
-            ), 403
-
-        model_dir_raw = str(payload.get("model_dir") or "").strip()
-        property_id = str(payload.get("property_id") or "").strip()
-        backend = str(payload.get("backend") or "").strip()
-        content_hash = str(payload.get("content_hash") or "").strip()
-        if not model_dir_raw or not property_id or not backend or not content_hash:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "model_dir, property_id, backend, and content_hash required",
-                }
-            ), 400
-        try:
-            manifest, version_dir = projects.register_model_asset(
-                clean_project_id,
-                clean_run_id,
-                Path(model_dir_raw),
-                property_id=property_id,
-                backend=backend,
-                content_hash=content_hash,
-                approved_by=actor,
-                approval_note=str(payload.get("approval_note") or ""),
-            )
-        except (ValueError, FileNotFoundError) as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify(
-            {
-                "ok": True,
-                "manifest": manifest.model_dump(mode="json"),
-                "version_dir": str(version_dir),
-                "permission": decision.model_dump(mode="json"),
-            }
-        )
-
-    @app.post("/api/projects/<project_id>/runs/<run_id>/models/promote/draft")
-    def draft_promoted_model_asset(project_id: str, run_id: str):
-        clean_project_id = str(project_id or "").strip()
-        clean_run_id = str(run_id or "").strip()
-        if not clean_project_id or not clean_run_id:
-            return jsonify({"ok": False, "error": "project_id and run_id required"}), 400
-        payload = request.get_json(silent=True) or {}
-        version_dir_raw = str(payload.get("version_dir") or "").strip()
-        if not version_dir_raw:
-            return jsonify({"ok": False, "error": "version_dir required"}), 400
-        try:
-            draft = projects.build_promoted_model_asset_draft(
-                clean_project_id,
-                Path(version_dir_raw),
-                overrides=_promotion_draft_overrides(payload),
-            )
-        except (ValueError, FileNotFoundError, ValidationError) as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, "draft": draft})
-
-    @app.post("/api/projects/<project_id>/runs/<run_id>/models/promote")
-    def promote_model_asset(project_id: str, run_id: str):
-        clean_project_id = str(project_id or "").strip()
-        clean_run_id = str(run_id or "").strip()
-        if not clean_project_id or not clean_run_id:
-            return jsonify({"ok": False, "error": "project_id and run_id required"}), 400
-        payload = request.get_json(silent=True) or {}
-        actor = str(payload.get("approved_by") or payload.get("actor") or "").strip()
-        decision = permissions.decide(
-            "promote_asset",
-            project_id=clean_project_id,
-            run_id=clean_run_id,
-            confirmed=_as_bool(payload.get("confirmed")),
-            actor=actor,
-        )
-        if not decision.allowed:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "model asset promotion requires per-action confirmation",
-                    "permission": decision.model_dump(mode="json"),
-                }
-            ), 403
-
-        version_dir_raw = str(payload.get("version_dir") or "").strip()
-        model_id = str(payload.get("model_id") or "").strip()
-        domain = str(payload.get("domain") or "").strip()
-        property_id = str(payload.get("property_id") or "").strip()
-        use_case = str(payload.get("use_case") or "").strip()
-        backend = str(payload.get("backend") or "").strip()
-        if not version_dir_raw or not model_id or not domain or not property_id or not use_case or not backend:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "version_dir, model_id, domain, property_id, use_case, and backend required",
-                }
-            ), 400
-        try:
-            metrics = _object_field(payload.get("metrics"), "metrics")
-            applicability = _object_field(payload.get("applicability"), "applicability")
-            input_columns = _string_dict_field(payload.get("input_columns"), "input_columns")
-            promoted, promoted_path = projects.promote_registered_model_asset(
-                clean_project_id,
-                clean_run_id,
-                Path(version_dir_raw),
-                model_id=model_id,
-                domain=domain,
-                property_id=property_id,
-                use_case=use_case,
-                backend=backend,
-                approved_by=actor,
-                metrics=metrics,
-                applicability=applicability,
-                feature_requirements=_string_list(payload.get("feature_requirements")),
-                input_columns=input_columns,
-                limitations=_string_list(payload.get("limitations")),
-                rollback_asset_id=str(payload.get("rollback_asset_id") or "").strip(),
-                note=str(payload.get("note") or ""),
-            )
-        except (ValueError, FileNotFoundError, ValidationError) as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify(
-            {
-                "ok": True,
-                "promoted_model_asset": promoted.model_dump(mode="json"),
-                "promoted_model_asset_path": str(promoted_path),
-                "permission": decision.model_dump(mode="json"),
-            }
-        )
-
-    @app.post("/api/projects/<project_id>/runs/<run_id>/assets/promote")
-    def promote_asset(project_id: str, run_id: str):
-        clean_project_id = str(project_id or "").strip()
-        clean_run_id = str(run_id or "").strip()
-        if not clean_project_id or not clean_run_id:
-            return jsonify({"ok": False, "error": "project_id and run_id required"}), 400
-        payload = request.get_json(silent=True) or {}
-        actor = str(payload.get("approved_by") or payload.get("actor") or "").strip()
-        decision = permissions.decide(
-            "promote_asset",
-            project_id=clean_project_id,
-            run_id=clean_run_id,
-            confirmed=_as_bool(payload.get("confirmed")),
-            actor=actor,
-        )
-        if not decision.allowed:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "asset promotion requires per-action confirmation",
-                    "permission": decision.model_dump(mode="json"),
-                }
-            ), 403
-
-        source_artifacts = _string_list(payload.get("source_artifacts"))
-        asset_id = str(payload.get("asset_id") or "").strip()
-        asset_type = str(payload.get("asset_type") or "").strip()
-        version = str(payload.get("version") or "").strip()
-        if not asset_id or not asset_type or not version:
-            return jsonify({"ok": False, "error": "asset_id, asset_type, and version required"}), 400
-        record = AssetPromotionRecord(
-            run_id=clean_run_id,
-            asset_id=asset_id,
-            asset_type=asset_type,
-            version=version,
-            source_artifacts=source_artifacts,
-            approved_by=actor,
-            approved_at=now_iso(),
-            note=str(payload.get("note") or ""),
-        )
-        try:
-            path = projects.append_asset_promotion_record(clean_project_id, clean_run_id, record)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify(
-            {
-                "ok": True,
-                "record": record.model_dump(mode="json"),
-                "record_path": str(path),
-                "permission": decision.model_dump(mode="json"),
-            }
-        )
+    register_project_routes(
+        app,
+        projects=projects,
+        project_memory=project_memory,
+        permissions=permissions,
+        allowed_file=_allowed_file,
+        copy_upload_stream=_copy_upload_stream,
+        max_upload_bytes_default=MAX_UPLOAD_BYTES,
+    )
+    register_project_asset_routes(app, projects=projects, permissions=permissions)
 
     @app.get("/api/projects/<project_id>/runs/<run_id>/stage-timeline")
     def stage_timeline(project_id: str, run_id: str):
@@ -1658,45 +1215,6 @@ def _first_trainability_property(trainability_report: object) -> str:
         if property_id:
             return property_id
     return ""
-
-
-def _object_field(value: object, field_name: str) -> dict[str, Any]:
-    if value in (None, ""):
-        return {}
-    if not isinstance(value, dict):
-        raise ValueError(f"{field_name} must be an object")
-    return {str(key): item for key, item in value.items()}
-
-
-def _string_dict_field(value: object, field_name: str) -> dict[str, str]:
-    if value in (None, ""):
-        return {}
-    if not isinstance(value, dict):
-        raise ValueError(f"{field_name} must be an object")
-    result: dict[str, str] = {}
-    for key, raw in value.items():
-        clean_key = str(key or "").strip()
-        clean_value = str(raw or "").strip()
-        if clean_key and clean_value:
-            result[clean_key] = clean_value
-    return result
-
-
-def _promotion_draft_overrides(payload: dict[str, Any]) -> dict[str, Any]:
-    overrides: dict[str, Any] = {}
-    for key in ("model_id", "domain", "use_case", "rollback_asset_id"):
-        value = str(payload.get(key) or "").strip()
-        if value:
-            overrides[key] = value
-    for key in ("metrics", "applicability", "input_columns"):
-        value = payload.get(key)
-        if isinstance(value, dict):
-            overrides[key] = value
-    for key in ("feature_requirements", "limitations"):
-        value = _string_list(payload.get(key))
-        if value:
-            overrides[key] = value
-    return overrides
 
 
 def _task_options(value: object) -> dict[str, dict[str, object]]:
