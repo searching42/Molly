@@ -4,6 +4,7 @@ from ai4s_agent.api_route_extensions import INSTALLER_NAMES, api_route_installer
 from ai4s_agent.app import create_app
 from ai4s_agent.routes.core import register_core_routes
 from ai4s_agent.routes.jobs import register_job_routes
+from ai4s_agent.routes.legacy_plan import register_legacy_plan_routes
 from ai4s_agent.routes.project_assets import register_project_asset_routes
 from ai4s_agent.routes.project_runs import register_project_run_routes
 from ai4s_agent.routes.projects import register_project_routes
@@ -27,6 +28,7 @@ def test_low_coupling_base_routes_are_registered_from_route_module(tmp_path) -> 
 
     assert callable(register_core_routes)
     assert callable(register_job_routes)
+    assert callable(register_legacy_plan_routes)
     assert callable(register_project_asset_routes)
     assert callable(register_project_run_routes)
     assert callable(register_project_routes)
@@ -39,6 +41,7 @@ def test_low_coupling_base_routes_are_registered_from_route_module(tmp_path) -> 
     assert "data_confirmation_card" in app.view_functions
     assert "run_confirmation_card" in app.view_functions
     assert "resolve_permission" in app.view_functions
+    assert "create_plan" in app.view_functions
     assert "create_project" in app.view_functions
     assert "list_projects" in app.view_functions
     assert "list_project_memory" in app.view_functions
