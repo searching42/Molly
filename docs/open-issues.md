@@ -140,19 +140,19 @@
 
 ### OPEN-018: api.py 单体路由
 - **MVP**: P2 / **生产**: P2
-- **状态**: In progress
-- 已完成前置拆分：route extension registry 已集中安装顺序；base routes 已开始迁出 `src/ai4s_agent/api.py`，包括 core、worker/deployment、review/permission、legacy plan、run-plan preview/execution/resume、gate/status/adapter execution、project memory/upload base、project model/asset promotion、project run timeline/report/verification、legacy job/background-job/retry/list routes
-- 剩余工作：agent proposal/conversation routes 仍在 `api.py`
+- **状态**: Resolved in `codex/split-api-agent-routes`
+- `src/ai4s_agent/api.py` 现在只负责 workspace/runtime 依赖装配与 route module 注册；不再直接声明 Flask route decorators
+- Base routes 已迁出到 `src/ai4s_agent/routes/`，包括 core、worker/deployment、review/permission、legacy plan、run-plan preview/execution/resume、agent proposal/conversation、gate/status/adapter execution、project memory/upload base、project model/asset promotion、project run timeline/report/verification、legacy job/background-job/retry/list routes
 
 ---
 
 ## Localhost MVP 修复顺序
 
-1. OPEN-018 — api.py 单体路由
+1. （暂无当前阻塞项）
 
 ## Remote / Multi-user Production Blockers
 
-1. OPEN-018 — api.py 单体路由
+1. （暂无当前阻塞项）
 
 ## GitHub Issue Mapping
 

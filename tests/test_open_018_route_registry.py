@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ai4s_agent.api_route_extensions import INSTALLER_NAMES, api_route_installers
 from ai4s_agent.app import create_app
+from ai4s_agent.routes.agents import register_agent_routes
 from ai4s_agent.routes.core import register_core_routes
 from ai4s_agent.routes.jobs import register_job_routes
 from ai4s_agent.routes.legacy_plan import register_legacy_plan_routes
@@ -26,6 +27,7 @@ def test_api_route_extension_registry_preserves_order() -> None:
 def test_low_coupling_base_routes_are_registered_from_route_module(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
 
+    assert callable(register_agent_routes)
     assert callable(register_core_routes)
     assert callable(register_job_routes)
     assert callable(register_legacy_plan_routes)
@@ -81,3 +83,16 @@ def test_low_coupling_base_routes_are_registered_from_route_module(tmp_path) -> 
     assert "plan_remote_worker_assignment" in app.view_functions
     assert "multi_user_readiness" in app.view_functions
     assert "list_atomic_tasks" in app.view_functions
+    assert "agent_plan_proposal" in app.view_functions
+    assert "agent_replan" in app.view_functions
+    assert "agent_research_sources" in app.view_functions
+    assert "agent_conversation_research_sources" in app.view_functions
+    assert "agent_research_acquisition_prepare" in app.view_functions
+    assert "agent_conversation_modeling_payload" in app.view_functions
+    assert "agent_conversation_next_turn" in app.view_functions
+    assert "agent_modeling_plan" in app.view_functions
+    assert "agent_model_package_review" in app.view_functions
+    assert "agent_generation_plan" in app.view_functions
+    assert "agent_report_summary" in app.view_functions
+    assert "agent_review_card" in app.view_functions
+    assert "agent_decision_card" in app.view_functions
