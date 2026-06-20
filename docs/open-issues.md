@@ -154,6 +154,14 @@
 
 1. （暂无当前阻塞项）
 
+## Post-OPEN Hardening Backlog
+
+OPEN-001 到 OPEN-024 已覆盖当前 localhost MVP 的已知阻塞项。后续生产化、
+端到端闭环验证、route extension 显式化、权限语义、存储一致性和 worker
+supervisor 工作不再继续塞进 OPEN 系列，而是在
+[`docs/post-open-hardening.md`](post-open-hardening.md) 中按 `HARDEN-*`
+追踪。
+
 ## GitHub Issue Mapping
 
 | OPEN id | GitHub Issue | Notes |

@@ -1,0 +1,251 @@
+# Post-OPEN Hardening Roadmap
+
+As of PR #35, the OPEN-001 through OPEN-024 backlog has resolved the known
+MVP-blocking architecture, permission, execution-boundary, route-splitting,
+state, snapshot, and storage issues tracked in `docs/open-issues.md`.
+
+The next phase is stabilization and end-to-end validation:
+
+```text
+Prove that the agent framework can run a complete AI4Science/OLED workflow
+with traceable permissions, state, logs, artifacts, retries, gates, and review
+records.
+```
+
+This backlog uses `HARDEN-*` ids so post-OPEN production hardening does not
+blur into the already-resolved OPEN series.
+
+## Current Phase
+
+- Status: OPEN backlog resolved for localhost MVP blockers.
+- Focus: stable localhost workflow closure before broad refactors.
+- Engineering priority: explicit app extension boundaries, e2e workflow tests,
+  permission semantics, storage consistency, and worker supervision.
+- Science priority: a small but closed OLED demo with literature provenance,
+  model training diagnostics, candidate generation, screening, and report
+  artifacts.
+
+## HARDEN-001: Introduce Explicit App Extension Registry
+
+- Replace implicit route-extension monkeypatch chains with a first-class app
+  extension registry.
+- Preserve current installer order while exposing explicit extension metadata,
+  dependency names, and registration hooks.
+- Keep compatibility wrappers until each extension is migrated.
+
+Acceptance:
+
+- App creation can list installed extensions and their order.
+- Tests assert extension order without relying on mutated function attributes.
+- No route behavior changes.
+
+## HARDEN-002: Migrate Permission And Upload Extensions
+
+- Move `server_permissions`, `upload_assets`, and
+  `project_memory_permissions` away from `api_module.register_routes`
+  monkeypatching.
+- Register their route overrides through explicit app extension hooks.
+- Preserve existing permission audit and legacy fallback behavior.
+
+Acceptance:
+
+- Existing permission, upload, and memory tests pass unchanged or with only
+  naming updates.
+- Route override ownership is visible from app construction.
+
+## HARDEN-003: Migrate Project Plan And Job Route Overrides
+
+- Move `project_plan_routes` and `project_job_routes` away from route-function
+  replacement via `app.view_functions[...]`.
+- Prefer explicit route override hooks or service-level dependencies.
+- Keep legacy route compatibility for clients without `project_id`.
+
+Acceptance:
+
+- Project-scoped and legacy run/job behavior remains covered by e2e tests.
+- Ambiguous `run_id` behavior remains unchanged.
+
+## HARDEN-004: Add Localhost Project Workflow E2E Smoke
+
+Add a lightweight end-to-end test that does not run real Uni-Mol, MinerU, or
+network acquisition.
+
+Coverage:
+
+```text
+create project
+-> create server permission grant
+-> upload dataset asset
+-> create project-scoped plan
+-> generate run-plan preview
+-> approve gate
+-> execute stub or baseline task
+-> register artifact
+-> read project run status
+-> generate report or decision card
+```
+
+Acceptance:
+
+- Project namespace does not leak across runs.
+- Job state and artifact registry are visible to later agent routes.
+- Permission audit records key writes.
+- Run-plan preview, execute, and resume do not bypass gate/snapshot checks.
+- Conversation/modeling/report routes can consume prior artifacts.
+
+## HARDEN-005: Add Permission Grant Expiry, Revoke, And Scope Semantics
+
+- Add expiry fields to server-side grants.
+- Add revoke semantics and audit entries.
+- Clarify project-scoped versus run-scoped grants.
+
+Acceptance:
+
+- Expired or revoked grants cannot authorize writes.
+- Audit records identify whether grant, fallback, or denial was used.
+
+## HARDEN-006: Standardize Actor Identity Across Project Routes
+
+- Inventory all project routes that accept `actor`, `approved_by`, or similar
+  identity fields from clients.
+- Standardize request parsing and audit identity semantics.
+- Prepare for future server/session-owned actor identity.
+
+Acceptance:
+
+- All write routes use one shared actor resolver.
+- Missing actor behavior is documented and tested.
+
+## HARDEN-007: Disable Legacy Client Flags By Default In Production Profile
+
+- Keep legacy client flags available for local/dev compatibility.
+- Add a production profile where client-declared approval flags are rejected
+  unless backed by server grants.
+
+Acceptance:
+
+- Production profile tests show upload, memory write, and privileged project
+  actions require server-side grants.
+
+## HARDEN-008: Inventory Mutable JSON State And Remaining RMW Paths
+
+Inventory files such as:
+
+- `job_state.json`
+- `background_job_state.json`
+- `plan.json`
+- `run_plan.json`
+- `stage.json`
+- `artifact_registry.json`
+- `gate_decisions.json`
+- `permission_grants.json`
+- `permission_audit.jsonl`
+- project memory records
+- asset manifests
+
+Acceptance:
+
+- Each mutable file is classified as locked RMW, append-only, immutable, or
+  migration candidate.
+- Unlocked RMW paths are tracked with follow-up items.
+
+## HARDEN-009: Add Storage Consistency Checker
+
+- Add a read-only checker for project/run storage.
+- Validate artifact registry references, stage state, gate decisions, promoted
+  assets, manifests, and job state coherence.
+
+Acceptance:
+
+- Checker reports missing files, dangling registry entries, malformed manifests,
+  and incompatible state transitions.
+- It can run in CI against test fixtures.
+
+## HARDEN-010: Evaluate SQLite Migration For Job/Project/Artifact State
+
+- Do not migrate immediately.
+- First compare current JSON+lock behavior with a minimal SQLite state store.
+- Identify which state should remain file/artifact based.
+
+Acceptance:
+
+- A short design note documents migration scope, risks, rollback path, and
+  what stays as immutable artifacts.
+
+## HARDEN-011: Add Local Process Worker Supervisor
+
+- Decouple long-running execution from API request lifetime.
+- Add a local supervisor that starts, monitors, and terminates worker processes.
+
+Acceptance:
+
+- API creates jobs; worker process executes callbacks and writes terminal state.
+- Supervisor restart behavior is tested at control-plane level.
+
+## HARDEN-012: Add Worker Queue Polling Loop
+
+- Add queue polling around project-scoped jobs.
+- Keep lease acquisition, heartbeat, cancel, and stale lease recovery semantics.
+
+Acceptance:
+
+- Multiple queued jobs are acquired in a deterministic order.
+- Cancelled jobs do not start.
+
+## HARDEN-013: Add Remote Worker Contract Test
+
+- Define a contract test for remote worker assignment, lease, heartbeat,
+  artifact handoff, and terminal state reporting.
+- Avoid requiring real remote GPU resources in CI.
+
+Acceptance:
+
+- Fake remote worker satisfies the same state contract as local worker.
+
+## HARDEN-014: Add Cancellation And Stale Lease Recovery E2E Test
+
+- Cover job cancellation during execution.
+- Cover stale lease takeover and terminal state recovery.
+
+Acceptance:
+
+- Cancelled jobs stop cleanly and record cancellation metadata.
+- Stale leases can be recovered without corrupting artifacts or logs.
+
+## Engineering Track
+
+Recommended order:
+
+```text
+HARDEN-001
+-> HARDEN-004
+-> HARDEN-002 / HARDEN-003
+-> HARDEN-005 / HARDEN-006 / HARDEN-007
+-> HARDEN-008 / HARDEN-009 / HARDEN-010
+-> HARDEN-011 / HARDEN-012 / HARDEN-013 / HARDEN-014
+```
+
+The e2e smoke should arrive early because it becomes the safety net for route
+extension cleanup.
+
+## Science Track
+
+Run in parallel with engineering hardening, but keep the first demo small:
+
+```text
+10-50 OLED papers
+-> 20-100 extracted structure-property records
+-> baseline predictor
+-> 20 generated candidates
+-> rule-based or xTB coarse screening
+-> provenance-backed report
+```
+
+The goal is a closed, auditable demo rather than full automation.
+
+## Near-Term PR Plan
+
+- PR #36: document post-OPEN hardening roadmap and fix stale route-extension
+  docs.
+- PR #37: add localhost project workflow e2e smoke.
+- PR #38+: migrate route extensions behind the new e2e safety net.

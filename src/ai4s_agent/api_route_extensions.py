@@ -31,9 +31,9 @@ def api_route_installers() -> tuple[RouteInstaller, ...]:
     """Return route extension installers in dependency order.
 
     This keeps package initialization from becoming the place where route-layer
-    monkeypatches are manually coordinated. `api.py` still owns the legacy base
-    routes, while feature-specific route extensions live in separate modules and
-    are installed through this registry.
+    monkeypatches are manually coordinated. `api.py` owns runtime dependency
+    assembly and base route-module registration, while feature-specific route
+    extensions live in separate modules and are installed through this registry.
     """
 
     from ai4s_agent.chat_context import install_chat_project_context
