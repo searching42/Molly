@@ -20,6 +20,7 @@ from ai4s_agent.memory import PermissionPolicy, ProjectMemory
 from ai4s_agent.orchestrator import Orchestrator
 from ai4s_agent.routes.core import register_core_routes
 from ai4s_agent.routes.jobs import register_job_routes
+from ai4s_agent.routes.legacy_plan import register_legacy_plan_routes
 from ai4s_agent.routes.project_assets import register_project_asset_routes
 from ai4s_agent.routes.project_runs import register_project_run_routes
 from ai4s_agent.routes.projects import register_project_routes
@@ -98,28 +99,7 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
 
     register_core_routes(app)
 
-    # --- Plan ---
-
-    @app.post("/api/plan")
-    def create_plan():
-        payload = request.get_json(silent=True) or {}
-        run_id = str(payload.get("run_id") or "").strip()
-        prompt = str(payload.get("prompt") or "").strip()
-        if not run_id or not prompt:
-            return jsonify({"ok": False, "error": "run_id and prompt required"}), 400
-        if jobs.get_job(run_id):
-            return jsonify({"ok": False, "error": f"job already active: {run_id}"}), 409
-        try:
-            status = orch.start_run(run_id=run_id, prompt=prompt)
-            jobs.start_job(run_id, details={"gate": status.get("gate")})
-        except ValueError as exc:
-            message = str(exc)
-            status_code = 409 if "already active" in message or "already exists" in message else 400
-            return jsonify({"ok": False, "error": message}), status_code
-        except KeyError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, **status})
-
+    register_legacy_plan_routes(app, orch=orch, jobs=jobs)
     register_run_plan_routes(app, projects=projects, jobs=jobs)
 
     @app.post("/api/agent/plan-proposal")
