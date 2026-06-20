@@ -70,6 +70,29 @@ def test_create_app_exposes_installed_route_extension_metadata(tmp_path) -> None
     assert "mutated" not in fresh[0]["depends_on"]
 
 
+def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    response = client.get("/api/system/route-extensions")
+
+    assert response.status_code == 200
+    body = response.json
+    assert body["ok"] is True
+    assert tuple(item["installer_name"] for item in body["extensions"]) == INSTALLER_NAMES
+    assert json.loads(json.dumps(body["routes"]))[0]["rule"]
+
+    by_rule = {item["rule"]: item for item in body["routes"]}
+    assert by_rule["/api/plan"]["endpoint"] == "create_plan"
+    assert by_rule["/api/plan"]["owner_extension_id"] == "project_scoped_plan_routes"
+    assert by_rule["/api/plan"]["owner_module"] == "ai4s_agent.project_plan_routes"
+    assert by_rule["/api/projects/<project_id>/upload"]["owner_extension_id"] == "immutable_upload_assets"
+    assert by_rule["/api/agent/modeling-plan"]["owner_extension_id"] == "external_approval_split"
+    assert by_rule["/api/system/route-extensions"]["owner_extension_id"] == ""
+    assert by_rule["/api/system/route-extensions"]["owner_module"] == "ai4s_agent.app"
+    assert by_rule["/api/system/route-extensions"]["methods"] == ["GET"]
+
+
 def test_low_coupling_base_routes_are_registered_from_route_module(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
 
