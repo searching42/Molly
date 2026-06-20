@@ -18,7 +18,8 @@ blur into the already-resolved OPEN series.
 ## Current Phase
 
 - Status: OPEN backlog resolved for localhost MVP blockers.
-- Focus: stable localhost workflow closure before broad refactors.
+- Resolved: HARDEN-004 localhost e2e safety net in PR #37.
+- Focus: route/app extension explicitness behind the e2e workflow safety net.
 - Engineering priority: explicit app extension boundaries, e2e workflow tests,
   permission semantics, storage consistency, and worker supervision.
 - Science priority: a small but closed OLED demo with literature provenance,
@@ -67,8 +68,12 @@ Acceptance:
 
 ## HARDEN-004: Add Localhost Project Workflow E2E Smoke
 
-Add a lightweight end-to-end test that does not run real Uni-Mol, MinerU, or
-network acquisition.
+- Status: Resolved in PR #37 / merge commit
+  `58c1b5d8bd4432e16877872d7ef9cd519b2cc224`.
+- Evidence: `tests/test_harden_004_e2e_workflow.py` covers the lightweight
+  localhost project workflow without real Uni-Mol, MinerU, or network
+  acquisition.
+- Verification from PR #37: full suite passed with `557 passed`.
 
 Coverage:
 
@@ -92,6 +97,8 @@ Acceptance:
 - Permission audit records key writes.
 - Run-plan preview, execute, and resume do not bypass gate/snapshot checks.
 - Conversation/modeling/report routes can consume prior artifacts.
+- RunPlan execution/resume events are visible in project-scoped logs when
+  `project_id` is present, while legacy run logs remain compatible.
 
 ## HARDEN-005: Add Permission Grant Expiry, Revoke, And Scope Semantics
 
@@ -217,8 +224,8 @@ Acceptance:
 Recommended order:
 
 ```text
-HARDEN-001
--> HARDEN-004
+HARDEN-004 resolved
+-> HARDEN-001
 -> HARDEN-002 / HARDEN-003
 -> HARDEN-005 / HARDEN-006 / HARDEN-007
 -> HARDEN-008 / HARDEN-009 / HARDEN-010
@@ -245,7 +252,7 @@ The goal is a closed, auditable demo rather than full automation.
 
 ## Near-Term PR Plan
 
-- PR #36: document post-OPEN hardening roadmap and fix stale route-extension
-  docs.
-- PR #37: add localhost project workflow e2e smoke.
-- PR #38+: migrate route extensions behind the new e2e safety net.
+- PR #36: completed. Document post-OPEN hardening roadmap and fix stale
+  route-extension docs.
+- PR #37: completed. Add localhost project workflow e2e smoke.
+- PR #38+: migrate route extensions behind the e2e safety net.
