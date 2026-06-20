@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from ai4s_agent.api_route_extensions import INSTALLER_NAMES, api_route_installers
+import ai4s_agent.api_route_extensions as route_extensions
 from ai4s_agent.app import create_app
 from ai4s_agent.routes.agents import register_agent_routes
 from ai4s_agent.routes.core import register_core_routes
@@ -22,6 +25,30 @@ def test_api_route_extension_registry_preserves_order() -> None:
     assert INSTALLER_NAMES.index("install_project_scoped_job_routes") < INSTALLER_NAMES.index("install_project_scoped_plan_routes")
     assert INSTALLER_NAMES.index("install_immutable_upload_assets") < INSTALLER_NAMES.index("install_server_permission_routes")
     assert INSTALLER_NAMES.index("install_server_permission_routes") < INSTALLER_NAMES.index("install_project_memory_permission_routes")
+
+
+def test_api_route_extension_metadata_is_observable_and_ordered() -> None:
+    specs = route_extensions.api_route_extension_specs()
+
+    assert tuple(spec.installer_name for spec in specs) == INSTALLER_NAMES
+    assert len({spec.extension_id for spec in specs}) == len(specs)
+    assert len({spec.installer_name for spec in specs}) == len(specs)
+    assert all(spec.module.startswith("ai4s_agent.") for spec in specs)
+    assert all(spec.summary for spec in specs)
+    assert {spec.mechanism for spec in specs} <= {
+        "class_patch",
+        "method_patch",
+        "register_routes_wrapper",
+        "view_function_override",
+    }
+
+    seen: set[str] = set()
+    for spec in specs:
+        assert set(spec.depends_on) <= seen
+        seen.add(spec.extension_id)
+
+    payload = [spec.as_dict() for spec in specs]
+    assert json.loads(json.dumps(payload))[0]["extension_id"] == specs[0].extension_id
 
 
 def test_low_coupling_base_routes_are_registered_from_route_module(tmp_path) -> None:
