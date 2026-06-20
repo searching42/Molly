@@ -164,6 +164,7 @@ def install_execution_policy_registry() -> None:
 
     import ai4s_agent.adapters as adapter_exports
     import ai4s_agent.api as api_module
+    import ai4s_agent.routes.run_control as run_control_module
     from ai4s_agent.executor import RunPlanExecutor
 
     if getattr(RunPlanExecutor._adapter_name_for, "_execution_policy_registry", False):
@@ -187,6 +188,8 @@ def install_execution_policy_registry() -> None:
     RunPlanExecutor._adapter_name_for = staticmethod(adapter_name_for)  # type: ignore[method-assign]
     api_module._adapter_execution_policy = adapter_execution_policy  # type: ignore[attr-defined]
     api_module._adapter_requires_snapshot_for_execute = adapter_requires_snapshot_for_execute  # type: ignore[attr-defined]
+    run_control_module._adapter_execution_policy = adapter_execution_policy  # type: ignore[attr-defined]
+    run_control_module._adapter_requires_snapshot_for_execute = adapter_requires_snapshot_for_execute  # type: ignore[attr-defined]
     adapter_exports._strict_execute_error = strict_execute_error  # type: ignore[attr-defined]
 
 
