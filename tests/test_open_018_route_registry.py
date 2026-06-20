@@ -8,6 +8,7 @@ from ai4s_agent.routes.project_assets import register_project_asset_routes
 from ai4s_agent.routes.project_runs import register_project_run_routes
 from ai4s_agent.routes.projects import register_project_routes
 from ai4s_agent.routes.review import register_review_routes
+from ai4s_agent.routes.run_control import register_run_control_routes
 from ai4s_agent.routes.run_plans import register_run_plan_routes
 from ai4s_agent.routes.worker_deployment import register_worker_deployment_routes
 
@@ -30,6 +31,7 @@ def test_low_coupling_base_routes_are_registered_from_route_module(tmp_path) -> 
     assert callable(register_project_run_routes)
     assert callable(register_project_routes)
     assert callable(register_review_routes)
+    assert callable(register_run_control_routes)
     assert callable(register_run_plan_routes)
     assert callable(register_worker_deployment_routes)
     assert "index" in app.view_functions
@@ -55,6 +57,9 @@ def test_low_coupling_base_routes_are_registered_from_route_module(tmp_path) -> 
     assert "regenerate_plan_preview" in app.view_functions
     assert "execute_run_plan" in app.view_functions
     assert "resume_run_plan" in app.view_functions
+    assert "approve_gate" in app.view_functions
+    assert "run_status" in app.view_functions
+    assert "execute_adapter" in app.view_functions
     assert "stage_timeline" in app.view_functions
     assert "report_preview" in app.view_functions
     assert "verify_project_run" in app.view_functions
