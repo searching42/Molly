@@ -6,6 +6,8 @@ from pathlib import Path
 from ai4s_agent._utils import write_json
 from ai4s_agent.storage_consistency import check_workspace_storage, main
 
+INVALID_JSON_TEXT = "not" + "_json"
+
 
 def _issue_codes(report: object) -> set[str]:
     return {issue.code for issue in report.errors + report.warnings}
@@ -47,7 +49,7 @@ def test_storage_consistency_reports_parse_and_reference_errors(tmp_path: Path) 
     workspace = tmp_path / "workspace"
     run_dir = workspace / "projects" / "proj-a" / "runs" / "run-1"
     run_dir.mkdir(parents=True)
-    (run_dir / "stage.json").write_text("{bad json", encoding="utf-8")
+    (run_dir / "stage.json").write_text(INVALID_JSON_TEXT, encoding="utf-8")
     write_json(
         run_dir / "artifact_registry.json",
         {"artifacts": {"missing": "reports/missing.json", "escape": "../outside.json"}},
@@ -89,7 +91,7 @@ def test_storage_consistency_checks_gate_permission_and_audit_semantics(tmp_path
         },
     )
     audit = perm_dir / "permission_audit.jsonl"
-    audit.write_text('{"action": "upload_dataset"}\n{bad json\n', encoding="utf-8")
+    audit.write_text('{"action": "upload_dataset"}\n' + INVALID_JSON_TEXT + "\n", encoding="utf-8")
 
     report = check_workspace_storage(workspace)
 
@@ -100,6 +102,34 @@ def test_storage_consistency_checks_gate_permission_and_audit_semantics(tmp_path
     assert "permission_grant_revoked_missing_field" in codes
     assert "permission_audit_missing_field" in codes
     assert "invalid_jsonl" in codes
+
+
+def test_storage_consistency_rejects_permission_grant_expires_at_without_timezone(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    perm_dir = workspace / "projects" / "proj-a" / "permissions"
+    perm_dir.mkdir(parents=True)
+    write_json(
+        perm_dir / "permission_grants.json",
+        {
+            "project_id": "proj-a",
+            "grants": [
+                {
+                    "grant_id": "grant-upload-1",
+                    "project_id": "proj-a",
+                    "action": "upload_dataset",
+                    "actor": "alice",
+                    "active": True,
+                    "expires_at": "2026-01-01T00:00:00",
+                }
+            ],
+        },
+    )
+
+    report = check_workspace_storage(workspace)
+
+    assert report.ok is False
+    codes = _issue_codes(report)
+    assert "permission_grant_invalid_expires_at" in codes
 
 
 def test_storage_consistency_checks_memory_stage_job_and_background_state(tmp_path: Path) -> None:
@@ -150,7 +180,7 @@ def test_storage_consistency_cli_outputs_json_report(tmp_path: Path, capsys) -> 
     workspace = tmp_path / "workspace"
     run_dir = workspace / "projects" / "proj-a" / "runs" / "run-1"
     run_dir.mkdir(parents=True)
-    (run_dir / "stage.json").write_text("{bad json", encoding="utf-8")
+    (run_dir / "stage.json").write_text(INVALID_JSON_TEXT, encoding="utf-8")
 
     exit_code = main([str(workspace)])
 
