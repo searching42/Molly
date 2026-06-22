@@ -54,6 +54,97 @@ def test_upload_requires_server_permission_grant_when_legacy_flags_disabled(tmp_
     assert "SERVER_GRANT" in reasons
 
 
+def test_permission_grant_uses_x_actor_before_body_actor_and_audits_actor_source(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    client.post("/api/projects", json={"project_id": "proj-a"})
+
+    grant = client.post(
+        "/api/projects/proj-a/permissions/grants",
+        headers={"X-Actor": "header-admin"},
+        json={"action": "upload_dataset", "actor": "body-admin", "confirmed": True},
+    )
+
+    assert grant.status_code == 200
+    assert grant.json["grant"]["actor"] == "header-admin"
+    audit = client.get("/api/projects/proj-a/permissions/audit")
+    created = [item for item in audit.json["audit"] if item["reason"] == "SERVER_GRANT_CREATED"][-1]
+    assert created["actor"] == "header-admin"
+    assert created["actor_source"] == "header:X-Actor"
+
+
+def test_upload_permission_uses_x_actor_before_form_actor_and_audits_actor_source(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    app.config["AI4S_ALLOW_CLIENT_PERMISSION_FLAGS"] = False
+    client = app.test_client()
+    client.post("/api/projects", json={"project_id": "proj-a"})
+    client.post(
+        "/api/projects/proj-a/permissions/grants",
+        json={"action": "upload_dataset", "actor": "alice", "confirmed": True},
+    )
+
+    uploaded = client.post(
+        "/api/projects/proj-a/upload",
+        data={"file": (BytesIO(b"SMILES,value\nCCO,1.0\n"), "dataset.csv"), "actor": "form-user"},
+        headers={"X-Actor": "header-user"},
+        content_type="multipart/form-data",
+    )
+
+    assert uploaded.status_code == 200
+    assert uploaded.json["permission"]["actor"] == "header-user"
+    assert uploaded.json["permission"]["actor_source"] == "header:X-Actor"
+    audit = client.get("/api/projects/proj-a/permissions/audit")
+    allowed = [item for item in audit.json["audit"] if item["reason"] == "SERVER_GRANT"][-1]
+    assert allowed["actor"] == "header-user"
+    assert allowed["actor_source"] == "header:X-Actor"
+
+
+def test_revoke_permission_grant_accepts_json_revoked_by_and_audits_actor_source(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    client.post("/api/projects", json={"project_id": "proj-a"})
+    grant = client.post(
+        "/api/projects/proj-a/permissions/grants",
+        json={"action": "upload_dataset", "actor": "alice", "confirmed": True},
+    )
+
+    revoked = client.delete(
+        f"/api/projects/proj-a/permissions/grants/{grant.json['grant']['grant_id']}",
+        json={"revoked_by": "security-admin"},
+    )
+
+    assert revoked.status_code == 200
+    assert revoked.json["grant"]["revoked_by"] == "security-admin"
+    audit = client.get("/api/projects/proj-a/permissions/audit")
+    revoked_record = [item for item in audit.json["audit"] if item["reason"] == "SERVER_GRANT_REVOKED"][-1]
+    assert revoked_record["actor"] == "security-admin"
+    assert revoked_record["actor_source"] == "json:revoked_by"
+
+
+def test_required_actor_missing_returns_403_for_permission_grant_and_revoke(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    client.post("/api/projects", json={"project_id": "proj-a"})
+
+    missing_grant_actor = client.post(
+        "/api/projects/proj-a/permissions/grants",
+        json={"action": "upload_dataset", "confirmed": True},
+    )
+    grant = client.post(
+        "/api/projects/proj-a/permissions/grants",
+        json={"action": "upload_dataset", "actor": "alice", "confirmed": True},
+    )
+    missing_revoke_actor = client.delete(
+        f"/api/projects/proj-a/permissions/grants/{grant.json['grant']['grant_id']}",
+        json={},
+    )
+
+    assert missing_grant_actor.status_code == 403
+    assert missing_grant_actor.json["actor_source"] == "missing"
+    assert missing_revoke_actor.status_code == 403
+    assert missing_revoke_actor.json["actor_source"] == "missing"
+
+
 def test_permission_grant_expires_at_is_persisted_and_authorizes_until_expiry(tmp_path) -> None:
     store = ServerPermissionStore(workspace_dir=tmp_path)
     project_dir = store.projects.project_dir("proj-a")
