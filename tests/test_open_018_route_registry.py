@@ -52,6 +52,39 @@ def test_api_route_extension_metadata_is_observable_and_ordered() -> None:
     assert json.loads(json.dumps(payload))[0]["extension_id"] == specs[0].extension_id
 
 
+def test_route_extension_metadata_declares_explicit_hook_skeleton() -> None:
+    specs = route_extensions.api_route_extension_specs()
+    by_id = {spec.extension_id: spec.as_dict() for spec in specs}
+
+    upload = by_id["immutable_upload_assets"]
+    assert upload["explicit_hook_capable"] is True
+    assert upload["explicit_hook_active"] is False
+    assert upload["declared_route_overrides"] == [{"endpoint": "upload_file"}]
+    assert upload["declared_new_routes"] == []
+
+    permissions = by_id["server_permission_routes"]
+    assert permissions["explicit_hook_capable"] is True
+    assert permissions["explicit_hook_active"] is False
+    assert permissions["declared_route_overrides"] == []
+    assert permissions["declared_new_routes"] == [
+        {
+            "endpoint": "create_permission_grant",
+            "rule": "/api/projects/<project_id>/permissions/grants",
+            "methods": ["POST"],
+        },
+        {
+            "endpoint": "list_permission_grants",
+            "rule": "/api/projects/<project_id>/permissions/grants",
+            "methods": ["GET"],
+        },
+        {
+            "endpoint": "list_permission_audit",
+            "rule": "/api/projects/<project_id>/permissions/audit",
+            "methods": ["GET"],
+        },
+    ]
+
+
 def test_create_app_exposes_installed_route_extension_metadata(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
 
@@ -70,6 +103,32 @@ def test_create_app_exposes_installed_route_extension_metadata(tmp_path) -> None
     assert "mutated" not in fresh[0]["depends_on"]
 
 
+def test_create_app_exposes_route_override_registry_metadata(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+
+    configured = app.config["AI4S_ROUTE_OVERRIDE_REGISTRY"]
+    registry = app_module.route_override_registry(app)
+
+    assert registry == configured
+    assert json.loads(json.dumps(registry))["route_overrides"][0]["endpoint"]
+    overrides = {
+        (item["extension_id"], item["endpoint"])
+        for item in registry["route_overrides"]
+    }
+    new_routes = {
+        (item["extension_id"], item["endpoint"], item["rule"], tuple(item["methods"]))
+        for item in registry["new_routes"]
+    }
+
+    assert ("immutable_upload_assets", "upload_file") in overrides
+    assert (
+        "server_permission_routes",
+        "create_permission_grant",
+        "/api/projects/<project_id>/permissions/grants",
+        ("POST",),
+    ) in new_routes
+
+
 def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     client = app.test_client()
@@ -80,6 +139,7 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
     body = response.json
     assert body["ok"] is True
     assert tuple(item["installer_name"] for item in body["extensions"]) == INSTALLER_NAMES
+    assert body["route_override_registry"] == app_module.route_override_registry(app)
     assert json.loads(json.dumps(body["routes"]))[0]["rule"]
 
     by_rule = {item["rule"]: item for item in body["routes"]}
@@ -91,6 +151,10 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
     assert by_rule["/api/system/route-extensions"]["owner_extension_id"] == ""
     assert by_rule["/api/system/route-extensions"]["owner_module"] == "ai4s_agent.app"
     assert by_rule["/api/system/route-extensions"]["methods"] == ["GET"]
+
+    upload = next(item for item in body["extensions"] if item["extension_id"] == "immutable_upload_assets")
+    assert upload["explicit_hook_capable"] is True
+    assert upload["explicit_hook_active"] is False
 
 
 def test_low_coupling_base_routes_are_registered_from_route_module(tmp_path) -> None:
