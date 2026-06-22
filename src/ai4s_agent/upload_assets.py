@@ -10,6 +10,7 @@ from werkzeug.utils import secure_filename
 from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.actor_identity import resolve_actor
 from ai4s_agent.memory import PermissionPolicy
+from ai4s_agent.profiles import legacy_client_permission_flags_enabled
 from ai4s_agent.schemas import AssetManifest, AssetStatus
 from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
 from ai4s_agent.storage import ProjectStorage
@@ -69,7 +70,11 @@ def _upload_file_view(
             return jsonify({"ok": False, "error": "project_id required"}), 400
         actor_context = resolve_actor(request)
         legacy_project_approved = _as_bool(request.form.get("project_approved")) or _as_bool(request.headers.get("X-Project-Approved"))
-        allow_legacy_flags = _config_bool(app.config.get("AI4S_ALLOW_CLIENT_PERMISSION_FLAGS", True), default=True)
+        allow_legacy_flags = legacy_client_permission_flags_enabled(
+            app,
+            "AI4S_ALLOW_CLIENT_PERMISSION_FLAGS",
+            default=True,
+        )
         try:
             decision = decide_server_permission(
                 server_permissions,
@@ -251,18 +256,3 @@ def _as_bool(value: Any) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _config_bool(value: Any, *, default: bool = True) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value != 0
-    clean = str(value).strip().lower()
-    if clean in {"false", "0", "no", "n", "off"}:
-        return False
-    if clean in {"true", "1", "yes", "y", "on"}:
-        return True
-    return default

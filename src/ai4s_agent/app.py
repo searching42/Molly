@@ -12,10 +12,12 @@ from ai4s_agent.api_route_extensions import (
     route_extension_context,
 )
 from ai4s_agent.api import register_routes
+from ai4s_agent.profiles import route_extension_inspection_enabled, selected_profile
 
 
 def create_app(base_runs_dir: Path | None = None, workspace_dir: Path | None = None) -> Flask:
     app = Flask(__name__)
+    app.config.setdefault("AI4S_PROFILE", selected_profile())
     register_routes(app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
     extension_context = route_extension_context(
         app=app,
@@ -102,6 +104,8 @@ def route_ownership(app: Flask) -> tuple[dict[str, Any], ...]:
 def register_route_inspection(app: Flask) -> None:
     @app.get("/api/system/route-extensions")
     def inspect_route_extensions():
+        if not route_extension_inspection_enabled(app):
+            return jsonify({"ok": False, "error": "route extension inspection disabled"}), 404
         return jsonify(
             {
                 "ok": True,
