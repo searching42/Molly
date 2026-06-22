@@ -215,13 +215,13 @@ def decide_server_permission(
         allowed = True
         reason = "AUTO_ALLOWED"
     elif level == PermissionLevel.PROJECT_APPROVED:
-        if revoked_grant:
-            reason = "REVOKED_GRANT"
-            grant_id = str(revoked_grant.get("grant_id") or "")
-        elif grant:
+        if grant:
             allowed = True
             reason = "SERVER_GRANT"
             grant_id = str(grant.get("grant_id") or "")
+        elif revoked_grant:
+            reason = "REVOKED_GRANT"
+            grant_id = str(revoked_grant.get("grant_id") or "")
         elif expired_grant:
             reason = "EXPIRED_GRANT"
             grant_id = str(expired_grant.get("grant_id") or "")
@@ -400,20 +400,25 @@ def _find_revoked_grant(
     *,
     run_id: str = "",
 ) -> dict[str, Any] | None:
-    """Return the most recently revoked matching grant, or None."""
+    """Return the most recently revoked matching grant, or None.
+
+    Only considers revoked grants that are *not* shadowed by a newer active
+    grant for the same scope.  Once an active grant is encountered while
+    walking the list oldest-to-newest, earlier revoked grants are ignored.
+    """
     clean_run = str(run_id or "").strip()
-    # Walk oldest-first so that the latest revoked grant wins when there are
-    # multiple inactive grants (e.g. create → revoke → create → revoke).
     found: dict[str, Any] | None = None
     for item in store.list_grants(project_id, action=action):
-        if bool(item.get("active", True)):
-            continue
         grant_run = str(item.get("run_id") or "").strip()
-        if grant_run and grant_run != clean_run:
+        run_mismatch = bool(grant_run and grant_run != clean_run)
+        if run_mismatch:
             continue
-        if not item.get("revoked_at"):
+        if bool(item.get("active", True)):
+            # A newer active grant overrides any earlier revoked grant.
+            found = None
             continue
-        found = item
+        if item.get("revoked_at"):
+            found = item
     return found
 
 

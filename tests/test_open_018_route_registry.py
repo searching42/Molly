@@ -142,6 +142,11 @@ def test_route_extension_metadata_declares_explicit_hook_skeleton() -> None:
             "rule": "/api/projects/<project_id>/permissions/audit",
             "methods": ["GET"],
         },
+        {
+            "endpoint": "revoke_permission_grant",
+            "rule": "/api/projects/<project_id>/permissions/grants/<grant_id>",
+            "methods": ["DELETE"],
+        },
     ]
 
     memory = by_id["project_memory_permission_routes"]
@@ -278,6 +283,12 @@ def test_create_app_exposes_route_override_registry_metadata(tmp_path) -> None:
         "/api/projects/<project_id>/permissions/grants",
         ("POST",),
     ) in new_routes
+    assert (
+        "server_permission_routes",
+        "revoke_permission_grant",
+        "/api/projects/<project_id>/permissions/grants/<grant_id>",
+        ("DELETE",),
+    ) in new_routes
     applied = {
         (item["extension_id"], item["endpoint"])
         for item in registry["applied_route_overrides"]
@@ -324,6 +335,12 @@ def test_create_app_exposes_route_override_registry_metadata(tmp_path) -> None:
         "list_permission_audit",
         "/api/projects/<project_id>/permissions/audit",
         ("GET",),
+    ) in applied_new_routes
+    assert (
+        "server_permission_routes",
+        "revoke_permission_grant",
+        "/api/projects/<project_id>/permissions/grants/<grant_id>",
+        ("DELETE",),
     ) in applied_new_routes
     assert (
         "project_scoped_job_routes",
@@ -490,6 +507,12 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
         "list_permission_audit",
         "/api/projects/<project_id>/permissions/audit",
         ("GET",),
+    ) in applied_new_routes
+    assert (
+        "server_permission_routes",
+        "revoke_permission_grant",
+        "/api/projects/<project_id>/permissions/grants/<grant_id>",
+        ("DELETE",),
     ) in applied_new_routes
     assert (
         "project_scoped_job_routes",

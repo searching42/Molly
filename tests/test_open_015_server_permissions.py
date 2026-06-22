@@ -310,6 +310,24 @@ def test_revoke_endpoint_returns_400_for_missing_grant(tmp_path) -> None:
     assert resp.status_code == 400
 
 
+def test_recreate_after_revoke_authorizes_new_grant(tmp_path) -> None:
+    store = ServerPermissionStore(workspace_dir=tmp_path)
+    policy = PermissionPolicy()
+    policy.set_policy("upload_dataset", PermissionLevel.PROJECT_APPROVED)
+
+    # Grant A → revoke → Grant B for same scope
+    grant_a = store.create_grant("proj-recreate", "upload_dataset", actor="alice", reason="first")
+    store.revoke_grant("proj-recreate", grant_a["grant_id"], revoked_by="admin")
+    grant_b = store.create_grant("proj-recreate", "upload_dataset", actor="alice", reason="second")
+
+    decision = decide_server_permission(store, policy, "upload_dataset", project_id="proj-recreate", actor="alice")
+    assert decision["allowed"] is True
+    assert decision["reason"] == "SERVER_GRANT"
+    assert decision["grant_id"] == grant_b["grant_id"]
+    # Revoked grant A does not shadow active grant B
+    assert decision["grant_id"] != grant_a["grant_id"]
+
+
 def test_revoke_endpoint_requires_actor(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     client = app.test_client()

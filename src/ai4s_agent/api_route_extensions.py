@@ -421,6 +421,11 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
                 rule="/api/projects/<project_id>/permissions/audit",
                 methods=("GET",),
             ),
+            RouteRegistrationDeclaration(
+                endpoint="revoke_permission_grant",
+                rule="/api/projects/<project_id>/permissions/grants/<grant_id>",
+                methods=("DELETE",),
+            ),
         ),
     ),
     RouteExtensionSpec(
