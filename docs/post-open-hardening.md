@@ -253,40 +253,45 @@ Acceptance:
 - The inventory distinguishes project-scoped storage from legacy compatibility
   paths where lock coverage differs.
 
-## HARDEN-009: Add Storage Consistency Checker
+## HARDEN-009: Add Storage Consistency Checker — RESOLVED
 
-- Status: Started by PR #58 with a read-only checker API and
-  `python -m ai4s_agent.storage_consistency` CLI.
-- Add a read-only checker for project/run storage.
-- Validate artifact registry references, stage state, gate decisions, promoted
-  assets, manifests, and job state coherence.
+- Status: Resolved by PR #58 (checker API + CLI), PR #59 (e2e workflow binding).
+- The `check_workspace_storage(workspace_dir)` API validates artifact registry
+  references, stage state, gate decisions, promoted assets, manifests, and job
+  state coherence.
+- The e2e workflow test (`test_harden_004_e2e_workflow.py`) now calls the
+  checker after a full upload → grant → plan → execute → resume → verify →
+  report → feedback cycle and asserts `report.ok is True`.
+- CLI entry point: `python -m ai4s_agent.storage_consistency <workspace_dir>`.
+
+## HARDEN-010: Evaluate SQLite Migration — RESOLVED
+
+- Status: Resolved by PR #60 (`docs/sqlite-migration-design.md`).
+- The design note documents: current JSON+locking state (aligned with
+  `storage-state-inventory.md`), per-project SQLite schema for 11 tables,
+  what stays as immutable file artifacts, a three-phase migration strategy
+  (dual-write → SQLite primary → JSON removal), and risks (WAL checkpointing,
+  concurrency, rollback).
+- No code migration starts before worker supervision and job durability are
+  in place.
+
+## HARDEN-011: Add Local Process Worker Supervisor — Planned
+
+- Add a `WorkerSupervisor` class that manages local subprocess worker lifecycles
+  without coupling to the RunPlanExecutor or remote workers.
+- Provide start / status / stop primitives with per-worker heartbeat files.
+- Expose worker lifecycle through a lightweight API.
+- Keep the existing executor path unchanged; the supervisor is a new
+  infrastructure layer that future durable jobs can adopt.
 
 Acceptance:
 
-- Checker reports missing files, dangling registry entries, malformed manifests,
-  and incompatible state transitions.
-- It can run in CI against test fixtures.
-
-## HARDEN-010: Evaluate SQLite Migration For Job/Project/Artifact State
-
-- Do not migrate immediately.
-- First compare current JSON+lock behavior with a minimal SQLite state store.
-- Identify which state should remain file/artifact based.
-
-Acceptance:
-
-- A short design note documents migration scope, risks, rollback path, and
-  what stays as immutable artifacts.
-
-## HARDEN-011: Add Local Process Worker Supervisor
-
-- Decouple long-running execution from API request lifetime.
-- Add a local supervisor that starts, monitors, and terminates worker processes.
-
-Acceptance:
-
-- API creates jobs; worker process executes callbacks and writes terminal state.
-- Supervisor restart behavior is tested at control-plane level.
+- `WorkerSupervisor` can start, poll status, and stop a local process.
+- Worker heartbeat state is persisted to a per-worker JSON file under the
+  project run directory.
+- Supervisor lifecycle is tested end-to-end (pending → running → stopped/failed)
+  without real long-running tasks.
+- No changes to RunPlanExecutor or remote worker code.
 
 ## HARDEN-012: Add Worker Queue Polling Loop
 
