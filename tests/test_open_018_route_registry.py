@@ -38,6 +38,7 @@ def test_api_route_extension_metadata_is_observable_and_ordered() -> None:
     assert all(spec.summary for spec in specs)
     assert {spec.mechanism for spec in specs} <= {
         "class_patch",
+        "explicit_route_override",
         "method_patch",
         "register_routes_wrapper",
         "view_function_override",
@@ -58,7 +59,8 @@ def test_route_extension_metadata_declares_explicit_hook_skeleton() -> None:
 
     upload = by_id["immutable_upload_assets"]
     assert upload["explicit_hook_capable"] is True
-    assert upload["explicit_hook_active"] is False
+    assert upload["explicit_hook_active"] is True
+    assert upload["mechanism"] == "explicit_route_override"
     assert upload["declared_route_overrides"] == [{"endpoint": "upload_file"}]
     assert upload["declared_new_routes"] == []
 
@@ -83,6 +85,17 @@ def test_route_extension_metadata_declares_explicit_hook_skeleton() -> None:
             "methods": ["GET"],
         },
     ]
+
+
+def test_immutable_upload_installer_no_longer_wraps_register_routes() -> None:
+    import ai4s_agent.api as api_module
+    import ai4s_agent.upload_assets as upload_assets
+
+    original_register_routes = api_module.register_routes
+
+    upload_assets.install_immutable_upload_assets()
+
+    assert api_module.register_routes is original_register_routes
 
 
 def test_create_app_exposes_installed_route_extension_metadata(tmp_path) -> None:
@@ -127,6 +140,12 @@ def test_create_app_exposes_route_override_registry_metadata(tmp_path) -> None:
         "/api/projects/<project_id>/permissions/grants",
         ("POST",),
     ) in new_routes
+    applied = {
+        (item["extension_id"], item["endpoint"])
+        for item in registry["applied_route_overrides"]
+    }
+
+    assert ("immutable_upload_assets", "upload_file") in applied
 
 
 def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -> None:
@@ -154,7 +173,12 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
 
     upload = next(item for item in body["extensions"] if item["extension_id"] == "immutable_upload_assets")
     assert upload["explicit_hook_capable"] is True
-    assert upload["explicit_hook_active"] is False
+    assert upload["explicit_hook_active"] is True
+    applied = {
+        (item["extension_id"], item["endpoint"])
+        for item in body["route_override_registry"]["applied_route_overrides"]
+    }
+    assert ("immutable_upload_assets", "upload_file") in applied
 
 
 def test_low_coupling_base_routes_are_registered_from_route_module(tmp_path) -> None:

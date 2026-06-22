@@ -61,7 +61,10 @@ class RouteExtensionSpec:
                 item.as_dict()
                 for item in self.declared_route_overrides
             ],
-            "declared_new_routes": [item.as_dict() for item in self.declared_new_routes],
+            "declared_new_routes": [
+                item.as_dict()
+                for item in self.declared_new_routes
+            ],
         }
 
 
@@ -74,29 +77,47 @@ class RouteExtensionContext:
 
 
 class RouteOverrideRegistry:
-    """Read-only skeleton for future explicit route extension hooks."""
+    """Track declared and applied explicit route extension hooks."""
 
     def __init__(self) -> None:
         self._route_overrides: list[dict[str, object]] = []
         self._new_routes: list[dict[str, object]] = []
+        self._applied_route_overrides: list[dict[str, object]] = []
 
     @classmethod
     def from_specs(cls, specs: tuple[RouteExtensionSpec, ...]) -> "RouteOverrideRegistry":
         registry = cls()
         for spec in specs:
             for declaration in spec.declared_route_overrides:
-                registry.declare_route_override(spec.extension_id, endpoint=declaration.endpoint)
+                registry.declare_route_override(
+                    spec.extension_id,
+                    endpoint=declaration.endpoint,
+                    explicit_hook_active=spec.explicit_hook_active,
+                )
             for declaration in spec.declared_new_routes:
                 registry.declare_new_route(
                     spec.extension_id,
                     endpoint=declaration.endpoint,
                     rule=declaration.rule,
                     methods=declaration.methods,
+                    explicit_hook_active=spec.explicit_hook_active,
                 )
         return registry
 
-    def declare_route_override(self, extension_id: str, *, endpoint: str) -> None:
-        self._route_overrides.append({"extension_id": extension_id, "endpoint": endpoint})
+    def declare_route_override(
+        self,
+        extension_id: str,
+        *,
+        endpoint: str,
+        explicit_hook_active: bool = False,
+    ) -> None:
+        self._route_overrides.append(
+            {
+                "extension_id": extension_id,
+                "endpoint": endpoint,
+                "explicit_hook_active": bool(explicit_hook_active),
+            }
+        )
 
     def declare_new_route(
         self,
@@ -105,6 +126,7 @@ class RouteOverrideRegistry:
         endpoint: str,
         rule: str,
         methods: tuple[str, ...],
+        explicit_hook_active: bool = False,
     ) -> None:
         self._new_routes.append(
             {
@@ -112,6 +134,25 @@ class RouteOverrideRegistry:
                 "endpoint": endpoint,
                 "rule": rule,
                 "methods": [method.upper() for method in methods],
+                "explicit_hook_active": bool(explicit_hook_active),
+            }
+        )
+
+    def apply_route_override(
+        self,
+        app: Any,
+        *,
+        extension_id: str,
+        endpoint: str,
+        view_func: Any,
+    ) -> None:
+        if endpoint not in app.view_functions:
+            raise RuntimeError(f"route endpoint not registered before override: {endpoint}")
+        app.view_functions[endpoint] = view_func
+        self._applied_route_overrides.append(
+            {
+                "extension_id": extension_id,
+                "endpoint": endpoint,
             }
         )
 
@@ -119,6 +160,7 @@ class RouteOverrideRegistry:
         return {
             "route_overrides": [dict(item) for item in self._route_overrides],
             "new_routes": [dict(item) for item in self._new_routes],
+            "applied_route_overrides": [dict(item) for item in self._applied_route_overrides],
         }
 
 
@@ -136,6 +178,23 @@ def route_extension_context(
         workspace_dir=workspace_dir,
         route_overrides=RouteOverrideRegistry.from_specs(selected_specs),
     )
+
+
+def apply_explicit_route_hooks(context: RouteExtensionContext) -> None:
+    """Apply route extensions that have migrated from monkeypatches to hooks."""
+
+    from ai4s_agent.upload_assets import apply_immutable_upload_assets_route_override
+
+    hooks: dict[str, Callable[[RouteExtensionContext], None]] = {
+        "immutable_upload_assets": apply_immutable_upload_assets_route_override,
+    }
+    for spec in api_route_extension_specs():
+        if not spec.explicit_hook_active:
+            continue
+        hook = hooks.get(spec.extension_id)
+        if hook is None:
+            raise RuntimeError(f"missing explicit route hook for extension: {spec.extension_id}")
+        hook(context)
 
 
 ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
@@ -265,7 +324,8 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
         installer_name="install_immutable_upload_assets",
         module="ai4s_agent.upload_assets",
         summary="Route project uploads through immutable versioned upload assets.",
-        mechanism="view_function_override",
+        mechanism="explicit_route_override",
+        explicit_hook_active=True,
         declared_route_overrides=(RouteOverrideDeclaration(endpoint="upload_file"),),
     ),
     RouteExtensionSpec(
