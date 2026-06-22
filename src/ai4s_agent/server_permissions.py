@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -22,12 +23,13 @@ class ServerPermissionStore:
         self.workspace_dir = Path(workspace_dir).resolve()
         self.projects = ProjectStorage(workspace_dir=self.workspace_dir)
 
-    def create_grant(self, project_id: str, action: str, *, actor: str, reason: str = "", run_id: str = "") -> dict[str, Any]:
+    def create_grant(self, project_id: str, action: str, *, actor: str, reason: str = "", run_id: str = "", expires_at: str = "") -> dict[str, Any]:
         project = _clean_segment(project_id, "project_id")
         clean_action = _clean_action(action)
         clean_actor = str(actor or "").strip()
         if not clean_actor:
             raise ValueError("actor required for permission grant")
+        clean_expires_at = _normalize_future_expires_at(expires_at)
         grant = {
             "grant_id": f"grant-{clean_action}-{uuid.uuid4().hex[:12]}",
             "project_id": project,
@@ -36,6 +38,7 @@ class ServerPermissionStore:
             "actor": clean_actor,
             "reason": str(reason or "").strip(),
             "created_at": now_iso(),
+            "expires_at": clean_expires_at,
             "active": True,
         }
         grants = self.list_grants(project)
@@ -73,7 +76,21 @@ class ServerPermissionStore:
             grant_run = str(grant.get("run_id") or "").strip()
             if grant_run and grant_run != clean_run:
                 continue
+            if _grant_is_expired(grant):
+                continue
             return grant
+        return None
+
+    def find_expired_grant(self, project_id: str, action: str, *, run_id: str = "") -> dict[str, Any] | None:
+        clean_run = str(run_id or "").strip()
+        for grant in reversed(self.list_grants(project_id, action=action)):
+            if not bool(grant.get("active", True)):
+                continue
+            grant_run = str(grant.get("run_id") or "").strip()
+            if grant_run and grant_run != clean_run:
+                continue
+            if _grant_is_expired(grant):
+                return grant
         return None
 
     def audit_decision(
@@ -153,6 +170,7 @@ def decide_server_permission(
     level = policy.resolve(clean_action)
     clean_actor = str(actor or "").strip()
     grant = store.find_grant(project_id, clean_action, run_id=run_id)
+    expired_grant = None if grant else store.find_expired_grant(project_id, clean_action, run_id=run_id)
     allowed = False
     reason = ""
     grant_id = ""
@@ -165,6 +183,9 @@ def decide_server_permission(
             allowed = True
             reason = "SERVER_GRANT"
             grant_id = str(grant.get("grant_id") or "")
+        elif expired_grant:
+            reason = "EXPIRED_GRANT"
+            grant_id = str(expired_grant.get("grant_id") or "")
         elif legacy_project_approved and allow_legacy_client_flags:
             allowed = True
             reason = "LEGACY_CLIENT_PROJECT_APPROVED"
@@ -198,7 +219,7 @@ def decide_server_permission(
         "run_id": run_id,
         "actor": clean_actor,
         "grant_id": grant_id,
-        "server_authorized": bool(grant_id or level == PermissionLevel.AUTO),
+        "server_authorized": bool(level == PermissionLevel.AUTO or (allowed and grant_id)),
         "legacy_client_flag": legacy,
         "audit": audit,
     }
@@ -261,7 +282,14 @@ def _create_permission_grant_view(*, store: ServerPermissionStore):
         if not confirmed or not actor:
             return jsonify({"ok": False, "error": "server permission grant requires confirmed=true and actor"}), 403
         try:
-            grant = store.create_grant(project_id, action, actor=actor, reason=str(payload.get("reason") or ""), run_id=str(payload.get("run_id") or ""))
+            grant = store.create_grant(
+                project_id,
+                action,
+                actor=actor,
+                reason=str(payload.get("reason") or ""),
+                run_id=str(payload.get("run_id") or ""),
+                expires_at=str(payload.get("expires_at") or ""),
+            )
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         return jsonify({"ok": True, "grant": grant})
@@ -303,3 +331,35 @@ def _clean_segment(value: str, label: str) -> str:
     if not clean or clean in {".", ".."} or any(ch in clean for ch in "/\\"):
         raise ValueError(f"{label} must be a single safe path segment")
     return clean
+
+
+def _normalize_future_expires_at(raw: str) -> str:
+    clean = str(raw or "").strip()
+    if not clean:
+        return ""
+    parsed = _parse_expires_at(clean)
+    if parsed <= datetime.now(timezone.utc):
+        raise ValueError("expires_at must be in the future")
+    return parsed.isoformat().replace("+00:00", "Z")
+
+
+def _grant_is_expired(grant: dict[str, Any]) -> bool:
+    raw = str(grant.get("expires_at") or "").strip()
+    if not raw:
+        return False
+    try:
+        expires_at = _parse_expires_at(raw)
+    except ValueError:
+        return True
+    return expires_at <= datetime.now(timezone.utc)
+
+
+def _parse_expires_at(raw: str) -> datetime:
+    clean = str(raw or "").strip()
+    try:
+        parsed = datetime.fromisoformat(clean.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("expires_at must be an ISO timestamp with timezone") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("expires_at must include timezone")
+    return parsed.astimezone(timezone.utc)

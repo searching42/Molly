@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.app import create_app
 from ai4s_agent.memory import PermissionPolicy
 from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
+
+
+def _iso_at(delta: timedelta) -> str:
+    return (datetime.now(timezone.utc) + delta).isoformat().replace("+00:00", "Z")
 
 
 def test_upload_requires_server_permission_grant_when_legacy_flags_disabled(tmp_path) -> None:
@@ -47,6 +52,83 @@ def test_upload_requires_server_permission_grant_when_legacy_flags_disabled(tmp_
     assert "SERVER_GRANT_REQUIRED" in reasons
     assert "SERVER_GRANT_CREATED" in reasons
     assert "SERVER_GRANT" in reasons
+
+
+def test_permission_grant_expires_at_is_persisted_and_authorizes_until_expiry(tmp_path) -> None:
+    store = ServerPermissionStore(workspace_dir=tmp_path)
+    project_dir = store.projects.project_dir("proj-a")
+    write_json(project_dir / "project.json", {"project_id": "proj-a", "name": "proj-a", "created_at": now_iso()})
+    expires_at = _iso_at(timedelta(hours=1))
+
+    grant = store.create_grant("proj-a", "upload_dataset", actor="alice", expires_at=expires_at)
+    decision = decide_server_permission(
+        store,
+        PermissionPolicy(),
+        "upload_dataset",
+        project_id="proj-a",
+        actor="alice",
+    )
+
+    assert grant["expires_at"] == expires_at
+    assert decision["allowed"] is True
+    assert decision["reason"] == "SERVER_GRANT"
+    assert decision["grant_id"] == grant["grant_id"]
+    assert decision["server_authorized"] is True
+
+
+def test_expired_permission_grant_is_denied_and_audited(tmp_path) -> None:
+    store = ServerPermissionStore(workspace_dir=tmp_path)
+    project_dir = store.projects.project_dir("proj-a")
+    write_json(project_dir / "project.json", {"project_id": "proj-a", "name": "proj-a", "created_at": now_iso()})
+    grant = store.create_grant("proj-a", "upload_dataset", actor="alice", expires_at=_iso_at(timedelta(hours=1)))
+    grant["expires_at"] = _iso_at(timedelta(minutes=-1))
+    write_json(
+        store._grants_path("proj-a"),
+        {"project_id": "proj-a", "updated_at": now_iso(), "grants": [grant]},
+    )
+
+    decision = decide_server_permission(
+        store,
+        PermissionPolicy(),
+        "upload_dataset",
+        project_id="proj-a",
+        actor="alice",
+    )
+
+    assert decision["allowed"] is False
+    assert decision["reason"] == "EXPIRED_GRANT"
+    assert decision["grant_id"] == grant["grant_id"]
+    assert decision["server_authorized"] is False
+    audit = store.read_audit("proj-a")
+    assert audit[-1]["reason"] == "EXPIRED_GRANT"
+    assert audit[-1]["allowed"] is False
+    assert audit[-1]["grant_id"] == grant["grant_id"]
+
+
+def test_permission_grant_rejects_invalid_or_past_expires_at(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    client.post("/api/projects", json={"project_id": "proj-a"})
+
+    invalid = client.post(
+        "/api/projects/proj-a/permissions/grants",
+        json={"action": "upload_dataset", "actor": "alice", "confirmed": True, "expires_at": "not-a-date"},
+    )
+    expired = client.post(
+        "/api/projects/proj-a/permissions/grants",
+        json={"action": "upload_dataset", "actor": "alice", "confirmed": True, "expires_at": _iso_at(timedelta(minutes=-1))},
+    )
+    valid = client.post(
+        "/api/projects/proj-a/permissions/grants",
+        json={"action": "upload_dataset", "actor": "alice", "confirmed": True, "expires_at": _iso_at(timedelta(hours=1))},
+    )
+
+    assert invalid.status_code == 400
+    assert "expires_at" in invalid.json["error"]
+    assert expired.status_code == 400
+    assert "future" in expired.json["error"]
+    assert valid.status_code == 200
+    assert valid.json["grant"]["expires_at"]
 
 
 def test_string_false_disables_legacy_client_permission_flags(tmp_path) -> None:
