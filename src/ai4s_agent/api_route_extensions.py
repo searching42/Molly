@@ -215,12 +215,14 @@ def route_extension_context(
 def apply_explicit_route_hooks(context: RouteExtensionContext) -> None:
     """Apply route extensions that have migrated from monkeypatches to hooks."""
 
+    from ai4s_agent.project_memory_permissions import apply_project_memory_permission_routes
     from ai4s_agent.server_permissions import apply_server_permission_routes
     from ai4s_agent.upload_assets import apply_immutable_upload_assets_route_override
 
     hooks: dict[str, Callable[[RouteExtensionContext], None]] = {
         "immutable_upload_assets": apply_immutable_upload_assets_route_override,
         "server_permission_routes": apply_server_permission_routes,
+        "project_memory_permission_routes": apply_project_memory_permission_routes,
     }
     for spec in api_route_extension_specs():
         if not spec.explicit_hook_active:
@@ -393,7 +395,8 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
         installer_name="install_project_memory_permission_routes",
         module="ai4s_agent.project_memory_permissions",
         summary="Protect project memory writes with server-side grants.",
-        mechanism="view_function_override",
+        mechanism="explicit_route_override",
+        explicit_hook_active=True,
         depends_on=("server_permission_routes",),
         declared_route_overrides=(
             RouteOverrideDeclaration(endpoint="create_project_memory_record"),

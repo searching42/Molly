@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from flask import jsonify, request
 from pydantic import ValidationError
@@ -10,33 +9,60 @@ from ai4s_agent.memory import PermissionLevel, PermissionPolicy, ProjectMemory
 from ai4s_agent.schemas import ProjectMemoryRecord
 from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
 
+if TYPE_CHECKING:
+    from ai4s_agent.api_route_extensions import RouteExtensionContext
+
 
 MEMORY_WRITE_ACTION = "project_memory_write"
 
 
 def install_project_memory_permission_routes() -> None:
+    """Project memory permission routes are installed by the explicit hook."""
+
+
+def apply_project_memory_permission_routes(context: "RouteExtensionContext") -> None:
     """Protect project memory mutations with server-side permission grants."""
 
     import ai4s_agent.api as api_module
 
-    original_register_routes = api_module.register_routes
-    if getattr(original_register_routes, "_project_memory_permissions", False):
-        return
-
-    def register_routes_with_project_memory_permissions(app: Any, base_runs_dir: Path | None = None, workspace_dir: Path | None = None) -> None:
-        original_register_routes(app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
-        workspace = api_module._workspace_from_config(base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
-        project_memory = ProjectMemory(workspace_dir=workspace)
-        store = ServerPermissionStore(workspace_dir=workspace)
-        policy = PermissionPolicy()
-        policy.set_policy(MEMORY_WRITE_ACTION, PermissionLevel.PROJECT_APPROVED)
-        app.view_functions["create_project_memory_record"] = _create_memory_record_view(app=app, project_memory=project_memory, store=store, policy=policy)
-        app.view_functions["update_project_memory_record"] = _update_memory_record_view(app=app, project_memory=project_memory, store=store, policy=policy)
-        app.view_functions["delete_project_memory_record"] = _delete_memory_record_view(app=app, project_memory=project_memory, store=store, policy=policy)
-        app.view_functions["set_project_memory_enabled"] = _set_memory_enabled_view(app=app, project_memory=project_memory, store=store, policy=policy)
-
-    register_routes_with_project_memory_permissions._project_memory_permissions = True  # type: ignore[attr-defined]
-    api_module.register_routes = register_routes_with_project_memory_permissions  # type: ignore[method-assign]
+    workspace = api_module._workspace_from_config(
+        base_runs_dir=context.base_runs_dir,
+        workspace_dir=context.workspace_dir,
+    )
+    project_memory = ProjectMemory(workspace_dir=workspace)
+    store = ServerPermissionStore(workspace_dir=workspace)
+    policy = PermissionPolicy()
+    policy.set_policy(MEMORY_WRITE_ACTION, PermissionLevel.PROJECT_APPROVED)
+    view_kwargs = {
+        "app": context.app,
+        "project_memory": project_memory,
+        "store": store,
+        "policy": policy,
+    }
+    context.route_overrides.apply_route_override(
+        context.app,
+        extension_id="project_memory_permission_routes",
+        endpoint="create_project_memory_record",
+        view_func=_create_memory_record_view(**view_kwargs),
+    )
+    context.route_overrides.apply_route_override(
+        context.app,
+        extension_id="project_memory_permission_routes",
+        endpoint="update_project_memory_record",
+        view_func=_update_memory_record_view(**view_kwargs),
+    )
+    context.route_overrides.apply_route_override(
+        context.app,
+        extension_id="project_memory_permission_routes",
+        endpoint="delete_project_memory_record",
+        view_func=_delete_memory_record_view(**view_kwargs),
+    )
+    context.route_overrides.apply_route_override(
+        context.app,
+        extension_id="project_memory_permission_routes",
+        endpoint="set_project_memory_enabled",
+        view_func=_set_memory_enabled_view(**view_kwargs),
+    )
 
 
 def _create_memory_record_view(*, app: Any, project_memory: ProjectMemory, store: ServerPermissionStore, policy: PermissionPolicy):

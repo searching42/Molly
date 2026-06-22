@@ -88,6 +88,18 @@ def test_route_extension_metadata_declares_explicit_hook_skeleton() -> None:
         },
     ]
 
+    memory = by_id["project_memory_permission_routes"]
+    assert memory["explicit_hook_capable"] is True
+    assert memory["explicit_hook_active"] is True
+    assert memory["mechanism"] == "explicit_route_override"
+    assert memory["declared_route_overrides"] == [
+        {"endpoint": "create_project_memory_record"},
+        {"endpoint": "update_project_memory_record"},
+        {"endpoint": "delete_project_memory_record"},
+        {"endpoint": "set_project_memory_enabled"},
+    ]
+    assert memory["declared_new_routes"] == []
+
 
 def test_immutable_upload_installer_no_longer_wraps_register_routes() -> None:
     import ai4s_agent.api as api_module
@@ -109,6 +121,20 @@ def test_server_permission_installer_no_longer_wraps_register_routes() -> None:
     server_permissions.install_server_permission_routes()
 
     assert api_module.register_routes is original_register_routes
+
+
+def test_project_memory_permission_installer_no_longer_wraps_register_routes(monkeypatch) -> None:
+    import ai4s_agent.api as api_module
+    import ai4s_agent.project_memory_permissions as project_memory_permissions
+
+    def dummy_register_routes(app, base_runs_dir=None, workspace_dir=None):
+        return None
+
+    monkeypatch.setattr(api_module, "register_routes", dummy_register_routes)
+
+    project_memory_permissions.install_project_memory_permission_routes()
+
+    assert api_module.register_routes is dummy_register_routes
 
 
 def test_create_app_exposes_installed_route_extension_metadata(tmp_path) -> None:
@@ -163,6 +189,10 @@ def test_create_app_exposes_route_override_registry_metadata(tmp_path) -> None:
     }
 
     assert ("immutable_upload_assets", "upload_file") in applied
+    assert ("project_memory_permission_routes", "create_project_memory_record") in applied
+    assert ("project_memory_permission_routes", "update_project_memory_record") in applied
+    assert ("project_memory_permission_routes", "delete_project_memory_record") in applied
+    assert ("project_memory_permission_routes", "set_project_memory_enabled") in applied
     assert (
         "server_permission_routes",
         "create_permission_grant",
@@ -197,6 +227,7 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
     assert json.loads(json.dumps(body["routes"]))[0]["rule"]
 
     by_rule = {item["rule"]: item for item in body["routes"]}
+    by_endpoint = {item["endpoint"]: item for item in body["routes"]}
     assert by_rule["/api/plan"]["endpoint"] == "create_plan"
     assert by_rule["/api/plan"]["owner_extension_id"] == "project_scoped_plan_routes"
     assert by_rule["/api/plan"]["owner_module"] == "ai4s_agent.project_plan_routes"
@@ -211,6 +242,18 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
     assert by_rule["/api/system/route-extensions"]["owner_extension_id"] == ""
     assert by_rule["/api/system/route-extensions"]["owner_module"] == "ai4s_agent.app"
     assert by_rule["/api/system/route-extensions"]["methods"] == ["GET"]
+    assert by_endpoint["create_project_memory_record"]["owner_extension_id"] == (
+        "project_memory_permission_routes"
+    )
+    assert by_endpoint["update_project_memory_record"]["owner_extension_id"] == (
+        "project_memory_permission_routes"
+    )
+    assert by_endpoint["delete_project_memory_record"]["owner_extension_id"] == (
+        "project_memory_permission_routes"
+    )
+    assert by_endpoint["set_project_memory_enabled"]["owner_extension_id"] == (
+        "project_memory_permission_routes"
+    )
 
     upload = next(item for item in body["extensions"] if item["extension_id"] == "immutable_upload_assets")
     assert upload["explicit_hook_capable"] is True
@@ -222,6 +265,13 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
     )
     assert permissions["explicit_hook_capable"] is True
     assert permissions["explicit_hook_active"] is True
+    memory = next(
+        item
+        for item in body["extensions"]
+        if item["extension_id"] == "project_memory_permission_routes"
+    )
+    assert memory["explicit_hook_capable"] is True
+    assert memory["explicit_hook_active"] is True
     applied = {
         (item["extension_id"], item["endpoint"])
         for item in body["route_override_registry"]["applied_route_overrides"]
@@ -231,6 +281,10 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
         for item in body["route_override_registry"]["applied_new_routes"]
     }
     assert ("immutable_upload_assets", "upload_file") in applied
+    assert ("project_memory_permission_routes", "create_project_memory_record") in applied
+    assert ("project_memory_permission_routes", "update_project_memory_record") in applied
+    assert ("project_memory_permission_routes", "delete_project_memory_record") in applied
+    assert ("project_memory_permission_routes", "set_project_memory_enabled") in applied
     assert (
         "server_permission_routes",
         "create_permission_grant",
