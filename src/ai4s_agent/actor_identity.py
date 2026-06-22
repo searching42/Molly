@@ -18,14 +18,14 @@ def resolve_actor(request: Any, *, required: bool = False) -> ActorContext:
 
     payload = request.get_json(silent=True)
     if isinstance(payload, dict):
-        for key in ("actor", "approved_by", "revoked_by"):
+        for key in ("actor", "approved_by", "revoked_by", "confirmed_by"):
             value = str(payload.get(key) or "").strip()
             if value:
                 return ActorContext(actor=value, source=f"json:{key}", required=required)
 
     form = getattr(request, "form", None)
     if form is not None:
-        for key in ("actor", "approved_by", "revoked_by"):
+        for key in ("actor", "approved_by", "revoked_by", "confirmed_by"):
             value = str(form.get(key) or "").strip()
             if value:
                 return ActorContext(actor=value, source=f"form:{key}", required=required)

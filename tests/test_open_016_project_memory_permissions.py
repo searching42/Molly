@@ -111,6 +111,26 @@ def test_project_memory_write_uses_x_actor_before_body_actor_and_audits_actor_so
     assert allowed["actor_source"] == "header:X-Actor"
 
 
+def test_project_memory_write_uses_confirmed_by_actor_alias_and_audits_source(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    client.post("/api/projects", json={"project_id": "proj-a"})
+    client.post(
+        "/api/projects/proj-a/permissions/grants",
+        json={"action": "project_memory_write", "actor": "alice", "confirmed": True},
+    )
+
+    created = client.post("/api/projects/proj-a/memory/records", json=_record_payload())
+
+    assert created.status_code == 200
+    assert created.json["permission"]["actor"] == "alice"
+    assert created.json["permission"]["actor_source"] == "json:confirmed_by"
+    audit = client.get("/api/projects/proj-a/permissions/audit")
+    allowed = [item for item in audit.json["audit"] if item["reason"] == "SERVER_GRANT"][-1]
+    assert allowed["actor"] == "alice"
+    assert allowed["actor_source"] == "json:confirmed_by"
+
+
 def test_project_memory_legacy_flag_requires_explicit_opt_in_and_is_audited(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     app.config["AI4S_ALLOW_MEMORY_CLIENT_PERMISSION_FLAGS"] = "true"
