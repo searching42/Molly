@@ -81,6 +81,41 @@ class ServerPermissionStore:
             return grant
         return None
 
+    def revoke_grant(self, project_id: str, grant_id: str, *, revoked_by: str, revoke_reason: str = "") -> dict[str, Any]:
+        project = _clean_segment(project_id, "project_id")
+        clean_grant_id = str(grant_id or "").strip()
+        if not clean_grant_id:
+            raise ValueError("grant_id required")
+        clean_actor = str(revoked_by or "").strip()
+        if not clean_actor:
+            raise ValueError("revoked_by required for permission revoke")
+        grants = self.list_grants(project)
+        changed: dict[str, Any] | None = None
+        updated: list[dict[str, Any]] = []
+        for item in grants:
+            if str(item.get("grant_id") or "") == clean_grant_id:
+                changed = dict(item)
+                changed["active"] = False
+                changed["revoked_at"] = now_iso()
+                changed["revoked_by"] = clean_actor
+                changed["revoke_reason"] = str(revoke_reason or "").strip()
+                updated.append(changed)
+            else:
+                updated.append(item)
+        if changed is None:
+            raise ValueError(f"grant not found: {clean_grant_id}")
+        write_json(self._grants_path(project), {"project_id": project, "updated_at": now_iso(), "grants": updated})
+        self.audit_decision(
+            project,
+            action=str(changed.get("action") or ""),
+            run_id=str(changed.get("run_id") or ""),
+            actor=clean_actor,
+            allowed=False,
+            reason="SERVER_GRANT_REVOKED",
+            grant_id=clean_grant_id,
+        )
+        return changed
+
     def find_expired_grant(self, project_id: str, action: str, *, run_id: str = "") -> dict[str, Any] | None:
         clean_run = str(run_id or "").strip()
         for grant in reversed(self.list_grants(project_id, action=action)):
@@ -171,6 +206,7 @@ def decide_server_permission(
     clean_actor = str(actor or "").strip()
     grant = store.find_grant(project_id, clean_action, run_id=run_id)
     expired_grant = None if grant else store.find_expired_grant(project_id, clean_action, run_id=run_id)
+    revoked_grant = _find_revoked_grant(store, project_id, clean_action, run_id=run_id)
     allowed = False
     reason = ""
     grant_id = ""
@@ -183,6 +219,9 @@ def decide_server_permission(
             allowed = True
             reason = "SERVER_GRANT"
             grant_id = str(grant.get("grant_id") or "")
+        elif revoked_grant:
+            reason = "REVOKED_GRANT"
+            grant_id = str(revoked_grant.get("grant_id") or "")
         elif expired_grant:
             reason = "EXPIRED_GRANT"
             grant_id = str(expired_grant.get("grant_id") or "")
@@ -269,6 +308,14 @@ def _add_permission_routes(
         view_func=_list_permission_audit_view(store=store),
         methods=("GET",),
     )
+    context.route_overrides.apply_new_route(
+        context.app,
+        extension_id="server_permission_routes",
+        endpoint="revoke_permission_grant",
+        rule="/api/projects/<project_id>/permissions/grants/<grant_id>",
+        view_func=_revoke_permission_grant_view(store=store),
+        methods=("DELETE",),
+    )
 
 
 def _create_permission_grant_view(*, store: ServerPermissionStore):
@@ -317,6 +364,62 @@ def _list_permission_audit_view(*, store: ServerPermissionStore):
         return jsonify({"ok": True, "project_id": project_id, "audit": audit})
 
     return list_permission_audit
+
+
+def _revoke_permission_grant_view(*, store: ServerPermissionStore):
+    def revoke_permission_grant(project_id: str, grant_id: str):
+        actor = str(request.headers.get("X-Actor") or "").strip()
+        revoked_by = str(request.form.get("actor") or request.form.get("revoked_by") or actor).strip()
+        if not revoked_by:
+            payload = request.get_json(silent=True) or {}
+            revoked_by = str(payload.get("actor") or payload.get("revoked_by") or "").strip()
+        if not revoked_by:
+            return jsonify({"ok": False, "error": "revoked_by or actor required in request"}), 403
+        revoke_reason = str(request.form.get("revoke_reason") or "")
+        if not revoke_reason:
+            payload = request.get_json(silent=True) or {}
+            revoke_reason = str(payload.get("revoke_reason") or "").strip()
+        try:
+            grant = store.revoke_grant(
+                project_id,
+                grant_id,
+                revoked_by=revoked_by,
+                revoke_reason=revoke_reason,
+            )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "grant": grant})
+
+    return revoke_permission_grant
+
+
+def _find_revoked_grant(
+    store: ServerPermissionStore,
+    project_id: str,
+    action: str,
+    *,
+    run_id: str = "",
+) -> dict[str, Any] | None:
+    """Return the most recently revoked matching grant, or None.
+
+    Only considers revoked grants that are *not* shadowed by a newer active
+    grant for the same scope.  Once an active grant is encountered while
+    walking the list oldest-to-newest, earlier revoked grants are ignored.
+    """
+    clean_run = str(run_id or "").strip()
+    found: dict[str, Any] | None = None
+    for item in store.list_grants(project_id, action=action):
+        grant_run = str(item.get("run_id") or "").strip()
+        run_mismatch = bool(grant_run and grant_run != clean_run)
+        if run_mismatch:
+            continue
+        if bool(item.get("active", True)):
+            # A newer active grant overrides any earlier revoked grant.
+            found = None
+            continue
+        if item.get("revoked_at"):
+            found = item
+    return found
 
 
 def _clean_action(action: str) -> str:
