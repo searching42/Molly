@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from flask import jsonify, request
 from werkzeug.utils import secure_filename
@@ -13,25 +13,33 @@ from ai4s_agent.schemas import AssetManifest, AssetStatus
 from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
 from ai4s_agent.storage import ProjectStorage
 
+if TYPE_CHECKING:
+    from ai4s_agent.api_route_extensions import RouteExtensionContext
+
 
 def install_immutable_upload_assets() -> None:
+    """Upload route migration is handled by the explicit route hook."""
+
+
+def apply_immutable_upload_assets_route_override(context: "RouteExtensionContext") -> None:
     """Route project uploads through immutable, versioned asset storage."""
 
     import ai4s_agent.api as api_module
 
-    original_register_routes = api_module.register_routes
-    if getattr(original_register_routes, "_immutable_upload_assets", False):
-        return
-
-    def register_routes_with_immutable_uploads(app: Any, base_runs_dir: Path | None = None, workspace_dir: Path | None = None) -> None:
-        original_register_routes(app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
-        workspace = api_module._workspace_from_config(base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
-        runs = Path(base_runs_dir or api_module.DEFAULT_RUNS_DIR).resolve()
-        projects = ProjectStorage(workspace_dir=workspace)
-        permissions = PermissionPolicy()
-        server_permissions = ServerPermissionStore(workspace_dir=workspace)
-        app.view_functions["upload_file"] = _upload_file_view(
-            app=app,
+    workspace = api_module._workspace_from_config(
+        base_runs_dir=context.base_runs_dir,
+        workspace_dir=context.workspace_dir,
+    )
+    runs = Path(context.base_runs_dir or api_module.DEFAULT_RUNS_DIR).resolve()
+    projects = ProjectStorage(workspace_dir=workspace)
+    permissions = PermissionPolicy()
+    server_permissions = ServerPermissionStore(workspace_dir=workspace)
+    context.route_overrides.apply_route_override(
+        context.app,
+        extension_id="immutable_upload_assets",
+        endpoint="upload_file",
+        view_func=_upload_file_view(
+            app=context.app,
             projects=projects,
             permissions=permissions,
             server_permissions=server_permissions,
@@ -39,10 +47,8 @@ def install_immutable_upload_assets() -> None:
             max_upload_bytes_default=api_module.MAX_UPLOAD_BYTES,
             chunk_bytes=api_module.UPLOAD_COPY_CHUNK_BYTES,
             reject_legacy_duplicate_filename=(workspace == runs),
-        )
-
-    register_routes_with_immutable_uploads._immutable_upload_assets = True  # type: ignore[attr-defined]
-    api_module.register_routes = register_routes_with_immutable_uploads  # type: ignore[method-assign]
+        ),
+    )
 
 
 def _upload_file_view(

@@ -6,14 +6,23 @@ from typing import Any
 
 from flask import Flask, jsonify
 
-from ai4s_agent.api_route_extensions import api_route_extension_specs, route_extension_context
+from ai4s_agent.api_route_extensions import (
+    apply_explicit_route_hooks,
+    api_route_extension_specs,
+    route_extension_context,
+)
 from ai4s_agent.api import register_routes
 
 
 def create_app(base_runs_dir: Path | None = None, workspace_dir: Path | None = None) -> Flask:
     app = Flask(__name__)
     register_routes(app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
-    extension_context = route_extension_context(app=app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
+    extension_context = route_extension_context(
+        app=app,
+        base_runs_dir=base_runs_dir,
+        workspace_dir=workspace_dir,
+    )
+    apply_explicit_route_hooks(extension_context)
     app.config["AI4S_ROUTE_EXTENSIONS"] = tuple(spec.as_dict() for spec in api_route_extension_specs())
     app.config["AI4S_ROUTE_OVERRIDE_REGISTRY"] = extension_context.route_overrides.as_dict()
     register_route_inspection(app)
@@ -46,8 +55,14 @@ def route_override_registry(app: Flask) -> dict[str, Any]:
     registry = copy.deepcopy(raw)
     route_overrides = registry.get("route_overrides")
     new_routes = registry.get("new_routes")
+    applied_route_overrides = registry.get("applied_route_overrides")
     registry["route_overrides"] = list(route_overrides) if isinstance(route_overrides, list) else []
     registry["new_routes"] = list(new_routes) if isinstance(new_routes, list) else []
+    registry["applied_route_overrides"] = (
+        list(applied_route_overrides)
+        if isinstance(applied_route_overrides, list)
+        else []
+    )
     return registry
 
 
