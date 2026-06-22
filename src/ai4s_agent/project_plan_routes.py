@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from flask import jsonify, request
 
@@ -13,34 +13,46 @@ from ai4s_agent.project_plan_guard import read_project_plan_status, start_projec
 from ai4s_agent.schemas import GateDecision, GateName, RunStatus
 from ai4s_agent.storage import ProjectStorage
 
+if TYPE_CHECKING:
+    from ai4s_agent.api_route_extensions import RouteExtensionContext
+
 
 def install_project_scoped_plan_routes() -> None:
-    """Finalize project-scoped plan, status, and gate approval routes."""
+    """Project plan routes are installed by the explicit route hook."""
 
+
+def apply_project_scoped_plan_routes(context: "RouteExtensionContext") -> None:
     import ai4s_agent.api as api_module
 
-    original_register_routes = api_module.register_routes
-    if getattr(original_register_routes, "_project_scoped_plan_routes", False):
-        return
-
-    def register_routes_with_project_plan_state(app: Any, base_runs_dir: Path | None = None, workspace_dir: Path | None = None) -> None:
-        original_register_routes(app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
-        runs = Path(base_runs_dir or api_module.DEFAULT_RUNS_DIR).resolve()
-        workspace = api_module._workspace_from_config(base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
-        jobs = JobManager(runs_dir=runs)
-        orch = Orchestrator(base_runs_dir=runs)
-        projects = ProjectStorage(workspace_dir=workspace)
-        app.view_functions["create_plan"] = _create_plan_view(jobs=jobs, orch=orch, projects=projects)
-        app.view_functions["approve_gate"] = _approve_gate_view(jobs=jobs, orch=orch, projects=projects)
-        app.add_url_rule(
-            "/api/projects/<project_id>/runs/<run_id>/status",
-            endpoint="project_run_status",
-            view_func=_project_run_status_view(projects=projects),
-            methods=["GET"],
-        )
-
-    register_routes_with_project_plan_state._project_scoped_plan_routes = True  # type: ignore[attr-defined]
-    api_module.register_routes = register_routes_with_project_plan_state  # type: ignore[method-assign]
+    runs = Path(context.base_runs_dir or api_module.DEFAULT_RUNS_DIR).resolve()
+    workspace = api_module._workspace_from_config(
+        base_runs_dir=context.base_runs_dir,
+        workspace_dir=context.workspace_dir,
+    )
+    jobs = JobManager(runs_dir=runs)
+    orch = Orchestrator(base_runs_dir=runs)
+    projects = ProjectStorage(workspace_dir=workspace)
+    extension_id = "project_scoped_plan_routes"
+    context.route_overrides.apply_route_override(
+        context.app,
+        extension_id=extension_id,
+        endpoint="create_plan",
+        view_func=_create_plan_view(jobs=jobs, orch=orch, projects=projects),
+    )
+    context.route_overrides.apply_route_override(
+        context.app,
+        extension_id=extension_id,
+        endpoint="approve_gate",
+        view_func=_approve_gate_view(jobs=jobs, orch=orch, projects=projects),
+    )
+    context.route_overrides.apply_new_route(
+        context.app,
+        extension_id=extension_id,
+        endpoint="project_run_status",
+        rule="/api/projects/<project_id>/runs/<run_id>/status",
+        view_func=_project_run_status_view(projects=projects),
+        methods=("GET",),
+    )
 
 
 def _create_plan_view(*, jobs: JobManager, orch: Orchestrator, projects: ProjectStorage):

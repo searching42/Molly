@@ -100,11 +100,18 @@ def test_route_extension_metadata_declares_explicit_hook_skeleton() -> None:
 
     plans = by_id["project_scoped_plan_routes"]
     assert plans["explicit_hook_capable"] is True
-    assert plans["explicit_hook_active"] is False
-    assert plans["mechanism"] == "view_function_override"
+    assert plans["explicit_hook_active"] is True
+    assert plans["mechanism"] == "explicit_route_override"
     assert plans["declared_route_overrides"] == [
         {"endpoint": "create_plan"},
         {"endpoint": "approve_gate"},
+    ]
+    assert plans["declared_new_routes"] == [
+        {
+            "endpoint": "project_run_status",
+            "rule": "/api/projects/<project_id>/runs/<run_id>/status",
+            "methods": ["GET"],
+        },
     ]
 
     upload = by_id["immutable_upload_assets"]
@@ -200,6 +207,20 @@ def test_project_scoped_job_installer_no_longer_wraps_register_routes(monkeypatc
     assert api_module.register_routes is dummy_register_routes
 
 
+def test_project_scoped_plan_installer_no_longer_wraps_register_routes(monkeypatch) -> None:
+    import ai4s_agent.api as api_module
+    import ai4s_agent.project_plan_routes as project_plan_routes
+
+    def dummy_register_routes(app, base_runs_dir=None, workspace_dir=None):
+        return None
+
+    monkeypatch.setattr(api_module, "register_routes", dummy_register_routes)
+
+    project_plan_routes.install_project_scoped_plan_routes()
+
+    assert api_module.register_routes is dummy_register_routes
+
+
 def test_create_app_exposes_installed_route_extension_metadata(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
 
@@ -248,6 +269,9 @@ def test_create_app_exposes_route_override_registry_metadata(tmp_path) -> None:
     assert ("project_scoped_job_routes", "background_resume_plan") in overrides
     assert ("project_scoped_job_routes", "retry_run") in overrides
     assert ("project_scoped_job_routes", "list_jobs") in overrides
+    assert ("project_scoped_plan_routes", "create_plan") in overrides
+    assert ("project_scoped_plan_routes", "approve_gate") in overrides
+    assert ("project_scoped_plan_routes", "retry_run") not in overrides
     assert (
         "server_permission_routes",
         "create_permission_grant",
@@ -276,6 +300,9 @@ def test_create_app_exposes_route_override_registry_metadata(tmp_path) -> None:
     assert ("project_scoped_job_routes", "background_resume_plan") in applied
     assert ("project_scoped_job_routes", "retry_run") in applied
     assert ("project_scoped_job_routes", "list_jobs") in applied
+    assert ("project_scoped_plan_routes", "create_plan") in applied
+    assert ("project_scoped_plan_routes", "approve_gate") in applied
+    assert ("project_scoped_plan_routes", "retry_run") not in applied
     assert ("project_memory_permission_routes", "create_project_memory_record") in applied
     assert ("project_memory_permission_routes", "update_project_memory_record") in applied
     assert ("project_memory_permission_routes", "delete_project_memory_record") in applied
@@ -322,6 +349,12 @@ def test_create_app_exposes_route_override_registry_metadata(tmp_path) -> None:
         "/api/projects/<project_id>/runs/<run_id>/stop",
         ("POST",),
     ) in applied_new_routes
+    assert (
+        "project_scoped_plan_routes",
+        "project_run_status",
+        "/api/projects/<project_id>/runs/<run_id>/status",
+        ("GET",),
+    ) in applied_new_routes
 
 
 def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -> None:
@@ -343,6 +376,8 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
     assert by_rule["/api/plan"]["owner_extension_id"] == "project_scoped_plan_routes"
     assert by_rule["/api/plan"]["owner_module"] == "ai4s_agent.project_plan_routes"
     assert by_endpoint["approve_gate"]["owner_extension_id"] == "project_scoped_plan_routes"
+    assert by_endpoint["project_run_status"]["owner_extension_id"] == "project_scoped_plan_routes"
+    assert by_endpoint["project_run_status"]["owner_module"] == "ai4s_agent.project_plan_routes"
     assert by_endpoint["run_logs"]["owner_extension_id"] == "project_scoped_job_routes"
     assert by_endpoint["pause_run"]["owner_extension_id"] == "project_scoped_job_routes"
     assert by_endpoint["resume_run"]["owner_extension_id"] == "project_scoped_job_routes"
@@ -391,6 +426,13 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
     )
     assert jobs["explicit_hook_capable"] is True
     assert jobs["explicit_hook_active"] is True
+    plans = next(
+        item
+        for item in body["extensions"]
+        if item["extension_id"] == "project_scoped_plan_routes"
+    )
+    assert plans["explicit_hook_capable"] is True
+    assert plans["explicit_hook_active"] is True
     permissions = next(
         item
         for item in body["extensions"]
@@ -424,6 +466,9 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
     assert ("project_scoped_job_routes", "background_resume_plan") in applied
     assert ("project_scoped_job_routes", "retry_run") in applied
     assert ("project_scoped_job_routes", "list_jobs") in applied
+    assert ("project_scoped_plan_routes", "create_plan") in applied
+    assert ("project_scoped_plan_routes", "approve_gate") in applied
+    assert ("project_scoped_plan_routes", "retry_run") not in applied
     assert ("project_memory_permission_routes", "create_project_memory_record") in applied
     assert ("project_memory_permission_routes", "update_project_memory_record") in applied
     assert ("project_memory_permission_routes", "delete_project_memory_record") in applied
@@ -469,6 +514,12 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
         "project_stop_run",
         "/api/projects/<project_id>/runs/<run_id>/stop",
         ("POST",),
+    ) in applied_new_routes
+    assert (
+        "project_scoped_plan_routes",
+        "project_run_status",
+        "/api/projects/<project_id>/runs/<run_id>/status",
+        ("GET",),
     ) in applied_new_routes
 
 

@@ -217,11 +217,13 @@ def apply_explicit_route_hooks(context: RouteExtensionContext) -> None:
 
     from ai4s_agent.project_job_routes import apply_project_scoped_job_routes
     from ai4s_agent.project_memory_permissions import apply_project_memory_permission_routes
+    from ai4s_agent.project_plan_routes import apply_project_scoped_plan_routes
     from ai4s_agent.server_permissions import apply_server_permission_routes
     from ai4s_agent.upload_assets import apply_immutable_upload_assets_route_override
 
     hooks: dict[str, Callable[[RouteExtensionContext], None]] = {
         "project_scoped_job_routes": apply_project_scoped_job_routes,
+        "project_scoped_plan_routes": apply_project_scoped_plan_routes,
         "immutable_upload_assets": apply_immutable_upload_assets_route_override,
         "server_permission_routes": apply_server_permission_routes,
         "project_memory_permission_routes": apply_project_memory_permission_routes,
@@ -371,11 +373,19 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
         installer_name="install_project_scoped_plan_routes",
         module="ai4s_agent.project_plan_routes",
         summary="Finalize project-scoped plan, gate approval, and status routes.",
-        mechanism="view_function_override",
+        mechanism="explicit_route_override",
+        explicit_hook_active=True,
         depends_on=("project_scoped_job_routes",),
         declared_route_overrides=(
             RouteOverrideDeclaration(endpoint="create_plan"),
             RouteOverrideDeclaration(endpoint="approve_gate"),
+        ),
+        declared_new_routes=(
+            RouteRegistrationDeclaration(
+                endpoint="project_run_status",
+                rule="/api/projects/<project_id>/runs/<run_id>/status",
+                methods=("GET",),
+            ),
         ),
     ),
     RouteExtensionSpec(
