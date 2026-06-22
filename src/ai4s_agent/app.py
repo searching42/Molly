@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify
 
-from ai4s_agent.api_route_extensions import api_route_extension_specs
+from ai4s_agent.api_route_extensions import api_route_extension_specs, route_extension_context
 from ai4s_agent.api import register_routes
 
 
 def create_app(base_runs_dir: Path | None = None, workspace_dir: Path | None = None) -> Flask:
     app = Flask(__name__)
     register_routes(app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
+    extension_context = route_extension_context(app=app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
     app.config["AI4S_ROUTE_EXTENSIONS"] = tuple(spec.as_dict() for spec in api_route_extension_specs())
+    app.config["AI4S_ROUTE_OVERRIDE_REGISTRY"] = extension_context.route_overrides.as_dict()
     register_route_inspection(app)
     return app
 
@@ -27,11 +30,25 @@ def installed_route_extensions(app: Flask) -> tuple[dict[str, Any], ...]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        record = dict(item)
+        record = copy.deepcopy(item)
         depends_on = record.get("depends_on")
         record["depends_on"] = list(depends_on) if isinstance(depends_on, list) else []
         copied.append(record)
     return tuple(copied)
+
+
+def route_override_registry(app: Flask) -> dict[str, Any]:
+    """Return JSON-safe explicit route hook declaration metadata."""
+
+    raw = app.config.get("AI4S_ROUTE_OVERRIDE_REGISTRY", {})
+    if not isinstance(raw, dict):
+        return {"route_overrides": [], "new_routes": []}
+    registry = copy.deepcopy(raw)
+    route_overrides = registry.get("route_overrides")
+    new_routes = registry.get("new_routes")
+    registry["route_overrides"] = list(route_overrides) if isinstance(route_overrides, list) else []
+    registry["new_routes"] = list(new_routes) if isinstance(new_routes, list) else []
+    return registry
 
 
 def route_ownership(app: Flask) -> tuple[dict[str, Any], ...]:
@@ -68,6 +85,7 @@ def register_route_inspection(app: Flask) -> None:
             {
                 "ok": True,
                 "extensions": list(installed_route_extensions(app)),
+                "route_override_registry": route_override_registry(app),
                 "routes": list(route_ownership(app)),
             }
         )

@@ -2,9 +2,33 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 
 RouteInstaller = Callable[[], None]
+
+
+@dataclass(frozen=True)
+class RouteOverrideDeclaration:
+    endpoint: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {"endpoint": self.endpoint}
+
+
+@dataclass(frozen=True)
+class RouteRegistrationDeclaration:
+    endpoint: str
+    rule: str
+    methods: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "endpoint": self.endpoint,
+            "rule": self.rule,
+            "methods": [method.upper() for method in self.methods],
+        }
 
 
 @dataclass(frozen=True)
@@ -15,6 +39,13 @@ class RouteExtensionSpec:
     summary: str
     mechanism: str
     depends_on: tuple[str, ...] = ()
+    explicit_hook_active: bool = False
+    declared_route_overrides: tuple[RouteOverrideDeclaration, ...] = ()
+    declared_new_routes: tuple[RouteRegistrationDeclaration, ...] = ()
+
+    @property
+    def explicit_hook_capable(self) -> bool:
+        return bool(self.declared_route_overrides or self.declared_new_routes)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -24,7 +55,87 @@ class RouteExtensionSpec:
             "summary": self.summary,
             "mechanism": self.mechanism,
             "depends_on": list(self.depends_on),
+            "explicit_hook_capable": self.explicit_hook_capable,
+            "explicit_hook_active": self.explicit_hook_active,
+            "declared_route_overrides": [
+                item.as_dict()
+                for item in self.declared_route_overrides
+            ],
+            "declared_new_routes": [item.as_dict() for item in self.declared_new_routes],
         }
+
+
+@dataclass(frozen=True)
+class RouteExtensionContext:
+    app: Any
+    base_runs_dir: Path | None
+    workspace_dir: Path | None
+    route_overrides: "RouteOverrideRegistry"
+
+
+class RouteOverrideRegistry:
+    """Read-only skeleton for future explicit route extension hooks."""
+
+    def __init__(self) -> None:
+        self._route_overrides: list[dict[str, object]] = []
+        self._new_routes: list[dict[str, object]] = []
+
+    @classmethod
+    def from_specs(cls, specs: tuple[RouteExtensionSpec, ...]) -> "RouteOverrideRegistry":
+        registry = cls()
+        for spec in specs:
+            for declaration in spec.declared_route_overrides:
+                registry.declare_route_override(spec.extension_id, endpoint=declaration.endpoint)
+            for declaration in spec.declared_new_routes:
+                registry.declare_new_route(
+                    spec.extension_id,
+                    endpoint=declaration.endpoint,
+                    rule=declaration.rule,
+                    methods=declaration.methods,
+                )
+        return registry
+
+    def declare_route_override(self, extension_id: str, *, endpoint: str) -> None:
+        self._route_overrides.append({"extension_id": extension_id, "endpoint": endpoint})
+
+    def declare_new_route(
+        self,
+        extension_id: str,
+        *,
+        endpoint: str,
+        rule: str,
+        methods: tuple[str, ...],
+    ) -> None:
+        self._new_routes.append(
+            {
+                "extension_id": extension_id,
+                "endpoint": endpoint,
+                "rule": rule,
+                "methods": [method.upper() for method in methods],
+            }
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "route_overrides": [dict(item) for item in self._route_overrides],
+            "new_routes": [dict(item) for item in self._new_routes],
+        }
+
+
+def route_extension_context(
+    *,
+    app: Any,
+    base_runs_dir: Path | None,
+    workspace_dir: Path | None,
+    specs: tuple[RouteExtensionSpec, ...] | None = None,
+) -> RouteExtensionContext:
+    selected_specs = specs if specs is not None else api_route_extension_specs()
+    return RouteExtensionContext(
+        app=app,
+        base_runs_dir=base_runs_dir,
+        workspace_dir=workspace_dir,
+        route_overrides=RouteOverrideRegistry.from_specs(selected_specs),
+    )
 
 
 ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
@@ -122,6 +233,19 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
         summary="Route job APIs through project-scoped job keys when project_id is present.",
         mechanism="view_function_override",
         depends_on=("project_plan_route_guard", "project_scoped_jobs"),
+        declared_route_overrides=(
+            RouteOverrideDeclaration(endpoint="create_plan"),
+            RouteOverrideDeclaration(endpoint="run_logs"),
+            RouteOverrideDeclaration(endpoint="pause_run"),
+            RouteOverrideDeclaration(endpoint="resume_run"),
+            RouteOverrideDeclaration(endpoint="stop_run"),
+            RouteOverrideDeclaration(endpoint="create_background_job"),
+            RouteOverrideDeclaration(endpoint="get_background_job"),
+            RouteOverrideDeclaration(endpoint="record_background_checkpoint"),
+            RouteOverrideDeclaration(endpoint="background_resume_plan"),
+            RouteOverrideDeclaration(endpoint="retry_run"),
+            RouteOverrideDeclaration(endpoint="list_jobs"),
+        ),
     ),
     RouteExtensionSpec(
         extension_id="project_scoped_plan_routes",
@@ -130,6 +254,11 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
         summary="Finalize project-scoped plan, gate approval, status, and retry routes.",
         mechanism="view_function_override",
         depends_on=("project_scoped_job_routes",),
+        declared_route_overrides=(
+            RouteOverrideDeclaration(endpoint="create_plan"),
+            RouteOverrideDeclaration(endpoint="approve_gate"),
+            RouteOverrideDeclaration(endpoint="retry_run"),
+        ),
     ),
     RouteExtensionSpec(
         extension_id="immutable_upload_assets",
@@ -137,6 +266,7 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
         module="ai4s_agent.upload_assets",
         summary="Route project uploads through immutable versioned upload assets.",
         mechanism="view_function_override",
+        declared_route_overrides=(RouteOverrideDeclaration(endpoint="upload_file"),),
     ),
     RouteExtensionSpec(
         extension_id="server_permission_routes",
@@ -145,6 +275,23 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
         summary="Add server-side permission grant and audit routes.",
         mechanism="register_routes_wrapper",
         depends_on=("immutable_upload_assets",),
+        declared_new_routes=(
+            RouteRegistrationDeclaration(
+                endpoint="create_permission_grant",
+                rule="/api/projects/<project_id>/permissions/grants",
+                methods=("POST",),
+            ),
+            RouteRegistrationDeclaration(
+                endpoint="list_permission_grants",
+                rule="/api/projects/<project_id>/permissions/grants",
+                methods=("GET",),
+            ),
+            RouteRegistrationDeclaration(
+                endpoint="list_permission_audit",
+                rule="/api/projects/<project_id>/permissions/audit",
+                methods=("GET",),
+            ),
+        ),
     ),
     RouteExtensionSpec(
         extension_id="project_memory_permission_routes",
@@ -153,6 +300,12 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
         summary="Protect project memory writes with server-side grants.",
         mechanism="view_function_override",
         depends_on=("server_permission_routes",),
+        declared_route_overrides=(
+            RouteOverrideDeclaration(endpoint="create_project_memory_record"),
+            RouteOverrideDeclaration(endpoint="update_project_memory_record"),
+            RouteOverrideDeclaration(endpoint="delete_project_memory_record"),
+            RouteOverrideDeclaration(endpoint="set_project_memory_enabled"),
+        ),
     ),
 )
 
