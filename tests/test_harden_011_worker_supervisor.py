@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ai4s_agent.worker_supervisor import WorkerSupervisor, _process_alive
+from ai4s_agent.worker_supervisor import WorkerSupervisor, _process_alive, _safe_component
 
 
 def _sleep_command(seconds: int) -> list[str]:
@@ -144,6 +144,52 @@ def test_supervisor_status_of_unknown_worker_returns_pending(tmp_path: Path) -> 
     status = supervisor.status("proj-ws", "run-unknown")
     assert status.status == "pending"
     assert status.pid == -1
+    # status is read-only and must not create directories
+    unknown_run_dir = tmp_path / "proj-ws" / "runs" / "run-unknown"
+    assert not unknown_run_dir.exists()
+
+
+def test_supervisor_rejects_empty_project_or_run_id(tmp_path: Path) -> None:
+    supervisor = WorkerSupervisor(projects_root=tmp_path)
+
+    with pytest.raises(ValueError, match="project_id must not be empty"):
+        supervisor.start(project_id="", run_id="r", command=["echo"])
+
+    with pytest.raises(ValueError, match="run_id must not be empty"):
+        supervisor.start(project_id="p", run_id="   ", command=["echo"])
+
+    with pytest.raises(ValueError, match="project_id must not be empty"):
+        supervisor.status("", "r")
+
+    with pytest.raises(ValueError, match="run_id must not be empty"):
+        supervisor.status("p", "")
+
+
+def test_supervisor_rejects_path_traversal_project_or_run_id(tmp_path: Path) -> None:
+    supervisor = WorkerSupervisor(projects_root=tmp_path)
+
+    for bad_id in ("..", ".", "a/b", "a\\b", "../escape", "x/../y"):
+        with pytest.raises(ValueError):
+            supervisor.start(project_id=bad_id, run_id="r", command=["echo"])
+        with pytest.raises(ValueError):
+            supervisor.start(project_id="p", run_id=bad_id, command=["echo"])
+        # status and stop should also reject
+        with pytest.raises(ValueError):
+            supervisor.status(bad_id, "r")
+        with pytest.raises(ValueError):
+            supervisor.status("p", bad_id)
+
+
+def test_safe_component_rejects_reserved_and_traversal_names() -> None:
+    for bad in ("..", ".", "a/b", "a\\b", "../evil"):
+        with pytest.raises(ValueError):
+            _safe_component(bad, "test")
+    for bad in ("", "   "):
+        with pytest.raises(ValueError):
+            _safe_component(bad, "test")
+    # Valid names pass
+    assert _safe_component("proj-a", "project_id") == "proj-a"
+    assert _safe_component("run_001", "run_id") == "run_001"
 
 
 def test_supervisor_list_workers(tmp_path: Path) -> None:
