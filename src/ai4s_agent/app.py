@@ -56,11 +56,17 @@ def route_override_registry(app: Flask) -> dict[str, Any]:
     route_overrides = registry.get("route_overrides")
     new_routes = registry.get("new_routes")
     applied_route_overrides = registry.get("applied_route_overrides")
+    applied_new_routes = registry.get("applied_new_routes")
     registry["route_overrides"] = list(route_overrides) if isinstance(route_overrides, list) else []
     registry["new_routes"] = list(new_routes) if isinstance(new_routes, list) else []
     registry["applied_route_overrides"] = (
         list(applied_route_overrides)
         if isinstance(applied_route_overrides, list)
+        else []
+    )
+    registry["applied_new_routes"] = (
+        list(applied_new_routes)
+        if isinstance(applied_new_routes, list)
         else []
     )
     return registry
