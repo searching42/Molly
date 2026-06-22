@@ -40,6 +40,7 @@ def test_api_route_extension_metadata_is_observable_and_ordered() -> None:
         "class_patch",
         "explicit_route_registration",
         "explicit_route_override",
+        "helper_module",
         "method_patch",
         "register_routes_wrapper",
         "view_function_override",
@@ -57,6 +58,54 @@ def test_api_route_extension_metadata_is_observable_and_ordered() -> None:
 def test_route_extension_metadata_declares_explicit_hook_skeleton() -> None:
     specs = route_extensions.api_route_extension_specs()
     by_id = {spec.extension_id: spec.as_dict() for spec in specs}
+
+    jobs = by_id["project_scoped_job_routes"]
+    assert jobs["explicit_hook_capable"] is True
+    assert jobs["explicit_hook_active"] is True
+    assert jobs["mechanism"] == "explicit_route_override"
+    assert jobs["declared_route_overrides"] == [
+        {"endpoint": "run_logs"},
+        {"endpoint": "pause_run"},
+        {"endpoint": "resume_run"},
+        {"endpoint": "stop_run"},
+        {"endpoint": "create_background_job"},
+        {"endpoint": "get_background_job"},
+        {"endpoint": "record_background_checkpoint"},
+        {"endpoint": "background_resume_plan"},
+        {"endpoint": "retry_run"},
+        {"endpoint": "list_jobs"},
+    ]
+    assert jobs["declared_new_routes"] == [
+        {
+            "endpoint": "project_run_logs",
+            "rule": "/api/projects/<project_id>/runs/<run_id>/logs",
+            "methods": ["GET"],
+        },
+        {
+            "endpoint": "project_pause_run",
+            "rule": "/api/projects/<project_id>/runs/<run_id>/pause",
+            "methods": ["POST"],
+        },
+        {
+            "endpoint": "project_resume_run",
+            "rule": "/api/projects/<project_id>/runs/<run_id>/resume",
+            "methods": ["POST"],
+        },
+        {
+            "endpoint": "project_stop_run",
+            "rule": "/api/projects/<project_id>/runs/<run_id>/stop",
+            "methods": ["POST"],
+        },
+    ]
+
+    plans = by_id["project_scoped_plan_routes"]
+    assert plans["explicit_hook_capable"] is True
+    assert plans["explicit_hook_active"] is False
+    assert plans["mechanism"] == "view_function_override"
+    assert plans["declared_route_overrides"] == [
+        {"endpoint": "create_plan"},
+        {"endpoint": "approve_gate"},
+    ]
 
     upload = by_id["immutable_upload_assets"]
     assert upload["explicit_hook_capable"] is True
@@ -137,6 +186,20 @@ def test_project_memory_permission_installer_no_longer_wraps_register_routes(mon
     assert api_module.register_routes is dummy_register_routes
 
 
+def test_project_scoped_job_installer_no_longer_wraps_register_routes(monkeypatch) -> None:
+    import ai4s_agent.api as api_module
+    import ai4s_agent.project_job_routes as project_job_routes
+
+    def dummy_register_routes(app, base_runs_dir=None, workspace_dir=None):
+        return None
+
+    monkeypatch.setattr(api_module, "register_routes", dummy_register_routes)
+
+    project_job_routes.install_project_scoped_job_routes()
+
+    assert api_module.register_routes is dummy_register_routes
+
+
 def test_create_app_exposes_installed_route_extension_metadata(tmp_path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
 
@@ -173,6 +236,18 @@ def test_create_app_exposes_route_override_registry_metadata(tmp_path) -> None:
     }
 
     assert ("immutable_upload_assets", "upload_file") in overrides
+    assert ("project_scoped_job_routes", "create_plan") not in overrides
+    assert ("project_scoped_job_routes", "approve_gate") not in overrides
+    assert ("project_scoped_job_routes", "run_logs") in overrides
+    assert ("project_scoped_job_routes", "pause_run") in overrides
+    assert ("project_scoped_job_routes", "resume_run") in overrides
+    assert ("project_scoped_job_routes", "stop_run") in overrides
+    assert ("project_scoped_job_routes", "create_background_job") in overrides
+    assert ("project_scoped_job_routes", "get_background_job") in overrides
+    assert ("project_scoped_job_routes", "record_background_checkpoint") in overrides
+    assert ("project_scoped_job_routes", "background_resume_plan") in overrides
+    assert ("project_scoped_job_routes", "retry_run") in overrides
+    assert ("project_scoped_job_routes", "list_jobs") in overrides
     assert (
         "server_permission_routes",
         "create_permission_grant",
@@ -189,6 +264,18 @@ def test_create_app_exposes_route_override_registry_metadata(tmp_path) -> None:
     }
 
     assert ("immutable_upload_assets", "upload_file") in applied
+    assert ("project_scoped_job_routes", "create_plan") not in applied
+    assert ("project_scoped_job_routes", "approve_gate") not in applied
+    assert ("project_scoped_job_routes", "run_logs") in applied
+    assert ("project_scoped_job_routes", "pause_run") in applied
+    assert ("project_scoped_job_routes", "resume_run") in applied
+    assert ("project_scoped_job_routes", "stop_run") in applied
+    assert ("project_scoped_job_routes", "create_background_job") in applied
+    assert ("project_scoped_job_routes", "get_background_job") in applied
+    assert ("project_scoped_job_routes", "record_background_checkpoint") in applied
+    assert ("project_scoped_job_routes", "background_resume_plan") in applied
+    assert ("project_scoped_job_routes", "retry_run") in applied
+    assert ("project_scoped_job_routes", "list_jobs") in applied
     assert ("project_memory_permission_routes", "create_project_memory_record") in applied
     assert ("project_memory_permission_routes", "update_project_memory_record") in applied
     assert ("project_memory_permission_routes", "delete_project_memory_record") in applied
@@ -211,6 +298,30 @@ def test_create_app_exposes_route_override_registry_metadata(tmp_path) -> None:
         "/api/projects/<project_id>/permissions/audit",
         ("GET",),
     ) in applied_new_routes
+    assert (
+        "project_scoped_job_routes",
+        "project_run_logs",
+        "/api/projects/<project_id>/runs/<run_id>/logs",
+        ("GET",),
+    ) in applied_new_routes
+    assert (
+        "project_scoped_job_routes",
+        "project_pause_run",
+        "/api/projects/<project_id>/runs/<run_id>/pause",
+        ("POST",),
+    ) in applied_new_routes
+    assert (
+        "project_scoped_job_routes",
+        "project_resume_run",
+        "/api/projects/<project_id>/runs/<run_id>/resume",
+        ("POST",),
+    ) in applied_new_routes
+    assert (
+        "project_scoped_job_routes",
+        "project_stop_run",
+        "/api/projects/<project_id>/runs/<run_id>/stop",
+        ("POST",),
+    ) in applied_new_routes
 
 
 def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -> None:
@@ -231,6 +342,21 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
     assert by_rule["/api/plan"]["endpoint"] == "create_plan"
     assert by_rule["/api/plan"]["owner_extension_id"] == "project_scoped_plan_routes"
     assert by_rule["/api/plan"]["owner_module"] == "ai4s_agent.project_plan_routes"
+    assert by_endpoint["approve_gate"]["owner_extension_id"] == "project_scoped_plan_routes"
+    assert by_endpoint["run_logs"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["pause_run"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["resume_run"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["stop_run"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["create_background_job"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["get_background_job"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["record_background_checkpoint"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["background_resume_plan"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["retry_run"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["list_jobs"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["project_run_logs"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["project_pause_run"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["project_resume_run"]["owner_extension_id"] == "project_scoped_job_routes"
+    assert by_endpoint["project_stop_run"]["owner_extension_id"] == "project_scoped_job_routes"
     assert by_rule["/api/projects/<project_id>/upload"]["owner_extension_id"] == "immutable_upload_assets"
     assert by_rule["/api/projects/<project_id>/permissions/grants"]["owner_extension_id"] == (
         "server_permission_routes"
@@ -258,6 +384,13 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
     upload = next(item for item in body["extensions"] if item["extension_id"] == "immutable_upload_assets")
     assert upload["explicit_hook_capable"] is True
     assert upload["explicit_hook_active"] is True
+    jobs = next(
+        item
+        for item in body["extensions"]
+        if item["extension_id"] == "project_scoped_job_routes"
+    )
+    assert jobs["explicit_hook_capable"] is True
+    assert jobs["explicit_hook_active"] is True
     permissions = next(
         item
         for item in body["extensions"]
@@ -281,6 +414,16 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
         for item in body["route_override_registry"]["applied_new_routes"]
     }
     assert ("immutable_upload_assets", "upload_file") in applied
+    assert ("project_scoped_job_routes", "run_logs") in applied
+    assert ("project_scoped_job_routes", "pause_run") in applied
+    assert ("project_scoped_job_routes", "resume_run") in applied
+    assert ("project_scoped_job_routes", "stop_run") in applied
+    assert ("project_scoped_job_routes", "create_background_job") in applied
+    assert ("project_scoped_job_routes", "get_background_job") in applied
+    assert ("project_scoped_job_routes", "record_background_checkpoint") in applied
+    assert ("project_scoped_job_routes", "background_resume_plan") in applied
+    assert ("project_scoped_job_routes", "retry_run") in applied
+    assert ("project_scoped_job_routes", "list_jobs") in applied
     assert ("project_memory_permission_routes", "create_project_memory_record") in applied
     assert ("project_memory_permission_routes", "update_project_memory_record") in applied
     assert ("project_memory_permission_routes", "delete_project_memory_record") in applied
@@ -302,6 +445,30 @@ def test_route_extension_inspection_endpoint_reports_route_ownership(tmp_path) -
         "list_permission_audit",
         "/api/projects/<project_id>/permissions/audit",
         ("GET",),
+    ) in applied_new_routes
+    assert (
+        "project_scoped_job_routes",
+        "project_run_logs",
+        "/api/projects/<project_id>/runs/<run_id>/logs",
+        ("GET",),
+    ) in applied_new_routes
+    assert (
+        "project_scoped_job_routes",
+        "project_pause_run",
+        "/api/projects/<project_id>/runs/<run_id>/pause",
+        ("POST",),
+    ) in applied_new_routes
+    assert (
+        "project_scoped_job_routes",
+        "project_resume_run",
+        "/api/projects/<project_id>/runs/<run_id>/resume",
+        ("POST",),
+    ) in applied_new_routes
+    assert (
+        "project_scoped_job_routes",
+        "project_stop_run",
+        "/api/projects/<project_id>/runs/<run_id>/stop",
+        ("POST",),
     ) in applied_new_routes
 
 

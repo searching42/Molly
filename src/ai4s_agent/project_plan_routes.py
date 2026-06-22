@@ -10,12 +10,12 @@ from ai4s_agent.gatekeeper import GATE_SEQUENCE
 from ai4s_agent.job_manager import JobManager
 from ai4s_agent.orchestrator import Orchestrator
 from ai4s_agent.project_plan_guard import read_project_plan_status, start_project_plan, _rollback_project_plan_file
-from ai4s_agent.schemas import GateDecision, GateName, RunStatus, StageHistoryItem
+from ai4s_agent.schemas import GateDecision, GateName, RunStatus
 from ai4s_agent.storage import ProjectStorage
 
 
 def install_project_scoped_plan_routes() -> None:
-    """Finalize project-scoped plan, status, gate approval, and retry routes."""
+    """Finalize project-scoped plan, status, and gate approval routes."""
 
     import ai4s_agent.api as api_module
 
@@ -32,7 +32,6 @@ def install_project_scoped_plan_routes() -> None:
         projects = ProjectStorage(workspace_dir=workspace)
         app.view_functions["create_plan"] = _create_plan_view(jobs=jobs, orch=orch, projects=projects)
         app.view_functions["approve_gate"] = _approve_gate_view(jobs=jobs, orch=orch, projects=projects)
-        app.view_functions["retry_run"] = _retry_run_view(jobs=jobs, orch=orch, projects=projects)
         app.add_url_rule(
             "/api/projects/<project_id>/runs/<run_id>/status",
             endpoint="project_run_status",
@@ -104,68 +103,6 @@ def _approve_gate_view(*, jobs: JobManager, orch: Orchestrator, projects: Projec
             return jsonify({"ok": False, "error": str(exc)}), 400
 
     return approve_gate
-
-
-def _retry_run_view(*, jobs: JobManager, orch: Orchestrator, projects: ProjectStorage):
-    def retry_run(run_id: str):
-        clean_run_id = str(run_id or "").strip()
-        if not clean_run_id:
-            return jsonify({"ok": False, "error": "run_id required"}), 400
-        payload = request.get_json(silent=True) or {}
-        stage = str(payload.get("stage") or "").strip()
-        project_id = str(payload.get("project_id") or "").strip()
-        state = None
-        if project_id:
-            try:
-                project_status = read_project_plan_status(projects, project_id, clean_run_id)
-                state = projects.read_stage_state(project_id, clean_run_id)
-            except ValueError as exc:
-                return jsonify({"ok": False, "error": str(exc)}), 400
-            if not project_status.get("plan_exists") and state is None:
-                return jsonify({"ok": False, "error": "no project run state found for run"}), 404
-            if jobs.get_project_job(project_id, clean_run_id):
-                return jsonify({"ok": False, "error": "run is active; pause or stop before retry"}), 409
-        else:
-            status = orch.read_status(clean_run_id)
-            if not status.get("plan_exists"):
-                return jsonify({"ok": False, "error": "no plan found for run"}), 404
-            if jobs.get_job(clean_run_id):
-                return jsonify({"ok": False, "error": "run is active; pause or stop before retry"}), 409
-            return jsonify({"ok": False, "error": "project_id required for failed-stage retry"}), 400
-        if state is None:
-            return jsonify({"ok": False, "error": "no stage state found for run"}), 404
-        if state.status != RunStatus.FAILED:
-            return jsonify({"ok": False, "error": "latest stage has not failed"}), 409
-        error = state.error if isinstance(state.error, dict) else {}
-        retryable_stages = error.get("retryable_stages", [])
-        if not isinstance(retryable_stages, list):
-            retryable_stages = []
-        requested_stage = stage or state.stage
-        explicitly_retryable = requested_stage in {str(item) for item in retryable_stages}
-        if requested_stage != state.stage and not explicitly_retryable:
-            return jsonify({"ok": False, "error": "retry is limited to latest failed stage or explicitly retryable stage", "latest_failed_stage": state.stage}), 400
-        if not bool(error.get("retryable")) and not explicitly_retryable:
-            return jsonify({"ok": False, "error": "latest failed stage is not retryable"}), 409
-        now = now_iso()
-        details = dict(state.details)
-        details["retry_requested_at"] = now
-        details["retry_stage"] = requested_stage
-        details["retry_count"] = int(details.get("retry_count") or 0) + 1
-        state.status = RunStatus.PENDING
-        state.started_at = now
-        state.updated_at = now
-        state.ended_at = None
-        state.details = details
-        state.history.append(StageHistoryItem(stage=requested_stage, status=RunStatus.PENDING, updated_at=now, note="retry requested"))
-        projects.write_stage_state(project_id, clean_run_id, state)
-        try:
-            job = jobs.start_project_job(project_id, clean_run_id, details={"retry": True, "retry_stage": requested_stage, "project_id": project_id})
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        jobs.add_project_log(project_id, clean_run_id, "INFO", "retry", f"Retry requested for stage: {requested_stage}")
-        return jsonify({"ok": True, "project_id": project_id, "run_id": clean_run_id, "retry_stage": requested_stage, "job": job, "job_key": job.get("job_key")})
-
-    return retry_run
 
 
 def approve_project_gate(projects: ProjectStorage, project_id: str, run_id: str, gate: GateName, *, actor: str, note: str = "") -> dict[str, Any]:
