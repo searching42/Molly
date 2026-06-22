@@ -306,5 +306,6 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #44: completed. Migrate immutable upload assets to explicit hook.
 - PR #45: completed. Migrate server permission routes to explicit hook.
 - PR #46: completed. Migrate project memory permission routes to explicit hook.
-- PR #47: migrate project job route overrides to explicit hook.
-- PR #48: migrate project plan route overrides to explicit hook.
+- PR #47: completed. Mark HARDEN-002 resolved in the roadmap.
+- PR #48: migrate project job route overrides to explicit hook.
+- PR #49: migrate project plan route overrides to explicit hook.
