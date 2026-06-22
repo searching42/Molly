@@ -5,6 +5,7 @@ from io import BytesIO
 from ai4s_agent.app import create_app
 from ai4s_agent.schemas import GateName, RunStatus
 from ai4s_agent.storage import ProjectStorage
+from ai4s_agent.storage_consistency import check_workspace_storage
 
 
 def _training_csv_bytes() -> bytes:
@@ -215,3 +216,6 @@ def test_localhost_project_workflow_closes_permission_execution_artifact_and_rep
     assert feedback_done.status_code == 200
     assert feedback_done.json["feedback"]["status"] == RunStatus.SUCCEEDED.value
     assert "report_synthesis_proposal_md" in feedback_done.json["feedback"]["artifact_registry"]
+
+    report = check_workspace_storage(tmp_path)
+    assert report.ok is True, f"storage check failed: {report.to_dict()}"
