@@ -275,33 +275,73 @@ Acceptance:
 - No code migration starts before worker supervision and job durability are
   in place.
 
-## HARDEN-011: Add Local Process Worker Supervisor — Planned
+## HARDEN-011: Add Local Process Worker Supervisor — RESOLVED
 
-- Add a `WorkerSupervisor` class that manages local subprocess worker lifecycles
-  without coupling to the RunPlanExecutor or remote workers.
-- Provide start / status / stop primitives with per-worker heartbeat files.
-- Expose worker lifecycle through a lightweight API.
-- Keep the existing executor path unchanged; the supervisor is a new
-  infrastructure layer that future durable jobs can adopt.
+- Status: Resolved across PR #62 and PR #63.
+- PR #62 added the `WorkerSupervisor` skeleton with start / status / stop
+  primitives, per-worker heartbeat JSON files, and a lifecycle test suite
+  (pending → running → stopped/failed, SIGTERM/SIGKILL escalation, duplicate
+  start rejection, cross-project same-run-id isolation).
+- PR #63 hardened path/read semantics: `status()` is read-only and does not
+  create directories; `project_id` and `run_id` are validated through
+  `_safe_component()` which rejects empty strings, `.`, `..`, and path
+  separators.
+- `WorkerSupervisor` is still decoupled from `RunPlanExecutor`.
+- No remote worker support yet.  No durable queue yet.
+
+Evidence:
+
+- `src/ai4s_agent/worker_supervisor.py` — `WorkerSupervisor` class
+- `tests/test_harden_011_worker_supervisor.py` — 13 tests covering lifecycle,
+  signal handling, composite key isolation, stale PID detection, path safety,
+  and read-only status semantics.
+- Verification from PR #63: full suite passed with `615 passed`.
+
+## HARDEN-012: Add Worker Queue Polling Loop — Planned
+
+- Add queue polling around project-scoped jobs so that multiple queued jobs
+  are acquired in a deterministic order and executed by supervised workers.
+- Keep lease acquisition, heartbeat update, cancellation, and stale lease
+  recovery semantics without introducing remote workers.
+
+Design outline (do not implement yet):
+
+1. **Queued job schema** — A JSON-serializable record under the project run
+   directory (`queued_jobs.json` or per-job `job_request.json`) that includes
+   `run_id`, `command`, `cwd`, `max_retries`, `timeout_sec`, and optional
+   `depends_on` for ordering constraints.
+
+2. **Lease acquisition** — A worker claims a job by writing a lease file
+   (`job_lease.json`) with `worker_run_id`, `acquired_at`, and
+   `heartbeat_deadline`.  Acquisition must be atomic (write + existence
+   check, no read-then-write gap).
+
+3. **Heartbeat update** — The worker periodically updates `heartbeat_deadline`
+   in the lease file.  The supervisor considers a lease stale if
+   `now > heartbeat_deadline + grace_period` and the worker process is no
+   longer alive.
+
+4. **Cancellation** — A `cancel_requested` flag in the job request, checked
+   by the worker before each unit of work.  The supervisor may also send
+   SIGTERM/SIGKILL through `WorkerSupervisor.stop()`.
+
+5. **Stale lease recovery** — When the supervisor detects a stale lease, it
+   marks the original job as `failed` with reason `stale_lease`, then
+   re-queues it if `retries < max_retries`.  Only one supervisor instance
+   should perform recovery at a time (per-project lock or leader election).
+
+6. **Deterministic acquisition order** — Jobs are acquired in order of
+   `priority` (descending) then `created_at` (ascending).  Ties are broken
+   by `run_id`.
 
 Acceptance:
 
-- `WorkerSupervisor` can start, poll status, and stop a local process.
-- Worker heartbeat state is persisted to a per-worker JSON file under the
-  project run directory.
-- Supervisor lifecycle is tested end-to-end (pending → running → stopped/failed)
-  without real long-running tasks.
-- No changes to RunPlanExecutor or remote worker code.
-
-## HARDEN-012: Add Worker Queue Polling Loop
-
-- Add queue polling around project-scoped jobs.
-- Keep lease acquisition, heartbeat, cancel, and stale lease recovery semantics.
-
-Acceptance:
-
-- Multiple queued jobs are acquired in a deterministic order.
-- Cancelled jobs do not start.
+- Queued job schema is documented as a Pydantic model or dataclass.
+- Lease acquisition, heartbeat, cancellation, and stale lease recovery
+  semantics are defined in prose (this section) before implementation
+  begins.
+- Tests (future PR) cover: acquire → heartbeat → complete, cancel before
+  start, stale lease detection and recovery, deterministic ordering.
 
 ## HARDEN-013: Add Remote Worker Contract Test
 
