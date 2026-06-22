@@ -215,11 +215,13 @@ def route_extension_context(
 def apply_explicit_route_hooks(context: RouteExtensionContext) -> None:
     """Apply route extensions that have migrated from monkeypatches to hooks."""
 
+    from ai4s_agent.project_job_routes import apply_project_scoped_job_routes
     from ai4s_agent.project_memory_permissions import apply_project_memory_permission_routes
     from ai4s_agent.server_permissions import apply_server_permission_routes
     from ai4s_agent.upload_assets import apply_immutable_upload_assets_route_override
 
     hooks: dict[str, Callable[[RouteExtensionContext], None]] = {
+        "project_scoped_job_routes": apply_project_scoped_job_routes,
         "immutable_upload_assets": apply_immutable_upload_assets_route_override,
         "server_permission_routes": apply_server_permission_routes,
         "project_memory_permission_routes": apply_project_memory_permission_routes,
@@ -318,18 +320,18 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
         extension_id="project_plan_route_guard",
         installer_name="install_project_plan_route_guard",
         module="ai4s_agent.project_plan_guard",
-        summary="Guard project-scoped plan state before legacy route writes.",
-        mechanism="method_patch",
+        summary="Provide project-scoped plan key validation and rollback helpers.",
+        mechanism="helper_module",
     ),
     RouteExtensionSpec(
         extension_id="project_scoped_job_routes",
         installer_name="install_project_scoped_job_routes",
         module="ai4s_agent.project_job_routes",
         summary="Route job APIs through project-scoped job keys when project_id is present.",
-        mechanism="view_function_override",
+        mechanism="explicit_route_override",
+        explicit_hook_active=True,
         depends_on=("project_plan_route_guard", "project_scoped_jobs"),
         declared_route_overrides=(
-            RouteOverrideDeclaration(endpoint="create_plan"),
             RouteOverrideDeclaration(endpoint="run_logs"),
             RouteOverrideDeclaration(endpoint="pause_run"),
             RouteOverrideDeclaration(endpoint="resume_run"),
@@ -341,18 +343,39 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
             RouteOverrideDeclaration(endpoint="retry_run"),
             RouteOverrideDeclaration(endpoint="list_jobs"),
         ),
+        declared_new_routes=(
+            RouteRegistrationDeclaration(
+                endpoint="project_run_logs",
+                rule="/api/projects/<project_id>/runs/<run_id>/logs",
+                methods=("GET",),
+            ),
+            RouteRegistrationDeclaration(
+                endpoint="project_pause_run",
+                rule="/api/projects/<project_id>/runs/<run_id>/pause",
+                methods=("POST",),
+            ),
+            RouteRegistrationDeclaration(
+                endpoint="project_resume_run",
+                rule="/api/projects/<project_id>/runs/<run_id>/resume",
+                methods=("POST",),
+            ),
+            RouteRegistrationDeclaration(
+                endpoint="project_stop_run",
+                rule="/api/projects/<project_id>/runs/<run_id>/stop",
+                methods=("POST",),
+            ),
+        ),
     ),
     RouteExtensionSpec(
         extension_id="project_scoped_plan_routes",
         installer_name="install_project_scoped_plan_routes",
         module="ai4s_agent.project_plan_routes",
-        summary="Finalize project-scoped plan, gate approval, status, and retry routes.",
+        summary="Finalize project-scoped plan, gate approval, and status routes.",
         mechanism="view_function_override",
         depends_on=("project_scoped_job_routes",),
         declared_route_overrides=(
             RouteOverrideDeclaration(endpoint="create_plan"),
             RouteOverrideDeclaration(endpoint="approve_gate"),
-            RouteOverrideDeclaration(endpoint="retry_run"),
         ),
     ),
     RouteExtensionSpec(

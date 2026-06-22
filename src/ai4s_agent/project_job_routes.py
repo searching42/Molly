@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from flask import jsonify, request
 from pydantic import ValidationError
@@ -9,80 +9,85 @@ from pydantic import ValidationError
 from ai4s_agent._utils import now_iso
 from ai4s_agent.job_manager import JobManager
 from ai4s_agent.orchestrator import Orchestrator
+from ai4s_agent.project_plan_guard import read_project_plan_status
 from ai4s_agent.schemas import BackgroundJobBudget, RunStatus, StageHistoryItem
 from ai4s_agent.storage import ProjectStorage
 
+if TYPE_CHECKING:
+    from ai4s_agent.api_route_extensions import RouteExtensionContext
+
 
 def install_project_scoped_job_routes() -> None:
+    """Project job routes are installed by the explicit route hook."""
+
+
+def apply_project_scoped_job_routes(context: "RouteExtensionContext") -> None:
     import ai4s_agent.api as api_module
 
-    original_register_routes = api_module.register_routes
-    if getattr(original_register_routes, "_project_scoped_job_routes", False):
-        return
-
-    def register_routes_with_project_jobs(app: Any, base_runs_dir: Path | None = None, workspace_dir: Path | None = None) -> None:
-        original_register_routes(app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
-        runs = Path(base_runs_dir or api_module.DEFAULT_RUNS_DIR).resolve()
-        workspace = api_module._workspace_from_config(base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
-        jobs = JobManager(runs_dir=runs)
-        orch = Orchestrator(base_runs_dir=runs)
-        projects = ProjectStorage(workspace_dir=workspace)
-        _replace_legacy_job_views(app, jobs=jobs, orch=orch, projects=projects)
-        _add_project_job_routes(app, jobs=jobs)
-
-    register_routes_with_project_jobs._project_scoped_job_routes = True  # type: ignore[attr-defined]
-    api_module.register_routes = register_routes_with_project_jobs  # type: ignore[method-assign]
+    runs = Path(context.base_runs_dir or api_module.DEFAULT_RUNS_DIR).resolve()
+    workspace = api_module._workspace_from_config(
+        base_runs_dir=context.base_runs_dir,
+        workspace_dir=context.workspace_dir,
+    )
+    jobs = JobManager(runs_dir=runs)
+    orch = Orchestrator(base_runs_dir=runs)
+    projects = ProjectStorage(workspace_dir=workspace)
+    _replace_legacy_job_views(context, jobs=jobs, orch=orch, projects=projects)
+    _add_project_job_routes(context, jobs=jobs)
 
 
-def _replace_legacy_job_views(app: Any, *, jobs: JobManager, orch: Orchestrator, projects: ProjectStorage) -> None:
-    app.view_functions["create_plan"] = _create_plan_view(jobs=jobs, orch=orch)
-    app.view_functions["run_logs"] = _run_logs_view(jobs=jobs)
-    app.view_functions["pause_run"] = _job_control_view(jobs=jobs, action="pause")
-    app.view_functions["resume_run"] = _job_control_view(jobs=jobs, action="resume")
-    app.view_functions["stop_run"] = _job_control_view(jobs=jobs, action="stop")
-    app.view_functions["create_background_job"] = _create_background_job_view(jobs=jobs)
-    app.view_functions["get_background_job"] = _get_background_job_view(jobs=jobs)
-    app.view_functions["record_background_checkpoint"] = _record_background_checkpoint_view(jobs=jobs)
-    app.view_functions["background_resume_plan"] = _background_resume_plan_view(jobs=jobs)
-    app.view_functions["retry_run"] = _retry_run_view(jobs=jobs, orch=orch, projects=projects)
-    app.view_functions["list_jobs"] = _list_jobs_view(jobs=jobs)
+def _replace_legacy_job_views(context: "RouteExtensionContext", *, jobs: JobManager, orch: Orchestrator, projects: ProjectStorage) -> None:
+    registry = context.route_overrides
+    app = context.app
+    extension_id = "project_scoped_job_routes"
+    registry.apply_route_override(app, extension_id=extension_id, endpoint="run_logs", view_func=_run_logs_view(jobs=jobs))
+    registry.apply_route_override(app, extension_id=extension_id, endpoint="pause_run", view_func=_job_control_view(jobs=jobs, action="pause"))
+    registry.apply_route_override(app, extension_id=extension_id, endpoint="resume_run", view_func=_job_control_view(jobs=jobs, action="resume"))
+    registry.apply_route_override(app, extension_id=extension_id, endpoint="stop_run", view_func=_job_control_view(jobs=jobs, action="stop"))
+    registry.apply_route_override(app, extension_id=extension_id, endpoint="create_background_job", view_func=_create_background_job_view(jobs=jobs))
+    registry.apply_route_override(app, extension_id=extension_id, endpoint="get_background_job", view_func=_get_background_job_view(jobs=jobs))
+    registry.apply_route_override(app, extension_id=extension_id, endpoint="record_background_checkpoint", view_func=_record_background_checkpoint_view(jobs=jobs))
+    registry.apply_route_override(app, extension_id=extension_id, endpoint="background_resume_plan", view_func=_background_resume_plan_view(jobs=jobs))
+    registry.apply_route_override(app, extension_id=extension_id, endpoint="retry_run", view_func=_retry_run_view(jobs=jobs, orch=orch, projects=projects))
+    registry.apply_route_override(app, extension_id=extension_id, endpoint="list_jobs", view_func=_list_jobs_view(jobs=jobs))
 
 
-def _add_project_job_routes(app: Any, *, jobs: JobManager) -> None:
-    app.add_url_rule("/api/projects/<project_id>/runs/<run_id>/logs", endpoint="project_run_logs", view_func=_project_run_logs_view(jobs=jobs), methods=["GET"])
-    app.add_url_rule("/api/projects/<project_id>/runs/<run_id>/pause", endpoint="project_pause_run", view_func=_project_job_control_view(jobs=jobs, action="pause"), methods=["POST"])
-    app.add_url_rule("/api/projects/<project_id>/runs/<run_id>/resume", endpoint="project_resume_run", view_func=_project_job_control_view(jobs=jobs, action="resume"), methods=["POST"])
-    app.add_url_rule("/api/projects/<project_id>/runs/<run_id>/stop", endpoint="project_stop_run", view_func=_project_job_control_view(jobs=jobs, action="stop"), methods=["POST"])
-
-
-def _create_plan_view(*, jobs: JobManager, orch: Orchestrator):
-    def create_plan():
-        payload = request.get_json(silent=True) or {}
-        run_id = str(payload.get("run_id") or "").strip()
-        prompt = str(payload.get("prompt") or "").strip()
-        project_id = str(payload.get("project_id") or "").strip()
-        if not run_id or not prompt:
-            return jsonify({"ok": False, "error": "run_id and prompt required"}), 400
-        try:
-            if project_id:
-                if jobs.get_project_job(project_id, run_id):
-                    return jsonify({"ok": False, "error": f"job already active: {project_id}/{run_id}"}), 409
-                status = orch.start_run(run_id=run_id, prompt=prompt)
-                job = jobs.start_project_job(project_id, run_id, details={"gate": status.get("gate")})
-                return jsonify({"ok": True, **status, "job": job, "job_key": job.get("job_key")})
-            if jobs.get_job(run_id):
-                return jsonify({"ok": False, "error": f"job already active: {run_id}"}), 409
-            status = orch.start_run(run_id=run_id, prompt=prompt)
-            jobs.start_job(run_id, details={"gate": status.get("gate")})
-        except ValueError as exc:
-            message = str(exc)
-            status_code = 409 if "already active" in message or "already exists" in message else 400
-            return jsonify({"ok": False, "error": message}), status_code
-        except KeyError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, **status})
-
-    return create_plan
+def _add_project_job_routes(context: "RouteExtensionContext", *, jobs: JobManager) -> None:
+    registry = context.route_overrides
+    app = context.app
+    extension_id = "project_scoped_job_routes"
+    registry.apply_new_route(
+        app,
+        extension_id=extension_id,
+        endpoint="project_run_logs",
+        rule="/api/projects/<project_id>/runs/<run_id>/logs",
+        view_func=_project_run_logs_view(jobs=jobs),
+        methods=("GET",),
+    )
+    registry.apply_new_route(
+        app,
+        extension_id=extension_id,
+        endpoint="project_pause_run",
+        rule="/api/projects/<project_id>/runs/<run_id>/pause",
+        view_func=_project_job_control_view(jobs=jobs, action="pause"),
+        methods=("POST",),
+    )
+    registry.apply_new_route(
+        app,
+        extension_id=extension_id,
+        endpoint="project_resume_run",
+        rule="/api/projects/<project_id>/runs/<run_id>/resume",
+        view_func=_project_job_control_view(jobs=jobs, action="resume"),
+        methods=("POST",),
+    )
+    registry.apply_new_route(
+        app,
+        extension_id=extension_id,
+        endpoint="project_stop_run",
+        rule="/api/projects/<project_id>/runs/<run_id>/stop",
+        view_func=_project_job_control_view(jobs=jobs, action="stop"),
+        methods=("POST",),
+    )
 
 
 def _run_logs_view(*, jobs: JobManager):
@@ -279,19 +284,24 @@ def _retry_run_view(*, jobs: JobManager, orch: Orchestrator, projects: ProjectSt
         payload = request.get_json(silent=True) or {}
         stage = str(payload.get("stage") or "").strip()
         project_id = str(payload.get("project_id") or "").strip()
-        status = orch.read_status(clean_run_id)
-        if not status.get("plan_exists"):
-            return jsonify({"ok": False, "error": "no plan found for run"}), 404
-        if not project_id:
+        state = None
+        if project_id:
+            try:
+                project_status = read_project_plan_status(projects, project_id, clean_run_id)
+                state = projects.read_stage_state(project_id, clean_run_id)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+            if not project_status.get("plan_exists") and state is None:
+                return jsonify({"ok": False, "error": "no project run state found for run"}), 404
+            if jobs.get_project_job(project_id, clean_run_id):
+                return jsonify({"ok": False, "error": "run is active; pause or stop before retry"}), 409
+        else:
+            status = orch.read_status(clean_run_id)
+            if not status.get("plan_exists"):
+                return jsonify({"ok": False, "error": "no plan found for run"}), 404
             if jobs.get_job(clean_run_id):
                 return jsonify({"ok": False, "error": "run is active; pause or stop before retry"}), 409
             return jsonify({"ok": False, "error": "project_id required for failed-stage retry"}), 400
-        if jobs.get_project_job(project_id, clean_run_id):
-            return jsonify({"ok": False, "error": "run is active; pause or stop before retry"}), 409
-        try:
-            state = projects.read_stage_state(project_id, clean_run_id)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
         if state is None:
             return jsonify({"ok": False, "error": "no stage state found for run"}), 404
         if state.status != RunStatus.FAILED:
