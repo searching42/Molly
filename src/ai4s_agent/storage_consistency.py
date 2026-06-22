@@ -254,8 +254,8 @@ def _check_permission_grants(report: StorageConsistencyReport, path: Path) -> No
                 if not str(grant.get(field_name) or "").strip():
                     report.add_error("permission_grant_revoked_missing_field", f"revoked grant missing {field_name}", path, index=index, grant_id=grant_id, field=field_name)
         expires_at = str(grant.get("expires_at") or "").strip()
-        if expires_at and _parse_iso(expires_at) is None:
-            report.add_error("permission_grant_invalid_expires_at", "permission grant expires_at is not ISO-like", path, index=index, grant_id=grant_id, expires_at=expires_at)
+        if expires_at and _parse_timezone_aware_iso(expires_at) is None:
+            report.add_error("permission_grant_invalid_expires_at", "permission grant expires_at must be ISO timestamp with timezone", path, index=index, grant_id=grant_id, expires_at=expires_at)
 
 
 def _check_permission_audit(report: StorageConsistencyReport, path: Path) -> None:
@@ -335,14 +335,17 @@ def _read_json_object(report: StorageConsistencyReport, path: Path) -> dict[str,
     return payload
 
 
-def _parse_iso(value: str) -> datetime | None:
+def _parse_timezone_aware_iso(value: str) -> datetime | None:
     clean = value.strip()
     if clean.endswith("Z"):
         clean = f"{clean[:-1]}+00:00"
     try:
-        return datetime.fromisoformat(clean)
+        parsed = datetime.fromisoformat(clean)
     except ValueError:
         return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
 
 
 def _is_relative_to(path: Path, base: Path) -> bool:
