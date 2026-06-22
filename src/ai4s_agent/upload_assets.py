@@ -8,6 +8,7 @@ from flask import jsonify, request
 from werkzeug.utils import secure_filename
 
 from ai4s_agent._utils import now_iso, write_json
+from ai4s_agent.actor_identity import resolve_actor
 from ai4s_agent.memory import PermissionPolicy
 from ai4s_agent.schemas import AssetManifest, AssetStatus
 from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
@@ -66,7 +67,7 @@ def _upload_file_view(
         clean_id = str(project_id or "").strip()
         if not clean_id:
             return jsonify({"ok": False, "error": "project_id required"}), 400
-        actor = str(request.form.get("actor") or request.headers.get("X-Actor") or "").strip()
+        actor_context = resolve_actor(request)
         legacy_project_approved = _as_bool(request.form.get("project_approved")) or _as_bool(request.headers.get("X-Project-Approved"))
         allow_legacy_flags = _config_bool(app.config.get("AI4S_ALLOW_CLIENT_PERMISSION_FLAGS", True), default=True)
         try:
@@ -75,7 +76,8 @@ def _upload_file_view(
                 permissions,
                 "upload_dataset",
                 project_id=clean_id,
-                actor=actor,
+                actor=actor_context.actor,
+                actor_source=actor_context.source,
                 legacy_project_approved=legacy_project_approved,
                 allow_legacy_client_flags=allow_legacy_flags,
             )

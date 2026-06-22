@@ -9,6 +9,7 @@ from typing import Any, TYPE_CHECKING
 from flask import jsonify, request
 
 from ai4s_agent._utils import now_iso, write_json
+from ai4s_agent.actor_identity import resolve_actor
 from ai4s_agent.memory import PermissionLevel, PermissionPolicy
 from ai4s_agent.storage import ProjectStorage
 
@@ -23,7 +24,7 @@ class ServerPermissionStore:
         self.workspace_dir = Path(workspace_dir).resolve()
         self.projects = ProjectStorage(workspace_dir=self.workspace_dir)
 
-    def create_grant(self, project_id: str, action: str, *, actor: str, reason: str = "", run_id: str = "", expires_at: str = "") -> dict[str, Any]:
+    def create_grant(self, project_id: str, action: str, *, actor: str, reason: str = "", run_id: str = "", expires_at: str = "", actor_source: str = "") -> dict[str, Any]:
         project = _clean_segment(project_id, "project_id")
         clean_action = _clean_action(action)
         clean_actor = str(actor or "").strip()
@@ -36,6 +37,7 @@ class ServerPermissionStore:
             "run_id": str(run_id or "").strip(),
             "action": clean_action,
             "actor": clean_actor,
+            "actor_source": str(actor_source or "").strip(),
             "reason": str(reason or "").strip(),
             "created_at": now_iso(),
             "expires_at": clean_expires_at,
@@ -44,7 +46,7 @@ class ServerPermissionStore:
         grants = self.list_grants(project)
         grants.append(grant)
         write_json(self._grants_path(project), {"project_id": project, "updated_at": now_iso(), "grants": grants})
-        self.audit_decision(project, action=clean_action, run_id=grant["run_id"], actor=clean_actor, allowed=True, reason="SERVER_GRANT_CREATED", grant_id=grant["grant_id"])
+        self.audit_decision(project, action=clean_action, run_id=grant["run_id"], actor=clean_actor, actor_source=grant["actor_source"], allowed=True, reason="SERVER_GRANT_CREATED", grant_id=grant["grant_id"])
         return grant
 
     def list_grants(self, project_id: str, *, action: str = "") -> list[dict[str, Any]]:
@@ -81,7 +83,7 @@ class ServerPermissionStore:
             return grant
         return None
 
-    def revoke_grant(self, project_id: str, grant_id: str, *, revoked_by: str, revoke_reason: str = "") -> dict[str, Any]:
+    def revoke_grant(self, project_id: str, grant_id: str, *, revoked_by: str, revoke_reason: str = "", actor_source: str = "") -> dict[str, Any]:
         project = _clean_segment(project_id, "project_id")
         clean_grant_id = str(grant_id or "").strip()
         if not clean_grant_id:
@@ -98,6 +100,7 @@ class ServerPermissionStore:
                 changed["active"] = False
                 changed["revoked_at"] = now_iso()
                 changed["revoked_by"] = clean_actor
+                changed["revoked_by_source"] = str(actor_source or "").strip()
                 changed["revoke_reason"] = str(revoke_reason or "").strip()
                 updated.append(changed)
             else:
@@ -110,6 +113,7 @@ class ServerPermissionStore:
             action=str(changed.get("action") or ""),
             run_id=str(changed.get("run_id") or ""),
             actor=clean_actor,
+            actor_source=str(actor_source or "").strip(),
             allowed=False,
             reason="SERVER_GRANT_REVOKED",
             grant_id=clean_grant_id,
@@ -137,6 +141,7 @@ class ServerPermissionStore:
         reason: str,
         run_id: str = "",
         actor: str = "",
+        actor_source: str = "",
         grant_id: str = "",
         legacy_client_flag: bool = False,
     ) -> dict[str, Any]:
@@ -149,6 +154,7 @@ class ServerPermissionStore:
             "allowed": bool(allowed),
             "reason": str(reason or "").strip(),
             "actor": str(actor or "").strip(),
+            "actor_source": str(actor_source or "").strip(),
             "grant_id": str(grant_id or "").strip(),
             "legacy_client_flag": bool(legacy_client_flag),
             "decided_at": now_iso(),
@@ -197,6 +203,7 @@ def decide_server_permission(
     project_id: str,
     run_id: str = "",
     actor: str = "",
+    actor_source: str = "",
     confirmed: bool = False,
     legacy_project_approved: bool = False,
     allow_legacy_client_flags: bool = True,
@@ -244,6 +251,7 @@ def decide_server_permission(
         action=clean_action,
         run_id=run_id,
         actor=clean_actor,
+        actor_source=str(actor_source or "").strip(),
         allowed=allowed,
         reason=reason,
         grant_id=grant_id,
@@ -257,6 +265,7 @@ def decide_server_permission(
         "project_id": project_id,
         "run_id": run_id,
         "actor": clean_actor,
+        "actor_source": str(actor_source or "").strip(),
         "grant_id": grant_id,
         "server_authorized": bool(level == PermissionLevel.AUTO or (allowed and grant_id)),
         "legacy_client_flag": legacy,
@@ -322,17 +331,18 @@ def _create_permission_grant_view(*, store: ServerPermissionStore):
     def create_permission_grant(project_id: str):
         payload = request.get_json(silent=True) or {}
         action = str(payload.get("action") or "").strip()
-        actor = str(payload.get("actor") or payload.get("approved_by") or "").strip()
+        actor_context = resolve_actor(request, required=True)
         confirmed = payload.get("confirmed") is True
         if not action:
             return jsonify({"ok": False, "error": "action required"}), 400
-        if not confirmed or not actor:
-            return jsonify({"ok": False, "error": "server permission grant requires confirmed=true and actor"}), 403
+        if not confirmed or not actor_context.actor:
+            return jsonify({"ok": False, "error": "server permission grant requires confirmed=true and actor", "actor_source": actor_context.source}), 403
         try:
             grant = store.create_grant(
                 project_id,
                 action,
-                actor=actor,
+                actor=actor_context.actor,
+                actor_source=actor_context.source,
                 reason=str(payload.get("reason") or ""),
                 run_id=str(payload.get("run_id") or ""),
                 expires_at=str(payload.get("expires_at") or ""),
@@ -368,13 +378,9 @@ def _list_permission_audit_view(*, store: ServerPermissionStore):
 
 def _revoke_permission_grant_view(*, store: ServerPermissionStore):
     def revoke_permission_grant(project_id: str, grant_id: str):
-        actor = str(request.headers.get("X-Actor") or "").strip()
-        revoked_by = str(request.form.get("actor") or request.form.get("revoked_by") or actor).strip()
-        if not revoked_by:
-            payload = request.get_json(silent=True) or {}
-            revoked_by = str(payload.get("actor") or payload.get("revoked_by") or "").strip()
-        if not revoked_by:
-            return jsonify({"ok": False, "error": "revoked_by or actor required in request"}), 403
+        actor_context = resolve_actor(request, required=True)
+        if not actor_context.actor:
+            return jsonify({"ok": False, "error": "revoked_by or actor required in request", "actor_source": actor_context.source}), 403
         revoke_reason = str(request.form.get("revoke_reason") or "")
         if not revoke_reason:
             payload = request.get_json(silent=True) or {}
@@ -383,7 +389,8 @@ def _revoke_permission_grant_view(*, store: ServerPermissionStore):
             grant = store.revoke_grant(
                 project_id,
                 grant_id,
-                revoked_by=revoked_by,
+                revoked_by=actor_context.actor,
+                actor_source=actor_context.source,
                 revoke_reason=revoke_reason,
             )
         except ValueError as exc:

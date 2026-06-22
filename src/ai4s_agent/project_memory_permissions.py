@@ -5,6 +5,7 @@ from typing import Any, TYPE_CHECKING
 from flask import jsonify, request
 from pydantic import ValidationError
 
+from ai4s_agent.actor_identity import resolve_actor
 from ai4s_agent.memory import PermissionLevel, PermissionPolicy, ProjectMemory
 from ai4s_agent.schemas import ProjectMemoryRecord
 from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
@@ -152,7 +153,7 @@ def _authorize_memory_write(
     record_id: str = "",
 ) -> tuple[dict[str, Any], Any | None]:
     clean_project = str(project_id or "").strip()
-    actor = str(payload.get("actor") or payload.get("confirmed_by") or request.headers.get("X-Actor") or "").strip()
+    actor_context = resolve_actor(request)
     allow_legacy_client_flags = _config_bool(app.config.get("AI4S_ALLOW_MEMORY_CLIENT_PERMISSION_FLAGS", False), default=False)
     legacy_project_approved = _as_bool(payload.get("project_approved")) or _as_bool(request.headers.get("X-Project-Approved"))
     try:
@@ -161,7 +162,8 @@ def _authorize_memory_write(
             policy,
             MEMORY_WRITE_ACTION,
             project_id=clean_project,
-            actor=actor,
+            actor=actor_context.actor,
+            actor_source=actor_context.source,
             legacy_project_approved=legacy_project_approved,
             allow_legacy_client_flags=allow_legacy_client_flags,
         )
