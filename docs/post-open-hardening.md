@@ -23,10 +23,12 @@ blur into the already-resolved OPEN series.
   PR #39, PR #40, and PR #41.
 - Resolved: HARDEN-002 upload, server permission, and project memory permission
   routes migrated to explicit hooks in PR #44, PR #45, and PR #46.
-- Focus: migrate project job and project plan route overrides behind the e2e and
-  inspection safety nets.
-- Engineering priority: explicit app extension boundaries, e2e workflow tests,
-  permission semantics, storage consistency, and worker supervision.
+- Resolved: HARDEN-003 project job and project plan route overrides migrated to
+  explicit hooks in PR #48 and PR #49.
+- Focus: tighten permission grant expiry, revoke, and scope semantics before
+  expanding production workflows.
+- Engineering priority: permission semantics, actor identity, production
+  profile safety, storage consistency, and worker supervision.
 - Science priority: a small but closed OLED demo with literature provenance,
   model training diagnostics, candidate generation, screening, and report
   artifacts.
@@ -86,6 +88,7 @@ Acceptance:
 
 ## HARDEN-003: Migrate Project Plan And Job Route Overrides
 
+- Status: Resolved across PR #48 and PR #49.
 - Move `project_plan_routes` and `project_job_routes` away from route-function
   replacement via `app.view_functions[...]`.
 - Prefer explicit route override hooks or service-level dependencies.
@@ -93,6 +96,16 @@ Acceptance:
 - Split migration into smaller PRs because project plan/job routes are more
   coupled to gate approval, retry, job logs, project-scoped keys, and run state.
 - Migrate project job routes before project plan routes.
+
+Evidence:
+
+- PR #48 migrated `project_scoped_job_routes` job, log, background, retry, and
+  list endpoints to explicit route hooks while preserving `retry_run`
+  ownership and behavior.
+- PR #49 migrated `project_scoped_plan_routes` `create_plan`, `approve_gate`,
+  and `project_run_status` to explicit route hooks without changing retry or
+  job behavior.
+- Verification from PR #49: full suite passed with `567 passed`.
 
 Acceptance:
 
@@ -267,15 +280,17 @@ Recommended order:
 HARDEN-004 resolved
 -> HARDEN-001 resolved
 -> HARDEN-002 resolved
--> HARDEN-003 job routes
--> HARDEN-003 plan routes
--> HARDEN-005 / HARDEN-006 / HARDEN-007
+-> HARDEN-003 resolved
+-> HARDEN-005 permission grant semantics
+-> HARDEN-006 actor identity
+-> HARDEN-007 production profile
 -> HARDEN-008 / HARDEN-009 / HARDEN-010
 -> HARDEN-011 / HARDEN-012 / HARDEN-013 / HARDEN-014
 ```
 
-The e2e smoke should arrive early because it becomes the safety net for route
-extension cleanup.
+The route-extension cleanup is now behind the e2e and inspection safety nets.
+The next hardening phase should focus on permission semantics before adding
+remote workers or broader science workflow integrations.
 
 ## Science Track
 
@@ -307,5 +322,9 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #45: completed. Migrate server permission routes to explicit hook.
 - PR #46: completed. Migrate project memory permission routes to explicit hook.
 - PR #47: completed. Mark HARDEN-002 resolved in the roadmap.
-- PR #48: migrate project job route overrides to explicit hook.
-- PR #49: migrate project plan route overrides to explicit hook.
+- PR #48: completed. Migrate project job route overrides to explicit hook.
+- PR #49: completed. Migrate project plan route overrides to explicit hook.
+- PR #50: completed. Mark HARDEN-003 resolved and start permission hardening.
+- PR #51: add permission grant expiry semantics.
+- PR #52: add permission grant revoke and audit records.
+- PR #53: standardize actor identity resolver.
