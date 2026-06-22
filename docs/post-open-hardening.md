@@ -255,6 +255,8 @@ Acceptance:
 
 ## HARDEN-009: Add Storage Consistency Checker
 
+- Status: Started by PR #58 with a read-only checker API and
+  `python -m ai4s_agent.storage_consistency` CLI.
 - Add a read-only checker for project/run storage.
 - Validate artifact registry references, stage state, gate decisions, promoted
   assets, manifests, and job state coherence.
