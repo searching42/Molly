@@ -33,6 +33,16 @@ def test_resolve_actor_uses_json_form_and_query_sources() -> None:
     assert _resolve_with_request(query_string={"actor": "query-user"}, json=None, method="GET").source == "query:actor"
 
 
+def test_resolve_actor_accepts_confirmed_by_alias_for_memory_payloads() -> None:
+    json_actor = _resolve_with_request(json={"confirmed_by": "memory-reviewer"})
+    form_actor = _resolve_with_request(data={"confirmed_by": "form-reviewer"}, json=None)
+
+    assert json_actor.actor == "memory-reviewer"
+    assert json_actor.source == "json:confirmed_by"
+    assert form_actor.actor == "form-reviewer"
+    assert form_actor.source == "form:confirmed_by"
+
+
 def test_resolve_actor_missing_required_records_required_context() -> None:
     actor = _resolve_with_request(json={}, method="POST")
 
