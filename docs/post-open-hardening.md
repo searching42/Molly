@@ -19,7 +19,10 @@ blur into the already-resolved OPEN series.
 
 - Status: OPEN backlog resolved for localhost MVP blockers.
 - Resolved: HARDEN-004 localhost e2e safety net in PR #37.
-- Focus: route/app extension explicitness behind the e2e workflow safety net.
+- Resolved: HARDEN-001 route extension metadata and inspection observability in
+  PR #39, PR #40, and PR #41.
+- Focus: migrate route/app extension wrappers behind the e2e and inspection
+  safety nets.
 - Engineering priority: explicit app extension boundaries, e2e workflow tests,
   permission semantics, storage consistency, and worker supervision.
 - Science priority: a small but closed OLED demo with literature provenance,
@@ -28,11 +31,22 @@ blur into the already-resolved OPEN series.
 
 ## HARDEN-001: Introduce Explicit App Extension Registry
 
+- Status: Resolved across PR #39, PR #40, and PR #41.
 - Replace implicit route-extension monkeypatch chains with a first-class app
   extension registry.
 - Preserve current installer order while exposing explicit extension metadata,
   dependency names, and registration hooks.
 - Keep compatibility wrappers until each extension is migrated.
+
+Evidence:
+
+- PR #39 added `RouteExtensionSpec` metadata and metadata-driven installer
+  ordering.
+- PR #40 exposed installed route extension metadata on Flask app config and via
+  a helper.
+- PR #41 added the read-only `/api/system/route-extensions` inspection endpoint
+  and route ownership metadata.
+- Verification from PR #41: full suite passed with `560 passed`.
 
 Acceptance:
 
@@ -128,11 +142,16 @@ Acceptance:
 - Keep legacy client flags available for local/dev compatibility.
 - Add a production profile where client-declared approval flags are rejected
   unless backed by server grants.
+- Consider guarding `/api/system/route-extensions` behind a read-only
+  admin/debug switch in production profile, while keeping it available for
+  localhost hardening observability.
 
 Acceptance:
 
 - Production profile tests show upload, memory write, and privileged project
   actions require server-side grants.
+- Route extension inspection remains read-only and is disabled or admin/debug
+  gated in production profile.
 
 ## HARDEN-008: Inventory Mutable JSON State And Remaining RMW Paths
 
@@ -225,7 +244,7 @@ Recommended order:
 
 ```text
 HARDEN-004 resolved
--> HARDEN-001
+-> HARDEN-001 resolved
 -> HARDEN-002 / HARDEN-003
 -> HARDEN-005 / HARDEN-006 / HARDEN-007
 -> HARDEN-008 / HARDEN-009 / HARDEN-010
@@ -255,4 +274,8 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #36: completed. Document post-OPEN hardening roadmap and fix stale
   route-extension docs.
 - PR #37: completed. Add localhost project workflow e2e smoke.
-- PR #38+: migrate route extensions behind the e2e safety net.
+- PR #38: completed. Mark HARDEN-004 resolved in the roadmap.
+- PR #39: completed. Add route extension metadata registry.
+- PR #40: completed. Expose installed route extension metadata on app creation.
+- PR #41: completed. Add route extension and route ownership inspection.
+- PR #42+: migrate route extensions behind the e2e and inspection safety nets.
