@@ -21,8 +21,10 @@ blur into the already-resolved OPEN series.
 - Resolved: HARDEN-004 localhost e2e safety net in PR #37.
 - Resolved: HARDEN-001 route extension metadata and inspection observability in
   PR #39, PR #40, and PR #41.
-- Focus: migrate route/app extension wrappers behind the e2e and inspection
-  safety nets.
+- Resolved: HARDEN-002 upload, server permission, and project memory permission
+  routes migrated to explicit hooks in PR #44, PR #45, and PR #46.
+- Focus: migrate project job and project plan route overrides behind the e2e and
+  inspection safety nets.
 - Engineering priority: explicit app extension boundaries, e2e workflow tests,
   permission semantics, storage consistency, and worker supervision.
 - Science priority: a small but closed OLED demo with literature provenance,
@@ -56,11 +58,25 @@ Acceptance:
 
 ## HARDEN-002: Migrate Permission And Upload Extensions
 
+- Status: Resolved across PR #44, PR #45, and PR #46.
 - Move `server_permissions`, `upload_assets`, and
   `project_memory_permissions` away from `api_module.register_routes`
   monkeypatching.
 - Register their route overrides through explicit app extension hooks.
 - Preserve existing permission audit and legacy fallback behavior.
+
+Evidence:
+
+- PR #44 migrated `immutable_upload_assets` and only the `upload_file` endpoint
+  override to an explicit route hook.
+- PR #45 migrated `server_permission_routes` and only the three permission
+  routes: `create_permission_grant`, `list_permission_grants`, and
+  `list_permission_audit`.
+- PR #46 migrated `project_memory_permission_routes` and only the four memory
+  endpoint overrides: `create_project_memory_record`,
+  `update_project_memory_record`, `delete_project_memory_record`, and
+  `set_project_memory_enabled`.
+- Verification from PR #46: full suite passed with `565 passed`.
 
 Acceptance:
 
@@ -74,11 +90,16 @@ Acceptance:
   replacement via `app.view_functions[...]`.
 - Prefer explicit route override hooks or service-level dependencies.
 - Keep legacy route compatibility for clients without `project_id`.
+- Split migration into smaller PRs because project plan/job routes are more
+  coupled to gate approval, retry, job logs, project-scoped keys, and run state.
+- Migrate project job routes before project plan routes.
 
 Acceptance:
 
 - Project-scoped and legacy run/job behavior remains covered by e2e tests.
 - Ambiguous `run_id` behavior remains unchanged.
+- Inspection endpoint reports explicit hook ownership for migrated job and plan
+  route overrides.
 
 ## HARDEN-004: Add Localhost Project Workflow E2E Smoke
 
@@ -245,7 +266,9 @@ Recommended order:
 ```text
 HARDEN-004 resolved
 -> HARDEN-001 resolved
--> HARDEN-002 / HARDEN-003
+-> HARDEN-002 resolved
+-> HARDEN-003 job routes
+-> HARDEN-003 plan routes
 -> HARDEN-005 / HARDEN-006 / HARDEN-007
 -> HARDEN-008 / HARDEN-009 / HARDEN-010
 -> HARDEN-011 / HARDEN-012 / HARDEN-013 / HARDEN-014
@@ -278,4 +301,11 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #39: completed. Add route extension metadata registry.
 - PR #40: completed. Expose installed route extension metadata on app creation.
 - PR #41: completed. Add route extension and route ownership inspection.
-- PR #42+: migrate route extensions behind the e2e and inspection safety nets.
+- PR #42: completed. Mark HARDEN-001 resolved in the roadmap.
+- PR #43: completed. Add explicit route hook skeleton.
+- PR #44: completed. Migrate immutable upload assets to explicit hook.
+- PR #45: completed. Migrate server permission routes to explicit hook.
+- PR #46: completed. Migrate project memory permission routes to explicit hook.
+- PR #47: completed. Mark HARDEN-002 resolved in the roadmap.
+- PR #48: migrate project job route overrides to explicit hook.
+- PR #49: migrate project plan route overrides to explicit hook.
