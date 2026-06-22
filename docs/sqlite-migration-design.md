@@ -7,32 +7,48 @@ consistency checker) is merged and passing against the e2e workflow test.
 
 ## Current State
 
-Mutable project state is stored as per-project JSON files under
-`projects/<project_id>/`:
+Mutable project state is stored as per-project JSON files.  The authoritative
+inventory is `docs/storage-state-inventory.md`.  Below is a summary for the
+SQLite migration conversation:
 
-| File | Operations | Locking |
-|------|-----------|---------|
-| `runs/<run_id>/stage.json` | read-modify-write on every gate/resume/complete | `fcntl` + threading |
-| `runs/<run_id>/artifact_registry.json` | append-only in practice, replaced whole-file | `fcntl` + threading |
-| `runs/<run_id>/gate_decisions.json` | append-only, replaced whole-file | none |
-| `runs/<run_id>/execution_confirmations.json` | append-only, replaced whole-file | none |
-| `runs/<run_id>/job_state.json` | RMW on pause/resume/stop | `fcntl` + threading |
-| `permissions/permission_grants.json` | create → rewrite all grants; revoke → rewrite | none |
-| `permissions/permission_audit.jsonl` | append-only (JSONL) | none |
-| `../memory/<project_id>/project_memory_records.json` | CRUD → rewrite all records | none |
+| File | Locking | Notes |
+|------|---------|-------|
+| `runs/<run_id>/stage.json` | currently unlocked RMW / atomic overwrite | Concurrent executor/resume paths can overwrite history without a lock. |
+| `runs/<run_id>/artifact_registry.json` | locked RMW for project-scoped hot path | Legacy/manual writes are not locked. |
+| `runs/<run_id>/gate_decisions.json` | mixed: locked RMW for project-scoped path, unlocked RMW for legacy path | Approval records are ordering-sensitive and audit-relevant. |
+| `runs/<run_id>/execution_confirmations.json` | locked RMW | Appended through `ProjectStorage.append_execution_confirmation`. |
+| `runs/<run_id>/job_state.json` | currently unlocked RMW / atomic overwrite | Transitions rewrite the full job object and history. |
+| `runs/<run_id>/background_job_state.json` | currently unlocked RMW / atomic overwrite | Checkpoint append rewrites full state. |
+| `runs/<run_id>/plan.json` | atomic create/overwrite | Mostly create-once plan state, low concurrency risk. |
+| `permissions/permission_grants.json` | currently unlocked RMW / atomic overwrite | Create/revoke reads all grants, mutates, and rewrites. |
+| `permissions/permission_audit.jsonl` | append-only | Append-only JSONL audit log, no RMW. |
+| `../memory/<project_id>/project_memory_records.json` | currently unlocked RMW / atomic overwrite | Save/update/delete reads full records and rewrites. |
+| `../memory/<project_id>/memory_manifest.json` | currently unlocked RMW / atomic overwrite | Collect/confirm rewrite the manifest. |
+| `../memory/<project_id>/project_memory_policy.json` | atomic overwrite | Single boolean policy, low value for SQLite unless memory moves too. |
+| `asset_manifest.json` | mixed: immutable for uploads, atomic overwrite for model promotion | Promotion rewrites status from candidate to confirmed. |
+| `asset_promotion_records.json` | locked RMW | Append-like JSON list, locked in project storage. |
 
-Locking is provided by `json_rmw_lock.py` which wraps `ProjectStorage`
-methods with `fcntl.flock` (POSIX) per-file and per-thread `RLock`.
+Lock categories (from `docs/storage-state-inventory.md`):
+
+- **locked RMW**: `json_rmw_lock.py` (`fcntl.flock` + per-thread `RLock`).
+- **currently unlocked RMW / atomic overwrite**: code reads, mutates, writes
+  with a same-directory temp file for atomicity, but without per-file locks.
+- **mixed**: locked on the project-scoped path, unlocked on the legacy path.
+- **append-only**: atomic per-line append, no full-file RMW.
+- **atomic create/overwrite**: write-once or full replace via temp file.
 
 ## Motivation For Migration
 
-1. **Read-modify-write races**: Five files use explicit locks; three more
-   have no locking (gate decisions, execution confirmations, permission
-   grants). A concurrent request can silently drop writes.
+1. **Unlocked RMW is the norm, not the exception**: Only `artifact_registry`,
+   `asset_promotion_records`, and `execution_confirmations` are locked.
+   `stage.json`, `job_state.json`, `gate_decisions.json` (legacy path),
+   `permission_grants.json`, `project_memory_records.json`, and
+   `memory_manifest.json` all use unlocked RMW with atomic file overwrite.
+   Concurrent requests can silently drop writes.
 
 2. **Whole-file replacement**: Every append or update rewrites the entire
-   file. For `project_memory_records.json` this grows linearly with
-   project history.
+   file. For `project_memory_records.json` and `permission_grants.json` this
+   grows linearly with project history.
 
 3. **No transactional semantics**: A `promote_registered_model_asset` call
    writes three files (promoted_model_asset.json, asset_manifest.json,
