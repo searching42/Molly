@@ -49,25 +49,25 @@ class WorkerSupervisor:
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
     ) -> WorkerHeartbeat:
-        key = (str(project_id or "").strip(), str(run_id or "").strip())
+        project, run = _normalize_ids(project_id, run_id)
+        key = _worker_key(project, run)
         if key in self._workers:
-            existing = self.status(project_id, run_id)
+            existing = self.status(project, run)
             if existing.status == "running":
-                raise ValueError(f"worker already running for {project_id}/{run_id}")
-            # Clean up stale entry before starting a new worker.
+                raise ValueError(f"worker already running for {project}/{run}")
             del self._workers[key]
 
         work_dir = Path(cwd or self._projects_root).resolve()
         run_cwd = str(work_dir)
         heartbeat = WorkerHeartbeat(
-            run_id=run_id,
+            run_id=run,
             pid=-1,
             status="pending",
             started_at=_now_iso(),
             command=list(command),
             cwd=run_cwd,
         )
-        self._write_heartbeat(project_id, run_id, heartbeat)
+        self._write_heartbeat(project, run, heartbeat)
 
         proc = subprocess.Popen(
             command,
@@ -80,12 +80,13 @@ class WorkerSupervisor:
         heartbeat.status = "running"
         heartbeat.updated_at = _now_iso()
         self._workers[key] = proc
-        self._write_heartbeat(project_id, run_id, heartbeat)
+        self._write_heartbeat(project, run, heartbeat)
         return heartbeat
 
     def status(self, project_id: str, run_id: str) -> WorkerHeartbeat:
-        key = (str(project_id or "").strip(), str(run_id or "").strip())
-        cached = self._read_heartbeat(project_id, run_id)
+        project, run = _normalize_ids(project_id, run_id)
+        key = _worker_key(project, run)
+        cached = self._read_heartbeat(project, run)
         proc = self._workers.get(key)
         if proc is None:
             if cached.status in ("running", "pending") and cached.pid > 0:
@@ -93,7 +94,7 @@ class WorkerSupervisor:
                     cached.status = "failed"
                     cached.exit_code = -1
                     cached.updated_at = _now_iso()
-                    self._write_heartbeat(project_id, run_id, cached)
+                    self._write_heartbeat(project, run, cached)
             return cached
 
         returncode = proc.poll()
@@ -101,16 +102,15 @@ class WorkerSupervisor:
             cached.status = "stopped" if returncode == 0 else "failed"
             cached.exit_code = returncode
             cached.updated_at = _now_iso()
-            self._write_heartbeat(project_id, run_id, cached)
-            # Keep the completed proc reference for exit-code inspection but
-            # allow a new start() to replace it.
+            self._write_heartbeat(project, run, cached)
         return cached
 
     def stop(self, project_id: str, run_id: str, *, timeout_sec: int = 10) -> WorkerHeartbeat:
-        key = (str(project_id or "").strip(), str(run_id or "").strip())
+        project, run = _normalize_ids(project_id, run_id)
+        key = _worker_key(project, run)
         proc = self._workers.get(key)
         if proc is None:
-            return self.status(project_id, run_id)
+            return self.status(project, run)
 
         if proc.poll() is None:
             proc.send_signal(signal.SIGTERM)
@@ -120,11 +120,11 @@ class WorkerSupervisor:
                 proc.kill()
                 proc.wait()
 
-        heartbeat = self.status(project_id, run_id)
-        return heartbeat
+        return self.status(project, run)
 
     def list_workers(self, project_id: str) -> list[WorkerHeartbeat]:
-        run_dir = self._run_dir(project_id)
+        project = _safe_component(project_id, "project_id")
+        run_dir = self._projects_root / project / "runs"
         heartbeats: list[WorkerHeartbeat] = []
         if not run_dir.exists():
             return heartbeats
@@ -136,16 +136,14 @@ class WorkerSupervisor:
 
     # ---------------------------------------------------------------- private
 
-    def _run_dir(self, project_id: str) -> Path:
-        return self._projects_root / project_id / "runs"
-
-    def _heartbeat_path(self, project_id: str, run_id: str) -> Path:
-        run_dir = self._run_dir(project_id) / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
+    def _heartbeat_path(self, project_id: str, run_id: str, *, create: bool) -> Path:
+        run_dir = self._projects_root / project_id / "runs" / run_id
+        if create:
+            run_dir.mkdir(parents=True, exist_ok=True)
         return run_dir / "worker_heartbeat.json"
 
     def _write_heartbeat(self, project_id: str, run_id: str, heartbeat: WorkerHeartbeat) -> Path:
-        path = self._heartbeat_path(project_id, run_id)
+        path = self._heartbeat_path(project_id, run_id, create=True)
         path.write_text(
             json.dumps(
                 {
@@ -165,7 +163,7 @@ class WorkerSupervisor:
         return path
 
     def _read_heartbeat(self, project_id: str, run_id: str) -> WorkerHeartbeat:
-        path = self._heartbeat_path(project_id, run_id)
+        path = self._heartbeat_path(project_id, run_id, create=False)
         return self._parse_heartbeat(path)
 
     @staticmethod
@@ -186,6 +184,25 @@ class WorkerSupervisor:
             exit_code=int(data["exit_code"]) if data.get("exit_code") is not None else None,
             updated_at=str(data.get("updated_at") or ""),
         )
+
+
+def _worker_key(project_id: str, run_id: str) -> tuple[str, str]:
+    return (_safe_component(project_id, "project_id"), _safe_component(run_id, "run_id"))
+
+
+def _normalize_ids(project_id: str, run_id: str) -> tuple[str, str]:
+    return _worker_key(project_id, run_id)
+
+
+def _safe_component(value: str, field_name: str) -> str:
+    clean = str(value or "").strip()
+    if not clean:
+        raise ValueError(f"{field_name} must not be empty")
+    if clean in {".", ".."}:
+        raise ValueError(f"{field_name} must not be a reserved name: {clean}")
+    if any(ch in clean for ch in "/\\"):
+        raise ValueError(f"{field_name} must not contain path separators: {clean}")
+    return clean
 
 
 def _process_alive(pid: int) -> bool:
