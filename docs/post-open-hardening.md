@@ -25,10 +25,15 @@ blur into the already-resolved OPEN series.
   routes migrated to explicit hooks in PR #44, PR #45, and PR #46.
 - Resolved: HARDEN-003 project job and project plan route overrides migrated to
   explicit hooks in PR #48 and PR #49.
-- Focus: tighten permission grant expiry, revoke, and scope semantics before
-  expanding production workflows.
-- Engineering priority: permission semantics, actor identity, production
-  profile safety, storage consistency, and worker supervision.
+- Resolved: HARDEN-005 permission grant expiry, revoke, and scope semantics in
+  PR #51 and PR #52.
+- Resolved: HARDEN-006 actor identity resolver and `confirmed_by` alias in
+  PR #53 and PR #54.
+- Resolved: HARDEN-007 production permission profile safety in PR #55.
+- Focus: inventory mutable JSON state and remaining read-modify-write paths
+  before adding storage consistency checks.
+- Engineering priority: storage consistency, state migration design, and worker
+  supervision.
 - Science priority: a small but closed OLED demo with literature provenance,
   model training diagnostics, candidate generation, screening, and report
   artifacts.
@@ -150,9 +155,19 @@ Acceptance:
 
 ## HARDEN-005: Add Permission Grant Expiry, Revoke, And Scope Semantics
 
+- Status: Resolved across PR #51 and PR #52.
 - Add expiry fields to server-side grants.
 - Add revoke semantics and audit entries.
 - Clarify project-scoped versus run-scoped grants.
+
+Evidence:
+
+- PR #51 added grant expiry fields, validation, and expired-grant denial/audit
+  semantics.
+- PR #52 added grant revoke behavior, revoke endpoint coverage, and audit
+  records for revoked grants.
+- Permission decisions now distinguish active server grants, expired grants,
+  revoked grants, denied requests, and legacy fallbacks.
 
 Acceptance:
 
@@ -161,10 +176,21 @@ Acceptance:
 
 ## HARDEN-006: Standardize Actor Identity Across Project Routes
 
+- Status: Resolved across PR #53 and PR #54.
 - Inventory all project routes that accept `actor`, `approved_by`, or similar
   identity fields from clients.
 - Standardize request parsing and audit identity semantics.
 - Prepare for future server/session-owned actor identity.
+
+Evidence:
+
+- PR #53 added the shared actor identity resolver for permission-related write
+  routes, with source metadata such as `header:X-Actor`, `json:actor`,
+  `json:approved_by`, `json:revoked_by`, `form:actor`, and `query:actor`.
+- PR #54 added `confirmed_by` as a JSON/form actor alias so historical project
+  memory payloads audit the confirming actor instead of an empty actor.
+- Permission grant, revoke, upload, and project memory write audit records now
+  persist `actor_source`.
 
 Acceptance:
 
@@ -173,12 +199,26 @@ Acceptance:
 
 ## HARDEN-007: Disable Legacy Client Flags By Default In Production Profile
 
+- Status: Resolved in PR #55.
 - Keep legacy client flags available for local/dev compatibility.
 - Add a production profile where client-declared approval flags are rejected
   unless backed by server grants.
 - Consider guarding `/api/system/route-extensions` behind a read-only
   admin/debug switch in production profile, while keeping it available for
   localhost hardening observability.
+
+Production behavior:
+
+- `AI4S_PROFILE=production` or `AI4S_ENV=production` enables production profile.
+- Legacy client permission flags are disabled in production, including explicit
+  `AI4S_ALLOW_CLIENT_PERMISSION_FLAGS=true` and
+  `AI4S_ALLOW_MEMORY_CLIENT_PERMISSION_FLAGS=true` overrides.
+- Upload and project memory writes must rely on server grants in production.
+- Valid server grants are still accepted in production.
+- `/api/system/route-extensions` returns 404 in production by default.
+- Route-extension inspection can be enabled explicitly with
+  `AI4S_ENABLE_ROUTE_EXTENSION_INSPECTION=true` or app config for admin/debug
+  inspection.
 
 Acceptance:
 
@@ -281,16 +321,19 @@ HARDEN-004 resolved
 -> HARDEN-001 resolved
 -> HARDEN-002 resolved
 -> HARDEN-003 resolved
--> HARDEN-005 permission grant semantics
--> HARDEN-006 actor identity
--> HARDEN-007 production profile
--> HARDEN-008 / HARDEN-009 / HARDEN-010
+-> HARDEN-005 resolved
+-> HARDEN-006 resolved
+-> HARDEN-007 resolved
+-> HARDEN-008 mutable JSON inventory
+-> HARDEN-009 storage consistency checker
+-> HARDEN-010 SQLite migration design note
 -> HARDEN-011 / HARDEN-012 / HARDEN-013 / HARDEN-014
 ```
 
-The route-extension cleanup is now behind the e2e and inspection safety nets.
-The next hardening phase should focus on permission semantics before adding
-remote workers or broader science workflow integrations.
+The route-extension cleanup and permission hardening layers are now behind the
+e2e safety net. The next hardening phase should focus on storage inventory and
+consistency before adding remote workers or broader science workflow
+integrations.
 
 ## Science Track
 
@@ -325,6 +368,11 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #48: completed. Migrate project job route overrides to explicit hook.
 - PR #49: completed. Migrate project plan route overrides to explicit hook.
 - PR #50: completed. Mark HARDEN-003 resolved and start permission hardening.
-- PR #51: add permission grant expiry semantics.
-- PR #52: add permission grant revoke and audit records.
-- PR #53: standardize actor identity resolver.
+- PR #51: completed. Add permission grant expiry semantics.
+- PR #52: completed. Add permission grant revoke and audit records.
+- PR #53: completed. Standardize actor identity resolver.
+- PR #54: completed. Add `confirmed_by` as an actor resolver alias.
+- PR #55: completed. Add production permission profile safety.
+- PR #56: mark permission hardening resolved.
+- PR #57: inventory mutable JSON state and RMW paths.
+- PR #58: add storage consistency checker.
