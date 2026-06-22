@@ -5,7 +5,7 @@ from io import BytesIO
 
 from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.app import create_app
-from ai4s_agent.memory import PermissionPolicy
+from ai4s_agent.memory import PermissionLevel, PermissionPolicy
 from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
 
 
@@ -239,3 +239,91 @@ def test_permission_grant_requires_actor_and_confirmation(tmp_path) -> None:
         json={"action": "upload_dataset", "actor": "alice"},
     )
     assert missing_confirmation.status_code == 403
+
+
+def test_revoke_grant_disables_active_grant_and_denies_permission(tmp_path) -> None:
+    store = ServerPermissionStore(workspace_dir=tmp_path)
+    policy = PermissionPolicy()
+    policy.set_policy("upload_dataset", PermissionLevel.PROJECT_APPROVED)
+
+    grant = store.create_grant("proj-revoke", "upload_dataset", actor="alice", reason="test revoke")
+    assert grant["active"] is True
+
+    # Active grant authorizes
+    decision = decide_server_permission(store, policy, "upload_dataset", project_id="proj-revoke", actor="alice")
+    assert decision["allowed"] is True
+    assert decision["reason"] == "SERVER_GRANT"
+    assert decision["grant_id"] == grant["grant_id"]
+
+    # Revoke
+    revoked = store.revoke_grant("proj-revoke", grant["grant_id"], revoked_by="admin", revoke_reason="mistaken grant")
+    assert revoked["active"] is False
+    assert revoked["revoked_at"]
+    assert revoked["revoked_by"] == "admin"
+    assert revoked["revoke_reason"] == "mistaken grant"
+
+    # Revoked grant no longer authorizes
+    decision = decide_server_permission(store, policy, "upload_dataset", project_id="proj-revoke", actor="alice")
+    assert decision["allowed"] is False
+    assert decision["reason"] == "REVOKED_GRANT"
+    assert decision["grant_id"] == grant["grant_id"]
+
+    # Audit trail includes SERVER_GRANT_REVOKED
+    audit = store.read_audit("proj-revoke")
+    audit_reasons = [entry["reason"] for entry in audit]
+    assert "SERVER_GRANT_CREATED" in audit_reasons
+    assert "SERVER_GRANT_REVOKED" in audit_reasons
+
+
+def test_revoked_grant_blocks_upload_and_memory_write(tmp_path) -> None:
+    store = ServerPermissionStore(workspace_dir=tmp_path)
+    policy = PermissionPolicy()
+    for action in ("upload_dataset", "project_memory_write"):
+        policy.set_policy(action, PermissionLevel.PROJECT_APPROVED)
+
+    # Create grants
+    upload_grant = store.create_grant("proj-block", "upload_dataset", actor="alice")
+    mem_grant = store.create_grant("proj-block", "project_memory_write", actor="alice")
+
+    # Revoke upload grant only
+    store.revoke_grant("proj-block", upload_grant["grant_id"], revoked_by="admin")
+
+    # Upload is denied with REVOKED_GRANT
+    decision = decide_server_permission(store, policy, "upload_dataset", project_id="proj-block", actor="alice")
+    assert decision["allowed"] is False
+    assert decision["reason"] == "REVOKED_GRANT"
+
+    # Memory write still active (not revoked)
+    decision = decide_server_permission(store, policy, "project_memory_write", project_id="proj-block", actor="alice")
+    assert decision["allowed"] is True
+    assert decision["reason"] == "SERVER_GRANT"
+    assert decision["grant_id"] == mem_grant["grant_id"]
+
+
+def test_revoke_endpoint_returns_400_for_missing_grant(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    resp = client.delete(
+        "/api/projects/proj-revoke/permissions/grants/nonexistent-grant",
+        json={"actor": "admin"},
+    )
+    assert resp.status_code == 400
+
+
+def test_revoke_endpoint_requires_actor(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    # First create a grant
+    resp = client.post(
+        "/api/projects/proj-revoke/permissions/grants",
+        json={"action": "upload_dataset", "actor": "alice", "confirmed": True},
+    )
+    grant_id = resp.json["grant"]["grant_id"]
+
+    # Try to revoke without actor
+    resp = client.delete(
+        f"/api/projects/proj-revoke/permissions/grants/{grant_id}",
+        json={},
+    )
+    assert resp.status_code == 403
+    assert "actor required" in resp.json["error"].lower() or "required" in resp.json["error"].lower()
