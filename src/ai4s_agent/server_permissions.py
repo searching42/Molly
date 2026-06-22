@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from flask import jsonify, request
 
 from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.memory import PermissionLevel, PermissionPolicy
 from ai4s_agent.storage import ProjectStorage
+
+if TYPE_CHECKING:
+    from ai4s_agent.api_route_extensions import RouteExtensionContext
 
 
 class ServerPermissionStore:
@@ -202,40 +205,48 @@ def decide_server_permission(
 
 
 def install_server_permission_routes() -> None:
+    """Server permission routes are installed by the explicit route hook."""
+
+
+def apply_server_permission_routes(context: "RouteExtensionContext") -> None:
     import ai4s_agent.api as api_module
 
-    original_register_routes = api_module.register_routes
-    if getattr(original_register_routes, "_server_permission_routes", False):
-        return
-
-    def register_routes_with_server_permissions(app: Any, base_runs_dir: Path | None = None, workspace_dir: Path | None = None) -> None:
-        original_register_routes(app, base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
-        workspace = api_module._workspace_from_config(base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
-        store = ServerPermissionStore(workspace_dir=workspace)
-        _add_permission_routes(app, store=store)
-
-    register_routes_with_server_permissions._server_permission_routes = True  # type: ignore[attr-defined]
-    api_module.register_routes = register_routes_with_server_permissions  # type: ignore[method-assign]
+    workspace = api_module._workspace_from_config(
+        base_runs_dir=context.base_runs_dir,
+        workspace_dir=context.workspace_dir,
+    )
+    store = ServerPermissionStore(workspace_dir=workspace)
+    _add_permission_routes(context, store=store)
 
 
-def _add_permission_routes(app: Any, *, store: ServerPermissionStore) -> None:
-    app.add_url_rule(
-        "/api/projects/<project_id>/permissions/grants",
+def _add_permission_routes(
+    context: "RouteExtensionContext",
+    *,
+    store: ServerPermissionStore,
+) -> None:
+    context.route_overrides.apply_new_route(
+        context.app,
+        extension_id="server_permission_routes",
         endpoint="create_permission_grant",
+        rule="/api/projects/<project_id>/permissions/grants",
         view_func=_create_permission_grant_view(store=store),
-        methods=["POST"],
+        methods=("POST",),
     )
-    app.add_url_rule(
-        "/api/projects/<project_id>/permissions/grants",
+    context.route_overrides.apply_new_route(
+        context.app,
+        extension_id="server_permission_routes",
         endpoint="list_permission_grants",
+        rule="/api/projects/<project_id>/permissions/grants",
         view_func=_list_permission_grants_view(store=store),
-        methods=["GET"],
+        methods=("GET",),
     )
-    app.add_url_rule(
-        "/api/projects/<project_id>/permissions/audit",
+    context.route_overrides.apply_new_route(
+        context.app,
+        extension_id="server_permission_routes",
         endpoint="list_permission_audit",
+        rule="/api/projects/<project_id>/permissions/audit",
         view_func=_list_permission_audit_view(store=store),
-        methods=["GET"],
+        methods=("GET",),
     )
 
 

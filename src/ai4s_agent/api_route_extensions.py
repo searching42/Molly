@@ -83,6 +83,7 @@ class RouteOverrideRegistry:
         self._route_overrides: list[dict[str, object]] = []
         self._new_routes: list[dict[str, object]] = []
         self._applied_route_overrides: list[dict[str, object]] = []
+        self._applied_new_routes: list[dict[str, object]] = []
 
     @classmethod
     def from_specs(cls, specs: tuple[RouteExtensionSpec, ...]) -> "RouteOverrideRegistry":
@@ -156,11 +157,42 @@ class RouteOverrideRegistry:
             }
         )
 
+    def apply_new_route(
+        self,
+        app: Any,
+        *,
+        extension_id: str,
+        endpoint: str,
+        rule: str,
+        view_func: Any,
+        methods: tuple[str, ...],
+    ) -> None:
+        if endpoint in app.view_functions:
+            raise RuntimeError(
+                f"route endpoint already registered before explicit hook: {endpoint}"
+            )
+        normalized_methods = tuple(method.upper() for method in methods)
+        app.add_url_rule(
+            rule,
+            endpoint=endpoint,
+            view_func=view_func,
+            methods=list(normalized_methods),
+        )
+        self._applied_new_routes.append(
+            {
+                "extension_id": extension_id,
+                "endpoint": endpoint,
+                "rule": rule,
+                "methods": list(normalized_methods),
+            }
+        )
+
     def as_dict(self) -> dict[str, object]:
         return {
             "route_overrides": [dict(item) for item in self._route_overrides],
             "new_routes": [dict(item) for item in self._new_routes],
             "applied_route_overrides": [dict(item) for item in self._applied_route_overrides],
+            "applied_new_routes": [dict(item) for item in self._applied_new_routes],
         }
 
 
@@ -183,10 +215,12 @@ def route_extension_context(
 def apply_explicit_route_hooks(context: RouteExtensionContext) -> None:
     """Apply route extensions that have migrated from monkeypatches to hooks."""
 
+    from ai4s_agent.server_permissions import apply_server_permission_routes
     from ai4s_agent.upload_assets import apply_immutable_upload_assets_route_override
 
     hooks: dict[str, Callable[[RouteExtensionContext], None]] = {
         "immutable_upload_assets": apply_immutable_upload_assets_route_override,
+        "server_permission_routes": apply_server_permission_routes,
     }
     for spec in api_route_extension_specs():
         if not spec.explicit_hook_active:
@@ -333,7 +367,8 @@ ROUTE_EXTENSION_SPECS: tuple[RouteExtensionSpec, ...] = (
         installer_name="install_server_permission_routes",
         module="ai4s_agent.server_permissions",
         summary="Add server-side permission grant and audit routes.",
-        mechanism="register_routes_wrapper",
+        mechanism="explicit_route_registration",
+        explicit_hook_active=True,
         depends_on=("immutable_upload_assets",),
         declared_new_routes=(
             RouteRegistrationDeclaration(
