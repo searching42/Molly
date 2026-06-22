@@ -229,6 +229,8 @@ Acceptance:
 
 ## HARDEN-008: Inventory Mutable JSON State And Remaining RMW Paths
 
+- Status: Covered by PR #57 inventory in `docs/storage-state-inventory.md`.
+
 Inventory files such as:
 
 - `job_state.json`
@@ -248,6 +250,8 @@ Acceptance:
 - Each mutable file is classified as locked RMW, append-only, immutable, or
   migration candidate.
 - Unlocked RMW paths are tracked with follow-up items.
+- The inventory distinguishes project-scoped storage from legacy compatibility
+  paths where lock coverage differs.
 
 ## HARDEN-009: Add Storage Consistency Checker
 
