@@ -183,6 +183,34 @@ def test_supervisor_status_detects_stale_pid_as_failed(tmp_path: Path) -> None:
     assert status.exit_code == -1
 
 
+def test_supervisor_allows_same_run_id_in_different_projects(tmp_path: Path) -> None:
+    supervisor = WorkerSupervisor(projects_root=tmp_path)
+
+    first = supervisor.start(
+        project_id="proj-a",
+        run_id="run-shared",
+        command=_sleep_command(30),
+        cwd=tmp_path,
+    )
+    second = supervisor.start(
+        project_id="proj-b",
+        run_id="run-shared",
+        command=_sleep_command(30),
+        cwd=tmp_path,
+    )
+
+    assert first.status == "running"
+    assert second.status == "running"
+    assert first.pid != second.pid
+
+    supervisor.stop("proj-a", "run-shared", timeout_sec=1)
+    supervisor.stop("proj-b", "run-shared", timeout_sec=1)
+
+    # After stopping proj-a, proj-b worker should still be present on disk
+    hb_b = tmp_path / "proj-b" / "runs" / "run-shared" / "worker_heartbeat.json"
+    assert hb_b.exists()
+
+
 def test_process_alive_helper() -> None:
     assert _process_alive(-1) is False
     assert _process_alive(99999) is False  # unlikely to exist

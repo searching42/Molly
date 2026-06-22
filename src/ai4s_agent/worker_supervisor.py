@@ -36,7 +36,7 @@ class WorkerSupervisor:
 
     def __init__(self, projects_root: Path) -> None:
         self._projects_root = Path(projects_root).resolve()
-        self._workers: dict[str, subprocess.Popen[Any]] = {}
+        self._workers: dict[tuple[str, str], subprocess.Popen[Any]] = {}
 
     # ------------------------------------------------------------------ public
 
@@ -49,12 +49,13 @@ class WorkerSupervisor:
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
     ) -> WorkerHeartbeat:
-        if run_id in self._workers:
+        key = (str(project_id or "").strip(), str(run_id or "").strip())
+        if key in self._workers:
             existing = self.status(project_id, run_id)
             if existing.status == "running":
-                raise ValueError(f"worker already running for run_id: {run_id}")
+                raise ValueError(f"worker already running for {project_id}/{run_id}")
             # Clean up stale entry before starting a new worker.
-            del self._workers[run_id]
+            del self._workers[key]
 
         work_dir = Path(cwd or self._projects_root).resolve()
         run_cwd = str(work_dir)
@@ -78,13 +79,14 @@ class WorkerSupervisor:
         heartbeat.pid = proc.pid
         heartbeat.status = "running"
         heartbeat.updated_at = _now_iso()
-        self._workers[run_id] = proc
+        self._workers[key] = proc
         self._write_heartbeat(project_id, run_id, heartbeat)
         return heartbeat
 
     def status(self, project_id: str, run_id: str) -> WorkerHeartbeat:
+        key = (str(project_id or "").strip(), str(run_id or "").strip())
         cached = self._read_heartbeat(project_id, run_id)
-        proc = self._workers.get(run_id)
+        proc = self._workers.get(key)
         if proc is None:
             if cached.status in ("running", "pending") and cached.pid > 0:
                 if not _process_alive(cached.pid):
@@ -105,7 +107,8 @@ class WorkerSupervisor:
         return cached
 
     def stop(self, project_id: str, run_id: str, *, timeout_sec: int = 10) -> WorkerHeartbeat:
-        proc = self._workers.get(run_id)
+        key = (str(project_id or "").strip(), str(run_id or "").strip())
+        proc = self._workers.get(key)
         if proc is None:
             return self.status(project_id, run_id)
 

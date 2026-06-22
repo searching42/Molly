@@ -293,16 +293,6 @@ Acceptance:
   without real long-running tasks.
 - No changes to RunPlanExecutor or remote worker code.
 
-## HARDEN-011: Add Local Process Worker Supervisor
-
-- Decouple long-running execution from API request lifetime.
-- Add a local supervisor that starts, monitors, and terminates worker processes.
-
-Acceptance:
-
-- API creates jobs; worker process executes callbacks and writes terminal state.
-- Supervisor restart behavior is tested at control-plane level.
-
 ## HARDEN-012: Add Worker Queue Polling Loop
 
 - Add queue polling around project-scoped jobs.
