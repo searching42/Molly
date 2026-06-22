@@ -173,3 +173,15 @@ def test_production_profile_allows_route_extension_inspection_when_debug_enabled
 
     assert response.status_code == 200
     assert response.json["ok"] is True
+
+
+def test_production_profile_allows_route_extension_inspection_when_env_enabled(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("AI4S_PROFILE", "production")
+    monkeypatch.setenv("AI4S_ENABLE_ROUTE_EXTENSION_INSPECTION", "true")
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    response = client.get("/api/system/route-extensions")
+
+    assert response.status_code == 200
+    assert response.json["ok"] is True

@@ -43,4 +43,7 @@ def legacy_client_permission_flags_enabled(app: Any, key: str, *, default: bool)
 def route_extension_inspection_enabled(app: Any) -> bool:
     if "AI4S_ENABLE_ROUTE_EXTENSION_INSPECTION" in app.config:
         return truthy(app.config.get("AI4S_ENABLE_ROUTE_EXTENSION_INSPECTION"))
+    env_value = os.environ.get("AI4S_ENABLE_ROUTE_EXTENSION_INSPECTION")
+    if env_value is not None:
+        return truthy(env_value)
     return not production_profile_enabled(app)
