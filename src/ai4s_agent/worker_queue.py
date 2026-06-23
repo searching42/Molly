@@ -301,9 +301,11 @@ def _read_json_object(path: Path, *, default: dict[str, Any]) -> dict[str, Any]:
         return dict(default)
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return dict(default)
-    return loaded if isinstance(loaded, dict) else dict(default)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} is not valid JSON") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path} JSON root must be an object")
+    return loaded
 
 
 def _records(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
@@ -338,7 +340,7 @@ def _next_job_id(project_id: str, run_id: str, jobs: list[dict[str, Any]]) -> st
 
 def _clean_segment(value: str, label: str) -> str:
     clean = str(value or "").strip()
-    if not clean or clean in {".", ".."} or Path(clean).name != clean:
+    if not clean or clean in {".", ".."} or "/" in clean or "\\" in clean or Path(clean).name != clean:
         raise ValueError(f"{label} must be a single safe path segment")
     return clean
 

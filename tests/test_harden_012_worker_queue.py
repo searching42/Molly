@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
 
 
@@ -130,3 +132,47 @@ def test_worker_queue_recovers_stale_lease_and_requeues_job(tmp_path) -> None:
     assert reacquired["job_id"] == job["job_id"]
     assert reacquired["lease_id"] != acquired["lease_id"]
     assert reacquired["worker_id"] == "worker-b"
+
+
+def test_worker_queue_rejects_malformed_queue_json(tmp_path) -> None:
+    store = JsonWorkerQueueStore(tmp_path)
+    store.queue_path.write_text("{bad json", encoding="utf-8")
+    queue = WorkerQueue(store)
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        queue.enqueue("proj-a", "run-a", {"task_id": "train"})
+
+    assert store.queue_path.read_text(encoding="utf-8") == "{bad json"
+
+
+def test_worker_queue_rejects_non_object_queue_json(tmp_path) -> None:
+    store = JsonWorkerQueueStore(tmp_path)
+    store.queue_path.write_text("[]", encoding="utf-8")
+    queue = WorkerQueue(store)
+
+    with pytest.raises(ValueError, match="JSON root must be an object"):
+        queue.list_jobs()
+
+    assert store.queue_path.read_text(encoding="utf-8") == "[]"
+
+
+def test_worker_queue_rejects_malformed_lease_json(tmp_path) -> None:
+    store = JsonWorkerQueueStore(tmp_path)
+    queue = WorkerQueue(store)
+    queue.enqueue("proj-a", "run-a", {"task_id": "train"})
+    store.leases_path.write_text("{bad json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        queue.acquire("worker-a")
+
+    assert store.leases_path.read_text(encoding="utf-8") == "{bad json"
+
+
+def test_worker_queue_rejects_backslash_path_segments(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+
+    with pytest.raises(ValueError, match="project_id must be a single safe path segment"):
+        queue.enqueue("proj\\a", "run-a", {"task_id": "train"})
+
+    with pytest.raises(ValueError, match="worker_id must be a single safe path segment"):
+        queue.acquire("worker\\a")
