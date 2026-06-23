@@ -55,6 +55,8 @@ behavior.
 | `model_registration_record.json` | `ProjectStorage.register_model_asset` | immutable artifact per model version | no | Written once in versioned model asset directory. |
 | `project.json` | project routes | atomic create/overwrite | maybe | Project metadata is low volume but useful for future project index/session model. |
 | worker registry JSON | `remote_worker.py` | atomic overwrite | yes | Remote worker registration/state needs leases, heartbeats, and queryable worker status if remote execution expands. |
+| `worker_queue.json` | `JsonWorkerQueueStore` | locked RMW / atomic overwrite | yes | HARDEN-012 skeleton queue state. Jobs are acquired deterministically and mutated under `.worker_queue.lock`. |
+| `worker_leases.json` | `JsonWorkerQueueStore` | locked RMW / atomic overwrite | yes | HARDEN-012 skeleton lease state. Active, stale, completed, and failed leases are mutated with the queue lock. |
 
 ## Locked RMW
 
@@ -173,6 +175,8 @@ Highest value candidates:
 - `permission_grants.json`
 - gate decision index from `gate_decisions.json`
 - worker registry / lease state
+- `worker_queue.json`
+- `worker_leases.json`
 
 Medium value candidates:
 
@@ -215,6 +219,8 @@ The storage consistency checker should initially validate:
   asset directories.
 - job/background state status transitions, leases, heartbeats, cancellation
   fields, and references to missing runs.
+- worker queue job ordering, active lease references, stale lease recovery, and
+  cancellation flags.
 
 ## Open Questions
 

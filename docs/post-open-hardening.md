@@ -297,51 +297,65 @@ Evidence:
   and read-only status semantics.
 - Verification from PR #63: full suite passed with `615 passed`.
 
-## HARDEN-012: Add Worker Queue Polling Loop — Planned
+## HARDEN-012: Add Worker Queue Polling Loop — Started
 
-- Add queue polling around project-scoped jobs so that multiple queued jobs
-  are acquired in a deterministic order and executed by supervised workers.
+- Status: Started by PR #65 with a JSON-backed worker queue skeleton.
+- Add queue polling around project-scoped jobs so that multiple queued jobs are
+  acquired in a deterministic order and later executed by supervised workers.
 - Keep lease acquisition, heartbeat update, cancellation, and stale lease
   recovery semantics without introducing remote workers.
+- PR #65 intentionally does not connect the queue to `WorkerSupervisor`,
+  `RunPlanExecutor`, real training jobs, or remote workers.
 
-Design outline (do not implement yet):
+Skeleton evidence:
 
-1. **Queued job schema** — A JSON-serializable record under the project run
-   directory (`queued_jobs.json` or per-job `job_request.json`) that includes
-   `run_id`, `command`, `cwd`, `max_retries`, `timeout_sec`, and optional
-   `depends_on` for ordering constraints.
+- `src/ai4s_agent/worker_queue.py` — `WorkerQueue` and
+  `JsonWorkerQueueStore`.
+- `docs/worker-queue-skeleton.md` — API, file layout, and out-of-scope
+  integration points.
+- `tests/test_harden_012_worker_queue.py` — queue ordering, lease acquisition,
+  heartbeat, queued/running cancellation, terminal state, and stale lease
+  recovery.
 
-2. **Lease acquisition** — A worker claims a job by writing a lease file
-   (`job_lease.json`) with `worker_run_id`, `acquired_at`, and
-   `heartbeat_deadline`.  Acquisition must be atomic (write + existence
-   check, no read-then-write gap).
+Implemented skeleton semantics:
 
-3. **Heartbeat update** — The worker periodically updates `heartbeat_deadline`
-   in the lease file.  The supervisor considers a lease stale if
-   `now > heartbeat_deadline + grace_period` and the worker process is no
-   longer alive.
+1. **Queued job schema** — A JSON-serializable record in `worker_queue.json`
+   with `job_id`, `project_id`, `run_id`, `task`, `status`, `created_at`,
+   `updated_at`, lease fields, cancellation state, attempts, and error state.
 
-4. **Cancellation** — A `cancel_requested` flag in the job request, checked
-   by the worker before each unit of work.  The supervisor may also send
-   SIGTERM/SIGKILL through `WorkerSupervisor.stop()`.
+2. **Lease acquisition** — `WorkerQueue.acquire(worker_id)` claims the oldest
+   non-cancelled queued job by `(created_at, job_id)`, writes a lease record to
+   `worker_leases.json`, and updates the job to `running` under
+   `.worker_queue.lock`.
 
-5. **Stale lease recovery** — When the supervisor detects a stale lease, it
-   marks the original job as `failed` with reason `stale_lease`, then
-   re-queues it if `retries < max_retries`.  Only one supervisor instance
-   should perform recovery at a time (per-project lock or leader election).
+3. **Heartbeat update** — `WorkerQueue.heartbeat(lease_id)` refreshes the lease
+   heartbeat and expiry timestamp while keeping the job in `running` state.
 
-6. **Deterministic acquisition order** — Jobs are acquired in order of
-   `priority` (descending) then `created_at` (ascending).  Ties are broken
-   by `run_id`.
+4. **Cancellation** — Cancelling a queued job moves it to `cancelled` so it is
+   skipped by acquire.  Cancelling a running job leaves the lease active but
+   exposes `cancellation_requested=true` for a future polling worker.
+
+5. **Stale lease recovery** — Expired active leases can be marked `stale`, and
+   their running jobs are requeued for a later worker acquisition.
+
+Future integration outline:
+
+1. Connect queue acquisition to the local worker supervisor without changing
+   task execution semantics.
+
+2. Add a polling loop that heartbeats active leases and observes
+   `cancellation_requested`.
+
+3. Add remote worker contract tests after the local polling loop is stable.
 
 Acceptance:
 
-- Queued job schema is documented as a Pydantic model or dataclass.
-- Lease acquisition, heartbeat, cancellation, and stale lease recovery
-  semantics are defined in prose (this section) before implementation
-  begins.
-- Tests (future PR) cover: acquire → heartbeat → complete, cancel before
-  start, stale lease detection and recovery, deterministic ordering.
+- Queue state is persisted in `worker_queue.json`; lease state is persisted in
+  `worker_leases.json`.
+- Queue and lease mutations use `.worker_queue.lock` and atomic JSON writes.
+- Tests cover deterministic ordering, acquire → heartbeat → complete/fail,
+  cancel before start, running cancellation visibility, and stale lease
+  recovery.
 
 ## HARDEN-013: Add Remote Worker Contract Test
 
