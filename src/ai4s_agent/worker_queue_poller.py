@@ -24,7 +24,7 @@ class WorkerQueuePoller:
     """Control-plane polling skeleton for worker queue leases.
 
     The poller intentionally does not execute queue tasks.  It only coordinates
-    recover -> acquire -> heartbeat -> cancellation visibility around
+    recover -> cancellation visibility / heartbeat active lease -> acquire around
     `WorkerQueue` so a later PR can attach a real worker runner behind the same
     state transitions.
     """

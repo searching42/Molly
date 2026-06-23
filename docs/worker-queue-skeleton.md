@@ -57,8 +57,9 @@ result = poller.poll_once()
 `WorkerQueuePoller` runs the control-plane sequence:
 
 1. recover stale leases
-2. heartbeat an existing active lease for the worker
-3. surface `cancellation_requested` for a running job
+2. if the worker has an active lease, surface `cancellation_requested` before
+   refreshing the lease
+3. heartbeat the active lease only when cancellation is not requested
 4. acquire the next queued job if no active lease exists
 
 `poll(max_iterations=N)` repeats this bounded sequence and returns the
