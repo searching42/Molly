@@ -197,6 +197,9 @@ class WorkerQueue:
         lease = _find_by_id(leases, "lease_id", clean_lease)
         return dict(lease) if lease is not None else None
 
+    def list_leases(self) -> list[dict[str, Any]]:
+        return [dict(lease) for lease in _records(self.store.read_leases(), "leases")]
+
     def list_jobs(self) -> list[dict[str, Any]]:
         return [dict(job) for job in _records(self.store.read_queue(), "jobs")]
 

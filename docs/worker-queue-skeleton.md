@@ -1,8 +1,8 @@
 # Worker Queue Skeleton
 
-PR #65 starts HARDEN-012 with a read/write control-plane queue only. It does
-not execute tasks, start worker processes, call `RunPlanExecutor`, or connect to
-real training jobs.
+PR #65 starts HARDEN-012 with a read/write control-plane queue. PR #67 adds a
+bounded polling-loop control skeleton. Neither PR executes tasks, starts worker
+processes, calls `RunPlanExecutor`, or connects to real training jobs.
 
 Python API:
 
@@ -42,7 +42,27 @@ Implemented operations:
 - `recover_stale_leases()`
 - `status(job_id)`
 - `lease_status(lease_id)`
+- `list_leases()`
 - `list_jobs()`
+
+Polling skeleton:
+
+```python
+from ai4s_agent.worker_queue_poller import WorkerQueuePoller
+
+poller = WorkerQueuePoller(queue, worker_id="worker-a")
+result = poller.poll_once()
+```
+
+`WorkerQueuePoller` runs the control-plane sequence:
+
+1. recover stale leases
+2. heartbeat an existing active lease for the worker
+3. surface `cancellation_requested` for a running job
+4. acquire the next queued job if no active lease exists
+
+`poll(max_iterations=N)` repeats this bounded sequence and returns the
+per-iteration results. It does not call any task runner.
 
 Skeleton behavior:
 
@@ -57,7 +77,6 @@ Skeleton behavior:
 
 Out of scope:
 
-- Worker polling loop
 - Process supervision integration
 - Remote worker contracts
 - Real model training or adapter execution
