@@ -297,21 +297,26 @@ Evidence:
   and read-only status semantics.
 - Verification from PR #63: full suite passed with `615 passed`.
 
-## HARDEN-012: Add Worker Queue Polling Loop — Started
+## HARDEN-012: Add Worker Queue Polling Loop — Control-Plane Resolved
 
-- Status: Started by PR #65 with a JSON-backed worker queue skeleton; extended
-  by PR #67 with a bounded polling-loop control skeleton.
+- Status: Control-plane resolved across PR #65, PR #66, PR #67, and PR #68.
 - Add queue polling around project-scoped jobs so that multiple queued jobs are
   acquired in a deterministic order and later executed by supervised workers.
 - Keep lease acquisition, heartbeat update, cancellation, and stale lease
   recovery semantics without introducing remote workers.
-- PR #65 and PR #67 intentionally do not connect the queue to
-  `WorkerSupervisor`, `RunPlanExecutor`, real training jobs, or remote workers.
+- HARDEN-012 intentionally does not include real task execution.  It does not
+  connect the queue to `WorkerSupervisor`, `RunPlanExecutor`, real training
+  jobs, remote workers, or SQLite.
 
 Skeleton evidence:
 
-- `src/ai4s_agent/worker_queue.py` — `WorkerQueue` and
+- PR #65: `src/ai4s_agent/worker_queue.py` — `WorkerQueue` and
   `JsonWorkerQueueStore`.
+- PR #66: queue/lease record validation plus `storage_consistency.py` coverage
+  for `worker_queue.json` and `worker_leases.json`.
+- PR #67: `src/ai4s_agent/worker_queue_poller.py` — bounded polling skeleton
+  for recover/acquire/heartbeat/cancellation visibility.
+- PR #68: cancellation and stale recovery control transition tests.
 - `docs/worker-queue-skeleton.md` — API, file layout, and out-of-scope
   integration points.
 - `tests/test_harden_012_worker_queue.py` — queue ordering, lease acquisition,
@@ -357,15 +362,33 @@ Implemented poller skeleton:
 4. `WorkerQueuePoller.poll(max_iterations=N)` runs a bounded loop for tests and
    future supervisors without starting any process or executing any task.
 
-Future integration outline:
+Next phase: runner binding plan:
 
-1. Connect queue acquisition to the local worker supervisor without changing
-   task execution semantics.
+1. **WorkerTaskRunner protocol** — Define a minimal runner interface that can
+   receive an acquired job and active lease, return terminal status, and expose
+   cancellation-aware heartbeat behavior without depending on
+   `RunPlanExecutor`.
 
-2. Attach a task runner behind active leases while preserving cancellation and
-   heartbeat semantics.
+2. **Fake runner tests** — Add deterministic tests for success, failure,
+   cancellation request handling, and heartbeat cadence using an in-process fake
+   runner only.
 
-3. Add remote worker contract tests after the local polling loop is stable.
+3. **Poller-to-runner binding** — Bind `WorkerQueuePoller` to the
+   `WorkerTaskRunner` protocol behind an explicit opt-in path while preserving
+   the current control-plane-only behavior by default.
+
+4. **WorkerSupervisorTaskRunner adapter** — Add a local-process adapter that
+   starts and observes supervised processes through `WorkerSupervisor` only
+   after the fake runner contract is stable.
+
+5. **RunPlanExecutor opt-in integration** — Add an explicit opt-in bridge from
+   run-plan jobs to the worker queue after the local adapter is covered by
+   tests.
+
+Do not jump directly from HARDEN-012 to remote worker support or SQLite
+migration.  Remote workers should wait until the local runner binding is stable;
+SQLite should wait until the file-backed queue semantics and consistency
+checker coverage remain green under runner integration.
 
 Acceptance:
 
