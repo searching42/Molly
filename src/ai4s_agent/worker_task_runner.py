@@ -154,6 +154,8 @@ def _allowed_cwd_root(value: str | Path | None) -> Path | None:
 def _task_cwd(task: dict[str, Any], *, allowed_root: Path | None) -> Path | None:
     cwd = str(task.get("cwd") or "").strip()
     if not cwd:
+        if allowed_root is not None:
+            raise ValueError("job task cwd required when allowed_cwd_root is configured")
         return None
     path = Path(cwd).expanduser().resolve()
     if not path.exists():

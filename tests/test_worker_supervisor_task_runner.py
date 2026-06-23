@@ -211,3 +211,30 @@ def test_worker_supervisor_task_runner_rejects_missing_cwd(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="job task cwd must exist"):
         runner.start(job)
+
+
+def test_worker_supervisor_task_runner_rejects_empty_cwd_when_allowed_root_configured(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runner = WorkerSupervisorTaskRunner(
+        supervisor=WorkerSupervisor(projects_root=tmp_path),
+        allowed_cwd_root=workspace,
+    )
+    job = _job(tmp_path, "run-empty-cwd", _exit_command(0), cwd="")
+
+    with pytest.raises(ValueError, match="job task cwd required when allowed_cwd_root is configured"):
+        runner.start(job)
+
+
+def test_worker_supervisor_task_runner_rejects_omitted_cwd_when_allowed_root_configured(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runner = WorkerSupervisorTaskRunner(
+        supervisor=WorkerSupervisor(projects_root=tmp_path),
+        allowed_cwd_root=workspace,
+    )
+    job = _job(tmp_path, "run-omitted-cwd", _exit_command(0), cwd=workspace)
+    del job["task"]["cwd"]
+
+    with pytest.raises(ValueError, match="job task cwd required when allowed_cwd_root is configured"):
+        runner.start(job)
