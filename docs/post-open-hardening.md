@@ -558,3 +558,5 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #83: add internal run-plan queue CLI without API route wiring.
 - PR #84: add input_artifacts/task_options JSON support to the internal
   run-plan queue CLI.
+- PR #85: add low-risk run-plan queue CLI fixture demo without API route
+  wiring.

@@ -240,6 +240,24 @@ object roots. It does not add Flask/API routes, does not change
 `/api/run-plan/execute`, does not connect remote workers, and does not change
 storage.
 
+Low-risk fixture demo:
+
+```bash
+python -m ai4s_agent.run_plan_queue_cli \
+  --workspace /tmp/ai4s-demo-workspace \
+  --queue-dir /tmp/ai4s-demo-queue \
+  --project-id demo-project \
+  --run-plan-json tests/fixtures/run_plan_queue_demo/run_plan.json \
+  --input-artifacts-json tests/fixtures/run_plan_queue_demo/input_artifacts.json \
+  --task-options-json tests/fixtures/run_plan_queue_demo/task_options.json \
+  --max-iterations 10
+```
+
+The fixture files are intentionally command-free and low risk. The automated
+demo test invokes the same CLI `main(...)` path with a fake executor, so it
+proves the documented shape and JSON summary contract without running real
+training or adding API routes.
+
 Run-plan executor task runner:
 
 ```python
