@@ -56,7 +56,7 @@ class WorkerQueuePoller:
             if job is not None and bool(job.get("cancellation_requested")):
                 if self.runner is not None:
                     result = self.runner.cancel(job)
-                    return self._finish_runner_result(active, result, recovered_job_ids=recovered)
+                    return self._finish_runner_result(active, result, recovered_job_ids=recovered, now=now)
                 return WorkerQueuePollResult(
                     worker_id=self.worker_id,
                     action="cancel_requested",
@@ -67,7 +67,7 @@ class WorkerQueuePoller:
             if self.runner is not None and job is not None:
                 result = self.runner.poll(job)
                 if result.state != "running":
-                    return self._finish_runner_result(active, result, recovered_job_ids=recovered)
+                    return self._finish_runner_result(active, result, recovered_job_ids=recovered, now=now)
             heartbeat_job = self.queue.heartbeat(str(active.get("lease_id") or ""), now=now)
             refreshed = self.queue.lease_status(str(active.get("lease_id") or ""))
             return WorkerQueuePollResult(
@@ -86,7 +86,7 @@ class WorkerQueuePoller:
                 active_lease = self.queue.lease_status(str(acquired.get("lease_id") or ""))
                 if active_lease is None:
                     raise KeyError(f"active lease not found for acquired job: {acquired.get('job_id')}")
-                return self._finish_runner_result(active_lease, runner_result, recovered_job_ids=recovered)
+                return self._finish_runner_result(active_lease, runner_result, recovered_job_ids=recovered, now=now)
             return WorkerQueuePollResult(
                 worker_id=self.worker_id,
                 action="acquired",
@@ -130,10 +130,11 @@ class WorkerQueuePoller:
         result: TaskRunResult,
         *,
         recovered_job_ids: list[str],
+        now: str = "",
     ) -> WorkerQueuePollResult:
         lease_id = str(lease.get("lease_id") or "")
         if result.state == "succeeded":
-            job = self.queue.complete(lease_id)
+            job = self.queue.complete(lease_id, now=now)
             return WorkerQueuePollResult(
                 worker_id=self.worker_id,
                 action="completed",
@@ -143,7 +144,7 @@ class WorkerQueuePoller:
                 runner_result=result,
             )
         if result.state == "failed":
-            job = self.queue.fail(lease_id, reason=result.message)
+            job = self.queue.fail(lease_id, reason=result.message, now=now)
             return WorkerQueuePollResult(
                 worker_id=self.worker_id,
                 action="failed",
@@ -153,7 +154,7 @@ class WorkerQueuePoller:
                 runner_result=result,
             )
         if result.state == "cancelled":
-            job = self.queue.fail(lease_id, reason="cancelled")
+            job = self.queue.fail(lease_id, reason="cancelled", now=now)
             return WorkerQueuePollResult(
                 worker_id=self.worker_id,
                 action="cancelled",

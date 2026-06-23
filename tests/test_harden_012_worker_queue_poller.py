@@ -268,6 +268,28 @@ def test_poller_with_runner_completes_succeeded_poll(tmp_path) -> None:
     assert queue.lease_status(first.acquired_job["lease_id"])["status"] == "completed"  # type: ignore[index]
 
 
+def test_poller_with_runner_terminal_state_uses_poll_now(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})
+    runner = FakeWorkerTaskRunner(
+        poll_results={queued["job_id"]: TaskRunResult(state="succeeded", message="done")}
+    )
+    poller = WorkerQueuePoller(queue, worker_id="worker-a", runner=runner)
+    first = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)))
+    assert first.acquired_job is not None
+    terminal_now = "2026-01-01T00:00:05Z"
+
+    result = poller.poll_once(now=terminal_now)
+
+    assert result.action == "completed"
+    status = queue.status(queued["job_id"])
+    lease = queue.lease_status(first.acquired_job["lease_id"])
+    assert status is not None
+    assert lease is not None
+    assert status["updated_at"] == terminal_now
+    assert lease["completed_at"] == terminal_now
+
+
 def test_poller_with_runner_fails_failed_poll(tmp_path) -> None:
     queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
     queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})
