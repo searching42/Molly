@@ -65,8 +65,8 @@ def build_run_plan_execute_task(
         project_id=project_id,
         run_id=run_id,
         run_plan=run_plan,
-        input_artifacts=input_artifacts or {},
-        task_options=task_options or {},
+        input_artifacts={} if input_artifacts is None else input_artifacts,
+        task_options={} if task_options is None else task_options,
     )
     return task.to_task()
 

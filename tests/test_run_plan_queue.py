@@ -70,12 +70,32 @@ def test_validate_run_plan_execute_task_rejects_non_object_input_artifacts() -> 
         validate_run_plan_execute_task(payload)
 
 
+def test_build_run_plan_execute_task_rejects_empty_list_input_artifacts() -> None:
+    with pytest.raises(ValidationError, match="input_artifacts"):
+        build_run_plan_execute_task(
+            project_id="proj-a",
+            run_id="run-a",
+            run_plan=_run_plan(),
+            input_artifacts=[],  # type: ignore[arg-type]
+        )
+
+
 def test_validate_run_plan_execute_task_rejects_non_object_task_options() -> None:
     payload = build_run_plan_execute_task(project_id="proj-a", run_id="run-a", run_plan=_run_plan())
     payload["task_options"] = ["epochs"]
 
     with pytest.raises(ValidationError, match="task_options"):
         validate_run_plan_execute_task(payload)
+
+
+def test_build_run_plan_execute_task_rejects_empty_list_task_options() -> None:
+    with pytest.raises(ValidationError, match="task_options"):
+        build_run_plan_execute_task(
+            project_id="proj-a",
+            run_id="run-a",
+            run_plan=_run_plan(),
+            task_options=[],  # type: ignore[arg-type]
+        )
 
 
 def test_validate_run_plan_execute_task_rejects_command_fields() -> None:
