@@ -62,11 +62,18 @@ class WorkerSupervisorTaskRunner:
     or change queue storage.
     """
 
-    def __init__(self, *, supervisor: WorkerSupervisor, stop_timeout_sec: int = 10) -> None:
+    def __init__(
+        self,
+        *,
+        supervisor: WorkerSupervisor,
+        stop_timeout_sec: int = 10,
+        allowed_cwd_root: str | Path | None = None,
+    ) -> None:
         self.supervisor = supervisor
         if stop_timeout_sec < 0:
             raise ValueError("stop_timeout_sec must be non-negative")
         self.stop_timeout_sec = stop_timeout_sec
+        self.allowed_cwd_root = _allowed_cwd_root(allowed_cwd_root)
 
     def start(self, job: dict[str, Any]) -> TaskRunResult:
         project_id, run_id, task = _validate_supervisor_job(job)
@@ -74,7 +81,7 @@ class WorkerSupervisorTaskRunner:
             project_id=project_id,
             run_id=run_id,
             command=_validate_command(task),
-            cwd=_task_cwd(task),
+            cwd=_task_cwd(task, allowed_root=self.allowed_cwd_root),
         )
         return TaskRunResult(state="running", message="worker started", output=_heartbeat_output(heartbeat))
 
@@ -133,9 +140,37 @@ def _validate_command(task: dict[str, Any]) -> list[str]:
     return clean
 
 
-def _task_cwd(task: dict[str, Any]) -> Path | None:
+def _allowed_cwd_root(value: str | Path | None) -> Path | None:
+    if value is None:
+        return None
+    root = Path(value).expanduser().resolve()
+    if not root.exists():
+        raise ValueError("allowed_cwd_root must exist")
+    if not root.is_dir():
+        raise ValueError("allowed_cwd_root must be a directory")
+    return root
+
+
+def _task_cwd(task: dict[str, Any], *, allowed_root: Path | None) -> Path | None:
     cwd = str(task.get("cwd") or "").strip()
-    return Path(cwd) if cwd else None
+    if not cwd:
+        return None
+    path = Path(cwd).expanduser().resolve()
+    if not path.exists():
+        raise ValueError("job task cwd must exist")
+    if not path.is_dir():
+        raise ValueError("job task cwd must be a directory")
+    if allowed_root is not None and not _is_relative_to(path, allowed_root):
+        raise ValueError("job task cwd must stay under allowed_cwd_root")
+    return path
+
+
+def _is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
 
 
 def _heartbeat_output(heartbeat: WorkerHeartbeat) -> dict[str, Any]:

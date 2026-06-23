@@ -10,7 +10,7 @@ from ai4s_agent.worker_supervisor import WorkerSupervisor
 from ai4s_agent.worker_task_runner import TaskRunResult, WorkerSupervisorTaskRunner
 
 
-def _job(tmp_path: Path, run_id: str, command: list[str] | str) -> dict:
+def _job(tmp_path: Path, run_id: str, command: list[str] | str, *, cwd: Path | str | None = None) -> dict:
     return {
         "job_id": f"job-{run_id}",
         "project_id": "proj-a",
@@ -18,7 +18,7 @@ def _job(tmp_path: Path, run_id: str, command: list[str] | str) -> dict:
         "task": {
             "task_id": "dummy_command",
             "command": command,
-            "cwd": str(tmp_path),
+            "cwd": str(cwd if cwd is not None else tmp_path),
         },
     }
 
@@ -133,4 +133,81 @@ def test_worker_supervisor_task_runner_rejects_shell_string_command(tmp_path: Pa
     job = _job(tmp_path, "run-shell-string", "echo unsafe")
 
     with pytest.raises(ValueError, match="job task command must be a list"):
+        runner.start(job)
+
+
+def test_worker_supervisor_task_runner_accepts_cwd_under_allowed_root(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    work_dir = workspace / "runs"
+    work_dir.mkdir(parents=True)
+    runner = WorkerSupervisorTaskRunner(
+        supervisor=WorkerSupervisor(projects_root=tmp_path),
+        allowed_cwd_root=workspace,
+    )
+    job = _job(tmp_path, "run-allowed-cwd", _exit_command(0), cwd=work_dir)
+
+    result = runner.start(job)
+
+    assert result.state == "running"
+    assert result.output is not None
+    assert result.output["cwd"] == str(work_dir.resolve())
+    terminal = _wait_for_terminal(runner, job)
+    assert terminal.state == "succeeded"
+
+
+def test_worker_supervisor_task_runner_rejects_cwd_outside_allowed_root(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    runner = WorkerSupervisorTaskRunner(
+        supervisor=WorkerSupervisor(projects_root=tmp_path),
+        allowed_cwd_root=workspace,
+    )
+    job = _job(tmp_path, "run-outside-cwd", _exit_command(0), cwd=outside)
+
+    with pytest.raises(ValueError, match="job task cwd must stay under allowed_cwd_root"):
+        runner.start(job)
+
+
+def test_worker_supervisor_task_runner_rejects_cwd_path_escape(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    escaped = tmp_path / "escaped"
+    escaped.mkdir()
+    runner = WorkerSupervisorTaskRunner(
+        supervisor=WorkerSupervisor(projects_root=tmp_path),
+        allowed_cwd_root=workspace,
+    )
+    job = _job(tmp_path, "run-escape-cwd", _exit_command(0), cwd=workspace / ".." / "escaped")
+
+    with pytest.raises(ValueError, match="job task cwd must stay under allowed_cwd_root"):
+        runner.start(job)
+
+
+def test_worker_supervisor_task_runner_rejects_file_cwd(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    cwd_file = workspace / "not-a-dir.txt"
+    cwd_file.write_text("not a directory", encoding="utf-8")
+    runner = WorkerSupervisorTaskRunner(
+        supervisor=WorkerSupervisor(projects_root=tmp_path),
+        allowed_cwd_root=workspace,
+    )
+    job = _job(tmp_path, "run-file-cwd", _exit_command(0), cwd=cwd_file)
+
+    with pytest.raises(ValueError, match="job task cwd must be a directory"):
+        runner.start(job)
+
+
+def test_worker_supervisor_task_runner_rejects_missing_cwd(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runner = WorkerSupervisorTaskRunner(
+        supervisor=WorkerSupervisor(projects_root=tmp_path),
+        allowed_cwd_root=workspace,
+    )
+    job = _job(tmp_path, "run-missing-cwd", _exit_command(0), cwd=workspace / "missing")
+
+    with pytest.raises(ValueError, match="job task cwd must exist"):
         runner.start(job)
