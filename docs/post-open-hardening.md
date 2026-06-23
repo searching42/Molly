@@ -30,10 +30,16 @@ blur into the already-resolved OPEN series.
 - Resolved: HARDEN-006 actor identity resolver and `confirmed_by` alias in
   PR #53 and PR #54.
 - Resolved: HARDEN-007 production permission profile safety in PR #55.
-- Focus: inventory mutable JSON state and remaining read-modify-write paths
-  before adding storage consistency checks.
-- Engineering priority: storage consistency, state migration design, and worker
-  supervision.
+- Resolved: HARDEN-008 mutable JSON state inventory in PR #57.
+- Resolved: HARDEN-009 storage consistency checker in PR #58 and PR #59.
+- Resolved: HARDEN-010 SQLite migration design note in PR #60.
+- Resolved: HARDEN-011 local process worker supervisor in PR #62 and PR #63.
+- Resolved: HARDEN-012 queue control plane and local runner binding in PR #65
+  through PR #73.
+- Focus: add an explicit run-plan opt-in bridge on top of the file-backed local
+  worker loop without jumping to remote workers or SQLite.
+- Engineering priority: run-plan queue job schema, local worker loop binding,
+  and opt-in `RunPlanExecutor` integration.
 - Science priority: a small but closed OLED demo with literature provenance,
   model training diagnostics, candidate generation, screening, and report
   artifacts.
@@ -297,16 +303,18 @@ Evidence:
   and read-only status semantics.
 - Verification from PR #63: full suite passed with `615 passed`.
 
-## HARDEN-012: Add Worker Queue Polling Loop — Control-Plane Resolved
+## HARDEN-012: Add Worker Queue Polling Loop And Local Runner Binding — RESOLVED
 
-- Status: Control-plane resolved across PR #65, PR #66, PR #67, and PR #68.
+- Status: Resolved across PR #65 through PR #73 for the file-backed queue,
+  poller, task runner protocol, and local supervisor-backed runner adapter.
 - Add queue polling around project-scoped jobs so that multiple queued jobs are
   acquired in a deterministic order and later executed by supervised workers.
 - Keep lease acquisition, heartbeat update, cancellation, and stale lease
   recovery semantics without introducing remote workers.
-- HARDEN-012 intentionally does not include real task execution.  It does not
-  connect the queue to `WorkerSupervisor`, `RunPlanExecutor`, real training
-  jobs, remote workers, or SQLite.
+- HARDEN-012 now includes optional task-runner binding and a local
+  `WorkerSupervisorTaskRunner` adapter for dummy/process commands only.
+- HARDEN-012 intentionally does not include `RunPlanExecutor`, real model
+  training jobs, API routes, remote workers, or SQLite.
 
 Skeleton evidence:
 
@@ -317,6 +325,14 @@ Skeleton evidence:
 - PR #67: `src/ai4s_agent/worker_queue_poller.py` — bounded polling skeleton
   for recover/acquire/heartbeat/cancellation visibility.
 - PR #68: cancellation and stale recovery control transition tests.
+- PR #70: `src/ai4s_agent/worker_task_runner.py` — `WorkerTaskRunner`
+  protocol, `TaskRunResult`, and `FakeWorkerTaskRunner`.
+- PR #71: optional `WorkerQueuePoller` runner binding while preserving
+  control-plane-only behavior when no runner is configured.
+- PR #72: `WorkerSupervisorTaskRunner` local adapter for supervised
+  dummy/process commands.
+- PR #73: `allowed_cwd_root` and task `cwd` fail-closed hardening for the local
+  supervisor runner adapter.
 - `docs/worker-queue-skeleton.md` — API, file layout, and out-of-scope
   integration points.
 - `tests/test_harden_012_worker_queue.py` — queue ordering, lease acquisition,
@@ -348,47 +364,50 @@ Implemented skeleton semantics:
 5. **Stale lease recovery** — Expired active leases can be marked `stale`, and
    their running jobs are requeued for a later worker acquisition.
 
-Implemented poller skeleton:
+Implemented poller and runner semantics:
 
 1. `WorkerQueuePoller.poll_once()` recovers stale leases before any worker
    action.
 
-2. If the current worker has an active lease, the poller heartbeats it unless
-   the job has `cancellation_requested=true`.
+2. If the current worker has an active lease, the poller surfaces
+   `cancellation_requested=true` before heartbeat.
 
 3. If no active lease exists, the poller acquires the next queued job for the
    worker.
 
 4. `WorkerQueuePoller.poll(max_iterations=N)` runs a bounded loop for tests and
-   future supervisors without starting any process or executing any task.
+   future supervisors.
 
-Next phase: runner binding plan:
+5. When a `WorkerTaskRunner` is configured, the poller can start newly acquired
+   jobs, poll active jobs, propagate succeeded/failed/cancelled terminal states
+   back to the queue, and avoid heartbeating cancellation-requested jobs.
 
-1. **WorkerTaskRunner protocol** — Define a minimal runner interface that can
-   receive an acquired job and active lease, return terminal status, and expose
-   cancellation-aware heartbeat behavior without depending on
-   `RunPlanExecutor`.
+6. `WorkerSupervisorTaskRunner` adapts this protocol to `WorkerSupervisor` for
+   local dummy/process commands.  It rejects shell string commands and can
+   constrain task `cwd` under an explicit `allowed_cwd_root`.
 
-2. **Fake runner tests** — Add deterministic tests for success, failure,
-   cancellation request handling, and heartbeat cadence using an in-process fake
-   runner only.
+Next phase: run-plan opt-in bridge:
 
-3. **Poller-to-runner binding** — Bind `WorkerQueuePoller` to the
-   `WorkerTaskRunner` protocol behind an explicit opt-in path while preserving
-   the current control-plane-only behavior by default.
+1. **Queue + poller + supervisor runner integration test** — Prove the
+   file-backed queue, bounded poller, and `WorkerSupervisorTaskRunner` can run a
+   local dummy command from queued to terminal state.
 
-4. **WorkerSupervisorTaskRunner adapter** — Add a local-process adapter that
-   starts and observes supervised processes through `WorkerSupervisor` only
-   after the fake runner contract is stable.
+2. **LocalWorkerLoop wrapper** — Add a small loop wrapper around queue, poller,
+   and runner construction so supervisors can drive bounded iterations without
+   API route coupling.
 
-5. **RunPlanExecutor opt-in integration** — Add an explicit opt-in bridge from
-   run-plan jobs to the worker queue after the local adapter is covered by
-   tests.
+3. **Run-plan queue job schema** — Define the minimal queued task envelope for a
+   run-plan execution request, including project/run identity, command-safe
+   metadata, artifacts, and permission expectations.
 
-Do not jump directly from HARDEN-012 to remote worker support or SQLite
-migration.  Remote workers should wait until the local runner binding is stable;
-SQLite should wait until the file-backed queue semantics and consistency
-checker coverage remain green under runner integration.
+4. **RunPlanExecutor opt-in bridge** — Add an explicit opt-in bridge from
+   run-plan jobs to worker queue execution only after the local loop and job
+   schema are covered by tests.
+
+Do not jump directly to remote worker support or SQLite migration.  Remote
+worker contracts should wait until the local run-plan bridge is stable; SQLite
+should wait until file-backed queue and runner semantics remain green under
+run-plan opt-in integration.
 
 Acceptance:
 
@@ -398,8 +417,11 @@ Acceptance:
 - Tests cover deterministic ordering, acquire → heartbeat → complete/fail,
   cancel before start, running cancellation visibility, and stale lease
   recovery.
-- Poller tests cover recover → acquire, active lease heartbeat, running
-  cancellation visibility, and bounded loop behavior.
+- Poller tests cover recover → acquire, active lease heartbeat, runner start,
+  runner poll, terminal state propagation, running cancellation visibility, and
+  bounded loop behavior.
+- Local runner tests cover exit 0/exit 1, SIGTERM/SIGKILL cancellation,
+  shell-string rejection, and `allowed_cwd_root` cwd enforcement.
 
 ## HARDEN-013: Add Remote Worker Contract Test
 
@@ -436,13 +458,17 @@ HARDEN-004 resolved
 -> HARDEN-008 mutable JSON inventory
 -> HARDEN-009 storage consistency checker
 -> HARDEN-010 SQLite migration design note
--> HARDEN-011 / HARDEN-012 / HARDEN-013 / HARDEN-014
+-> HARDEN-011 resolved
+-> HARDEN-012 resolved
+-> run-plan opt-in bridge
+-> HARDEN-013 / HARDEN-014
 ```
 
 The route-extension cleanup and permission hardening layers are now behind the
-e2e safety net. The next hardening phase should focus on storage inventory and
-consistency before adding remote workers or broader science workflow
-integrations.
+e2e safety net. Storage inventory/checking and the local worker control plane
+are also in place. The next hardening phase should connect run-plan execution
+through an explicit local opt-in bridge before adding remote workers, SQLite
+migration, or broader science workflow integrations.
 
 ## Science Track
 
@@ -482,6 +508,23 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #53: completed. Standardize actor identity resolver.
 - PR #54: completed. Add `confirmed_by` as an actor resolver alias.
 - PR #55: completed. Add production permission profile safety.
-- PR #56: mark permission hardening resolved.
-- PR #57: inventory mutable JSON state and RMW paths.
-- PR #58: add storage consistency checker.
+- PR #56: completed. Mark permission hardening resolved.
+- PR #57: completed. Inventory mutable JSON state and RMW paths.
+- PR #58: completed. Add storage consistency checker.
+- PR #59: completed. Bind storage consistency checker into e2e workflow.
+- PR #60: completed. Document SQLite migration design.
+- PR #61: completed. Prepare worker supervision hardening.
+- PR #62: completed. Add local process worker supervisor skeleton.
+- PR #63: completed. Harden worker supervisor path/read semantics.
+- PR #64: completed. Prepare worker queue control-plane skeleton.
+- PR #65: completed. Add worker queue JSON control plane.
+- PR #66: completed. Validate worker queue records and checker coverage.
+- PR #67: completed. Add worker queue polling loop skeleton.
+- PR #68: completed. Add cancellation and stale recovery transition tests.
+- PR #69: completed. Mark HARDEN-012 control plane resolved and plan runner
+  binding.
+- PR #70: completed. Add WorkerTaskRunner protocol and fake runner.
+- PR #71: completed. Bind WorkerQueuePoller to optional task runner protocol.
+- PR #72: completed. Add local supervisor task runner adapter.
+- PR #73: completed. Harden supervisor runner cwd constraints.
+- PR #74: mark local runner binding complete and plan run-plan opt-in bridge.
