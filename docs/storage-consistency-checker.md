@@ -54,6 +54,9 @@ Initial coverage:
 - `asset_manifest.json` schema validation
 - `stage.json`, `job_state.json`, and `background_job_state.json` basic schema
   and run/status checks
+- `worker_queue.json` and `worker_leases.json` list/object record shape,
+  required fields, timestamps, status values, cancellation flags, TTL values,
+  duplicate ids, and lease references to queued jobs
 
 Out of scope for PR #58:
 

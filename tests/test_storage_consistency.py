@@ -165,6 +165,65 @@ def test_storage_consistency_checks_memory_stage_job_and_background_state(tmp_pa
     assert "memory_artifact_missing" in codes
 
 
+def test_storage_consistency_checks_worker_queue_and_lease_records(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    write_json(
+        workspace / "worker_queue.json",
+        {
+            "jobs": [
+                "not-an-object",
+                {
+                    "job_id": "job-a",
+                    "project_id": "",
+                    "run_id": "run-a",
+                    "task": [],
+                    "status": "unknown",
+                    "created_at": "not-a-date",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "cancellation_requested": "no",
+                },
+            ]
+        },
+    )
+    write_json(
+        workspace / "worker_leases.json",
+        {
+            "leases": [
+                "not-an-object",
+                {
+                    "lease_id": "lease-a",
+                    "job_id": "missing-job",
+                    "worker_id": "",
+                    "status": "active",
+                    "acquired_at": "2026-01-01T00:00:00Z",
+                    "heartbeat_at": "not-a-date",
+                    "expires_at": "2026-01-01T00:00:00Z",
+                    "ttl_sec": 0,
+                },
+            ]
+        },
+    )
+
+    report = check_workspace_storage(workspace)
+
+    assert report.ok is False
+    codes = _issue_codes(report)
+    assert "worker_queue_job_invalid" in codes
+    assert "worker_queue_job_missing_field" in codes
+    assert "worker_queue_job_invalid_task" in codes
+    assert "worker_queue_job_invalid_status" in codes
+    assert "worker_queue_job_invalid_timestamp" in codes
+    assert "worker_queue_job_invalid_cancellation" in codes
+    assert "worker_lease_invalid" in codes
+    assert "worker_lease_missing_field" in codes
+    assert "worker_lease_invalid_timestamp" in codes
+    assert "worker_lease_invalid_ttl" in codes
+    assert "worker_lease_dangling_job" in codes
+    assert str(workspace / "worker_queue.json") in report.checked_files
+    assert str(workspace / "worker_leases.json") in report.checked_files
+
+
 def test_storage_consistency_report_is_json_safe(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     (workspace / "projects").mkdir(parents=True)

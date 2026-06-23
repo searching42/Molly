@@ -176,3 +176,40 @@ def test_worker_queue_rejects_backslash_path_segments(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="worker_id must be a single safe path segment"):
         queue.acquire("worker\\a")
+
+
+def test_worker_queue_rejects_non_object_job_record_without_overwriting(tmp_path) -> None:
+    store = JsonWorkerQueueStore(tmp_path)
+    raw_payload = '{"jobs": ["not-an-object"]}'
+    store.queue_path.write_text(raw_payload, encoding="utf-8")
+    queue = WorkerQueue(store)
+
+    with pytest.raises(ValueError, match=r"jobs\[0\] must be an object"):
+        queue.enqueue("proj-a", "run-a", {"task_id": "train"})
+
+    assert store.queue_path.read_text(encoding="utf-8") == raw_payload
+
+
+def test_worker_queue_rejects_non_object_lease_record_without_overwriting(tmp_path) -> None:
+    store = JsonWorkerQueueStore(tmp_path)
+    queue = WorkerQueue(store)
+    queue.enqueue("proj-a", "run-a", {"task_id": "train"})
+    raw_payload = '{"leases": ["not-an-object"]}'
+    store.leases_path.write_text(raw_payload, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"leases\[0\] must be an object"):
+        queue.acquire("worker-a")
+
+    assert store.leases_path.read_text(encoding="utf-8") == raw_payload
+
+
+def test_worker_queue_rejects_non_list_record_collections_without_overwriting(tmp_path) -> None:
+    store = JsonWorkerQueueStore(tmp_path)
+    raw_payload = '{"jobs": {"job_id": "job-a"}}'
+    store.queue_path.write_text(raw_payload, encoding="utf-8")
+    queue = WorkerQueue(store)
+
+    with pytest.raises(ValueError, match="jobs must be a list"):
+        queue.list_jobs()
+
+    assert store.queue_path.read_text(encoding="utf-8") == raw_payload

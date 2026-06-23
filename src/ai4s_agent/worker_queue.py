@@ -311,12 +311,10 @@ def _read_json_object(path: Path, *, default: dict[str, Any]) -> dict[str, Any]:
 def _records(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
     records = payload.get(key)
     if not isinstance(records, list):
-        records = []
-        payload[key] = records
-    cleaned = [item for item in records if isinstance(item, dict)]
-    if len(cleaned) != len(records):
-        payload[key] = cleaned
-        return cleaned
+        raise ValueError(f"{key} must be a list")
+    for index, item in enumerate(records):
+        if not isinstance(item, dict):
+            raise ValueError(f"{key}[{index}] must be an object")
     return records
 
 
