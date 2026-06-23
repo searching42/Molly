@@ -148,8 +148,10 @@ Next phase:
 3. Define a run-plan queue job schema.
 4. Add a one-shot `RunPlanExecutorTaskRunner` adapter for the run-plan queue
    task envelope.
-5. Add queue/poller opt-in wiring for run-plan execution only after the one-shot
-   adapter contract is covered by tests.
+5. Add an internal enqueue helper that converts a `RunPlan` into a queued
+   `run_plan_execute` worker job.
+6. Add queue/poller opt-in wiring for run-plan execution only after the enqueue
+   helper and one-shot adapter contracts are covered by tests.
 
 Run-plan queue job schema:
 
@@ -170,6 +172,25 @@ The schema is a serializable queued task envelope only. It includes
 the validated `RunPlan`, `input_artifacts`, and `task_options`. It deliberately
 does not include `command`, local argv, cwd, shell strings, `RunPlanExecutor`
 calls, API routing, remote worker fields, or SQLite behavior.
+
+Run-plan queue enqueue helper:
+
+```python
+from ai4s_agent.run_plan_queue import enqueue_run_plan_execute_job
+
+job = enqueue_run_plan_execute_job(
+    queue,
+    project_id="project-a",
+    run_plan=run_plan,
+    input_artifacts={"dataset": "datasets/input.csv"},
+    task_options={"train_model": {"epochs": 1}},
+)
+```
+
+The helper is internal plumbing only. It derives `run_id` from the `RunPlan`,
+builds a validated `run_plan_execute` envelope, calls `WorkerQueue.enqueue(...)`,
+and returns the queued job. It does not call `RunPlanExecutor`, start a
+`LocalWorkerLoop`, add API routes, or change `/api/run-plan/execute`.
 
 Run-plan executor task runner:
 

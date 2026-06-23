@@ -406,7 +406,12 @@ Next phase: run-plan opt-in bridge:
    `RunPlanExecutor.execute(...)` without changing API routes or the default
    `/api/run-plan/execute` path.
 
-5. **RunPlanExecutor opt-in queue bridge** — Add explicit opt-in wiring from
+5. **Run-plan worker queue enqueue helper** — Add internal plumbing that turns a
+   `RunPlan` plus project/input/options context into a queued
+   `run_plan_execute` worker job without starting a loop, calling
+   `RunPlanExecutor`, or changing API behavior.
+
+6. **RunPlanExecutor opt-in queue bridge** — Add explicit opt-in wiring from
    run-plan jobs to worker queue execution only after the one-shot adapter is
    covered by tests.
 
@@ -536,3 +541,5 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #74: mark local runner binding complete and plan run-plan opt-in bridge.
 - PR #78: define run-plan queue job schema without executing RunPlanExecutor.
 - PR #79: add one-shot RunPlanExecutorTaskRunner without API route wiring.
+- PR #81: add internal run-plan worker queue enqueue helper without API route
+  wiring.
