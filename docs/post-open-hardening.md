@@ -416,7 +416,12 @@ Next phase: run-plan opt-in bridge:
    `RunPlanExecutorTaskRunner` into an internal opt-in service helper without
    exposing API routes or changing the default synchronous execution path.
 
-7. **RunPlanExecutor opt-in queue bridge** — Add explicit opt-in wiring from
+7. **Internal run-plan queue CLI** — Add a local module entrypoint that reads a
+   `RunPlan` JSON file, uses a dedicated `JsonWorkerQueueStore`, and calls the
+   internal queued helper for opt-in debugging without exposing Flask/API
+   routes.
+
+8. **RunPlanExecutor opt-in queue bridge** — Add explicit opt-in wiring from
    run-plan jobs to worker queue execution only after the internal helper is
    covered by tests.
 
@@ -550,3 +555,4 @@ The goal is a closed, auditable demo rather than full automation.
   wiring.
 - PR #82: add internal opt-in queued run-plan execution helper without API route
   wiring.
+- PR #83: add internal run-plan queue CLI without API route wiring.
