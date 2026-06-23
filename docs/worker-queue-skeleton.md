@@ -218,6 +218,24 @@ the next queued job rather than a specific target job. It does not add API
 routes, does not change the default synchronous `/api/run-plan/execute` path,
 does not connect remote workers, and does not change storage.
 
+Internal queued run-plan CLI:
+
+```bash
+python -m ai4s_agent.run_plan_queue_cli \
+  --workspace /path/to/workspace \
+  --queue-dir /path/to/dedicated-queue \
+  --project-id project-a \
+  --run-plan-json /path/to/run_plan.json \
+  --max-iterations 10
+```
+
+The CLI is an internal-only module entrypoint for local debugging and controlled
+experiments. It reads a `RunPlan` JSON file, creates a file-backed dedicated
+`WorkerQueue`, calls `run_run_plan_via_local_queue(...)`, prints a JSON summary,
+and exits `0` only when the queued helper returns `ok=true` and `terminal=true`.
+It does not add Flask/API routes, does not change `/api/run-plan/execute`, does
+not connect remote workers, and does not change storage.
+
 Run-plan executor task runner:
 
 ```python
