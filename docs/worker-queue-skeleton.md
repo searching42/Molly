@@ -1,10 +1,14 @@
-# Worker Queue Skeleton
+# Worker Queue And Local Runner Skeleton
 
-HARDEN-012 is control-plane resolved across PR #65 through PR #68.  The queue
-can persist jobs, lease them to workers, poll for heartbeat/cancellation/recovery
-state, and validate queue files.  It still does not execute tasks, start worker
-processes, call `RunPlanExecutor`, connect to remote workers, or migrate state
-to SQLite.
+HARDEN-012 is resolved for the file-backed queue, bounded poller, optional task
+runner binding, and local supervisor-backed runner adapter across PR #65 through
+PR #73.  The queue can persist jobs, lease them to workers, poll for
+heartbeat/cancellation/recovery state, validate queue files, optionally drive a
+`WorkerTaskRunner`, and run local dummy/process commands through
+`WorkerSupervisorTaskRunner`.
+
+It still does not call `RunPlanExecutor`, expose API routes, connect to remote
+workers, migrate state to SQLite, or run real model training jobs.
 
 Resolved PRs:
 
@@ -14,6 +18,13 @@ Resolved PRs:
   coverage.
 - PR #67: `WorkerQueuePoller` bounded polling skeleton.
 - PR #68: cancellation and stale recovery control transition tests.
+- PR #70: `WorkerTaskRunner` protocol, `TaskRunResult`, and
+  `FakeWorkerTaskRunner`.
+- PR #71: optional `WorkerQueuePoller` binding to `WorkerTaskRunner`.
+- PR #72: `WorkerSupervisorTaskRunner` local adapter for supervised
+  dummy/process commands.
+- PR #73: `allowed_cwd_root` and task `cwd` fail-closed hardening for the local
+  supervisor runner adapter.
 
 Python API:
 
@@ -56,7 +67,7 @@ Implemented operations:
 - `list_leases()`
 - `list_jobs()`
 
-Polling skeleton:
+Polling and runner skeleton:
 
 ```python
 from ai4s_agent.worker_queue_poller import WorkerQueuePoller
@@ -74,7 +85,40 @@ result = poller.poll_once()
 4. acquire the next queued job if no active lease exists
 
 `poll(max_iterations=N)` repeats this bounded sequence and returns the
-per-iteration results. It does not call any task runner.
+per-iteration results.
+
+The poller can also bind to a task runner explicitly:
+
+```python
+from ai4s_agent.worker_queue_poller import WorkerQueuePoller
+from ai4s_agent.worker_task_runner import FakeWorkerTaskRunner
+
+poller = WorkerQueuePoller(queue, worker_id="worker-a", runner=FakeWorkerTaskRunner())
+result = poller.poll_once()
+```
+
+When `runner` is omitted, the poller keeps the original control-plane-only
+behavior. When `runner` is provided, the poller starts newly acquired jobs,
+polls active jobs, propagates succeeded/failed/cancelled terminal states to the
+queue, and does not heartbeat cancellation-requested jobs.
+
+Local supervisor adapter:
+
+```python
+from ai4s_agent.worker_supervisor import WorkerSupervisor
+from ai4s_agent.worker_task_runner import WorkerSupervisorTaskRunner
+
+runner = WorkerSupervisorTaskRunner(
+    supervisor=WorkerSupervisor(projects_root="/path/to/projects"),
+    allowed_cwd_root="/path/to/workspace",
+)
+```
+
+`WorkerSupervisorTaskRunner` adapts the runner protocol to
+`WorkerSupervisor`. It is limited to local dummy/process commands. It rejects
+shell string commands, maps exit 0 to succeeded and non-zero exits to failed,
+handles SIGTERM/SIGKILL cancellation through the supervisor, and can require
+task `cwd` values to resolve under `allowed_cwd_root`.
 
 Skeleton behavior:
 
@@ -89,23 +133,22 @@ Skeleton behavior:
 
 Out of scope:
 
-- Process supervision integration
+- `RunPlanExecutor` integration
+- API routes
 - Remote worker contracts
-- Real model training or adapter execution
 - SQLite store implementation
+- Real model training or adapter execution
 
 Next phase:
 
-1. Define a `WorkerTaskRunner` protocol.
-2. Add fake runner tests for success, failure, cancellation, and heartbeat
-   cadence.
-3. Bind `WorkerQueuePoller` to the runner protocol behind an explicit opt-in
-   path.
-4. Add a `WorkerSupervisorTaskRunner` adapter after the fake runner contract is
-   stable.
-5. Add `RunPlanExecutor` opt-in integration only after the local adapter is
-   covered.
+1. Add a queue + poller + supervisor runner integration test proving a queued
+   local dummy command can move from queued to terminal state.
+2. Add a `LocalWorkerLoop` wrapper for bounded local polling iterations without
+   API route coupling.
+3. Define a run-plan queue job schema.
+4. Add a `RunPlanExecutor` opt-in bridge after the local loop and job schema are
+   covered by tests.
 
-Do not jump directly to remote workers or SQLite from this state.  Remote worker
-contracts should wait for local runner binding; SQLite should wait for stable
-file-backed runner semantics and checker coverage.
+Do not jump directly to remote workers or SQLite from this state. Remote worker
+contracts should wait for the local run-plan bridge; SQLite should wait for
+stable file-backed queue and runner semantics under the opt-in bridge.
