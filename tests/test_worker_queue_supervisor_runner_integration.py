@@ -4,8 +4,6 @@ import sys
 import time
 from pathlib import Path
 
-import pytest
-
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
 from ai4s_agent.worker_queue_poller import WorkerQueuePollResult, WorkerQueuePoller
 from ai4s_agent.worker_supervisor import WorkerSupervisor
@@ -125,12 +123,15 @@ def test_worker_queue_supervisor_runner_rejects_cwd_outside_allowed_root(tmp_pat
     poller = _poller(queue, tmp_path, allowed_cwd_root=workspace)
     job = queue.enqueue("proj-a", "run-cwd-outside", _dummy_task(_exit_command(0), cwd=outside))
 
-    with pytest.raises(ValueError, match="job task cwd must stay under allowed_cwd_root"):
-        poller.poll_once()
+    result = poller.poll_once()
 
     current_job = queue.status(job["job_id"])
+    assert result.action == "failed"
+    assert result.runner_result is not None
+    assert result.runner_result.message == "job task cwd must stay under allowed_cwd_root"
     assert current_job is not None
-    assert current_job["status"] == "running"
+    assert current_job["status"] == "failed"
+    assert current_job["error"] == {"reason": "job task cwd must stay under allowed_cwd_root"}
     lease = queue.lease_status(str(current_job["lease_id"]))
     assert lease is not None
-    assert lease["status"] == "active"
+    assert lease["status"] == "failed"
