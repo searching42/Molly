@@ -401,9 +401,14 @@ Next phase: run-plan opt-in bridge:
    metadata, artifacts, and permission expectations.  PR #78 adds the schema,
    validator, and builder only; it does not execute `RunPlanExecutor`.
 
-4. **RunPlanExecutor opt-in bridge** — Add an explicit opt-in bridge from
-   run-plan jobs to worker queue execution only after the local loop and job
-   schema are covered by tests.
+4. **RunPlanExecutorTaskRunner one-shot adapter** — Add a `WorkerTaskRunner`
+   adapter that validates the run-plan queue envelope and synchronously calls
+   `RunPlanExecutor.execute(...)` without changing API routes or the default
+   `/api/run-plan/execute` path.
+
+5. **RunPlanExecutor opt-in queue bridge** — Add explicit opt-in wiring from
+   run-plan jobs to worker queue execution only after the one-shot adapter is
+   covered by tests.
 
 Do not jump directly to remote worker support or SQLite migration.  Remote
 worker contracts should wait until the local run-plan bridge is stable; SQLite
@@ -530,3 +535,4 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #73: completed. Harden supervisor runner cwd constraints.
 - PR #74: mark local runner binding complete and plan run-plan opt-in bridge.
 - PR #78: define run-plan queue job schema without executing RunPlanExecutor.
+- PR #79: add one-shot RunPlanExecutorTaskRunner without API route wiring.

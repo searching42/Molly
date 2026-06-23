@@ -146,8 +146,10 @@ Next phase:
 2. Add a `LocalWorkerLoop` wrapper for bounded local polling iterations without
    API route coupling.
 3. Define a run-plan queue job schema.
-4. Add a `RunPlanExecutor` opt-in bridge after the local loop and job schema are
-   covered by tests.
+4. Add a one-shot `RunPlanExecutorTaskRunner` adapter for the run-plan queue
+   task envelope.
+5. Add queue/poller opt-in wiring for run-plan execution only after the one-shot
+   adapter contract is covered by tests.
 
 Run-plan queue job schema:
 
@@ -168,6 +170,23 @@ The schema is a serializable queued task envelope only. It includes
 the validated `RunPlan`, `input_artifacts`, and `task_options`. It deliberately
 does not include `command`, local argv, cwd, shell strings, `RunPlanExecutor`
 calls, API routing, remote worker fields, or SQLite behavior.
+
+Run-plan executor task runner:
+
+```python
+from ai4s_agent.run_plan_task_runner import RunPlanExecutorTaskRunner
+
+runner = RunPlanExecutorTaskRunner(storage=project_storage)
+result = runner.start(worker_job)
+```
+
+`RunPlanExecutorTaskRunner` is a one-shot `WorkerTaskRunner` adapter. It
+validates `worker_job["task"]` as a `run_plan_execute` envelope and synchronously
+calls `RunPlanExecutor.execute(...)`. It does not alter `/api/run-plan/execute`,
+does not add API routes, does not support remote workers, and does not implement
+SQLite behavior. `poll()` fails fast because the runner is one-shot; `cancel()`
+reports cancellation as unsupported rather than pretending it can interrupt a
+synchronous executor call.
 
 Do not jump directly to remote workers or SQLite from this state. Remote worker
 contracts should wait for the local run-plan bridge; SQLite should wait for
