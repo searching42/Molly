@@ -11,6 +11,34 @@ def _iso(value: datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
 
 
+class RaisingWorkerTaskRunner:
+    def __init__(
+        self,
+        *,
+        start_error: Exception | None = None,
+        poll_error: Exception | None = None,
+        cancel_error: Exception | None = None,
+    ) -> None:
+        self.start_error = start_error
+        self.poll_error = poll_error
+        self.cancel_error = cancel_error
+
+    def start(self, job: dict) -> TaskRunResult:
+        if self.start_error is not None:
+            raise self.start_error
+        return TaskRunResult(state="running", message="started")
+
+    def poll(self, job: dict) -> TaskRunResult:
+        if self.poll_error is not None:
+            raise self.poll_error
+        return TaskRunResult(state="running", message="running")
+
+    def cancel(self, job: dict) -> TaskRunResult:
+        if self.cancel_error is not None:
+            raise self.cancel_error
+        return TaskRunResult(state="cancelled", message="cancelled")
+
+
 def test_worker_queue_poller_acquires_queued_job_without_executing_task(tmp_path) -> None:
     queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
     queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model", "command": ["do-not-run"]})
@@ -333,6 +361,74 @@ def test_poller_with_runner_cancels_without_heartbeat(tmp_path) -> None:
     assert lease is not None
     assert lease["heartbeat_at"] == original_heartbeat
     assert lease["status"] == "failed"
+
+
+def test_poller_with_runner_fails_job_when_start_raises(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})
+    poller = WorkerQueuePoller(
+        queue,
+        worker_id="worker-a",
+        runner=RaisingWorkerTaskRunner(start_error=ValueError("invalid task cwd")),
+    )
+
+    result = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)))
+
+    assert result.action == "failed"
+    assert result.runner_result == TaskRunResult(state="failed", message="invalid task cwd")
+    status = queue.status(queued["job_id"])
+    assert status is not None
+    assert status["status"] == "failed"
+    assert status["error"] == {"reason": "invalid task cwd"}
+    assert result.active_lease is not None
+    assert result.active_lease["status"] == "failed"
+
+
+def test_poller_with_runner_fails_job_when_poll_raises(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})
+    poller = WorkerQueuePoller(
+        queue,
+        worker_id="worker-a",
+        runner=RaisingWorkerTaskRunner(poll_error=RuntimeError("poll exploded")),
+    )
+    first = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)))
+    assert first.action == "acquired"
+
+    result = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 5, tzinfo=timezone.utc)))
+
+    assert result.action == "failed"
+    assert result.runner_result == TaskRunResult(state="failed", message="poll exploded")
+    status = queue.status(queued["job_id"])
+    assert status is not None
+    assert status["status"] == "failed"
+    assert status["error"] == {"reason": "poll exploded"}
+    assert result.active_lease is not None
+    assert result.active_lease["status"] == "failed"
+
+
+def test_poller_with_runner_fails_job_when_cancel_raises(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})
+    poller = WorkerQueuePoller(
+        queue,
+        worker_id="worker-a",
+        runner=RaisingWorkerTaskRunner(cancel_error=RuntimeError("process stuck")),
+    )
+    first = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)))
+    assert first.action == "acquired"
+    poller.cancel(queued["job_id"], now=_iso(datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc)))
+
+    result = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 5, tzinfo=timezone.utc)))
+
+    assert result.action == "failed"
+    assert result.runner_result == TaskRunResult(state="failed", message="cancel failed: process stuck")
+    status = queue.status(queued["job_id"])
+    assert status is not None
+    assert status["status"] == "failed"
+    assert status["error"] == {"reason": "cancel failed: process stuck"}
+    assert result.active_lease is not None
+    assert result.active_lease["status"] == "failed"
 
 
 def test_poller_without_runner_preserves_control_plane_only_behavior(tmp_path) -> None:

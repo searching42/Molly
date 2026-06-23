@@ -55,7 +55,10 @@ class WorkerQueuePoller:
             job = self.queue.status(str(active.get("job_id") or ""))
             if job is not None and bool(job.get("cancellation_requested")):
                 if self.runner is not None:
-                    result = self.runner.cancel(job)
+                    try:
+                        result = self.runner.cancel(job)
+                    except Exception as exc:
+                        result = TaskRunResult(state="failed", message=f"cancel failed: {_exception_message(exc)}")
                     return self._finish_runner_result(active, result, recovered_job_ids=recovered, now=now)
                 return WorkerQueuePollResult(
                     worker_id=self.worker_id,
@@ -65,7 +68,10 @@ class WorkerQueuePoller:
                     cancellation_requested=True,
                 )
             if self.runner is not None and job is not None:
-                result = self.runner.poll(job)
+                try:
+                    result = self.runner.poll(job)
+                except Exception as exc:
+                    result = TaskRunResult(state="failed", message=_exception_message(exc))
                 if result.state != "running":
                     return self._finish_runner_result(active, result, recovered_job_ids=recovered, now=now)
             heartbeat_job = self.queue.heartbeat(str(active.get("lease_id") or ""), now=now)
@@ -81,7 +87,13 @@ class WorkerQueuePoller:
 
         acquired = self.queue.acquire(self.worker_id, now=now)
         if acquired is not None:
-            runner_result = self.runner.start(acquired) if self.runner is not None else None
+            if self.runner is not None:
+                try:
+                    runner_result = self.runner.start(acquired)
+                except Exception as exc:
+                    runner_result = TaskRunResult(state="failed", message=_exception_message(exc))
+            else:
+                runner_result = None
             if runner_result is not None and runner_result.state != "running":
                 active_lease = self.queue.lease_status(str(acquired.get("lease_id") or ""))
                 if active_lease is None:
@@ -171,3 +183,7 @@ class WorkerQueuePoller:
             active_lease=self.queue.lease_status(lease_id),
             runner_result=result,
         )
+
+
+def _exception_message(exc: Exception) -> str:
+    return str(exc) or exc.__class__.__name__
