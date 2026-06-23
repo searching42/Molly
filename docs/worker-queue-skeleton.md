@@ -226,6 +226,8 @@ python -m ai4s_agent.run_plan_queue_cli \
   --queue-dir /path/to/dedicated-queue \
   --project-id project-a \
   --run-plan-json /path/to/run_plan.json \
+  --input-artifacts-json /path/to/input_artifacts.json \
+  --task-options-json /path/to/task_options.json \
   --max-iterations 10
 ```
 
@@ -233,8 +235,10 @@ The CLI is an internal-only module entrypoint for local debugging and controlled
 experiments. It reads a `RunPlan` JSON file, creates a file-backed dedicated
 `WorkerQueue`, calls `run_run_plan_via_local_queue(...)`, prints a JSON summary,
 and exits `0` only when the queued helper returns `ok=true` and `terminal=true`.
-It does not add Flask/API routes, does not change `/api/run-plan/execute`, does
-not connect remote workers, and does not change storage.
+Optional `--input-artifacts-json` and `--task-options-json` files must have JSON
+object roots. It does not add Flask/API routes, does not change
+`/api/run-plan/execute`, does not connect remote workers, and does not change
+storage.
 
 Run-plan executor task runner:
 

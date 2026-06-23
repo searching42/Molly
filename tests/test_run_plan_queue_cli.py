@@ -60,8 +60,20 @@ def _factory(fake: FakeRunPlanExecutor):
     return factory
 
 
-def _argv(tmp_path: Path, *, queue_dir: Path | None = None, run_plan_json: Path | None = None) -> list[str]:
-    return [
+def _write_json(path: Path, payload: dict[str, Any] | list[Any] | str) -> Path:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _argv(
+    tmp_path: Path,
+    *,
+    queue_dir: Path | None = None,
+    run_plan_json: Path | None = None,
+    input_artifacts_json: Path | None = None,
+    task_options_json: Path | None = None,
+) -> list[str]:
+    args = [
         "--workspace",
         str(tmp_path / "workspace"),
         "--queue-dir",
@@ -70,9 +82,18 @@ def _argv(tmp_path: Path, *, queue_dir: Path | None = None, run_plan_json: Path 
         "proj-a",
         "--run-plan-json",
         str(run_plan_json or _write_run_plan(tmp_path / "run_plan.json")),
-        "--max-iterations",
-        "10",
     ]
+    if input_artifacts_json is not None:
+        args.extend(["--input-artifacts-json", str(input_artifacts_json)])
+    if task_options_json is not None:
+        args.extend(["--task-options-json", str(task_options_json)])
+    args.extend(
+        [
+            "--max-iterations",
+            "10",
+        ]
+    )
+    return args
 
 
 def _run_cli(argv: list[str], fake: FakeRunPlanExecutor) -> tuple[int, dict[str, Any], str]:
@@ -95,6 +116,27 @@ def test_run_plan_queue_cli_returns_zero_for_waiting_user_execution(tmp_path: Pa
     assert payload["final_job"]["status"] == "succeeded"
     assert payload["final_lease"]["status"] == "completed"
     assert fake.calls[0]["project_id"] == "proj-a"
+
+
+def test_run_plan_queue_cli_passes_input_artifacts_and_task_options(tmp_path: Path) -> None:
+    fake = FakeRunPlanExecutor({"ok": True, "run_id": "run-a", "status": "WAITING_USER"})
+    input_artifacts_json = _write_json(tmp_path / "input_artifacts.json", {"dataset": "datasets/input.csv"})
+    task_options_json = _write_json(tmp_path / "task_options.json", {"train_model": {"epochs": 1}})
+
+    code, payload, stderr = _run_cli(
+        _argv(
+            tmp_path,
+            input_artifacts_json=input_artifacts_json,
+            task_options_json=task_options_json,
+        ),
+        fake,
+    )
+
+    assert code == 0
+    assert stderr == ""
+    assert payload["ok"] is True
+    assert fake.calls[0]["input_artifacts"] == {"dataset": "datasets/input.csv"}
+    assert fake.calls[0]["task_options"] == {"train_model": {"epochs": 1}}
 
 
 def test_run_plan_queue_cli_returns_one_for_failed_execution(tmp_path: Path) -> None:
@@ -128,6 +170,35 @@ def test_run_plan_queue_cli_returns_two_for_invalid_run_plan_json(tmp_path: Path
     assert payload["ok"] is False
     assert payload["error"]["type"] == "validation_error"
     assert "valid JSON" in payload["error"]["message"]
+    assert fake.calls == []
+
+
+def test_run_plan_queue_cli_returns_two_for_malformed_input_artifacts_json(tmp_path: Path) -> None:
+    input_artifacts_path = tmp_path / "bad_input_artifacts.json"
+    input_artifacts_path.write_text("{bad json", encoding="utf-8")
+    fake = FakeRunPlanExecutor({"ok": True, "status": "WAITING_USER"})
+
+    code, payload, stderr = _run_cli(_argv(tmp_path, input_artifacts_json=input_artifacts_path), fake)
+
+    assert code == 2
+    assert stderr == ""
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "validation_error"
+    assert "input_artifacts JSON is not valid JSON" in payload["error"]["message"]
+    assert fake.calls == []
+
+
+def test_run_plan_queue_cli_returns_two_for_non_object_task_options_json(tmp_path: Path) -> None:
+    task_options_path = _write_json(tmp_path / "task_options.json", [{"train_model": {"epochs": 1}}])
+    fake = FakeRunPlanExecutor({"ok": True, "status": "WAITING_USER"})
+
+    code, payload, stderr = _run_cli(_argv(tmp_path, task_options_json=task_options_path), fake)
+
+    assert code == 2
+    assert stderr == ""
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "validation_error"
+    assert "task_options JSON root must be an object" in payload["error"]["message"]
     assert fake.calls == []
 
 

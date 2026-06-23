@@ -31,6 +31,8 @@ def main(
             args = parser.parse_args(argv)
     try:
         run_plan = _read_json_object(Path(args.run_plan_json), label="run-plan JSON")
+        input_artifacts = _read_optional_json_object(args.input_artifacts_json, label="input_artifacts JSON")
+        task_options = _read_optional_json_object(args.task_options_json, label="task_options JSON")
         queue = WorkerQueue(JsonWorkerQueueStore(Path(args.queue_dir)))
         storage = ProjectStorage(Path(args.workspace))
         summary = run_run_plan_via_local_queue(
@@ -38,6 +40,8 @@ def main(
             storage=storage,
             project_id=str(args.project_id),
             run_plan=run_plan,
+            input_artifacts=input_artifacts,
+            task_options=task_options,
             max_iterations=int(args.max_iterations),
             executor_factory=executor_factory,
         )
@@ -67,8 +71,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--queue-dir", required=True, help="Dedicated JsonWorkerQueueStore directory.")
     parser.add_argument("--project-id", required=True, help="Project id for the queued run-plan job.")
     parser.add_argument("--run-plan-json", required=True, help="Path to a run_plan JSON file.")
+    parser.add_argument("--input-artifacts-json", help="Optional path to an input_artifacts JSON object.")
+    parser.add_argument("--task-options-json", help="Optional path to a task_options JSON object.")
     parser.add_argument("--max-iterations", type=int, default=10, help="Maximum local worker loop iterations.")
     return parser
+
+
+def _read_optional_json_object(value: str | None, *, label: str) -> dict[str, Any] | None:
+    if not value:
+        return None
+    return _read_json_object(Path(value), label=label)
 
 
 def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
