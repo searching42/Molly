@@ -1,0 +1,7 @@
+{
+  "train_model": {
+    "dry_run": true,
+    "epochs": 1,
+    "notes": "Fixture-only CLI demo; tests use a fake executor."
+  }
+}

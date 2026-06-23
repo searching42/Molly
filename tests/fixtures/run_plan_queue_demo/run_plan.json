@@ -1,0 +1,23 @@
+{
+  "run_id": "demo-run",
+  "requested_tasks": [
+    "train_model"
+  ],
+  "tasks": [
+    {
+      "task_id": "train_model",
+      "depends_on": [],
+      "required_artifacts": [
+        "demo_dataset"
+      ],
+      "output_artifacts": [
+        "demo_model_report"
+      ],
+      "unresolved_requirements": []
+    }
+  ],
+  "available_artifacts": [
+    "demo_dataset"
+  ],
+  "missing_artifacts": []
+}
