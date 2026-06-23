@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
 from ai4s_agent.worker_queue_poller import WorkerQueuePoller
+from ai4s_agent.worker_task_runner import FakeWorkerTaskRunner, TaskRunResult
 
 
 def _iso(value: datetime) -> str:
@@ -212,3 +213,117 @@ def test_worker_queue_poller_loop_runs_bounded_iterations(tmp_path) -> None:
 
     assert [result.action for result in results] == ["acquired", "heartbeat"]
     assert poller.poll(max_iterations=0) == []
+
+
+def test_poller_with_runner_starts_acquired_job(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})
+    poller = WorkerQueuePoller(queue, worker_id="worker-a", runner=FakeWorkerTaskRunner())
+
+    result = poller.poll_once(now=_iso(datetime(2026, 1, 1, tzinfo=timezone.utc)))
+
+    assert result.action == "acquired"
+    assert result.acquired_job is not None
+    assert result.acquired_job["job_id"] == queued["job_id"]
+    assert result.runner_result == TaskRunResult(
+        state="running",
+        message="task started",
+        output={"task_id": "train_model"},
+    )
+    assert queue.status(queued["job_id"])["status"] == "running"  # type: ignore[index]
+
+
+def test_poller_with_runner_heartbeats_running_poll(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})
+    poller = WorkerQueuePoller(queue, worker_id="worker-a", runner=FakeWorkerTaskRunner())
+    first = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)))
+    assert first.acquired_job is not None
+
+    result = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 5, tzinfo=timezone.utc)))
+
+    assert result.action == "heartbeat"
+    assert result.heartbeat_job is not None
+    assert result.heartbeat_job["job_id"] == queued["job_id"]
+    assert result.heartbeat_job["heartbeat_at"] == "2026-01-01T00:00:05Z"
+    assert result.runner_result is not None
+    assert result.runner_result.state == "running"
+
+
+def test_poller_with_runner_completes_succeeded_poll(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})
+    runner = FakeWorkerTaskRunner(
+        poll_results={queued["job_id"]: TaskRunResult(state="succeeded", message="done", output={"artifact_id": "report"})}
+    )
+    poller = WorkerQueuePoller(queue, worker_id="worker-a", runner=runner)
+    first = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)))
+    assert first.acquired_job is not None
+
+    result = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 5, tzinfo=timezone.utc)))
+
+    assert result.action == "completed"
+    assert result.runner_result == TaskRunResult(state="succeeded", message="done", output={"artifact_id": "report"})
+    assert queue.status(queued["job_id"])["status"] == "succeeded"  # type: ignore[index]
+    assert queue.lease_status(first.acquired_job["lease_id"])["status"] == "completed"  # type: ignore[index]
+
+
+def test_poller_with_runner_fails_failed_poll(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})
+    runner = FakeWorkerTaskRunner(
+        poll_results={queued["job_id"]: TaskRunResult(state="failed", message="adapter failed")}
+    )
+    poller = WorkerQueuePoller(queue, worker_id="worker-a", runner=runner)
+    first = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)))
+    assert first.acquired_job is not None
+
+    result = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 5, tzinfo=timezone.utc)))
+
+    assert result.action == "failed"
+    assert result.runner_result == TaskRunResult(state="failed", message="adapter failed")
+    status = queue.status(queued["job_id"])
+    assert status is not None
+    assert status["status"] == "failed"
+    assert status["error"]["reason"] == "adapter failed"
+    assert queue.lease_status(first.acquired_job["lease_id"])["status"] == "failed"  # type: ignore[index]
+
+
+def test_poller_with_runner_cancels_without_heartbeat(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})
+    poller = WorkerQueuePoller(queue, worker_id="worker-a", runner=FakeWorkerTaskRunner())
+    first = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)))
+    assert first.acquired_job is not None
+    original_heartbeat = first.acquired_job["heartbeat_at"]
+    poller.cancel(queued["job_id"], now=_iso(datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc)))
+
+    result = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 10, tzinfo=timezone.utc)))
+
+    assert result.action == "cancelled"
+    assert result.runner_result == TaskRunResult(state="cancelled", message="task cancelled", output={"task_id": "train_model"})
+    status = queue.status(queued["job_id"])
+    assert status is not None
+    assert status["status"] == "failed"
+    assert status["heartbeat_at"] == original_heartbeat
+    assert status["error"]["reason"] == "cancelled"
+    lease = queue.lease_status(first.acquired_job["lease_id"])
+    assert lease is not None
+    assert lease["heartbeat_at"] == original_heartbeat
+    assert lease["status"] == "failed"
+
+
+def test_poller_without_runner_preserves_control_plane_only_behavior(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})
+    poller = WorkerQueuePoller(queue, worker_id="worker-a")
+    acquired = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)))
+    assert acquired.action == "acquired"
+    assert acquired.runner_result is None
+    poller.cancel(queued["job_id"], now=_iso(datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc)))
+
+    result = poller.poll_once(now=_iso(datetime(2026, 1, 1, 0, 0, 2, tzinfo=timezone.utc)))
+
+    assert result.action == "cancel_requested"
+    assert result.runner_result is None
+    assert queue.status(queued["job_id"])["status"] == "running"  # type: ignore[index]
