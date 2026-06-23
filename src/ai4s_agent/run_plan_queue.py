@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ai4s_agent.schemas import RunPlan
+from ai4s_agent.worker_queue import WorkerQueue
 
 RUN_PLAN_EXECUTE_TASK_ID = "run_plan_execute"
 RUN_PLAN_EXECUTE_KIND = "run_plan_execute"
@@ -69,6 +70,25 @@ def build_run_plan_execute_task(
         task_options={} if task_options is None else task_options,
     )
     return task.to_task()
+
+
+def enqueue_run_plan_execute_job(
+    queue: WorkerQueue,
+    *,
+    project_id: str,
+    run_plan: RunPlan | dict[str, Any],
+    input_artifacts: dict[str, Any] | None = None,
+    task_options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    parsed = run_plan if isinstance(run_plan, RunPlan) else RunPlan.model_validate(run_plan)
+    task = build_run_plan_execute_task(
+        project_id=project_id,
+        run_id=parsed.run_id,
+        run_plan=parsed,
+        input_artifacts=input_artifacts,
+        task_options=task_options,
+    )
+    return queue.enqueue(project_id, parsed.run_id, task)
 
 
 def validate_run_plan_execute_task(value: object) -> RunPlanExecuteQueueTask:
