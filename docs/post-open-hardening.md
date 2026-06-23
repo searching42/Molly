@@ -299,13 +299,14 @@ Evidence:
 
 ## HARDEN-012: Add Worker Queue Polling Loop — Started
 
-- Status: Started by PR #65 with a JSON-backed worker queue skeleton.
+- Status: Started by PR #65 with a JSON-backed worker queue skeleton; extended
+  by PR #67 with a bounded polling-loop control skeleton.
 - Add queue polling around project-scoped jobs so that multiple queued jobs are
   acquired in a deterministic order and later executed by supervised workers.
 - Keep lease acquisition, heartbeat update, cancellation, and stale lease
   recovery semantics without introducing remote workers.
-- PR #65 intentionally does not connect the queue to `WorkerSupervisor`,
-  `RunPlanExecutor`, real training jobs, or remote workers.
+- PR #65 and PR #67 intentionally do not connect the queue to
+  `WorkerSupervisor`, `RunPlanExecutor`, real training jobs, or remote workers.
 
 Skeleton evidence:
 
@@ -316,6 +317,10 @@ Skeleton evidence:
 - `tests/test_harden_012_worker_queue.py` — queue ordering, lease acquisition,
   heartbeat, queued/running cancellation, terminal state, and stale lease
   recovery.
+- `src/ai4s_agent/worker_queue_poller.py` — bounded poller skeleton for
+  recover/acquire/heartbeat/cancellation visibility.
+- `tests/test_harden_012_worker_queue_poller.py` — poller acquire, heartbeat,
+  running cancellation, stale recovery, and bounded loop behavior.
 
 Implemented skeleton semantics:
 
@@ -338,13 +343,27 @@ Implemented skeleton semantics:
 5. **Stale lease recovery** — Expired active leases can be marked `stale`, and
    their running jobs are requeued for a later worker acquisition.
 
+Implemented poller skeleton:
+
+1. `WorkerQueuePoller.poll_once()` recovers stale leases before any worker
+   action.
+
+2. If the current worker has an active lease, the poller heartbeats it unless
+   the job has `cancellation_requested=true`.
+
+3. If no active lease exists, the poller acquires the next queued job for the
+   worker.
+
+4. `WorkerQueuePoller.poll(max_iterations=N)` runs a bounded loop for tests and
+   future supervisors without starting any process or executing any task.
+
 Future integration outline:
 
 1. Connect queue acquisition to the local worker supervisor without changing
    task execution semantics.
 
-2. Add a polling loop that heartbeats active leases and observes
-   `cancellation_requested`.
+2. Attach a task runner behind active leases while preserving cancellation and
+   heartbeat semantics.
 
 3. Add remote worker contract tests after the local polling loop is stable.
 
@@ -356,6 +375,8 @@ Acceptance:
 - Tests cover deterministic ordering, acquire → heartbeat → complete/fail,
   cancel before start, running cancellation visibility, and stale lease
   recovery.
+- Poller tests cover recover → acquire, active lease heartbeat, running
+  cancellation visibility, and bounded loop behavior.
 
 ## HARDEN-013: Add Remote Worker Contract Test
 
