@@ -133,7 +133,7 @@ Skeleton behavior:
 
 Out of scope:
 
-- `RunPlanExecutor` integration
+- default `/api/run-plan/execute` integration
 - API routes
 - Remote worker contracts
 - SQLite store implementation
@@ -150,8 +150,9 @@ Next phase:
    task envelope.
 5. Add an internal enqueue helper that converts a `RunPlan` into a queued
    `run_plan_execute` worker job.
-6. Add queue/poller opt-in wiring for run-plan execution only after the enqueue
-   helper and one-shot adapter contracts are covered by tests.
+6. Add an internal opt-in queued run-plan execution helper that composes the
+   enqueue helper, `WorkerQueuePoller`, `LocalWorkerLoop`, and
+   `RunPlanExecutorTaskRunner` without exposing API routes.
 
 Run-plan queue job schema:
 
@@ -191,6 +192,31 @@ The helper is internal plumbing only. It derives `run_id` from the `RunPlan`,
 builds a validated `run_plan_execute` envelope, calls `WorkerQueue.enqueue(...)`,
 and returns the queued job. It does not call `RunPlanExecutor`, start a
 `LocalWorkerLoop`, add API routes, or change `/api/run-plan/execute`.
+
+Internal queued run-plan execution helper:
+
+```python
+from ai4s_agent.run_plan_queue_service import run_run_plan_via_local_queue
+
+summary = run_run_plan_via_local_queue(
+    queue=queue,
+    storage=project_storage,
+    project_id="project-a",
+    run_plan=run_plan,
+    input_artifacts={"dataset": "datasets/input.csv"},
+    task_options={"train_model": {"epochs": 1}},
+    executor_factory=fake_or_real_executor_factory,
+)
+```
+
+This helper is opt-in internal service plumbing. It enqueues a validated
+`run_plan_execute` job, binds a `RunPlanExecutorTaskRunner` to a
+`WorkerQueuePoller`, runs a bounded `LocalWorkerLoop`, and returns queue/lease
+terminal state plus poll actions. The helper requires a dedicated queue with no
+existing queued or running jobs, because the current `WorkerQueuePoller` acquires
+the next queued job rather than a specific target job. It does not add API
+routes, does not change the default synchronous `/api/run-plan/execute` path,
+does not connect remote workers, and does not change storage.
 
 Run-plan executor task runner:
 

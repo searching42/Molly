@@ -411,8 +411,13 @@ Next phase: run-plan opt-in bridge:
    `run_plan_execute` worker job without starting a loop, calling
    `RunPlanExecutor`, or changing API behavior.
 
-6. **RunPlanExecutor opt-in queue bridge** — Add explicit opt-in wiring from
-   run-plan jobs to worker queue execution only after the one-shot adapter is
+6. **Internal queued run-plan execution helper** — Compose the enqueue helper,
+   `WorkerQueuePoller`, bounded `LocalWorkerLoop`, and
+   `RunPlanExecutorTaskRunner` into an internal opt-in service helper without
+   exposing API routes or changing the default synchronous execution path.
+
+7. **RunPlanExecutor opt-in queue bridge** — Add explicit opt-in wiring from
+   run-plan jobs to worker queue execution only after the internal helper is
    covered by tests.
 
 Do not jump directly to remote worker support or SQLite migration.  Remote
@@ -542,4 +547,6 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #78: define run-plan queue job schema without executing RunPlanExecutor.
 - PR #79: add one-shot RunPlanExecutorTaskRunner without API route wiring.
 - PR #81: add internal run-plan worker queue enqueue helper without API route
+  wiring.
+- PR #82: add internal opt-in queued run-plan execution helper without API route
   wiring.
