@@ -398,7 +398,8 @@ Next phase: run-plan opt-in bridge:
 
 3. **Run-plan queue job schema** — Define the minimal queued task envelope for a
    run-plan execution request, including project/run identity, command-safe
-   metadata, artifacts, and permission expectations.
+   metadata, artifacts, and permission expectations.  PR #78 adds the schema,
+   validator, and builder only; it does not execute `RunPlanExecutor`.
 
 4. **RunPlanExecutor opt-in bridge** — Add an explicit opt-in bridge from
    run-plan jobs to worker queue execution only after the local loop and job
@@ -528,3 +529,4 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #72: completed. Add local supervisor task runner adapter.
 - PR #73: completed. Harden supervisor runner cwd constraints.
 - PR #74: mark local runner binding complete and plan run-plan opt-in bridge.
+- PR #78: define run-plan queue job schema without executing RunPlanExecutor.

@@ -149,6 +149,26 @@ Next phase:
 4. Add a `RunPlanExecutor` opt-in bridge after the local loop and job schema are
    covered by tests.
 
+Run-plan queue job schema:
+
+```python
+from ai4s_agent.run_plan_queue import build_run_plan_execute_task
+
+task = build_run_plan_execute_task(
+    project_id="project-a",
+    run_id="run-1",
+    run_plan=run_plan,
+    input_artifacts={"dataset": "datasets/input.csv"},
+    task_options={"train_model": {"epochs": 1}},
+)
+```
+
+The schema is a serializable queued task envelope only. It includes
+`task_id="run_plan_execute"`, `kind="run_plan_execute"`, project/run identity,
+the validated `RunPlan`, `input_artifacts`, and `task_options`. It deliberately
+does not include `command`, local argv, cwd, shell strings, `RunPlanExecutor`
+calls, API routing, remote worker fields, or SQLite behavior.
+
 Do not jump directly to remote workers or SQLite from this state. Remote worker
 contracts should wait for the local run-plan bridge; SQLite should wait for
 stable file-backed queue and runner semantics under the opt-in bridge.
