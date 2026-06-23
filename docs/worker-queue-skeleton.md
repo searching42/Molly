@@ -1,8 +1,19 @@
 # Worker Queue Skeleton
 
-PR #65 starts HARDEN-012 with a read/write control-plane queue. PR #67 adds a
-bounded polling-loop control skeleton. Neither PR executes tasks, starts worker
-processes, calls `RunPlanExecutor`, or connects to real training jobs.
+HARDEN-012 is control-plane resolved across PR #65 through PR #68.  The queue
+can persist jobs, lease them to workers, poll for heartbeat/cancellation/recovery
+state, and validate queue files.  It still does not execute tasks, start worker
+processes, call `RunPlanExecutor`, connect to remote workers, or migrate state
+to SQLite.
+
+Resolved PRs:
+
+- PR #65: `WorkerQueue` / `JsonWorkerQueueStore` JSON-backed queue and lease
+  state.
+- PR #66: queue/lease record validation and storage consistency checker
+  coverage.
+- PR #67: `WorkerQueuePoller` bounded polling skeleton.
+- PR #68: cancellation and stale recovery control transition tests.
 
 Python API:
 
@@ -82,3 +93,19 @@ Out of scope:
 - Remote worker contracts
 - Real model training or adapter execution
 - SQLite store implementation
+
+Next phase:
+
+1. Define a `WorkerTaskRunner` protocol.
+2. Add fake runner tests for success, failure, cancellation, and heartbeat
+   cadence.
+3. Bind `WorkerQueuePoller` to the runner protocol behind an explicit opt-in
+   path.
+4. Add a `WorkerSupervisorTaskRunner` adapter after the fake runner contract is
+   stable.
+5. Add `RunPlanExecutor` opt-in integration only after the local adapter is
+   covered.
+
+Do not jump directly to remote workers or SQLite from this state.  Remote worker
+contracts should wait for local runner binding; SQLite should wait for stable
+file-backed runner semantics and checker coverage.
