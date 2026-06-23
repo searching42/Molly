@@ -71,6 +71,7 @@ def check_workspace_storage(workspace_dir: str | Path, *, legacy_runs_dir: str |
     _check_permission_files(report, workspace / "projects")
     _check_memory_files(report, workspace / "memory")
     _check_asset_files(report, workspace / "projects")
+    _check_worker_queue_files(report, workspace)
     if legacy_runs_dir is not None:
         _check_legacy_run_files(report, Path(legacy_runs_dir).expanduser().resolve())
     report.finalize()
@@ -142,6 +143,16 @@ def _check_asset_files(report: StorageConsistencyReport, projects_root: Path) ->
         return
     for path in sorted(projects_root.glob("*/assets/**/asset_manifest.json")):
         _check_asset_manifest(report, path)
+
+
+def _check_worker_queue_files(report: StorageConsistencyReport, workspace: Path) -> None:
+    if not workspace.exists():
+        return
+    roots = {path.parent for path in workspace.rglob("worker_queue.json")}
+    roots.update(path.parent for path in workspace.rglob("worker_leases.json"))
+    for root in sorted(roots):
+        job_ids = _check_worker_queue(report, root / "worker_queue.json")
+        _check_worker_leases(report, root / "worker_leases.json", job_ids=job_ids)
 
 
 def _check_stage_state(report: StorageConsistencyReport, path: Path) -> None:
@@ -320,6 +331,80 @@ def _check_asset_manifest(report: StorageConsistencyReport, path: Path) -> None:
         report.add_error("invalid_asset_manifest", "asset_manifest.json does not match AssetManifest schema", path, error=str(exc))
 
 
+def _check_worker_queue(report: StorageConsistencyReport, path: Path) -> set[str] | None:
+    payload = _read_json_object(report, path)
+    if payload is None:
+        return None
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list):
+        report.add_error("worker_queue_jobs_invalid", "worker_queue.json jobs must be a list", path)
+        return set()
+    seen: set[str] = set()
+    for index, job in enumerate(jobs):
+        if not isinstance(job, dict):
+            report.add_error("worker_queue_job_invalid", "worker queue job must be an object", path, index=index)
+            continue
+        for field_name in ("job_id", "project_id", "run_id", "task", "status", "created_at", "updated_at", "cancellation_requested"):
+            if _missing_required(job, field_name):
+                report.add_error("worker_queue_job_missing_field", f"worker queue job missing {field_name}", path, index=index, field=field_name)
+        job_id = str(job.get("job_id") or "")
+        if job_id in seen:
+            report.add_error("worker_queue_job_duplicate_id", "worker queue job id is duplicated", path, index=index, job_id=job_id)
+        if job_id:
+            seen.add(job_id)
+        if not isinstance(job.get("task"), dict):
+            report.add_error("worker_queue_job_invalid_task", "worker queue job task must be an object", path, index=index, job_id=job_id)
+        status = str(job.get("status") or "")
+        if status and status not in {"queued", "running", "cancelled", "succeeded", "failed"}:
+            report.add_error("worker_queue_job_invalid_status", "worker queue job status is invalid", path, index=index, job_id=job_id, status=status)
+        if not isinstance(job.get("cancellation_requested"), bool):
+            report.add_error("worker_queue_job_invalid_cancellation", "worker queue job cancellation_requested must be boolean", path, index=index, job_id=job_id)
+        for field_name in ("created_at", "updated_at", "heartbeat_at", "stale_recovered_at"):
+            timestamp = str(job.get(field_name) or "").strip()
+            if timestamp and _parse_timezone_aware_iso(timestamp) is None:
+                report.add_error("worker_queue_job_invalid_timestamp", f"worker queue job {field_name} must be ISO timestamp with timezone", path, index=index, job_id=job_id, field=field_name, value=timestamp)
+        attempts = job.get("attempts")
+        if attempts is not None and (not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 0):
+            report.add_error("worker_queue_job_invalid_attempts", "worker queue job attempts must be a non-negative integer", path, index=index, job_id=job_id)
+    return seen
+
+
+def _check_worker_leases(report: StorageConsistencyReport, path: Path, *, job_ids: set[str] | None) -> None:
+    payload = _read_json_object(report, path)
+    if payload is None:
+        return
+    leases = payload.get("leases")
+    if not isinstance(leases, list):
+        report.add_error("worker_leases_invalid", "worker_leases.json leases must be a list", path)
+        return
+    seen: set[str] = set()
+    for index, lease in enumerate(leases):
+        if not isinstance(lease, dict):
+            report.add_error("worker_lease_invalid", "worker lease must be an object", path, index=index)
+            continue
+        for field_name in ("lease_id", "job_id", "worker_id", "status", "acquired_at", "heartbeat_at", "expires_at", "ttl_sec"):
+            if _missing_required(lease, field_name):
+                report.add_error("worker_lease_missing_field", f"worker lease missing {field_name}", path, index=index, field=field_name)
+        lease_id = str(lease.get("lease_id") or "")
+        if lease_id in seen:
+            report.add_error("worker_lease_duplicate_id", "worker lease id is duplicated", path, index=index, lease_id=lease_id)
+        if lease_id:
+            seen.add(lease_id)
+        status = str(lease.get("status") or "")
+        if status and status not in {"active", "completed", "failed", "stale"}:
+            report.add_error("worker_lease_invalid_status", "worker lease status is invalid", path, index=index, lease_id=lease_id, status=status)
+        for field_name in ("acquired_at", "heartbeat_at", "expires_at", "completed_at", "stale_at"):
+            timestamp = str(lease.get(field_name) or "").strip()
+            if timestamp and _parse_timezone_aware_iso(timestamp) is None:
+                report.add_error("worker_lease_invalid_timestamp", f"worker lease {field_name} must be ISO timestamp with timezone", path, index=index, lease_id=lease_id, field=field_name, value=timestamp)
+        ttl_sec = lease.get("ttl_sec")
+        if not isinstance(ttl_sec, int) or isinstance(ttl_sec, bool) or ttl_sec <= 0:
+            report.add_error("worker_lease_invalid_ttl", "worker lease ttl_sec must be a positive integer", path, index=index, lease_id=lease_id)
+        job_id = str(lease.get("job_id") or "")
+        if job_ids is not None and job_id and job_id not in job_ids:
+            report.add_error("worker_lease_dangling_job", "worker lease references a missing queue job", path, index=index, lease_id=lease_id, job_id=job_id)
+
+
 def _read_json_object(report: StorageConsistencyReport, path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
@@ -333,6 +418,17 @@ def _read_json_object(report: StorageConsistencyReport, path: Path) -> dict[str,
         report.add_error("invalid_json", "file JSON root must be an object", path)
         return None
     return payload
+
+
+def _missing_required(payload: dict[str, Any], field_name: str) -> bool:
+    if field_name not in payload:
+        return True
+    value = payload.get(field_name)
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    return False
 
 
 def _parse_timezone_aware_iso(value: str) -> datetime | None:
