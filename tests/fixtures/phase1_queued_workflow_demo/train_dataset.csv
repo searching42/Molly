@@ -1,0 +1,37 @@
+smiles,plqy,lambda_em,split_group,note
+CCO,0.42,455,train,seed 01
+CCN,0.51,472,train,seed 02
+CCC,0.36,438,train,seed 03
+CCCl,0.58,489,train,seed 04
+c1ccccc1,0.63,512,train,seed 05
+CCOC,0.47,465,train,seed 06
+CCS,0.44,458,train,seed 07
+CCF,0.55,480,train,seed 08
+CCBr,0.61,505,train,seed 09
+CC(C)O,0.49,468,train,seed 10
+CC(C)N,0.53,476,train,seed 11
+CC(C)C,0.39,442,train,seed 12
+CCCO,0.46,462,train,seed 13
+CCCN,0.52,474,train,seed 14
+CCCC,0.37,439,train,seed 15
+CCCOC,0.48,467,train,seed 16
+CCCSC,0.45,459,train,seed 17
+CC(F)F,0.56,482,train,seed 18
+CC(Cl)Cl,0.59,492,train,seed 19
+CC(Br)Br,0.62,507,train,seed 20
+CC(C)(C)O,0.50,469,train,seed 21
+CC(C)(C)N,0.54,478,train,seed 22
+CC(C)(C)C,0.40,443,train,seed 23
+COC,0.43,456,train,seed 24
+COCC,0.46,463,valid,seed 25
+CNCC,0.52,475,valid,seed 26
+CCCCO,0.47,466,valid,seed 27
+CCCCN,0.53,477,valid,seed 28
+CCCOCC,0.49,470,valid,seed 29
+CCNCC,0.55,481,valid,seed 30
+CCCOCCC,0.50,471,test,seed 31
+CCNCCC,0.56,483,test,seed 32
+CCCCCO,0.48,467,test,seed 33
+CCCCCN,0.54,479,test,seed 34
+CCCCCC,0.41,445,test,seed 35
+invalid_smiles,,not_numeric,train,bad row for cleaning stats

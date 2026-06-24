@@ -438,6 +438,11 @@ Resolved run-plan queue bridge scope:
 11. **Lifecycle helper hardening** — Cleanup/recovery helpers use locked queue
     state, return stable result dictionaries, fail closed on malformed JSON,
     and keep cleanup/recovery internal until mutating operations are audit-ready.
+12. **Phase 1 queued workflow fixture** — The existing Phase 1 workflow is
+    productized through the internal queued execution bridge in a low-risk
+    fixture demo that writes cleaned dataset, baseline metrics, candidate
+    predictions, ranking, report files, artifact registry entries, queue status,
+    and audit records.
 
 Still not default:
 
@@ -446,12 +451,15 @@ Still not default:
   actor identity, and a `run_plan_queue_execute` server grant.
 - Remote workers are not connected.
 - Queue state remains file-backed; no SQLite migration is included.
-- Real training success is not guaranteed by the route/CLI tests.
+- The Phase 1 fixture uses lightweight baseline training/prediction only; it
+  does not prove heavy Uni-Mol/DPA3 training, remote workers, or Phase 2/3/4
+  workflow completion.
 
 Default-route migration hard gates:
 
 1. `RunPlanExecutorTaskRunner` must pass a real low-risk adapter demo, not only
-   fake executor tests.
+   fake executor tests. PR #93 adds a low-risk Phase 1 queued workflow fixture
+   demo with real artifact writes.
 2. The internal route must have permission, actor identity, and audit
    constraints that match or exceed the synchronous route. PR #89 added the
    first actor/audit layer; PR #90 adds the route-level permission grant gate.
@@ -625,5 +633,7 @@ The goal is a closed, auditable demo rather than full automation.
   requirement to the feature-flagged internal run-plan queue route.
 - PR #91: completed. Add internal run-plan queue lifecycle helpers and feature-flagged
   read-only queue status route.
-- PR #92: harden run-plan queue lifecycle helper semantics without exposing
+- PR #92: completed. Harden run-plan queue lifecycle helper semantics without exposing
   cleanup/recovery routes.
+- PR #93: add Phase 1 queued workflow fixture demo without replacing
+  `/api/run-plan/execute`.
