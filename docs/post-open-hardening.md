@@ -478,6 +478,9 @@ Resolved run-plan queue bridge scope:
 20. **Run-plan review card** — Previously written review artifacts can now be
     read as one `RunPlanReviewCard` schema for UI, report, or project-memory
     consumers through a helper and feature-flagged internal read route.
+21. **Project memory review summary** — Run-plan review cards can now be saved
+    as compact `ProjectMemoryRecord` entries containing only decision summary
+    fields and artifact references for future Planner/Observer/Replanner use.
 
 Still not default:
 
@@ -514,6 +517,11 @@ Still not default:
 - The review card layer only aggregates existing review artifacts. It does not
   regenerate artifacts, execute proposals, apply patches, call LLMs, enqueue
   jobs, mutate `RunPlan`, or replace `/api/run-plan/execute`.
+- The project memory review summary stores only the review decision,
+  proposed action, affected tasks, required user decisions, and artifact
+  references. It does not store raw datasets, full artifact contents, markdown
+  bodies, complete verifier/proposal payloads, executable patches, or queued
+  execution state.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -723,3 +731,7 @@ The goal is a closed, auditable demo rather than full automation.
   existing review artifacts without executing proposals, applying patches,
   enqueueing jobs, mutating plans, calling LLMs, or replacing the default
   run-plan execution route.
+- PR #102: save `RunPlanReviewCard` summaries to project memory as compact
+  `run_plan_review` records with decision fields and artifact references only,
+  without storing raw data, full artifact contents, executing proposals,
+  applying patches, enqueueing jobs, mutating plans, or calling LLMs.

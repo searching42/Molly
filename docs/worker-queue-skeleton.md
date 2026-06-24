@@ -468,6 +468,18 @@ Review card aggregation:
   proposed patch, enqueue work, mutate `RunPlan`, call LLMs, or replace
   `/api/run-plan/execute`.
 
+Project memory summary:
+
+- `ai4s_agent.run_plan_review_memory.save_run_plan_review_card_summary_to_memory(...)`
+  stores a compact `ProjectMemoryRecord` from a `RunPlanReviewCard`.
+- The saved memory record uses category `run_plan_review` and includes only the
+  verifier decision, proposed action, affected tasks, required user decisions,
+  and artifact references.
+- It does not store raw CSV/data, full artifact contents, complete verifier or
+  proposal payloads, markdown bodies, or executable patches.
+- The memory integration does not execute proposals, apply patches, call LLMs,
+  enqueue work, mutate `RunPlan`, or replace `/api/run-plan/execute`.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with
