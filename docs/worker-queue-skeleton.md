@@ -382,6 +382,32 @@ Phase 3 literature-to-dataset fixture demo:
   network acquisition, MinerU parsing, large-scale PDF crawling, remote worker
   execution, SQLite migration, or default route replacement.
 
+OLED property profile and multi-objective screening fixture demo:
+
+- `tests/fixtures/oled_property_profiles/oled_properties.json` defines a
+  fixture OLED property profile with configurable property metadata, aliases,
+  canonical units, optimization direction, ranking defaults, risk notes, and
+  recommended task type.
+- The profile includes `plqy`, `lambda_em_nm`, `homo_ev`, `lumo_ev`, and
+  `delta_e_st_ev` as data-configured properties. These are not core schema enum
+  restrictions and do not prevent future workflows from using other
+  `property_id` values.
+- `tests/fixtures/oled_multiobjective_screening_demo/` contains a small
+  multi-property training CSV, candidate CSV, run-plan JSON, input artifact
+  JSON, and task options JSON.
+- `tests/test_oled_multiobjective_screening_demo.py` invokes the
+  feature-flagged internal queued execution route with actor identity and a
+  `run_plan_queue_execute` server grant. The test-local executor reuses
+  existing Phase 1 adapters by training/predicting one property at a time,
+  merges predictions into `multi_property_predictions.csv`, computes
+  profile-driven objective score contributions, ranks candidates, and renders
+  a report.
+- This fixture uses multiple single-property predictions plus weighted
+  multi-objective ranking. It does not implement full multi-task model
+  training, does not let an LLM write executable code at runtime, does not
+  connect REINVENT4/Web Search/MinerU/remote workers, and does not replace
+  `/api/run-plan/execute`.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with

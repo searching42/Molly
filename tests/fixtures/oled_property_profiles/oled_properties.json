@@ -1,0 +1,103 @@
+{
+  "profile_id": "oled_properties",
+  "version": "2026-06-24.fixture",
+  "domain": "OLED materials",
+  "description": "Fixture OLED property profile for configurable multi-objective screening tests.",
+  "properties": [
+    {
+      "property_id": "plqy",
+      "aliases": ["PLQY", "photoluminescence quantum yield", "quantum yield"],
+      "canonical_unit": "fraction",
+      "direction": "maximize",
+      "task_type": "numeric_regression",
+      "property_family": "photophysics",
+      "typical_range": [0, 1],
+      "requires_3d": false,
+      "bounded": true,
+      "derived_from": [],
+      "risk_notes": ["solvent and film morphology dependent"],
+      "ranking_default": {
+        "hard_constraint": false,
+        "weight": 1.4,
+        "target_value": null,
+        "range": null
+      }
+    },
+    {
+      "property_id": "lambda_em_nm",
+      "aliases": ["lambda_em", "emission wavelength", "λ_em", "maximum emission wavelength"],
+      "canonical_unit": "nm",
+      "direction": "target",
+      "task_type": "numeric_regression",
+      "property_family": "photophysics",
+      "typical_range": [380, 800],
+      "requires_3d": "medium",
+      "bounded": false,
+      "derived_from": [],
+      "risk_notes": ["solvent, host, and aggregation dependent"],
+      "ranking_default": {
+        "hard_constraint": false,
+        "weight": 1.0,
+        "target_value": 520,
+        "range": null
+      }
+    },
+    {
+      "property_id": "homo_ev",
+      "aliases": ["HOMO", "HOMO level", "highest occupied molecular orbital"],
+      "canonical_unit": "eV",
+      "direction": "range",
+      "task_type": "numeric_regression",
+      "property_family": "electronic_structure",
+      "typical_range": [-6.8, -4.5],
+      "requires_3d": false,
+      "bounded": false,
+      "derived_from": [],
+      "risk_notes": ["method-dependent and reference-dependent"],
+      "ranking_default": {
+        "hard_constraint": false,
+        "weight": 0.8,
+        "target_value": null,
+        "range": [-5.9, -5.2]
+      }
+    },
+    {
+      "property_id": "lumo_ev",
+      "aliases": ["LUMO", "LUMO level", "lowest unoccupied molecular orbital"],
+      "canonical_unit": "eV",
+      "direction": "range",
+      "task_type": "numeric_regression",
+      "property_family": "electronic_structure",
+      "typical_range": [-3.8, -1.5],
+      "requires_3d": false,
+      "bounded": false,
+      "derived_from": [],
+      "risk_notes": ["method-dependent and reference-dependent"],
+      "ranking_default": {
+        "hard_constraint": false,
+        "weight": 0.8,
+        "target_value": null,
+        "range": [-3.0, -2.2]
+      }
+    },
+    {
+      "property_id": "delta_e_st_ev",
+      "aliases": ["ΔE_ST", "Delta EST", "singlet-triplet gap", "S1-T1", "EST"],
+      "canonical_unit": "eV",
+      "direction": "minimize",
+      "task_type": "numeric_regression",
+      "property_family": "excited_state",
+      "typical_range": [0, 1.2],
+      "requires_3d": true,
+      "bounded": true,
+      "derived_from": ["s1_ev", "t1_ev"],
+      "risk_notes": ["TD-DFT method dependent; important for TADF screening"],
+      "ranking_default": {
+        "hard_constraint": false,
+        "weight": 1.1,
+        "target_value": null,
+        "range": null
+      }
+    }
+  ]
+}

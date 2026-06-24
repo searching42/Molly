@@ -1,0 +1,5 @@
+{
+  "train_dataset": "train_dataset.csv",
+  "candidate_dataset": "candidate_dataset.csv",
+  "property_profile": "../oled_property_profiles/oled_properties.json"
+}

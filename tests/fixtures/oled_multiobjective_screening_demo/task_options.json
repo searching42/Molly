@@ -1,0 +1,26 @@
+{
+  "target_properties": [
+    "plqy",
+    "lambda_em_nm",
+    "homo_ev",
+    "lumo_ev",
+    "delta_e_st_ev"
+  ],
+  "train_model": {
+    "adapter": "train_model_baseline_adapter",
+    "smiles_col": "smiles",
+    "split_col": "split_group",
+    "n_bits": 64
+  },
+  "filter_rank": {
+    "topn": 5
+  },
+  "render_report": {
+    "sections": {
+      "Summary": [
+        "OLED multi-objective screening fixture completed.",
+        "Multiple single-property predictions were merged and ranked with the OLED property profile."
+      ]
+    }
+  }
+}
