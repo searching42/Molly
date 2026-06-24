@@ -423,6 +423,23 @@ Run-plan artifact Observer-Verifier:
   revised plan. Downstream LLM/planner components should consume the fixed
   verifier result and produce only reviewable replan proposals.
 
+Reviewable replan proposal:
+
+- `ai4s_agent.run_plan_replan_proposal.propose_replan_from_verification(...)`
+  consumes only a `RunPlanArtifactVerification` payload.
+- It returns a fixed `RunPlanReplanProposal` schema with
+  `decision_source="verifier"`, the original verifier decision, a deterministic
+  `proposed_action`, affected tasks, rationale, required user decisions, and an
+  unapplied `proposed_run_plan_patch`.
+- `executable` is always `false`; attempts to validate a proposal with
+  `executable=true` are rejected.
+- The first implementation is deterministic and rule-based. It does not call an
+  LLM, mutate a `RunPlan`, execute adapters, enqueue work, or automatically
+  rerun tasks.
+- Future planner/LLM layers may explain or refine these proposals, but the next
+  executable step must still pass through explicit user review plus the
+  existing gate/resume or modified-run-plan path.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with

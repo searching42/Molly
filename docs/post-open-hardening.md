@@ -467,6 +467,10 @@ Resolved run-plan queue bridge scope:
     metrics, generation reports, extraction benchmark reports, and
     multi-objective ranking outputs into one of `continue`, `needs_review`,
     `rerun_recommended`, or `blocked`.
+18. **Reviewable replan proposal** — A deterministic proposal layer now maps
+    `RunPlanArtifactVerification` results into a fixed, non-executable
+    `RunPlanReplanProposal` with affected tasks, rationale, required user
+    decisions, and an unapplied advisory run-plan patch.
 
 Still not default:
 
@@ -493,6 +497,10 @@ Still not default:
   adapters, call LLMs, mutate queues, or create revised plans. Future LLM or
   planner components should consume its fixed schema and propose only
   reviewable replans.
+- The reviewable replan proposal layer is also deterministic and non-executing.
+  It does not mutate `RunPlan`, apply its advisory patch, call LLMs, enqueue
+  jobs, execute adapters, or automatically rerun tasks. User confirmation and a
+  future gate/resume or modified-plan path are still required before execution.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -691,3 +699,6 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #98: add a read-only run-plan artifact Observer-Verifier that maps queue,
   audit, registry, trainability, model, generation, extraction, and ranking
   evidence into fixed four-state decisions for downstream reviewable replans.
+- PR #99: add a deterministic, reviewable `RunPlanReplanProposal` layer from
+  Observer-Verifier findings without mutating plans, executing adapters, calling
+  LLMs, or auto-rerunning tasks.
