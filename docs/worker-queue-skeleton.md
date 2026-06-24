@@ -343,6 +343,25 @@ Phase 1 queued workflow fixture demo:
   does not connect remote workers, does not use SQLite, and does not run heavy
   Uni-Mol/DPA3 training.
 
+Phase 2 deterministic generation screening fixture demo:
+
+- `tests/fixtures/phase2_generation_screening_demo/` contains a run-plan JSON,
+  input artifact JSON, and task options JSON for a local generation-to-screening
+  chain.
+- `tests/test_phase2_generation_screening_demo.py` invokes the same
+  feature-flagged internal queued execution route with actor identity and a
+  `run_plan_queue_execute` server grant.
+- The demo trains a lightweight Phase 1 baseline model from the fixture training
+  dataset, runs `generate_candidates_stub_adapter`, registers the generated
+  CSV as `candidate_dataset`, predicts candidate properties, ranks candidates,
+  and renders a report.
+- The demo writes real generation report, generated candidates, predictions,
+  ranked candidates, final report files, queue status, and requested/succeeded
+  audit records.
+- This is a local low-risk Phase 2 bridge fixture. It does not execute
+  REINVENT4, does not connect remote workers, does not replace
+  `/api/run-plan/execute`, and does not claim full inverse-design automation.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with

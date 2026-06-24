@@ -1,0 +1,34 @@
+{
+  "clean_dataset": {
+    "strict_smiles_cleaning": false
+  },
+  "train_model": {
+    "property_id": "plqy",
+    "adapter": "train_model_baseline_adapter"
+  },
+  "generate_candidates": {
+    "backend": "deterministic_stub",
+    "count": 8,
+    "seed": 7
+  },
+  "filter_rank": {
+    "topn": 4,
+    "score_columns": [
+      "plqy_pred"
+    ],
+    "directions": {
+      "plqy_pred": "maximize"
+    },
+    "weights": {
+      "plqy_pred": 1.0
+    }
+  },
+  "render_report": {
+    "sections": {
+      "Summary": [
+        "Phase 2 deterministic generation screening fixture completed.",
+        "Generated candidates were screened through Phase 1 prediction, ranking, and reporting."
+      ]
+    }
+  }
+}
