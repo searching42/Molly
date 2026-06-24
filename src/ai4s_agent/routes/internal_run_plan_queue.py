@@ -10,16 +10,19 @@ from pydantic import ValidationError
 
 from ai4s_agent._utils import now_iso, truthy
 from ai4s_agent.actor_identity import ActorContext, resolve_actor
+from ai4s_agent.memory import PermissionLevel, PermissionPolicy
 from ai4s_agent.run_plan_queue_service import run_run_plan_via_local_queue
 from ai4s_agent.run_plan_queue_summary import build_run_plan_queue_execution_summary
 from ai4s_agent.run_plan_task_runner import ExecutorFactory
 from ai4s_agent.schemas import RunPlan
+from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
 from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
 
 
 INTERNAL_RUN_PLAN_QUEUE_ROUTE_FLAG = "AI4S_ENABLE_INTERNAL_RUN_PLAN_QUEUE_ROUTE"
 EXECUTOR_FACTORY_CONFIG_KEY = "AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"
+INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION = "run_plan_queue_execute"
 
 
 def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStorage) -> None:
@@ -50,6 +53,23 @@ def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStor
             if "queue_dir" in payload:
                 raise ValueError("queue_dir is not accepted by the internal run-plan queue route")
             max_iterations = _max_iterations(payload.get("max_iterations"))
+            permission = _decide_permission(projects, actor=actor, project_id=project_id, run_id=run_id)
+            if not bool(permission.get("allowed")):
+                summary = _permission_denied_summary(permission)
+                audit_error = _append_audit_or_error(
+                    projects,
+                    actor=actor,
+                    project_id=project_id,
+                    run_id=run_id,
+                    outcome="permission_denied",
+                    status_code=403,
+                    queued_job_id="",
+                    error=_permission_error_dict(permission),
+                    permission=permission,
+                )
+                if audit_error is not None:
+                    return jsonify(audit_error), 500
+                return jsonify(summary), 403
             audit_error = _append_audit_or_error(
                 projects,
                 actor=actor,
@@ -59,6 +79,7 @@ def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStor
                 status_code=202,
                 queued_job_id="",
                 error=None,
+                permission=permission,
             )
             if audit_error is not None:
                 return jsonify(audit_error), 500
@@ -84,6 +105,7 @@ def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStor
                 status_code=status_code,
                 queued_job_id=str(summary.get("queued_job_id") or ""),
                 error=_summary_error(summary),
+                permission=permission,
             )
             if audit_error is not None:
                 return jsonify(audit_error), 500
@@ -100,6 +122,7 @@ def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStor
                 status_code=status_code,
                 queued_job_id="",
                 error=_summary_error_dict(exc),
+                permission=None,
             )
             if audit_error is not None:
                 return jsonify(audit_error), 500
@@ -110,6 +133,13 @@ class _RouteRequestError(ValueError):
     def __init__(self, message: str, *, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class _RunPlanQueuePermissionPolicy(PermissionPolicy):
+    def resolve(self, action: str) -> PermissionLevel:
+        if str(action or "").strip() == INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION:
+            return PermissionLevel.PROJECT_APPROVED
+        return super().resolve(action)
 
 
 def internal_run_plan_queue_route_enabled(app: Any) -> bool:
@@ -173,6 +203,25 @@ def _executor_factory(app: Any) -> ExecutorFactory | None:
     return factory if callable(factory) else None
 
 
+def _decide_permission(
+    projects: ProjectStorage,
+    *,
+    actor: ActorContext,
+    project_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    return decide_server_permission(
+        ServerPermissionStore(projects.workspace_dir),
+        _RunPlanQueuePermissionPolicy(),
+        INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION,
+        project_id=project_id,
+        run_id=run_id,
+        actor=actor.actor,
+        actor_source=actor.source,
+        allow_legacy_client_flags=False,
+    )
+
+
 def _append_audit_or_error(
     projects: ProjectStorage,
     *,
@@ -183,6 +232,7 @@ def _append_audit_or_error(
     status_code: int,
     queued_job_id: str,
     error: dict[str, Any] | None,
+    permission: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     try:
         _append_audit_event(
@@ -194,6 +244,7 @@ def _append_audit_or_error(
             status_code=status_code,
             queued_job_id=queued_job_id,
             error=error,
+            permission=permission,
         )
     except OSError as exc:
         return build_run_plan_queue_execution_summary(
@@ -217,7 +268,9 @@ def _append_audit_event(
     status_code: int,
     queued_job_id: str,
     error: dict[str, Any] | None,
+    permission: dict[str, Any] | None,
 ) -> None:
+    permission_metadata = _permission_audit_metadata(permission, project_id=project_id, run_id=run_id)
     record = {
         "event": "internal_run_plan_queue_execute",
         "timestamp": now_iso(),
@@ -231,6 +284,7 @@ def _append_audit_event(
         "status_code": int(status_code),
         "queued_job_id": queued_job_id,
         "error": error,
+        **permission_metadata,
     }
     path = _audit_path(projects)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -268,6 +322,59 @@ def _summary_error_dict(exc: BaseException) -> dict[str, Any]:
         "type": "validation_error",
         "message": str(exc).strip() or exc.__class__.__name__,
     }
+
+
+def _permission_error_dict(permission: dict[str, Any]) -> dict[str, Any]:
+    reason = str(permission.get("reason") or "permission_denied")
+    return {
+        "type": "permission_denied",
+        "message": f"permission denied: {reason}",
+    }
+
+
+def _permission_denied_summary(permission: dict[str, Any]) -> dict[str, Any]:
+    return build_run_plan_queue_execution_summary(
+        ok=False,
+        terminal=False,
+        error=_permission_error_dict(permission),
+    )
+
+
+def _permission_audit_metadata(
+    permission: dict[str, Any] | None,
+    *,
+    project_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    if permission is None:
+        resource = _permission_resource(project_id, run_id)
+        return {
+            "permission_allowed": False,
+            "permission_reason": "",
+            "permission_action": INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION,
+            "permission_resource": resource,
+            "permission_scope": resource,
+            "permission_grant_id": "",
+            "permission_server_authorized": False,
+        }
+    resource = _permission_resource(project_id, run_id)
+    return {
+        "permission_allowed": bool(permission.get("allowed")),
+        "permission_reason": str(permission.get("reason") or ""),
+        "permission_action": str(permission.get("action") or INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION),
+        "permission_resource": resource,
+        "permission_scope": resource,
+        "permission_grant_id": str(permission.get("grant_id") or ""),
+        "permission_server_authorized": bool(permission.get("server_authorized")),
+    }
+
+
+def _permission_resource(project_id: str, run_id: str) -> str:
+    if project_id and run_id:
+        return f"project:{project_id}:run:{run_id}"
+    if project_id:
+        return f"project:{project_id}"
+    return ""
 
 
 def _error_summary(exc: BaseException) -> dict[str, Any]:

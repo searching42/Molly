@@ -278,14 +278,20 @@ or alter the default synchronous `/api/run-plan/execute` route.
 
 The route requires actor identity through the shared actor resolver. Supported
 sources include `X-Actor`, JSON/form `actor`, `approved_by`, `revoked_by`, and
-`confirmed_by`, plus query `actor`. Each feature-flag-enabled request writes an
-append-only audit record to
+`confirmed_by`, plus query `actor`. It also requires an explicit server grant
+for the `run_plan_queue_execute` permission action scoped to the project/run.
+Actor-present requests without an active grant return a stable
+`permission_denied` summary with HTTP 403 and do not call the executor. Each
+feature-flag-enabled request writes an append-only audit record to
 `workspace/.ai4s_internal/audit/internal_run_plan_queue_audit.jsonl` with actor,
 actor source, project/run identity, outcome, status code, queued job id, and
-error metadata when present. Valid execution requests write a `requested` audit
-event before queue execution starts; if that write fails, the route fails closed
-without calling the executor or mutating the worker queue. Terminal
-`succeeded`/`failed` events are written after queued execution finishes.
+error metadata when present. Permission decisions are recorded in the same event
+with allowed/reason/action/resource/grant metadata, including
+`permission_resource="project:<project_id>:run:<run_id>"`. Valid execution
+requests write a `requested` audit event before queue execution starts; if that
+write fails, the route fails closed without calling the executor or mutating the
+worker queue. Terminal `succeeded`/`failed` events are written after queued
+execution finishes.
 
 Low-risk fixture demo:
 
@@ -332,15 +338,16 @@ The internal run-plan queue bridge is complete for local opt-in use. It now has
 a validated queue task schema, enqueue helper, one-shot
 `RunPlanExecutorTaskRunner`, local queue service, internal CLI, stable
 `RunPlanQueueExecutionSummary`, feature-flagged internal route, and minimal
-actor/audit metadata. These pieces prove the route/CLI/service control path can
-write queue and lease terminal state without changing the default run-plan
-execution route.
+actor/audit/permission metadata. These pieces prove the route/CLI/service
+control path can write queue and lease terminal state without changing the
+default run-plan execution route.
 
 Still not default:
 
 - `/api/run-plan/execute` remains synchronous.
 - `POST /api/internal/run-plan/queue/execute` requires
-  `AI4S_ENABLE_INTERNAL_RUN_PLAN_QUEUE_ROUTE` and actor identity.
+  `AI4S_ENABLE_INTERNAL_RUN_PLAN_QUEUE_ROUTE`, actor identity, and a
+  `run_plan_queue_execute` server grant.
 - No remote worker is connected.
 - No SQLite queue store exists.
 - Fake executor and low-risk CLI tests do not guarantee real model training
