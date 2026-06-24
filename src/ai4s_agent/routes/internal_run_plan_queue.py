@@ -15,6 +15,7 @@ from ai4s_agent.run_plan_queue_lifecycle import internal_run_plan_queue_dir, rea
 from ai4s_agent.run_plan_queue_service import run_run_plan_via_local_queue
 from ai4s_agent.run_plan_queue_summary import build_run_plan_queue_execution_summary
 from ai4s_agent.run_plan_task_runner import ExecutorFactory
+from ai4s_agent.run_plan_review_card import read_run_plan_review_card
 from ai4s_agent.schemas import RunPlan
 from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
 from ai4s_agent.storage import ProjectStorage
@@ -54,6 +55,52 @@ def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStor
                 "status": read_run_plan_queue_status(queue),
                 "permission": _public_permission_decision(permission, project_id=project_id, run_id=run_id),
             })
+        except (OSError, ValidationError, ValueError) as exc:
+            status_code = exc.status_code if isinstance(exc, _RouteRequestError) else 400
+            return jsonify({
+                "ok": False,
+                "error": _summary_error_dict(exc),
+            }), status_code
+
+    @app.get("/api/internal/run-plan/review-card")
+    def internal_run_plan_review_card():
+        if not internal_run_plan_queue_route_enabled(current_app):
+            return jsonify({"ok": False, "error": "internal run-plan queue route disabled"}), 404
+        try:
+            actor = resolve_actor(request, required=True)
+            if not actor.actor:
+                raise _RouteRequestError("actor required", status_code=403)
+            project_id = _safe_path_component(request.args.get("project_id"), "project_id")
+            run_id = _safe_path_component(request.args.get("run_id"), "run_id")
+            permission = _decide_permission(projects, actor=actor, project_id=project_id, run_id=run_id)
+            if not bool(permission.get("allowed")):
+                return jsonify({
+                    "ok": False,
+                    "project_id": project_id,
+                    "run_id": run_id,
+                    "error": _permission_error_dict(permission),
+                    "permission": _public_permission_decision(permission, project_id=project_id, run_id=run_id),
+                }), 403
+            card = read_run_plan_review_card(
+                workspace_dir=projects.workspace_dir,
+                project_id=project_id,
+                run_id=run_id,
+            )
+            return jsonify({
+                "ok": True,
+                "project_id": project_id,
+                "run_id": run_id,
+                "card": card.model_dump(mode="json"),
+                "permission": _public_permission_decision(permission, project_id=project_id, run_id=run_id),
+            })
+        except FileNotFoundError as exc:
+            return jsonify({
+                "ok": False,
+                "error": {
+                    "type": "not_found",
+                    "message": str(exc).strip() or exc.__class__.__name__,
+                },
+            }), 404
         except (OSError, ValidationError, ValueError) as exc:
             status_code = exc.status_code if isinstance(exc, _RouteRequestError) else 400
             return jsonify({
