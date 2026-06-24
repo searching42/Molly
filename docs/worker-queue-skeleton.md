@@ -480,6 +480,23 @@ Project memory summary:
 - The memory integration does not execute proposals, apply patches, call LLMs,
   enqueue work, mutate `RunPlan`, or replace `/api/run-plan/execute`.
 
+Replan application artifacts, audit, and memory:
+
+- `ai4s_agent.run_plan_replan_application_artifacts.write_replan_application_artifacts(...)`
+  materializes a compiled, user-confirmed application draft as review artifacts
+  only.
+- `ai4s_agent.run_plan_replan_application_audit_memory.append_replan_application_audit_record(...)`
+  appends compact `replan_application_requested`,
+  `replan_application_completed`, or `replan_application_failed` audit events
+  under the run `review/` directory.
+- `ai4s_agent.run_plan_replan_application_audit_memory.save_replan_application_summary_to_memory(...)`
+  stores a compact project-memory summary with selected action, result type,
+  selected operation ids, affected tasks, required gates, artifact refs, and
+  audit refs.
+- These helpers do not expose public routes, execute adapters, apply patches,
+  call LLMs, enqueue work, mutate `RunPlan`, store raw data, or replace
+  `/api/run-plan/execute`.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with

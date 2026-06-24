@@ -38,6 +38,8 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 review artifacts | Completed as review-only artifact materialization | `src/ai4s_agent/run_plan_review_artifacts.py` |
 | Phase 4 review card | Completed as read-only UI/API aggregation schema | `src/ai4s_agent/run_plan_review_card.py` |
 | Phase 4 project memory summary | Completed as compact memory record, summary only | `src/ai4s_agent/run_plan_review_memory.py` |
+| Phase 4 replan application review artifacts | Completed as non-executing user-confirmed application drafts | `src/ai4s_agent/run_plan_replan_application_artifacts.py` |
+| Phase 4 replan application audit/memory summary | Completed as append-only audit and compact memory refs only | `src/ai4s_agent/run_plan_replan_application_audit_memory.py` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -219,6 +221,26 @@ Completed layers:
      - artifact references
    - Avoids raw data, full artifact contents, markdown bodies, and full
      verifier/proposal payloads.
+
+6. Replan Application Review Artifacts
+   - Module: `src/ai4s_agent/run_plan_replan_application_artifacts.py`
+   - Reads a user-confirmed application request and proposal artifact.
+   - Verifies `proposal_hash` and selected `operation_id` values.
+   - Writes review-only application artifacts:
+     - `review/replan_application_record.json`
+     - `review/replan_resume_intent.json`, `review/run_plan_revision.json`, or
+       `review/blocked_acknowledgement.json`
+   - Keeps `executable=false` and does not apply the advisory patch.
+
+7. Replan Application Audit And Memory Summary
+   - Module: `src/ai4s_agent/run_plan_replan_application_audit_memory.py`
+   - Appends compact `replan_application_requested`,
+     `replan_application_completed`, or `replan_application_failed` audit
+     records.
+   - Saves compact project memory records with category
+     `run_plan_replan_application`.
+   - Stores only summary fields, selected operation ids, artifact references,
+     and audit references.
 
 Phase 4 boundaries:
 
