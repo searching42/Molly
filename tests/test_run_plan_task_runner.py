@@ -68,6 +68,11 @@ def _runner(tmp_path: Path, execution: dict[str, Any]) -> tuple[RunPlanExecutorT
 
 def test_run_plan_task_runner_start_executes_valid_queue_task(tmp_path: Path) -> None:
     execution = {"ok": True, "run_id": "run-a", "status": "WAITING_USER", "waiting_task": "train_model"}
+    expected_output = {
+        **execution,
+        "waiting_user": True,
+        "required_gates": [],
+    }
     runner, fake = _runner(tmp_path, execution)
     run_plan = _run_plan()
     task = build_run_plan_execute_task(
@@ -80,7 +85,7 @@ def test_run_plan_task_runner_start_executes_valid_queue_task(tmp_path: Path) ->
 
     result = runner.start(_job(task))
 
-    assert result == TaskRunResult(state="succeeded", message="run-plan execution completed", output=execution)
+    assert result == TaskRunResult(state="succeeded", message="run-plan execution completed", output=expected_output)
     assert fake.calls == [
         {
             "project_id": "proj-a",

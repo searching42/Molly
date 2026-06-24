@@ -51,9 +51,11 @@ def test_read_run_plan_queue_status_empty_queue(tmp_path: Path) -> None:
         "active_leases": 0,
         "terminal_jobs": 0,
         "terminal_leases": 0,
+        "waiting_user": 0,
     }
     assert status["has_active_jobs"] is False
     assert status["has_terminal_jobs"] is False
+    assert status["waiting_user_jobs"] == []
 
 
 def test_read_run_plan_queue_status_after_successful_job(tmp_path: Path) -> None:
@@ -142,6 +144,40 @@ def test_cleanup_terminal_run_plan_queue_deletes_files_when_all_records_terminal
     assert result["error"] is None
     assert not store.queue_path.exists()
     assert not store.leases_path.exists()
+
+
+def test_cleanup_terminal_run_plan_queue_removes_terminal_waiting_user_job(tmp_path: Path) -> None:
+    queue = _queue(tmp_path)
+    queue.enqueue("proj-a", "run-a", {"task_id": "run_plan_execute"})
+    waiting = queue.acquire("worker-a")
+    assert waiting is not None
+    queue.complete(
+        waiting["lease_id"],
+        result={
+            "status": "WAITING_USER",
+            "waiting_user": True,
+            "waiting_task": "train_model",
+            "required_gates": ["gate_3_train_config"],
+        },
+    )
+
+    status = read_run_plan_queue_status(queue)
+    assert status["counts"]["waiting_user"] == 1
+    assert status["waiting_user_jobs"] == [
+        {
+            "job_id": "job-proj-a-run-a",
+            "run_id": "run-a",
+            "status": "succeeded",
+            "waiting_task": "train_model",
+            "required_gates": ["gate_3_train_config"],
+        }
+    ]
+
+    result = cleanup_terminal_run_plan_queue(queue)
+
+    assert result["removed_job_ids"] == ["job-proj-a-run-a"]
+    assert result["removed_jobs"] == 1
+    assert result["deleted_files"] is True
 
 
 def test_cleanup_terminal_run_plan_queue_rejects_escaped_store_path(tmp_path: Path) -> None:

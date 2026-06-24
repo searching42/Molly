@@ -80,8 +80,12 @@ def test_run_plan_via_local_queue_completes_waiting_user_execution(tmp_path: Pat
 
     assert result["ok"] is True
     assert result["terminal"] is True
+    assert result["waiting_user"] is True
+    assert result["waiting_task"] == ""
+    assert result["required_gates"] == []
     assert result["loop_results"] == ["completed", "idle"]
     assert result["final_job"]["status"] == "succeeded"
+    assert result["final_job"]["result"]["waiting_user"] is True
     assert result["final_lease"]["status"] == "completed"
     assert result["queued_job_id"] == result["final_job"]["job_id"]
     assert fake.calls == [
@@ -92,6 +96,37 @@ def test_run_plan_via_local_queue_completes_waiting_user_execution(tmp_path: Pat
             "task_options": {"train_model": {"epochs": 1}},
         }
     ]
+
+
+def test_run_plan_via_local_queue_surfaces_waiting_user_metadata(tmp_path: Path) -> None:
+    queue = _queue(tmp_path)
+    fake = FakeRunPlanExecutor(
+        {
+            "ok": True,
+            "run_id": "run-a",
+            "status": "WAITING_USER",
+            "waiting_task": "train_model",
+            "required_gates": ["gate_3_train_config"],
+        }
+    )
+
+    result = run_run_plan_via_local_queue(
+        queue=queue,
+        storage=_storage(tmp_path),
+        project_id="proj-a",
+        run_plan=_run_plan(),
+        executor_factory=_factory(fake),
+    )
+
+    assert result["ok"] is True
+    assert result["terminal"] is True
+    assert result["waiting_user"] is True
+    assert result["waiting_task"] == "train_model"
+    assert result["required_gates"] == ["gate_3_train_config"]
+    assert result["final_job"]["status"] == "succeeded"
+    assert result["final_job"]["result"]["status"] == "WAITING_USER"
+    assert result["final_job"]["result"]["waiting_user"] is True
+    assert result["final_job"]["result"]["waiting_task"] == "train_model"
 
 
 def test_run_plan_via_local_queue_reports_failed_execution(tmp_path: Path) -> None:

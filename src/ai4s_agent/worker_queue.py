@@ -157,8 +157,8 @@ class WorkerQueue:
             state.save()
             return dict(job)
 
-    def complete(self, lease_id: str, *, now: str = "") -> dict[str, Any]:
-        return self._finish(lease_id, status="succeeded", lease_status="completed", now=now)
+    def complete(self, lease_id: str, *, now: str = "", result: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._finish(lease_id, status="succeeded", lease_status="completed", now=now, result=result)
 
     def fail(self, lease_id: str, *, reason: str = "", now: str = "") -> dict[str, Any]:
         return self._finish(lease_id, status="failed", lease_status="failed", reason=reason, now=now)
@@ -203,7 +203,16 @@ class WorkerQueue:
     def list_jobs(self) -> list[dict[str, Any]]:
         return [dict(job) for job in _records(self.store.read_queue(), "jobs")]
 
-    def _finish(self, lease_id: str, *, status: str, lease_status: str, reason: str = "", now: str = "") -> dict[str, Any]:
+    def _finish(
+        self,
+        lease_id: str,
+        *,
+        status: str,
+        lease_status: str,
+        reason: str = "",
+        now: str = "",
+        result: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         clean_lease = _clean_required(lease_id, "lease_id")
         current = _normalize_time(now, fallback=self._now())
         with self._locked_state() as state:
@@ -215,6 +224,8 @@ class WorkerQueue:
                 raise KeyError(f"job not found for lease: {clean_lease}")
             job["status"] = status
             job["updated_at"] = current
+            if result is not None:
+                job["result"] = dict(result)
             if reason:
                 job["error"] = {"reason": str(reason)}
             lease["status"] = lease_status

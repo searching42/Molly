@@ -80,6 +80,37 @@ def test_succeeded_run_plan_queue_summary_validates(tmp_path: Path) -> None:
     assert parsed.final_lease is not None
     assert parsed.loop_results == ["completed", "idle"]
     assert parsed.error is None
+    assert parsed.waiting_user is True
+
+
+def test_waiting_user_run_plan_queue_summary_surfaces_gate_metadata(tmp_path: Path) -> None:
+    summary = run_run_plan_via_local_queue(
+        queue=_queue(tmp_path),
+        storage=_storage(tmp_path),
+        project_id="proj-a",
+        run_plan=_run_plan(),
+        executor_factory=_factory(
+            {
+                "ok": True,
+                "run_id": "run-a",
+                "status": "WAITING_USER",
+                "waiting_task": "train_model",
+                "required_gates": ["gate_3_train_config"],
+            }
+        ),
+    )
+
+    parsed = RunPlanQueueExecutionSummary.model_validate(summary)
+
+    assert parsed.ok is True
+    assert parsed.terminal is True
+    assert parsed.waiting_user is True
+    assert parsed.waiting_task == "train_model"
+    assert parsed.required_gates == ["gate_3_train_config"]
+    assert parsed.final_job is not None
+    assert parsed.final_job["status"] == "succeeded"
+    assert parsed.final_job["result"]["waiting_user"] is True
+    assert parsed.final_job["result"]["waiting_task"] == "train_model"
 
 
 def test_failed_run_plan_queue_summary_validates(tmp_path: Path) -> None:
