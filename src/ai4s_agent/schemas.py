@@ -1890,6 +1890,7 @@ ProjectMemoryCategory = Literal[
     "parser_choice",
     "property_alias",
     "risk_policy",
+    "run_plan_review",
 ]
 
 
