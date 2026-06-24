@@ -497,6 +497,20 @@ Replan application artifacts, audit, and memory:
   call LLMs, enqueue work, mutate `RunPlan`, store raw data, or replace
   `/api/run-plan/execute`.
 
+Internal replan application review route:
+
+- `POST /api/internal/run-plan/replan/apply-review` is an internal-only route
+  for materializing a user-confirmed replan application review draft.
+- It requires `AI4S_ENABLE_INTERNAL_RUN_PLAN_QUEUE_ROUTE`, actor identity, and
+  a `run_plan_replan_apply` server permission grant.
+- The route accepts a `ReplanApplicationRequest`, writes a requested audit
+  record, calls `write_replan_application_artifacts(...)`, writes completed or
+  failed audit records, saves a compact project-memory summary, and returns a
+  compact application bundle summary.
+- The route does not execute adapters, enqueue work, auto-resume, apply the
+  proposed patch, mutate `RunPlan`, call LLMs, or replace
+  `/api/run-plan/execute`.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with

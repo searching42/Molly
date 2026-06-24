@@ -498,6 +498,12 @@ Resolved run-plan queue bridge scope:
     audit records for requested/completed/failed replan application events and
     compact project-memory summaries containing only summary fields, artifact
     refs, and audit refs.
+26. **Internal replan application review route** — PR #109 exposes
+    `POST /api/internal/run-plan/replan/apply-review` behind the internal
+    feature flag, actor identity, and `run_plan_replan_apply` permission grant.
+    It writes requested/completed/failed audit records, materializes application
+    review artifacts, saves compact project memory, and returns a review
+    summary without executing or enqueueing anything.
 
 Still not default:
 
@@ -549,6 +555,11 @@ Still not default:
   patches, enqueue jobs, mutate `RunPlan`, call LLMs, or replace
   `/api/run-plan/execute`. Memory records store only compact summary fields,
   artifact references, and audit references.
+- The internal replan application route is also review-only. It requires the
+  existing internal feature flag, actor identity, and a
+  `run_plan_replan_apply` server grant, but it does not resume runs, execute
+  adapters, enqueue jobs, apply patches, mutate `RunPlan`, call LLMs, or
+  replace `/api/run-plan/execute`.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -783,3 +794,8 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #108: add replan application audit records and compact project-memory
   summary helpers without adding routes, executing proposals, applying patches,
   enqueueing jobs, mutating `RunPlan`, or calling LLMs.
+- PR #109: add a feature-flagged internal replan application review route that
+  writes application artifacts, audit records, and compact memory summaries
+  behind actor and `run_plan_replan_apply` permission gates, without executing,
+  enqueueing, applying patches, mutating `RunPlan`, calling LLMs, or replacing
+  `/api/run-plan/execute`.

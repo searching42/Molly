@@ -40,6 +40,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 project memory summary | Completed as compact memory record, summary only | `src/ai4s_agent/run_plan_review_memory.py` |
 | Phase 4 replan application review artifacts | Completed as non-executing user-confirmed application drafts | `src/ai4s_agent/run_plan_replan_application_artifacts.py` |
 | Phase 4 replan application audit/memory summary | Completed as append-only audit and compact memory refs only | `src/ai4s_agent/run_plan_replan_application_audit_memory.py` |
+| Phase 4 internal replan application route | Completed as feature-flagged review-only route | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -241,6 +242,16 @@ Completed layers:
      `run_plan_replan_application`.
    - Stores only summary fields, selected operation ids, artifact references,
      and audit references.
+
+8. Internal Replan Application Review Route
+   - Route: `POST /api/internal/run-plan/replan/apply-review`
+   - Requires the internal feature flag, actor identity, and
+     `run_plan_replan_apply` permission grant.
+   - Accepts a `ReplanApplicationRequest`, writes requested/completed/failed
+     audit records, materializes review-only application artifacts, and saves a
+     compact memory summary.
+   - Does not execute, enqueue, auto-resume, apply patches, call LLMs, mutate
+     `RunPlan`, or replace `/api/run-plan/execute`.
 
 Phase 4 boundaries:
 
