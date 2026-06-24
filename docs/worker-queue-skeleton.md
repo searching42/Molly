@@ -408,6 +408,21 @@ OLED property profile and multi-objective screening fixture demo:
   connect REINVENT4/Web Search/MinerU/remote workers, and does not replace
   `/api/run-plan/execute`.
 
+Run-plan artifact Observer-Verifier:
+
+- `ai4s_agent.run_plan_artifact_verifier.verify_run_plan_artifacts(...)` is a
+  read-only observer-verifier for queued workflow artifacts.
+- It consumes optional queue execution summary/status payloads, internal
+  run-plan queue audit records, the project artifact registry, and known
+  artifact reports. It reads trainability reports, model metrics, generation
+  reports, extraction benchmark reports, and multi-objective ranking CSVs when
+  present.
+- It returns a fixed `RunPlanArtifactVerification` schema with one decision:
+  `continue`, `needs_review`, `rerun_recommended`, or `blocked`.
+- This layer does not execute adapters, mutate queues, call LLMs, or author a
+  revised plan. Downstream LLM/planner components should consume the fixed
+  verifier result and produce only reviewable replan proposals.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with

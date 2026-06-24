@@ -461,6 +461,12 @@ Resolved run-plan queue bridge scope:
     emission wavelength, HOMO, LUMO, and singlet-triplet gap are recognized as
     configurable properties, predicted with multiple single-property baselines,
     combined into profile-driven score contributions, ranked, and reported.
+17. **Run-plan artifact Observer-Verifier** — A fixed, read-only
+    observer-verifier schema now evaluates queued execution summaries/status,
+    audit outcomes, artifact registry entries, trainability reports, model
+    metrics, generation reports, extraction benchmark reports, and
+    multi-objective ranking outputs into one of `continue`, `needs_review`,
+    `rerun_recommended`, or `blocked`.
 
 Still not default:
 
@@ -483,6 +489,10 @@ Still not default:
 - The OLED property profile fixture is data configuration, not a hardcoded
   OLED-only core schema enum. It does not implement full multi-task model
   training and does not allow runtime LLM-generated executable code.
+- The Observer-Verifier is a deterministic read-only layer. It does not execute
+  adapters, call LLMs, mutate queues, or create revised plans. Future LLM or
+  planner components should consume its fixed schema and propose only
+  reviewable replans.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -678,3 +688,6 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #97: add OLED property profile and multi-objective screening fixture using
   multiple single-property predictions plus weighted ranking, without hardcoding
   OLED-only core property enums or implementing full multi-task training.
+- PR #98: add a read-only run-plan artifact Observer-Verifier that maps queue,
+  audit, registry, trainability, model, generation, extraction, and ranking
+  evidence into fixed four-state decisions for downstream reviewable replans.
