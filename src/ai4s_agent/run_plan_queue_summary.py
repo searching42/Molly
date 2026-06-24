@@ -16,6 +16,9 @@ class RunPlanQueueExecutionSummary(BaseModel):
     final_job: dict[str, Any] | None
     final_lease: dict[str, Any] | None
     loop_results: list[str] = Field(default_factory=list)
+    waiting_user: bool = False
+    waiting_task: str = ""
+    required_gates: list[str] = Field(default_factory=list)
     error: dict[str, Any] | None = None
 
     @field_validator("queued_job_id")
@@ -27,6 +30,16 @@ class RunPlanQueueExecutionSummary(BaseModel):
     @classmethod
     def clean_loop_results(cls, value: list[str]) -> list[str]:
         return [str(item) for item in value]
+
+    @field_validator("waiting_task")
+    @classmethod
+    def clean_waiting_task(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @field_validator("required_gates")
+    @classmethod
+    def clean_required_gates(cls, value: list[str]) -> list[str]:
+        return [str(item).strip() for item in value if str(item).strip()]
 
     @field_validator("error")
     @classmethod
@@ -54,6 +67,9 @@ def build_run_plan_queue_execution_summary(
     final_job: dict[str, Any] | None = None,
     final_lease: dict[str, Any] | None = None,
     loop_results: list[str] | None = None,
+    waiting_user: bool = False,
+    waiting_task: str = "",
+    required_gates: list[str] | None = None,
     error: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return RunPlanQueueExecutionSummary(
@@ -63,5 +79,8 @@ def build_run_plan_queue_execution_summary(
         final_job=final_job,
         final_lease=final_lease,
         loop_results=list(loop_results or []),
+        waiting_user=waiting_user,
+        waiting_task=waiting_task,
+        required_gates=list(required_gates or []),
         error=error,
     ).to_json_dict()

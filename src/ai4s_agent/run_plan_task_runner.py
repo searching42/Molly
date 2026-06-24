@@ -51,6 +51,7 @@ class RunPlanExecutorTaskRunner:
             input_artifacts={str(key): str(value) for key, value in task.input_artifacts.items()},
             task_options=_task_options(task.task_options),
         )
+        execution = _normalize_execution_output(execution)
         if _execution_succeeded(execution):
             return TaskRunResult(
                 state="succeeded",
@@ -90,6 +91,17 @@ def _execution_succeeded(execution: dict[str, Any]) -> bool:
         return False
     status = str(execution.get("status") or "").strip().lower()
     return status in {"succeeded", "done", "waiting_user"}
+
+
+def _normalize_execution_output(execution: dict[str, Any]) -> dict[str, Any]:
+    clean = dict(execution)
+    status = str(clean.get("status") or "").strip().upper()
+    if status == "WAITING_USER":
+        clean["waiting_user"] = True
+        clean["waiting_task"] = str(clean.get("waiting_task") or "").strip()
+        gates = clean.get("required_gates")
+        clean["required_gates"] = [str(item).strip() for item in gates if str(item).strip()] if isinstance(gates, list) else []
+    return clean
 
 
 def _failure_message(execution: dict[str, Any]) -> str:

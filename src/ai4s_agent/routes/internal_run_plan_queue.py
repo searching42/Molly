@@ -130,7 +130,7 @@ def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStor
                 executor_factory=_executor_factory(current_app),
             )
             status_code = 200 if bool(summary.get("ok")) and bool(summary.get("terminal")) else 400
-            outcome = "succeeded" if status_code == 200 else "failed"
+            outcome = _terminal_audit_outcome(summary, status_code=status_code)
             audit_error = _append_audit_or_error(
                 projects,
                 actor=actor,
@@ -141,6 +141,7 @@ def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStor
                 queued_job_id=str(summary.get("queued_job_id") or ""),
                 error=_summary_error(summary),
                 permission=permission,
+                waiting_metadata=_waiting_audit_metadata(summary),
             )
             if audit_error is not None:
                 return jsonify(audit_error), 500
@@ -264,6 +265,7 @@ def _append_audit_or_error(
     queued_job_id: str,
     error: dict[str, Any] | None,
     permission: dict[str, Any] | None,
+    waiting_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     try:
         _append_audit_event(
@@ -276,6 +278,7 @@ def _append_audit_or_error(
             queued_job_id=queued_job_id,
             error=error,
             permission=permission,
+            waiting_metadata=waiting_metadata,
         )
     except OSError as exc:
         return build_run_plan_queue_execution_summary(
@@ -300,8 +303,10 @@ def _append_audit_event(
     queued_job_id: str,
     error: dict[str, Any] | None,
     permission: dict[str, Any] | None,
+    waiting_metadata: dict[str, Any] | None = None,
 ) -> None:
     permission_metadata = _permission_audit_metadata(permission, project_id=project_id, run_id=run_id)
+    waiting = waiting_metadata or {"waiting_user": False, "waiting_task": "", "required_gates": []}
     record = {
         "event": "internal_run_plan_queue_execute",
         "timestamp": now_iso(),
@@ -315,6 +320,13 @@ def _append_audit_event(
         "status_code": int(status_code),
         "queued_job_id": queued_job_id,
         "error": error,
+        "waiting_user": bool(waiting.get("waiting_user")),
+        "waiting_task": str(waiting.get("waiting_task") or ""),
+        "required_gates": [
+            str(item).strip()
+            for item in waiting.get("required_gates", [])
+            if str(item).strip()
+        ] if isinstance(waiting.get("required_gates"), list) else [],
         **permission_metadata,
     }
     path = _audit_path(projects)
@@ -346,6 +358,23 @@ def _summary_error(summary: dict[str, Any]) -> dict[str, Any] | None:
             if message:
                 return {"type": "execution_error", "message": message}
     return None
+
+
+def _waiting_audit_metadata(summary: dict[str, Any]) -> dict[str, Any]:
+    gates = summary.get("required_gates")
+    return {
+        "waiting_user": bool(summary.get("waiting_user")),
+        "waiting_task": str(summary.get("waiting_task") or ""),
+        "required_gates": [str(item).strip() for item in gates if str(item).strip()] if isinstance(gates, list) else [],
+    }
+
+
+def _terminal_audit_outcome(summary: dict[str, Any], *, status_code: int) -> str:
+    if status_code == 200 and bool(summary.get("waiting_user")):
+        return "waiting_user"
+    if status_code == 200:
+        return "succeeded"
+    return "failed"
 
 
 def _summary_error_dict(exc: BaseException) -> dict[str, Any]:

@@ -124,7 +124,17 @@ def test_internal_run_plan_queue_status_route_is_disabled_by_default(tmp_path: P
 def test_internal_run_plan_queue_route_executes_when_feature_flag_enabled(tmp_path: Path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
-    _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    _enable_queue_route(
+        app,
+        execution={
+            "ok": True,
+            "run_id": "run-a",
+            "status": "WAITING_USER",
+            "waiting_task": "train_model",
+            "required_gates": ["gate_3_train_config"],
+        },
+        calls=calls,
+    )
     grant = _grant_run_plan_queue_permission(tmp_path)
     client = app.test_client()
 
@@ -134,8 +144,12 @@ def test_internal_run_plan_queue_route_executes_when_feature_flag_enabled(tmp_pa
     summary = RunPlanQueueExecutionSummary.model_validate(response.get_json())
     assert summary.ok is True
     assert summary.terminal is True
+    assert summary.waiting_user is True
+    assert summary.waiting_task == "train_model"
+    assert summary.required_gates == ["gate_3_train_config"]
     assert summary.final_job is not None
     assert summary.final_job["status"] == "succeeded"
+    assert summary.final_job["result"]["waiting_user"] is True
     assert summary.final_lease is not None
     assert summary.final_lease["status"] == "completed"
     assert summary.loop_results == ["completed", "idle"]
@@ -160,9 +174,12 @@ def test_internal_run_plan_queue_route_executes_when_feature_flag_enabled(tmp_pa
     assert audit[-1]["run_id"] == "run-a"
     assert audit[-1]["route"] == "/api/internal/run-plan/queue/execute"
     assert audit[-1]["feature_flag_enabled"] is True
-    assert audit[-1]["outcome"] == "succeeded"
+    assert audit[-1]["outcome"] == "waiting_user"
     assert audit[-1]["status_code"] == 200
     assert audit[-1]["queued_job_id"] == summary.queued_job_id
+    assert audit[-1]["waiting_user"] is True
+    assert audit[-1]["waiting_task"] == "train_model"
+    assert audit[-1]["required_gates"] == ["gate_3_train_config"]
     assert audit[-1]["permission_allowed"] is True
     assert audit[-1]["permission_reason"] == "SERVER_GRANT"
     assert audit[-1]["permission_resource"] == "project:proj-a:run:run-a"
@@ -223,6 +240,8 @@ def test_internal_run_plan_queue_status_route_returns_status_without_executor(tm
     assert payload["run_id"] == "run-a"
     assert payload["status"]["counts"]["succeeded"] == 1
     assert payload["status"]["counts"]["terminal_leases"] == 1
+    assert payload["status"]["counts"]["waiting_user"] == 1
+    assert payload["status"]["waiting_user_jobs"][0]["waiting_task"] == ""
     assert payload["permission"]["allowed"] is True
     assert calls == []
 
@@ -378,7 +397,8 @@ def test_internal_run_plan_queue_route_audits_x_actor_success(tmp_path: Path) ->
     assert audit[-2]["outcome"] == "requested"
     assert audit[-1]["actor"] == "test-user"
     assert audit[-1]["actor_source"] == "header:X-Actor"
-    assert audit[-1]["outcome"] == "succeeded"
+    assert audit[-1]["outcome"] == "waiting_user"
+    assert audit[-1]["waiting_user"] is True
     assert audit[-1]["queued_job_id"] == summary.queued_job_id
 
 

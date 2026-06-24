@@ -343,6 +343,23 @@ Phase 1 queued workflow fixture demo:
   does not connect remote workers, does not use SQLite, and does not run heavy
   Uni-Mol/DPA3 training.
 
+Queued `WAITING_USER` contract:
+
+- `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with
+  `status="WAITING_USER"` as terminal-compatible for the first queued bridge
+  version.
+- The underlying worker queue job is completed with `job.status="succeeded"`
+  and the lease is completed, preserving current queue cleanup and status
+  semantics.
+- The job `result`, `RunPlanQueueExecutionSummary`, internal status route, and
+  audit records expose `waiting_user=true`, `waiting_task`, and
+  `required_gates`.
+- Terminal audit outcome is `waiting_user`, not `failed`, when queued execution
+  pauses for a gate/user decision.
+- This contract does not implement a full queued resume engine. Resume behavior
+  remains a separate future bridge after waiting-user state, actor, permission,
+  and audit rules are stable.
+
 Low-risk fixture demo:
 
 ```bash
@@ -402,6 +419,8 @@ Still not default:
 - No SQLite queue store exists.
 - Fake executor and low-risk CLI tests do not guarantee real model training
   success.
+- `WAITING_USER` is terminal-compatible in the queue, but resumable queued
+  execution is not implemented yet.
 
 Default-route migration hard gates:
 
@@ -414,5 +433,6 @@ Default-route migration hard gates:
    service helper, and tests.
 5. The dedicated queue limitation must be resolved with dedicated per-request
    queues or target-job acquisition.
-6. `waiting_user` must have an explicit contract: either terminal succeeded for
-   compatibility or a non-terminal waiting state with resume semantics.
+6. `waiting_user` uses the current compatibility contract: terminal succeeded
+   queue state plus explicit waiting metadata in summary, status, and audit.
+   A full queued resume engine remains future work.

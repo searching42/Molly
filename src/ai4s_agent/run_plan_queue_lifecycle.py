@@ -30,6 +30,7 @@ def read_run_plan_queue_status(queue: WorkerQueue) -> dict[str, Any]:
         "counts": counts,
         "has_active_jobs": bool(counts["queued"] or counts["running"] or counts["active_leases"]),
         "has_terminal_jobs": bool(counts["terminal_jobs"]),
+        "waiting_user_jobs": _waiting_user_jobs(jobs),
     }
 
 
@@ -102,6 +103,7 @@ def _counts(jobs: list[dict[str, Any]], leases: list[dict[str, Any]]) -> dict[st
         "active_leases": 0,
         "terminal_jobs": 0,
         "terminal_leases": 0,
+        "waiting_user": 0,
     }
     for job in jobs:
         status = str(job.get("status") or "")
@@ -109,6 +111,8 @@ def _counts(jobs: list[dict[str, Any]], leases: list[dict[str, Any]]) -> dict[st
             counts[status] += 1
         if status in TERMINAL_JOB_STATUSES:
             counts["terminal_jobs"] += 1
+        if _job_waiting_user(job):
+            counts["waiting_user"] += 1
     for lease in leases:
         status = str(lease.get("status") or "")
         if status == "active":
@@ -116,6 +120,35 @@ def _counts(jobs: list[dict[str, Any]], leases: list[dict[str, Any]]) -> dict[st
         if status in TERMINAL_LEASE_STATUSES:
             counts["terminal_leases"] += 1
     return counts
+
+
+def _waiting_user_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for job in jobs:
+        if not _job_waiting_user(job):
+            continue
+        job_result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        result.append(
+            {
+                "job_id": str(job.get("job_id") or ""),
+                "run_id": str(job.get("run_id") or ""),
+                "status": str(job.get("status") or ""),
+                "waiting_task": str(job_result.get("waiting_task") or ""),
+                "required_gates": [
+                    str(item).strip()
+                    for item in job_result.get("required_gates", [])
+                    if str(item).strip()
+                ] if isinstance(job_result.get("required_gates"), list) else [],
+            }
+        )
+    return result
+
+
+def _job_waiting_user(job: dict[str, Any]) -> bool:
+    result = job.get("result")
+    if not isinstance(result, dict):
+        return False
+    return bool(result.get("waiting_user")) or str(result.get("status") or "").strip().upper() == "WAITING_USER"
 
 
 def _safe_path_component(value: object, label: str) -> str:

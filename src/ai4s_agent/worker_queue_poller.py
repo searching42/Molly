@@ -146,7 +146,8 @@ class WorkerQueuePoller:
     ) -> WorkerQueuePollResult:
         lease_id = str(lease.get("lease_id") or "")
         if result.state == "succeeded":
-            job = self.queue.complete(lease_id, now=now)
+            output = result.output if isinstance(result.output, dict) else None
+            job = self.queue.complete(lease_id, now=now, result=output)
             return WorkerQueuePollResult(
                 worker_id=self.worker_id,
                 action="completed",

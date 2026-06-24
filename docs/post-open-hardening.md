@@ -443,6 +443,11 @@ Resolved run-plan queue bridge scope:
     fixture demo that writes cleaned dataset, baseline metrics, candidate
     predictions, ranking, report files, artifact registry entries, queue status,
     and audit records.
+13. **Queued `WAITING_USER` semantics** — The first queued execution contract
+    keeps `WAITING_USER` terminal-compatible by completing the queue job as
+    `succeeded`, while `RunPlanQueueExecutionSummary`, queue status, and audit
+    records explicitly expose `waiting_user`, `waiting_task`, and
+    `required_gates` metadata.
 
 Still not default:
 
@@ -454,6 +459,7 @@ Still not default:
 - The Phase 1 fixture uses lightweight baseline training/prediction only; it
   does not prove heavy Uni-Mol/DPA3 training, remote workers, or Phase 2/3/4
   workflow completion.
+- Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
 
@@ -471,8 +477,10 @@ Default-route migration hard gates:
    service helper, and integration tests.
 5. The dedicated-queue limitation must be resolved either with guaranteed
    per-request dedicated queues or target-job acquisition.
-6. `waiting_user` semantics must be explicit: either terminal succeeded for
-   current compatibility or a non-terminal/waiting state with resume behavior.
+6. `waiting_user` semantics must stay explicit. PR #94 defines the first
+   compatibility contract: queue jobs finish as `succeeded`, while summary,
+   status, and audit surfaces carry waiting metadata. A full queued resume
+   engine remains future work.
 
 Do not jump directly to remote worker support or SQLite migration. Remote worker
 contracts should wait until the local default-route migration gates are met;
@@ -637,3 +645,5 @@ The goal is a closed, auditable demo rather than full automation.
   cleanup/recovery routes.
 - PR #93: add Phase 1 queued workflow fixture demo without replacing
   `/api/run-plan/execute`.
+- PR #94: define queued `WAITING_USER` compatibility semantics without adding a
+  full resume queue engine.

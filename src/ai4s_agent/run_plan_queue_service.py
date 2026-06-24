@@ -52,6 +52,7 @@ def run_run_plan_via_local_queue(
             final_lease = queue.lease_status(lease_id)
     loop_actions = [item.action for item in loop_result.results]
     terminal = bool(loop_actions) and loop_actions[-1] == "idle"
+    waiting = _waiting_user_metadata(final_job)
     return build_run_plan_queue_execution_summary(
         ok=final_job is not None and str(final_job.get("status") or "") == "succeeded",
         terminal=terminal,
@@ -59,6 +60,9 @@ def run_run_plan_via_local_queue(
         final_job=final_job,
         final_lease=final_lease,
         loop_results=loop_actions,
+        waiting_user=bool(waiting["waiting_user"]),
+        waiting_task=str(waiting["waiting_task"]),
+        required_gates=list(waiting["required_gates"]),
     )
 
 
@@ -67,3 +71,18 @@ def _active_or_queued_jobs(queue: WorkerQueue) -> list[dict[str, Any]]:
         job for job in queue.list_jobs()
         if str(job.get("status") or "") in {"queued", "running"}
     ]
+
+
+def _waiting_user_metadata(job: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(job, dict):
+        return {"waiting_user": False, "waiting_task": "", "required_gates": []}
+    result = job.get("result")
+    if not isinstance(result, dict):
+        return {"waiting_user": False, "waiting_task": "", "required_gates": []}
+    waiting_user = str(result.get("status") or "").strip().upper() == "WAITING_USER" or bool(result.get("waiting_user"))
+    required_gates = result.get("required_gates")
+    return {
+        "waiting_user": waiting_user,
+        "waiting_task": str(result.get("waiting_task") or "").strip(),
+        "required_gates": [str(item).strip() for item in required_gates if str(item).strip()] if isinstance(required_gates, list) else [],
+    }
