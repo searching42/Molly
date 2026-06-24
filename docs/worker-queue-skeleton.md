@@ -259,6 +259,23 @@ Validation/input failures use the same schema with `ok=false`,
 `terminal=false`, empty `queued_job_id`, null final state fields, an empty
 `loop_results` list, and an `error` object containing `type` and `message`.
 
+Internal queued run-plan API route:
+
+```text
+POST /api/internal/run-plan/queue/execute
+```
+
+This route is internal-only and disabled by default. It is available only when
+`AI4S_ENABLE_INTERNAL_RUN_PLAN_QUEUE_ROUTE` is truthy in app config or the
+environment. It accepts `project_id`, `run_plan`, optional `input_artifacts`,
+optional `task_options`, and optional `max_iterations`, then returns a
+`RunPlanQueueExecutionSummary`. The route always uses an internal queue path
+under `workspace/.ai4s_internal/run_plan_queues/<project_id>/<run_id>` and
+rejects request-supplied `queue_dir` values. `project_id` and `run_id` must be
+single safe path components, so traversal names and path separators are rejected
+before the internal queue path is constructed. It intentionally does not replace
+or alter the default synchronous `/api/run-plan/execute` route.
+
 Low-risk fixture demo:
 
 ```bash

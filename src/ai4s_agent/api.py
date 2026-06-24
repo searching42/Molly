@@ -11,6 +11,7 @@ from ai4s_agent.orchestrator import Orchestrator
 from ai4s_agent.routes import run_control as run_control_routes
 from ai4s_agent.routes.agents import _as_bool, register_agent_routes
 from ai4s_agent.routes.core import register_core_routes
+from ai4s_agent.routes.internal_run_plan_queue import register_internal_run_plan_queue_routes
 from ai4s_agent.routes.jobs import register_job_routes
 from ai4s_agent.routes.legacy_plan import register_legacy_plan_routes
 from ai4s_agent.routes.project_assets import register_project_asset_routes
@@ -71,6 +72,7 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
     register_core_routes(app)
     register_legacy_plan_routes(app, orch=orch, jobs=jobs)
     register_run_plan_routes(app, projects=projects, jobs=jobs)
+    register_internal_run_plan_queue_routes(app, projects=projects)
     register_agent_routes(app, projects=projects, project_memory=project_memory, jobs=jobs)
     register_worker_deployment_routes(app, workspace=workspace, runs=runs)
     register_review_routes(app, workspace=workspace, permissions=permissions)
