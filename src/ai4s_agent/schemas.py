@@ -1892,6 +1892,7 @@ ProjectMemoryCategory = Literal[
     "risk_policy",
     "run_plan_review",
     "run_plan_replan_application",
+    "run_plan_resume_intent_validation",
 ]
 
 
