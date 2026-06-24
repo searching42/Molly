@@ -475,6 +475,9 @@ Resolved run-plan queue bridge scope:
     proposal can now be materialized as review-only artifacts:
     `observer_verification.json`, `replan_proposal.json`, and
     `replan_review.md`.
+20. **Run-plan review card** — Previously written review artifacts can now be
+    read as one `RunPlanReviewCard` schema for UI, report, or project-memory
+    consumers through a helper and feature-flagged internal read route.
 
 Still not default:
 
@@ -508,6 +511,9 @@ Still not default:
 - The review artifact writer only materializes verifier/proposal outputs for
   UI, report, or project-memory review. It does not execute the proposal,
   mutate `RunPlan`, call LLMs, enqueue jobs, or replace `/api/run-plan/execute`.
+- The review card layer only aggregates existing review artifacts. It does not
+  regenerate artifacts, execute proposals, apply patches, call LLMs, enqueue
+  jobs, mutate `RunPlan`, or replace `/api/run-plan/execute`.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -713,3 +719,7 @@ The goal is a closed, auditable demo rather than full automation.
   (`observer_verification.json`, `replan_proposal.json`, `replan_review.md`)
   without executing proposals, mutating plans, enqueueing jobs, or replacing the
   default run-plan execution route.
+- PR #101: expose a read-only `RunPlanReviewCard` helper and internal route for
+  existing review artifacts without executing proposals, applying patches,
+  enqueueing jobs, mutating plans, calling LLMs, or replacing the default
+  run-plan execution route.

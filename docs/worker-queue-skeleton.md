@@ -454,6 +454,20 @@ Review artifacts:
 - The writer does not execute adapters, call LLMs, mutate `RunPlan`, enqueue
   work, auto-rerun tasks, or replace `/api/run-plan/execute`.
 
+Review card aggregation:
+
+- `ai4s_agent.run_plan_review_card.read_run_plan_review_card(...)` is a
+  read-only aggregation helper for previously written review artifacts.
+- It reads `observer_verification.json`, `replan_proposal.json`, and
+  `replan_review.md`, then returns one `RunPlanReviewCard` schema for UI,
+  report, or project-memory consumers.
+- `GET /api/internal/run-plan/review-card?project_id=...&run_id=...` exposes
+  the same card behind the internal run-plan queue feature flag, actor identity,
+  and `run_plan_queue_execute` permission grant.
+- The card route does not call an executor, write review artifacts, apply the
+  proposed patch, enqueue work, mutate `RunPlan`, call LLMs, or replace
+  `/api/run-plan/execute`.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with
