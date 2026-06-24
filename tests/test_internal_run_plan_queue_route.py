@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -44,18 +45,32 @@ def _run_plan(run_id: str = "run-a") -> RunPlan:
     )
 
 
-def _payload(*, run_plan: RunPlan | None = None) -> dict[str, Any]:
-    return {
+def _payload(*, run_plan: RunPlan | None = None, actor: str | None = "json-user") -> dict[str, Any]:
+    payload = {
         "project_id": "proj-a",
         "run_plan": (run_plan or _run_plan()).model_dump(mode="json"),
         "input_artifacts": {"dataset": "datasets/input.csv"},
         "task_options": {"train_model": {"epochs": 1}},
         "max_iterations": 10,
     }
+    if actor is not None:
+        payload["actor"] = actor
+    return payload
 
 
 def _default_queue_dir(workspace: Path, project_id: str = "proj-a", run_id: str = "run-a") -> Path:
     return workspace / ".ai4s_internal" / "run_plan_queues" / project_id / run_id
+
+
+def _audit_path(workspace: Path) -> Path:
+    return workspace / ".ai4s_internal" / "audit" / "internal_run_plan_queue_audit.jsonl"
+
+
+def _audit_records(workspace: Path) -> list[dict[str, Any]]:
+    path = _audit_path(workspace)
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _enable_queue_route(app, *, execution: dict[str, Any], calls: list[dict[str, Any]]) -> None:
@@ -98,6 +113,97 @@ def test_internal_run_plan_queue_route_executes_when_feature_flag_enabled(tmp_pa
     assert calls[0]["task_options"] == {"train_model": {"epochs": 1}}
     assert (_default_queue_dir(tmp_path) / "worker_queue.json").exists()
     assert (_default_queue_dir(tmp_path) / "worker_leases.json").exists()
+    audit = _audit_records(tmp_path)
+    assert audit[-2]["outcome"] == "requested"
+    assert audit[-2]["status_code"] == 202
+    assert audit[-2]["queued_job_id"] == ""
+    assert audit[-1]["event"] == "internal_run_plan_queue_execute"
+    assert audit[-1]["actor"] == "json-user"
+    assert audit[-1]["actor_source"] == "json:actor"
+    assert audit[-1]["project_id"] == "proj-a"
+    assert audit[-1]["run_id"] == "run-a"
+    assert audit[-1]["route"] == "/api/internal/run-plan/queue/execute"
+    assert audit[-1]["feature_flag_enabled"] is True
+    assert audit[-1]["outcome"] == "succeeded"
+    assert audit[-1]["status_code"] == 200
+    assert audit[-1]["queued_job_id"] == summary.queued_job_id
+    assert str(audit[-1]["timestamp"]).endswith("Z")
+
+
+def test_internal_run_plan_queue_route_requires_actor_without_executor(tmp_path: Path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    client = app.test_client()
+
+    response = client.post("/api/internal/run-plan/queue/execute", json=_payload(actor=None))
+
+    assert response.status_code == 403
+    summary = RunPlanQueueExecutionSummary.model_validate(response.get_json())
+    assert summary.ok is False
+    assert summary.terminal is False
+    assert summary.error is not None
+    assert summary.error["type"] == "validation_error"
+    assert "actor required" in summary.error["message"]
+    assert calls == []
+    audit = _audit_records(tmp_path)
+    assert audit[-1]["actor"] == ""
+    assert audit[-1]["actor_source"] == "missing"
+    assert audit[-1]["project_id"] == "proj-a"
+    assert audit[-1]["run_id"] == "run-a"
+    assert audit[-1]["outcome"] == "validation_error"
+    assert audit[-1]["status_code"] == 403
+    assert audit[-1]["error"]["message"] == "actor required"
+
+
+def test_internal_run_plan_queue_route_audit_write_failure_fails_before_executor(monkeypatch, tmp_path: Path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    client = app.test_client()
+
+    def raise_oserror(*args, **kwargs):
+        raise OSError("audit unavailable")
+
+    monkeypatch.setattr("ai4s_agent.routes.internal_run_plan_queue._append_audit_event", raise_oserror)
+
+    response = client.post("/api/internal/run-plan/queue/execute", json=_payload())
+
+    assert response.status_code == 500
+    summary = RunPlanQueueExecutionSummary.model_validate(response.get_json())
+    assert summary.ok is False
+    assert summary.terminal is False
+    assert summary.error is not None
+    assert summary.error["type"] == "audit_write_failed"
+    assert summary.error["message"] == "audit unavailable"
+    assert calls == []
+    assert not (_default_queue_dir(tmp_path) / "worker_queue.json").exists()
+    assert not (_default_queue_dir(tmp_path) / "worker_leases.json").exists()
+
+
+def test_internal_run_plan_queue_route_audits_x_actor_success(tmp_path: Path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    client = app.test_client()
+
+    response = client.post(
+        "/api/internal/run-plan/queue/execute",
+        json=_payload(actor=None),
+        headers={"X-Actor": "test-user"},
+    )
+
+    assert response.status_code == 200
+    summary = RunPlanQueueExecutionSummary.model_validate(response.get_json())
+    assert summary.ok is True
+    audit = _audit_records(tmp_path)
+    assert audit[-2]["actor"] == "test-user"
+    assert audit[-2]["actor_source"] == "header:X-Actor"
+    assert audit[-2]["outcome"] == "requested"
+    assert audit[-1]["actor"] == "test-user"
+    assert audit[-1]["actor_source"] == "header:X-Actor"
+    assert audit[-1]["outcome"] == "succeeded"
+    assert audit[-1]["queued_job_id"] == summary.queued_job_id
 
 
 def test_internal_run_plan_queue_route_can_be_enabled_by_env(monkeypatch, tmp_path: Path) -> None:
@@ -126,7 +232,7 @@ def test_internal_run_plan_queue_route_returns_summary_for_invalid_payload(tmp_p
     _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
     client = app.test_client()
 
-    response = client.post("/api/internal/run-plan/queue/execute", json={"project_id": "proj-a"})
+    response = client.post("/api/internal/run-plan/queue/execute", json={"project_id": "proj-a", "actor": "json-user"})
 
     assert response.status_code == 400
     summary = RunPlanQueueExecutionSummary.model_validate(response.get_json())
@@ -140,6 +246,37 @@ def test_internal_run_plan_queue_route_returns_summary_for_invalid_payload(tmp_p
     assert summary.error["type"] == "validation_error"
     assert "run_plan object required" in summary.error["message"]
     assert calls == []
+    audit = _audit_records(tmp_path)
+    assert audit[-1]["actor"] == "json-user"
+    assert audit[-1]["actor_source"] == "json:actor"
+    assert audit[-1]["project_id"] == "proj-a"
+    assert audit[-1]["outcome"] == "validation_error"
+    assert audit[-1]["status_code"] == 400
+    assert audit[-1]["error"]["message"] == "run_plan object required"
+
+
+def test_internal_run_plan_queue_route_audits_failed_executor(tmp_path: Path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    _enable_queue_route(app, execution={"ok": False, "run_id": "run-a", "status": "FAILED", "error": {"message": "adapter failed"}}, calls=calls)
+    client = app.test_client()
+
+    response = client.post("/api/internal/run-plan/queue/execute", json=_payload())
+
+    assert response.status_code == 400
+    summary = RunPlanQueueExecutionSummary.model_validate(response.get_json())
+    assert summary.ok is False
+    assert summary.terminal is True
+    assert summary.final_job is not None
+    assert summary.final_job["status"] == "failed"
+    assert summary.final_job["error"] == {"reason": "adapter failed"}
+    audit = _audit_records(tmp_path)
+    assert audit[-2]["outcome"] == "requested"
+    assert audit[-2]["status_code"] == 202
+    assert audit[-1]["outcome"] == "failed"
+    assert audit[-1]["status_code"] == 400
+    assert audit[-1]["queued_job_id"] == summary.queued_job_id
+    assert audit[-1]["error"]["message"] == "adapter failed"
 
 
 def test_internal_run_plan_queue_route_rejects_absolute_queue_dir_without_executor(tmp_path: Path) -> None:
@@ -182,6 +319,9 @@ def test_internal_run_plan_queue_route_rejects_queue_dir_path_escape_without_exe
     assert summary.error is not None
     assert "queue_dir is not accepted" in summary.error["message"]
     assert calls == []
+    audit = _audit_records(tmp_path)
+    assert audit[-1]["outcome"] == "validation_error"
+    assert audit[-1]["error"]["message"] == "queue_dir is not accepted by the internal run-plan queue route"
 
 
 def test_internal_run_plan_queue_route_rejects_project_id_path_escape_without_executor(tmp_path: Path) -> None:
