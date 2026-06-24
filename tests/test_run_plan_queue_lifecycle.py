@@ -82,7 +82,12 @@ def test_recover_stale_run_plan_queue_requeues_expired_running_job(tmp_path: Pat
 
     result = recover_stale_run_plan_queue(queue, now=_iso(datetime(2026, 1, 1, 0, 0, 11, tzinfo=timezone.utc)))
 
-    assert result == {"recovered_job_ids": [job["job_id"]], "recovered_count": 1}
+    assert result == {
+        "ok": True,
+        "recovered_job_ids": [job["job_id"]],
+        "recovered_count": 1,
+        "error": None,
+    }
     status = read_run_plan_queue_status(queue)
     assert status["jobs"][0]["status"] == "queued"
     assert status["leases"][0]["status"] == "stale"
@@ -98,9 +103,16 @@ def test_cleanup_terminal_run_plan_queue_keeps_active_jobs(tmp_path: Path) -> No
 
     result = cleanup_terminal_run_plan_queue(queue)
 
-    assert result["removed_jobs"] == 1
-    assert result["removed_leases"] == 1
-    assert result["deleted_files"] is False
+    assert result == {
+        "ok": True,
+        "removed_job_ids": ["job-proj-a-run-a"],
+        "removed_lease_ids": [success["lease_id"]],
+        "removed_jobs": 1,
+        "removed_leases": 1,
+        "deleted_files": False,
+        "has_active_jobs": True,
+        "error": None,
+    }
     status = read_run_plan_queue_status(queue)
     assert [job["status"] for job in status["jobs"]] == ["queued"]
     assert status["leases"] == []
@@ -120,9 +132,14 @@ def test_cleanup_terminal_run_plan_queue_deletes_files_when_all_records_terminal
 
     result = cleanup_terminal_run_plan_queue(queue)
 
+    assert result["ok"] is True
+    assert result["removed_job_ids"] == ["job-proj-a-run-a", "job-proj-a-run-a-2"]
+    assert result["removed_lease_ids"] == [success["lease_id"], failed["lease_id"]]
     assert result["removed_jobs"] == 2
     assert result["removed_leases"] == 2
     assert result["deleted_files"] is True
+    assert result["has_active_jobs"] is False
+    assert result["error"] is None
     assert not store.queue_path.exists()
     assert not store.leases_path.exists()
 
@@ -143,3 +160,52 @@ def test_cleanup_terminal_run_plan_queue_preserves_malformed_state(tmp_path: Pat
 
     assert queue.store.queue_path.read_text(encoding="utf-8") == "{bad json"
 
+
+def test_cleanup_terminal_run_plan_queue_keeps_running_job_and_active_lease(tmp_path: Path) -> None:
+    queue = _queue(tmp_path)
+    queue.enqueue("proj-a", "run-a", {"task_id": "terminal-success"})
+    success = queue.acquire("worker-a")
+    assert success is not None
+    queue.complete(success["lease_id"])
+    queue.enqueue("proj-a", "run-a", {"task_id": "active-running"})
+    running = queue.acquire("worker-b")
+    assert running is not None
+
+    result = cleanup_terminal_run_plan_queue(queue)
+
+    assert result["removed_job_ids"] == ["job-proj-a-run-a"]
+    assert result["removed_lease_ids"] == [success["lease_id"]]
+    assert result["has_active_jobs"] is True
+    status = read_run_plan_queue_status(queue)
+    assert [job["status"] for job in status["jobs"]] == ["running"]
+    assert [lease["status"] for lease in status["leases"]] == ["active"]
+    assert status["leases"][0]["lease_id"] == running["lease_id"]
+
+
+def test_cleanup_terminal_run_plan_queue_preserves_malformed_leases_state(tmp_path: Path) -> None:
+    queue = _queue(tmp_path)
+    queue.enqueue("proj-a", "run-a", {"task_id": "terminal-success"})
+    success = queue.acquire("worker-a")
+    assert success is not None
+    queue.complete(success["lease_id"])
+    original_queue = queue.store.queue_path.read_text(encoding="utf-8")
+    queue.store.leases_path.write_text("{bad json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        cleanup_terminal_run_plan_queue(queue)
+
+    assert queue.store.queue_path.read_text(encoding="utf-8") == original_queue
+    assert queue.store.leases_path.read_text(encoding="utf-8") == "{bad json"
+
+
+def test_cleanup_terminal_run_plan_queue_under_workspace_path_succeeds(tmp_path: Path) -> None:
+    queue = _queue(tmp_path)
+    queue.enqueue("proj-a", "run-a", {"task_id": "terminal-success"})
+    success = queue.acquire("worker-a")
+    assert success is not None
+    queue.complete(success["lease_id"])
+
+    result = cleanup_terminal_run_plan_queue(queue, workspace=tmp_path)
+
+    assert result["ok"] is True
+    assert result["removed_jobs"] == 1

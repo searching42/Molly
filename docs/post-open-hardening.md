@@ -435,6 +435,9 @@ Resolved run-plan queue bridge scope:
     recover stale leases, and clean terminal records without touching active
     queued/running jobs. A feature-flagged internal status route exposes
     read-only queue state behind the same actor and permission gate.
+11. **Lifecycle helper hardening** — Cleanup/recovery helpers use locked queue
+    state, return stable result dictionaries, fail closed on malformed JSON,
+    and keep cleanup/recovery internal until mutating operations are audit-ready.
 
 Still not default:
 
@@ -454,7 +457,8 @@ Default-route migration hard gates:
    first actor/audit layer; PR #90 adds the route-level permission grant gate.
 3. Queue lifecycle must include cleanup, stale recovery, and observability for
    stuck queued/running jobs. PR #91 starts this layer with read-only status,
-   stale recovery helper, and terminal cleanup helper.
+   stale recovery helper, and terminal cleanup helper. PR #92 hardens helper
+   semantics before any cleanup/recovery route is considered.
 4. `RunPlanQueueExecutionSummary` must be validated consistently by route, CLI,
    service helper, and integration tests.
 5. The dedicated-queue limitation must be resolved either with guaranteed
@@ -619,5 +623,7 @@ The goal is a closed, auditable demo rather than full automation.
   metadata to the feature-flagged internal run-plan queue route.
 - PR #90: completed. Add explicit `run_plan_queue_execute` permission grant
   requirement to the feature-flagged internal run-plan queue route.
-- PR #91: add internal run-plan queue lifecycle helpers and feature-flagged
+- PR #91: completed. Add internal run-plan queue lifecycle helpers and feature-flagged
   read-only queue status route.
+- PR #92: harden run-plan queue lifecycle helper semantics without exposing
+  cleanup/recovery routes.
