@@ -10,6 +10,10 @@ from typing import Any, TextIO
 from pydantic import ValidationError
 
 from ai4s_agent.run_plan_queue_service import run_run_plan_via_local_queue
+from ai4s_agent.run_plan_queue_summary import (
+    RunPlanQueueExecutionSummary,
+    build_run_plan_queue_execution_summary,
+)
 from ai4s_agent.run_plan_task_runner import ExecutorFactory
 from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
@@ -47,19 +51,20 @@ def main(
         )
     except (OSError, ValidationError, ValueError) as exc:
         _write_json(
-            {
-                "ok": False,
-                "terminal": False,
-                "error": {
+            build_run_plan_queue_execution_summary(
+                ok=False,
+                terminal=False,
+                error={
                     "type": "validation_error",
                     "message": _error_message(exc),
                 },
-            },
+            ),
             output,
         )
         return 2
-    _write_json(summary, output)
-    return 0 if bool(summary.get("ok")) and bool(summary.get("terminal")) else 1
+    parsed_summary = RunPlanQueueExecutionSummary.model_validate(summary)
+    _write_json(parsed_summary.to_json_dict(), output)
+    return 0 if parsed_summary.ok and parsed_summary.terminal else 1
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -4,6 +4,7 @@ from typing import Any
 
 from ai4s_agent.local_worker_loop import LocalWorkerLoop
 from ai4s_agent.run_plan_queue import enqueue_run_plan_execute_job
+from ai4s_agent.run_plan_queue_summary import build_run_plan_queue_execution_summary
 from ai4s_agent.run_plan_task_runner import ExecutorFactory, RunPlanExecutorTaskRunner
 from ai4s_agent.schemas import RunPlan
 from ai4s_agent.storage import ProjectStorage
@@ -51,14 +52,14 @@ def run_run_plan_via_local_queue(
             final_lease = queue.lease_status(lease_id)
     loop_actions = [item.action for item in loop_result.results]
     terminal = bool(loop_actions) and loop_actions[-1] == "idle"
-    return {
-        "ok": final_job is not None and str(final_job.get("status") or "") == "succeeded",
-        "queued_job_id": str(queued_job.get("job_id") or ""),
-        "final_job": final_job,
-        "final_lease": final_lease,
-        "loop_results": loop_actions,
-        "terminal": terminal,
-    }
+    return build_run_plan_queue_execution_summary(
+        ok=final_job is not None and str(final_job.get("status") or "") == "succeeded",
+        terminal=terminal,
+        queued_job_id=str(queued_job.get("job_id") or ""),
+        final_job=final_job,
+        final_lease=final_lease,
+        loop_results=loop_actions,
+    )
 
 
 def _active_or_queued_jobs(queue: WorkerQueue) -> list[dict[str, Any]]:

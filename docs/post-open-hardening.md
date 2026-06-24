@@ -560,3 +560,5 @@ The goal is a closed, auditable demo rather than full automation.
   run-plan queue CLI.
 - PR #85: add low-risk run-plan queue CLI fixture demo without API route
   wiring.
+- PR #86: define stable RunPlanQueueExecutionSummary schema for queued helper
+  and CLI output.
