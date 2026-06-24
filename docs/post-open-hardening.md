@@ -487,6 +487,17 @@ Resolved run-plan queue bridge scope:
     executing adapters, mutating `RunPlan`, enqueueing jobs, or letting
     proposal/LLM output apply itself automatically. See
     `docs/user-confirmed-replan-application-semantics.md`.
+23. **Replan application schemas and compiler** — PR #105 and PR #106 define
+    non-executable application request/record/result schemas and a
+    deterministic validator/compiler for selected proposal operations.
+24. **Replan application review artifacts** — PR #107 materializes compiled
+    application drafts as review artifacts such as
+    `replan_application_record.json`, `replan_resume_intent.json`,
+    `run_plan_revision.json`, or `blocked_acknowledgement.json`.
+25. **Replan application audit and memory summary** — PR #108 adds append-only
+    audit records for requested/completed/failed replan application events and
+    compact project-memory summaries containing only summary fields, artifact
+    refs, and audit refs.
 
 Still not default:
 
@@ -533,6 +544,11 @@ Still not default:
   `ResumeIntent`, `RunPlanRevision`, or blocked acknowledgement. It should not
   directly execute proposals, apply advisory patches, enqueue jobs, call LLMs,
   mutate `RunPlan`, or replace `/api/run-plan/execute`.
+- Replan application schemas, compiler, artifacts, audit records, and memory
+  summaries are still review-only. They do not execute adapters, apply
+  patches, enqueue jobs, mutate `RunPlan`, call LLMs, or replace
+  `/api/run-plan/execute`. Memory records store only compact summary fields,
+  artifact references, and audit references.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -751,3 +767,19 @@ The goal is a closed, auditable demo rather than full automation.
   `run_plan_review` records with decision fields and artifact references only,
   without storing raw data, full artifact contents, executing proposals,
   applying patches, enqueueing jobs, mutating plans, or calling LLMs.
+- PR #103: completed. Consolidate Phase 1-4 milestone status and remaining
+  non-goals.
+- PR #104: completed. Define user-confirmed replan application semantics as a
+  docs-only boundary.
+- PR #105: completed. Define replan application request, record, resume intent,
+  blocked acknowledgement, operation id, and selected-operation schemas without
+  execution.
+- PR #106: completed. Add deterministic replan patch validator/compiler without
+  writing files, modifying `RunPlan`, enqueueing jobs, executing adapters, or
+  calling LLMs.
+- PR #107: completed. Write replan application review artifacts and register
+  their refs without executing, applying patches, mutating `RunPlan`, or
+  enqueueing jobs.
+- PR #108: add replan application audit records and compact project-memory
+  summary helpers without adding routes, executing proposals, applying patches,
+  enqueueing jobs, mutating `RunPlan`, or calling LLMs.

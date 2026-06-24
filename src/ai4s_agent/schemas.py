@@ -1891,6 +1891,7 @@ ProjectMemoryCategory = Literal[
     "property_alias",
     "risk_policy",
     "run_plan_review",
+    "run_plan_replan_application",
 ]
 
 
