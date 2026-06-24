@@ -481,6 +481,12 @@ Resolved run-plan queue bridge scope:
 21. **Project memory review summary** — Run-plan review cards can now be saved
     as compact `ProjectMemoryRecord` entries containing only decision summary
     fields and artifact references for future Planner/Observer/Replanner use.
+22. **User-confirmed replan application semantics** — PR #104 defines the
+    design boundary for converting a user-confirmed reviewable proposal into a
+    `ResumeIntent`, `RunPlanRevision`, or blocked acknowledgement without
+    executing adapters, mutating `RunPlan`, enqueueing jobs, or letting
+    proposal/LLM output apply itself automatically. See
+    `docs/user-confirmed-replan-application-semantics.md`.
 
 Still not default:
 
@@ -522,6 +528,11 @@ Still not default:
   references. It does not store raw datasets, full artifact contents, markdown
   bodies, complete verifier/proposal payloads, executable patches, or queued
   execution state.
+- User-confirmed replan application semantics are design-only in PR #104.
+  Confirmation should create a reviewable application record,
+  `ResumeIntent`, `RunPlanRevision`, or blocked acknowledgement. It should not
+  directly execute proposals, apply advisory patches, enqueue jobs, call LLMs,
+  mutate `RunPlan`, or replace `/api/run-plan/execute`.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -544,6 +555,11 @@ Default-route migration hard gates:
    compatibility contract: queue jobs finish as `succeeded`, while summary,
    status, and audit surfaces carry waiting metadata. A full queued resume
    engine remains future work.
+7. User-confirmed replan application must remain separate from execution.
+   A confirmed proposal should first produce a validated application record and
+   either a `ResumeIntent`, `RunPlanRevision`, or blocked acknowledgement with
+   actor, permission, audit, gate, and compact memory semantics. A separate
+   gate/resume/execute path is still required before any adapter runs.
 
 Do not jump directly to remote worker support or SQLite migration. Remote worker
 contracts should wait until the local default-route migration gates are met;

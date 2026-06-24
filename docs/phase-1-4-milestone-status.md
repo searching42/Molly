@@ -272,7 +272,8 @@ the completed fixtures:
 - Autonomous replanning:
   verifier and proposal outputs are reviewable only. User confirmation and a
   future gate/resume or modified-run-plan path are still required before
-  execution.
+  execution. The first design contract for that path is documented in
+  `docs/user-confirmed-replan-application-semantics.md`.
 
 ## Suggested Next Milestones
 
@@ -280,8 +281,9 @@ Recommended next work should keep the same safety posture:
 
 1. Add review-card or review-memory consumption tests in Planner/Observer
    without allowing automatic execution.
-2. Define user-confirmed proposal application semantics separately from
-   proposal generation.
+2. Implement user-confirmed proposal application schemas and tests from
+   `docs/user-confirmed-replan-application-semantics.md`, still without
+   automatic execution.
 3. Decide whether queued `WAITING_USER` should remain terminal-compatible or
    move to a resumable non-terminal state.
 4. Add target-job acquisition or another dedicated-queue guarantee before
