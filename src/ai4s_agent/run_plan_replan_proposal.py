@@ -153,16 +153,18 @@ def _operations_for(
     if action == "continue":
         return []
     if not findings:
-        return [
-            {
-                "op": action,
-                "task_id": task_id,
-                "source_finding_id": "",
-                "category": "",
-                "reason": f"Verifier proposed action `{action}`.",
-            }
-            for task_id in affected_tasks
-        ]
+        return _with_operation_ids(
+            [
+                {
+                    "op": action,
+                    "task_id": task_id,
+                    "source_finding_id": "",
+                    "category": "",
+                    "reason": f"Verifier proposed action `{action}`.",
+                }
+                for task_id in affected_tasks
+            ]
+        )
     operations: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for finding in findings:
@@ -180,7 +182,17 @@ def _operations_for(
                     "reason": finding.message,
                 }
             )
-    return operations
+    return _with_operation_ids(operations)
+
+
+def _with_operation_ids(operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "operation_id": f"op_{index:06d}",
+            **operation,
+        }
+        for index, operation in enumerate(operations, start=1)
+    ]
 
 
 def _rationale(

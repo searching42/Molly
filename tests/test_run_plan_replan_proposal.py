@@ -85,6 +85,7 @@ def test_replan_proposal_maps_bad_metrics_to_reviewable_rerun_task() -> None:
     assert proposal.proposed_run_plan_patch["applied"] is False
     assert proposal.proposed_run_plan_patch["operations"] == [
         {
+            "operation_id": "op_000001",
             "op": "rerun_task",
             "task_id": "train_model",
             "source_finding_id": "poor_model_metrics-1",
@@ -115,6 +116,7 @@ def test_replan_proposal_maps_waiting_user_to_request_review() -> None:
     assert proposal.proposed_action == "request_review"
     assert proposal.affected_tasks == ["approve_training"]
     assert any("gate_3_train_config" in item for item in proposal.required_user_decisions)
+    assert proposal.proposed_run_plan_patch["operations"][0]["operation_id"] == "op_000001"
     assert proposal.proposed_run_plan_patch["operations"][0]["op"] == "request_review"
     assert proposal.executable is False
 
@@ -137,6 +139,7 @@ def test_replan_proposal_maps_data_gaps_to_collect_more_data() -> None:
     assert proposal.proposed_action == "collect_more_data"
     assert proposal.affected_tasks == ["inspect_dataset", "check_trainability"]
     assert any("additional data" in item.lower() for item in proposal.required_user_decisions)
+    assert proposal.proposed_run_plan_patch["operations"][0]["operation_id"] == "op_000001"
     assert proposal.proposed_run_plan_patch["operations"][0]["op"] == "collect_more_data"
     assert proposal.executable is False
 
@@ -160,6 +163,7 @@ def test_replan_proposal_blocks_critical_findings() -> None:
     assert proposal.proposed_action == "block"
     assert proposal.affected_tasks == ["artifact_registry"]
     assert any("Resolve blocked verifier finding" in item for item in proposal.required_user_decisions)
+    assert proposal.proposed_run_plan_patch["operations"][0]["operation_id"] == "op_000001"
     assert proposal.proposed_run_plan_patch["operations"][0]["op"] == "block"
     assert proposal.executable is False
 
