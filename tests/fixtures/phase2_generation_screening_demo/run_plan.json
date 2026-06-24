@@ -1,0 +1,131 @@
+{
+  "run_id": "phase2-demo-run",
+  "requested_tasks": [
+    "render_report"
+  ],
+  "tasks": [
+    {
+      "task_id": "inspect_dataset",
+      "depends_on": [],
+      "required_artifacts": [
+        "uploaded_dataset"
+      ],
+      "output_artifacts": [
+        "dataset_profile",
+        "property_catalog"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "clean_dataset",
+      "depends_on": [
+        "inspect_dataset"
+      ],
+      "required_artifacts": [
+        "uploaded_dataset"
+      ],
+      "output_artifacts": [
+        "cleaned_train_dataset",
+        "cleaning_rules"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "check_trainability",
+      "depends_on": [
+        "clean_dataset"
+      ],
+      "required_artifacts": [
+        "property_catalog"
+      ],
+      "output_artifacts": [
+        "trainability_report"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "run_baseline",
+      "depends_on": [
+        "check_trainability"
+      ],
+      "required_artifacts": [
+        "cleaned_train_dataset"
+      ],
+      "output_artifacts": [
+        "baseline_report"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "train_model",
+      "depends_on": [
+        "run_baseline"
+      ],
+      "required_artifacts": [
+        "cleaned_train_dataset"
+      ],
+      "output_artifacts": [
+        "model_metadata"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "generate_candidates",
+      "depends_on": [
+        "train_model"
+      ],
+      "required_artifacts": [
+        "cleaned_train_dataset"
+      ],
+      "output_artifacts": [
+        "candidate_dataset",
+        "generation_report"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "predict_candidates",
+      "depends_on": [
+        "generate_candidates"
+      ],
+      "required_artifacts": [
+        "candidate_dataset",
+        "model_metadata"
+      ],
+      "output_artifacts": [
+        "candidate_predictions"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "filter_rank",
+      "depends_on": [
+        "predict_candidates"
+      ],
+      "required_artifacts": [
+        "candidate_predictions"
+      ],
+      "output_artifacts": [
+        "ranked_candidates"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "render_report",
+      "depends_on": [
+        "filter_rank"
+      ],
+      "required_artifacts": [
+        "ranked_candidates"
+      ],
+      "output_artifacts": [
+        "report_markdown"
+      ],
+      "unresolved_requirements": []
+    }
+  ],
+  "available_artifacts": [
+    "uploaded_dataset"
+  ],
+  "missing_artifacts": []
+}

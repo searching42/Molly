@@ -448,6 +448,10 @@ Resolved run-plan queue bridge scope:
     `succeeded`, while `RunPlanQueueExecutionSummary`, queue status, and audit
     records explicitly expose `waiting_user`, `waiting_task`, and
     `required_gates` metadata.
+14. **Phase 2 generation-to-screening fixture** — Deterministic candidate
+    generation now feeds a generated candidate dataset into the Phase 1
+    prediction, filtering/ranking, and report chain under the internal queued
+    execution bridge.
 
 Still not default:
 
@@ -459,6 +463,8 @@ Still not default:
 - The Phase 1 fixture uses lightweight baseline training/prediction only; it
   does not prove heavy Uni-Mol/DPA3 training, remote workers, or Phase 2/3/4
   workflow completion.
+- The Phase 2 fixture uses deterministic local generation only; it is not full
+  inverse design and does not execute REINVENT4 or other external generators.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -647,3 +653,5 @@ The goal is a closed, auditable demo rather than full automation.
   `/api/run-plan/execute`.
 - PR #94: define queued `WAITING_USER` compatibility semantics without adding a
   full resume queue engine.
+- PR #95: connect deterministic generation candidates to the Phase 1
+  screening/report chain without external generation backends.
