@@ -1,6 +1,8 @@
 # Resume Intent Validation Semantics
 
-Status: design only.
+Status: validation-only design plus schema/helper implementation. PR #115 adds
+run-plan and stage-state fingerprints for stale-intent detection, but this
+document still does not define an execution path.
 
 This document defines how a future gate/resume/execute path should consume
 `review/replan_resume_intent.json` created by a user-confirmed replan
@@ -62,11 +64,16 @@ A `ResumeIntent` is valid only when all of the following are true:
     `proposed_run_plan_patch.applied=false`.
 12. All selected operation ids in the application record still exist in the
     proposal artifact operations.
-13. Every task referenced by `affected_tasks`, `rerun_tasks`, or
+13. `resume_state_binding` exists on both `replan_application_record.json` and
+    `replan_resume_intent.json`, and the two bindings are identical.
+14. The current schema-normalized `RunPlan` fingerprint matches the recorded
+    binding.
+15. The current stable `StageState` fingerprint matches the recorded binding.
+16. Every task referenced by `affected_tasks`, `rerun_tasks`, or
     `resume_from_task` still exists in the current `RunPlan`.
-14. The current run state is still compatible with resume; for the existing
+17. The current run state is still compatible with resume; for the existing
     executor this means the run is waiting for user action at a known stage.
-15. Required gates are still pending or explicitly approved by the later
+18. Required gates are still pending or explicitly approved by the later
     resume request. `ResumeIntent` creation does not approve them.
 
 If any condition fails, validation must fail closed and produce a reviewable
@@ -144,10 +151,54 @@ Required checks:
   changed dependencies; otherwise the application should have produced a
   `RunPlanRevision`
 
-First implementation should compare task ids and task order. A later
-implementation should add a stable `run_plan_fingerprint` to application
-artifacts so validation can detect dependency, option, and target changes more
-precisely.
+PR #115 adds a canonical `run_plan_fingerprint` to the application record and
+resume intent. Validation recomputes the current fingerprint and fails closed
+with `decision="stale_intent"` and
+`error.type="run_plan_fingerprint_mismatch"` when the current plan differs.
+
+## Run-Plan And Stage-State Binding
+
+`ResumeStateBinding` records compact state identity when a user-confirmed
+replan application creates a `ResumeIntent`:
+
+```json
+{
+  "schema_version": "resume_state_binding.v1",
+  "run_plan_fingerprint": "sha256:<64 hex>",
+  "stage_fingerprint": "sha256:<64 hex>",
+  "stage": "train_model",
+  "stage_status": "WAITING_USER",
+  "execution_snapshot_id": "snapshot-1",
+  "execution_snapshot_hash": "sha256:<64 hex>"
+}
+```
+
+The run-plan fingerprint is computed from the complete schema-normalized
+`RunPlan` JSON using sorted JSON object keys and stable separators. List order
+is preserved, so task ordering, dependencies, requested tasks, available
+artifacts, missing artifacts, and any future schema fields included in
+`RunPlan.model_dump(mode="json")` affect the fingerprint.
+
+The stage fingerprint is computed from stable stage semantics only:
+
+- `stage`
+- `status`
+- `next_stage`
+- normalized sorted `details.required_gates`
+- ordered `details.executed_tasks`
+- `details.execution_snapshot.snapshot_id`
+- `details.execution_snapshot.snapshot_hash`
+
+It intentionally ignores volatile timestamps, stage history timestamps, audit
+records, memory records, markdown/report contents, and raw execution snapshot
+payloads. If `execution_snapshot_id` or `execution_snapshot_hash` is present,
+both must be present.
+
+The binding is stale-state detection only. It is not a digital signature, not
+an authorization mechanism, and not a substitute for actor, permission, gate,
+or executor snapshot checks. Any future actual resume bridge must recompute the
+current fingerprints immediately before consuming the intent to avoid TOCTOU
+drift between validation and execution.
 
 ## Gate Requirements
 
@@ -184,6 +235,11 @@ An intent is stale if any of these are true:
 
 - proposal hash no longer matches the proposal artifact
 - application record no longer points to this intent
+- application record or resume intent is missing `resume_state_binding`
+- application record and resume intent have different bindings
+- current `RunPlan` fingerprint differs from the recorded binding
+- current `StageState` is missing or fingerprints to a different semantic
+  payload
 - artifact registry points to different application or intent refs
 - current `RunPlan` no longer contains referenced tasks
 - current run is not in `WAITING_USER`
@@ -195,9 +251,9 @@ An intent is stale if any of these are true:
 - a newer `RunPlanRevision` has been accepted for the same run
 - the intent was already consumed by a terminal resume audit event
 
-The first implementation can detect staleness using artifact refs, proposal
-hash, current `RunPlan`, stage state, and audit records. Later implementations
-should add explicit `run_plan_fingerprint`, `intent_consumed_at`, and
+The first implementation detects staleness using artifact refs, proposal hash,
+current `RunPlan`, current `StageState`, recorded state fingerprints, and audit
+records. Later implementations may add `intent_consumed_at` and
 `superseded_by_application_id` fields.
 
 ## Validation Result Shape
@@ -220,8 +276,20 @@ The future validator should return a fixed, non-executing result such as:
     "replan_resume_intent": "review/replan_resume_intent.json",
     "replan_proposal": "review/replan_proposal.json"
   },
+  "resume_state_binding": {
+    "schema_version": "resume_state_binding.v1",
+    "run_plan_fingerprint": "sha256:<64 hex>",
+    "stage_fingerprint": "sha256:<64 hex>",
+    "stage": "train_model",
+    "stage_status": "WAITING_USER",
+    "execution_snapshot_id": "snapshot-1",
+    "execution_snapshot_hash": "sha256:<64 hex>"
+  },
   "validation_findings": [
     "proposal_hash_valid",
+    "run_plan_fingerprint_valid",
+    "stage_fingerprint_valid",
+    "application_intent_state_binding_match",
     "application_record_matches_intent",
     "rerun_tasks_present_in_current_run_plan",
     "current_run_waiting_for_user"

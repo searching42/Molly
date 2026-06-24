@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ai4s_agent._utils import now_iso
 from ai4s_agent.memory import ProjectMemory
 from ai4s_agent.run_plan_resume_intent_validation import ResumeIntentValidationResult
+from ai4s_agent.run_plan_state_fingerprint import ResumeStateBinding
 from ai4s_agent.schemas import ProjectMemoryRecord
 from ai4s_agent.storage import ProjectStorage
 
@@ -39,6 +40,7 @@ class ResumeIntentValidationAuditRecord(BaseModel):
     rerun_tasks: list[str] = Field(default_factory=list)
     resume_from_task: str = ""
     artifact_refs: dict[str, str] = Field(default_factory=dict)
+    resume_state_binding: ResumeStateBinding | None = None
     error: dict[str, Any] | None = None
     executable: bool = False
 
@@ -163,6 +165,7 @@ def append_resume_intent_validation_audit_record(
         rerun_tasks=validation_result.rerun_tasks if validation_result else [],
         resume_from_task=validation_result.resume_from_task if validation_result else "",
         artifact_refs=validation_result.artifact_refs if validation_result else {},
+        resume_state_binding=validation_result.resume_state_binding if validation_result else None,
         error=_clean_error(error if error is not None else validation_result.error if validation_result else None),
         executable=False,
     )
@@ -238,6 +241,9 @@ def build_resume_intent_validation_memory_record(
         "rerun_tasks": list(validation_result.rerun_tasks),
         "resume_from_task": validation_result.resume_from_task,
         "artifact_refs": dict(validation_result.artifact_refs),
+        "resume_state_binding": validation_result.resume_state_binding.model_dump(mode="json")
+        if validation_result.resume_state_binding is not None
+        else None,
         "audit_refs": clean_audit_refs,
         "error": _clean_error(validation_result.error),
         "executable": False,

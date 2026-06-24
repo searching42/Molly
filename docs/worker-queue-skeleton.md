@@ -525,6 +525,12 @@ Resume intent validation design:
 
 Resume intent validation schemas, helpers, audit, memory, and internal route:
 
+- `ai4s_agent.run_plan_state_fingerprint.ResumeStateBinding` records compact
+  run-plan and stage-state fingerprints when a user-confirmed replan
+  application creates a resume intent.
+- `run_plan_fingerprint(...)` hashes the complete schema-normalized `RunPlan`;
+  `stage_state_fingerprint(...)` hashes stable stage semantics while ignoring
+  volatile timestamps.
 - `ai4s_agent.run_plan_resume_intent_validation.validate_resume_intent(...)`
   validates a materialized resume intent against the current `RunPlan`, review
   artifacts, optional stage state, optional audit records, and optional
@@ -545,6 +551,9 @@ Resume intent validation schemas, helpers, audit, memory, and internal route:
   `RunPlanExecutor.resume_after_gate(...)`, write gate decisions, enqueue work,
   execute adapters, mutate `RunPlan`, call LLMs, or replace
   `/api/run-plan/resume` or `/api/run-plan/execute`.
+- Fingerprints are stale-state detection only. They are not signatures,
+  permission grants, or execution authorization. A future actual resume bridge
+  must recompute them again immediately before execution.
 
 Queued `WAITING_USER` contract:
 

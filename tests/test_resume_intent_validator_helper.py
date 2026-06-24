@@ -15,6 +15,7 @@ from ai4s_agent.run_plan_replan_application_artifacts import (
 from ai4s_agent.run_plan_replan_proposal import RunPlanReplanProposal
 from ai4s_agent.run_plan_resume_intent_validation import validate_resume_intent
 from ai4s_agent.run_plan_review_artifacts import REPLAN_PROPOSAL_ARTIFACT_ID
+from ai4s_agent.run_plan_state_fingerprint import build_resume_state_binding
 from ai4s_agent.schemas import PlannedTask, RunPlan, RunStatus, StageState
 from ai4s_agent.storage import ProjectStorage
 
@@ -32,7 +33,12 @@ def _run_plan(*task_ids: str) -> RunPlan:
     )
 
 
-def _stage_state(status: RunStatus = RunStatus.WAITING_USER, *, stage: str = "train_model") -> StageState:
+def _stage_state(
+    status: RunStatus = RunStatus.WAITING_USER,
+    *,
+    stage: str = "train_model",
+    snapshot_hash: str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+) -> StageState:
     now = now_iso()
     return StageState(
         stage=stage,
@@ -40,7 +46,14 @@ def _stage_state(status: RunStatus = RunStatus.WAITING_USER, *, stage: str = "tr
         started_at=now,
         ended_at=now,
         updated_at=now,
-        details={"required_gates": ["gate_replan_rerun_task"]},
+        details={
+            "required_gates": ["gate_replan_rerun_task"],
+            "executed_tasks": ["inspect_dataset"],
+            "execution_snapshot": {
+                "snapshot_id": "snapshot-resume-1",
+                "snapshot_hash": snapshot_hash,
+            },
+        },
     )
 
 
@@ -81,6 +94,8 @@ def _write_proposal(tmp_path: Path, *, task_id: str = "train_model") -> Path:
 
 def _write_resume_intent_artifacts(tmp_path: Path) -> dict[str, Any]:
     proposal_path = _write_proposal(tmp_path)
+    run_plan = _run_plan()
+    stage_state = _stage_state()
     request = ReplanApplicationRequest(
         project_id=PROJECT_ID,
         run_id=RUN_ID,
@@ -95,11 +110,15 @@ def _write_resume_intent_artifacts(tmp_path: Path) -> dict[str, Any]:
         request=request,
         actor="review-user",
         actor_source="header:X-Actor",
+        current_run_plan=run_plan,
+        stage_state=stage_state,
     )
     return {
         "bundle": bundle,
         "proposal_path": proposal_path,
         "run_dir": ProjectStorage(tmp_path).run_dir(PROJECT_ID, RUN_ID),
+        "run_plan": run_plan,
+        "stage_state": stage_state,
     }
 
 
@@ -145,7 +164,11 @@ def test_validate_resume_intent_returns_needs_gate_approval_for_valid_artifacts(
         REPLAN_RESUME_INTENT_ARTIFACT_ID: "review/replan_resume_intent.json",
         REPLAN_PROPOSAL_ARTIFACT_ID: "review/replan_proposal.json",
     }
+    assert result.resume_state_binding == build_resume_state_binding(_run_plan(), _stage_state())
     assert "proposal_hash_valid" in result.validation_findings
+    assert "run_plan_fingerprint_valid" in result.validation_findings
+    assert "stage_fingerprint_valid" in result.validation_findings
+    assert "application_intent_state_binding_match" in result.validation_findings
     assert "missing_gate_approval:gate_replan_rerun_task" in result.validation_findings
 
 
@@ -252,8 +275,98 @@ def test_validate_resume_intent_marks_missing_rerun_task_as_stale(tmp_path: Path
     assert result.ok is False
     assert result.decision == "stale_intent"
     assert result.error == {
-        "type": "missing_run_plan_task",
-        "message": "resume intent references tasks not present in the current RunPlan: train_model",
+        "type": "run_plan_fingerprint_mismatch",
+        "message": "current RunPlan fingerprint does not match resume state binding",
+    }
+
+
+def test_validate_resume_intent_marks_changed_run_plan_stale(tmp_path: Path) -> None:
+    _write_resume_intent_artifacts(tmp_path)
+
+    result = validate_resume_intent(
+        workspace_dir=tmp_path,
+        project_id=PROJECT_ID,
+        run_id=RUN_ID,
+        current_run_plan=_run_plan("train_model", "inspect_dataset", "render_report"),
+        stage_state=_stage_state(),
+    )
+
+    assert result.ok is False
+    assert result.decision == "stale_intent"
+    assert result.error == {
+        "type": "run_plan_fingerprint_mismatch",
+        "message": "current RunPlan fingerprint does not match resume state binding",
+    }
+
+
+def test_validate_resume_intent_marks_changed_stage_stale(tmp_path: Path) -> None:
+    _write_resume_intent_artifacts(tmp_path)
+
+    result = validate_resume_intent(
+        workspace_dir=tmp_path,
+        project_id=PROJECT_ID,
+        run_id=RUN_ID,
+        current_run_plan=_run_plan(),
+        stage_state=_stage_state(
+            snapshot_hash="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ),
+    )
+
+    assert result.ok is False
+    assert result.decision == "stale_intent"
+    assert result.error == {
+        "type": "stage_fingerprint_mismatch",
+        "message": "current StageState fingerprint does not match resume state binding",
+    }
+
+
+def test_validate_resume_intent_rejects_binding_mismatch_between_artifacts(tmp_path: Path) -> None:
+    fixture = _write_resume_intent_artifacts(tmp_path)
+    intent_path = fixture["run_dir"] / "review" / "replan_resume_intent.json"
+    intent = _json(intent_path)
+    intent["resume_state_binding"]["stage"] = "render_report"
+    _write_object(intent_path, intent)
+
+    result = validate_resume_intent(
+        workspace_dir=tmp_path,
+        project_id=PROJECT_ID,
+        run_id=RUN_ID,
+        current_run_plan=_run_plan(),
+        stage_state=_stage_state(),
+    )
+
+    assert result.ok is False
+    assert result.decision == "invalid_intent"
+    assert result.error == {
+        "type": "resume_state_binding_mismatch",
+        "message": "replan application record and resume intent state bindings do not match",
+    }
+
+
+def test_validate_resume_intent_rejects_historical_unbound_intent(tmp_path: Path) -> None:
+    fixture = _write_resume_intent_artifacts(tmp_path)
+    application_path = fixture["run_dir"] / "review" / "replan_application_record.json"
+    intent_path = fixture["run_dir"] / "review" / "replan_resume_intent.json"
+    application = _json(application_path)
+    intent = _json(intent_path)
+    application.pop("resume_state_binding", None)
+    intent.pop("resume_state_binding", None)
+    _write_object(application_path, application)
+    _write_object(intent_path, intent)
+
+    result = validate_resume_intent(
+        workspace_dir=tmp_path,
+        project_id=PROJECT_ID,
+        run_id=RUN_ID,
+        current_run_plan=_run_plan(),
+        stage_state=_stage_state(),
+    )
+
+    assert result.ok is False
+    assert result.decision == "invalid_intent"
+    assert result.error == {
+        "type": "resume_state_binding_missing",
+        "message": "resume intent artifacts do not include required resume_state_binding",
     }
 
 

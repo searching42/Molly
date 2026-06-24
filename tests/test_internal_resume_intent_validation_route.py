@@ -13,6 +13,7 @@ from ai4s_agent.run_plan_replan_application_artifacts import write_replan_applic
 from ai4s_agent.run_plan_replan_proposal import RunPlanReplanProposal
 from ai4s_agent.run_plan_resume_intent_validation import ResumeIntentValidationResult
 from ai4s_agent.run_plan_resume_intent_validation_audit_memory import RESUME_INTENT_VALIDATION_AUDIT_REF
+from ai4s_agent.run_plan_state_fingerprint import build_resume_state_binding
 from ai4s_agent.schemas import PlannedTask, RunPlan, RunStatus, StageState
 from ai4s_agent.server_permissions import ServerPermissionStore
 from ai4s_agent.storage import ProjectStorage
@@ -36,27 +37,43 @@ def _run_plan(*task_ids: str) -> RunPlan:
     )
 
 
-def _write_current_state(workspace: Path, *, run_plan: RunPlan | None = None) -> None:
+def _stage_state() -> StageState:
+    now = now_iso()
+    return StageState(
+        stage="train_model",
+        status=RunStatus.WAITING_USER,
+        started_at=now,
+        ended_at=now,
+        updated_at=now,
+        details={
+            "required_gates": ["gate_replan_rerun_task"],
+            "executed_tasks": ["inspect_dataset"],
+            "execution_snapshot": {
+                "snapshot_id": "snapshot-validation-route-1",
+                "snapshot_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            },
+        },
+    )
+
+
+def _write_current_state(
+    workspace: Path,
+    *,
+    run_plan: RunPlan | None = None,
+    stage_state: StageState | None = None,
+) -> tuple[RunPlan, StageState]:
     storage = ProjectStorage(workspace)
     run_dir = storage.run_dir(PROJECT_ID, RUN_ID)
-    write_json(run_dir / "run_plan.json", (run_plan or _run_plan()).model_dump(mode="json"))
-    now = now_iso()
-    storage.write_stage_state(
-        PROJECT_ID,
-        RUN_ID,
-        StageState(
-            stage="train_model",
-            status=RunStatus.WAITING_USER,
-            started_at=now,
-            ended_at=now,
-            updated_at=now,
-            details={"required_gates": ["gate_replan_rerun_task"]},
-        ),
-    )
+    current_run_plan = run_plan or _run_plan()
+    current_stage_state = stage_state or _stage_state()
+    write_json(run_dir / "run_plan.json", current_run_plan.model_dump(mode="json"))
+    storage.write_stage_state(PROJECT_ID, RUN_ID, current_stage_state)
+    return current_run_plan, current_stage_state
 
 
 def _write_resume_intent_artifacts(workspace: Path) -> Path:
     run_dir = ProjectStorage(workspace).run_dir(PROJECT_ID, RUN_ID)
+    current_run_plan, current_stage_state = _write_current_state(workspace)
     proposal = RunPlanReplanProposal(
         verifier_decision="rerun_recommended",
         proposed_action="rerun_task",
@@ -95,6 +112,8 @@ def _write_resume_intent_artifacts(workspace: Path) -> Path:
         request=request,
         actor="review-user",
         actor_source="test",
+        current_run_plan=current_run_plan,
+        stage_state=current_stage_state,
     )
     return proposal_path
 
@@ -147,7 +166,6 @@ def test_internal_resume_intent_validation_route_is_disabled_by_default(tmp_path
 
 def test_internal_resume_intent_validation_route_requires_actor(tmp_path: Path) -> None:
     _write_resume_intent_artifacts(tmp_path)
-    _write_current_state(tmp_path)
     _grant_permission(tmp_path)
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     _enable_route(app)
@@ -167,7 +185,6 @@ def test_internal_resume_intent_validation_route_requires_actor(tmp_path: Path) 
 
 def test_internal_resume_intent_validation_route_requires_permission_grant(tmp_path: Path) -> None:
     _write_resume_intent_artifacts(tmp_path)
-    _write_current_state(tmp_path)
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     _enable_route(app)
     client = app.test_client()
@@ -190,7 +207,7 @@ def test_internal_resume_intent_validation_route_requires_permission_grant(tmp_p
 
 def test_internal_resume_intent_validation_route_returns_result_audit_and_memory(tmp_path: Path) -> None:
     _write_resume_intent_artifacts(tmp_path)
-    _write_current_state(tmp_path)
+    current_run_plan, current_stage_state = _write_current_state(tmp_path)
     grant = _grant_permission(tmp_path)
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     _enable_route(app)
@@ -214,9 +231,12 @@ def test_internal_resume_intent_validation_route_returns_result_audit_and_memory
     assert validation.approved_gates == ["gate_replan_rerun_task"]
     assert validation.rerun_tasks == ["train_model"]
     assert validation.resume_from_task == "train_model"
+    expected_binding = build_resume_state_binding(current_run_plan, current_stage_state)
+    assert validation.resume_state_binding == expected_binding
     assert payload["audit_refs"] == [RESUME_INTENT_VALIDATION_AUDIT_REF]
     assert payload["memory"]["category"] == "run_plan_resume_intent_validation"
     assert payload["memory"]["value"]["validation_decision"] == "resume_eligible"
+    assert payload["memory"]["value"]["resume_state_binding"] == expected_binding.model_dump(mode="json")
     assert payload["memory"]["value"]["audit_refs"] == [RESUME_INTENT_VALIDATION_AUDIT_REF]
     assert payload["permission"]["allowed"] is True
     assert payload["permission"]["action"] == PERMISSION_ACTION
@@ -231,9 +251,11 @@ def test_internal_resume_intent_validation_route_returns_result_audit_and_memory
     assert audit[0]["validation_decision"] == ""
     assert audit[1]["validation_decision"] == "resume_eligible"
     assert audit[1]["approved_gates"] == ["gate_replan_rerun_task"]
+    assert audit[1]["resume_state_binding"] == expected_binding.model_dump(mode="json")
     records = ProjectMemory(tmp_path).list_project_records(PROJECT_ID)
     assert len(records) == 1
     assert records[0].value["intent_id"] == validation.intent_id
+    assert records[0].value["resume_state_binding"] == expected_binding.model_dump(mode="json")
     assert "validation_findings" not in json.dumps(records[0].model_dump(mode="json"))
     assert not (tmp_path / ".ai4s_internal" / "run_plan_queues").exists()
 
@@ -242,7 +264,6 @@ def test_internal_resume_intent_validation_route_keeps_artifact_approved_gates_w
     tmp_path: Path,
 ) -> None:
     _write_resume_intent_artifacts(tmp_path)
-    _write_current_state(tmp_path)
     _grant_permission(tmp_path)
     run_dir = ProjectStorage(tmp_path).run_dir(PROJECT_ID, RUN_ID)
     intent_path = run_dir / "review" / "replan_resume_intent.json"
@@ -263,7 +284,6 @@ def test_internal_resume_intent_validation_route_keeps_artifact_approved_gates_w
 
 def test_internal_resume_intent_validation_route_records_stale_result_without_execution(tmp_path: Path) -> None:
     proposal_path = _write_resume_intent_artifacts(tmp_path)
-    _write_current_state(tmp_path)
     _grant_permission(tmp_path)
     proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
     proposal["rationale"].append("mutated after application")
@@ -294,6 +314,7 @@ def test_internal_resume_intent_validation_route_records_stale_result_without_ex
 
 def test_internal_resume_intent_validation_route_writes_failed_audit_on_missing_run_plan(tmp_path: Path) -> None:
     _write_resume_intent_artifacts(tmp_path)
+    (ProjectStorage(tmp_path).run_dir(PROJECT_ID, RUN_ID) / "run_plan.json").unlink()
     _grant_permission(tmp_path)
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     _enable_route(app)
@@ -322,7 +343,6 @@ def test_internal_resume_intent_validation_route_audit_write_failure_fails_befor
     tmp_path: Path,
 ) -> None:
     _write_resume_intent_artifacts(tmp_path)
-    _write_current_state(tmp_path)
     _grant_permission(tmp_path)
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     _enable_route(app)

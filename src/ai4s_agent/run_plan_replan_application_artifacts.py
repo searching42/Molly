@@ -19,6 +19,8 @@ from ai4s_agent.run_plan_replan_application import (
     validate_and_compile_replan_application,
 )
 from ai4s_agent.run_plan_replan_proposal import RunPlanReplanProposal
+from ai4s_agent.run_plan_state_fingerprint import ResumeStateBinding, build_resume_state_binding
+from ai4s_agent.schemas import RunPlan, StageState
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -119,6 +121,8 @@ def write_replan_application_artifacts(
     request: ReplanApplicationRequest | dict[str, Any],
     actor: str,
     actor_source: str,
+    current_run_plan: RunPlan | dict[str, Any] | None = None,
+    stage_state: StageState | dict[str, Any] | None = None,
 ) -> RunPlanApplicationArtifactBundle:
     """Materialize a compiled replan application draft as review artifacts.
 
@@ -140,7 +144,12 @@ def write_replan_application_artifacts(
     proposal = _read_proposal(proposal_path)
     patch = ReviewableRunPlanPatch.model_validate(proposal.proposed_run_plan_patch)
     compiled = validate_and_compile_replan_application(application_request, patch, proposal)
-    application_id = _application_id(compiled)
+    resume_state_binding = _resume_state_binding(
+        compiled=compiled,
+        current_run_plan=current_run_plan,
+        stage_state=stage_state,
+    )
+    application_id = _application_id(compiled, resume_state_binding=resume_state_binding)
     result_ref = _result_relative_path(compiled.result_type)
     application_record = ReplanApplicationRecord(
         application_id=application_id,
@@ -152,6 +161,7 @@ def write_replan_application_artifacts(
         selected_operation_ids=compiled.selected_operation_ids,
         result_type=compiled.result_type,
         result_ref=result_ref,
+        resume_state_binding=resume_state_binding,
         actor=actor,
         actor_source=actor_source,
         executable=False,
@@ -161,6 +171,7 @@ def write_replan_application_artifacts(
         application_record=application_record,
         actor=actor,
         actor_source=actor_source,
+        resume_state_binding=resume_state_binding,
     )
     artifacts = {
         REPLAN_APPLICATION_RECORD_ARTIFACT_ID: "review/replan_application_record.json",
@@ -202,16 +213,24 @@ def _read_proposal(path: Path) -> RunPlanReplanProposal:
     return RunPlanReplanProposal.model_validate(payload)
 
 
-def _application_id(compiled: CompiledReplanApplication) -> str:
-    material = "|".join(
-        [
-            compiled.project_id,
-            compiled.run_id,
-            compiled.proposal_hash,
-            compiled.selected_action,
-            ",".join(compiled.selected_operation_ids),
-        ]
-    )
+def _application_id(
+    compiled: CompiledReplanApplication,
+    *,
+    resume_state_binding: ResumeStateBinding | None,
+) -> str:
+    material_parts = [
+        compiled.project_id,
+        compiled.run_id,
+        compiled.proposal_hash,
+        compiled.selected_action,
+        ",".join(compiled.selected_operation_ids),
+    ]
+    if resume_state_binding is not None:
+        material_parts.extend([
+            resume_state_binding.run_plan_fingerprint,
+            resume_state_binding.stage_fingerprint,
+        ])
+    material = "|".join(material_parts)
     digest = hashlib.sha1(material.encode("utf-8")).hexdigest()[:12]
     return f"replan-application-{compiled.run_id}-{digest}"
 
@@ -232,8 +251,11 @@ def _result_artifact(
     application_record: ReplanApplicationRecord,
     actor: str,
     actor_source: str,
+    resume_state_binding: ResumeStateBinding | None,
 ) -> tuple[str, dict[str, Any]]:
     if compiled.result_type == "resume_intent":
+        if resume_state_binding is None:
+            raise ValueError("resume_state_binding is required for resume_intent artifacts")
         intent = ResumeIntent(
             intent_id=f"resume-{application_record.application_id}",
             project_id=compiled.project_id,
@@ -244,6 +266,7 @@ def _result_artifact(
             rerun_tasks=_rerun_tasks(compiled),
             required_gates=compiled.required_gates,
             reason=_reason(compiled),
+            resume_state_binding=resume_state_binding,
             created_by=actor,
             actor_source=actor_source,
             executable=False,
@@ -277,6 +300,23 @@ def _result_artifact(
         executable=False,
     )
     return BLOCKED_ACKNOWLEDGEMENT_ARTIFACT_ID, acknowledgement.model_dump(mode="json")
+
+
+def _resume_state_binding(
+    *,
+    compiled: CompiledReplanApplication,
+    current_run_plan: RunPlan | dict[str, Any] | None,
+    stage_state: StageState | dict[str, Any] | None,
+) -> ResumeStateBinding | None:
+    if compiled.result_type != "resume_intent":
+        return None
+    if current_run_plan is None or stage_state is None:
+        raise ValueError("current_run_plan and stage_state are required for resume_intent application artifacts")
+    run_plan = current_run_plan if isinstance(current_run_plan, RunPlan) else RunPlan.model_validate(current_run_plan)
+    if run_plan.run_id != compiled.run_id:
+        raise ValueError("current_run_plan run_id does not match replan application run_id")
+    stage = stage_state if isinstance(stage_state, StageState) else StageState.model_validate(stage_state)
+    return build_resume_state_binding(run_plan, stage)
 
 
 def _affected_tasks(compiled: CompiledReplanApplication) -> list[str]:

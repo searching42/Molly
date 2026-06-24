@@ -188,6 +188,8 @@ def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStor
                 request=application_request,
                 actor=actor.actor,
                 actor_source=actor.source,
+                current_run_plan=_read_current_run_plan(projects, project_id=project_id, run_id=run_id),
+                stage_state=_read_stage_state(projects, project_id=project_id, run_id=run_id),
             )
             memory_save = save_replan_application_summary_to_memory(
                 workspace_dir=projects.workspace_dir,

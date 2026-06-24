@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from ai4s_agent._utils import now_iso
 from ai4s_agent.run_plan_replan_proposal import PATCH_SCHEMA_VERSION, RunPlanReplanAction, RunPlanReplanProposal
+from ai4s_agent.run_plan_state_fingerprint import ResumeStateBinding
 
 
 ReplanApplicationResultType = Literal["resume_intent", "run_plan_revision", "blocked_acknowledgement"]
@@ -104,6 +105,7 @@ class ReplanApplicationRecord(BaseModel):
     applied: bool = True
     result_type: ReplanApplicationResultType
     result_ref: str = ""
+    resume_state_binding: ResumeStateBinding | None = None
     actor: str
     actor_source: str
     created_at: str = Field(default_factory=now_iso)
@@ -152,6 +154,10 @@ class ReplanApplicationRecord(BaseModel):
             raise ValueError("block action must create a blocked acknowledgement")
         if self.selected_action != "block" and self.result_type == "blocked_acknowledgement":
             raise ValueError("blocked acknowledgement result requires block action")
+        if self.result_type == "resume_intent" and self.resume_state_binding is None:
+            raise ValueError("resume_intent application records require resume_state_binding")
+        if self.result_type != "resume_intent" and self.resume_state_binding is not None:
+            raise ValueError("resume_state_binding is only valid for resume_intent application records")
         return self
 
 
@@ -169,6 +175,7 @@ class ResumeIntent(BaseModel):
     resume_from_task: str = ""
     required_gates: list[str] = Field(default_factory=list)
     reason: str
+    resume_state_binding: ResumeStateBinding
     created_at: str = Field(default_factory=now_iso)
     created_by: str
     actor_source: str

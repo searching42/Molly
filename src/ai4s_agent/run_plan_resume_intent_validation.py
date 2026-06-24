@@ -11,6 +11,7 @@ from ai4s_agent.run_plan_replan_application import ReplanApplicationRecord, Resu
 from ai4s_agent.run_plan_replan_application_artifacts import proposal_artifact_hash
 from ai4s_agent.run_plan_replan_proposal import RunPlanReplanProposal
 from ai4s_agent.run_plan_review_artifacts import REPLAN_PROPOSAL_ARTIFACT_ID
+from ai4s_agent.run_plan_state_fingerprint import ResumeStateBinding, run_plan_fingerprint, stage_state_fingerprint
 from ai4s_agent.schemas import RunPlan, RunStatus, StageState
 
 
@@ -109,6 +110,7 @@ class ResumeIntentValidationResult(BaseModel):
     affected_tasks: list[str] = Field(default_factory=list)
     resume_from_task: str = ""
     artifact_refs: dict[str, str]
+    resume_state_binding: ResumeStateBinding | None = None
     validation_findings: list[str] = Field(default_factory=list)
     error: dict[str, Any] | None = None
     executable: bool = False
@@ -205,12 +207,7 @@ def validate_resume_intent(
             ReplanApplicationRecord,
             label="replan_application_record",
         )
-        resume_intent = _read_model(
-            run_dir,
-            artifact_refs["replan_resume_intent"],
-            ResumeIntent,
-            label="replan_resume_intent",
-        )
+        resume_intent = _read_resume_intent(run_dir, artifact_refs["replan_resume_intent"])
         proposal = _read_model(
             run_dir,
             artifact_refs["replan_proposal"],
@@ -253,6 +250,19 @@ def validate_resume_intent(
             findings=exc.findings,
         )
     except (FileNotFoundError, ValueError, ValidationError, json.JSONDecodeError) as exc:
+        exc_text = str(exc)
+        if isinstance(exc, ValidationError) and "resume_state_binding" in exc_text and (
+            "Field required" in exc_text or "require resume_state_binding" in exc_text
+        ):
+            return _failure_result(
+                project_id=project,
+                run_id=run,
+                artifact_refs=artifact_refs,
+                decision="invalid_intent",
+                error_type="resume_state_binding_missing",
+                message="resume intent artifacts do not include required resume_state_binding",
+                findings=["resume_state_binding_missing"],
+            )
         return _failure_result(
             project_id=project,
             run_id=run,
@@ -407,6 +417,19 @@ def _read_model(run_dir: Path, relative_path: str, model: type[BaseModel], *, la
     return model.model_validate(_read_json_object(path, label=label))
 
 
+def _read_resume_intent(run_dir: Path, relative_path: str) -> ResumeIntent:
+    path = _resolve_artifact_path(run_dir, relative_path)
+    payload = _read_json_object(path, label="replan_resume_intent")
+    if "resume_state_binding" not in payload or payload.get("resume_state_binding") is None:
+        raise _ValidationFailure(
+            decision="invalid_intent",
+            error_type="resume_state_binding_missing",
+            message="resume intent artifacts do not include required resume_state_binding",
+            findings=["resume_state_binding_missing"],
+        )
+    return ResumeIntent.model_validate(payload)
+
+
 def _resolve_artifact_path(run_dir: Path, relative_path: str) -> Path:
     path = (run_dir / relative_path).resolve()
     if not path.is_relative_to(run_dir.resolve()):
@@ -447,6 +470,9 @@ def _validate_context(
             "application_result_type",
             "replan application record does not point to a resume intent",
         )
+    failure = _validate_state_binding(context=context, run_plan=run_plan, stage_state=stage_state)
+    if failure is not None:
+        return failure
     if application.result_ref != context.artifact_refs["replan_resume_intent"]:
         return _invalid_from_context(
             context,
@@ -547,6 +573,60 @@ def _validate_current_run_plan_tasks(
     return None
 
 
+def _validate_state_binding(
+    *,
+    context: _ValidationContext,
+    run_plan: RunPlan,
+    stage_state: StageState | None,
+) -> ResumeIntentValidationResult | None:
+    application_binding = context.application_record.resume_state_binding
+    intent_binding = context.resume_intent.resume_state_binding
+    if application_binding is None or intent_binding is None:
+        return _failure_from_context(
+            context,
+            decision="invalid_intent",
+            error_type="resume_state_binding_missing",
+            message="resume intent artifacts do not include required resume_state_binding",
+            findings=["resume_state_binding_missing"],
+        )
+    if application_binding.model_dump(mode="json") != intent_binding.model_dump(mode="json"):
+        return _failure_from_context(
+            context,
+            decision="invalid_intent",
+            error_type="resume_state_binding_mismatch",
+            message="replan application record and resume intent state bindings do not match",
+            findings=["resume_state_binding_mismatch"],
+        )
+    if run_plan_fingerprint(run_plan) != application_binding.run_plan_fingerprint:
+        return _failure_from_context(
+            context,
+            decision="stale_intent",
+            error_type="run_plan_fingerprint_mismatch",
+            message="current RunPlan fingerprint does not match resume state binding",
+            findings=["run_plan_fingerprint_mismatch"],
+            resume_state_binding=application_binding,
+        )
+    if stage_state is None:
+        return _failure_from_context(
+            context,
+            decision="stale_intent",
+            error_type="stage_state_missing",
+            message="current StageState is required to validate resume state binding",
+            findings=["stage_state_missing"],
+            resume_state_binding=application_binding,
+        )
+    if stage_state_fingerprint(stage_state) != application_binding.stage_fingerprint:
+        return _failure_from_context(
+            context,
+            decision="stale_intent",
+            error_type="stage_fingerprint_mismatch",
+            message="current StageState fingerprint does not match resume state binding",
+            findings=["stage_fingerprint_mismatch"],
+            resume_state_binding=application_binding,
+        )
+    return None
+
+
 def _validate_audit_consumption(
     *,
     context: _ValidationContext,
@@ -581,6 +661,9 @@ def _eligible_result(
     findings = [
         "artifact_refs_valid",
         "proposal_hash_valid",
+        "run_plan_fingerprint_valid",
+        "stage_fingerprint_valid",
+        "application_intent_state_binding_match",
         "source_application_valid",
         "selected_operation_ids_valid",
         "rerun_tasks_present_in_current_run_plan",
@@ -601,6 +684,7 @@ def _eligible_result(
         affected_tasks=intent.affected_tasks,
         resume_from_task=intent.resume_from_task or _first_task(intent.rerun_tasks, run_plan),
         artifact_refs=context.artifact_refs,
+        resume_state_binding=context.application_record.resume_state_binding,
         validation_findings=findings,
         executable=False,
     )
@@ -634,6 +718,7 @@ def _failure_from_context(
     error_type: str,
     message: str,
     findings: list[str],
+    resume_state_binding: ResumeStateBinding | None = None,
 ) -> ResumeIntentValidationResult:
     return _failure_result(
         project_id=context.project_id,
@@ -651,6 +736,7 @@ def _failure_from_context(
         rerun_tasks=context.resume_intent.rerun_tasks,
         affected_tasks=context.resume_intent.affected_tasks,
         resume_from_task=context.resume_intent.resume_from_task,
+        resume_state_binding=resume_state_binding,
     )
 
 
@@ -671,6 +757,7 @@ def _failure_result(
     rerun_tasks: list[str] | None = None,
     affected_tasks: list[str] | None = None,
     resume_from_task: str = "",
+    resume_state_binding: ResumeStateBinding | None = None,
 ) -> ResumeIntentValidationResult:
     try:
         safe_refs = _artifact_refs(artifact_refs)
@@ -690,6 +777,7 @@ def _failure_result(
         affected_tasks=affected_tasks or [],
         resume_from_task=resume_from_task,
         artifact_refs=safe_refs,
+        resume_state_binding=resume_state_binding,
         validation_findings=findings,
         error={"type": error_type, "message": message},
         executable=False,
