@@ -362,6 +362,26 @@ Phase 2 deterministic generation screening fixture demo:
   REINVENT4, does not connect remote workers, does not replace
   `/api/run-plan/execute`, and does not claim full inverse-design automation.
 
+Phase 3 literature-to-dataset fixture demo:
+
+- `tests/fixtures/phase3_literature_dataset_demo/` contains a parsed document
+  fixture, target property metadata, and extraction config for a small OLED-like
+  PLQY table.
+- `tests/test_phase3_literature_dataset_demo.py` runs a local fixture pipeline
+  that extracts table rows into `ExtractedRecord` objects, normalizes PLQY
+  percentages to fractions, merges duplicate molecule/property observations,
+  writes conflict and benchmark reports, and exports a confirmed training CSV.
+- The demo writes real Phase 3 artifacts: `extracted_records.jsonl`,
+  `extracted_records.json`, `unit_normalization_report.json`,
+  `conflict_report.json`, `merged_records.json`, `confirmed_dataset.csv`,
+  `extraction_benchmark_report.json`, `report.md`, and `report.json`.
+- The confirmed dataset is fed into Phase 1 `inspect_dataset_service` and
+  `check_trainability_service` to verify that `plqy` is recognized as a
+  trainable numeric property without running heavy model training.
+- This is a local low-risk Phase 3 fixture. It does not perform Web Search,
+  network acquisition, MinerU parsing, large-scale PDF crawling, remote worker
+  execution, SQLite migration, or default route replacement.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with

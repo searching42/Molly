@@ -452,6 +452,10 @@ Resolved run-plan queue bridge scope:
     generation now feeds a generated candidate dataset into the Phase 1
     prediction, filtering/ranking, and report chain under the internal queued
     execution bridge.
+15. **Phase 3 literature-to-dataset fixture** — Fixture parsed literature/table
+    data now flows through structured extraction, PLQY unit normalization,
+    duplicate merge/conflict reporting, confirmed dataset export, benchmark
+    reporting, and Phase 1 trainability intake.
 
 Still not default:
 
@@ -465,6 +469,12 @@ Still not default:
   workflow completion.
 - The Phase 2 fixture uses deterministic local generation only; it is not full
   inverse design and does not execute REINVENT4 or other external generators.
+- The Phase 3 fixture uses local parsed-table fixtures only; it is not full
+  literature mining, Web Search, network acquisition, MinerU parsing, or
+  large-scale corpus extraction.
+- The Phase 3 confirmed dataset is intended to feed Phase 1 training workflows,
+  but the fixture only verifies trainability intake and does not run heavy
+  model training.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -655,3 +665,5 @@ The goal is a closed, auditable demo rather than full automation.
   full resume queue engine.
 - PR #95: connect deterministic generation candidates to the Phase 1
   screening/report chain without external generation backends.
+- PR #96: add Phase 3 literature-to-dataset fixture pipeline without Web Search,
+  MinerU crawling, remote workers, or heavy training.
