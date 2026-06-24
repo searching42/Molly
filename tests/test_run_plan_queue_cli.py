@@ -168,6 +168,11 @@ def test_run_plan_queue_cli_returns_two_for_invalid_run_plan_json(tmp_path: Path
     assert code == 2
     assert stderr == ""
     assert payload["ok"] is False
+    assert payload["terminal"] is False
+    assert payload["queued_job_id"] == ""
+    assert payload["final_job"] is None
+    assert payload["final_lease"] is None
+    assert payload["loop_results"] == []
     assert payload["error"]["type"] == "validation_error"
     assert "valid JSON" in payload["error"]["message"]
     assert fake.calls == []
@@ -183,6 +188,11 @@ def test_run_plan_queue_cli_returns_two_for_malformed_input_artifacts_json(tmp_p
     assert code == 2
     assert stderr == ""
     assert payload["ok"] is False
+    assert payload["terminal"] is False
+    assert payload["queued_job_id"] == ""
+    assert payload["final_job"] is None
+    assert payload["final_lease"] is None
+    assert payload["loop_results"] == []
     assert payload["error"]["type"] == "validation_error"
     assert "input_artifacts JSON is not valid JSON" in payload["error"]["message"]
     assert fake.calls == []
@@ -197,6 +207,11 @@ def test_run_plan_queue_cli_returns_two_for_non_object_task_options_json(tmp_pat
     assert code == 2
     assert stderr == ""
     assert payload["ok"] is False
+    assert payload["terminal"] is False
+    assert payload["queued_job_id"] == ""
+    assert payload["final_job"] is None
+    assert payload["final_lease"] is None
+    assert payload["loop_results"] == []
     assert payload["error"]["type"] == "validation_error"
     assert "task_options JSON root must be an object" in payload["error"]["message"]
     assert fake.calls == []
@@ -213,6 +228,11 @@ def test_run_plan_queue_cli_returns_two_for_non_dedicated_queue(tmp_path: Path) 
     assert code == 2
     assert stderr == ""
     assert payload["ok"] is False
+    assert payload["terminal"] is False
+    assert payload["queued_job_id"] == ""
+    assert payload["final_job"] is None
+    assert payload["final_lease"] is None
+    assert payload["loop_results"] == []
     assert payload["error"]["type"] == "validation_error"
     assert "empty/dedicated queue" in payload["error"]["message"]
     assert len(queue.list_jobs()) == 1

@@ -240,6 +240,25 @@ object roots. It does not add Flask/API routes, does not change
 `/api/run-plan/execute`, does not connect remote workers, and does not change
 storage.
 
+The printed JSON summary is validated by `RunPlanQueueExecutionSummary` and has
+a stable top-level shape:
+
+```json
+{
+  "ok": true,
+  "terminal": true,
+  "queued_job_id": "job-demo-project-demo-run",
+  "final_job": {},
+  "final_lease": {},
+  "loop_results": ["completed", "idle"],
+  "error": null
+}
+```
+
+Validation/input failures use the same schema with `ok=false`,
+`terminal=false`, empty `queued_job_id`, null final state fields, an empty
+`loop_results` list, and an `error` object containing `type` and `message`.
+
 Low-risk fixture demo:
 
 ```bash
