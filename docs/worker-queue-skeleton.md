@@ -314,3 +314,36 @@ synchronous executor call.
 Do not jump directly to remote workers or SQLite from this state. Remote worker
 contracts should wait for the local run-plan bridge; SQLite should wait for
 stable file-backed queue and runner semantics under the opt-in bridge.
+
+Route phase status:
+
+The internal run-plan queue bridge is complete for local opt-in use. It now has
+a validated queue task schema, enqueue helper, one-shot
+`RunPlanExecutorTaskRunner`, local queue service, internal CLI, stable
+`RunPlanQueueExecutionSummary`, and feature-flagged internal route. These pieces
+prove the route/CLI/service control path can write queue and lease terminal
+state without changing the default run-plan execution route.
+
+Still not default:
+
+- `/api/run-plan/execute` remains synchronous.
+- `POST /api/internal/run-plan/queue/execute` requires
+  `AI4S_ENABLE_INTERNAL_RUN_PLAN_QUEUE_ROUTE`.
+- No remote worker is connected.
+- No SQLite queue store exists.
+- Fake executor and low-risk CLI tests do not guarantee real model training
+  success.
+
+Default-route migration hard gates:
+
+1. `RunPlanExecutorTaskRunner` must run a real low-risk adapter demo end to end.
+2. The internal route must enforce permission, actor identity, and audit
+   semantics suitable for queued execution.
+3. Queue lifecycle must expose cleanup, stale recovery, and observability for
+   queued/running jobs.
+4. `RunPlanQueueExecutionSummary` must be validated consistently by route, CLI,
+   service helper, and tests.
+5. The dedicated queue limitation must be resolved with dedicated per-request
+   queues or target-job acquisition.
+6. `waiting_user` must have an explicit contract: either terminal succeeded for
+   compatibility or a non-terminal waiting state with resume semantics.

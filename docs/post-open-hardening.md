@@ -34,12 +34,12 @@ blur into the already-resolved OPEN series.
 - Resolved: HARDEN-009 storage consistency checker in PR #58 and PR #59.
 - Resolved: HARDEN-010 SQLite migration design note in PR #60.
 - Resolved: HARDEN-011 local process worker supervisor in PR #62 and PR #63.
-- Resolved: HARDEN-012 queue control plane and local runner binding in PR #65
-  through PR #73.
-- Focus: add an explicit run-plan opt-in bridge on top of the file-backed local
-  worker loop without jumping to remote workers or SQLite.
-- Engineering priority: run-plan queue job schema, local worker loop binding,
-  and opt-in `RunPlanExecutor` integration.
+- Resolved: HARDEN-012 queue control plane, local runner binding, and internal
+  run-plan queue route phase in PR #65 through PR #87.
+- Focus: define default-route migration criteria before considering any
+  replacement of the synchronous `/api/run-plan/execute` path.
+- Engineering priority: harden permission/audit, queue lifecycle, observability,
+  and waiting-user semantics around the opt-in run-plan queue bridge.
 - Science priority: a small but closed OLED demo with literature provenance,
   model training diagnostics, candidate generation, screening, and report
   artifacts.
@@ -305,16 +305,19 @@ Evidence:
 
 ## HARDEN-012: Add Worker Queue Polling Loop And Local Runner Binding — RESOLVED
 
-- Status: Resolved across PR #65 through PR #73 for the file-backed queue,
-  poller, task runner protocol, and local supervisor-backed runner adapter.
+- Status: Resolved across PR #65 through PR #87 for the file-backed queue,
+  poller, task runner protocol, local supervisor-backed runner adapter, run-plan
+  queue bridge, internal CLI, stable summary schema, and feature-flagged
+  internal API route.
 - Add queue polling around project-scoped jobs so that multiple queued jobs are
   acquired in a deterministic order and later executed by supervised workers.
 - Keep lease acquisition, heartbeat update, cancellation, and stale lease
   recovery semantics without introducing remote workers.
 - HARDEN-012 now includes optional task-runner binding and a local
   `WorkerSupervisorTaskRunner` adapter for dummy/process commands only.
-- HARDEN-012 intentionally does not include `RunPlanExecutor`, real model
-  training jobs, API routes, remote workers, or SQLite.
+- HARDEN-012 intentionally does not replace the default synchronous
+  `/api/run-plan/execute` route, does not add remote workers, does not migrate
+  state to SQLite, and does not guarantee real training workloads.
 
 Skeleton evidence:
 
@@ -333,6 +336,23 @@ Skeleton evidence:
   dummy/process commands.
 - PR #73: `allowed_cwd_root` and task `cwd` fail-closed hardening for the local
   supervisor runner adapter.
+- PR #75: integration test proving `WorkerQueue`, `WorkerQueuePoller`,
+  `WorkerSupervisorTaskRunner`, and `WorkerSupervisor` can move local dummy
+  commands from queued to terminal state.
+- PR #76: runner exception handling so acquired jobs fail terminally instead of
+  leaving active leases behind.
+- PR #77: `LocalWorkerLoop` bounded wrapper for reusable local polling.
+- PR #78: run-plan queue job schema and validator.
+- PR #79: one-shot `RunPlanExecutorTaskRunner` adapter.
+- PR #80: local worker loop integration test for the run-plan executor task
+  runner.
+- PR #81: internal enqueue helper for `run_plan_execute` worker jobs.
+- PR #82: internal queued run-plan execution service helper.
+- PR #83: internal run-plan queue CLI.
+- PR #84: CLI `input_artifacts` and `task_options` JSON support.
+- PR #85: low-risk CLI fixture demo.
+- PR #86: stable `RunPlanQueueExecutionSummary` schema.
+- PR #87: feature-flagged internal run-plan queue route.
 - `docs/worker-queue-skeleton.md` — API, file layout, and out-of-scope
   integration points.
 - `tests/test_harden_012_worker_queue.py` — queue ordering, lease acquisition,
@@ -386,53 +406,52 @@ Implemented poller and runner semantics:
    local dummy/process commands.  It rejects shell string commands and can
    constrain task `cwd` under an explicit `allowed_cwd_root`.
 
-Next phase: run-plan opt-in bridge:
+Resolved run-plan queue bridge scope:
 
-1. **Queue + poller + supervisor runner integration test** — Prove the
-   file-backed queue, bounded poller, and `WorkerSupervisorTaskRunner` can run a
-   local dummy command from queued to terminal state.
+1. **Run-plan queue schema** — `run_plan_execute` envelopes are validated and
+   intentionally exclude command/argv/cwd fields.
+2. **Enqueue helper** — `RunPlan` plus project/input/options context can be
+   converted into a queued worker job without starting execution.
+3. **One-shot `RunPlanExecutorTaskRunner`** — The adapter can consume the
+   queued envelope and synchronously call `RunPlanExecutor.execute(...)` behind
+   explicit opt-in helpers.
+4. **Local queue service** — `run_run_plan_via_local_queue(...)` composes the
+   enqueue helper, `WorkerQueuePoller`, `LocalWorkerLoop`, and task runner.
+5. **Internal CLI** — Local debugging can run the queued service from JSON
+   files with stable exit-code behavior.
+6. **Stable summary schema** — CLI, helper, and route responses share
+   `RunPlanQueueExecutionSummary`.
+7. **Feature-flagged internal route** —
+   `POST /api/internal/run-plan/queue/execute` is available only behind
+   `AI4S_ENABLE_INTERNAL_RUN_PLAN_QUEUE_ROUTE` and uses an internal queue path.
 
-2. **LocalWorkerLoop wrapper** — Add a small loop wrapper around queue, poller,
-   and runner construction so supervisors can drive bounded iterations without
-   API route coupling.
+Still not default:
 
-3. **Run-plan queue job schema** — Define the minimal queued task envelope for a
-   run-plan execution request, including project/run identity, command-safe
-   metadata, artifacts, and permission expectations.  PR #78 adds the schema,
-   validator, and builder only; it does not execute `RunPlanExecutor`.
+- `/api/run-plan/execute` remains synchronous and is not replaced.
+- The internal route requires an explicit feature flag.
+- Remote workers are not connected.
+- Queue state remains file-backed; no SQLite migration is included.
+- Real training success is not guaranteed by the route/CLI tests.
 
-4. **RunPlanExecutorTaskRunner one-shot adapter** — Add a `WorkerTaskRunner`
-   adapter that validates the run-plan queue envelope and synchronously calls
-   `RunPlanExecutor.execute(...)` without changing API routes or the default
-   `/api/run-plan/execute` path.
+Default-route migration hard gates:
 
-5. **Run-plan worker queue enqueue helper** — Add internal plumbing that turns a
-   `RunPlan` plus project/input/options context into a queued
-   `run_plan_execute` worker job without starting a loop, calling
-   `RunPlanExecutor`, or changing API behavior.
+1. `RunPlanExecutorTaskRunner` must pass a real low-risk adapter demo, not only
+   fake executor tests.
+2. The internal route must have permission, actor identity, and audit
+   constraints that match or exceed the synchronous route.
+3. Queue lifecycle must include cleanup, stale recovery, and observability for
+   stuck queued/running jobs.
+4. `RunPlanQueueExecutionSummary` must be validated consistently by route, CLI,
+   service helper, and integration tests.
+5. The dedicated-queue limitation must be resolved either with guaranteed
+   per-request dedicated queues or target-job acquisition.
+6. `waiting_user` semantics must be explicit: either terminal succeeded for
+   current compatibility or a non-terminal/waiting state with resume behavior.
 
-6. **Internal queued run-plan execution helper** — Compose the enqueue helper,
-   `WorkerQueuePoller`, bounded `LocalWorkerLoop`, and
-   `RunPlanExecutorTaskRunner` into an internal opt-in service helper without
-   exposing API routes or changing the default synchronous execution path.
-
-7. **Internal run-plan queue CLI** — Add a local module entrypoint that reads a
-   `RunPlan` JSON file, uses a dedicated `JsonWorkerQueueStore`, and calls the
-   internal queued helper for opt-in debugging without exposing Flask/API
-   routes.
-
-8. **Feature-flagged internal run-plan queue route** — Add an internal-only API
-   route that returns `RunPlanQueueExecutionSummary` through the local queued
-   helper only when explicitly enabled.
-
-9. **RunPlanExecutor opt-in queue bridge** — Add explicit opt-in wiring from
-   run-plan jobs to worker queue execution only after the internal helper is
-   covered by tests.
-
-Do not jump directly to remote worker support or SQLite migration.  Remote
-worker contracts should wait until the local run-plan bridge is stable; SQLite
-should wait until file-backed queue and runner semantics remain green under
-run-plan opt-in integration.
+Do not jump directly to remote worker support or SQLite migration. Remote worker
+contracts should wait until the local default-route migration gates are met;
+SQLite should wait until file-backed queue and runner semantics remain green
+under the opt-in bridge.
 
 Acceptance:
 
@@ -485,15 +504,18 @@ HARDEN-004 resolved
 -> HARDEN-010 SQLite migration design note
 -> HARDEN-011 resolved
 -> HARDEN-012 resolved
--> run-plan opt-in bridge
+-> run-plan internal queue route resolved
+-> default-route migration criteria
 -> HARDEN-013 / HARDEN-014
 ```
 
 The route-extension cleanup and permission hardening layers are now behind the
 e2e safety net. Storage inventory/checking and the local worker control plane
-are also in place. The next hardening phase should connect run-plan execution
-through an explicit local opt-in bridge before adding remote workers, SQLite
-migration, or broader science workflow integrations.
+are also in place. The run-plan queue bridge now has schema, local execution,
+CLI, stable summary, and feature-flagged internal route coverage. The next
+hardening phase should satisfy the default-route migration gates before
+replacing `/api/run-plan/execute`, adding remote workers, migrating storage to
+SQLite, or broadening science workflow integrations.
 
 ## Science Track
 
@@ -552,19 +574,30 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #71: completed. Bind WorkerQueuePoller to optional task runner protocol.
 - PR #72: completed. Add local supervisor task runner adapter.
 - PR #73: completed. Harden supervisor runner cwd constraints.
-- PR #74: mark local runner binding complete and plan run-plan opt-in bridge.
-- PR #78: define run-plan queue job schema without executing RunPlanExecutor.
-- PR #79: add one-shot RunPlanExecutorTaskRunner without API route wiring.
-- PR #81: add internal run-plan worker queue enqueue helper without API route
+- PR #74: completed. Mark local runner binding complete and plan run-plan
+  opt-in bridge.
+- PR #75: completed. Add local worker queue supervisor runner integration
+  coverage.
+- PR #76: completed. Fail queued worker jobs when runner start/poll/cancel
+  raises.
+- PR #77: completed. Add `LocalWorkerLoop` bounded wrapper.
+- PR #78: completed. Define run-plan queue job schema without executing
+  RunPlanExecutor.
+- PR #79: completed. Add one-shot RunPlanExecutorTaskRunner without API route
   wiring.
-- PR #82: add internal opt-in queued run-plan execution helper without API route
-  wiring.
-- PR #83: add internal run-plan queue CLI without API route wiring.
-- PR #84: add input_artifacts/task_options JSON support to the internal
+- PR #80: completed. Cover RunPlanExecutorTaskRunner through local worker loop.
+- PR #81: completed. Add internal run-plan worker queue enqueue helper without
+  API route wiring.
+- PR #82: completed. Add internal opt-in queued run-plan execution helper
+  without API route wiring.
+- PR #83: completed. Add internal run-plan queue CLI without API route wiring.
+- PR #84: completed. Add input_artifacts/task_options JSON support to the internal
   run-plan queue CLI.
-- PR #85: add low-risk run-plan queue CLI fixture demo without API route
+- PR #85: completed. Add low-risk run-plan queue CLI fixture demo without API route
   wiring.
-- PR #86: define stable RunPlanQueueExecutionSummary schema for queued helper
-  and CLI output.
-- PR #87: add feature-flagged internal run-plan queue route without replacing
-  `/api/run-plan/execute`.
+- PR #86: completed. Define stable RunPlanQueueExecutionSummary schema for
+  queued helper and CLI output.
+- PR #87: completed. Add feature-flagged internal run-plan queue route without
+  replacing `/api/run-plan/execute`.
+- PR #88: mark internal run-plan queue route phase complete and define
+  default-route migration criteria.
