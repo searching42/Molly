@@ -456,6 +456,11 @@ Resolved run-plan queue bridge scope:
     data now flows through structured extraction, PLQY unit normalization,
     duplicate merge/conflict reporting, confirmed dataset export, benchmark
     reporting, and Phase 1 trainability intake.
+16. **OLED property profile and multi-objective screening fixture** — A
+    structured OLED property profile now drives a low-risk fixture where PLQY,
+    emission wavelength, HOMO, LUMO, and singlet-triplet gap are recognized as
+    configurable properties, predicted with multiple single-property baselines,
+    combined into profile-driven score contributions, ranked, and reported.
 
 Still not default:
 
@@ -475,6 +480,9 @@ Still not default:
 - The Phase 3 confirmed dataset is intended to feed Phase 1 training workflows,
   but the fixture only verifies trainability intake and does not run heavy
   model training.
+- The OLED property profile fixture is data configuration, not a hardcoded
+  OLED-only core schema enum. It does not implement full multi-task model
+  training and does not allow runtime LLM-generated executable code.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -667,3 +675,6 @@ The goal is a closed, auditable demo rather than full automation.
   screening/report chain without external generation backends.
 - PR #96: add Phase 3 literature-to-dataset fixture pipeline without Web Search,
   MinerU crawling, remote workers, or heavy training.
+- PR #97: add OLED property profile and multi-objective screening fixture using
+  multiple single-property predictions plus weighted ranking, without hardcoding
+  OLED-only core property enums or implementing full multi-task training.
