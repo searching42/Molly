@@ -428,11 +428,15 @@ Resolved run-plan queue bridge scope:
    resolver, writes a pre-execution `requested` audit gate, and appends terminal
    audit records to
    `workspace/.ai4s_internal/audit/internal_run_plan_queue_audit.jsonl`.
+9. **Permission gate** — The internal route requires an explicit
+   `run_plan_queue_execute` server grant before writing the `requested` audit
+   event or executing the queued run-plan helper.
 
 Still not default:
 
 - `/api/run-plan/execute` remains synchronous and is not replaced.
-- The internal route requires an explicit feature flag and actor identity.
+- The internal route requires an explicit feature flag, actor identity, and a
+  `run_plan_queue_execute` server grant.
 - Remote workers are not connected.
 - Queue state remains file-backed; no SQLite migration is included.
 - Real training success is not guaranteed by the route/CLI tests.
@@ -442,8 +446,8 @@ Default-route migration hard gates:
 1. `RunPlanExecutorTaskRunner` must pass a real low-risk adapter demo, not only
    fake executor tests.
 2. The internal route must have permission, actor identity, and audit
-   constraints that match or exceed the synchronous route. PR #89 covers the
-   first actor/audit layer but does not complete permission parity.
+   constraints that match or exceed the synchronous route. PR #89 added the
+   first actor/audit layer; PR #90 adds the route-level permission grant gate.
 3. Queue lifecycle must include cleanup, stale recovery, and observability for
    stuck queued/running jobs.
 4. `RunPlanQueueExecutionSummary` must be validated consistently by route, CLI,
@@ -606,5 +610,7 @@ The goal is a closed, auditable demo rather than full automation.
   replacing `/api/run-plan/execute`.
 - PR #88: completed. Mark internal run-plan queue route phase complete and define
   default-route migration criteria.
-- PR #89: add actor identity, pre-execution audit gate, and terminal audit
+- PR #89: completed. Add actor identity, pre-execution audit gate, and terminal audit
   metadata to the feature-flagged internal run-plan queue route.
+- PR #90: add explicit `run_plan_queue_execute` permission grant requirement to
+  the feature-flagged internal run-plan queue route.

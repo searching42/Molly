@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.app import create_app
 from ai4s_agent.run_plan_queue_summary import RunPlanQueueExecutionSummary
 from ai4s_agent.schemas import PlannedTask, RunPlan
+from ai4s_agent.server_permissions import ServerPermissionStore
 from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
+
+
+PERMISSION_ACTION = "run_plan_queue_execute"
 
 
 class FakeRunPlanExecutor:
@@ -82,6 +88,21 @@ def _enable_queue_route(app, *, execution: dict[str, Any], calls: list[dict[str,
     app.config["AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"] = factory
 
 
+def _grant_run_plan_queue_permission(workspace: Path, *, project_id: str = "proj-a", run_id: str = "run-a", actor: str = "admin") -> dict[str, Any]:
+    return ServerPermissionStore(workspace).create_grant(
+        project_id,
+        PERMISSION_ACTION,
+        actor=actor,
+        actor_source="test",
+        run_id=run_id,
+        reason="test grant",
+    )
+
+
+def _iso_at(delta: timedelta) -> str:
+    return (datetime.now(timezone.utc) + delta).isoformat().replace("+00:00", "Z")
+
+
 def test_internal_run_plan_queue_route_is_disabled_by_default(tmp_path: Path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     client = app.test_client()
@@ -95,6 +116,7 @@ def test_internal_run_plan_queue_route_executes_when_feature_flag_enabled(tmp_pa
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    grant = _grant_run_plan_queue_permission(tmp_path)
     client = app.test_client()
 
     response = client.post("/api/internal/run-plan/queue/execute", json=_payload())
@@ -117,6 +139,11 @@ def test_internal_run_plan_queue_route_executes_when_feature_flag_enabled(tmp_pa
     assert audit[-2]["outcome"] == "requested"
     assert audit[-2]["status_code"] == 202
     assert audit[-2]["queued_job_id"] == ""
+    assert audit[-2]["permission_allowed"] is True
+    assert audit[-2]["permission_reason"] == "SERVER_GRANT"
+    assert audit[-2]["permission_action"] == PERMISSION_ACTION
+    assert audit[-2]["permission_resource"] == "project:proj-a:run:run-a"
+    assert audit[-2]["permission_grant_id"] == grant["grant_id"]
     assert audit[-1]["event"] == "internal_run_plan_queue_execute"
     assert audit[-1]["actor"] == "json-user"
     assert audit[-1]["actor_source"] == "json:actor"
@@ -127,6 +154,9 @@ def test_internal_run_plan_queue_route_executes_when_feature_flag_enabled(tmp_pa
     assert audit[-1]["outcome"] == "succeeded"
     assert audit[-1]["status_code"] == 200
     assert audit[-1]["queued_job_id"] == summary.queued_job_id
+    assert audit[-1]["permission_allowed"] is True
+    assert audit[-1]["permission_reason"] == "SERVER_GRANT"
+    assert audit[-1]["permission_resource"] == "project:proj-a:run:run-a"
     assert str(audit[-1]["timestamp"]).endswith("Z")
 
 
@@ -160,6 +190,7 @@ def test_internal_run_plan_queue_route_audit_write_failure_fails_before_executor
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    _grant_run_plan_queue_permission(tmp_path)
     client = app.test_client()
 
     def raise_oserror(*args, **kwargs):
@@ -181,10 +212,88 @@ def test_internal_run_plan_queue_route_audit_write_failure_fails_before_executor
     assert not (_default_queue_dir(tmp_path) / "worker_leases.json").exists()
 
 
+def test_internal_run_plan_queue_route_denies_actor_without_permission_grant(tmp_path: Path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    client = app.test_client()
+
+    response = client.post("/api/internal/run-plan/queue/execute", json=_payload())
+
+    assert response.status_code == 403
+    summary = RunPlanQueueExecutionSummary.model_validate(response.get_json())
+    assert summary.ok is False
+    assert summary.terminal is False
+    assert summary.error is not None
+    assert summary.error["type"] == "permission_denied"
+    assert "SERVER_GRANT_REQUIRED" in summary.error["message"]
+    assert calls == []
+    assert not (_default_queue_dir(tmp_path) / "worker_queue.json").exists()
+    audit = _audit_records(tmp_path)
+    assert audit[-1]["actor"] == "json-user"
+    assert audit[-1]["actor_source"] == "json:actor"
+    assert audit[-1]["outcome"] == "permission_denied"
+    assert audit[-1]["status_code"] == 403
+    assert audit[-1]["permission_allowed"] is False
+    assert audit[-1]["permission_reason"] == "SERVER_GRANT_REQUIRED"
+    assert audit[-1]["permission_action"] == PERMISSION_ACTION
+    assert audit[-1]["permission_resource"] == "project:proj-a:run:run-a"
+    assert audit[-1]["permission_scope"] == "project:proj-a:run:run-a"
+    assert audit[-1]["error"]["type"] == "permission_denied"
+
+
+def test_internal_run_plan_queue_route_denies_expired_permission_grant(tmp_path: Path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    store = ServerPermissionStore(tmp_path)
+    grant = store.create_grant("proj-a", PERMISSION_ACTION, actor="admin", run_id="run-a", expires_at=_iso_at(timedelta(hours=1)))
+    grant["expires_at"] = _iso_at(timedelta(minutes=-1))
+    write_json(store._grants_path("proj-a"), {"project_id": "proj-a", "updated_at": now_iso(), "grants": [grant]})
+    client = app.test_client()
+
+    response = client.post("/api/internal/run-plan/queue/execute", json=_payload())
+
+    assert response.status_code == 403
+    summary = RunPlanQueueExecutionSummary.model_validate(response.get_json())
+    assert summary.error is not None
+    assert summary.error["type"] == "permission_denied"
+    assert "EXPIRED_GRANT" in summary.error["message"]
+    assert calls == []
+    audit = _audit_records(tmp_path)
+    assert audit[-1]["outcome"] == "permission_denied"
+    assert audit[-1]["permission_reason"] == "EXPIRED_GRANT"
+    assert audit[-1]["permission_grant_id"] == grant["grant_id"]
+
+
+def test_internal_run_plan_queue_route_denies_revoked_permission_grant(tmp_path: Path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    store = ServerPermissionStore(tmp_path)
+    grant = store.create_grant("proj-a", PERMISSION_ACTION, actor="admin", run_id="run-a")
+    store.revoke_grant("proj-a", grant["grant_id"], revoked_by="admin", revoke_reason="test revoke")
+    client = app.test_client()
+
+    response = client.post("/api/internal/run-plan/queue/execute", json=_payload())
+
+    assert response.status_code == 403
+    summary = RunPlanQueueExecutionSummary.model_validate(response.get_json())
+    assert summary.error is not None
+    assert summary.error["type"] == "permission_denied"
+    assert "REVOKED_GRANT" in summary.error["message"]
+    assert calls == []
+    audit = _audit_records(tmp_path)
+    assert audit[-1]["outcome"] == "permission_denied"
+    assert audit[-1]["permission_reason"] == "REVOKED_GRANT"
+    assert audit[-1]["permission_grant_id"] == grant["grant_id"]
+
+
 def test_internal_run_plan_queue_route_audits_x_actor_success(tmp_path: Path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    _grant_run_plan_queue_permission(tmp_path)
     client = app.test_client()
 
     response = client.post(
@@ -216,6 +325,7 @@ def test_internal_run_plan_queue_route_can_be_enabled_by_env(monkeypatch, tmp_pa
         return FakeRunPlanExecutor({"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls)
 
     app.config["AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"] = factory
+    _grant_run_plan_queue_permission(tmp_path)
     client = app.test_client()
 
     response = client.post("/api/internal/run-plan/queue/execute", json=_payload())
@@ -259,6 +369,7 @@ def test_internal_run_plan_queue_route_audits_failed_executor(tmp_path: Path) ->
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     _enable_queue_route(app, execution={"ok": False, "run_id": "run-a", "status": "FAILED", "error": {"message": "adapter failed"}}, calls=calls)
+    _grant_run_plan_queue_permission(tmp_path)
     client = app.test_client()
 
     response = client.post("/api/internal/run-plan/queue/execute", json=_payload())
@@ -273,6 +384,7 @@ def test_internal_run_plan_queue_route_audits_failed_executor(tmp_path: Path) ->
     audit = _audit_records(tmp_path)
     assert audit[-2]["outcome"] == "requested"
     assert audit[-2]["status_code"] == 202
+    assert audit[-2]["permission_allowed"] is True
     assert audit[-1]["outcome"] == "failed"
     assert audit[-1]["status_code"] == 400
     assert audit[-1]["queued_job_id"] == summary.queued_job_id
@@ -403,6 +515,7 @@ def test_internal_run_plan_queue_route_rejects_non_dedicated_queue_without_execu
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    _grant_run_plan_queue_permission(tmp_path)
     client = app.test_client()
 
     response = client.post("/api/internal/run-plan/queue/execute", json=_payload())
