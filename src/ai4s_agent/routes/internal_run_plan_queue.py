@@ -15,6 +15,16 @@ from ai4s_agent.run_plan_queue_lifecycle import internal_run_plan_queue_dir, rea
 from ai4s_agent.run_plan_queue_service import run_run_plan_via_local_queue
 from ai4s_agent.run_plan_queue_summary import build_run_plan_queue_execution_summary
 from ai4s_agent.run_plan_task_runner import ExecutorFactory
+from ai4s_agent.run_plan_replan_application import ReplanApplicationRequest
+from ai4s_agent.run_plan_replan_application_artifacts import (
+    RunPlanApplicationArtifactBundle,
+    write_replan_application_artifacts,
+)
+from ai4s_agent.run_plan_replan_application_audit_memory import (
+    REPLAN_APPLICATION_AUDIT_REF,
+    append_replan_application_audit_record,
+    save_replan_application_summary_to_memory,
+)
 from ai4s_agent.run_plan_review_card import read_run_plan_review_card
 from ai4s_agent.schemas import RunPlan
 from ai4s_agent.server_permissions import ServerPermissionStore, decide_server_permission
@@ -25,6 +35,7 @@ from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
 INTERNAL_RUN_PLAN_QUEUE_ROUTE_FLAG = "AI4S_ENABLE_INTERNAL_RUN_PLAN_QUEUE_ROUTE"
 EXECUTOR_FACTORY_CONFIG_KEY = "AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"
 INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION = "run_plan_queue_execute"
+INTERNAL_RUN_PLAN_REPLAN_APPLY_PERMISSION_ACTION = "run_plan_replan_apply"
 
 
 def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStorage) -> None:
@@ -107,6 +118,114 @@ def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStor
                 "ok": False,
                 "error": _summary_error_dict(exc),
             }), status_code
+
+    @app.post("/api/internal/run-plan/replan/apply-review")
+    def internal_replan_application_apply_review():
+        if not internal_run_plan_queue_route_enabled(current_app):
+            return jsonify({"ok": False, "error": "internal run-plan queue route disabled"}), 404
+        actor = ActorContext(actor="", source="missing", required=True)
+        project_id = ""
+        run_id = ""
+        permission: dict[str, Any] | None = None
+        bundle: RunPlanApplicationArtifactBundle | None = None
+        try:
+            payload = _request_json_object()
+            actor = resolve_actor(request, required=True)
+            if not actor.actor:
+                raise _RouteRequestError("actor required", status_code=403)
+            project_id = _safe_path_component(payload.get("project_id"), "project_id")
+            run_id = _safe_path_component(payload.get("run_id"), "run_id")
+            application_request = ReplanApplicationRequest.model_validate(
+                _replan_application_request_payload(payload, project_id=project_id, run_id=run_id)
+            )
+            permission = _decide_permission(
+                projects,
+                actor=actor,
+                project_id=project_id,
+                run_id=run_id,
+                action=INTERNAL_RUN_PLAN_REPLAN_APPLY_PERMISSION_ACTION,
+            )
+            if not bool(permission.get("allowed")):
+                error = _permission_error_dict(permission)
+                audit_error = _append_replan_application_audit_or_error(
+                    projects,
+                    actor=actor,
+                    project_id=project_id,
+                    run_id=run_id,
+                    event="replan_application_failed",
+                    bundle=None,
+                    error=error,
+                )
+                if audit_error is not None:
+                    return jsonify(audit_error), 500
+                return jsonify(_replan_application_error_summary(
+                    project_id=project_id,
+                    run_id=run_id,
+                    error=error,
+                    permission=permission,
+                )), 403
+            audit_error = _append_replan_application_audit_or_error(
+                projects,
+                actor=actor,
+                project_id=project_id,
+                run_id=run_id,
+                event="replan_application_requested",
+                bundle=None,
+                error=None,
+            )
+            if audit_error is not None:
+                return jsonify(audit_error), 500
+            bundle = write_replan_application_artifacts(
+                workspace_dir=projects.workspace_dir,
+                request=application_request,
+                actor=actor.actor,
+                actor_source=actor.source,
+            )
+            memory_save = save_replan_application_summary_to_memory(
+                workspace_dir=projects.workspace_dir,
+                project_id=project_id,
+                run_id=run_id,
+                bundle=bundle,
+                audit_refs=[REPLAN_APPLICATION_AUDIT_REF],
+                confirmed_by=actor.actor,
+            )
+            audit_error = _append_replan_application_audit_or_error(
+                projects,
+                actor=actor,
+                project_id=project_id,
+                run_id=run_id,
+                event="replan_application_completed",
+                bundle=bundle,
+                error=None,
+            )
+            if audit_error is not None:
+                return jsonify(audit_error), 500
+            return jsonify(_replan_application_success_summary(
+                bundle=bundle,
+                memory_record=memory_save.record.model_dump(mode="json"),
+                permission=permission,
+            ))
+        except (OSError, ValidationError, ValueError) as exc:
+            status_code = exc.status_code if isinstance(exc, _RouteRequestError) else 400
+            error = _summary_error_dict(exc)
+            if actor.actor and project_id and run_id:
+                audit_error = _append_replan_application_audit_or_error(
+                    projects,
+                    actor=actor,
+                    project_id=project_id,
+                    run_id=run_id,
+                    event="replan_application_failed",
+                    bundle=bundle,
+                    error=error,
+                )
+                if audit_error is not None:
+                    return jsonify(audit_error), 500
+            return jsonify(_replan_application_error_summary(
+                project_id=project_id,
+                run_id=run_id,
+                error=error,
+                permission=permission,
+            )), status_code
 
     @app.post("/api/internal/run-plan/queue/execute")
     def internal_run_plan_queue_execute():
@@ -220,7 +339,10 @@ class _RouteRequestError(ValueError):
 
 class _RunPlanQueuePermissionPolicy(PermissionPolicy):
     def resolve(self, action: str) -> PermissionLevel:
-        if str(action or "").strip() == INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION:
+        if str(action or "").strip() in {
+            INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION,
+            INTERNAL_RUN_PLAN_REPLAN_APPLY_PERMISSION_ACTION,
+        }:
             return PermissionLevel.PROJECT_APPROVED
         return super().resolve(action)
 
@@ -262,6 +384,19 @@ def _optional_object(value: object, label: str) -> dict[str, Any] | None:
     return value
 
 
+def _replan_application_request_payload(
+    payload: dict[str, Any],
+    *,
+    project_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    actor_fields = {"actor", "approved_by", "revoked_by", "confirmed_by"}
+    clean = {str(key): value for key, value in payload.items() if str(key) not in actor_fields}
+    clean["project_id"] = project_id
+    clean["run_id"] = run_id
+    return clean
+
+
 def _max_iterations(value: object) -> int:
     if value is None:
         return 10
@@ -288,11 +423,12 @@ def _decide_permission(
     actor: ActorContext,
     project_id: str,
     run_id: str,
+    action: str = INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION,
 ) -> dict[str, Any]:
     return decide_server_permission(
         ServerPermissionStore(projects.workspace_dir),
         _RunPlanQueuePermissionPolicy(),
-        INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION,
+        action,
         project_id=project_id,
         run_id=run_id,
         actor=actor.actor,
@@ -335,6 +471,40 @@ def _append_audit_or_error(
                 "type": "audit_write_failed",
                 "message": str(exc).strip() or exc.__class__.__name__,
             },
+        )
+    return None
+
+
+def _append_replan_application_audit_or_error(
+    projects: ProjectStorage,
+    *,
+    actor: ActorContext,
+    project_id: str,
+    run_id: str,
+    event: str,
+    bundle: RunPlanApplicationArtifactBundle | None,
+    error: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    try:
+        append_replan_application_audit_record(
+            workspace_dir=projects.workspace_dir,
+            project_id=project_id,
+            run_id=run_id,
+            event=event,  # type: ignore[arg-type]
+            actor=actor.actor,
+            actor_source=actor.source,
+            bundle=bundle,
+            error=error,
+        )
+    except OSError as exc:
+        return _replan_application_error_summary(
+            project_id=project_id,
+            run_id=run_id,
+            error={
+                "type": "audit_write_failed",
+                "message": str(exc).strip() or exc.__class__.__name__,
+            },
+            permission=None,
         )
     return None
 
@@ -429,6 +599,58 @@ def _summary_error_dict(exc: BaseException) -> dict[str, Any]:
         "type": "validation_error",
         "message": str(exc).strip() or exc.__class__.__name__,
     }
+
+
+def _replan_application_success_summary(
+    *,
+    bundle: RunPlanApplicationArtifactBundle,
+    memory_record: dict[str, Any],
+    permission: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "project_id": bundle.project_id,
+        "run_id": bundle.run_id,
+        "application": {
+            "application_id": bundle.application_record.application_id,
+            "proposal_hash": bundle.application_record.proposal_hash,
+            "selected_action": bundle.application_record.selected_action,
+            "selected_operation_ids": list(bundle.application_record.selected_operation_ids),
+            "result_type": bundle.application_record.result_type,
+            "result_artifact_id": bundle.result_artifact_id,
+            "result_ref": bundle.application_record.result_ref,
+            "artifact_ids": list(bundle.artifact_ids),
+            "artifacts": dict(bundle.artifacts),
+            "required_gates": list(bundle.compiled.required_gates),
+            "executable": False,
+        },
+        "audit_refs": [REPLAN_APPLICATION_AUDIT_REF],
+        "memory": memory_record,
+        "permission": _public_permission_decision(permission, project_id=bundle.project_id, run_id=bundle.run_id),
+        "executable": False,
+    }
+
+
+def _replan_application_error_summary(
+    *,
+    project_id: str,
+    run_id: str,
+    error: dict[str, Any],
+    permission: dict[str, Any] | None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "project_id": project_id,
+        "run_id": run_id,
+        "application": None,
+        "audit_refs": [REPLAN_APPLICATION_AUDIT_REF] if project_id and run_id else [],
+        "memory": None,
+        "error": error,
+        "executable": False,
+    }
+    if permission is not None:
+        result["permission"] = _public_permission_decision(permission, project_id=project_id, run_id=run_id)
+    return result
 
 
 def _permission_error_dict(permission: dict[str, Any]) -> dict[str, Any]:
