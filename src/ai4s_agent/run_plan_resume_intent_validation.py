@@ -173,6 +173,7 @@ def validate_resume_intent(
     current_run_plan: RunPlan | dict[str, Any],
     stage_state: StageState | dict[str, Any] | None = None,
     audit_records: list[dict[str, Any]] | None = None,
+    approved_gates: list[str] | None = None,
 ) -> ResumeIntentValidationResult:
     """Validate a materialized resume intent against current read-only state.
 
@@ -235,7 +236,12 @@ def validate_resume_intent(
         )
         if failure is not None:
             return failure
-        return _eligible_result(context=context, run_plan=run_plan, stage_state=stage)
+        return _eligible_result(
+            context=context,
+            run_plan=run_plan,
+            stage_state=stage,
+            approved_gates=approved_gates,
+        )
     except _ValidationFailure as exc:
         return _failure_result(
             project_id=project,
@@ -566,9 +572,11 @@ def _eligible_result(
     context: _ValidationContext,
     run_plan: RunPlan,
     stage_state: StageState | None,
+    approved_gates: list[str] | None,
 ) -> ResumeIntentValidationResult:
     intent = context.resume_intent
-    missing_gates = [gate for gate in intent.required_gates if gate not in set(intent.approved_gates)]
+    clean_approved_gates = _approved_gates(intent, approved_gates)
+    missing_gates = [gate for gate in intent.required_gates if gate not in set(clean_approved_gates)]
     decision: ResumeIntentValidationDecision = "needs_gate_approval" if missing_gates else "resume_eligible"
     findings = [
         "artifact_refs_valid",
@@ -588,7 +596,7 @@ def _eligible_result(
         proposal_hash=context.application_record.proposal_hash,
         decision=decision,
         required_gates=intent.required_gates,
-        approved_gates=intent.approved_gates,
+        approved_gates=clean_approved_gates,
         rerun_tasks=intent.rerun_tasks,
         affected_tasks=intent.affected_tasks,
         resume_from_task=intent.resume_from_task or _first_task(intent.rerun_tasks, run_plan),
@@ -605,6 +613,12 @@ def _stage_findings(stage_state: StageState | None) -> list[str]:
     if stage_state.status == RunStatus.WAITING_USER:
         findings.append("stage_state_waiting_user")
     return findings
+
+
+def _approved_gates(intent: ResumeIntent, approved_gates: list[str] | None) -> list[str]:
+    if approved_gates is None:
+        return list(intent.approved_gates)
+    return _clean_string_list(approved_gates)
 
 
 def _first_task(tasks: list[str], run_plan: RunPlan) -> str:
