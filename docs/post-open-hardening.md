@@ -504,6 +504,12 @@ Resolved run-plan queue bridge scope:
     It writes requested/completed/failed audit records, materializes application
     review artifacts, saves compact project memory, and returns a review
     summary without executing or enqueueing anything.
+27. **Resume intent validation semantics** — PR #110 defines how a future
+    gate/resume path should validate `review/replan_resume_intent.json` before
+    any execution bridge can consume it. The design covers source application
+    linkage, proposal hash checks, artifact refs, current `RunPlan`
+    compatibility, stale-intent detection, resume audit, and default-route
+    compatibility without adding execution code.
 
 Still not default:
 
@@ -560,6 +566,10 @@ Still not default:
   `run_plan_replan_apply` server grant, but it does not resume runs, execute
   adapters, enqueue jobs, apply patches, mutate `RunPlan`, call LLMs, or
   replace `/api/run-plan/execute`.
+- Resume intent validation remains design-only in PR #110. It does not add a
+  resume route, call `RunPlanExecutor.resume_after_gate(...)`, enqueue work,
+  write gate decisions, mutate `RunPlan`, call LLMs, or replace
+  `/api/run-plan/resume` or `/api/run-plan/execute`.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -799,3 +809,7 @@ The goal is a closed, auditable demo rather than full automation.
   behind actor and `run_plan_replan_apply` permission gates, without executing,
   enqueueing, applying patches, mutating `RunPlan`, calling LLMs, or replacing
   `/api/run-plan/execute`.
+- PR #110: define resume intent validation semantics in docs only, covering
+  source application, proposal hash, artifact refs, current `RunPlan`, stale
+  intent, gates, audit, permission, and default-route compatibility without
+  adding resume execution.

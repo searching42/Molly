@@ -41,6 +41,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 replan application review artifacts | Completed as non-executing user-confirmed application drafts | `src/ai4s_agent/run_plan_replan_application_artifacts.py` |
 | Phase 4 replan application audit/memory summary | Completed as append-only audit and compact memory refs only | `src/ai4s_agent/run_plan_replan_application_audit_memory.py` |
 | Phase 4 internal replan application route | Completed as feature-flagged review-only route | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
+| Phase 4 resume intent validation semantics | Completed as docs-only validation contract | `docs/resume-intent-validation-semantics.md` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -252,6 +253,17 @@ Completed layers:
      compact memory summary.
    - Does not execute, enqueue, auto-resume, apply patches, call LLMs, mutate
      `RunPlan`, or replace `/api/run-plan/execute`.
+
+9. Resume Intent Validation Semantics
+   - Document: `docs/resume-intent-validation-semantics.md`
+   - Defines how future gate/resume paths should validate
+     `review/replan_resume_intent.json`.
+   - Covers source application id, proposal hash, artifact refs, current
+     `RunPlan` compatibility, rerun task presence, stale-intent detection,
+     gate checks, resume audit, and default-route compatibility.
+   - Does not add a resume route, enqueue work, execute adapters, write gate
+     decisions, mutate `RunPlan`, call LLMs, or replace `/api/run-plan/resume`
+     or `/api/run-plan/execute`.
 
 Phase 4 boundaries:
 
