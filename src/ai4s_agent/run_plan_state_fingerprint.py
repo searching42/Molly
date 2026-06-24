@@ -11,6 +11,7 @@ from ai4s_agent.schemas import RunPlan, StageState
 
 
 _FINGERPRINT_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+_BARE_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 RESUME_STATE_BINDING_SCHEMA_VERSION = "resume_state_binding.v1"
 
 
@@ -31,7 +32,7 @@ class ResumeStateBinding(BaseModel):
     execution_snapshot_id: str = ""
     execution_snapshot_hash: str = ""
 
-    @field_validator("run_plan_fingerprint", "stage_fingerprint", "execution_snapshot_hash")
+    @field_validator("run_plan_fingerprint", "stage_fingerprint")
     @classmethod
     def validate_fingerprint(cls, value: str) -> str:
         clean = str(value or "").strip()
@@ -40,6 +41,11 @@ class ResumeStateBinding(BaseModel):
         if not _FINGERPRINT_PATTERN.fullmatch(clean):
             raise ValueError("fingerprint must use sha256:<64 lowercase hex>")
         return clean
+
+    @field_validator("execution_snapshot_hash")
+    @classmethod
+    def validate_execution_snapshot_hash(cls, value: str) -> str:
+        return _normalize_execution_snapshot_hash(value)
 
     @field_validator("stage", "stage_status", "execution_snapshot_id")
     @classmethod
@@ -131,19 +137,21 @@ def _execution_snapshot_identity(stage_state: StageState) -> tuple[str, str]:
     if not isinstance(raw, dict):
         raise ValueError("execution_snapshot must be an object")
     snapshot_id = str(raw.get("snapshot_id") or "").strip()
-    snapshot_hash = str(raw.get("snapshot_hash") or "").strip()
+    snapshot_hash = _normalize_execution_snapshot_hash(str(raw.get("snapshot_hash") or ""))
     if bool(snapshot_id) != bool(snapshot_hash):
         raise ValueError("execution_snapshot snapshot_id and snapshot_hash must be provided together")
-    if snapshot_hash:
-        ResumeStateBinding(
-            run_plan_fingerprint="sha256:" + "0" * 64,
-            stage_fingerprint="sha256:" + "0" * 64,
-            stage=stage_state.stage,
-            stage_status=stage_state.status.value,
-            execution_snapshot_id=snapshot_id,
-            execution_snapshot_hash=snapshot_hash,
-        )
     return snapshot_id, snapshot_hash
+
+
+def _normalize_execution_snapshot_hash(value: str) -> str:
+    clean = str(value or "").strip()
+    if not clean:
+        return ""
+    if _BARE_SHA256_PATTERN.fullmatch(clean):
+        return f"sha256:{clean}"
+    if _FINGERPRINT_PATTERN.fullmatch(clean):
+        return clean
+    raise ValueError("execution_snapshot_hash must use 64 lowercase hex or sha256:<64 lowercase hex>")
 
 
 def _sorted_unique_strings(value: Any) -> list[str]:

@@ -161,6 +161,26 @@ def test_resume_state_binding_rejects_partial_snapshot_identity() -> None:
         )
 
 
+def test_resume_state_binding_accepts_executor_snapshot_hash_format() -> None:
+    binding = ResumeStateBinding(
+        run_plan_fingerprint=run_plan_fingerprint(_run_plan()),
+        stage_fingerprint=stage_state_fingerprint(_stage_state()),
+        stage="train_model",
+        stage_status="WAITING_USER",
+        execution_snapshot_id="snapshot-1",
+        execution_snapshot_hash="a" * 64,
+    )
+
+    assert binding.execution_snapshot_hash == "sha256:" + "a" * 64
+
+
+def test_stage_fingerprint_normalizes_snapshot_hash_representation() -> None:
+    bare_hash_stage = _stage_state(snapshot_hash="a" * 64)
+    prefixed_hash_stage = _stage_state(snapshot_hash="sha256:" + "a" * 64)
+
+    assert stage_state_fingerprint(bare_hash_stage) == stage_state_fingerprint(prefixed_hash_stage)
+
+
 def test_build_resume_state_binding_captures_current_state() -> None:
     run_plan = _run_plan()
     stage = _stage_state()

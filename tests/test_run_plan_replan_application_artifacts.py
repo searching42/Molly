@@ -8,7 +8,9 @@ import pytest
 
 from ai4s_agent._utils import now_iso
 from ai4s_agent._utils import write_json
+from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.run_plan_artifact_verifier import RunPlanArtifactVerification
+from ai4s_agent.planner import expand_run_plan
 from ai4s_agent.run_plan_replan_application import ReplanApplicationRequest
 from ai4s_agent.run_plan_replan_application_artifacts import (
     BLOCKED_ACKNOWLEDGEMENT_ARTIFACT_ID,
@@ -57,6 +59,15 @@ def _stage_state() -> StageState:
             },
         },
     )
+
+
+def _write_training_csv(path: Path) -> None:
+    rows = ["SMILES,plqy,lambda_em,split_group"]
+    for idx in range(36):
+        split = "train" if idx < 24 else "valid" if idx < 30 else "test"
+        rows.append(f"CC{'C' * (idx % 5)}O,{0.45 + idx * 0.01:.3f},{500 + idx},{split}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
 def _request(
@@ -182,6 +193,42 @@ def test_write_replan_application_artifacts_binds_resume_intent_to_current_state
     assert bundle.application_record.resume_state_binding is not None
     assert bundle.application_record.resume_state_binding.model_dump(mode="json") == expected_binding
     assert bundle.result_artifact["resume_state_binding"] == expected_binding
+
+
+def test_write_replan_application_artifacts_accepts_real_executor_waiting_snapshot(tmp_path: Path) -> None:
+    project_id = "proj-exec-apply"
+    run_id = "run-exec-apply"
+    storage = ProjectStorage(tmp_path)
+    dataset = tmp_path / "input" / "train.csv"
+    _write_training_csv(dataset)
+    run_plan = expand_run_plan(run_id=run_id, requested_tasks=["train_model"], available_artifacts=[])
+    execution = RunPlanExecutor(storage=storage).execute(
+        project_id=project_id,
+        run_plan=run_plan,
+        input_artifacts={"uploaded_dataset": str(dataset)},
+    )
+    assert execution["status"] == RunStatus.WAITING_USER.value
+    stage_state = storage.read_stage_state(project_id, run_id)
+    assert stage_state is not None
+    raw_snapshot_hash = stage_state.details["execution_snapshot"]["snapshot_hash"]
+    assert len(raw_snapshot_hash) == 64
+    assert not raw_snapshot_hash.startswith("sha256:")
+    proposal_path = _write_manual_proposal(tmp_path, project_id=project_id, run_id=run_id, action="rerun_task", task_id="train_model")
+    request = _request(project_id=project_id, run_id=run_id, proposal_hash=_proposal_hash(proposal_path))
+
+    bundle = write_replan_application_artifacts(
+        workspace_dir=tmp_path,
+        request=request,
+        actor="review-user",
+        actor_source="header:X-Actor",
+        current_run_plan=run_plan,
+        stage_state=stage_state,
+    )
+
+    binding = bundle.application_record.resume_state_binding
+    assert binding is not None
+    assert binding.execution_snapshot_hash == "sha256:" + raw_snapshot_hash
+    assert bundle.result_artifact["resume_state_binding"]["execution_snapshot_hash"] == "sha256:" + raw_snapshot_hash
 
 
 def test_write_replan_application_artifacts_requires_state_for_resume_intent(tmp_path: Path) -> None:
