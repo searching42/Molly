@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ai4s_agent._utils import now_iso
-from ai4s_agent.run_plan_replan_proposal import PATCH_SCHEMA_VERSION, RunPlanReplanAction
+from ai4s_agent.run_plan_replan_proposal import PATCH_SCHEMA_VERSION, RunPlanReplanAction, RunPlanReplanProposal
 
 
 ReplanApplicationResultType = Literal["resume_intent", "run_plan_revision", "blocked_acknowledgement"]
@@ -250,6 +250,44 @@ class BlockedAcknowledgement(BaseModel):
         return False
 
 
+class CompiledReplanApplication(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    run_id: str
+    proposal_hash: str
+    proposal_action: RunPlanReplanAction
+    selected_action: RunPlanReplanAction
+    selected_operation_ids: list[str] = Field(default_factory=list)
+    selected_operations: list[ReplanPatchOperation] = Field(default_factory=list)
+    result_type: ReplanApplicationResultType
+    required_gates: list[str] = Field(default_factory=list)
+    validation_findings: list[str] = Field(default_factory=list)
+    executable: bool = False
+
+    @field_validator("project_id", "run_id", "proposal_hash")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        return _required_text(value)
+
+    @field_validator("selected_operation_ids")
+    @classmethod
+    def validate_selected_operation_ids(cls, value: list[str]) -> list[str]:
+        return _clean_operation_id_list(value, label="selected_operation_ids")
+
+    @field_validator("required_gates", "validation_findings")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return _clean_string_list(value)
+
+    @field_validator("executable")
+    @classmethod
+    def validate_executable_false(cls, value: bool) -> bool:
+        if value is not False:
+            raise ValueError("executable must remain false for compiled replan applications")
+        return False
+
+
 def validate_selected_operation_ids_for_patch(
     request: ReplanApplicationRequest | dict[str, Any],
     patch: ReviewableRunPlanPatch | dict[str, Any],
@@ -263,6 +301,96 @@ def validate_selected_operation_ids_for_patch(
     if unknown:
         raise ValueError(f"unknown operation_id in selected_operation_ids: {', '.join(unknown)}")
     return list(application_request.selected_operation_ids)
+
+
+def validate_and_compile_replan_application(
+    request: ReplanApplicationRequest | dict[str, Any],
+    patch: ReviewableRunPlanPatch | dict[str, Any],
+    proposal: RunPlanReplanProposal | dict[str, Any],
+) -> CompiledReplanApplication:
+    """Validate a user-selected replan proposal subset into a non-executable draft.
+
+    The compiler is deterministic and side-effect free. It does not write
+    files, mutate a RunPlan, enqueue work, execute adapters, call LLMs, or apply
+    the patch.
+    """
+
+    application_request = (
+        request if isinstance(request, ReplanApplicationRequest) else ReplanApplicationRequest.model_validate(request)
+    )
+    reviewable_patch = patch if isinstance(patch, ReviewableRunPlanPatch) else ReviewableRunPlanPatch.model_validate(patch)
+    replan_proposal = (
+        proposal if isinstance(proposal, RunPlanReplanProposal) else RunPlanReplanProposal.model_validate(proposal)
+    )
+    proposal_patch = ReviewableRunPlanPatch.model_validate(replan_proposal.proposed_run_plan_patch)
+    if proposal_patch.model_dump(mode="json") != reviewable_patch.model_dump(mode="json"):
+        raise ValueError("reviewable patch must match proposal proposed_run_plan_patch")
+
+    selected_ids = validate_selected_operation_ids_for_patch(application_request, reviewable_patch)
+    action_finding = _validate_selected_action(
+        selected_action=application_request.selected_action,
+        proposal_action=replan_proposal.proposed_action,
+    )
+    selected_operations = _selected_operations(reviewable_patch, selected_ids)
+    result_type = _result_type_for(application_request.selected_action)
+    required_gates = _required_gates_for(application_request.selected_action)
+    validation_findings = [
+        "proposal patch validated",
+        "selected operation ids validated",
+        action_finding,
+        f"compiled result_type={result_type}",
+    ]
+    return CompiledReplanApplication(
+        project_id=application_request.project_id,
+        run_id=application_request.run_id,
+        proposal_hash=application_request.proposal_hash,
+        proposal_action=replan_proposal.proposed_action,
+        selected_action=application_request.selected_action,
+        selected_operation_ids=selected_ids,
+        selected_operations=selected_operations,
+        result_type=result_type,
+        required_gates=required_gates,
+        validation_findings=validation_findings,
+        executable=False,
+    )
+
+
+def _validate_selected_action(*, selected_action: RunPlanReplanAction, proposal_action: RunPlanReplanAction) -> str:
+    if selected_action == proposal_action:
+        return "selected action matches proposal action"
+    if selected_action == "block":
+        return "selected action downgraded to block"
+    if selected_action == "request_review" and proposal_action != "block":
+        return "selected action downgraded to request_review"
+    raise ValueError("selected_action must match proposal action or be downgraded to request_review/block")
+
+
+def _selected_operations(
+    patch: ReviewableRunPlanPatch,
+    selected_operation_ids: list[str],
+) -> list[ReplanPatchOperation]:
+    by_id = {operation.operation_id: operation for operation in patch.operations}
+    return [by_id[operation_id] for operation_id in selected_operation_ids]
+
+
+def _result_type_for(action: RunPlanReplanAction) -> ReplanApplicationResultType:
+    if action == "block":
+        return "blocked_acknowledgement"
+    if action in {"adjust_targets", "collect_more_data"}:
+        return "run_plan_revision"
+    return "resume_intent"
+
+
+def _required_gates_for(action: RunPlanReplanAction) -> list[str]:
+    gates = {
+        "continue": [],
+        "request_review": ["gate_replan_review"],
+        "rerun_task": ["gate_replan_rerun_task"],
+        "adjust_targets": ["gate_replan_adjust_targets"],
+        "collect_more_data": ["gate_replan_collect_more_data"],
+        "block": [],
+    }
+    return list(gates[action])
 
 
 def _required_text(value: str) -> str:
