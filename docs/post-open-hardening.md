@@ -431,12 +431,16 @@ Resolved run-plan queue bridge scope:
 9. **Permission gate** — The internal route requires an explicit
    `run_plan_queue_execute` server grant before writing the `requested` audit
    event or executing the queued run-plan helper.
+10. **Lifecycle observability** — Internal helpers can read queue/lease status,
+    recover stale leases, and clean terminal records without touching active
+    queued/running jobs. A feature-flagged internal status route exposes
+    read-only queue state behind the same actor and permission gate.
 
 Still not default:
 
 - `/api/run-plan/execute` remains synchronous and is not replaced.
-- The internal route requires an explicit feature flag, actor identity, and a
-  `run_plan_queue_execute` server grant.
+- The internal execute and status routes require an explicit feature flag,
+  actor identity, and a `run_plan_queue_execute` server grant.
 - Remote workers are not connected.
 - Queue state remains file-backed; no SQLite migration is included.
 - Real training success is not guaranteed by the route/CLI tests.
@@ -449,7 +453,8 @@ Default-route migration hard gates:
    constraints that match or exceed the synchronous route. PR #89 added the
    first actor/audit layer; PR #90 adds the route-level permission grant gate.
 3. Queue lifecycle must include cleanup, stale recovery, and observability for
-   stuck queued/running jobs.
+   stuck queued/running jobs. PR #91 starts this layer with read-only status,
+   stale recovery helper, and terminal cleanup helper.
 4. `RunPlanQueueExecutionSummary` must be validated consistently by route, CLI,
    service helper, and integration tests.
 5. The dedicated-queue limitation must be resolved either with guaranteed
@@ -612,5 +617,7 @@ The goal is a closed, auditable demo rather than full automation.
   default-route migration criteria.
 - PR #89: completed. Add actor identity, pre-execution audit gate, and terminal audit
   metadata to the feature-flagged internal run-plan queue route.
-- PR #90: add explicit `run_plan_queue_execute` permission grant requirement to
-  the feature-flagged internal run-plan queue route.
+- PR #90: completed. Add explicit `run_plan_queue_execute` permission grant
+  requirement to the feature-flagged internal run-plan queue route.
+- PR #91: add internal run-plan queue lifecycle helpers and feature-flagged
+  read-only queue status route.

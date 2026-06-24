@@ -112,6 +112,15 @@ def test_internal_run_plan_queue_route_is_disabled_by_default(tmp_path: Path) ->
     assert response.status_code == 404
 
 
+def test_internal_run_plan_queue_status_route_is_disabled_by_default(tmp_path: Path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+
+    response = client.get("/api/internal/run-plan/queue/status?project_id=proj-a&run_id=run-a")
+
+    assert response.status_code == 404
+
+
 def test_internal_run_plan_queue_route_executes_when_feature_flag_enabled(tmp_path: Path) -> None:
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
@@ -158,6 +167,64 @@ def test_internal_run_plan_queue_route_executes_when_feature_flag_enabled(tmp_pa
     assert audit[-1]["permission_reason"] == "SERVER_GRANT"
     assert audit[-1]["permission_resource"] == "project:proj-a:run:run-a"
     assert str(audit[-1]["timestamp"]).endswith("Z")
+
+
+def test_internal_run_plan_queue_status_route_requires_actor_without_executor(tmp_path: Path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    _grant_run_plan_queue_permission(tmp_path)
+    client = app.test_client()
+
+    response = client.get("/api/internal/run-plan/queue/status?project_id=proj-a&run_id=run-a")
+
+    assert response.status_code == 403
+    assert response.get_json()["error"]["type"] == "validation_error"
+    assert calls == []
+
+
+def test_internal_run_plan_queue_status_route_requires_permission_without_executor(tmp_path: Path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    client = app.test_client()
+
+    response = client.get(
+        "/api/internal/run-plan/queue/status?project_id=proj-a&run_id=run-a",
+        headers={"X-Actor": "status-user"},
+    )
+
+    assert response.status_code == 403
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "permission_denied"
+    assert calls == []
+
+
+def test_internal_run_plan_queue_status_route_returns_status_without_executor(tmp_path: Path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
+    _grant_run_plan_queue_permission(tmp_path)
+    client = app.test_client()
+
+    executed = client.post("/api/internal/run-plan/queue/execute", json=_payload())
+    assert executed.status_code == 200
+    calls.clear()
+    response = client.get(
+        "/api/internal/run-plan/queue/status?project_id=proj-a&run_id=run-a",
+        headers={"X-Actor": "status-user"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["project_id"] == "proj-a"
+    assert payload["run_id"] == "run-a"
+    assert payload["status"]["counts"]["succeeded"] == 1
+    assert payload["status"]["counts"]["terminal_leases"] == 1
+    assert payload["permission"]["allowed"] is True
+    assert calls == []
 
 
 def test_internal_run_plan_queue_route_requires_actor_without_executor(tmp_path: Path) -> None:

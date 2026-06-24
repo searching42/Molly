@@ -293,6 +293,33 @@ write fails, the route fails closed without calling the executor or mutating the
 worker queue. Terminal `succeeded`/`failed` events are written after queued
 execution finishes.
 
+Read-only internal queue status:
+
+```text
+GET /api/internal/run-plan/queue/status?project_id=<project_id>&run_id=<run_id>
+```
+
+This route is also internal-only and disabled unless
+`AI4S_ENABLE_INTERNAL_RUN_PLAN_QUEUE_ROUTE` is enabled. It requires actor
+identity and the same `run_plan_queue_execute` server grant as execute. It does
+not call the executor, mutate the queue, or expose cleanup/recovery operations.
+The response contains `jobs`, `leases`, `counts`, `has_active_jobs`, and
+`has_terminal_jobs`.
+
+Lifecycle helpers:
+
+- `internal_run_plan_queue_dir(workspace, project_id, run_id)` builds the
+  internal queue path with the same safe path component and containment rules as
+  the route.
+- `read_run_plan_queue_status(queue)` returns job/lease records, status counts,
+  and active/terminal booleans.
+- `recover_stale_run_plan_queue(queue, now=...)` wraps
+  `WorkerQueue.recover_stale_leases(...)` and returns recovered job ids/counts.
+- `cleanup_terminal_run_plan_queue(queue, workspace=...)` removes terminal
+  succeeded/failed/cancelled job records and terminal lease records. It never
+  deletes active queued/running jobs, and deletes queue/lease files only when
+  all records are terminal and safely removable.
+
 Low-risk fixture demo:
 
 ```bash
@@ -338,9 +365,9 @@ The internal run-plan queue bridge is complete for local opt-in use. It now has
 a validated queue task schema, enqueue helper, one-shot
 `RunPlanExecutorTaskRunner`, local queue service, internal CLI, stable
 `RunPlanQueueExecutionSummary`, feature-flagged internal route, and minimal
-actor/audit/permission metadata. These pieces prove the route/CLI/service
-control path can write queue and lease terminal state without changing the
-default run-plan execution route.
+actor/audit/permission metadata plus read-only lifecycle observability. These
+pieces prove the route/CLI/service control path can write and inspect queue and
+lease terminal state without changing the default run-plan execution route.
 
 Still not default:
 

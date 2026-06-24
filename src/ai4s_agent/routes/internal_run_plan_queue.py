@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from ai4s_agent._utils import now_iso, truthy
 from ai4s_agent.actor_identity import ActorContext, resolve_actor
 from ai4s_agent.memory import PermissionLevel, PermissionPolicy
+from ai4s_agent.run_plan_queue_lifecycle import internal_run_plan_queue_dir, read_run_plan_queue_status
 from ai4s_agent.run_plan_queue_service import run_run_plan_via_local_queue
 from ai4s_agent.run_plan_queue_summary import build_run_plan_queue_execution_summary
 from ai4s_agent.run_plan_task_runner import ExecutorFactory
@@ -26,6 +27,40 @@ INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION = "run_plan_queue_execute"
 
 
 def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStorage) -> None:
+    @app.get("/api/internal/run-plan/queue/status")
+    def internal_run_plan_queue_status():
+        if not internal_run_plan_queue_route_enabled(current_app):
+            return jsonify({"ok": False, "error": "internal run-plan queue route disabled"}), 404
+        try:
+            actor = resolve_actor(request, required=True)
+            if not actor.actor:
+                raise _RouteRequestError("actor required", status_code=403)
+            project_id = _safe_path_component(request.args.get("project_id"), "project_id")
+            run_id = _safe_path_component(request.args.get("run_id"), "run_id")
+            permission = _decide_permission(projects, actor=actor, project_id=project_id, run_id=run_id)
+            if not bool(permission.get("allowed")):
+                return jsonify({
+                    "ok": False,
+                    "project_id": project_id,
+                    "run_id": run_id,
+                    "error": _permission_error_dict(permission),
+                    "permission": _public_permission_decision(permission, project_id=project_id, run_id=run_id),
+                }), 403
+            queue = WorkerQueue(JsonWorkerQueueStore(_queue_dir(projects, project_id, run_id)))
+            return jsonify({
+                "ok": True,
+                "project_id": project_id,
+                "run_id": run_id,
+                "status": read_run_plan_queue_status(queue),
+                "permission": _public_permission_decision(permission, project_id=project_id, run_id=run_id),
+            })
+        except (OSError, ValidationError, ValueError) as exc:
+            status_code = exc.status_code if isinstance(exc, _RouteRequestError) else 400
+            return jsonify({
+                "ok": False,
+                "error": _summary_error_dict(exc),
+            }), status_code
+
     @app.post("/api/internal/run-plan/queue/execute")
     def internal_run_plan_queue_execute():
         if not internal_run_plan_queue_route_enabled(current_app):
@@ -191,11 +226,7 @@ def _max_iterations(value: object) -> int:
 
 
 def _queue_dir(projects: ProjectStorage, project_id: str, run_id: str) -> Path:
-    base = (projects.workspace_dir / ".ai4s_internal" / "run_plan_queues").resolve()
-    queue_dir = (base / project_id / run_id).resolve()
-    if queue_dir != base and not queue_dir.is_relative_to(base):
-        raise ValueError("internal queue path must stay under workspace")
-    return queue_dir
+    return internal_run_plan_queue_dir(projects.workspace_dir, project_id, run_id)
 
 
 def _executor_factory(app: Any) -> ExecutorFactory | None:
@@ -375,6 +406,18 @@ def _permission_resource(project_id: str, run_id: str) -> str:
     if project_id:
         return f"project:{project_id}"
     return ""
+
+
+def _public_permission_decision(permission: dict[str, Any], *, project_id: str, run_id: str) -> dict[str, Any]:
+    result = {
+        "allowed": bool(permission.get("allowed")),
+        "reason": str(permission.get("reason") or ""),
+        "action": str(permission.get("action") or INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION),
+        "resource": _permission_resource(project_id, run_id),
+        "grant_id": str(permission.get("grant_id") or ""),
+        "server_authorized": bool(permission.get("server_authorized")),
+    }
+    return result
 
 
 def _error_summary(exc: BaseException) -> dict[str, Any]:
