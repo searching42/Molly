@@ -518,6 +518,12 @@ Resolved run-plan queue bridge scope:
     records audit/memory summaries without resuming, enqueueing, writing gate
     decisions, executing adapters, mutating `RunPlan`, or replacing default
     routes.
+29. **Resume intent state binding** — PR #115 binds user-confirmed resume
+    intents to canonical `RunPlan` and stable `StageState` fingerprints. The
+    application writer records the binding in both application and intent
+    artifacts; validation recomputes current fingerprints and fails closed with
+    `stale_intent` on drift. This is integrity/staleness hardening only, not
+    resume authorization or execution.
 
 Still not default:
 
@@ -584,6 +590,10 @@ Still not default:
   `RunPlanExecutor.resume_after_gate(...)`, write gate decisions, enqueue work,
   execute adapters, mutate `RunPlan`, call LLMs, or replace
   `/api/run-plan/resume` or `/api/run-plan/execute`.
+- Resume intent state bindings are stale-state checks only. They do not
+  authorize resume, do not replace actor/permission/gate checks, and do not
+  execute adapters. Future resume execution must recompute fingerprints again
+  immediately before consuming the intent.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -611,6 +621,9 @@ Default-route migration hard gates:
    either a `ResumeIntent`, `RunPlanRevision`, or blocked acknowledgement with
    actor, permission, audit, gate, and compact memory semantics. A separate
    gate/resume/execute path is still required before any adapter runs.
+8. Resume intents must remain bound to current run state. PR #115 adds
+   canonical run-plan and stable stage fingerprints; any future default route
+   migration must recompute them at consumption time and fail closed on drift.
 
 Do not jump directly to remote worker support or SQLite migration. Remote worker
 contracts should wait until the local default-route migration gates are met;

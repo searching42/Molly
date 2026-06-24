@@ -5,11 +5,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ai4s_agent._utils import write_json
+from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.app import create_app
 from ai4s_agent.memory import ProjectMemory
 from ai4s_agent.run_plan_replan_application_audit_memory import REPLAN_APPLICATION_AUDIT_REF
 from ai4s_agent.run_plan_replan_proposal import RunPlanReplanProposal
+from ai4s_agent.run_plan_state_fingerprint import build_resume_state_binding
+from ai4s_agent.schemas import PlannedTask, RunPlan, RunStatus, StageState
 from ai4s_agent.server_permissions import ServerPermissionStore
 from ai4s_agent.storage import ProjectStorage
 
@@ -19,6 +21,42 @@ PERMISSION_ACTION = "run_plan_replan_apply"
 
 def _proposal_hash(path: Path) -> str:
     return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+
+
+def _run_plan(*task_ids: str, run_id: str = "run-apply") -> RunPlan:
+    tasks = list(task_ids) or ["inspect_dataset", "train_model", "render_report"]
+    return RunPlan(
+        run_id=run_id,
+        requested_tasks=tasks,
+        tasks=[PlannedTask(task_id=task_id) for task_id in tasks],
+        available_artifacts=["uploaded_dataset"],
+    )
+
+
+def _stage_state() -> StageState:
+    now = now_iso()
+    return StageState(
+        stage="train_model",
+        status=RunStatus.WAITING_USER,
+        started_at=now,
+        ended_at=now,
+        updated_at=now,
+        details={
+            "required_gates": ["gate_replan_rerun_task"],
+            "executed_tasks": ["inspect_dataset"],
+            "execution_snapshot": {
+                "snapshot_id": "snapshot-route-1",
+                "snapshot_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            },
+        },
+    )
+
+
+def _write_current_state(workspace: Path, *, project_id: str = "proj-apply", run_id: str = "run-apply") -> None:
+    storage = ProjectStorage(workspace)
+    run_dir = storage.run_dir(project_id, run_id)
+    write_json(run_dir / "run_plan.json", _run_plan(run_id=run_id).model_dump(mode="json"))
+    storage.write_stage_state(project_id, run_id, _stage_state())
 
 
 def _write_proposal(
@@ -119,6 +157,7 @@ def test_internal_replan_application_route_is_disabled_by_default(tmp_path: Path
 
 def test_internal_replan_application_route_requires_actor(tmp_path: Path) -> None:
     proposal_path = _write_proposal(tmp_path)
+    _write_current_state(tmp_path)
     _grant_permission(tmp_path)
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     _enable_route(app)
@@ -137,6 +176,7 @@ def test_internal_replan_application_route_requires_actor(tmp_path: Path) -> Non
 
 def test_internal_replan_application_route_requires_permission_grant(tmp_path: Path) -> None:
     proposal_path = _write_proposal(tmp_path)
+    _write_current_state(tmp_path)
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     _enable_route(app)
     client = app.test_client()
@@ -158,6 +198,7 @@ def test_internal_replan_application_route_requires_permission_grant(tmp_path: P
 
 def test_internal_replan_application_route_writes_artifacts_audit_and_memory(tmp_path: Path) -> None:
     proposal_path = _write_proposal(tmp_path)
+    _write_current_state(tmp_path)
     grant = _grant_permission(tmp_path)
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     _enable_route(app)
@@ -189,6 +230,13 @@ def test_internal_replan_application_route_writes_artifacts_audit_and_memory(tmp
     run_dir = ProjectStorage(tmp_path).run_dir("proj-apply", "run-apply")
     assert (run_dir / "review" / "replan_application_record.json").exists()
     assert (run_dir / "review" / "replan_resume_intent.json").exists()
+    application_record = json.loads((run_dir / "review" / "replan_application_record.json").read_text(encoding="utf-8"))
+    resume_intent = json.loads((run_dir / "review" / "replan_resume_intent.json").read_text(encoding="utf-8"))
+    assert application_record["resume_state_binding"] == resume_intent["resume_state_binding"]
+    assert application_record["resume_state_binding"] == build_resume_state_binding(
+        _run_plan(),
+        _stage_state(),
+    ).model_dump(mode="json")
     audit = _audit_records(tmp_path)
     assert [record["event"] for record in audit] == [
         "replan_application_requested",
@@ -206,8 +254,35 @@ def test_internal_replan_application_route_writes_artifacts_audit_and_memory(tmp
     assert not (tmp_path / ".ai4s_internal" / "run_plan_queues").exists()
 
 
+def test_internal_replan_application_route_rejects_client_supplied_state_binding(tmp_path: Path) -> None:
+    proposal_path = _write_proposal(tmp_path)
+    _write_current_state(tmp_path)
+    _grant_permission(tmp_path)
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    _enable_route(app)
+    client = app.test_client()
+    payload = _payload(proposal_path)
+    payload["resume_state_binding"] = {
+        "schema_version": "resume_state_binding.v1",
+        "run_plan_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "stage_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "stage": "train_model",
+        "stage_status": "WAITING_USER",
+    }
+
+    response = client.post("/api/internal/run-plan/replan/apply-review", json=payload)
+
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["ok"] is False
+    assert body["error"]["type"] == "validation_error"
+    assert not (ProjectStorage(tmp_path).run_dir("proj-apply", "run-apply") / "review" / "replan_application_record.json").exists()
+    assert not (tmp_path / ".ai4s_internal" / "run_plan_queues").exists()
+
+
 def test_internal_replan_application_route_writes_failed_audit_on_validation_error(tmp_path: Path) -> None:
     proposal_path = _write_proposal(tmp_path)
+    _write_current_state(tmp_path)
     _grant_permission(tmp_path)
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     _enable_route(app)
@@ -239,6 +314,7 @@ def test_internal_replan_application_route_audit_write_failure_fails_before_arti
     tmp_path: Path,
 ) -> None:
     proposal_path = _write_proposal(tmp_path)
+    _write_current_state(tmp_path)
     _grant_permission(tmp_path)
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     _enable_route(app)

@@ -42,6 +42,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 replan application audit/memory summary | Completed as append-only audit and compact memory refs only | `src/ai4s_agent/run_plan_replan_application_audit_memory.py` |
 | Phase 4 internal replan application route | Completed as feature-flagged review-only route | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
 | Phase 4 resume intent validation semantics | Completed as docs-only validation contract | `docs/resume-intent-validation-semantics.md` |
+| Phase 4 resume intent state binding | Completed as validation-only integrity hardening | `src/ai4s_agent/run_plan_state_fingerprint.py` |
 
 ## Phase 1: Queued Workflow Fixture
 

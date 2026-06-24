@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from ai4s_agent._utils import write_json
+from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.memory import ProjectMemory
 from ai4s_agent.run_plan_replan_application import ReplanApplicationRequest
 from ai4s_agent.run_plan_replan_application_artifacts import (
@@ -20,11 +20,44 @@ from ai4s_agent.run_plan_replan_application_audit_memory import (
     save_replan_application_summary_to_memory,
 )
 from ai4s_agent.run_plan_replan_proposal import RunPlanReplanProposal
+from ai4s_agent.schemas import PlannedTask, RunPlan, RunStatus, StageState
 from ai4s_agent.storage import ProjectStorage
 
 
 def _proposal_hash(path: Path) -> str:
     return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+
+
+def _run_plan() -> RunPlan:
+    return RunPlan(
+        run_id="run-apply",
+        requested_tasks=["inspect_dataset", "train_model", "render_report"],
+        tasks=[
+            PlannedTask(task_id="inspect_dataset"),
+            PlannedTask(task_id="train_model"),
+            PlannedTask(task_id="render_report"),
+        ],
+        available_artifacts=["uploaded_dataset"],
+    )
+
+
+def _stage_state() -> StageState:
+    now = now_iso()
+    return StageState(
+        stage="train_model",
+        status=RunStatus.WAITING_USER,
+        started_at=now,
+        ended_at=now,
+        updated_at=now,
+        details={
+            "required_gates": ["gate_replan_rerun_task"],
+            "executed_tasks": ["inspect_dataset"],
+            "execution_snapshot": {
+                "snapshot_id": "snapshot-application-memory-1",
+                "snapshot_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            },
+        },
+    )
 
 
 def _write_application_bundle(tmp_path: Path) -> RunPlanApplicationArtifactBundle:
@@ -68,6 +101,8 @@ def _write_application_bundle(tmp_path: Path) -> RunPlanApplicationArtifactBundl
         request=request,
         actor="review-user",
         actor_source="header:X-Actor",
+        current_run_plan=_run_plan(),
+        stage_state=_stage_state(),
     )
 
 

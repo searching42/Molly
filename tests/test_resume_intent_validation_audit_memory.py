@@ -16,11 +16,23 @@ from ai4s_agent.run_plan_resume_intent_validation_audit_memory import (
     build_resume_intent_validation_memory_record,
     save_resume_intent_validation_summary_to_memory,
 )
+from ai4s_agent.run_plan_state_fingerprint import ResumeStateBinding
 from ai4s_agent.storage import ProjectStorage
 
 
 PROJECT_ID = "proj-resume"
 RUN_ID = "run-resume"
+
+
+def _binding() -> ResumeStateBinding:
+    return ResumeStateBinding(
+        run_plan_fingerprint="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        stage_fingerprint="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        stage="train_model",
+        stage_status="WAITING_USER",
+        execution_snapshot_id="snapshot-1",
+        execution_snapshot_hash="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    )
 
 
 def _validation_result(*, decision: str = "needs_gate_approval", ok: bool = True) -> ResumeIntentValidationResult:
@@ -38,6 +50,7 @@ def _validation_result(*, decision: str = "needs_gate_approval", ok: bool = True
         affected_tasks=["train_model"],
         resume_from_task="train_model",
         artifact_refs=dict(DEFAULT_RESUME_INTENT_ARTIFACT_REFS),
+        resume_state_binding=_binding(),
         validation_findings=["missing_gate_approval:gate_replan_rerun_task"],
         error=None
         if ok
@@ -88,6 +101,7 @@ def test_append_resume_intent_validation_audit_record_writes_compact_completed_e
             "rerun_tasks": ["train_model"],
             "resume_from_task": "train_model",
             "artifact_refs": DEFAULT_RESUME_INTENT_ARTIFACT_REFS,
+            "resume_state_binding": _binding().model_dump(mode="json"),
             "error": None,
             "executable": False,
         }
@@ -152,6 +166,7 @@ def test_build_resume_intent_validation_memory_record_uses_summary_and_refs_only
         "rerun_tasks": ["train_model"],
         "resume_from_task": "train_model",
         "artifact_refs": DEFAULT_RESUME_INTENT_ARTIFACT_REFS,
+        "resume_state_binding": _binding().model_dump(mode="json"),
         "audit_refs": [RESUME_INTENT_VALIDATION_AUDIT_REF],
         "error": None,
         "executable": False,
@@ -166,6 +181,8 @@ def test_build_resume_intent_validation_memory_record_uses_summary_and_refs_only
     assert "validation_findings" not in serialized
     assert "proposed_run_plan_patch" not in serialized
     assert "selected_operations" not in serialized
+    assert "requested_tasks" not in serialized
+    assert "execution_snapshot\": {" not in serialized
 
 
 def test_save_resume_intent_validation_summary_to_memory_is_idempotent(tmp_path: Path) -> None:

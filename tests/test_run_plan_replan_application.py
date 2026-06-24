@@ -14,6 +14,7 @@ from ai4s_agent.run_plan_replan_application import (
     validate_selected_operation_ids_for_patch,
 )
 from ai4s_agent.run_plan_replan_proposal import RunPlanReplanProposal
+from ai4s_agent.run_plan_state_fingerprint import ResumeStateBinding
 
 
 def _operation(operation_id: str = "op_000001") -> dict[str, str]:
@@ -65,6 +66,17 @@ def _request(
         proposal_hash="sha256:abc123",
         selected_action=selected_action,  # type: ignore[arg-type]
         selected_operation_ids=selected_operation_ids or ["op_000001"],
+    )
+
+
+def _binding() -> ResumeStateBinding:
+    return ResumeStateBinding(
+        run_plan_fingerprint="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        stage_fingerprint="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        stage="train_model",
+        stage_status="WAITING_USER",
+        execution_snapshot_id="snapshot-1",
+        execution_snapshot_hash="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     )
 
 
@@ -157,6 +169,7 @@ def test_replan_application_record_is_applied_but_not_executable() -> None:
         result_ref="review/replan_resume_intent.json",
         actor="review-user",
         actor_source="header:X-Actor",
+        resume_state_binding=_binding(),
     )
 
     assert record.applied is True
@@ -177,6 +190,7 @@ def test_replan_application_record_rejects_executable_true() -> None:
             result_ref="review/replan_resume_intent.json",
             actor="review-user",
             actor_source="header:X-Actor",
+            resume_state_binding=_binding(),
             executable=True,
         )
 
@@ -193,6 +207,7 @@ def test_resume_intent_is_non_executable_and_rejects_block_action() -> None:
             reason="Blocked runs cannot resume.",
             created_by="review-user",
             actor_source="header:X-Actor",
+            resume_state_binding=_binding(),
         )
 
     intent = ResumeIntent(
@@ -206,6 +221,7 @@ def test_resume_intent_is_non_executable_and_rejects_block_action() -> None:
         reason="User approved rerun.",
         created_by="review-user",
         actor_source="header:X-Actor",
+        resume_state_binding=_binding(),
     )
 
     assert intent.executable is False
