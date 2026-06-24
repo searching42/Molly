@@ -510,6 +510,14 @@ Resolved run-plan queue bridge scope:
     linkage, proposal hash checks, artifact refs, current `RunPlan`
     compatibility, stale-intent detection, resume audit, and default-route
     compatibility without adding execution code.
+28. **Internal resume intent validation route** — PR #111 through PR #114
+    define resume-intent validation schemas, deterministic validation helper,
+    validation audit/memory summaries, and a feature-flagged internal
+    validation route. The route requires actor identity and a
+    `run_plan_resume_intent_use` server grant, returns validation results, and
+    records audit/memory summaries without resuming, enqueueing, writing gate
+    decisions, executing adapters, mutating `RunPlan`, or replacing default
+    routes.
 
 Still not default:
 
@@ -569,6 +577,12 @@ Still not default:
 - Resume intent validation remains design-only in PR #110. It does not add a
   resume route, call `RunPlanExecutor.resume_after_gate(...)`, enqueue work,
   write gate decisions, mutate `RunPlan`, call LLMs, or replace
+  `/api/run-plan/resume` or `/api/run-plan/execute`.
+- Resume intent validation schemas, helpers, audit/memory, and the internal
+  validation route remain read-only validation surfaces. The internal route is
+  feature-flagged, actor-gated, and permission-gated, but it does not call
+  `RunPlanExecutor.resume_after_gate(...)`, write gate decisions, enqueue work,
+  execute adapters, mutate `RunPlan`, call LLMs, or replace
   `/api/run-plan/resume` or `/api/run-plan/execute`.
 - Full queued resume semantics for waiting-user runs remain future work.
 

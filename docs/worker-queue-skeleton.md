@@ -523,6 +523,29 @@ Resume intent validation design:
   mutate `RunPlan`, call LLMs, or replace `/api/run-plan/resume` or
   `/api/run-plan/execute`.
 
+Resume intent validation schemas, helpers, audit, memory, and internal route:
+
+- `ai4s_agent.run_plan_resume_intent_validation.validate_resume_intent(...)`
+  validates a materialized resume intent against the current `RunPlan`, review
+  artifacts, optional stage state, optional audit records, and optional
+  approved gates.
+- `ai4s_agent.run_plan_resume_intent_validation_audit_memory.append_resume_intent_validation_audit_record(...)`
+  appends compact requested/completed/failed validation audit records under the
+  run `review/` directory.
+- `ai4s_agent.run_plan_resume_intent_validation_audit_memory.save_resume_intent_validation_summary_to_memory(...)`
+  stores a compact project-memory summary with the validation decision,
+  intent/application/proposal identifiers, gates, rerun tasks, artifact refs,
+  audit refs, and error shape.
+- `POST /api/internal/run-plan/resume-intent/validate` exposes this validation
+  as an internal-only route behind
+  `AI4S_ENABLE_INTERNAL_RESUME_INTENT_VALIDATION_ROUTE`, actor identity, and a
+  `run_plan_resume_intent_use` server permission grant.
+- The route returns a `ResumeIntentValidationResult` wrapper and writes
+  validation audit/memory summaries only. It does not call
+  `RunPlanExecutor.resume_after_gate(...)`, write gate decisions, enqueue work,
+  execute adapters, mutate `RunPlan`, call LLMs, or replace
+  `/api/run-plan/resume` or `/api/run-plan/execute`.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with
