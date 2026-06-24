@@ -207,6 +207,12 @@ Valid `ResumeIntent` cases:
 A `ResumeIntent` is not execution. It becomes eligible for execution only after
 the normal gate/resume path validates it.
 
+The follow-up validation contract is defined in
+`docs/resume-intent-validation-semantics.md`. That document keeps validation
+separate from execution: it covers source application id, proposal hash,
+artifact refs, current `RunPlan` compatibility, stale-intent detection, gates,
+and resume audit, but does not call the resume path.
+
 ## RunPlanRevision
 
 Use `RunPlanRevision` when the proposal changes the task graph, run targets,

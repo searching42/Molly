@@ -511,6 +511,18 @@ Internal replan application review route:
   proposed patch, mutate `RunPlan`, call LLMs, or replace
   `/api/run-plan/execute`.
 
+Resume intent validation design:
+
+- `docs/resume-intent-validation-semantics.md` defines how a future
+  gate/resume path should validate `review/replan_resume_intent.json`.
+- The design requires source application linkage, proposal hash verification,
+  artifact registry checks, current `RunPlan` compatibility, stale-intent
+  detection, permission, gate validation, and fail-closed resume audit.
+- This is still design-only. It does not add a route, call
+  `RunPlanExecutor.resume_after_gate(...)`, enqueue work, write gate decisions,
+  mutate `RunPlan`, call LLMs, or replace `/api/run-plan/resume` or
+  `/api/run-plan/execute`.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with
