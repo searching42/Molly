@@ -314,11 +314,18 @@ Lifecycle helpers:
 - `read_run_plan_queue_status(queue)` returns job/lease records, status counts,
   and active/terminal booleans.
 - `recover_stale_run_plan_queue(queue, now=...)` wraps
-  `WorkerQueue.recover_stale_leases(...)` and returns recovered job ids/counts.
+  `WorkerQueue.recover_stale_leases(...)` and returns a stable result with
+  `ok`, `recovered_job_ids`, `recovered_count`, and `error`.
 - `cleanup_terminal_run_plan_queue(queue, workspace=...)` removes terminal
-  succeeded/failed/cancelled job records and terminal lease records. It never
-  deletes active queued/running jobs, and deletes queue/lease files only when
-  all records are terminal and safely removable.
+  succeeded/failed/cancelled job records and terminal lease records under the
+  queue lock. It returns a stable result with removed ids/counts,
+  `deleted_files`, `has_active_jobs`, and `error`.
+
+Cleanup/recovery helpers remain internal. Do not expose mutating cleanup or
+recovery routes until their permission, actor, and audit behavior is explicitly
+specified. Cleanup never deletes active queued/running jobs or active leases,
+fails closed on malformed queue/lease JSON, and deletes queue/lease files only
+when all records are terminal and safely removable.
 
 Low-risk fixture demo:
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ai4s_agent._utils import write_json
 from ai4s_agent.worker_queue import WorkerQueue
 
 
@@ -37,37 +36,57 @@ def read_run_plan_queue_status(queue: WorkerQueue) -> dict[str, Any]:
 def recover_stale_run_plan_queue(queue: WorkerQueue, *, now: str = "") -> dict[str, Any]:
     recovered = queue.recover_stale_leases(now=now)
     return {
+        "ok": True,
         "recovered_job_ids": recovered,
         "recovered_count": len(recovered),
+        "error": None,
     }
 
 
 def cleanup_terminal_run_plan_queue(queue: WorkerQueue, *, workspace: str | Path | None = None) -> dict[str, Any]:
     if workspace is not None:
         _ensure_internal_queue_root(Path(workspace), queue.store.root_dir)
-    jobs = queue.list_jobs()
-    leases = queue.list_leases()
-    kept_jobs = [job for job in jobs if str(job.get("status") or "") not in TERMINAL_JOB_STATUSES]
-    terminal_job_ids = {str(job.get("job_id") or "") for job in jobs if str(job.get("status") or "") in TERMINAL_JOB_STATUSES}
-    kept_leases = [
-        lease for lease in leases
-        if str(lease.get("status") or "") not in TERMINAL_LEASE_STATUSES
-        or str(lease.get("job_id") or "") not in terminal_job_ids
-    ]
-    removed_jobs = len(jobs) - len(kept_jobs)
-    removed_leases = len(leases) - len(kept_leases)
-    deleted_files = False
-    if not kept_jobs and not kept_leases and (removed_jobs or removed_leases):
-        queue.store.queue_path.unlink(missing_ok=True)
-        queue.store.leases_path.unlink(missing_ok=True)
-        deleted_files = True
-    elif removed_jobs or removed_leases:
-        write_json(queue.store.queue_path, {"jobs": kept_jobs})
-        write_json(queue.store.leases_path, {"leases": kept_leases})
+    with queue._locked_state() as state:
+        jobs = state.jobs
+        leases = state.leases
+        removed_job_ids = [
+            str(job.get("job_id") or "")
+            for job in jobs
+            if str(job.get("status") or "") in TERMINAL_JOB_STATUSES
+        ]
+        terminal_job_ids = set(removed_job_ids)
+        kept_jobs = [job for job in jobs if str(job.get("job_id") or "") not in terminal_job_ids]
+        removed_lease_ids = [
+            str(lease.get("lease_id") or "")
+            for lease in leases
+            if str(lease.get("status") or "") in TERMINAL_LEASE_STATUSES
+            and str(lease.get("job_id") or "") in terminal_job_ids
+        ]
+        removed_lease_id_set = set(removed_lease_ids)
+        kept_leases = [lease for lease in leases if str(lease.get("lease_id") or "") not in removed_lease_id_set]
+        removed_jobs = len(removed_job_ids)
+        removed_leases = len(removed_lease_ids)
+        has_active_jobs = any(str(job.get("status") or "") in {"queued", "running"} for job in kept_jobs) or any(
+            str(lease.get("status") or "") == "active" for lease in kept_leases
+        )
+        deleted_files = False
+        if not kept_jobs and not kept_leases and (removed_jobs or removed_leases):
+            queue.store.queue_path.unlink(missing_ok=True)
+            queue.store.leases_path.unlink(missing_ok=True)
+            deleted_files = True
+        elif removed_jobs or removed_leases:
+            state.queue["jobs"] = kept_jobs
+            state.leases_payload["leases"] = kept_leases
+            state.save()
     return {
+        "ok": True,
+        "removed_job_ids": removed_job_ids,
+        "removed_lease_ids": removed_lease_ids,
         "removed_jobs": removed_jobs,
         "removed_leases": removed_leases,
         "deleted_files": deleted_files,
+        "has_active_jobs": has_active_jobs,
+        "error": None,
     }
 
 
@@ -113,4 +132,3 @@ def _ensure_internal_queue_root(workspace: Path, queue_root: Path) -> None:
     resolved_root = queue_root.expanduser().resolve()
     if resolved_root != base and not resolved_root.is_relative_to(base):
         raise ValueError("queue root must stay under internal run-plan queue root")
-
