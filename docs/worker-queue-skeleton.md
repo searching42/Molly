@@ -440,6 +440,20 @@ Reviewable replan proposal:
   executable step must still pass through explicit user review plus the
   existing gate/resume or modified-run-plan path.
 
+Review artifacts:
+
+- `ai4s_agent.run_plan_review_artifacts.write_run_plan_review_artifacts(...)`
+  links the read-only Observer-Verifier and deterministic replan proposal into
+  review artifacts under the run directory.
+- It writes `review/observer_verification.json`,
+  `review/replan_proposal.json`, and `review/replan_review.md`, then registers
+  them as `observer_verification`, `replan_proposal`, and
+  `replan_review_markdown` artifacts.
+- These files are intended for UI, report, and project-memory consumption. They
+  are not executable state and do not apply the proposed patch.
+- The writer does not execute adapters, call LLMs, mutate `RunPlan`, enqueue
+  work, auto-rerun tasks, or replace `/api/run-plan/execute`.
+
 Queued `WAITING_USER` contract:
 
 - `RunPlanExecutorTaskRunner` treats `RunPlanExecutor` output with

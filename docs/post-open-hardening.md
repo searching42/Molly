@@ -471,6 +471,10 @@ Resolved run-plan queue bridge scope:
     `RunPlanArtifactVerification` results into a fixed, non-executable
     `RunPlanReplanProposal` with affected tasks, rationale, required user
     decisions, and an unapplied advisory run-plan patch.
+19. **Verifier/replan review artifacts** — The verifier result and replan
+    proposal can now be materialized as review-only artifacts:
+    `observer_verification.json`, `replan_proposal.json`, and
+    `replan_review.md`.
 
 Still not default:
 
@@ -501,6 +505,9 @@ Still not default:
   It does not mutate `RunPlan`, apply its advisory patch, call LLMs, enqueue
   jobs, execute adapters, or automatically rerun tasks. User confirmation and a
   future gate/resume or modified-plan path are still required before execution.
+- The review artifact writer only materializes verifier/proposal outputs for
+  UI, report, or project-memory review. It does not execute the proposal,
+  mutate `RunPlan`, call LLMs, enqueue jobs, or replace `/api/run-plan/execute`.
 - Full queued resume semantics for waiting-user runs remain future work.
 
 Default-route migration hard gates:
@@ -702,3 +709,7 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #99: add a deterministic, reviewable `RunPlanReplanProposal` layer from
   Observer-Verifier findings without mutating plans, executing adapters, calling
   LLMs, or auto-rerunning tasks.
+- PR #100: write Observer-Verifier and replan proposal review artifacts
+  (`observer_verification.json`, `replan_proposal.json`, `replan_review.md`)
+  without executing proposals, mutating plans, enqueueing jobs, or replacing the
+  default run-plan execution route.
