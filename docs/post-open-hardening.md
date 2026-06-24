@@ -424,11 +424,15 @@ Resolved run-plan queue bridge scope:
 7. **Feature-flagged internal route** —
    `POST /api/internal/run-plan/queue/execute` is available only behind
    `AI4S_ENABLE_INTERNAL_RUN_PLAN_QUEUE_ROUTE` and uses an internal queue path.
+8. **Actor and audit metadata** — The internal route requires the shared actor
+   resolver, writes a pre-execution `requested` audit gate, and appends terminal
+   audit records to
+   `workspace/.ai4s_internal/audit/internal_run_plan_queue_audit.jsonl`.
 
 Still not default:
 
 - `/api/run-plan/execute` remains synchronous and is not replaced.
-- The internal route requires an explicit feature flag.
+- The internal route requires an explicit feature flag and actor identity.
 - Remote workers are not connected.
 - Queue state remains file-backed; no SQLite migration is included.
 - Real training success is not guaranteed by the route/CLI tests.
@@ -438,7 +442,8 @@ Default-route migration hard gates:
 1. `RunPlanExecutorTaskRunner` must pass a real low-risk adapter demo, not only
    fake executor tests.
 2. The internal route must have permission, actor identity, and audit
-   constraints that match or exceed the synchronous route.
+   constraints that match or exceed the synchronous route. PR #89 covers the
+   first actor/audit layer but does not complete permission parity.
 3. Queue lifecycle must include cleanup, stale recovery, and observability for
    stuck queued/running jobs.
 4. `RunPlanQueueExecutionSummary` must be validated consistently by route, CLI,
@@ -599,5 +604,7 @@ The goal is a closed, auditable demo rather than full automation.
   queued helper and CLI output.
 - PR #87: completed. Add feature-flagged internal run-plan queue route without
   replacing `/api/run-plan/execute`.
-- PR #88: mark internal run-plan queue route phase complete and define
+- PR #88: completed. Mark internal run-plan queue route phase complete and define
   default-route migration criteria.
+- PR #89: add actor identity, pre-execution audit gate, and terminal audit
+  metadata to the feature-flagged internal run-plan queue route.
