@@ -327,6 +327,22 @@ specified. Cleanup never deletes active queued/running jobs or active leases,
 fails closed on malformed queue/lease JSON, and deletes queue/lease files only
 when all records are terminal and safely removable.
 
+Phase 1 queued workflow fixture demo:
+
+- `tests/fixtures/phase1_queued_workflow_demo/` contains a small training CSV,
+  candidate CSV, run-plan JSON, input artifact JSON, and task options JSON.
+- `tests/test_phase1_queued_workflow_demo.py` invokes the feature-flagged
+  internal queued execution route with actor identity and a
+  `run_plan_queue_execute` server grant.
+- The demo writes real Phase 1 artifacts: cleaned dataset, baseline metrics,
+  lightweight baseline model metadata, candidate predictions, ranked
+  candidates, final report files, artifact registry entries, queue status, and
+  requested/succeeded audit records.
+- The demo is a productization fixture for the existing Phase 1 path. It does
+  not replace `/api/run-plan/execute`, does not expose cleanup/recovery routes,
+  does not connect remote workers, does not use SQLite, and does not run heavy
+  Uni-Mol/DPA3 training.
+
 Low-risk fixture demo:
 
 ```bash

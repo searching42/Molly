@@ -1,0 +1,5 @@
+candidate_id,smiles,name
+cand-001,CCO,demo ethanol analog
+cand-002,CCN,demo amine analog
+cand-003,c1ccccc1,demo aromatic
+cand-004,CCOC,demo ether analog
