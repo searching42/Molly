@@ -32,6 +32,7 @@ def test_queued_canary_observability_checklist_names_backend_markers() -> None:
         "RunPlan execution backend: sync",
         "RunPlan execution backend: queued_canary",
         "RunPlan execution backend: sync_fallback_not_allowlisted",
+        "RunPlan queued canary telemetry: {...}",
         'execution_backend="queued_canary"',
         "queue_summary",
     ]:
@@ -53,6 +54,7 @@ def test_queued_canary_observability_checklist_names_identity_and_state_fields()
         "failed task",
         "waiting task",
         "required gates",
+        "error_message_present",
         "cancellation status",
         "stale lease",
     ]:

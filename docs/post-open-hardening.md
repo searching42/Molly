@@ -66,9 +66,12 @@ blur into the already-resolved OPEN series.
   production-sized fixture lane design for the queued execute canary, while
   explicitly not enabling a workflow, not committing large fixture data, and
   not changing route behavior.
-- Next recommended queued-canary work: implement minimal structured telemetry
-  fields for queued canary, or add a separate optional manual/nightly workflow
-  skeleton.
+- Resolved: PR #135 adds minimal structured telemetry fields for queued
+  canary runs at the local review/test level, while explicitly not
+  implementing production telemetry sinks, dashboards, or alerting.
+- Next recommended queued-canary work: add a separate optional
+  manual/nightly workflow skeleton, or deepen observability beyond the
+  current minimal telemetry surface.
 - Default-route migration is still not recommended.
 
 ## HARDEN-001: Introduce Explicit App Extension Registry
@@ -978,6 +981,10 @@ The goal is a closed, auditable demo rather than full automation.
   production-sized fixture lane for the queued canary. This PR does not enable
   a nightly workflow, does not commit large fixture data, and does not change
   default route behavior.
-- Next: implement minimal structured telemetry fields for queued canary, or
-  add a separate optional manual/nightly workflow skeleton. Do not proceed to
-  default-route migration yet.
+- PR #135: completed. Add minimal structured telemetry fields for queued
+  canary runs, emitted as local review/test evidence only. This PR does not
+  implement production telemetry sinks, dashboards, alerting, or default
+  migration.
+- Next: add a separate optional manual/nightly workflow skeleton, or deepen
+  observability beyond the current minimal telemetry surface. Do not proceed
+  to default-route migration yet.

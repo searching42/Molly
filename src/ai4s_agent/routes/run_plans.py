@@ -13,6 +13,10 @@ from ai4s_agent.planner import build_plan, diff_run_plans, expand_run_plan
 from ai4s_agent.run_plan_execute_canary_policy import queued_canary_allowed_for_run_plan
 from ai4s_agent.run_plan_queue_lifecycle import internal_run_plan_queue_dir
 from ai4s_agent.run_plan_queue_service import run_run_plan_via_local_queue
+from ai4s_agent.run_plan_queue_telemetry import (
+    build_run_plan_queued_canary_telemetry,
+    format_run_plan_queued_canary_telemetry_log,
+)
 from ai4s_agent.schemas import RunPlan, RunStatus
 from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
@@ -118,6 +122,7 @@ def register_run_plan_routes(app: Flask, *, projects: ProjectStorage, jobs: JobM
                         executor_factory=current_app.config.get(RUN_PLAN_QUEUE_EXECUTOR_FACTORY_CONFIG),
                     )
                     execution = response_payload.get("execution") if isinstance(response_payload.get("execution"), dict) else {}
+                    _log_queued_canary_telemetry(jobs, project_id, run_plan.run_id, response_payload)
                     if isinstance(execution, dict):
                         _log_run_plan_execution_result(jobs, project_id, run_plan.run_id, execution)
                     return jsonify(response_payload), status_code
@@ -350,6 +355,32 @@ def _log_queued_canary_sync_fallback(
         run_id,
         "INFO",
         f"RunPlan queued canary policy: {reason}; disallowed_tasks={disallowed_text}",
+    )
+
+
+def _log_queued_canary_telemetry(
+    jobs: JobManager,
+    project_id: str,
+    run_id: str,
+    response_payload: dict[str, Any],
+) -> None:
+    queue_summary = response_payload.get("queue_summary")
+    if not isinstance(queue_summary, dict):
+        return
+    execution = response_payload.get("execution")
+    execution_dict = execution if isinstance(execution, dict) else {}
+    telemetry = build_run_plan_queued_canary_telemetry(
+        project_id=project_id,
+        run_id=run_id,
+        queue_summary=queue_summary,
+        execution=execution_dict,
+    )
+    _add_run_plan_log(
+        jobs,
+        project_id,
+        run_id,
+        "INFO",
+        format_run_plan_queued_canary_telemetry_log(telemetry),
     )
 
 
