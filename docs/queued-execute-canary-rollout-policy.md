@@ -347,6 +347,7 @@ Current existing coverage already references:
 - `RunPlan execution backend: sync`
 - `RunPlan execution backend: queued_canary`
 - `RunPlan execution backend: sync_fallback_not_allowlisted`
+- `RunPlan queued canary telemetry: {...}`
 - `execution_backend="queued_canary"`
 - `queue_summary`
 
@@ -373,10 +374,36 @@ Queued canary observability must surface:
 - failed task
 - waiting task
 - required gates
+- error_message_present
 - error message or error type
 - cancellation status
 - stale lease or recovery events
 - queue final state
+
+Minimal structured telemetry is now implemented only at the local review/test
+level. The queued canary path writes a JSON-safe log line of the form
+`RunPlan queued canary telemetry: {...}` for allowlisted queued executions.
+The payload is intentionally small and limited to already-available queue
+bridge fields such as:
+
+- `project_id`
+- `run_id`
+- `execution_backend`
+- `queued_job_id`
+- `job_id`
+- `lease_id`
+- `worker_id`
+- `ok`
+- `terminal`
+- `final_job_status`
+- `final_lease_status`
+- `waiting_user`
+- `waiting_task`
+- `required_gates`
+- `failed_task`
+- `error_type`
+- `error_message_present`
+- `loop_results`
 
 ### Required safety evidence
 
@@ -406,8 +433,9 @@ Current gaps remain explicit:
 
 ### Current decision
 
-Current decision: telemetry checklist is documented but not fully implemented
-as production observability.
+Current decision: telemetry checklist is documented and the queued canary now
+has minimal structured telemetry evidence, but this is still far from
+production observability.
 
 - Keep queued canary feature-flagged.
 - Keep allowlist conservative.
@@ -489,13 +517,14 @@ Keep the queued canary feature-flagged. Keep the allowlist conservative.
 PR #130 adds a second allowlisted chain parity fixture. PR #131 adds
 cancellation coverage plus explicit documentation that retry/requeue
 production semantics remain future work. PR #132 documents and guards the
-production-sized fixture boundary without claiming production-sized proof. The
-PR #133 documents and guards the telemetry/observability checklist without
-claiming production-grade telemetry. The next engineering PR should implement
-minimal structured telemetry fields for queued canary, or design an optional
-nightly production-sized fixture lane. The default-migration readiness
-checklist is now documented, but this is still not enough to justify default
-migration.
+production-sized fixture boundary without claiming production-sized proof. PR
+#133 documents and guards the telemetry/observability checklist without
+claiming production-grade telemetry. PR #135 adds minimal structured telemetry
+for queued canary runs at the local review/test level only. The next
+engineering PR should add a separate optional manual/nightly workflow
+skeleton, or deepen observability beyond the current minimal telemetry. The
+default-migration readiness checklist is now documented, but this is still not
+enough to justify default migration.
 
 Do not move `train_model`, generation, literature, or mining tasks into the
 queued canary yet.
