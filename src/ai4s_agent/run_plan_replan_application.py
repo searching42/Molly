@@ -170,6 +170,7 @@ class ResumeIntent(BaseModel):
     source_application_id: str
     action: RunPlanReplanAction
     affected_tasks: list[str] = Field(default_factory=list)
+    application_required_gates: list[str] = Field(default_factory=list)
     approved_gates: list[str] = Field(default_factory=list)
     rerun_tasks: list[str] = Field(default_factory=list)
     resume_from_task: str = ""
@@ -194,7 +195,7 @@ class ResumeIntent(BaseModel):
     def validate_required_text(cls, value: str) -> str:
         return _required_text(value)
 
-    @field_validator("affected_tasks", "approved_gates", "rerun_tasks", "required_gates")
+    @field_validator("affected_tasks", "application_required_gates", "approved_gates", "rerun_tasks", "required_gates")
     @classmethod
     def validate_string_lists(cls, value: list[str]) -> list[str]:
         return _clean_string_list(value)
@@ -215,6 +216,8 @@ class ResumeIntent(BaseModel):
     def validate_resume_action(self) -> ResumeIntent:
         if self.action == "block":
             raise ValueError("block cannot create a resume intent")
+        if self.approved_gates:
+            raise ValueError("ResumeIntent cannot embed executor gate approvals")
         return self
 
 
@@ -398,6 +401,12 @@ def _required_gates_for(action: RunPlanReplanAction) -> list[str]:
         "block": [],
     }
     return list(gates[action])
+
+
+def application_required_gates_for(action: RunPlanReplanAction) -> list[str]:
+    """Return canonical review/application gates for a replan action."""
+
+    return _required_gates_for(action)
 
 
 def _required_text(value: str) -> str:

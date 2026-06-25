@@ -535,6 +535,17 @@ Resume intent validation schemas, helpers, audit, memory, and internal route:
   validates a materialized resume intent against the current `RunPlan`, review
   artifacts, optional stage state, optional audit records, and optional
   approved gates.
+- `ai4s_agent.run_plan_resume_stage_gate.WaitingStageGateContext` validates
+  that the current stage is still `WAITING_USER`, present in the current
+  `RunPlan`, known to `AtomicTaskRegistry`, and backed by a complete execution
+  snapshot whose material hash and required gates still match the current
+  executor contract.
+- `ResumeIntent.application_required_gates` records review/application gates;
+  `ResumeIntent.required_gates` records executor gates for the waiting task.
+  `ResumeIntent.approved_gates` must stay empty. The internal validation route
+  accepts approved gates only from the request payload and rejects duplicates,
+  non-string values, application gates, and gates outside the current executor
+  gate set.
 - `ai4s_agent.run_plan_resume_intent_validation_audit_memory.append_resume_intent_validation_audit_record(...)`
   appends compact requested/completed/failed validation audit records under the
   run `review/` directory.

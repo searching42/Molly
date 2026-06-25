@@ -1,8 +1,9 @@
 # Resume Intent Validation Semantics
 
 Status: validation-only design plus schema/helper implementation. PR #115 adds
-run-plan and stage-state fingerprints for stale-intent detection, but this
-document still does not define an execution path.
+run-plan and stage-state fingerprints for stale-intent detection. PR #116 adds
+strict waiting-stage, execution-snapshot, and executor-gate compatibility checks.
+This document still does not define an execution path.
 
 This document defines how a future gate/resume/execute path should consume
 `review/replan_resume_intent.json` created by a user-confirmed replan
@@ -72,9 +73,21 @@ A `ResumeIntent` is valid only when all of the following are true:
 16. Every task referenced by `affected_tasks`, `rerun_tasks`, or
     `resume_from_task` still exists in the current `RunPlan`.
 17. The current run state is still compatible with resume; for the existing
-    executor this means the run is waiting for user action at a known stage.
-18. Required gates are still pending or explicitly approved by the later
-    resume request. `ResumeIntent` creation does not approve them.
+    executor this means the run is in `WAITING_USER` at a task present in both
+    the current `RunPlan` and `AtomicTaskRegistry`.
+18. The bound stage, current `StageState.stage`, and
+    `resume_intent.resume_from_task` are identical.
+19. The current stage has a complete `details.execution_snapshot` with
+    `snapshot_id`, `snapshot_hash`, `run_id`, `task_id`, `run_plan`, and
+    `approved_gates`.
+20. The execution snapshot hash matches its canonical computational material.
+    Existing executor snapshots may store a bare 64-character SHA-256 digest;
+    resume validation canonicalizes it to `sha256:<digest>`.
+21. The current stage required gates and execution snapshot gates match the
+    gate list in `AtomicTaskRegistry` for the current waiting task.
+22. Required executor gates are still pending or explicitly approved by the
+    later validation/resume request. `ResumeIntent` creation does not approve
+    them.
 
 If any condition fails, validation must fail closed and produce a reviewable
 validation result. It must not attempt partial resume or infer missing links.
@@ -202,18 +215,31 @@ drift between validation and execution.
 
 ## Gate Requirements
 
-`ResumeIntent` does not approve gates. It only records which gates are expected
-before resume can proceed.
+`ResumeIntent` does not approve executor gates. It records two distinct gate
+domains:
+
+- `application_required_gates`: review/application gates such as
+  `gate_replan_rerun_task`. These explain why a user-confirmed application was
+  needed.
+- `required_gates`: executor gates for the current waiting task, derived from
+  `AtomicTaskRegistry` and the current execution snapshot.
+
+`ResumeIntent.approved_gates` must remain empty. If an artifact embeds executor
+gate approvals, validation fails closed with
+`resume_intent_embeds_gate_approval`. Gate approvals are supplied only by the
+later validation/resume request and are never copied into the intent artifact.
 
 Gate validation should require:
 
 - actor identity from the shared resolver
 - permission grant for resume-intent consumption, for example
   `run_plan_resume_intent_use`
-- confirmation that `resume_intent.required_gates` is a subset of the gates
+- confirmation that `resume_intent.required_gates` equals the executor gates
   required by the current waiting stage
-- no unknown or future gate approvals
-- no missing current-stage gate approvals
+- confirmation that `resume_intent.application_required_gates` is not treated
+  as executor approval
+- no unknown, duplicate, non-string, or future gate approvals
+- no missing current-stage executor gate approvals
 - current executor snapshot validation remains in force
 
 For current executor compatibility, the final resume call should still use the
@@ -228,6 +254,14 @@ approved_gates supplied by user
 
 The resume-intent validator must not write gate decisions by itself. Gate
 decisions are written only by the actual gate/resume path after approval.
+
+The validation-only helper returns:
+
+- `needs_gate_approval` when required executor gates are missing.
+- `resume_eligible` when the request supplies exactly the current executor
+  gates.
+- `blocked` with `unexpected_gate_approval` when supplied approvals include an
+  application gate or any gate outside the current executor gate set.
 
 ## Stale Intent Prevention
 

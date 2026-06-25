@@ -524,6 +524,14 @@ Resolved run-plan queue bridge scope:
     artifacts; validation recomputes current fingerprints and fails closed with
     `stale_intent` on drift. This is integrity/staleness hardening only, not
     resume authorization or execution.
+30. **Strict resume stage/gate compatibility** — PR #116 requires resume
+    intents to bind to the current `WAITING_USER` stage, validates the current
+    execution snapshot material, checks the waiting task against
+    `AtomicTaskRegistry`, separates application gates from executor gates, and
+    rejects embedded executor gate approvals in resume intent artifacts. This
+    remains validation-only: it does not call `RunPlanExecutor.resume_after_gate`,
+    write gate decisions, enqueue work, execute adapters, mutate `RunPlan`, call
+    LLMs, or replace default routes.
 
 Still not default:
 
@@ -840,3 +848,5 @@ The goal is a closed, auditable demo rather than full automation.
   source application, proposal hash, artifact refs, current `RunPlan`, stale
   intent, gates, audit, permission, and default-route compatibility without
   adding resume execution.
+- PR #116: enforce strict waiting-stage, execution-snapshot, and executor-gate
+  compatibility for resume intent validation without adding resume execution.

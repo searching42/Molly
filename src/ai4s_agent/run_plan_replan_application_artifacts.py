@@ -19,6 +19,7 @@ from ai4s_agent.run_plan_replan_application import (
     validate_and_compile_replan_application,
 )
 from ai4s_agent.run_plan_replan_proposal import RunPlanReplanProposal
+from ai4s_agent.run_plan_resume_stage_gate import WaitingStageGateContext, build_waiting_stage_gate_context
 from ai4s_agent.run_plan_state_fingerprint import ResumeStateBinding, build_resume_state_binding
 from ai4s_agent.schemas import RunPlan, StageState
 from ai4s_agent.storage import ProjectStorage
@@ -144,7 +145,7 @@ def write_replan_application_artifacts(
     proposal = _read_proposal(proposal_path)
     patch = ReviewableRunPlanPatch.model_validate(proposal.proposed_run_plan_patch)
     compiled = validate_and_compile_replan_application(application_request, patch, proposal)
-    resume_state_binding = _resume_state_binding(
+    resume_state_binding, waiting_context = _resume_state(
         compiled=compiled,
         current_run_plan=current_run_plan,
         stage_state=stage_state,
@@ -172,6 +173,7 @@ def write_replan_application_artifacts(
         actor=actor,
         actor_source=actor_source,
         resume_state_binding=resume_state_binding,
+        waiting_context=waiting_context,
     )
     artifacts = {
         REPLAN_APPLICATION_RECORD_ARTIFACT_ID: "review/replan_application_record.json",
@@ -252,10 +254,11 @@ def _result_artifact(
     actor: str,
     actor_source: str,
     resume_state_binding: ResumeStateBinding | None,
+    waiting_context: WaitingStageGateContext | None,
 ) -> tuple[str, dict[str, Any]]:
     if compiled.result_type == "resume_intent":
-        if resume_state_binding is None:
-            raise ValueError("resume_state_binding is required for resume_intent artifacts")
+        if resume_state_binding is None or waiting_context is None:
+            raise ValueError("resume_state_binding and waiting stage context are required for resume_intent artifacts")
         intent = ResumeIntent(
             intent_id=f"resume-{application_record.application_id}",
             project_id=compiled.project_id,
@@ -263,8 +266,11 @@ def _result_artifact(
             source_application_id=application_record.application_id,
             action=compiled.selected_action,
             affected_tasks=_affected_tasks(compiled),
+            application_required_gates=compiled.required_gates,
+            approved_gates=[],
             rerun_tasks=_rerun_tasks(compiled),
-            required_gates=compiled.required_gates,
+            resume_from_task=waiting_context.stage,
+            required_gates=waiting_context.execution_required_gates,
             reason=_reason(compiled),
             resume_state_binding=resume_state_binding,
             created_by=actor,
@@ -302,21 +308,46 @@ def _result_artifact(
     return BLOCKED_ACKNOWLEDGEMENT_ARTIFACT_ID, acknowledgement.model_dump(mode="json")
 
 
-def _resume_state_binding(
+def _resume_state(
     *,
     compiled: CompiledReplanApplication,
     current_run_plan: RunPlan | dict[str, Any] | None,
     stage_state: StageState | dict[str, Any] | None,
-) -> ResumeStateBinding | None:
+) -> tuple[ResumeStateBinding | None, WaitingStageGateContext | None]:
     if compiled.result_type != "resume_intent":
-        return None
+        return None, None
     if current_run_plan is None or stage_state is None:
         raise ValueError("current_run_plan and stage_state are required for resume_intent application artifacts")
     run_plan = current_run_plan if isinstance(current_run_plan, RunPlan) else RunPlan.model_validate(current_run_plan)
     if run_plan.run_id != compiled.run_id:
         raise ValueError("current_run_plan run_id does not match replan application run_id")
     stage = stage_state if isinstance(stage_state, StageState) else StageState.model_validate(stage_state)
-    return build_resume_state_binding(run_plan, stage)
+    waiting_context = build_waiting_stage_gate_context(
+        run_plan=run_plan,
+        stage_state=stage,
+        application_required_gates=compiled.required_gates,
+    )
+    _validate_resume_action_stage_contract(compiled=compiled, waiting_stage=waiting_context.stage)
+    return build_resume_state_binding(run_plan, stage), waiting_context
+
+
+def _validate_resume_action_stage_contract(
+    *,
+    compiled: CompiledReplanApplication,
+    waiting_stage: str,
+) -> None:
+    affected_tasks = set(_affected_tasks(compiled))
+    rerun_tasks = set(_rerun_tasks(compiled))
+    if compiled.selected_action == "rerun_task":
+        if waiting_stage not in rerun_tasks or waiting_stage not in affected_tasks:
+            raise ValueError("rerun_task_stage_mismatch")
+    if compiled.selected_action == "request_review":
+        if rerun_tasks:
+            raise ValueError("request_review_rerun_tasks")
+        if affected_tasks and waiting_stage not in affected_tasks:
+            raise ValueError("request_review_stage_mismatch")
+    if compiled.selected_action == "continue" and rerun_tasks:
+        raise ValueError("continue_rerun_tasks")
 
 
 def _affected_tasks(compiled: CompiledReplanApplication) -> list[str]:

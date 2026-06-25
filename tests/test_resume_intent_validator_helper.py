@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Any
 
 from ai4s_agent._utils import now_iso, write_json
+from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.run_plan_replan_application import ReplanApplicationRequest
 from ai4s_agent.run_plan_replan_application_artifacts import (
     REPLAN_APPLICATION_RECORD_ARTIFACT_ID,
@@ -33,12 +35,34 @@ def _run_plan(*task_ids: str) -> RunPlan:
     )
 
 
+def _execution_snapshot(run_plan: RunPlan, *, task_id: str = "train_model") -> dict[str, Any]:
+    gates = sorted(AtomicTaskRegistry().get(task_id).gates)
+    material = {
+        "schema_version": 1,
+        "run_id": run_plan.run_id,
+        "task_id": task_id,
+        "adapter": "train_model_baseline_adapter",
+        "run_plan": run_plan.model_dump(mode="json"),
+        "task_options": {},
+        "payload": {},
+        "input_artifacts": {},
+        "approved_gates": gates,
+    }
+    digest = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {
+        "snapshot_id": f"{run_plan.run_id}:{task_id}:{digest[:16]}",
+        "snapshot_hash": digest,
+        **material,
+    }
+
+
 def _stage_state(
     status: RunStatus = RunStatus.WAITING_USER,
     *,
     stage: str = "train_model",
-    snapshot_hash: str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    run_plan: RunPlan | None = None,
 ) -> StageState:
+    plan = run_plan or _run_plan()
     now = now_iso()
     return StageState(
         stage=stage,
@@ -47,12 +71,9 @@ def _stage_state(
         ended_at=now,
         updated_at=now,
         details={
-            "required_gates": ["gate_replan_rerun_task"],
+            "required_gates": list(AtomicTaskRegistry().get(stage).gates),
             "executed_tasks": ["inspect_dataset"],
-            "execution_snapshot": {
-                "snapshot_id": "snapshot-resume-1",
-                "snapshot_hash": snapshot_hash,
-            },
+            "execution_snapshot": _execution_snapshot(plan, task_id=stage),
         },
     )
 
@@ -155,7 +176,9 @@ def test_validate_resume_intent_returns_needs_gate_approval_for_valid_artifacts(
     assert result.executable is False
     assert result.source_application_id == fixture["bundle"].application_record.application_id
     assert result.proposal_hash == fixture["bundle"].application_record.proposal_hash
-    assert result.required_gates == ["gate_replan_rerun_task"]
+    assert result.application_required_gates == ["gate_replan_rerun_task"]
+    assert result.required_gates == ["gate_3_train_config"]
+    assert result.missing_gates == ["gate_3_train_config"]
     assert result.rerun_tasks == ["train_model"]
     assert result.affected_tasks == ["train_model"]
     assert result.resume_from_task == "train_model"
@@ -169,7 +192,7 @@ def test_validate_resume_intent_returns_needs_gate_approval_for_valid_artifacts(
     assert "run_plan_fingerprint_valid" in result.validation_findings
     assert "stage_fingerprint_valid" in result.validation_findings
     assert "application_intent_state_binding_match" in result.validation_findings
-    assert "missing_gate_approval:gate_replan_rerun_task" in result.validation_findings
+    assert "missing_gate_approval:gate_3_train_config" in result.validation_findings
 
 
 def test_validate_resume_intent_is_read_only(tmp_path: Path) -> None:
@@ -187,6 +210,111 @@ def test_validate_resume_intent_is_read_only(tmp_path: Path) -> None:
     assert result.ok is True
     assert _file_snapshot(tmp_path) == before
     assert not (tmp_path / ".ai4s_internal").exists()
+
+
+def test_validate_resume_intent_accepts_exact_executor_gate_approval(tmp_path: Path) -> None:
+    _write_resume_intent_artifacts(tmp_path)
+
+    result = validate_resume_intent(
+        workspace_dir=tmp_path,
+        project_id=PROJECT_ID,
+        run_id=RUN_ID,
+        current_run_plan=_run_plan(),
+        stage_state=_stage_state(),
+        approved_gates=["gate_3_train_config"],
+    )
+
+    assert result.ok is True
+    assert result.decision == "resume_eligible"
+    assert result.approved_gates == ["gate_3_train_config"]
+    assert result.missing_gates == []
+
+
+def test_validate_resume_intent_rejects_application_gate_as_executor_approval(tmp_path: Path) -> None:
+    _write_resume_intent_artifacts(tmp_path)
+
+    result = validate_resume_intent(
+        workspace_dir=tmp_path,
+        project_id=PROJECT_ID,
+        run_id=RUN_ID,
+        current_run_plan=_run_plan(),
+        stage_state=_stage_state(),
+        approved_gates=["gate_replan_rerun_task"],
+    )
+
+    assert result.ok is False
+    assert result.decision == "blocked"
+    assert result.error == {
+        "type": "unexpected_gate_approval",
+        "message": "approved_gates includes gates outside the current executor-required gate set: gate_replan_rerun_task",
+    }
+
+
+def test_validate_resume_intent_rejects_artifact_embedded_executor_gate_approvals(tmp_path: Path) -> None:
+    fixture = _write_resume_intent_artifacts(tmp_path)
+    intent_path = fixture["run_dir"] / "review" / "replan_resume_intent.json"
+    intent = _json(intent_path)
+    intent["approved_gates"] = ["gate_3_train_config"]
+    _write_object(intent_path, intent)
+
+    result = validate_resume_intent(
+        workspace_dir=tmp_path,
+        project_id=PROJECT_ID,
+        run_id=RUN_ID,
+        current_run_plan=_run_plan(),
+        stage_state=_stage_state(),
+    )
+
+    assert result.ok is False
+    assert result.decision == "invalid_intent"
+    assert result.error is not None
+    assert result.error["type"] == "resume_intent_embeds_gate_approval"
+
+
+def test_validate_resume_intent_rejects_tampered_required_gates(tmp_path: Path) -> None:
+    fixture = _write_resume_intent_artifacts(tmp_path)
+    intent_path = fixture["run_dir"] / "review" / "replan_resume_intent.json"
+    intent = _json(intent_path)
+    intent["required_gates"] = []
+    _write_object(intent_path, intent)
+
+    result = validate_resume_intent(
+        workspace_dir=tmp_path,
+        project_id=PROJECT_ID,
+        run_id=RUN_ID,
+        current_run_plan=_run_plan(),
+        stage_state=_stage_state(),
+    )
+
+    assert result.ok is False
+    assert result.decision == "invalid_intent"
+    assert result.error == {
+        "type": "resume_intent_execution_gates_mismatch",
+        "message": "resume intent required_gates do not match current executor gates",
+    }
+
+
+def test_validate_resume_intent_rejects_application_execution_gate_overlap(tmp_path: Path) -> None:
+    fixture = _write_resume_intent_artifacts(tmp_path)
+    intent_path = fixture["run_dir"] / "review" / "replan_resume_intent.json"
+    intent = _json(intent_path)
+    intent["application_required_gates"] = ["gate_3_train_config"]
+    _write_object(intent_path, intent)
+
+    result = validate_resume_intent(
+        workspace_dir=tmp_path,
+        project_id=PROJECT_ID,
+        run_id=RUN_ID,
+        current_run_plan=_run_plan(),
+        stage_state=_stage_state(),
+    )
+
+    assert result.ok is False
+    assert result.decision == "invalid_intent"
+    assert result.error == {
+        "type": "gate_domain_overlap",
+        "message": "application_required_gates overlap with executor required_gates: gate_3_train_config",
+    }
 
 
 def test_validate_resume_intent_detects_proposal_hash_mismatch(tmp_path: Path) -> None:
@@ -301,15 +429,17 @@ def test_validate_resume_intent_marks_changed_run_plan_stale(tmp_path: Path) -> 
 
 def test_validate_resume_intent_marks_changed_stage_stale(tmp_path: Path) -> None:
     _write_resume_intent_artifacts(tmp_path)
+    stage_state = _stage_state()
+    stage_state.details["execution_snapshot"]["snapshot_hash"] = (
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    )
 
     result = validate_resume_intent(
         workspace_dir=tmp_path,
         project_id=PROJECT_ID,
         run_id=RUN_ID,
         current_run_plan=_run_plan(),
-        stage_state=_stage_state(
-            snapshot_hash="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        ),
+        stage_state=stage_state,
     )
 
     assert result.ok is False

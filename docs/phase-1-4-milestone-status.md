@@ -43,6 +43,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 internal replan application route | Completed as feature-flagged review-only route | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
 | Phase 4 resume intent validation semantics | Completed as docs-only validation contract | `docs/resume-intent-validation-semantics.md` |
 | Phase 4 resume intent state binding | Completed as validation-only integrity hardening | `src/ai4s_agent/run_plan_state_fingerprint.py` |
+| Phase 4 strict resume stage/gate validation | Completed as validation-only waiting-stage and executor-gate hardening | `src/ai4s_agent/run_plan_resume_stage_gate.py` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -265,6 +266,17 @@ Completed layers:
    - Does not add a resume route, enqueue work, execute adapters, write gate
      decisions, mutate `RunPlan`, call LLMs, or replace `/api/run-plan/resume`
      or `/api/run-plan/execute`.
+
+10. Strict Resume Stage/Gate Compatibility
+   - Module: `src/ai4s_agent/run_plan_resume_stage_gate.py`
+   - Validates that resume intents bind to the current `WAITING_USER` stage,
+     a known atomic task, a complete execution snapshot, and executor gates from
+     `AtomicTaskRegistry`.
+   - Separates application gates from executor gates and rejects embedded
+     executor approvals in resume intent artifacts.
+   - Does not call `RunPlanExecutor.resume_after_gate(...)`, write gate
+     decisions, enqueue work, execute adapters, mutate `RunPlan`, call LLMs, or
+     replace default routes.
 
 Phase 4 boundaries:
 

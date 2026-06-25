@@ -143,6 +143,16 @@ def _execution_snapshot_identity(stage_state: StageState) -> tuple[str, str]:
     return snapshot_id, snapshot_hash
 
 
+def normalize_execution_snapshot_hash(value: str) -> str:
+    """Normalize executor snapshot hashes to sha256-prefixed fingerprints.
+
+    Existing RunPlanExecutor snapshots store the raw 64-character digest.
+    Resume/review artifacts use the explicit sha256:<digest> representation.
+    """
+
+    return _normalize_execution_snapshot_hash(value)
+
+
 def _normalize_execution_snapshot_hash(value: str) -> str:
     clean = str(value or "").strip()
     if not clean:

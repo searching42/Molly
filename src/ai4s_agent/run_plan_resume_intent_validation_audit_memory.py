@@ -35,10 +35,15 @@ class ResumeIntentValidationAuditRecord(BaseModel):
     intent_id: str = ""
     source_application_id: str = ""
     proposal_hash: str = ""
+    application_required_gates: list[str] = Field(default_factory=list)
     required_gates: list[str] = Field(default_factory=list)
     approved_gates: list[str] = Field(default_factory=list)
+    missing_gates: list[str] = Field(default_factory=list)
     rerun_tasks: list[str] = Field(default_factory=list)
     resume_from_task: str = ""
+    waiting_stage: str = ""
+    execution_snapshot_id: str = ""
+    execution_snapshot_hash: str = ""
     artifact_refs: dict[str, str] = Field(default_factory=dict)
     resume_state_binding: ResumeStateBinding | None = None
     error: dict[str, Any] | None = None
@@ -52,12 +57,21 @@ class ResumeIntentValidationAuditRecord(BaseModel):
             raise ValueError("resume intent validation audit text fields are required")
         return clean
 
-    @field_validator("validation_decision", "intent_id", "source_application_id", "proposal_hash", "resume_from_task")
+    @field_validator(
+        "validation_decision",
+        "intent_id",
+        "source_application_id",
+        "proposal_hash",
+        "resume_from_task",
+        "waiting_stage",
+        "execution_snapshot_id",
+        "execution_snapshot_hash",
+    )
     @classmethod
     def validate_optional_text(cls, value: str) -> str:
         return str(value or "").strip()
 
-    @field_validator("required_gates", "approved_gates", "rerun_tasks")
+    @field_validator("application_required_gates", "required_gates", "approved_gates", "missing_gates", "rerun_tasks")
     @classmethod
     def validate_string_lists(cls, value: list[str]) -> list[str]:
         return _clean_string_list(value)
@@ -160,10 +174,19 @@ def append_resume_intent_validation_audit_record(
         intent_id=validation_result.intent_id if validation_result else "",
         source_application_id=validation_result.source_application_id if validation_result else "",
         proposal_hash=validation_result.proposal_hash if validation_result else "",
+        application_required_gates=validation_result.application_required_gates if validation_result else [],
         required_gates=validation_result.required_gates if validation_result else [],
         approved_gates=validation_result.approved_gates if validation_result else [],
+        missing_gates=validation_result.missing_gates if validation_result else [],
         rerun_tasks=validation_result.rerun_tasks if validation_result else [],
         resume_from_task=validation_result.resume_from_task if validation_result else "",
+        waiting_stage=validation_result.resume_state_binding.stage if validation_result and validation_result.resume_state_binding else "",
+        execution_snapshot_id=validation_result.resume_state_binding.execution_snapshot_id
+        if validation_result and validation_result.resume_state_binding
+        else "",
+        execution_snapshot_hash=validation_result.resume_state_binding.execution_snapshot_hash
+        if validation_result and validation_result.resume_state_binding
+        else "",
         artifact_refs=validation_result.artifact_refs if validation_result else {},
         resume_state_binding=validation_result.resume_state_binding if validation_result else None,
         error=_clean_error(error if error is not None else validation_result.error if validation_result else None),
@@ -236,10 +259,21 @@ def build_resume_intent_validation_memory_record(
         "intent_id": validation_result.intent_id,
         "source_application_id": validation_result.source_application_id,
         "proposal_hash": validation_result.proposal_hash,
+        "application_required_gates": list(validation_result.application_required_gates),
         "required_gates": list(validation_result.required_gates),
         "approved_gates": list(validation_result.approved_gates),
+        "missing_gates": list(validation_result.missing_gates),
         "rerun_tasks": list(validation_result.rerun_tasks),
         "resume_from_task": validation_result.resume_from_task,
+        "waiting_stage": validation_result.resume_state_binding.stage
+        if validation_result.resume_state_binding is not None
+        else "",
+        "execution_snapshot_id": validation_result.resume_state_binding.execution_snapshot_id
+        if validation_result.resume_state_binding is not None
+        else "",
+        "execution_snapshot_hash": validation_result.resume_state_binding.execution_snapshot_hash
+        if validation_result.resume_state_binding is not None
+        else "",
         "artifact_refs": dict(validation_result.artifact_refs),
         "resume_state_binding": validation_result.resume_state_binding.model_dump(mode="json")
         if validation_result.resume_state_binding is not None
