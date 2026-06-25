@@ -241,12 +241,59 @@ def _load_content_payload(bundle: MinerUOutputBundle) -> list[dict[str, Any]] | 
 
 def _flatten_content_items(value: list[Any]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
-    for item in value:
+    for page_index, item in enumerate(value):
         if isinstance(item, dict):
-            items.append(item)
+            items.append(_normalize_content_item(item))
         elif isinstance(item, list):
-            items.extend(child for child in item if isinstance(child, dict))
+            items.extend(
+                _normalize_content_item(child, page_idx=page_index, order=order)
+                for order, child in enumerate(item, start=1)
+                if isinstance(child, dict)
+            )
     return items
+
+
+def _normalize_content_item(
+    item: dict[str, Any],
+    *,
+    page_idx: int | None = None,
+    order: int | None = None,
+) -> dict[str, Any]:
+    normalized = dict(item)
+    if page_idx is not None and "page_idx" not in normalized and "page" not in normalized:
+        normalized["page_idx"] = page_idx
+    if order is not None and "order" not in normalized and "sort_id" not in normalized:
+        normalized["order"] = order
+    content = normalized.get("content")
+    if not isinstance(content, dict):
+        return normalized
+
+    for key in (
+        "title_content",
+        "paragraph_content",
+        "text_content",
+        "code_body",
+        "list_items",
+        "table_body",
+        "table_html",
+        "table_caption",
+        "table_footnote",
+        "img_path",
+        "image_path",
+        "image_caption",
+        "image_footnote",
+        "latex",
+        "markdown",
+    ):
+        if key in content and key not in normalized:
+            normalized[key] = content[key]
+    if "text" not in normalized:
+        for key in ("title_content", "paragraph_content", "text_content"):
+            value = content.get(key)
+            if value:
+                normalized["text"] = value
+                break
+    return normalized
 
 
 def _build_pages(content_payload: list[dict[str, Any]] | None, middle_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -327,6 +374,8 @@ def _element_text(raw: dict[str, Any]) -> str:
             value = "\n".join(str(item).strip() for item in raw[key] if str(item).strip())
             if value:
                 return value
+            continue
+        if isinstance(raw.get(key), dict):
             continue
         value = str(raw.get(key) or "").strip()
         if value:

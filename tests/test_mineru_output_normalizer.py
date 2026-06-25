@@ -90,20 +90,39 @@ def test_mineru_output_normalizer_supports_content_list_v2_nested_pages(tmp_path
             [
                 [
                     {
+                        "type": "title",
+                        "content": {"title_content": "Official V2 Title"},
+                        "bbox": [0, 0, 100, 20],
+                    },
+                    {
                         "type": "text",
-                        "page_idx": 0,
-                        "order": 1,
-                        "text": "Nested page text",
+                        "content": {"paragraph_content": "Nested page text"},
                         "bbox": [1, 2, 3, 4],
-                    }
+                    },
+                    {
+                        "type": "list",
+                        "content": {"list_items": ["first bullet", "second bullet"]},
+                    },
+                    {
+                        "type": "code",
+                        "content": {"code_body": "print('v2')"},
+                    },
+                    {
+                        "type": "image",
+                        "content": {
+                            "img_path": "images/v2-figure.png",
+                            "image_caption": ["Official V2 figure"],
+                        },
+                    },
                 ],
                 [
                     {
                         "type": "table",
-                        "page_idx": 1,
-                        "order": 1,
-                        "table_caption": ["Second page table"],
-                        "table_body": "<table><tr><th>A</th></tr><tr><td>B</td></tr></table>",
+                        "content": {
+                            "table_caption": ["Second page table"],
+                            "table_footnote": ["Official V2 footnote"],
+                            "table_body": "<table><tr><th>A</th></tr><tr><td>B</td></tr></table>",
+                        },
                     }
                 ],
             ]
@@ -130,6 +149,12 @@ def test_mineru_output_normalizer_supports_content_list_v2_nested_pages(tmp_path
     )
 
     assert [page["page"] for page in normalized.parsed_document.pages] == [1, 2]
-    assert normalized.parsed_document.elements[0].text == "Nested page text"
+    by_type = {element.type: element for element in normalized.parsed_document.elements}
+    assert by_type["title"].text == "Official V2 Title"
+    assert by_type["paragraph"].text == "Nested page text"
+    assert by_type["list"].text == "first bullet\nsecond bullet"
+    assert by_type["code"].text == "print('v2')"
+    assert by_type["image"].metadata["image_path"] == "images/v2-figure.png"
     assert normalized.parsed_document.tables[0].page == 2
     assert normalized.parsed_document.tables[0].caption == "Second page table"
+    assert normalized.parsed_document.tables[0].footnotes == ["Official V2 footnote"]
