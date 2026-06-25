@@ -1,0 +1,122 @@
+name: Optional Queued Canary Manual Evidence
+
+on:
+  # Manual-only skeleton. Do not add push/pull_request/schedule here until the
+  # queued-canary production-sized policy and rollout gates are hardened.
+  workflow_dispatch:
+    inputs:
+      fixture_profile:
+        description: Conservative queued-canary fixture profile
+        required: false
+        default: control_plane_small
+        type: choice
+        options:
+          - control_plane_small
+          - docs_boundary_only
+      run_extended_canary:
+        description: Include selected extra queued-canary safety tests
+        required: false
+        default: false
+        type: boolean
+      evidence_retention_days:
+        description: Retention window for bounded pytest evidence artifacts
+        required: false
+        default: "14"
+        type: choice
+        options:
+          - "7"
+          - "14"
+          - "21"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: queued-canary-manual-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  queued-canary-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: src
+      FIXTURE_PROFILE: ${{ inputs.fixture_profile }}
+      RUN_EXTENDED_CANARY: ${{ inputs.run_extended_canary }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile Python sources and tests
+        run: python -m compileall -q src tests
+
+      - name: Run bounded queued-canary evidence tests
+        id: pytest
+        shell: bash
+        run: |
+          set +e
+          default_tests=(
+            tests/test_queued_execute_canary_minimal_telemetry.py
+            tests/test_queued_execute_canary_observability_checklist_docs.py
+            tests/test_queued_execute_canary_nightly_fixture_lane_docs.py
+            tests/test_queued_execute_canary_production_sized_boundary.py
+          )
+          extended_tests=(
+            tests/test_queued_execute_canary_artifact_parity.py
+            tests/test_queued_execute_canary_failure_parity.py
+            tests/test_queued_execute_canary_queue_recovery.py
+            tests/test_queued_execute_canary_cancellation_retry.py
+          )
+          selected_tests=("${default_tests[@]}")
+          if [ "${RUN_EXTENDED_CANARY}" = "true" ]; then
+            selected_tests+=("${extended_tests[@]}")
+          fi
+
+          {
+            echo "fixture_profile=${FIXTURE_PROFILE}"
+            echo "run_extended_canary=${RUN_EXTENDED_CANARY}"
+            echo "selected_tests=${selected_tests[*]}"
+          } > queued-canary-summary.txt
+
+          python -m pytest -q --junitxml=queued-canary-junit.xml "${selected_tests[@]}" > queued-canary-pytest.log 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          tail -n 120 queued-canary-pytest.log
+          exit 0
+
+      - name: Upload bounded queued-canary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: queued-canary-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            queued-canary-pytest.log
+            queued-canary-junit.xml
+            queued-canary-summary.txt
+          if-no-files-found: error
+          retention-days: ${{ inputs.evidence_retention_days }}
+
+      - name: Enforce pytest result
+        if: always()
+        shell: bash
+        run: |
+          status="${{ steps.pytest.outputs.exit_code }}"
+          if [ -z "$status" ]; then
+            echo "pytest did not report an exit code" >&2
+            exit 1
+          fi
+          exit "$status"

@@ -326,6 +326,47 @@ enabled.
 - Allowlist remains conservative.
 - Default migration remains blocked.
 
+## Optional Manual/Nightly Workflow Skeleton
+
+PR #136 adds an optional manual queued-canary evidence workflow skeleton at:
+
+- `.github/workflows/queued-canary-manual-nightly.yml`
+
+This workflow is intentionally narrow:
+
+- `workflow_dispatch` only
+- no `pull_request`
+- no `push`
+- no `schedule`
+- no large fixture data
+- no production-sized proof
+- no allowlist expansion
+- no default-route migration signal
+
+The default manual run stays bounded to lightweight evidence only:
+
+- `tests/test_queued_execute_canary_minimal_telemetry.py`
+- `tests/test_queued_execute_canary_observability_checklist_docs.py`
+- `tests/test_queued_execute_canary_nightly_fixture_lane_docs.py`
+- `tests/test_queued_execute_canary_production_sized_boundary.py`
+
+An optional `run_extended_canary=true` input may add a few selected queued
+canary safety tests, but still does not add production-sized datasets, heavy
+training, generation, literature/mining, remote workers, or SQLite migration.
+
+The workflow uploads only bounded evidence artifacts:
+
+- pytest log
+- junit XML
+- short text summary
+
+Current decision:
+
+- this is a manual-only evidence skeleton
+- scheduled nightly execution is still not enabled
+- default migration remains blocked
+- queued execution remains feature-flagged and allowlisted
+
 ## Telemetry and Observability Checklist
 
 This checklist documents the minimum observability surface expected before the

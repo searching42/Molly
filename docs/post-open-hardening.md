@@ -69,9 +69,12 @@ blur into the already-resolved OPEN series.
 - Resolved: PR #135 adds minimal structured telemetry fields for queued
   canary runs at the local review/test level, while explicitly not
   implementing production telemetry sinks, dashboards, or alerting.
-- Next recommended queued-canary work: add a separate optional
-  manual/nightly workflow skeleton, or deepen observability beyond the
-  current minimal telemetry surface.
+- Resolved: PR #136 adds an optional manual queued-canary evidence workflow
+  skeleton, while explicitly not enabling scheduled nightly execution, not
+  adding large fixture data, and not changing default CI behavior.
+- Next recommended queued-canary work: deepen observability beyond the
+  current minimal telemetry surface, or keep the manual workflow unscheduled
+  until production-sized/runtime/storage constraints are clearer.
 - Default-route migration is still not recommended.
 
 ## HARDEN-001: Introduce Explicit App Extension Registry
@@ -985,6 +988,10 @@ The goal is a closed, auditable demo rather than full automation.
   canary runs, emitted as local review/test evidence only. This PR does not
   implement production telemetry sinks, dashboards, alerting, or default
   migration.
-- Next: add a separate optional manual/nightly workflow skeleton, or deepen
-  observability beyond the current minimal telemetry surface. Do not proceed
-  to default-route migration yet.
+- PR #136: completed. Add an optional manual queued-canary workflow
+  skeleton for bounded evidence collection. This PR does not enable a
+  schedule, does not run on `pull_request` or `push`, and does not make
+  queued execution default.
+- Next: deepen observability beyond the current minimal telemetry surface, or
+  keep the manual workflow unscheduled until production-sized/runtime/storage
+  constraints are clearer. Do not proceed to default-route migration yet.
