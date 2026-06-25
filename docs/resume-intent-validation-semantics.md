@@ -1,18 +1,25 @@
 # Resume Intent Validation Semantics
 
-Status: validation-only design plus schema/helper implementation. PR #115 adds
-run-plan and stage-state fingerprints for stale-intent detection. PR #116 adds
+Status: validation contract is implemented, and PR #115 adds run-plan and
+stage-state fingerprints for stale-intent detection. PR #116 adds
 strict waiting-stage, execution-snapshot, and executor-gate compatibility checks.
-This document still does not define an execution path.
+PR #117 adds the feature-flagged one-time internal execution bridge, and PR #118
+adds an end-to-end user-confirmed resume-loop fixture test. This document
+describes the migration contract and remaining hardening gates for default-route
+adoption.
 
-This document defines how a future gate/resume/execute path should consume
+The PR #117/118 execution path is intentionally narrow and internal; default
+`/api/run-plan/execute` and `/api/run-plan/resume` replacement are still out of
+scope here.
+
+This document defines how a default-route migration path should consume
 `review/replan_resume_intent.json` created by a user-confirmed replan
-application. It does not add a resume route, enqueue jobs, execute adapters,
+application. It does not add another resume route, enqueue jobs, execute adapters,
 mutate `RunPlan`, call LLMs, apply patches, or replace `/api/run-plan/execute`.
 
 ## Context
 
-Phase 4 now has a review-only replan application path:
+Phase 4 now has a user-confirmed replan application path:
 
 ```text
 RunPlanReplanProposal
@@ -24,22 +31,39 @@ RunPlanReplanProposal
 ```
 
 `ResumeIntent` is the only application result that can eventually feed a
-resume path without changing the task graph. It is still not executable. A
-future resume bridge must treat it as a signed-off review artifact that needs
-fresh validation against current run state before any adapter can run.
+resume path without changing the task graph. The PR #117 + PR #118 loop now
+adds the current narrow execution bridge and closed-loop verification flow, while
+default-route migration still requires this contract plus target-job-safe queue
+acquisition.
+
+## Current Closed-Loop Status
+
+`PR #118` (plus the shared PR #117 execution bridge) proves the current user-confirmed
+closed loop at feature-flagged scope:
+
+```text
+RunPlanReplanProposal
+-> replan_application_record.json
+-> replan_resume_intent.json
+-> /api/internal/run-plan/replan/apply-review
+-> internal resume-intent validation
+-> /api/internal/run-plan/resume-intent/execute
+-> post-resume review artifacts
+```
+
+This is a full review→application→validation→execution→re-review cycle inside the
+opt-in path and is intended as the migration hard gate before default-route changes.
 
 ## Non-Goals
 
 This design does not:
 
-- add a new resume route
-- call `RunPlanExecutor.resume_after_gate(...)`
+- add or change default-route resume/execute behavior
 - enqueue a worker job
 - run adapters or model training
 - mutate `RunPlan`
 - apply a proposed patch
 - call an LLM
-- migrate the default `/api/run-plan/resume` or `/api/run-plan/execute` routes
 - implement queued waiting-user resume
 - add remote worker or SQLite behavior
 
@@ -429,36 +453,51 @@ The existing routes remain unchanged:
 - `POST /api/run-plan/execute`
 - `POST /api/run-plan/resume`
 
-The future resume-intent validator should be an internal helper or
-feature-flagged internal route first. It may produce a validated payload that a
-separate user-confirmed resume path can later consume, but it must not silently
-wrap or replace `/api/run-plan/resume`.
+The implemented internal execution path (PR #117) is feature-flagged and still an
+opt-in narrow bridge. It may produce a validated payload that a separate
+user-confirmed resume path consumes, but it must not replace
+`/api/run-plan/resume` or `/api/run-plan/execute`.
 
 Default-route migration is out of scope until:
 
 1. Resume-intent validation has fixed schema tests.
-2. Resume-intent audit is fail-closed.
-3. Current `RunPlan` compatibility checks cover task ids, task order, gates,
+2. User-confirmed loop closure from PR #118 (proposal/apply/validate/execute/review)
+   remains green and one-time intent consumption is enforced.
+3. Resume-intent audit remains fail-closed.
+4. Current `RunPlan` compatibility checks cover task ids, task order, gates,
    and stage state.
-4. Stale-intent detection is tested.
-5. Existing `/api/run-plan/resume` snapshot and gate tests remain green.
-6. A user confirmation gate explicitly authorizes the final resume.
+5. `target-job` acquisition or strict dedicated-queue guarantees are in place.
+6. Stale-intent detection and execution-snapshot consistency are tested.
+7. Existing `/api/run-plan/resume` snapshot/gate tests remain green.
+8. A user confirmation gate still explicitly authorizes final resume execution.
+9. Full queued `WAITING_USER` resume behavior remains out-of-scope until a
+   target-job-safe queue resume path is added.
+
+## Remaining migration gates before default-route queue replacement
+
+The current validation/execution loop is internal and opt-in only. Before default
+queue execution can replace synchronous execution, the following hard gates remain:
+
+1. target-job acquisition for queue workers (or strict dedicated queue contract).
+2. full queued `WAITING_USER` resume engine (resume semantics beyond terminal-
+   compatible metadata).
+3. queued resume should still include post-execute review/card refresh.
+4. no remote worker support or SQLite migration before the local gates stay green.
+5. no full MinerU/Web Search/MinerU crawl/mining and no REINVENT4 or heavy
+   Uni-Mol/DPA3 in the default-route migration scope.
 
 ## Future Implementation Order
 
-Recommended next PRs:
+Remaining engineering milestones after PR #118 are migration-focused:
 
-1. Add `ResumeIntentValidationRequest` and `ResumeIntentValidationResult`
-   schemas.
-2. Add a deterministic `validate_resume_intent(...)` helper that reads only
-   artifacts and current run state.
-3. Add resume-intent audit writer and compact memory summary, still without
-   execution.
-4. Add a feature-flagged internal validation route that returns validation
-   results only.
-5. Add a separate user-confirmed resume bridge that calls the existing resume
-   path only after gate, actor, permission, audit, stale-intent, and snapshot
-   validation pass.
+1. Implement safe `target-job` acquisition (or equivalent dedicated-queue
+   isolation) in the run-plan queue execution path.
+2. Add deterministic post-resume queue/job verification before any default-route
+   queue migration.
+3. Keep PR #117-style resume bridge as internal-only until the above migration
+   gates are green.
+4. Move to default-route migration only after queue resume and migration gates
+   above are explicit and tested.
 
 Do not combine these steps with queued execution migration, remote workers,
 SQLite, heavy training, web acquisition, or default-route replacement.

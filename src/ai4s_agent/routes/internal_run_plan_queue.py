@@ -619,6 +619,9 @@ def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStor
                 input_artifacts=input_artifacts,
                 task_options=task_options,
                 max_iterations=max_iterations,
+                require_empty_queue=False,
+                target_project_id=project_id,
+                target_run_id=run_id,
                 executor_factory=_executor_factory(current_app),
             )
             status_code = 200 if bool(summary.get("ok")) and bool(summary.get("terminal")) else 400

@@ -97,14 +97,34 @@ class WorkerQueue:
             state.save()
             return dict(job)
 
-    def acquire(self, worker_id: str, *, now: str = "") -> dict[str, Any] | None:
+    def acquire(
+        self,
+        worker_id: str,
+        *,
+        now: str = "",
+        target_job_id: str | None = None,
+        target_project_id: str | None = None,
+        target_run_id: str | None = None,
+    ) -> dict[str, Any] | None:
         worker = _clean_segment(worker_id, "worker_id")
+        clean_target_job_id = _clean_optional_segment(target_job_id, "target_job_id")
+        clean_target_project_id = _clean_optional_segment(target_project_id, "target_project_id")
+        clean_target_run_id = _clean_optional_segment(target_run_id, "target_run_id")
         current = _normalize_time(now, fallback=self._now())
         with self._locked_state() as state:
             self._recover_stale_locked(state, now=current)
             candidates = [
                 job for job in state.jobs
-                if str(job.get("status") or "") == "queued" and not bool(job.get("cancellation_requested"))
+                if (
+                    str(job.get("status") or "") == "queued"
+                    and not bool(job.get("cancellation_requested"))
+                    and _matches_target(
+                        job,
+                        target_job_id=clean_target_job_id,
+                        target_project_id=clean_target_project_id,
+                        target_run_id=clean_target_run_id,
+                    )
+                )
             ]
             if not candidates:
                 state.save()
@@ -355,6 +375,31 @@ def _clean_segment(value: str, label: str) -> str:
     if not clean or clean in {".", ".."} or "/" in clean or "\\" in clean or Path(clean).name != clean:
         raise ValueError(f"{label} must be a single safe path segment")
     return clean
+
+
+def _clean_optional_segment(value: str | None, label: str) -> str | None:
+    if value is None:
+        return None
+    clean = str(value or "").strip()
+    if not clean:
+        return None
+    return _clean_segment(clean, label)
+
+
+def _matches_target(
+    job: dict[str, Any],
+    *,
+    target_job_id: str | None,
+    target_project_id: str | None,
+    target_run_id: str | None,
+) -> bool:
+    if target_job_id is not None and str(job.get("job_id") or "") != target_job_id:
+        return False
+    if target_project_id is not None and str(job.get("project_id") or "") != target_project_id:
+        return False
+    if target_run_id is not None and str(job.get("run_id") or "") != target_run_id:
+        return False
+    return True
 
 
 def _clean_required(value: str, label: str) -> str:

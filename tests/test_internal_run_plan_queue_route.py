@@ -595,10 +595,10 @@ def test_internal_run_plan_queue_route_rejects_run_id_nested_path_without_execut
     assert calls == []
 
 
-def test_internal_run_plan_queue_route_rejects_non_dedicated_queue_without_executor(tmp_path: Path) -> None:
+def test_internal_run_plan_queue_route_targets_new_run_even_with_non_dedicated_queue(tmp_path: Path) -> None:
     queue_dir = _default_queue_dir(tmp_path)
     queue = WorkerQueue(JsonWorkerQueueStore(queue_dir))
-    queue.enqueue("proj-old", "run-old", {"task_id": "some_other_task"})
+    old_job = queue.enqueue("proj-old", "run-old", {"task_id": "some_other_task"})
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     _enable_queue_route(app, execution={"ok": True, "run_id": "run-a", "status": "WAITING_USER"}, calls=calls)
@@ -607,17 +607,18 @@ def test_internal_run_plan_queue_route_rejects_non_dedicated_queue_without_execu
 
     response = client.post("/api/internal/run-plan/queue/execute", json=_payload())
 
-    assert response.status_code == 400
+    assert response.status_code == 200
     summary = RunPlanQueueExecutionSummary.model_validate(response.get_json())
-    assert summary.ok is False
-    assert summary.terminal is False
-    assert summary.queued_job_id == ""
-    assert summary.final_job is None
-    assert summary.final_lease is None
-    assert summary.loop_results == []
-    assert summary.error is not None
-    assert "empty/dedicated queue" in summary.error["message"]
-    assert calls == []
+    assert summary.ok is True
+    assert summary.terminal is True
+    assert summary.final_job is not None
+    assert summary.final_job["run_id"] == "run-a"
+    assert summary.final_job["status"] == "succeeded"
+    assert len(calls) == 1
+    assert calls[0]["project_id"] == "proj-a"
+    old_after = queue.status(str(old_job.get("job_id") or ""))
+    assert old_after is not None
+    assert old_after["status"] == "queued"
 
 
 def test_internal_run_plan_queue_route_does_not_replace_default_execute_route(tmp_path: Path) -> None:

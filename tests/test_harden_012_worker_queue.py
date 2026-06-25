@@ -31,6 +31,51 @@ def test_worker_queue_acquires_queued_jobs_in_deterministic_order(tmp_path) -> N
     assert acquired_second["job_id"] == second["job_id"]
 
 
+def test_worker_queue_acquire_targets_specific_job_id(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queue.enqueue("proj-a", "run-a", {"task_id": "older"})
+    target = queue.enqueue("proj-a", "run-b", {"task_id": "target"})
+
+    acquired = queue.acquire("worker-a", target_job_id=target["job_id"])
+
+    assert acquired is not None
+    assert acquired["job_id"] == target["job_id"]
+
+
+def test_worker_queue_acquire_targets_project_and_run(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queue.enqueue("proj-a", "run-a", {"task_id": "older-project"})
+    target = queue.enqueue("proj-b", "run-target", {"task_id": "target"})
+    queue.enqueue("proj-b", "run-other", {"task_id": "other"})
+
+    acquired = queue.acquire(
+        "worker-a",
+        target_project_id="proj-b",
+        target_run_id="run-target",
+    )
+
+    assert acquired is not None
+    assert acquired["job_id"] == target["job_id"]
+    assert acquired["project_id"] == "proj-b"
+    assert acquired["run_id"] == "run-target"
+
+
+def test_worker_queue_acquire_target_filters_to_none(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queue.enqueue("proj-a", "run-a", {"task_id": "older"})
+
+    acquired = queue.acquire("worker-a", target_run_id="run-missing")
+
+    assert acquired is None
+
+
+def test_worker_queue_acquire_rejects_unsafe_target_selector(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+
+    with pytest.raises(ValueError, match="target_project_id must be a single safe path segment"):
+        queue.acquire("worker-a", target_project_id="proj/unsafe")
+
+
 def test_worker_queue_acquire_records_lease_worker_and_heartbeat(tmp_path) -> None:
     queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
     job = queue.enqueue("proj-a", "run-a", {"task_id": "train"})

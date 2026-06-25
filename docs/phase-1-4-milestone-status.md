@@ -45,6 +45,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 resume intent state binding | Completed as validation-only integrity hardening | `src/ai4s_agent/run_plan_state_fingerprint.py` |
 | Phase 4 strict resume stage/gate validation | Completed as validation-only waiting-stage and executor-gate hardening | `src/ai4s_agent/run_plan_resume_stage_gate.py` |
 | Phase 4 internal resume intent execution bridge | Completed as feature-flagged one-time internal bridge | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
+| Phase 4 user-confirmed resume loop | Completed as review → application → validation → actual resume → post-resume review (PR #118) | `tests/test_user_confirmed_resume_loop_e2e.py` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -290,6 +291,13 @@ Completed layers:
    - Consumes each intent once. It does not enqueue work, call LLMs, mutate
      `RunPlan`, write custom gate decisions, or replace default routes.
 
+12. User-confirmed resume loop e2e
+   - `tests/test_user_confirmed_resume_loop_e2e.py` connects verifier findings,
+     replan application, resume-intent validation, one-time resume execution,
+     and post-resume review artifacts.
+   - Confirms `resume_intent` can be consumed once, stage transitions to success,
+     and post-resume artifacts/review card can be refreshed.
+
 Phase 4 boundaries:
 
 - Does not execute proposals.
@@ -320,8 +328,8 @@ the completed fixtures:
 - Default route migration:
   `/api/run-plan/execute` remains synchronous and is not replaced.
 - Full queued resume:
-  `WAITING_USER` is terminal-compatible in the queue for now; resumable queued
-  execution remains future work.
+  `WAITING_USER` remains terminal-compatible in the queue for now; resumable
+  queued WAITING_USER resume remains future work.
 - Remote worker:
   no remote worker contract, lease handoff, heartbeat service, or remote GPU
   execution is connected.
@@ -356,7 +364,7 @@ Recommended next work should keep the same safety posture:
    automatic execution.
 3. Decide whether queued `WAITING_USER` should remain terminal-compatible or
    move to a resumable non-terminal state.
-4. Add target-job acquisition or another dedicated-queue guarantee before
-   default-route migration.
-5. Only after local controls stay green, revisit remote worker contracts and
-   storage migration design.
+4. Only after local controls stay green, revisit remote worker contracts and
+  storage migration design.
+5. Target-job acquisition is now implemented via queue/poller selectors in PR #119,
+   with future hardening needed around default-route one-time resume safety.
