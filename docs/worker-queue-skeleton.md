@@ -56,6 +56,7 @@ Mutation semantics:
 Implemented operations:
 
 - `enqueue(project_id, run_id, task)`
+- `enqueue_retry_of_failed_job(source_job_id, *, retry_request_id, requested_by, reason)`
 - `acquire(worker_id, *, target_job_id=None, target_project_id=None, target_run_id=None)`
 - `heartbeat(lease_id)`
 - `complete(lease_id)`
@@ -146,6 +147,12 @@ Lease attempts versus explicit retry:
 - Any future explicit retry for queued canary must create a new `job_id` and
   keep the original failed job immutable.
 - `WAITING_USER` remains a resume/gate path, not a retry path.
+- PR #138 adds atomic one-shot retry-child creation for failed local queue
+  jobs. The original failed job remains immutable, the retry child receives a
+  new `job_id`, and no automatic retry path is introduced.
+- `enqueue_queued_canary_retry(...)` applies the existing run-plan queue
+  envelope validation plus queued-canary allowlist checks before delegating to
+  the low-level queue mutation.
 - See `docs/queued-canary-retry-requeue-semantics.md` for the conservative
   queued-canary retry/requeue contract.
 

@@ -1,12 +1,14 @@
 # Queued Canary Retry And Requeue Semantics
 
 This document defines conservative retry/requeue semantics for the local
-JSON-backed queued execute canary before any explicit retry operation exists.
-It is documentation and guard-test scope only.
+JSON-backed queued execute canary. PR #138 now implements the smallest allowed
+subset of that contract: atomic one-shot retry-child creation for eligible
+failed local queue jobs plus an allowlisted queued-canary helper.
 
-This PR does not implement an API route or queue mutation.
+This PR does not implement a public API route.
 
-It does not add `WorkerQueue.retry`, `WorkerQueue.requeue`, automatic retry, timers, or any change to `/api/run-plan/execute` or `/api/run-plan/resume`.
+It does not add `WorkerQueue.retry`, `WorkerQueue.requeue`, automatic retry,
+timers, or any change to `/api/run-plan/execute` or `/api/run-plan/resume`.
 
 The contract here is specific to the local queued execute canary. It does not
 change existing non-queue failed-stage retry routes elsewhere in the
@@ -18,7 +20,7 @@ This document exists to keep future retry behavior narrow and reviewable.
 
 It does not:
 
-- implement retry or requeue operations
+- implement a public retry or requeue API
 - add automatic retry
 - add a public API route
 - change the current `attempts` field meaning
@@ -112,8 +114,7 @@ A future explicit retry job should carry stable lineage fields such as:
 - `original_project_id`
 - `original_run_id`
 
-The exact storage layout may be finalized in PR #138, but these semantics are
-already fixed:
+PR #138 fixes the first implementation shape:
 
 - a new `job_id` is required for every explicit retry
 - the original failed job remains immutable
@@ -143,8 +144,10 @@ A retry request must have a stable `retry_request_id`.
 - artifact-output isolation must be proven before explicit retry is enabled for
   production scientific adapters
 
-PR #138 may initially implement only queue-control-level retry behavior with
-deterministic fake/lightweight runners.
+PR #138 implements only queue-control-level retry behavior plus the
+`enqueue_queued_canary_retry(...)` helper for the current allowlisted
+queued-canary `run_plan_execute` envelope. It does not expose a route, add
+automatic retry, or widen queued-canary scope.
 
 ### Cancellation
 
@@ -179,7 +182,7 @@ Required future correlation fields:
 - `reason`
 - `final status`
 
-These events are not implemented in this PR.
+These events are not implemented in PR #138.
 
 ### Rollback And Default-Route Boundaries
 
@@ -192,15 +195,18 @@ These events are not implemented in this PR.
 
 ## Initial Implementation Boundary For PR #138
 
-The first implementation PR should remain narrow and conservative.
+PR #138 remains narrow and conservative.
 
-It may implement only queue-control-level explicit retry behavior if:
+Implemented in PR #138:
 
 - the source job is terminal failed
 - the retry request is idempotent by `retry_request_id`
 - the original failed job remains immutable
 - the retry creates a new child job with a new `job_id`
 - lineage fields are preserved
+- the child starts with reset runtime state and a copied task envelope
+- the queued-canary helper rejects non-allowlisted, malformed, or mismatched
+  run-plan queue jobs
 - no automatic retry is introduced
 - no `WAITING_USER` path is rewritten into retry
 - no cancellation path is reinterpreted as retry
@@ -214,3 +220,27 @@ It must not:
 - make cancelled jobs retryable
 - make `WAITING_USER` use retry instead of resume
 - make queued execution default
+
+## Current Implementation Boundary After PR #138
+
+PR #138 implements:
+
+- `WorkerQueue.enqueue_retry_of_failed_job(...)` as an atomic low-level
+  queue-control mutation under the existing queue lock
+- strict one-shot child creation with `retry_request_id` idempotency
+- original failed-job immutability
+- `enqueue_queued_canary_retry(...)` as a higher-level validator for the
+  existing allowlisted queued-canary `run_plan_execute` task envelope
+- deterministic test coverage proving the retry child can be targeted and
+  processed by the existing queue/poller infrastructure
+
+PR #138 still does not implement:
+
+- a Flask route or public retry/requeue API
+- automatic retry, timers, or a scheduler
+- retry initiation from `WorkerQueuePoller`
+- allowlist expansion
+- `train_model`, generation, literature, mining, or unknown queued-canary retry
+- remote workers
+- SQLite queue storage
+- default-route migration

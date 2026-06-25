@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import uuid
@@ -204,6 +205,72 @@ class WorkerQueue:
             state.save()
             return recovered
 
+    def enqueue_retry_of_failed_job(
+        self,
+        source_job_id: str,
+        *,
+        retry_request_id: str,
+        requested_by: str,
+        reason: str,
+        now: str = "",
+    ) -> dict[str, Any]:
+        source_id = _clean_required(source_job_id, "source_job_id")
+        request_id = _clean_required(retry_request_id, "retry_request_id")
+        actor = _clean_required(requested_by, "requested_by")
+        retry_reason = _clean_required(reason, "reason")
+        current = _normalize_time(now, fallback=self._now())
+        with self._locked_state() as state:
+            source = _find_by_id(state.jobs, "job_id", source_id)
+            if source is None:
+                raise KeyError(f"source job not found: {source_id}")
+            if _is_retry_child(source):
+                raise ValueError("retry child jobs are not eligible for explicit retry")
+            if str(source.get("status") or "") != "failed":
+                raise ValueError("source job status must be failed")
+            if bool(source.get("cancellation_requested")):
+                raise ValueError("source failed job cannot have cancellation_requested")
+            if _has_active_lease(state.leases, source_id):
+                raise ValueError("source failed job cannot have an active lease")
+            source_task = source.get("task")
+            if not isinstance(source_task, dict):
+                raise ValueError("source job task must be an object")
+            existing_request = _find_retry_job_by_request_id(state.jobs, request_id)
+            if existing_request is not None:
+                if str(existing_request.get("retry_of_job_id") or "") == source_id:
+                    return copy.deepcopy(existing_request)
+                raise ValueError("retry_request_id already belongs to a different source job")
+            existing_child = _find_retry_child(state.jobs, source_id)
+            if existing_child is not None:
+                raise ValueError("explicit retry child already exists for source job")
+            project = _clean_segment(str(source.get("project_id") or ""), "source project_id")
+            run = _clean_segment(str(source.get("run_id") or ""), "source run_id")
+            child = {
+                "job_id": _next_job_id(project, run, state.jobs),
+                "project_id": project,
+                "run_id": run,
+                "task": copy.deepcopy(source_task),
+                "status": "queued",
+                "created_at": current,
+                "updated_at": current,
+                "lease_id": "",
+                "worker_id": "",
+                "heartbeat_at": "",
+                "cancellation_requested": False,
+                "attempts": 0,
+                "error": {},
+                "retry_of_job_id": source_id,
+                "retry_root_job_id": source_id,
+                "retry_index": 1,
+                "retry_request_id": request_id,
+                "retry_reason": retry_reason,
+                "retry_requested_by": actor,
+                "original_project_id": project,
+                "original_run_id": run,
+            }
+            state.jobs.append(child)
+            state.save()
+            return copy.deepcopy(child)
+
     def status(self, job_id: str) -> dict[str, Any] | None:
         clean_job = _clean_required(job_id, "job_id")
         queue = self.store.read_queue()
@@ -357,6 +424,31 @@ def _find_by_id(records: list[dict[str, Any]], field: str, value: str) -> dict[s
         if str(record.get(field) or "") == value:
             return record
     return None
+
+
+def _find_retry_job_by_request_id(records: list[dict[str, Any]], retry_request_id: str) -> dict[str, Any] | None:
+    for record in records:
+        if str(record.get("retry_request_id") or "") == retry_request_id:
+            return record
+    return None
+
+
+def _find_retry_child(records: list[dict[str, Any]], source_job_id: str) -> dict[str, Any] | None:
+    for record in records:
+        if str(record.get("retry_of_job_id") or "") == source_job_id:
+            return record
+    return None
+
+
+def _has_active_lease(leases: list[dict[str, Any]], job_id: str) -> bool:
+    for lease in leases:
+        if str(lease.get("job_id") or "") == job_id and str(lease.get("status") or "") == "active":
+            return True
+    return False
+
+
+def _is_retry_child(job: dict[str, Any]) -> bool:
+    return bool(str(job.get("retry_of_job_id") or "").strip())
 
 
 def _next_job_id(project_id: str, run_id: str, jobs: list[dict[str, Any]]) -> str:

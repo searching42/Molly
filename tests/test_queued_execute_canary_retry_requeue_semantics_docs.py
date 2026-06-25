@@ -61,8 +61,13 @@ def test_retry_requeue_semantics_doc_forbids_automatic_retry_and_route_mutation(
     text = _text(SEMANTICS_DOC)
 
     for required in [
-        "This PR does not implement an API route or queue mutation",
-        "It does not add `WorkerQueue.retry`, `WorkerQueue.requeue`, automatic retry, timers, or any change to `/api/run-plan/execute` or `/api/run-plan/resume`",
+        "PR #138 now implements the smallest allowed",
+        "subset of that contract",
+        "This PR does not implement a public API route",
+        "It does not add `WorkerQueue.retry`, `WorkerQueue.requeue`, automatic retry,",
+        "or any change to `/api/run-plan/execute` or `/api/run-plan/resume`",
+        "`WorkerQueue.enqueue_retry_of_failed_job(...)` as an atomic low-level",
+        "`enqueue_queued_canary_retry(...)` as a higher-level validator",
         "no automatic retry loop",
         "no retry from inside `WorkerQueuePoller`",
         "stale recovery must not consume the explicit retry allowance",

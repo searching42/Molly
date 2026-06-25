@@ -138,3 +138,7 @@ def test_queued_execute_canary_rollout_policy_documents_cancellation_and_retry_b
         "This does not enable remote workers or SQLite",
     ]:
         assert required in text
+
+    assert "This still does not implement a public retry/requeue API, automatic retry," in text
+    assert "route changes, allowlist expansion, or default migration." in text
+    assert "This still does not implement retry/requeue operations, automatic retry, API" not in text
