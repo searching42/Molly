@@ -54,8 +54,10 @@ blur into the already-resolved OPEN series.
 - Resolved: PR #130 adds a second allowlisted chain parity fixture for the
   feature-flagged queued execute canary, using the actual second fully
   allowlisted planner expansion instead of broadening the allowlist.
-- Next recommended queued-canary work: add explicit cancellation/retry
-  coverage, or add a production-sized fixture for an allowlisted chain.
+- Resolved: PR #131 adds cancellation coverage for the queued execute canary
+  and documents that retry/requeue production semantics remain future work.
+- Next recommended queued-canary work: add a production-sized fixture for an
+  allowlisted chain, or tighten the telemetry/observability checklist.
 - Default-route migration is still not recommended.
 
 ## HARDEN-001: Introduce Explicit App Extension Registry
@@ -948,5 +950,10 @@ The goal is a closed, auditable demo rather than full automation.
   reaches non-allowlisted tasks, so this parity fixture intentionally uses
   the actual second all-allowlisted chain, `check_trainability`, without
   expanding the allowlist.
-- Next: add cancellation/retry coverage, or add a production-sized fixture
-  for an allowlisted chain. Do not proceed to default-route migration yet.
+- PR #131: completed. Add cancellation coverage for the queued canary and
+  prove that sync fallback does not process or mutate cancelled queued jobs.
+  Because the queue still has no explicit retry/requeue production API, retry
+  semantics remain documented future work rather than new behavior in this PR.
+- Next: add a production-sized fixture for an allowlisted chain, or tighten
+  the telemetry/observability checklist. Do not proceed to default-route
+  migration yet.
