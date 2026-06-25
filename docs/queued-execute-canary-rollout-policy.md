@@ -235,6 +235,97 @@ Current decision:
 - a production-sized or nightly boundary fixture policy still needs to exist
 - Default migration remains blocked
 
+## Optional Nightly Production-Sized Fixture Lane Design
+
+### Purpose
+
+The nightly lane is intended to validate queued canary behavior on larger,
+more realistic scientific datasets.
+
+- It is not part of the default presubmit suite.
+- It is not enabled by this PR.
+- It must remain optional until runtime, data, and storage constraints are
+  understood.
+
+### Dataset profile
+
+The future nightly fixture should represent at least:
+
+- larger row count than small deterministic CI fixtures
+- wider property schema
+- realistic missingness
+- mixed valid and invalid SMILES rows
+- `split_group` coverage
+- representative OLED properties if available
+- no private or proprietary data committed to the repo
+- documented fixture provenance
+
+### Execution scope
+
+The future nightly lane should stay constrained to current allowlisted task
+chains only:
+
+- `inspect_dataset`
+- `clean_dataset`
+- `check_trainability`
+- `run_baseline`
+
+Additional scope constraints:
+
+- `train_model` remains excluded.
+- generation remains excluded.
+- literature/mining remains excluded.
+- `render_report` remains sync-only if planner expansion reaches
+  non-allowlisted tasks.
+- No allowlist expansion is part of the nightly lane design.
+
+### Required parity checks
+
+Any future nightly lane must check:
+
+- sync vs queued canary response compatibility
+- logical artifact ids match
+- artifact files exist
+- failure classification remains comparable
+- queued job final status is stable
+- old queued jobs are not consumed
+- stale/cancelled jobs are not consumed
+- rollback to sync remains safe
+
+### Runtime and CI budget
+
+Nightly lane constraints remain explicit:
+
+- default CI must remain lightweight and deterministic
+- nightly lane must have explicit runtime budget
+- large fixture may need opt-in label, manual dispatch, or scheduled nightly
+  workflow
+- failing nightly lane should block default migration, but should not
+  necessarily block ordinary PRs until policy is finalized
+- no nightly workflow is enabled in this PR
+
+### Storage and observability requirements
+
+The future nightly lane will need:
+
+- artifact size expectations
+- retention policy
+- log volume expectations
+- queue file size expectations
+- telemetry markers from the observability checklist
+- no centralized telemetry sink yet
+- no production dashboard yet
+- no alerting yet
+
+### Current decision
+
+Current decision: nightly production-sized fixture lane is designed but not
+enabled.
+
+- Queued canary remains feature-flagged.
+- Allowlist remains conservative.
+- Default migration remains blocked.
+
 ## Telemetry and Observability Checklist
 
 This checklist documents the minimum observability surface expected before the

@@ -15,11 +15,14 @@ def test_production_sized_fixture_boundary_is_documented() -> None:
 
     for required in [
         "Production-Sized Fixture Boundary",
+        "Optional Nightly Production-Sized Fixture Lane Design",
         "small deterministic datasets",
         "not enough for production-sized scientific workload confidence",
         "runtime budget",
         "CI constraints",
         "nightly",
+        "not enabled by this PR",
+        "default CI must remain lightweight and deterministic",
         "artifact file existence",
         "target-job safety",
         "flag off returns sync-compatible response",
