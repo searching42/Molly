@@ -138,6 +138,17 @@ Skeleton behavior:
 - Stale active leases are marked `stale`, and their jobs are requeued for a new
   worker to acquire.
 
+Lease attempts versus explicit retry:
+
+- `attempts` counts queue acquisitions only.
+- Reacquisition after stale lease recovery increments `attempts`.
+- Stale lease recovery keeps the same `job_id` and is not an explicit retry.
+- Any future explicit retry for queued canary must create a new `job_id` and
+  keep the original failed job immutable.
+- `WAITING_USER` remains a resume/gate path, not a retry path.
+- See `docs/queued-canary-retry-requeue-semantics.md` for the conservative
+  queued-canary retry/requeue contract.
+
 Out of scope:
 
 - default `/api/run-plan/execute` integration
