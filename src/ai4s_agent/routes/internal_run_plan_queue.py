@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from ai4s_agent._utils import now_iso, truthy
 from ai4s_agent.actor_identity import ActorContext, resolve_actor
+from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.memory import PermissionLevel, PermissionPolicy
 from ai4s_agent.run_plan_queue_lifecycle import internal_run_plan_queue_dir, read_run_plan_queue_status
 from ai4s_agent.run_plan_queue_service import run_run_plan_via_local_queue
@@ -40,10 +41,12 @@ from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
 
 INTERNAL_RUN_PLAN_QUEUE_ROUTE_FLAG = "AI4S_ENABLE_INTERNAL_RUN_PLAN_QUEUE_ROUTE"
 INTERNAL_RESUME_INTENT_VALIDATION_ROUTE_FLAG = "AI4S_ENABLE_INTERNAL_RESUME_INTENT_VALIDATION_ROUTE"
+INTERNAL_RESUME_INTENT_EXECUTE_ROUTE_FLAG = "AI4S_ENABLE_INTERNAL_RESUME_INTENT_EXECUTE_ROUTE"
 EXECUTOR_FACTORY_CONFIG_KEY = "AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"
 INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION = "run_plan_queue_execute"
 INTERNAL_RUN_PLAN_REPLAN_APPLY_PERMISSION_ACTION = "run_plan_replan_apply"
 INTERNAL_RUN_PLAN_RESUME_INTENT_USE_PERMISSION_ACTION = "run_plan_resume_intent_use"
+INTERNAL_RUN_PLAN_RESUME_EXECUTE_PERMISSION_ACTION = "run_plan_resume_execute"
 
 
 def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStorage) -> None:
@@ -354,6 +357,202 @@ def register_internal_run_plan_queue_routes(app: Flask, *, projects: ProjectStor
                 permission=permission,
             )), status_code
 
+    @app.post("/api/internal/run-plan/resume-intent/execute")
+    def internal_resume_intent_execute():
+        if not internal_resume_intent_execute_route_enabled(current_app):
+            return jsonify({"ok": False, "error": "internal resume intent execute route disabled"}), 404
+        actor = ActorContext(actor="", source="missing", required=True)
+        project_id = ""
+        run_id = ""
+        permission: dict[str, Any] | None = None
+        validation: ResumeIntentValidationResult | None = None
+        try:
+            payload = _request_json_object()
+            actor = resolve_actor(request, required=True)
+            if not actor.actor:
+                raise _RouteRequestError("actor required", status_code=403)
+            project_id = _safe_path_component(payload.get("project_id"), "project_id")
+            run_id = _safe_path_component(payload.get("run_id"), "run_id")
+            approved_gates = _optional_string_list(payload.get("approved_gates"), "approved_gates")
+            permission = _decide_permission(
+                projects,
+                actor=actor,
+                project_id=project_id,
+                run_id=run_id,
+                action=INTERNAL_RUN_PLAN_RESUME_EXECUTE_PERMISSION_ACTION,
+            )
+            if not bool(permission.get("allowed")):
+                error = _permission_error_dict(permission)
+                audit_error = _append_resume_intent_execute_audit_or_error(
+                    projects,
+                    actor=actor,
+                    project_id=project_id,
+                    run_id=run_id,
+                    event="run_plan_resume_failed",
+                    result=None,
+                    error=error,
+                    permission=permission,
+                )
+                if audit_error is not None:
+                    return jsonify(audit_error), 500
+                return jsonify(_resume_intent_execute_error_summary(
+                    project_id=project_id,
+                    run_id=run_id,
+                    validation=None,
+                    error=error,
+                    permission=permission,
+                )), 403
+            run_plan = _read_current_run_plan(projects, project_id=project_id, run_id=run_id)
+            validation = validate_resume_intent(
+                workspace_dir=projects.workspace_dir,
+                project_id=project_id,
+                run_id=run_id,
+                current_run_plan=run_plan,
+                stage_state=_read_stage_state(projects, project_id=project_id, run_id=run_id),
+                audit_records=_read_resume_intent_validation_audit_records(
+                    projects,
+                    project_id=project_id,
+                    run_id=run_id,
+                ),
+                approved_gates=approved_gates,
+            )
+            if not validation.ok or validation.decision != "resume_eligible":
+                error = {
+                    "type": "resume_intent_not_eligible",
+                    "message": f"resume intent validation decision must be resume_eligible, got {validation.decision}",
+                }
+                audit_error = _append_resume_intent_execute_audit_or_error(
+                    projects,
+                    actor=actor,
+                    project_id=project_id,
+                    run_id=run_id,
+                    event="run_plan_resume_failed",
+                    result=validation,
+                    error=error,
+                    permission=permission,
+                )
+                if audit_error is not None:
+                    return jsonify(audit_error), 500
+                return jsonify(_resume_intent_execute_error_summary(
+                    project_id=project_id,
+                    run_id=run_id,
+                    validation=validation,
+                    error=error,
+                    permission=permission,
+                )), 409
+            audit_error = _append_resume_intent_execute_audit_or_error(
+                projects,
+                actor=actor,
+                project_id=project_id,
+                run_id=run_id,
+                event="resume_intent_consumed",
+                result=validation,
+                error=None,
+                permission=permission,
+            )
+            if audit_error is not None:
+                return jsonify(audit_error), 500
+            try:
+                execution = RunPlanExecutor(storage=projects).resume_after_gate(
+                    project_id=project_id,
+                    run_plan=run_plan,
+                    approved_gates=validation.approved_gates,
+                    actor=actor.actor,
+                    note=str(payload.get("note") or ""),
+                )
+            except (ValidationError, ValueError, FileNotFoundError) as exc:
+                error = _summary_error_dict(exc)
+                audit_error = _append_resume_intent_execute_audit_or_error(
+                    projects,
+                    actor=actor,
+                    project_id=project_id,
+                    run_id=run_id,
+                    event="run_plan_resume_failed",
+                    result=validation,
+                    error=error,
+                    permission=permission,
+                )
+                if audit_error is not None:
+                    return jsonify(audit_error), 500
+                return jsonify(_resume_intent_execute_error_summary(
+                    project_id=project_id,
+                    run_id=run_id,
+                    validation=validation,
+                    error=error,
+                    permission=permission,
+                )), 400
+            if _execution_failed(execution):
+                error = _execution_error_dict(execution)
+                audit_error = _append_resume_intent_execute_audit_or_error(
+                    projects,
+                    actor=actor,
+                    project_id=project_id,
+                    run_id=run_id,
+                    event="run_plan_resume_failed",
+                    result=validation,
+                    error=error,
+                    permission=permission,
+                )
+                if audit_error is not None:
+                    return jsonify(audit_error), 500
+                return jsonify(_resume_intent_execute_error_summary(
+                    project_id=project_id,
+                    run_id=run_id,
+                    validation=validation,
+                    error=error,
+                    permission=permission,
+                    execution=execution,
+                )), 500
+            memory_save = save_resume_intent_validation_summary_to_memory(
+                workspace_dir=projects.workspace_dir,
+                project_id=project_id,
+                run_id=run_id,
+                result=validation,
+                audit_refs=[RESUME_INTENT_VALIDATION_AUDIT_REF],
+                confirmed_by=actor.actor,
+            )
+            audit_error = _append_resume_intent_execute_audit_or_error(
+                projects,
+                actor=actor,
+                project_id=project_id,
+                run_id=run_id,
+                event="run_plan_resume_completed",
+                result=validation,
+                error=None,
+                permission=permission,
+            )
+            if audit_error is not None:
+                return jsonify(audit_error), 500
+            return jsonify(_resume_intent_execute_success_summary(
+                result=validation,
+                execution=execution,
+                memory_record=memory_save.record.model_dump(mode="json"),
+                permission=permission,
+            ))
+        except (OSError, ValidationError, ValueError, FileNotFoundError) as exc:
+            status_code = exc.status_code if isinstance(exc, _RouteRequestError) else 400
+            error = _summary_error_dict(exc)
+            if actor.actor and project_id and run_id:
+                audit_error = _append_resume_intent_execute_audit_or_error(
+                    projects,
+                    actor=actor,
+                    project_id=project_id,
+                    run_id=run_id,
+                    event="run_plan_resume_failed",
+                    result=validation,
+                    error=error,
+                    permission=permission,
+                )
+                if audit_error is not None:
+                    return jsonify(audit_error), 500
+            return jsonify(_resume_intent_execute_error_summary(
+                project_id=project_id,
+                run_id=run_id,
+                validation=validation,
+                error=error,
+                permission=permission,
+            )), status_code
+
     @app.post("/api/internal/run-plan/queue/execute")
     def internal_run_plan_queue_execute():
         if not internal_run_plan_queue_route_enabled(current_app):
@@ -470,6 +669,7 @@ class _RunPlanQueuePermissionPolicy(PermissionPolicy):
             INTERNAL_RUN_PLAN_QUEUE_PERMISSION_ACTION,
             INTERNAL_RUN_PLAN_REPLAN_APPLY_PERMISSION_ACTION,
             INTERNAL_RUN_PLAN_RESUME_INTENT_USE_PERMISSION_ACTION,
+            INTERNAL_RUN_PLAN_RESUME_EXECUTE_PERMISSION_ACTION,
         }:
             return PermissionLevel.PROJECT_APPROVED
         return super().resolve(action)
@@ -486,6 +686,13 @@ def internal_resume_intent_validation_route_enabled(app: Any) -> bool:
     if INTERNAL_RESUME_INTENT_VALIDATION_ROUTE_FLAG in app.config:
         return truthy(app.config.get(INTERNAL_RESUME_INTENT_VALIDATION_ROUTE_FLAG))
     env_value = os.environ.get(INTERNAL_RESUME_INTENT_VALIDATION_ROUTE_FLAG)
+    return truthy(env_value)
+
+
+def internal_resume_intent_execute_route_enabled(app: Any) -> bool:
+    if INTERNAL_RESUME_INTENT_EXECUTE_ROUTE_FLAG in app.config:
+        return truthy(app.config.get(INTERNAL_RESUME_INTENT_EXECUTE_ROUTE_FLAG))
+    env_value = os.environ.get(INTERNAL_RESUME_INTENT_EXECUTE_ROUTE_FLAG)
     return truthy(env_value)
 
 
@@ -694,6 +901,42 @@ def _append_resume_intent_validation_audit_or_error(
                 "message": str(exc).strip() or exc.__class__.__name__,
             },
             permission=None,
+        )
+    return None
+
+
+def _append_resume_intent_execute_audit_or_error(
+    projects: ProjectStorage,
+    *,
+    actor: ActorContext,
+    project_id: str,
+    run_id: str,
+    event: str,
+    result: ResumeIntentValidationResult | None,
+    error: dict[str, Any] | None,
+    permission: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    try:
+        append_resume_intent_validation_audit_record(
+            workspace_dir=projects.workspace_dir,
+            project_id=project_id,
+            run_id=run_id,
+            event=event,  # type: ignore[arg-type]
+            actor=actor.actor,
+            actor_source=actor.source,
+            result=result,
+            error=error,
+        )
+    except OSError as exc:
+        return _resume_intent_execute_error_summary(
+            project_id=project_id,
+            run_id=run_id,
+            validation=result,
+            error={
+                "type": "audit_write_failed",
+                "message": str(exc).strip() or exc.__class__.__name__,
+            },
+            permission=permission,
         )
     return None
 
@@ -937,6 +1180,71 @@ def _resume_intent_validation_error_summary(
     if permission is not None:
         result["permission"] = _public_permission_decision(permission, project_id=project_id, run_id=run_id)
     return result
+
+
+def _resume_intent_execute_success_summary(
+    *,
+    result: ResumeIntentValidationResult,
+    execution: dict[str, Any],
+    memory_record: dict[str, Any],
+    permission: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "project_id": result.project_id,
+        "run_id": result.run_id,
+        "validation": result.model_dump(mode="json"),
+        "execution": execution,
+        "audit_refs": [RESUME_INTENT_VALIDATION_AUDIT_REF],
+        "memory": memory_record,
+        "permission": _public_permission_decision(permission, project_id=result.project_id, run_id=result.run_id),
+        "executable": False,
+    }
+
+
+def _resume_intent_execute_error_summary(
+    *,
+    project_id: str,
+    run_id: str,
+    validation: ResumeIntentValidationResult | None,
+    error: dict[str, Any],
+    permission: dict[str, Any] | None,
+    execution: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "project_id": project_id,
+        "run_id": run_id,
+        "validation": validation.model_dump(mode="json") if validation is not None else None,
+        "execution": execution,
+        "audit_refs": [RESUME_INTENT_VALIDATION_AUDIT_REF] if project_id and run_id else [],
+        "memory": None,
+        "error": error,
+        "executable": False,
+    }
+    if permission is not None:
+        result["permission"] = _public_permission_decision(permission, project_id=project_id, run_id=run_id)
+    return result
+
+
+def _execution_failed(execution: dict[str, Any]) -> bool:
+    return execution.get("ok") is False or str(execution.get("status") or "").upper() == "FAILED"
+
+
+def _execution_error_dict(execution: dict[str, Any]) -> dict[str, Any]:
+    error = execution.get("error")
+    message = ""
+    if isinstance(error, dict):
+        message = str(error.get("message") or error.get("error") or "").strip()
+    if not message:
+        message = str(execution.get("message") or "run-plan resume execution failed").strip()
+    result = {
+        "type": "run_plan_resume_execution_failed",
+        "message": message,
+        "status": str(execution.get("status") or "").strip(),
+        "failed_task": str(execution.get("failed_task") or "").strip(),
+    }
+    return {key: value for key, value in result.items() if value}
 
 
 def _permission_error_dict(permission: dict[str, Any]) -> dict[str, Any]:

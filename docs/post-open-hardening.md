@@ -532,6 +532,17 @@ Resolved run-plan queue bridge scope:
     remains validation-only: it does not call `RunPlanExecutor.resume_after_gate`,
     write gate decisions, enqueue work, execute adapters, mutate `RunPlan`, call
     LLMs, or replace default routes.
+31. **Feature-flagged internal resume intent execution bridge** — PR #117 adds
+    `POST /api/internal/run-plan/resume-intent/execute` behind
+    `AI4S_ENABLE_INTERNAL_RESUME_INTENT_EXECUTE_ROUTE`, actor identity, and a
+    `run_plan_resume_execute` server grant. The bridge server-loads current
+    artifacts and state, reruns `validate_resume_intent(...)`, requires
+    `decision="resume_eligible"`, writes a pre-execution consumed audit record
+    fail-closed, calls the existing `RunPlanExecutor.resume_after_gate(...)`,
+    and records completed/failed audit plus compact memory. It is one-time
+    consumption only and still does not enqueue work, call LLMs, mutate
+    `RunPlan`, write custom gate decisions, replace `/api/run-plan/resume`, or
+    replace `/api/run-plan/execute`.
 
 Still not default:
 
@@ -850,3 +861,6 @@ The goal is a closed, auditable demo rather than full automation.
   adding resume execution.
 - PR #116: enforce strict waiting-stage, execution-snapshot, and executor-gate
   compatibility for resume intent validation without adding resume execution.
+- PR #117: add a feature-flagged internal resume intent execution bridge with
+  strict validation, audit, permission, and one-time consumption, without
+  replacing default resume/execute routes.

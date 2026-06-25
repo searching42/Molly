@@ -393,6 +393,17 @@ application creation:
 run_plan_resume_intent_use
 ```
 
+The feature-flagged internal execution bridge uses a separate permission:
+
+```text
+run_plan_resume_execute
+```
+
+That bridge still reruns this validator, requires `resume_eligible`, writes a
+pre-execution `resume_intent_consumed` audit record before calling
+`RunPlanExecutor.resume_after_gate(...)`, and treats the intent as one-time
+consumed. It does not replace the default resume route.
+
 This separation matters because applying a proposal creates review artifacts,
 while consuming a resume intent moves the system closer to execution.
 

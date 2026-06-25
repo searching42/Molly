@@ -44,6 +44,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 resume intent validation semantics | Completed as docs-only validation contract | `docs/resume-intent-validation-semantics.md` |
 | Phase 4 resume intent state binding | Completed as validation-only integrity hardening | `src/ai4s_agent/run_plan_state_fingerprint.py` |
 | Phase 4 strict resume stage/gate validation | Completed as validation-only waiting-stage and executor-gate hardening | `src/ai4s_agent/run_plan_resume_stage_gate.py` |
+| Phase 4 internal resume intent execution bridge | Completed as feature-flagged one-time internal bridge | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -277,6 +278,17 @@ Completed layers:
    - Does not call `RunPlanExecutor.resume_after_gate(...)`, write gate
      decisions, enqueue work, execute adapters, mutate `RunPlan`, call LLMs, or
      replace default routes.
+
+11. Internal Resume Intent Execution Bridge
+   - Route: `POST /api/internal/run-plan/resume-intent/execute`
+   - Requires `AI4S_ENABLE_INTERNAL_RESUME_INTENT_EXECUTE_ROUTE`, actor
+     identity, and `run_plan_resume_execute` permission.
+   - Server-loads artifacts and current state, reruns strict validation, writes
+     `resume_intent_consumed` before execution, calls the existing
+     `RunPlanExecutor.resume_after_gate(...)`, and records completed/failed
+     audit plus compact memory.
+   - Consumes each intent once. It does not enqueue work, call LLMs, mutate
+     `RunPlan`, write custom gate decisions, or replace default routes.
 
 Phase 4 boundaries:
 
