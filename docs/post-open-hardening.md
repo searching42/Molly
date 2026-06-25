@@ -917,6 +917,10 @@ The goal is a closed, auditable demo rather than full automation.
   existing allowlisted queued execute chain, comparing sync and queued canary
   logical artifact ids and artifact file existence without expanding the
   allowlist.
-- Next: add failure classification parity fixture for an allowlisted chain, or
-  add repeated-run stability coverage for the queued canary. Do not proceed to
-  default-route migration yet.
+- PR #126: completed. Add failure classification parity fixture coverage for an
+  existing allowlisted queued execute chain, comparing sync and queued canary
+  failed status, failed task, and useful error message fields without expanding
+  the allowlist.
+- Next: add repeated-run stability coverage for the queued canary, or add a
+  second allowlisted chain parity fixture. Do not proceed to default-route
+  migration yet.

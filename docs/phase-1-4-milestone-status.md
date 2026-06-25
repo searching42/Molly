@@ -46,7 +46,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 strict resume stage/gate validation | Completed as validation-only waiting-stage and executor-gate hardening | `src/ai4s_agent/run_plan_resume_stage_gate.py` |
 | Phase 4 internal resume intent execution bridge | Completed as feature-flagged one-time internal bridge | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
 | Phase 4 user-confirmed resume loop | Completed as review → application → validation → actual resume → post-resume review (PR #118) | `tests/test_user_confirmed_resume_loop_e2e.py` |
-| Phase 4 queued execute canary | Completed as feature-flagged, allowlisted, rollout-policy documented, and artifact registry parity fixture started; not default migrated | `tests/test_run_plan_executor.py`, `tests/test_queued_execute_canary_artifact_parity.py`, `docs/queued-execute-canary-rollout-policy.md` |
+| Phase 4 queued execute canary | Completed as feature-flagged, allowlisted, rollout-policy documented, artifact registry parity fixture started, and failure classification parity fixture started; not default migrated | `tests/test_run_plan_executor.py`, `tests/test_queued_execute_canary_artifact_parity.py`, `tests/test_queued_execute_canary_failure_parity.py`, `docs/queued-execute-canary-rollout-policy.md` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -387,7 +387,10 @@ Recommended next work should keep the same safety posture:
    allowlisted chain. The fixture compares sync and queued canary logical
    artifact ids plus artifact file existence, without requiring run-specific
    paths or hashes to match.
-9. Remaining canary migration work includes more parity fixtures, repeated-run
-   stability, failure classification parity, default migration decision, remote
-   worker contract, SQLite or storage migration decision, and production
-   scientific adapter validation.
+9. Failure classification parity fixture coverage has started for an existing
+   allowlisted chain. The fixture compares sync and queued canary failed status,
+   failed task, and useful error message fields without moving `train_model` or
+   other excluded tasks into the queued canary.
+10. Remaining canary migration work includes repeated-run stability, more
+   parity fixtures, default migration decision, remote worker contract, SQLite
+   or storage migration decision, and production scientific adapter validation.

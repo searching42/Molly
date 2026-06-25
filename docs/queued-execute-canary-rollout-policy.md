@@ -88,6 +88,13 @@ Failure classification parity:
 - An executor failed dict is not treated as success.
 - Route logs include backend and failed task/status.
 - The response keeps useful status and error fields for review.
+- PR #126 adds failure classification parity fixture for an existing
+  allowlisted queued execute chain. The fixture compares sync versus queued
+  canary failed status, failed task, and useful error message fields.
+- Exact error strings are not required to match because queue wrapping may add
+  context.
+- Queued executor failed dict must not be treated as success.
+- This does not expand the allowlist.
 
 Queue safety:
 
