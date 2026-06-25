@@ -15,6 +15,7 @@ def test_default_migration_readiness_checklist_documents_green_and_blocking_item
 
     for required in [
         "Default Migration Readiness Checklist",
+        "Production-Sized Fixture Boundary",
         "Current Green Coverage",
         "Still Blocking Default Migration",
         "Required Before Default Migration",
@@ -23,6 +24,9 @@ def test_default_migration_readiness_checklist_documents_green_and_blocking_item
         "train_model",
         "remote worker",
         "SQLite",
+        "nightly",
+        "CI constraints",
+        "Default migration remains blocked",
         "/api/run-plan/resume",
     ]:
         assert required in text
@@ -37,6 +41,7 @@ def test_default_migration_readiness_checklist_names_existing_coverage() -> None
         "failure classification parity",
         "repeated-run stability",
         "cancellation coverage",
+        "production-sized datasets are not yet proven",
         "stale lease",
         "queue recovery",
         "target-job safety",

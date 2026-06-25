@@ -46,7 +46,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 strict resume stage/gate validation | Completed as validation-only waiting-stage and executor-gate hardening | `src/ai4s_agent/run_plan_resume_stage_gate.py` |
 | Phase 4 internal resume intent execution bridge | Completed as feature-flagged one-time internal bridge | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
 | Phase 4 user-confirmed resume loop | Completed as review → application → validation → actual resume → post-resume review (PR #118) | `tests/test_user_confirmed_resume_loop_e2e.py` |
-| Phase 4 queued execute canary | Completed as feature-flagged, allowlisted, rollout-policy documented, first and second chain parity started, artifact registry parity fixture started, failure classification parity fixture started, repeated-run stability coverage started, queue recovery/stale lease coverage started, cancellation coverage started, and default-migration readiness checklist documented; not default migrated | `tests/test_run_plan_executor.py`, `tests/test_queued_execute_canary_artifact_parity.py`, `tests/test_queued_execute_canary_failure_parity.py`, `tests/test_queued_execute_canary_second_chain_parity.py`, `tests/test_queued_execute_canary_cancellation_retry.py`, `tests/test_queued_execute_canary_repeated_run_stability.py`, `tests/test_queued_execute_canary_queue_recovery.py`, `tests/test_queued_execute_canary_default_migration_readiness_docs.py`, `docs/queued-execute-canary-rollout-policy.md` |
+| Phase 4 queued execute canary | Completed as feature-flagged, allowlisted, rollout-policy documented, first and second chain parity started, artifact registry parity fixture started, failure classification parity fixture started, repeated-run stability coverage started, queue recovery/stale lease coverage started, cancellation coverage started, production-sized fixture boundary documented, and default-migration readiness checklist documented; not default migrated | `tests/test_run_plan_executor.py`, `tests/test_queued_execute_canary_artifact_parity.py`, `tests/test_queued_execute_canary_failure_parity.py`, `tests/test_queued_execute_canary_second_chain_parity.py`, `tests/test_queued_execute_canary_cancellation_retry.py`, `tests/test_queued_execute_canary_production_sized_boundary.py`, `tests/test_queued_execute_canary_repeated_run_stability.py`, `tests/test_queued_execute_canary_queue_recovery.py`, `tests/test_queued_execute_canary_default_migration_readiness_docs.py`, `docs/queued-execute-canary-rollout-policy.md` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -401,12 +401,16 @@ Recommended next work should keep the same safety posture:
     fallback does not process or mutate cancelled queued jobs. Explicit retry
     production semantics remain future work because the queue currently has no
     public retry/requeue API.
-12. Repeated-run stability coverage has started for existing allowlisted queued
+12. Production-sized fixture boundary documentation has started. Current
+    parity fixtures remain small and deterministic; they are useful for
+    control-plane confidence, but they are not production-sized proof. A
+    larger nightly or offline fixture policy is still future work.
+13. Repeated-run stability coverage has started for existing allowlisted queued
     execute chains. The fixture checks project/run queue isolation, stable
     response shape, stable logical artifact ids, and rollback-to-sync behavior
     that does not touch existing queued jobs.
-13. Remaining canary migration work includes a production-sized fixture,
-    explicit retry production semantics if queued execution needs them,
-    telemetry/observability checklist hardening, the default migration
+14. Remaining canary migration work includes telemetry/observability checklist
+    hardening, an optional nightly production-sized fixture, explicit retry
+    production semantics if queued execution needs them, the default migration
     decision, remote worker contract, SQLite or storage migration decision,
     and production scientific adapter validation.

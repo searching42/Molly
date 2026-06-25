@@ -56,8 +56,12 @@ blur into the already-resolved OPEN series.
   allowlisted planner expansion instead of broadening the allowlist.
 - Resolved: PR #131 adds cancellation coverage for the queued execute canary
   and documents that retry/requeue production semantics remain future work.
-- Next recommended queued-canary work: add a production-sized fixture for an
-  allowlisted chain, or tighten the telemetry/observability checklist.
+- Resolved: PR #132 documents and guards the production-sized fixture
+  boundary for the queued execute canary, while explicitly keeping
+  production-sized or nightly fixture proof out of the current PR.
+- Next recommended queued-canary work: tighten the
+  telemetry/observability checklist, or design an optional nightly
+  production-sized fixture lane.
 - Default-route migration is still not recommended.
 
 ## HARDEN-001: Introduce Explicit App Extension Registry
@@ -954,6 +958,11 @@ The goal is a closed, auditable demo rather than full automation.
   prove that sync fallback does not process or mutate cancelled queued jobs.
   Because the queue still has no explicit retry/requeue production API, retry
   semantics remain documented future work rather than new behavior in this PR.
-- Next: add a production-sized fixture for an allowlisted chain, or tighten
-  the telemetry/observability checklist. Do not proceed to default-route
+- PR #132: completed. Document and guard the production-sized fixture boundary
+  for the queued canary. This PR keeps the boundary explicit: current small
+  deterministic fixtures are useful for control-plane confidence, but they are
+  not production-sized proof. No medium or nightly fixture lane is enabled
+  yet.
+- Next: tighten the telemetry/observability checklist, or design an optional
+  nightly production-sized fixture lane. Do not proceed to default-route
   migration yet.
