@@ -11,7 +11,8 @@ from ai4s_agent.agents.prediction import PredictionPreparationAgent
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.app import create_app
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
-from ai4s_agent.schemas import AtomicTaskSpec, GateName, RiskLevel, RunStatus
+from ai4s_agent.run_plan_execute_canary_policy import queued_canary_allowed_for_run_plan
+from ai4s_agent.schemas import AtomicTaskSpec, GateName, PlannedTask, RiskLevel, RunPlan, RunStatus
 from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
 
@@ -72,6 +73,57 @@ def _log_messages(client, run_id: str) -> list[str]:
 
 def _waiting_task(execution: dict[str, Any]) -> str:
     return str(execution.get("waiting_task") or execution.get("planned_task") or "")
+
+
+def test_queued_canary_allowlist_policy_reports_disallowed_tasks() -> None:
+    allowed_plan = RunPlan(
+        run_id="r-policy-allowed",
+        requested_tasks=["run_baseline"],
+        tasks=[
+            PlannedTask(task_id="inspect_dataset"),
+            PlannedTask(task_id="clean_dataset"),
+            PlannedTask(task_id="check_trainability"),
+            PlannedTask(task_id="run_baseline"),
+            PlannedTask(task_id="render_report"),
+        ],
+        available_artifacts=[],
+        missing_artifacts=[],
+    )
+    train_plan = RunPlan(
+        run_id="r-policy-train",
+        requested_tasks=["train_model"],
+        tasks=[PlannedTask(task_id="train_model")],
+        available_artifacts=[],
+        missing_artifacts=[],
+    )
+    unknown_plan = RunPlan(
+        run_id="r-policy-unknown",
+        requested_tasks=["mystery_task"],
+        tasks=[PlannedTask(task_id="mystery_task")],
+        available_artifacts=[],
+        missing_artifacts=[],
+    )
+    empty_plan = RunPlan(run_id="r-policy-empty", requested_tasks=[], tasks=[], available_artifacts=[], missing_artifacts=[])
+
+    allowed, allowed_policy = queued_canary_allowed_for_run_plan(allowed_plan)
+    train_allowed, train_policy = queued_canary_allowed_for_run_plan(train_plan)
+    unknown_allowed, unknown_policy = queued_canary_allowed_for_run_plan(unknown_plan)
+    empty_allowed, empty_policy = queued_canary_allowed_for_run_plan(empty_plan)
+
+    assert allowed is True
+    assert allowed_policy == {
+        "allowed": True,
+        "reason": "allowlisted_low_risk_tasks",
+        "task_ids": ["inspect_dataset", "clean_dataset", "check_trainability", "run_baseline", "render_report"],
+        "disallowed_tasks": [],
+    }
+    assert train_allowed is False
+    assert train_policy["reason"] == "contains_non_allowlisted_tasks"
+    assert train_policy["disallowed_tasks"] == ["train_model"]
+    assert unknown_allowed is False
+    assert unknown_policy["disallowed_tasks"] == ["mystery_task"]
+    assert empty_allowed is False
+    assert empty_policy["reason"] == "empty_task_chain"
 
 
 def test_run_plan_executor_runs_low_risk_baseline_chain_and_registers_artifacts(tmp_path: Path) -> None:
@@ -856,8 +908,8 @@ def test_run_plan_execute_endpoint_sync_backend_logs_when_canary_disabled(tmp_pa
     assert not (tmp_path / ".ai4s_internal" / "run_plan_queues").exists()
 
 
-def test_run_plan_execute_endpoint_queued_canary_uses_queue_bridge(tmp_path: Path) -> None:
-    run_plan = expand_run_plan(run_id="r-exec-canary", requested_tasks=["train_model"], available_artifacts=[])
+def test_run_plan_execute_endpoint_queued_canary_allowlisted_chain_uses_queue_bridge(tmp_path: Path) -> None:
+    run_plan = expand_run_plan(run_id="r-exec-canary", requested_tasks=["run_baseline"], available_artifacts=[])
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     app.config["AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY"] = True
@@ -865,9 +917,8 @@ def test_run_plan_execute_endpoint_queued_canary_uses_queue_bridge(tmp_path: Pat
         {
             "ok": True,
             "run_id": "r-exec-canary",
-            "status": RunStatus.WAITING_USER.value,
-            "waiting_task": "train_model",
-            "required_gates": [GateName.TRAIN_CONFIG.value],
+            "status": RunStatus.SUCCEEDED.value,
+            "executed_tasks": ["inspect_dataset", "clean_dataset", "check_trainability", "run_baseline"],
         },
         calls,
     )
@@ -884,27 +935,26 @@ def test_run_plan_execute_endpoint_queued_canary_uses_queue_bridge(tmp_path: Pat
     assert resp.status_code == 200
     assert resp.json["ok"] is True
     assert resp.json["execution_backend"] == "queued_canary"
-    assert resp.json["execution"]["status"] == RunStatus.WAITING_USER.value
-    assert resp.json["execution"]["waiting_user"] is True
-    assert resp.json["execution"]["waiting_task"] == "train_model"
-    assert resp.json["execution"]["required_gates"] == [GateName.TRAIN_CONFIG.value]
+    assert resp.json["execution"]["status"] == RunStatus.SUCCEEDED.value
     assert resp.json["queue_summary"]["ok"] is True
     assert resp.json["queue_summary"]["final_job"]["status"] == "succeeded"
     assert resp.json["queue_summary"]["final_lease"]["status"] == "completed"
     assert len(calls) == 1
     assert calls[0]["project_id"] == "proj-exec-canary"
+    messages = _log_messages(client, "r-exec-canary")
+    assert any("RunPlan execution backend: queued_canary" in message for message in messages)
 
 
 def test_run_plan_execute_endpoint_canary_can_roll_back_to_sync_with_same_payload(tmp_path: Path) -> None:
     dataset = tmp_path / "input" / "train.csv"
     dataset.parent.mkdir(parents=True)
     _write_training_csv(dataset)
-    canary_plan = expand_run_plan(run_id="r-exec-canary-rollback", requested_tasks=["train_model"], available_artifacts=[])
-    sync_plan = expand_run_plan(run_id="r-exec-sync-rollback", requested_tasks=["train_model"], available_artifacts=[])
+    canary_plan = expand_run_plan(run_id="r-exec-canary-rollback", requested_tasks=["run_baseline"], available_artifacts=[])
+    sync_plan = expand_run_plan(run_id="r-exec-sync-rollback", requested_tasks=["run_baseline"], available_artifacts=[])
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     app.config["AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"] = _fake_executor_factory(
-        {"ok": True, "run_id": "r-exec-canary-rollback", "status": RunStatus.WAITING_USER.value, "waiting_task": "train_model", "required_gates": [GateName.TRAIN_CONFIG.value]},
+        {"ok": True, "run_id": "r-exec-canary-rollback", "status": RunStatus.SUCCEEDED.value},
         calls,
     )
     client = app.test_client()
@@ -935,18 +985,18 @@ def test_run_plan_execute_endpoint_canary_can_roll_back_to_sync_with_same_payloa
     assert sync_resp.status_code == 200
     assert "execution_backend" not in sync_resp.json
     assert "queue_summary" not in sync_resp.json
-    assert sync_resp.json["execution"]["status"] == RunStatus.WAITING_USER.value
+    assert sync_resp.json["execution"]["status"] == RunStatus.SUCCEEDED.value
     assert (_default_queue_dir(tmp_path, "proj-exec-rollback", "r-exec-canary-rollback") / "worker_queue.json").exists()
     assert not _default_queue_dir(tmp_path, "proj-exec-rollback", "r-exec-sync-rollback").exists()
     assert client.post("/api/run-plan/resume", json={}).status_code == 400
 
 
-def test_run_plan_execute_endpoint_waiting_user_summary_matches_sync_and_queued_canary(tmp_path: Path) -> None:
+def test_run_plan_execute_endpoint_queued_canary_falls_back_to_sync_for_train_model(tmp_path: Path) -> None:
     dataset = tmp_path / "input" / "train.csv"
     dataset.parent.mkdir(parents=True)
     _write_training_csv(dataset)
     sync_plan = expand_run_plan(run_id="r-exec-sync-waiting", requested_tasks=["train_model"], available_artifacts=[])
-    queued_plan = expand_run_plan(run_id="r-exec-canary-waiting", requested_tasks=["train_model"], available_artifacts=[])
+    fallback_plan = expand_run_plan(run_id="r-exec-canary-waiting", requested_tasks=["train_model"], available_artifacts=[])
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     app.config["AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"] = _fake_executor_factory(
@@ -965,24 +1015,68 @@ def test_run_plan_execute_endpoint_waiting_user_summary_matches_sync_and_queued_
         },
     )
     app.config["AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY"] = True
-    queued_resp = client.post(
+    fallback_resp = client.post(
         "/api/run-plan/execute",
         json={
             "project_id": "proj-exec-waiting",
-            "run_plan": queued_plan.model_dump(mode="json"),
+            "run_plan": fallback_plan.model_dump(mode="json"),
             "input_artifacts": {"uploaded_dataset": str(dataset)},
         },
     )
 
     assert sync_resp.status_code == 200
-    assert queued_resp.status_code == 200
-    assert sync_resp.json["execution"]["status"] == queued_resp.json["execution"]["status"] == RunStatus.WAITING_USER.value
-    assert _waiting_task(sync_resp.json["execution"]) == _waiting_task(queued_resp.json["execution"]) == "train_model"
-    assert sync_resp.json["execution"]["required_gates"] == queued_resp.json["execution"]["required_gates"] == [GateName.TRAIN_CONFIG.value]
+    assert fallback_resp.status_code == 200
+    assert sync_resp.json["execution"]["status"] == fallback_resp.json["execution"]["status"] == RunStatus.WAITING_USER.value
+    assert _waiting_task(sync_resp.json["execution"]) == _waiting_task(fallback_resp.json["execution"]) == "train_model"
+    assert sync_resp.json["execution"]["required_gates"] == fallback_resp.json["execution"]["required_gates"] == [GateName.TRAIN_CONFIG.value]
+    assert "execution_backend" not in fallback_resp.json
+    assert "queue_summary" not in fallback_resp.json
+    assert len(calls) == 0
+    assert not _default_queue_dir(tmp_path, "proj-exec-waiting", "r-exec-canary-waiting").exists()
+    messages = _log_messages(client, "r-exec-canary-waiting")
+    assert any("RunPlan execution backend: sync_fallback_not_allowlisted" in message for message in messages)
+    assert any("disallowed_tasks=train_model" in message for message in messages)
+
+
+def test_run_plan_execute_endpoint_queued_canary_falls_back_to_sync_for_unknown_task(tmp_path: Path) -> None:
+    run_plan = RunPlan(
+        run_id="r-exec-canary-unknown",
+        requested_tasks=["mystery_task"],
+        tasks=[PlannedTask(task_id="mystery_task")],
+        available_artifacts=[],
+        missing_artifacts=[],
+    )
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    app.config["AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY"] = True
+    app.config["AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"] = _fake_executor_factory(
+        {"ok": True, "run_id": "r-exec-canary-unknown", "status": RunStatus.SUCCEEDED.value},
+        calls,
+    )
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/run-plan/execute",
+        json={
+            "project_id": "proj-exec-unknown",
+            "run_plan": run_plan.model_dump(mode="json"),
+        },
+    )
+
+    assert resp.status_code == 400
+    assert resp.json["ok"] is False
+    assert "unknown atomic task: mystery_task" in resp.json["error"]
+    assert "execution_backend" not in resp.json
+    assert "queue_summary" not in resp.json
+    assert len(calls) == 0
+    assert not _default_queue_dir(tmp_path, "proj-exec-unknown", "r-exec-canary-unknown").exists()
+    messages = _log_messages(client, "r-exec-canary-unknown")
+    assert any("RunPlan execution backend: sync_fallback_not_allowlisted" in message for message in messages)
+    assert any("disallowed_tasks=mystery_task" in message for message in messages)
 
 
 def test_run_plan_execute_endpoint_queued_canary_does_not_consume_existing_job(tmp_path: Path) -> None:
-    run_plan = expand_run_plan(run_id="r-exec-canary-existing", requested_tasks=["train_model"], available_artifacts=[])
+    run_plan = expand_run_plan(run_id="r-exec-canary-existing", requested_tasks=["run_baseline"], available_artifacts=[])
     queue_dir = _default_queue_dir(tmp_path, "proj-exec-canary-existing", "r-exec-canary-existing")
     queue = WorkerQueue(JsonWorkerQueueStore(queue_dir))
     old_job = queue.enqueue("proj-exec-canary-existing", "r-exec-canary-existing", {"task_id": "old_job"})
@@ -990,7 +1084,7 @@ def test_run_plan_execute_endpoint_queued_canary_does_not_consume_existing_job(t
     calls: list[dict[str, Any]] = []
     app.config["AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY"] = True
     app.config["AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"] = _fake_executor_factory(
-        {"ok": True, "run_id": "r-exec-canary-existing", "status": RunStatus.WAITING_USER.value},
+        {"ok": True, "run_id": "r-exec-canary-existing", "status": RunStatus.SUCCEEDED.value},
         calls,
     )
     client = app.test_client()
@@ -1011,7 +1105,7 @@ def test_run_plan_execute_endpoint_queued_canary_does_not_consume_existing_job(t
 
 
 def test_run_plan_execute_endpoint_queued_canary_failed_execution_is_not_success(tmp_path: Path) -> None:
-    run_plan = expand_run_plan(run_id="r-exec-canary-failed", requested_tasks=["train_model"], available_artifacts=[])
+    run_plan = expand_run_plan(run_id="r-exec-canary-failed", requested_tasks=["run_baseline"], available_artifacts=[])
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     app.config["AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY"] = True
@@ -1044,7 +1138,7 @@ def test_run_plan_execute_endpoint_queued_canary_failed_execution_is_not_success
 
 
 def test_run_plan_execute_endpoint_queued_canary_failed_execution_logs_backend_and_failed_task(tmp_path: Path) -> None:
-    run_plan = expand_run_plan(run_id="r-exec-canary-failed-log", requested_tasks=["train_model"], available_artifacts=[])
+    run_plan = expand_run_plan(run_id="r-exec-canary-failed-log", requested_tasks=["run_baseline"], available_artifacts=[])
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     app.config["AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY"] = True
@@ -1053,7 +1147,7 @@ def test_run_plan_execute_endpoint_queued_canary_failed_execution_logs_backend_a
             "ok": False,
             "run_id": "r-exec-canary-failed-log",
             "status": RunStatus.FAILED.value,
-            "failed_task": "train_model",
+            "failed_task": "run_baseline",
             "error": {"message": "adapter failed"},
         },
         calls,
@@ -1072,12 +1166,12 @@ def test_run_plan_execute_endpoint_queued_canary_failed_execution_logs_backend_a
     assert resp.json["ok"] is False
     assert resp.json["execution_backend"] == "queued_canary"
     assert resp.json["execution"]["status"] == RunStatus.FAILED.value
-    assert resp.json["execution"]["failed_task"] == "train_model"
+    assert resp.json["execution"]["failed_task"] == "run_baseline"
     assert resp.json["queue_summary"]["ok"] is False
     assert resp.json["queue_summary"]["final_job"]["status"] == "failed"
     messages = _log_messages(client, "r-exec-canary-failed-log")
     assert any("RunPlan execution backend: queued_canary" in message for message in messages)
-    assert any("RunPlan execution failed at train_model" in message for message in messages)
+    assert any("RunPlan execution failed at run_baseline" in message for message in messages)
     assert not (
         _project_run_dir(tmp_path, "proj-exec-canary-failed-log", "r-exec-canary-failed-log")
         / "review"
@@ -1088,7 +1182,7 @@ def test_run_plan_execute_endpoint_queued_canary_failed_execution_logs_backend_a
 
 
 def test_run_plan_execute_endpoint_canary_non_empty_queue_then_sync_rollback_does_not_touch_old_job(tmp_path: Path) -> None:
-    canary_plan = expand_run_plan(run_id="r-exec-canary-safety", requested_tasks=["train_model"], available_artifacts=[])
+    canary_plan = expand_run_plan(run_id="r-exec-canary-safety", requested_tasks=["run_baseline"], available_artifacts=[])
     sync_plan = expand_run_plan(run_id="r-exec-sync-safety", requested_tasks=["run_baseline"], available_artifacts=[])
     dataset = tmp_path / "input" / "train.csv"
     dataset.parent.mkdir(parents=True)
@@ -1099,7 +1193,7 @@ def test_run_plan_execute_endpoint_canary_non_empty_queue_then_sync_rollback_doe
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     calls: list[dict[str, Any]] = []
     app.config["AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"] = _fake_executor_factory(
-        {"ok": True, "run_id": "r-exec-canary-safety", "status": RunStatus.WAITING_USER.value},
+        {"ok": True, "run_id": "r-exec-canary-safety", "status": RunStatus.SUCCEEDED.value},
         calls,
     )
     client = app.test_client()

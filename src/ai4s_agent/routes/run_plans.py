@@ -10,6 +10,7 @@ from ai4s_agent._utils import truthy
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.job_manager import JobManager
 from ai4s_agent.planner import build_plan, diff_run_plans, expand_run_plan
+from ai4s_agent.run_plan_execute_canary_policy import queued_canary_allowed_for_run_plan
 from ai4s_agent.run_plan_queue_lifecycle import internal_run_plan_queue_dir
 from ai4s_agent.run_plan_queue_service import run_run_plan_via_local_queue
 from ai4s_agent.schemas import RunPlan, RunStatus
@@ -102,23 +103,28 @@ def register_run_plan_routes(app: Flask, *, projects: ProjectStorage, jobs: JobM
         run_plan: RunPlan | None = None
         try:
             run_plan = RunPlan.model_validate(run_plan_payload)
-            if run_plan_execute_queued_canary_enabled(current_app):
-                _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution started via queued canary")
-                _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution backend: queued_canary")
-                response_payload, status_code = _execute_run_plan_queued_canary_response(
-                    projects=projects,
-                    project_id=project_id,
-                    run_plan=run_plan,
-                    input_artifacts={str(k): str(v) for k, v in input_artifacts.items()},
-                    task_options=_task_options(task_options),
-                    executor_factory=current_app.config.get(RUN_PLAN_QUEUE_EXECUTOR_FACTORY_CONFIG),
-                )
-                execution = response_payload.get("execution") if isinstance(response_payload.get("execution"), dict) else {}
-                if isinstance(execution, dict):
-                    _log_run_plan_execution_result(jobs, project_id, run_plan.run_id, execution)
-                return jsonify(response_payload), status_code
+            queued_canary_enabled = run_plan_execute_queued_canary_enabled(current_app)
+            if queued_canary_enabled:
+                canary_allowed, canary_policy = queued_canary_allowed_for_run_plan(run_plan)
+                if canary_allowed:
+                    _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution started via queued canary")
+                    _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution backend: queued_canary")
+                    response_payload, status_code = _execute_run_plan_queued_canary_response(
+                        projects=projects,
+                        project_id=project_id,
+                        run_plan=run_plan,
+                        input_artifacts={str(k): str(v) for k, v in input_artifacts.items()},
+                        task_options=_task_options(task_options),
+                        executor_factory=current_app.config.get(RUN_PLAN_QUEUE_EXECUTOR_FACTORY_CONFIG),
+                    )
+                    execution = response_payload.get("execution") if isinstance(response_payload.get("execution"), dict) else {}
+                    if isinstance(execution, dict):
+                        _log_run_plan_execution_result(jobs, project_id, run_plan.run_id, execution)
+                    return jsonify(response_payload), status_code
+                _log_queued_canary_sync_fallback(jobs, project_id, run_plan.run_id, canary_policy)
             _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution started")
-            _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution backend: sync")
+            if not queued_canary_enabled:
+                _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution backend: sync")
             execution = RunPlanExecutor(storage=projects).execute(
                 project_id=project_id,
                 run_plan=run_plan,
@@ -325,6 +331,26 @@ def _log_run_plan_execution_result(jobs: JobManager, project_id: str, run_id: st
         _add_run_plan_log(jobs, project_id, run_id, "INFO", f"RunPlan execution completed: {status}")
     else:
         _add_run_plan_log(jobs, project_id, run_id, "INFO", f"RunPlan execution status: {status or 'unknown'}")
+
+
+def _log_queued_canary_sync_fallback(
+    jobs: JobManager,
+    project_id: str,
+    run_id: str,
+    policy: dict[str, Any],
+) -> None:
+    reason = str(policy.get("reason") or "not_allowlisted").strip()
+    raw_disallowed = policy.get("disallowed_tasks")
+    disallowed = [str(task_id) for task_id in raw_disallowed] if isinstance(raw_disallowed, list) else []
+    disallowed_text = ",".join(disallowed) if disallowed else "none"
+    _add_run_plan_log(jobs, project_id, run_id, "INFO", "RunPlan execution backend: sync_fallback_not_allowlisted")
+    _add_run_plan_log(
+        jobs,
+        project_id,
+        run_id,
+        "INFO",
+        f"RunPlan queued canary policy: {reason}; disallowed_tasks={disallowed_text}",
+    )
 
 
 def _add_run_plan_log(jobs: JobManager, project_id: str, run_id: str, level: str, message: str) -> None:

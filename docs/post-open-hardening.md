@@ -903,4 +903,11 @@ The goal is a closed, auditable demo rather than full automation.
   evidence tests. The canary remains feature-flagged, preserves sync response
   compatibility when disabled, does not change `/api/run-plan/resume`, does not
   enable remote workers, and does not migrate queue storage to SQLite.
-- Next: allow queued canary for selected low-risk task chains only.
+- PR #123: completed. Restrict the `/api/run-plan/execute` queued canary to
+  selected low-risk task chains only. The canary flag remains a master switch,
+  but only all-allowlisted chains can use the queue bridge. Non-allowlisted
+  tasks such as `train_model`, generation, literature/mining, and unknown task
+  ids fall back to the synchronous path with no `execution_backend` or
+  `queue_summary` response fields.
+- Next: define queued execute canary rollout policy and decision matrix before
+  considering any broader default-route migration.
