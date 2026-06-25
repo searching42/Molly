@@ -111,3 +111,16 @@ def test_queued_execute_canary_rollout_policy_documents_queue_recovery_and_stale
         "This does not expand the allowlist",
     ]:
         assert required in text
+
+
+def test_queued_execute_canary_rollout_policy_documents_second_allowlisted_chain_parity_fixture() -> None:
+    text = _policy_text()
+
+    for required in [
+        "PR #130 adds a second allowlisted chain parity fixture",
+        "second allowlisted chain",
+        "render_report",
+        "This still does not expand the allowlist",
+        "This still does not justify default migration by itself",
+    ]:
+        assert required in text

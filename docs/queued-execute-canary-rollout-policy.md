@@ -82,6 +82,15 @@ Artifact registry parity:
 - Exact paths/hashes are not required unless artifacts are deterministic and
   run-id-independent.
 - This does not expand the allowlist.
+- PR #130 adds a second allowlisted chain parity fixture.
+- The fixture covers `render_report` or the actual second all-allowlisted
+  chain selected by the current planner. Today that second chain is
+  `check_trainability`, because the current `render_report` planner expansion
+  reaches non-allowlisted tasks and therefore remains sync-only.
+- The second allowlisted chain fixture compares sync vs queued canary artifact
+  registry and failure classification for the same real chain.
+- This still does not expand the allowlist.
+- This still does not justify default migration by itself.
 
 Failure classification parity:
 
@@ -190,6 +199,7 @@ Current green coverage already exists for:
 - response compatibility and rollback evidence
 - low-risk allowlist enforcement
 - artifact registry parity
+- second allowlisted chain parity
 - failure classification parity
 - repeated-run stability
 - stale lease and queue recovery coverage
@@ -201,7 +211,6 @@ Current green coverage already exists for:
 The following items still block default migration:
 
 - the allowlist still covers only a small set of low-risk chains
-- a second allowlisted chain parity fixture is not yet covered
 - production-sized datasets are not yet proven
 - long-running or heavy adapters are not yet proven
 - `train_model` remains excluded
@@ -243,10 +252,10 @@ Current decision: do not make queued execution default.
 
 Keep the queued canary feature-flagged. Keep the allowlist conservative.
 
-The next engineering PR should add a second allowlisted chain parity fixture,
-or add queue cancellation/retry coverage. The default-migration readiness
-checklist is now documented, but this is still not enough to justify default
-migration.
+PR #130 adds a second allowlisted chain parity fixture. The next engineering
+PR should add queue cancellation/retry coverage, or add a production-sized
+fixture for an allowlisted chain. The default-migration readiness checklist is
+now documented, but this is still not enough to justify default migration.
 
 Do not move `train_model`, generation, literature, or mining tasks into the
 queued canary yet.
