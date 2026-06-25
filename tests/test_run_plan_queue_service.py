@@ -234,6 +234,56 @@ def test_run_plan_via_local_queue_rejects_existing_running_job_without_enqueue(t
     assert fake.calls == []
 
 
+def test_run_plan_via_local_queue_runs_targeted_job_when_queue_not_empty(tmp_path: Path) -> None:
+    queue = _queue(tmp_path)
+    existing = queue.enqueue("proj-a", "run-a", {"task_id": "existing_job"})
+    run_plan = _run_plan()
+    fake = FakeRunPlanExecutor({"ok": True, "run_id": "run-a", "status": "WAITING_USER"})
+
+    result = run_run_plan_via_local_queue(
+        queue=queue,
+        storage=_storage(tmp_path),
+        project_id="proj-a",
+        run_plan=run_plan,
+        require_empty_queue=False,
+        executor_factory=_factory(fake),
+    )
+
+    assert result["ok"] is True
+    assert result["queued_job_id"] != existing["job_id"]
+    assert result["final_job"]["job_id"] == result["queued_job_id"]
+    assert result["final_job"]["status"] == "succeeded"
+    assert queue.status(existing["job_id"]) is not None
+    assert queue.status(existing["job_id"])["status"] == "queued"
+    assert fake.calls == [
+        {
+            "project_id": "proj-a",
+            "run_plan": run_plan,
+            "input_artifacts": {},
+            "task_options": {},
+        }
+    ]
+
+
+def test_run_plan_via_local_queue_rejects_invalid_target_selector(tmp_path: Path) -> None:
+    queue = _queue(tmp_path)
+    fake = FakeRunPlanExecutor({"ok": True, "run_id": "run-a", "status": "WAITING_USER"})
+
+    with pytest.raises(ValueError, match="single safe path segment"):
+        run_run_plan_via_local_queue(
+            queue=queue,
+            storage=_storage(tmp_path),
+            project_id="proj-a",
+            run_plan=_run_plan(),
+            require_empty_queue=False,
+            target_project_id="proj/a",
+            executor_factory=_factory(fake),
+        )
+
+    assert queue.list_jobs() == []
+    assert fake.calls == []
+
+
 def test_run_plan_via_local_queue_respects_max_iterations(tmp_path: Path) -> None:
     queue = _queue(tmp_path)
     fake = FakeRunPlanExecutor({"ok": True, "run_id": "run-a", "status": "WAITING_USER"})

@@ -36,6 +36,9 @@ blur into the already-resolved OPEN series.
 - Resolved: HARDEN-011 local process worker supervisor in PR #62 and PR #63.
 - Resolved: HARDEN-012 queue control plane, local runner binding, and internal
   run-plan queue route phase in PR #65 through PR #87.
+- Resolved: user-confirmed resume loop completion through PR #117 + PR #118:
+  verifier/proposal → application → validation → actual one-time resume execution →
+  post-resume review.
 - Focus: define default-route migration criteria before considering any
   replacement of the synchronous `/api/run-plan/execute` path.
 - Engineering priority: harden permission/audit, queue lifecycle, observability,
@@ -543,12 +546,17 @@ Resolved run-plan queue bridge scope:
     consumption only and still does not enqueue work, call LLMs, mutate
     `RunPlan`, write custom gate decisions, replace `/api/run-plan/resume`, or
     replace `/api/run-plan/execute`.
+32. **User-confirmed resume loop e2e** — PR #118 adds
+    `tests/test_user_confirmed_resume_loop_e2e.py` coverage of the closed-loop
+    path: verifier findings → proposal → apply-review → validation →
+    resume-after-approval execution → review artifacts/card refresh.
 
 Still not default:
 
 - `/api/run-plan/execute` remains synchronous and is not replaced.
 - The internal execute and status routes require an explicit feature flag,
   actor identity, and a `run_plan_queue_execute` server grant.
+- Target-job acquisition is now supported in queue acquire/poller selectors.
 - Remote workers are not connected.
 - Queue state remains file-backed; no SQLite migration is included.
 - The Phase 1 fixture uses lightweight baseline training/prediction only; it
@@ -643,6 +651,12 @@ Default-route migration hard gates:
 8. Resume intents must remain bound to current run state. PR #115 adds
    canonical run-plan and stable stage fingerprints; any future default route
    migration must recompute them at consumption time and fail closed on drift.
+9. User-confirmed resume loop readiness is now established through PR #118:
+   review findings → proposal → application → validation → one-time execute →
+   post-resume review artifacts/card refresh.
+10. Target-job acquisition now has selector-level support in queue/poller APIs;
+    default-route migration still requires one-time, actor/permission/audit-safe
+    target-safe execution proofs.
 
 Do not jump directly to remote worker support or SQLite migration. Remote worker
 contracts should wait until the local default-route migration gates are met;
@@ -864,3 +878,9 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #117: add a feature-flagged internal resume intent execution bridge with
   strict validation, audit, permission, and one-time consumption, without
   replacing default resume/execute routes.
+- PR #118: add a full user-confirmed resume loop e2e test covering verifier
+  findings, proposal generation, application, validation, one-time execute, and
+  post-resume review artifact/card refresh.
+- PR #119: completed. Implement target-job acquisition support in
+  `WorkerQueue.acquire()` and `WorkerQueuePoller` before default-route queue
+  migration.

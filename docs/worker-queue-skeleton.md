@@ -56,7 +56,7 @@ Mutation semantics:
 Implemented operations:
 
 - `enqueue(project_id, run_id, task)`
-- `acquire(worker_id)`
+- `acquire(worker_id, *, target_job_id=None, target_project_id=None, target_run_id=None)`
 - `heartbeat(lease_id)`
 - `complete(lease_id)`
 - `fail(lease_id)`
@@ -82,7 +82,9 @@ result = poller.poll_once()
 2. if the worker has an active lease, surface `cancellation_requested` before
    refreshing the lease
 3. heartbeat the active lease only when cancellation is not requested
-4. acquire the next queued job if no active lease exists
+4. if no active lease exists, acquire the first queued job that matches optional
+   target selectors, then fall back to normal queued order when no selector is
+   set.
 
 `poll(max_iterations=N)` repeats this bounded sequence and returns the
 per-iteration results.
@@ -212,9 +214,10 @@ summary = run_run_plan_via_local_queue(
 This helper is opt-in internal service plumbing. It enqueues a validated
 `run_plan_execute` job, binds a `RunPlanExecutorTaskRunner` to a
 `WorkerQueuePoller`, runs a bounded `LocalWorkerLoop`, and returns queue/lease
-terminal state plus poll actions. The helper requires a dedicated queue with no
-existing queued or running jobs, because the current `WorkerQueuePoller` acquires
-the next queued job rather than a specific target job. It does not add API
+terminal state plus poll actions. By default the helper requires a dedicated
+queue with no existing queued or running jobs. If `require_empty_queue=False`,
+it targets the newly created `target_job_id` and can safely run on shared queues
+with optional `target_project_id`/`target_run_id` selectors. It does not add API
 routes, does not change the default synchronous `/api/run-plan/execute` path,
 does not connect remote workers, and does not change storage.
 

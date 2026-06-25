@@ -55,6 +55,33 @@ def test_worker_queue_poller_acquires_queued_job_without_executing_task(tmp_path
     assert status["task"]["command"] == ["do-not-run"]
 
 
+def test_worker_queue_poller_acquires_targeted_job_even_if_earlier_jobs_exist(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queue.enqueue("proj-a", "run-a", {"task_id": "first"})
+    target = queue.enqueue("proj-a", "run-b", {"task_id": "target"})
+    poller = WorkerQueuePoller(queue, worker_id="worker-a", target_run_id="run-b")
+
+    result = poller.poll_once(now="2026-01-01T00:00:00Z")
+
+    assert result.action == "acquired"
+    assert result.acquired_job is not None
+    assert result.acquired_job["job_id"] == target["job_id"]
+    assert queue.status(target["job_id"])["status"] == "running"  # type: ignore[index]
+
+
+def test_worker_queue_poller_idle_when_targeted_job_missing(tmp_path) -> None:
+    queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
+    queue.enqueue("proj-a", "run-a", {"task_id": "first"})
+    poller = WorkerQueuePoller(queue, worker_id="worker-a", target_run_id="run-missing")
+
+    result = poller.poll_once(now="2026-01-01T00:00:00Z")
+
+    assert result.action == "idle"
+    status = queue.status(queue.list_jobs()[0]["job_id"])
+    assert status is not None
+    assert status["status"] == "queued"
+
+
 def test_worker_queue_poller_heartbeats_existing_active_lease(tmp_path) -> None:
     queue = WorkerQueue(JsonWorkerQueueStore(tmp_path))
     queued = queue.enqueue("proj-a", "run-a", {"task_id": "train_model"})

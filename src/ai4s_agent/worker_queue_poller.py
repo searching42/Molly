@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from ai4s_agent.worker_queue import WorkerQueue
@@ -38,6 +39,9 @@ class WorkerQueuePoller:
         worker_id: str,
         poll_interval_sec: float = 0.0,
         runner: WorkerTaskRunner | None = None,
+        target_job_id: str | None = None,
+        target_project_id: str | None = None,
+        target_run_id: str | None = None,
     ) -> None:
         self.queue = queue
         self.worker_id = str(worker_id or "").strip()
@@ -47,6 +51,9 @@ class WorkerQueuePoller:
             raise ValueError("poll_interval_sec must be non-negative")
         self.poll_interval_sec = poll_interval_sec
         self.runner = runner
+        self.target_job_id = _clean_optional_target_selector(target_job_id, "target_job_id")
+        self.target_project_id = _clean_optional_target_selector(target_project_id, "target_project_id")
+        self.target_run_id = _clean_optional_target_selector(target_run_id, "target_run_id")
 
     def poll_once(self, *, now: str = "") -> WorkerQueuePollResult:
         recovered = self.queue.recover_stale_leases(now=now)
@@ -85,7 +92,13 @@ class WorkerQueuePoller:
                 runner_result=result if self.runner is not None and job is not None else None,
             )
 
-        acquired = self.queue.acquire(self.worker_id, now=now)
+        acquired = self.queue.acquire(
+            self.worker_id,
+            now=now,
+            target_job_id=self.target_job_id,
+            target_project_id=self.target_project_id,
+            target_run_id=self.target_run_id,
+        )
         if acquired is not None:
             if self.runner is not None:
                 try:
@@ -188,3 +201,14 @@ class WorkerQueuePoller:
 
 def _exception_message(exc: Exception) -> str:
     return str(exc) or exc.__class__.__name__
+
+
+def _clean_optional_target_selector(value: str | None, label: str) -> str | None:
+    if value is None:
+        return None
+    clean = str(value or "").strip()
+    if not clean:
+        return None
+    if clean in {".", ".."} or "/" in clean or "\\" in clean or Path(clean).name != clean:
+        raise ValueError(f"{label} must be a single safe selector")
+    return clean
