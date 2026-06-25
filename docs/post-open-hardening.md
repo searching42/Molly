@@ -921,6 +921,10 @@ The goal is a closed, auditable demo rather than full automation.
   existing allowlisted queued execute chain, comparing sync and queued canary
   failed status, failed task, and useful error message fields without expanding
   the allowlist.
-- Next: add repeated-run stability coverage for the queued canary, or add a
+- PR #127: completed. Add repeated-run stability coverage for the queued
+  canary, proving repeated allowlisted runs isolate queue state by
+  project/run, keep response shape and logical artifacts stable, and do not let
+  rollback touch existing queued jobs.
+- Next: add queue recovery/stale lease coverage for the queued canary, or add a
   second allowlisted chain parity fixture. Do not proceed to default-route
   migration yet.

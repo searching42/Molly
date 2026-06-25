@@ -83,3 +83,17 @@ def test_queued_execute_canary_rollout_policy_documents_failure_parity_fixture()
         "This does not expand the allowlist",
     ]:
         assert required in text
+
+
+def test_queued_execute_canary_rollout_policy_documents_repeated_run_stability() -> None:
+    text = _policy_text()
+
+    for required in [
+        "PR #127 adds repeated-run stability coverage",
+        "isolate queue state by project_id/run_id",
+        "stable response shape",
+        "logical artifact ids",
+        "Rollback to sync must not touch existing queued jobs",
+        "This does not expand the allowlist",
+    ]:
+        assert required in text
