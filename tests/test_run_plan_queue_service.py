@@ -284,6 +284,63 @@ def test_run_plan_via_local_queue_rejects_invalid_target_selector(tmp_path: Path
     assert fake.calls == []
 
 
+def test_run_plan_via_local_queue_rejects_explicit_target_job_id_without_enqueue(tmp_path: Path) -> None:
+    queue = _queue(tmp_path)
+    fake = FakeRunPlanExecutor({"ok": True, "run_id": "run-a", "status": "WAITING_USER"})
+
+    with pytest.raises(ValueError, match="target_job_id is managed internally"):
+        run_run_plan_via_local_queue(
+            queue=queue,
+            storage=_storage(tmp_path),
+            project_id="proj-a",
+            run_plan=_run_plan(),
+            require_empty_queue=False,
+            target_job_id="job-proj-a-run-a-000001",
+            executor_factory=_factory(fake),
+        )
+
+    assert queue.list_jobs() == []
+    assert fake.calls == []
+
+
+def test_run_plan_via_local_queue_rejects_mismatched_target_project_without_enqueue(tmp_path: Path) -> None:
+    queue = _queue(tmp_path)
+    fake = FakeRunPlanExecutor({"ok": True, "run_id": "run-a", "status": "WAITING_USER"})
+
+    with pytest.raises(ValueError, match="target_project_id must match project_id"):
+        run_run_plan_via_local_queue(
+            queue=queue,
+            storage=_storage(tmp_path),
+            project_id="proj-a",
+            run_plan=_run_plan(),
+            require_empty_queue=False,
+            target_project_id="proj-b",
+            executor_factory=_factory(fake),
+        )
+
+    assert queue.list_jobs() == []
+    assert fake.calls == []
+
+
+def test_run_plan_via_local_queue_rejects_mismatched_target_run_without_enqueue(tmp_path: Path) -> None:
+    queue = _queue(tmp_path)
+    fake = FakeRunPlanExecutor({"ok": True, "run_id": "run-a", "status": "WAITING_USER"})
+
+    with pytest.raises(ValueError, match="target_run_id must match run_plan.run_id"):
+        run_run_plan_via_local_queue(
+            queue=queue,
+            storage=_storage(tmp_path),
+            project_id="proj-a",
+            run_plan=_run_plan(),
+            require_empty_queue=False,
+            target_run_id="run-b",
+            executor_factory=_factory(fake),
+        )
+
+    assert queue.list_jobs() == []
+    assert fake.calls == []
+
+
 def test_run_plan_via_local_queue_respects_max_iterations(tmp_path: Path) -> None:
     queue = _queue(tmp_path)
     fake = FakeRunPlanExecutor({"ok": True, "run_id": "run-a", "status": "WAITING_USER"})

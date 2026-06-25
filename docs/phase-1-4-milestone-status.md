@@ -366,5 +366,7 @@ Recommended next work should keep the same safety posture:
    move to a resumable non-terminal state.
 4. Only after local controls stay green, revisit remote worker contracts and
   storage migration design.
-5. Target-job acquisition is now implemented via queue/poller selectors in PR #119,
-   with future hardening needed around default-route one-time resume safety.
+5. Target-job acquisition is implemented at the queue/poller layer, while the
+   run-plan service helper is constrained to the job it just enqueued. Default
+   route migration still needs canary tests before replacing synchronous
+   execution.

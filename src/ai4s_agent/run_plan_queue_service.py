@@ -40,15 +40,27 @@ def run_run_plan_via_local_queue(
 
     run_plan_obj = run_plan if isinstance(run_plan, RunPlan) else RunPlan.model_validate(run_plan)
 
-    target_project_id_clean = _clean_optional_target_selector(
-        target_project_id if target_project_id is not None else project_id,
-        "target_project_id",
-    )
-    target_run_id_clean = _clean_optional_target_selector(
-        target_run_id if target_run_id is not None else str(run_plan_obj.run_id),
-        "target_run_id",
-    )
-    target_job_id_clean = _clean_optional_target_selector(target_job_id, "target_job_id")
+    if _clean_optional_target_selector(target_job_id, "target_job_id") is not None:
+        raise ValueError("target_job_id is managed internally by run-plan queue service")
+
+    project_id_clean = _clean_optional_target_selector(project_id, "project_id")
+    if project_id_clean is None:
+        raise ValueError("project_id required")
+    run_id_clean = _clean_optional_target_selector(str(run_plan_obj.run_id), "run_plan.run_id")
+    if run_id_clean is None:
+        raise ValueError("run_plan.run_id required")
+
+    target_project_id_clean = project_id_clean
+    if target_project_id is not None:
+        target_project_id_clean = _clean_optional_target_selector(target_project_id, "target_project_id")
+        if target_project_id_clean != project_id_clean:
+            raise ValueError("target_project_id must match project_id")
+
+    target_run_id_clean = run_id_clean
+    if target_run_id is not None:
+        target_run_id_clean = _clean_optional_target_selector(target_run_id, "target_run_id")
+        if target_run_id_clean != run_id_clean:
+            raise ValueError("target_run_id must match run_plan.run_id")
 
     if require_empty_queue:
         existing = _active_or_queued_jobs(queue)
@@ -63,8 +75,7 @@ def run_run_plan_via_local_queue(
         task_options=task_options,
     )
 
-    if target_job_id_clean is None:
-        target_job_id_clean = str(queued_job.get("job_id") or "")
+    target_job_id_clean = str(queued_job.get("job_id") or "")
 
     runner = RunPlanExecutorTaskRunner(storage=storage, executor_factory=executor_factory)
     poller = WorkerQueuePoller(
