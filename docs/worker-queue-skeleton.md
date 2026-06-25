@@ -271,6 +271,12 @@ synchronous route for all task chains. The canary does not change
 `/api/run-plan/resume`, does not enable remote workers, and does not migrate
 queue storage to SQLite.
 
+The rollout policy and decision matrix are documented in
+`docs/queued-execute-canary-rollout-policy.md`. The allowlist is a policy gate,
+not a statement that the queue bridge can safely run every task. Queued canary
+execution is still not default migration, and sync fallback response
+compatibility is part of the rollout criteria.
+
 Failed queued executor results are not treated as successful route execution:
 the canary returns `ok=false`, a failed execution payload, and the queue summary
 for review.

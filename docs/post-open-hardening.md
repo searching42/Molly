@@ -909,5 +909,10 @@ The goal is a closed, auditable demo rather than full automation.
   tasks such as `train_model`, generation, literature/mining, and unknown task
   ids fall back to the synchronous path with no `execution_backend` or
   `queue_summary` response fields.
-- Next: define queued execute canary rollout policy and decision matrix before
-  considering any broader default-route migration.
+- PR #124: completed. Define the queued execute canary rollout policy and
+  decision matrix in `docs/queued-execute-canary-rollout-policy.md`, with
+  green criteria, red disable conditions, allowlist expansion rules, and default
+  migration exit criteria.
+- Next: add parity fixtures for one additional low-risk allowlisted chain, or
+  add artifact registry parity tests for existing allowlisted chains. Do not
+  proceed to default-route migration yet.

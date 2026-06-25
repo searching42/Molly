@@ -46,7 +46,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 strict resume stage/gate validation | Completed as validation-only waiting-stage and executor-gate hardening | `src/ai4s_agent/run_plan_resume_stage_gate.py` |
 | Phase 4 internal resume intent execution bridge | Completed as feature-flagged one-time internal bridge | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
 | Phase 4 user-confirmed resume loop | Completed as review → application → validation → actual resume → post-resume review (PR #118) | `tests/test_user_confirmed_resume_loop_e2e.py` |
-| Phase 4 queued execute canary | Completed as feature-flagged observability/rollback evidence with a low-risk task-chain allowlist, not default migration | `tests/test_run_plan_executor.py` |
+| Phase 4 queued execute canary | Completed as feature-flagged, allowlisted, and rollout-policy documented; not default migrated | `tests/test_run_plan_executor.py`, `docs/queued-execute-canary-rollout-policy.md` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -378,6 +378,11 @@ Recommended next work should keep the same safety posture:
    and `render_report`. Non-allowlisted tasks, including `train_model`,
    generation, literature/mining, and unknown tasks, fall back to synchronous
    execution without queued response fields.
-7. Remaining canary migration work includes rollout policy, default migration
-   decision, remote worker contract, SQLite or storage migration decision, and
-   production scientific adapter validation.
+7. The queued execute canary rollout policy and decision matrix are documented
+   in `docs/queued-execute-canary-rollout-policy.md`. The policy requires
+   response parity, artifact registry parity, failure classification parity,
+   queue safety, rollback evidence, and no hidden scope expansion before the
+   allowlist can grow.
+8. Remaining canary migration work includes artifact parity fixture expansion,
+   default migration decision, remote worker contract, SQLite or storage
+   migration decision, and production scientific adapter validation.
