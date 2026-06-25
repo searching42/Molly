@@ -46,7 +46,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 strict resume stage/gate validation | Completed as validation-only waiting-stage and executor-gate hardening | `src/ai4s_agent/run_plan_resume_stage_gate.py` |
 | Phase 4 internal resume intent execution bridge | Completed as feature-flagged one-time internal bridge | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
 | Phase 4 user-confirmed resume loop | Completed as review → application → validation → actual resume → post-resume review (PR #118) | `tests/test_user_confirmed_resume_loop_e2e.py` |
-| Phase 4 queued execute canary | Completed as feature-flagged, allowlisted, rollout-policy documented, first and second chain parity started, artifact registry parity fixture started, failure classification parity fixture started, repeated-run stability coverage started, queue recovery/stale lease coverage started, cancellation coverage started, production-sized fixture boundary documented, optional nightly production-sized fixture lane designed, telemetry/observability checklist documented, minimal structured telemetry implemented, and default-migration readiness checklist documented; not default migrated | `tests/test_run_plan_executor.py`, `tests/test_queued_execute_canary_artifact_parity.py`, `tests/test_queued_execute_canary_failure_parity.py`, `tests/test_queued_execute_canary_second_chain_parity.py`, `tests/test_queued_execute_canary_cancellation_retry.py`, `tests/test_queued_execute_canary_minimal_telemetry.py`, `tests/test_queued_execute_canary_production_sized_boundary.py`, `tests/test_queued_execute_canary_nightly_fixture_lane_docs.py`, `tests/test_queued_execute_canary_observability_checklist_docs.py`, `tests/test_queued_execute_canary_repeated_run_stability.py`, `tests/test_queued_execute_canary_queue_recovery.py`, `tests/test_queued_execute_canary_default_migration_readiness_docs.py`, `docs/queued-execute-canary-rollout-policy.md` |
+| Phase 4 queued execute canary | Completed as feature-flagged, allowlisted, rollout-policy documented, first and second chain parity started, artifact registry parity fixture started, failure classification parity fixture started, repeated-run stability coverage started, queue recovery/stale lease coverage started, cancellation coverage started, production-sized fixture boundary documented, optional nightly production-sized fixture lane designed, telemetry/observability checklist documented, minimal structured telemetry implemented, optional manual/nightly workflow skeleton added, and default-migration readiness checklist documented; not default migrated | `tests/test_run_plan_executor.py`, `tests/test_queued_execute_canary_artifact_parity.py`, `tests/test_queued_execute_canary_failure_parity.py`, `tests/test_queued_execute_canary_second_chain_parity.py`, `tests/test_queued_execute_canary_cancellation_retry.py`, `tests/test_queued_execute_canary_minimal_telemetry.py`, `tests/test_queued_execute_canary_production_sized_boundary.py`, `tests/test_queued_execute_canary_nightly_fixture_lane_docs.py`, `tests/test_queued_execute_canary_observability_checklist_docs.py`, `tests/test_queued_execute_canary_repeated_run_stability.py`, `tests/test_queued_execute_canary_queue_recovery.py`, `tests/test_queued_execute_canary_default_migration_readiness_docs.py`, `tests/test_queued_canary_manual_nightly_workflow_skeleton.py`, `.github/workflows/queued-canary-manual-nightly.yml`, `docs/queued-execute-canary-rollout-policy.md` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -413,12 +413,15 @@ Recommended next work should keep the same safety posture:
     design remains docs-only: no nightly workflow is enabled, no large fixture
     data is committed, and no default presubmit test is made slower by this
     work.
-15. Repeated-run stability coverage has started for existing allowlisted queued
+15. Optional manual/nightly workflow skeleton has started. The workflow is
+    manual-only via `workflow_dispatch`, uploads bounded pytest evidence, and
+    does not run on `pull_request`, `push`, or a schedule.
+16. Repeated-run stability coverage has started for existing allowlisted queued
     execute chains. The fixture checks project/run queue isolation, stable
     response shape, stable logical artifact ids, and rollback-to-sync behavior
     that does not touch existing queued jobs.
-16. Remaining canary migration work includes an optional manual/nightly
-    workflow skeleton if desired, broader observability wiring if needed,
-    explicit retry production semantics if queued execution needs them, the
-    default migration decision, remote worker contract, SQLite or storage
-    migration decision, and production scientific adapter validation.
+17. Remaining canary migration work includes broader observability wiring if
+    needed, optional scheduled/nightly enablement only after policy gates are
+    satisfied, explicit retry production semantics if queued execution needs
+    them, the default migration decision, remote worker contract, SQLite or
+    storage migration decision, and production scientific adapter validation.
