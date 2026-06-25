@@ -487,6 +487,9 @@ def _validate_context(
             "application_result_type",
             "replan application record does not point to a resume intent",
         )
+    failure = _validate_audit_consumption(context=context, audit_records=audit_records)
+    if failure is not None:
+        return failure
     failure = _validate_state_binding(context=context, run_plan=run_plan, stage_state=stage_state)
     if failure is not None:
         return failure
@@ -551,9 +554,6 @@ def _validate_context(
     if failure is not None:
         return failure
     failure = _validate_waiting_stage_gate_context(context=context, run_plan=run_plan, stage_state=stage_state)
-    if failure is not None:
-        return failure
-    failure = _validate_audit_consumption(context=context, audit_records=audit_records)
     if failure is not None:
         return failure
     _stage_findings(stage_state)

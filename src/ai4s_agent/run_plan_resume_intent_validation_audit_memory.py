@@ -19,6 +19,9 @@ ResumeIntentValidationAuditEvent = Literal[
     "resume_intent_validation_requested",
     "resume_intent_validation_completed",
     "resume_intent_validation_failed",
+    "resume_intent_consumed",
+    "run_plan_resume_completed",
+    "run_plan_resume_failed",
 ]
 
 

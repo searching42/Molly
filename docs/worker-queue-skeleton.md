@@ -562,9 +562,20 @@ Resume intent validation schemas, helpers, audit, memory, and internal route:
   `RunPlanExecutor.resume_after_gate(...)`, write gate decisions, enqueue work,
   execute adapters, mutate `RunPlan`, call LLMs, or replace
   `/api/run-plan/resume` or `/api/run-plan/execute`.
+- `POST /api/internal/run-plan/resume-intent/execute` is a separate
+  feature-flagged internal bridge behind
+  `AI4S_ENABLE_INTERNAL_RESUME_INTENT_EXECUTE_ROUTE`, actor identity, and a
+  `run_plan_resume_execute` server grant. It server-loads the current
+  `RunPlan`, `StageState`, and review artifacts, reruns
+  `validate_resume_intent(...)`, requires `decision="resume_eligible"`, writes
+  a pre-execution `resume_intent_consumed` audit record fail-closed, then calls
+  the existing `RunPlanExecutor.resume_after_gate(...)`. Gate decisions are
+  written only by the executor. The bridge does not enqueue work, mutate
+  `RunPlan`, call LLMs, replace `/api/run-plan/resume`, or replace
+  `/api/run-plan/execute`.
 - Fingerprints are stale-state detection only. They are not signatures,
-  permission grants, or execution authorization. A future actual resume bridge
-  must recompute them again immediately before execution.
+  permission grants, or execution authorization. Any future default-route or
+  queued resume bridge must recompute them again immediately before execution.
 
 Queued `WAITING_USER` contract:
 
