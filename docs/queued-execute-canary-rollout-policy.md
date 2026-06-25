@@ -195,6 +195,46 @@ Default migration is not allowed until:
 - default-route canary is stable across repeated runs.
 - `/api/run-plan/resume` remains unaffected or has its own migration policy.
 
+## Production-Sized Fixture Boundary
+
+Current parity fixtures use small deterministic datasets. They are enough for
+route, queue, and control-plane confidence, but they are not enough for
+production-sized scientific workload confidence. In short: small deterministic
+datasets are not enough for production-sized scientific workload confidence.
+
+PR #132 only documents and guards the production-sized boundary. It does not
+claim production readiness, and it does not make queued execution default. A
+production-sized fixture must be separately defined before default migration.
+
+Minimum production-sized fixture expectations:
+
+- dataset size target:
+  - not necessarily full production data in CI
+  - but representative of larger row counts, wider property schema, and
+    realistic missingness
+- runtime budget:
+  - must stay within CI constraints
+  - larger fixture profiles may need a nightly or offline lane rather than the
+    default presubmit suite
+- artifact expectations:
+  - same logical artifact ids as sync path
+  - no missing registry artifacts
+  - artifact file existence
+  - failure classification remains comparable between sync and queued canary
+- queue expectations:
+  - target-job safety
+  - no orphan jobs
+  - stale or cancelled old jobs are not consumed
+- rollback expectations:
+  - flag off returns sync-compatible response
+  - sync path does not create queue files
+
+Current decision:
+
+- small deterministic datasets remain the current confidence boundary
+- a production-sized or nightly boundary fixture policy still needs to exist
+- Default migration remains blocked
+
 ## Default Migration Readiness Checklist
 
 ### 1. Current Green Coverage
@@ -238,6 +278,8 @@ The following are required before default migration:
 - failure parity coverage for success, failure, and partial failure cases
 - repeated-run stability coverage across broader run counts
 - queue recovery coverage for stale running, cancellation, and retry paths
+- production-sized fixture policy defined, potentially via nightly or offline
+  coverage that still respects CI constraints
 - explicit retry/requeue production semantics defined and tested, if queued
   execution is to move beyond current canary scope
 - storage backend decision completed
@@ -264,10 +306,12 @@ Keep the queued canary feature-flagged. Keep the allowlist conservative.
 
 PR #130 adds a second allowlisted chain parity fixture. PR #131 adds
 cancellation coverage plus explicit documentation that retry/requeue
-production semantics remain future work. The next engineering PR should add a
-production-sized fixture for an allowlisted chain, or tighten the
-telemetry/observability checklist. The default-migration readiness checklist
-is now documented, but this is still not enough to justify default migration.
+production semantics remain future work. PR #132 documents and guards the
+production-sized fixture boundary without claiming production-sized proof. The
+next engineering PR should tighten the telemetry/observability checklist, or
+design an optional nightly production-sized fixture lane. The default-migration
+readiness checklist is now documented, but this is still not enough to justify
+default migration.
 
 Do not move `train_model`, generation, literature, or mining tasks into the
 queued canary yet.
