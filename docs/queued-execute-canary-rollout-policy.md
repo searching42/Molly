@@ -400,8 +400,8 @@ behavior separate:
 - there is still no public retry API, automatic retry, or route behavior
   change
 
-This still does not implement retry/requeue operations, automatic retry, API
-routes, allowlist expansion, or default migration.
+This still does not implement a public retry/requeue API, automatic retry,
+route changes, allowlist expansion, or default migration.
 
 ## Telemetry and Observability Checklist
 
