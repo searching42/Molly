@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from ai4s_agent._utils import now_iso
 from ai4s_agent._utils import write_json
 from ai4s_agent.executor import RunPlanExecutor
+from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.run_plan_artifact_verifier import RunPlanArtifactVerification
 from ai4s_agent.planner import expand_run_plan
 from ai4s_agent.run_plan_replan_application import ReplanApplicationRequest
@@ -42,7 +44,29 @@ def _run_plan(*task_ids: str, project_run_id: str = "run-apply") -> RunPlan:
     )
 
 
-def _stage_state() -> StageState:
+def _execution_snapshot(run_plan: RunPlan, *, task_id: str = "train_model") -> dict[str, Any]:
+    gates = sorted(AtomicTaskRegistry().get(task_id).gates)
+    material = {
+        "schema_version": 1,
+        "run_id": run_plan.run_id,
+        "task_id": task_id,
+        "adapter": "train_model_baseline_adapter",
+        "run_plan": run_plan.model_dump(mode="json"),
+        "task_options": {},
+        "payload": {},
+        "input_artifacts": {},
+        "approved_gates": gates,
+    }
+    digest = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {
+        "snapshot_id": f"{run_plan.run_id}:{task_id}:{digest[:16]}",
+        "snapshot_hash": digest,
+        **material,
+    }
+
+
+def _stage_state(run_plan: RunPlan | None = None) -> StageState:
+    plan = run_plan or _run_plan()
     now = now_iso()
     return StageState(
         stage="train_model",
@@ -51,12 +75,9 @@ def _stage_state() -> StageState:
         ended_at=now,
         updated_at=now,
         details={
-            "required_gates": ["gate_replan_rerun_task"],
+            "required_gates": list(AtomicTaskRegistry().get("train_model").gates),
             "executed_tasks": ["inspect_dataset"],
-            "execution_snapshot": {
-                "snapshot_id": "snapshot-apply-1",
-                "snapshot_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            },
+            "execution_snapshot": _execution_snapshot(plan),
         },
     )
 
@@ -249,6 +270,28 @@ def test_write_replan_application_artifacts_requires_state_for_resume_intent(tmp
     assert REPLAN_APPLICATION_RECORD_ARTIFACT_ID not in ProjectStorage(tmp_path).read_artifact_registry(
         "proj-apply", "run-apply"
     )
+
+
+def test_write_replan_application_artifacts_rejects_rerun_task_that_is_not_waiting_stage(tmp_path: Path) -> None:
+    proposal_path = _write_manual_proposal(tmp_path, action="rerun_task", task_id="render_report")
+    request = _request(proposal_hash=_proposal_hash(proposal_path))
+
+    with pytest.raises(ValueError, match="rerun_task_stage_mismatch"):
+        write_replan_application_artifacts(
+            workspace_dir=tmp_path,
+            request=request,
+            actor="review-user",
+            actor_source="header:X-Actor",
+            current_run_plan=_run_plan(),
+            stage_state=_stage_state(_run_plan()),
+        )
+
+    run_dir = ProjectStorage(tmp_path).run_dir("proj-apply", "run-apply")
+    assert not (run_dir / "review" / "replan_application_record.json").exists()
+    assert not (run_dir / "review" / "replan_resume_intent.json").exists()
+    registry = ProjectStorage(tmp_path).read_artifact_registry("proj-apply", "run-apply")
+    assert REPLAN_APPLICATION_RECORD_ARTIFACT_ID not in registry
+    assert REPLAN_RESUME_INTENT_ARTIFACT_ID not in registry
 
 
 def test_write_replan_application_artifacts_materializes_run_plan_revision_draft(tmp_path: Path) -> None:

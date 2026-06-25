@@ -524,7 +524,19 @@ def _optional_string_list(value: object, label: str) -> list[str]:
         return []
     if not isinstance(value, list):
         raise ValueError(f"{label} must be a list")
-    return [str(item).strip() for item in value if str(item).strip()]
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"{label} must contain only strings")
+        clean = item.strip()
+        if not clean:
+            raise ValueError(f"{label} must not contain empty strings")
+        if clean in seen:
+            raise ValueError(f"{label} must not contain duplicate values")
+        seen.add(clean)
+        cleaned.append(clean)
+    return cleaned
 
 
 def _replan_application_request_payload(

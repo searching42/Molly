@@ -8,6 +8,7 @@ from typing import Any
 from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.app import create_app
 from ai4s_agent.memory import ProjectMemory
+from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.run_plan_replan_application import ReplanApplicationRequest
 from ai4s_agent.run_plan_replan_application_artifacts import write_replan_application_artifacts
 from ai4s_agent.run_plan_replan_proposal import RunPlanReplanProposal
@@ -37,7 +38,29 @@ def _run_plan(*task_ids: str) -> RunPlan:
     )
 
 
-def _stage_state() -> StageState:
+def _execution_snapshot(run_plan: RunPlan, *, task_id: str = "train_model") -> dict[str, Any]:
+    gates = sorted(AtomicTaskRegistry().get(task_id).gates)
+    material = {
+        "schema_version": 1,
+        "run_id": run_plan.run_id,
+        "task_id": task_id,
+        "adapter": "train_model_baseline_adapter",
+        "run_plan": run_plan.model_dump(mode="json"),
+        "task_options": {},
+        "payload": {},
+        "input_artifacts": {},
+        "approved_gates": gates,
+    }
+    digest = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {
+        "snapshot_id": f"{run_plan.run_id}:{task_id}:{digest[:16]}",
+        "snapshot_hash": digest,
+        **material,
+    }
+
+
+def _stage_state(run_plan: RunPlan | None = None) -> StageState:
+    plan = run_plan or _run_plan()
     now = now_iso()
     return StageState(
         stage="train_model",
@@ -46,12 +69,9 @@ def _stage_state() -> StageState:
         ended_at=now,
         updated_at=now,
         details={
-            "required_gates": ["gate_replan_rerun_task"],
+            "required_gates": list(AtomicTaskRegistry().get("train_model").gates),
             "executed_tasks": ["inspect_dataset"],
-            "execution_snapshot": {
-                "snapshot_id": "snapshot-validation-route-1",
-                "snapshot_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            },
+            "execution_snapshot": _execution_snapshot(plan),
         },
     )
 
@@ -65,7 +85,7 @@ def _write_current_state(
     storage = ProjectStorage(workspace)
     run_dir = storage.run_dir(PROJECT_ID, RUN_ID)
     current_run_plan = run_plan or _run_plan()
-    current_stage_state = stage_state or _stage_state()
+    current_stage_state = stage_state or _stage_state(current_run_plan)
     write_json(run_dir / "run_plan.json", current_run_plan.model_dump(mode="json"))
     storage.write_stage_state(PROJECT_ID, RUN_ID, current_stage_state)
     return current_run_plan, current_stage_state
@@ -215,7 +235,7 @@ def test_internal_resume_intent_validation_route_returns_result_audit_and_memory
 
     response = client.post(
         "/api/internal/run-plan/resume-intent/validate",
-        json=_payload(actor=None, approved_gates=["gate_replan_rerun_task"]),
+        json=_payload(actor=None, approved_gates=["gate_3_train_config"]),
         headers={"X-Actor": "review-user"},
     )
 
@@ -228,7 +248,10 @@ def test_internal_resume_intent_validation_route_returns_result_audit_and_memory
     validation = ResumeIntentValidationResult.model_validate(payload["validation"])
     assert validation.ok is True
     assert validation.decision == "resume_eligible"
-    assert validation.approved_gates == ["gate_replan_rerun_task"]
+    assert validation.application_required_gates == ["gate_replan_rerun_task"]
+    assert validation.required_gates == ["gate_3_train_config"]
+    assert validation.approved_gates == ["gate_3_train_config"]
+    assert validation.missing_gates == []
     assert validation.rerun_tasks == ["train_model"]
     assert validation.resume_from_task == "train_model"
     expected_binding = build_resume_state_binding(current_run_plan, current_stage_state)
@@ -250,7 +273,9 @@ def test_internal_resume_intent_validation_route_returns_result_audit_and_memory
     assert audit[0]["actor_source"] == "header:X-Actor"
     assert audit[0]["validation_decision"] == ""
     assert audit[1]["validation_decision"] == "resume_eligible"
-    assert audit[1]["approved_gates"] == ["gate_replan_rerun_task"]
+    assert audit[1]["application_required_gates"] == ["gate_replan_rerun_task"]
+    assert audit[1]["approved_gates"] == ["gate_3_train_config"]
+    assert audit[1]["missing_gates"] == []
     assert audit[1]["resume_state_binding"] == expected_binding.model_dump(mode="json")
     records = ProjectMemory(tmp_path).list_project_records(PROJECT_ID)
     assert len(records) == 1
@@ -260,7 +285,27 @@ def test_internal_resume_intent_validation_route_returns_result_audit_and_memory
     assert not (tmp_path / ".ai4s_internal" / "run_plan_queues").exists()
 
 
-def test_internal_resume_intent_validation_route_keeps_artifact_approved_gates_when_payload_omits_override(
+def test_internal_resume_intent_validation_route_rejects_duplicate_approved_gates(tmp_path: Path) -> None:
+    _write_resume_intent_artifacts(tmp_path)
+    _grant_permission(tmp_path)
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    _enable_route(app)
+    client = app.test_client()
+
+    response = client.post(
+        "/api/internal/run-plan/resume-intent/validate",
+        json=_payload(approved_gates=["gate_3_train_config", "gate_3_train_config"]),
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "validation_error"
+    assert "duplicate" in payload["error"]["message"]
+    assert ProjectMemory(tmp_path).list_project_records(PROJECT_ID) == []
+
+
+def test_internal_resume_intent_validation_route_rejects_artifact_embedded_approved_gates(
     tmp_path: Path,
 ) -> None:
     _write_resume_intent_artifacts(tmp_path)
@@ -268,7 +313,7 @@ def test_internal_resume_intent_validation_route_keeps_artifact_approved_gates_w
     run_dir = ProjectStorage(tmp_path).run_dir(PROJECT_ID, RUN_ID)
     intent_path = run_dir / "review" / "replan_resume_intent.json"
     intent = json.loads(intent_path.read_text(encoding="utf-8"))
-    intent["approved_gates"] = ["gate_replan_rerun_task"]
+    intent["approved_gates"] = ["gate_3_train_config"]
     intent_path.write_text(json.dumps(intent, indent=2, sort_keys=True), encoding="utf-8")
     app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
     _enable_route(app)
@@ -278,8 +323,9 @@ def test_internal_resume_intent_validation_route_keeps_artifact_approved_gates_w
 
     assert response.status_code == 200
     validation = ResumeIntentValidationResult.model_validate(response.get_json()["validation"])
-    assert validation.decision == "resume_eligible"
-    assert validation.approved_gates == ["gate_replan_rerun_task"]
+    assert validation.decision == "invalid_intent"
+    assert validation.error is not None
+    assert validation.error["type"] == "resume_intent_embeds_gate_approval"
 
 
 def test_internal_resume_intent_validation_route_records_stale_result_without_execution(tmp_path: Path) -> None:

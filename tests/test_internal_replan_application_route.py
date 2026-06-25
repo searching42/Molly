@@ -8,6 +8,7 @@ from typing import Any
 from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.app import create_app
 from ai4s_agent.memory import ProjectMemory
+from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.run_plan_replan_application_audit_memory import REPLAN_APPLICATION_AUDIT_REF
 from ai4s_agent.run_plan_replan_proposal import RunPlanReplanProposal
 from ai4s_agent.run_plan_state_fingerprint import build_resume_state_binding
@@ -33,7 +34,29 @@ def _run_plan(*task_ids: str, run_id: str = "run-apply") -> RunPlan:
     )
 
 
-def _stage_state() -> StageState:
+def _execution_snapshot(run_plan: RunPlan, *, task_id: str = "train_model") -> dict[str, Any]:
+    gates = sorted(AtomicTaskRegistry().get(task_id).gates)
+    material = {
+        "schema_version": 1,
+        "run_id": run_plan.run_id,
+        "task_id": task_id,
+        "adapter": "train_model_baseline_adapter",
+        "run_plan": run_plan.model_dump(mode="json"),
+        "task_options": {},
+        "payload": {},
+        "input_artifacts": {},
+        "approved_gates": gates,
+    }
+    digest = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {
+        "snapshot_id": f"{run_plan.run_id}:{task_id}:{digest[:16]}",
+        "snapshot_hash": digest,
+        **material,
+    }
+
+
+def _stage_state(run_plan: RunPlan | None = None) -> StageState:
+    plan = run_plan or _run_plan()
     now = now_iso()
     return StageState(
         stage="train_model",
@@ -42,12 +65,9 @@ def _stage_state() -> StageState:
         ended_at=now,
         updated_at=now,
         details={
-            "required_gates": ["gate_replan_rerun_task"],
+            "required_gates": list(AtomicTaskRegistry().get("train_model").gates),
             "executed_tasks": ["inspect_dataset"],
-            "execution_snapshot": {
-                "snapshot_id": "snapshot-route-1",
-                "snapshot_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            },
+            "execution_snapshot": _execution_snapshot(plan),
         },
     )
 
@@ -55,8 +75,9 @@ def _stage_state() -> StageState:
 def _write_current_state(workspace: Path, *, project_id: str = "proj-apply", run_id: str = "run-apply") -> None:
     storage = ProjectStorage(workspace)
     run_dir = storage.run_dir(project_id, run_id)
-    write_json(run_dir / "run_plan.json", _run_plan(run_id=run_id).model_dump(mode="json"))
-    storage.write_stage_state(project_id, run_id, _stage_state())
+    run_plan = _run_plan(run_id=run_id)
+    write_json(run_dir / "run_plan.json", run_plan.model_dump(mode="json"))
+    storage.write_stage_state(project_id, run_id, _stage_state(run_plan))
 
 
 def _write_proposal(

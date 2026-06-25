@@ -7,9 +7,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from ai4s_agent.run_plan_replan_application import ReplanApplicationRecord, ResumeIntent, ReviewableRunPlanPatch
+from ai4s_agent.run_plan_replan_application import (
+    ReplanApplicationRecord,
+    ResumeIntent,
+    ReviewableRunPlanPatch,
+    application_required_gates_for,
+)
 from ai4s_agent.run_plan_replan_application_artifacts import proposal_artifact_hash
 from ai4s_agent.run_plan_replan_proposal import RunPlanReplanProposal
+from ai4s_agent.run_plan_resume_stage_gate import WaitingStageGateContext, build_waiting_stage_gate_context
 from ai4s_agent.run_plan_review_artifacts import REPLAN_PROPOSAL_ARTIFACT_ID
 from ai4s_agent.run_plan_state_fingerprint import ResumeStateBinding, run_plan_fingerprint, stage_state_fingerprint
 from ai4s_agent.schemas import RunPlan, RunStatus, StageState
@@ -104,8 +110,10 @@ class ResumeIntentValidationResult(BaseModel):
     source_application_id: str
     proposal_hash: str
     decision: ResumeIntentValidationDecision
+    application_required_gates: list[str] = Field(default_factory=list)
     required_gates: list[str] = Field(default_factory=list)
     approved_gates: list[str] = Field(default_factory=list)
+    missing_gates: list[str] = Field(default_factory=list)
     rerun_tasks: list[str] = Field(default_factory=list)
     affected_tasks: list[str] = Field(default_factory=list)
     resume_from_task: str = ""
@@ -125,7 +133,15 @@ class ResumeIntentValidationResult(BaseModel):
     def validate_proposal_hash(cls, value: str) -> str:
         return _proposal_hash(value)
 
-    @field_validator("required_gates", "approved_gates", "rerun_tasks", "affected_tasks", "validation_findings")
+    @field_validator(
+        "application_required_gates",
+        "required_gates",
+        "approved_gates",
+        "missing_gates",
+        "rerun_tasks",
+        "affected_tasks",
+        "validation_findings",
+    )
     @classmethod
     def validate_string_lists(cls, value: list[str]) -> list[str]:
         return _clean_string_list(value)
@@ -263,14 +279,15 @@ def validate_resume_intent(
                 message="resume intent artifacts do not include required resume_state_binding",
                 findings=["resume_state_binding_missing"],
             )
+        error_type = "resume_intent_embeds_gate_approval" if "cannot embed executor gate approvals" in exc_text else "invalid_resume_intent_artifact"
         return _failure_result(
             project_id=project,
             run_id=run,
             artifact_refs=artifact_refs,
             decision="invalid_intent",
-            error_type="invalid_resume_intent_artifact",
+            error_type=error_type,
             message=str(exc),
-            findings=["invalid_resume_intent_artifact"],
+            findings=[error_type],
         )
 
 
@@ -530,6 +547,12 @@ def _validate_context(
     failure = _validate_current_run_plan_tasks(context=context, run_plan=run_plan)
     if failure is not None:
         return failure
+    failure = _validate_resume_action_stage_compatibility(context=context, stage_state=stage_state)
+    if failure is not None:
+        return failure
+    failure = _validate_waiting_stage_gate_context(context=context, run_plan=run_plan, stage_state=stage_state)
+    if failure is not None:
+        return failure
     failure = _validate_audit_consumption(context=context, audit_records=audit_records)
     if failure is not None:
         return failure
@@ -597,6 +620,15 @@ def _validate_state_binding(
             message="replan application record and resume intent state bindings do not match",
             findings=["resume_state_binding_mismatch"],
         )
+    if application_binding.stage_status != RunStatus.WAITING_USER.value:
+        return _failure_from_context(
+            context,
+            decision="invalid_intent",
+            error_type="bound_stage_not_waiting_user",
+            message="resume state binding does not point to a WAITING_USER stage",
+            findings=["bound_stage_not_waiting_user"],
+            resume_state_binding=application_binding,
+        )
     if run_plan_fingerprint(run_plan) != application_binding.run_plan_fingerprint:
         return _failure_from_context(
             context,
@@ -615,6 +647,24 @@ def _validate_state_binding(
             findings=["stage_state_missing"],
             resume_state_binding=application_binding,
         )
+    if stage_state.status != RunStatus.WAITING_USER:
+        return _failure_from_context(
+            context,
+            decision="stale_intent",
+            error_type="stage_not_waiting_user",
+            message="current StageState is no longer waiting for user",
+            findings=["stage_not_waiting_user"],
+            resume_state_binding=application_binding,
+        )
+    if stage_state.stage != application_binding.stage:
+        return _failure_from_context(
+            context,
+            decision="stale_intent",
+            error_type="waiting_stage_mismatch",
+            message="current StageState stage does not match resume state binding",
+            findings=["waiting_stage_mismatch"],
+            resume_state_binding=application_binding,
+        )
     if stage_state_fingerprint(stage_state) != application_binding.stage_fingerprint:
         return _failure_from_context(
             context,
@@ -623,6 +673,113 @@ def _validate_state_binding(
             message="current StageState fingerprint does not match resume state binding",
             findings=["stage_fingerprint_mismatch"],
             resume_state_binding=application_binding,
+        )
+    return None
+
+
+def _validate_resume_action_stage_compatibility(
+    *,
+    context: _ValidationContext,
+    stage_state: StageState | None,
+) -> ResumeIntentValidationResult | None:
+    intent = context.resume_intent
+    waiting_stage = str(stage_state.stage if stage_state is not None else "")
+    binding_stage = str(context.application_record.resume_state_binding.stage if context.application_record.resume_state_binding else "")
+    if not intent.resume_from_task:
+        return _invalid_from_context(context, "resume_from_task_missing", "resume intent must include resume_from_task")
+    if waiting_stage and intent.resume_from_task != waiting_stage:
+        return _failure_from_context(
+            context,
+            decision="invalid_intent",
+            error_type="resume_from_task_stage_mismatch",
+            message="resume_from_task must match the current waiting stage",
+            findings=["resume_from_task_stage_mismatch"],
+        )
+    if binding_stage and intent.resume_from_task != binding_stage:
+        return _failure_from_context(
+            context,
+            decision="invalid_intent",
+            error_type="resume_from_task_binding_mismatch",
+            message="resume_from_task must match the bound waiting stage",
+            findings=["resume_from_task_binding_mismatch"],
+        )
+    if intent.action == "rerun_task":
+        if intent.resume_from_task not in set(intent.rerun_tasks) or intent.resume_from_task not in set(intent.affected_tasks):
+            return _failure_from_context(
+                context,
+                decision="invalid_intent",
+                error_type="rerun_task_stage_mismatch",
+                message="rerun_task resume intents must target the current waiting stage",
+                findings=["rerun_task_stage_mismatch"],
+            )
+    if intent.action == "request_review":
+        if intent.rerun_tasks:
+            return _invalid_from_context(context, "request_review_rerun_tasks", "request_review cannot include rerun_tasks")
+        if intent.affected_tasks and intent.resume_from_task not in set(intent.affected_tasks):
+            return _invalid_from_context(
+                context,
+                "request_review_stage_mismatch",
+                "request_review affected_tasks must be empty or include the current waiting stage",
+            )
+    if intent.action == "continue" and intent.rerun_tasks:
+        return _invalid_from_context(context, "continue_rerun_tasks", "continue cannot include rerun_tasks")
+    return None
+
+
+def _validate_waiting_stage_gate_context(
+    *,
+    context: _ValidationContext,
+    run_plan: RunPlan,
+    stage_state: StageState | None,
+) -> ResumeIntentValidationResult | None:
+    try:
+        waiting_context = build_waiting_stage_gate_context(
+            run_plan=run_plan,
+            stage_state=stage_state,
+            application_required_gates=context.resume_intent.application_required_gates,
+        )
+    except ValueError as exc:
+        error_type = str(exc).split(":", 1)[0]
+        decision: ResumeIntentValidationDecision = "stale_intent"
+        if error_type in {"unknown_waiting_task", "execution_snapshot_missing", "execution_snapshot_missing_fields"}:
+            decision = "invalid_intent"
+        return _failure_from_context(
+            context,
+            decision=decision,
+            error_type=error_type,
+            message=str(exc),
+            findings=[error_type],
+            resume_state_binding=context.application_record.resume_state_binding,
+        )
+    intent = context.resume_intent
+    if sorted(intent.required_gates) != sorted(waiting_context.execution_required_gates):
+        return _failure_from_context(
+            context,
+            decision="invalid_intent",
+            error_type="resume_intent_execution_gates_mismatch",
+            message="resume intent required_gates do not match current executor gates",
+            findings=["resume_intent_execution_gates_mismatch"],
+            resume_state_binding=context.application_record.resume_state_binding,
+        )
+    overlap = sorted(set(intent.application_required_gates) & set(waiting_context.execution_required_gates))
+    if overlap:
+        return _failure_from_context(
+            context,
+            decision="invalid_intent",
+            error_type="gate_domain_overlap",
+            message="application_required_gates overlap with executor required_gates: " + ", ".join(overlap),
+            findings=["gate_domain_overlap:" + ",".join(overlap)],
+            resume_state_binding=context.application_record.resume_state_binding,
+        )
+    expected_application_gates = application_required_gates_for(intent.action)
+    if sorted(intent.application_required_gates) != sorted(expected_application_gates):
+        return _failure_from_context(
+            context,
+            decision="invalid_intent",
+            error_type="application_required_gates_mismatch",
+            message="resume intent application_required_gates do not match selected action",
+            findings=["application_required_gates_mismatch"],
+            resume_state_binding=context.application_record.resume_state_binding,
         )
     return None
 
@@ -655,8 +812,25 @@ def _eligible_result(
     approved_gates: list[str] | None,
 ) -> ResumeIntentValidationResult:
     intent = context.resume_intent
-    clean_approved_gates = _approved_gates(intent, approved_gates)
-    missing_gates = [gate for gate in intent.required_gates if gate not in set(clean_approved_gates)]
+    waiting_context = build_waiting_stage_gate_context(
+        run_plan=run_plan,
+        stage_state=stage_state,
+        application_required_gates=intent.application_required_gates,
+    )
+    clean_approved_gates = _approved_gates(approved_gates)
+    unexpected_gates = [gate for gate in clean_approved_gates if gate not in set(waiting_context.execution_required_gates)]
+    if unexpected_gates:
+        return _failure_from_context(
+            context,
+            decision="blocked",
+            error_type="unexpected_gate_approval",
+            message="approved_gates includes gates outside the current executor-required gate set: "
+            + ", ".join(unexpected_gates),
+            findings=["unexpected_gate_approval:" + ",".join(unexpected_gates)],
+            approved_gates=clean_approved_gates,
+            resume_state_binding=context.application_record.resume_state_binding,
+        )
+    missing_gates = [gate for gate in waiting_context.execution_required_gates if gate not in set(clean_approved_gates)]
     decision: ResumeIntentValidationDecision = "needs_gate_approval" if missing_gates else "resume_eligible"
     findings = [
         "artifact_refs_valid",
@@ -667,6 +841,15 @@ def _eligible_result(
         "source_application_valid",
         "selected_operation_ids_valid",
         "rerun_tasks_present_in_current_run_plan",
+        "current_stage_waiting_user",
+        "resume_from_task_matches_waiting_stage",
+        "execution_snapshot_identity_valid",
+        "execution_snapshot_material_valid",
+        "current_task_registry_valid",
+        "stage_required_gates_match_registry",
+        "snapshot_required_gates_match_registry",
+        "resume_intent_execution_gates_valid",
+        "application_and_execution_gate_domains_separated",
         *_stage_findings(stage_state),
     ]
     findings.extend(f"missing_gate_approval:{gate}" for gate in missing_gates)
@@ -678,11 +861,13 @@ def _eligible_result(
         source_application_id=intent.source_application_id,
         proposal_hash=context.application_record.proposal_hash,
         decision=decision,
-        required_gates=intent.required_gates,
+        application_required_gates=intent.application_required_gates,
+        required_gates=waiting_context.execution_required_gates,
         approved_gates=clean_approved_gates,
+        missing_gates=missing_gates,
         rerun_tasks=intent.rerun_tasks,
         affected_tasks=intent.affected_tasks,
-        resume_from_task=intent.resume_from_task or _first_task(intent.rerun_tasks, run_plan),
+        resume_from_task=intent.resume_from_task,
         artifact_refs=context.artifact_refs,
         resume_state_binding=context.application_record.resume_state_binding,
         validation_findings=findings,
@@ -699,9 +884,9 @@ def _stage_findings(stage_state: StageState | None) -> list[str]:
     return findings
 
 
-def _approved_gates(intent: ResumeIntent, approved_gates: list[str] | None) -> list[str]:
+def _approved_gates(approved_gates: list[str] | None) -> list[str]:
     if approved_gates is None:
-        return list(intent.approved_gates)
+        return []
     return _clean_string_list(approved_gates)
 
 
@@ -719,6 +904,7 @@ def _failure_from_context(
     message: str,
     findings: list[str],
     resume_state_binding: ResumeStateBinding | None = None,
+    approved_gates: list[str] | None = None,
 ) -> ResumeIntentValidationResult:
     return _failure_result(
         project_id=context.project_id,
@@ -732,7 +918,8 @@ def _failure_from_context(
         message=message,
         findings=findings,
         required_gates=context.resume_intent.required_gates,
-        approved_gates=context.resume_intent.approved_gates,
+        application_required_gates=context.resume_intent.application_required_gates,
+        approved_gates=approved_gates if approved_gates is not None else [],
         rerun_tasks=context.resume_intent.rerun_tasks,
         affected_tasks=context.resume_intent.affected_tasks,
         resume_from_task=context.resume_intent.resume_from_task,
@@ -753,7 +940,9 @@ def _failure_result(
     source_application_id: str = "unknown-application",
     proposal_hash: str = "sha256:unknown",
     required_gates: list[str] | None = None,
+    application_required_gates: list[str] | None = None,
     approved_gates: list[str] | None = None,
+    missing_gates: list[str] | None = None,
     rerun_tasks: list[str] | None = None,
     affected_tasks: list[str] | None = None,
     resume_from_task: str = "",
@@ -771,8 +960,10 @@ def _failure_result(
         source_application_id=source_application_id,
         proposal_hash=proposal_hash,
         decision=decision,
+        application_required_gates=application_required_gates or [],
         required_gates=required_gates or [],
         approved_gates=approved_gates or [],
+        missing_gates=missing_gates or [],
         rerun_tasks=rerun_tasks or [],
         affected_tasks=affected_tasks or [],
         resume_from_task=resume_from_task,
