@@ -3,10 +3,11 @@ from __future__ import annotations
 import io
 import json
 import stat
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -83,7 +84,29 @@ def _normalize_base_url(base_url: str) -> str:
         raise ValueError("MinerU API base_url must use http or https")
     if not parsed.netloc:
         raise ValueError("MinerU API base_url must include a host")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("MinerU API base_url must not include userinfo, query, or fragment")
     return clean
+
+
+def _positive_float(value: Any, label: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be positive") from exc
+    if parsed <= 0:
+        raise ValueError(f"{label} must be positive")
+    return parsed
+
+
+def _positive_int(value: Any, label: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be positive") from exc
+    if parsed <= 0:
+        raise ValueError(f"{label} must be positive")
+    return parsed
 
 
 def _safe_member_path(name: str) -> Path:
@@ -95,43 +118,104 @@ def _safe_member_path(name: str) -> Path:
     return member
 
 
+def _validate_archive_infos(
+    *,
+    infos: list[zipfile.ZipInfo],
+    destination_root: Path,
+    original_pdf: Path,
+    max_member_count: int,
+    max_member_bytes: int,
+    max_total_uncompressed_bytes: int,
+    max_compression_ratio: float,
+) -> None:
+    if max_member_count <= 0:
+        raise ValueError("max_member_count must be positive")
+    if max_member_bytes <= 0:
+        raise ValueError("max_member_bytes must be positive")
+    if max_total_uncompressed_bytes <= 0:
+        raise ValueError("max_total_uncompressed_bytes must be positive")
+    if max_compression_ratio <= 0:
+        raise ValueError("max_compression_ratio must be positive")
+    if len(infos) > max_member_count:
+        raise MinerUApiError(code="unsafe_result_archive", message="result archive contains too many files")
+
+    seen: set[str] = set()
+    total_uncompressed = 0
+    for info in infos:
+        member = _safe_member_path(info.filename)
+        relative = str(member)
+        if relative in seen:
+            raise MinerUApiError(code="unsafe_result_archive", message="result archive contains duplicate paths")
+        seen.add(relative)
+        mode = (info.external_attr >> 16) & 0xFFFF
+        file_type = stat.S_IFMT(mode)
+        if file_type:
+            if stat.S_ISLNK(mode):
+                raise MinerUApiError(code="unsafe_result_archive", message="result archive contains symlinks")
+            if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                raise MinerUApiError(code="unsafe_result_archive", message="result archive contains special files")
+        target = (destination_root / member).resolve()
+        if target == original_pdf.resolve():
+            raise MinerUApiError(code="unsafe_result_archive", message="result archive attempts to overwrite the source PDF")
+        if destination_root not in target.parents and target != destination_root:
+            raise MinerUApiError(code="unsafe_result_archive", message="result archive escapes destination root")
+        if info.is_dir():
+            continue
+        if info.file_size > max_member_bytes:
+            raise MinerUApiError(code="unsafe_result_archive", message="result archive member exceeds configured size limit")
+        total_uncompressed += int(info.file_size)
+        if total_uncompressed > max_total_uncompressed_bytes:
+            raise MinerUApiError(code="unsafe_result_archive", message="result archive exceeds configured uncompressed size limit")
+        compressed_size = max(int(info.compress_size), 1)
+        if info.file_size > 0 and (float(info.file_size) / float(compressed_size)) > max_compression_ratio:
+            raise MinerUApiError(code="unsafe_result_archive", message="result archive compression ratio exceeds configured limit")
+
+
 def safe_extract_result_archive(
     *,
     archive_bytes: bytes,
     destination_dir: Path,
     original_pdf: Path,
+    max_member_count: int = 1000,
+    max_member_bytes: int = 64 * 1024 * 1024,
+    max_total_uncompressed_bytes: int = 512 * 1024 * 1024,
+    max_compression_ratio: float = 100.0,
 ) -> list[str]:
     destination_root = destination_dir.expanduser().resolve()
-    destination_root.mkdir(parents=True, exist_ok=True)
     extracted_paths: list[str] = []
-    seen: set[str] = set()
     try:
         with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
-            for info in archive.infolist():
+            infos = archive.infolist()
+            _validate_archive_infos(
+                infos=infos,
+                destination_root=destination_root,
+                original_pdf=original_pdf,
+                max_member_count=max_member_count,
+                max_member_bytes=max_member_bytes,
+                max_total_uncompressed_bytes=max_total_uncompressed_bytes,
+                max_compression_ratio=max_compression_ratio,
+            )
+            if destination_root.exists() and any(destination_root.iterdir()):
+                raise MinerUApiError(code="unsafe_result_archive", message="result destination directory must be empty")
+            destination_root.mkdir(parents=True, exist_ok=True)
+            for info in infos:
                 member = _safe_member_path(info.filename)
-                relative = str(member)
-                if relative in seen:
-                    raise MinerUApiError(code="unsafe_result_archive", message="result archive contains duplicate paths")
-                seen.add(relative)
-                mode = (info.external_attr >> 16) & 0xFFFF
-                is_dir = info.is_dir()
-                if mode:
-                    if stat.S_ISLNK(mode):
-                        raise MinerUApiError(code="unsafe_result_archive", message="result archive contains symlinks")
-                    if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
-                        raise MinerUApiError(code="unsafe_result_archive", message="result archive contains special files")
                 target = (destination_root / member).resolve()
-                if target == original_pdf.resolve():
-                    raise MinerUApiError(code="unsafe_result_archive", message="result archive attempts to overwrite the source PDF")
-                if destination_root not in target.parents and target != destination_root:
-                    raise MinerUApiError(code="unsafe_result_archive", message="result archive escapes destination root")
-                if is_dir:
+                if info.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
+                written = 0
                 with archive.open(info, "r") as source, target.open("wb") as sink:
-                    sink.write(source.read())
-                extracted_paths.append(relative)
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > info.file_size or written > max_member_bytes:
+                            raise MinerUApiError(code="unsafe_result_archive", message="result archive member exceeds configured size limit")
+                        sink.write(chunk)
+                extracted_paths.append(str(member))
     except zipfile.BadZipFile as exc:
         raise MinerUApiError(code="invalid_output_bundle", message="result archive is not a valid ZIP bundle") from exc
     return extracted_paths
@@ -145,11 +229,18 @@ class MinerUApiClient:
         api_token: str = "",
         token_header: str = "Authorization",
         allow_insecure_remote_http: bool = False,
-        timeout_sec: float = 300.0,
+        timeout_sec: float | None = None,
+        http_timeout_sec: float | None = None,
+        task_timeout_sec: float = 300.0,
         poll_interval_sec: float = 1.0,
         max_poll_attempts: int = 120,
         max_result_bytes: int = 100 * 1024 * 1024,
+        max_result_member_count: int = 1000,
+        max_result_member_bytes: int = 64 * 1024 * 1024,
+        max_result_uncompressed_bytes: int = 512 * 1024 * 1024,
         transport: httpx.BaseTransport | None = None,
+        monotonic: Callable[[], float] | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.base_url = _normalize_base_url(base_url)
         parsed = urlparse(self.base_url)
@@ -158,30 +249,43 @@ class MinerUApiClient:
         self._api_token = str(api_token or "").strip()
         self._token_header = str(token_header or "Authorization").strip() or "Authorization"
         self._allow_insecure_remote_http = bool(allow_insecure_remote_http)
-        self._timeout_sec = float(timeout_sec)
-        self._poll_interval_sec = float(poll_interval_sec)
-        self._max_poll_attempts = int(max_poll_attempts)
-        self._max_result_bytes = int(max_result_bytes)
+        if http_timeout_sec is None:
+            http_timeout_sec = timeout_sec if timeout_sec is not None else 30.0
+        self._http_timeout_sec = _positive_float(http_timeout_sec, "http_timeout_sec")
+        self._task_timeout_sec = _positive_float(task_timeout_sec, "task_timeout_sec")
+        self._poll_interval_sec = _positive_float(poll_interval_sec, "poll_interval_sec")
+        self._max_poll_attempts = _positive_int(max_poll_attempts, "max_poll_attempts")
+        self._max_result_bytes = _positive_int(max_result_bytes, "max_result_bytes")
+        self._max_result_member_count = _positive_int(max_result_member_count, "max_result_member_count")
+        self._max_result_member_bytes = _positive_int(max_result_member_bytes, "max_result_member_bytes")
+        self._max_result_uncompressed_bytes = _positive_int(max_result_uncompressed_bytes, "max_result_uncompressed_bytes")
         self._transport = transport
+        self._monotonic = monotonic or time.monotonic
+        self._sleep = sleep or time.sleep
 
     def configured(self) -> bool:
         return bool(self.base_url)
 
     def health(self) -> dict[str, Any]:
-        response = self._client().get(self._url("/health"))
+        response = self._request("GET", self._url("/health"), error_code="api_unavailable")
         if response.status_code != 200:
             raise MinerUApiError(
                 code="health_check_failure",
                 message=f"MinerU health check failed with HTTP {response.status_code}",
             )
         payload = self._json_object(response, code="health_check_failure")
+        status = str(payload.get("status") or "").strip().lower()
+        if status and status not in {"ok", "healthy", "ready"}:
+            raise MinerUApiError(code="health_check_failure", message=f"MinerU health check reported status {status!r}")
         return payload
 
     def submit_pdf(self, *, request: DocumentParseRequest, input_pdf: Path) -> MinerUApiTaskSubmission:
         self.validate_upload_policy(request)
         files = [("files", (input_pdf.name, input_pdf.read_bytes(), "application/pdf"))]
-        response = self._client().post(
+        response = self._request(
+            "POST",
             self._url("/tasks"),
+            error_code="api_unavailable",
             data=self._submission_form_data(request),
             files=files,
         )
@@ -197,7 +301,7 @@ class MinerUApiClient:
         return MinerUApiTaskSubmission.model_validate(payload)
 
     def get_task_status(self, task_id: str) -> MinerUApiTaskStatus:
-        response = self._client().get(self._url(f"/tasks/{task_id}"))
+        response = self._request("GET", self._url(f"/tasks/{task_id}"), error_code="api_unavailable")
         if response.status_code != 200:
             raise MinerUApiError(
                 code="task_failed",
@@ -221,57 +325,109 @@ class MinerUApiClient:
     def wait_for_task(self, task_id: str) -> tuple[MinerUApiTaskStatus, list[str], list[int]]:
         history: list[str] = []
         queued_history: list[int] = []
+        deadline = self._monotonic() + self._task_timeout_sec
         for _ in range(self._max_poll_attempts):
-            status = self.get_task_status(task_id)
+            if self._monotonic() >= deadline:
+                raise self._task_error(
+                    code="task_timeout",
+                    message="MinerU task polling exceeded the configured deadline",
+                    task_id=task_id,
+                    history=history,
+                    queued_history=queued_history,
+                )
+            try:
+                status = self.get_task_status(task_id)
+            except MinerUApiError as exc:
+                raise self._enrich_task_error(exc, task_id=task_id, history=history, queued_history=queued_history) from exc
             history.append(status.state)
             if status.queued_ahead is not None:
                 queued_history.append(int(status.queued_ahead))
             if status.state == "completed":
                 return status, history, queued_history
             if status.state in {"pending", "processing", "queued", "running"}:
+                remaining = deadline - self._monotonic()
+                if remaining <= 0:
+                    raise self._task_error(
+                        code="task_timeout",
+                        message="MinerU task polling exceeded the configured deadline",
+                        task_id=task_id,
+                        history=history,
+                        queued_history=queued_history,
+                    )
+                self._sleep(min(self._poll_interval_sec, remaining))
                 continue
             if status.state == "failed":
-                raise MinerUApiError(code="task_failed", message=status.message or "MinerU task failed", details={"task_id": task_id})
+                raise self._task_error(
+                    code="task_failed",
+                    message=status.message or "MinerU task failed",
+                    task_id=task_id,
+                    history=history,
+                    queued_history=queued_history,
+                )
             if status.state == "cancelled":
-                raise MinerUApiError(code="task_cancelled", message=status.message or "MinerU task cancelled", details={"task_id": task_id})
-            raise MinerUApiError(
+                raise self._task_error(
+                    code="task_cancelled",
+                    message=status.message or "MinerU task cancelled",
+                    task_id=task_id,
+                    history=history,
+                    queued_history=queued_history,
+                )
+            raise self._task_error(
                 code="task_failed",
                 message=f"MinerU task entered unknown state {status.state!r}",
-                details={"task_id": task_id},
+                task_id=task_id,
+                history=history,
+                queued_history=queued_history,
             )
-        raise MinerUApiError(code="task_timeout", message="MinerU task polling exceeded the configured limit", details={"task_id": task_id})
+        raise self._task_error(
+            code="task_timeout",
+            message="MinerU task polling exceeded the configured limit",
+            task_id=task_id,
+            history=history,
+            queued_history=queued_history,
+        )
 
     def download_result(self, *, task_id: str, output_dir: Path, original_pdf: Path) -> MinerUDownloadedResult:
-        response = self._client().get(self._url(f"/tasks/{task_id}/result"))
+        response = self._stream_request_bytes(
+            "GET",
+            self._url(f"/tasks/{task_id}/result"),
+            error_code="api_unavailable",
+            task_id=task_id,
+        )
         if response.status_code != 200:
             raise MinerUApiError(
                 code="result_download_failure",
                 message=f"MinerU result download failed with HTTP {response.status_code}",
                 details={"task_id": task_id},
             )
-        archive_bytes = bytes(response.content)
-        if len(archive_bytes) > self._max_result_bytes:
-            raise MinerUApiError(
-                code="oversized_result",
-                message="MinerU result archive exceeds the configured size limit",
-                details={"task_id": task_id},
-            )
         extracted = safe_extract_result_archive(
-            archive_bytes=archive_bytes,
+            archive_bytes=response.content,
             destination_dir=output_dir,
             original_pdf=original_pdf,
+            max_member_count=self._max_result_member_count,
+            max_member_bytes=self._max_result_member_bytes,
+            max_total_uncompressed_bytes=self._max_result_uncompressed_bytes,
         )
         return MinerUDownloadedResult(output_dir=output_dir, extracted_relative_paths=extracted)
 
     def parse_pdf(self, *, request: DocumentParseRequest, input_pdf: Path, output_dir: Path) -> MinerUApiParseOutcome:
         self.validate_upload_policy(request)
         submission = self.submit_pdf(request=request, input_pdf=input_pdf)
-        status, history, queued_history = self.wait_for_task(submission.task_id)
-        downloaded = self.download_result(
-            task_id=submission.task_id,
-            output_dir=output_dir,
-            original_pdf=input_pdf,
-        )
+        history: list[str] = []
+        queued_history: list[int] = []
+        try:
+            status, history, queued_history = self.wait_for_task(submission.task_id)
+            downloaded = self.download_result(
+                task_id=submission.task_id,
+                output_dir=output_dir,
+                original_pdf=input_pdf,
+            )
+        except MinerUApiError as exc:
+            details = dict(exc.details)
+            details.setdefault("task_id", submission.task_id)
+            details.setdefault("task_status_history", history or list(details.get("task_status_history") or []))
+            details.setdefault("queued_ahead_history", queued_history or list(details.get("queued_ahead_history") or []))
+            raise MinerUApiError(code=exc.code, message=exc.message, details=details) from exc
         return MinerUApiParseOutcome(
             remote_task_id=submission.task_id,
             output_dir=downloaded.output_dir,
@@ -319,11 +475,48 @@ class MinerUApiClient:
     def _json_object(self, response: httpx.Response, *, code: str) -> dict[str, Any]:
         try:
             payload = response.json()
-        except json.JSONDecodeError as exc:
+        except ValueError as exc:
             raise MinerUApiError(code=code, message="MinerU response is not valid JSON") from exc
         if not isinstance(payload, dict):
             raise MinerUApiError(code=code, message="MinerU response JSON root must be an object")
         return payload
+
+    def _request(self, method: str, url: str, *, error_code: str, **kwargs: Any) -> httpx.Response:
+        client = self._client()
+        try:
+            return client.request(method, url, **kwargs)
+        except httpx.RequestError as exc:
+            raise MinerUApiError(code=error_code, message=self._redacted_network_message(exc)) from exc
+        finally:
+            if self._transport is None:
+                client.close()
+
+    def _stream_request_bytes(self, method: str, url: str, *, error_code: str, task_id: str) -> httpx.Response:
+        client = self._client()
+        try:
+            with client.stream(method, url) as response:
+                payload = bytearray()
+                for chunk in response.iter_bytes():
+                    payload.extend(chunk)
+                    if len(payload) > self._max_result_bytes:
+                        raise MinerUApiError(
+                            code="oversized_result",
+                            message="MinerU result archive exceeds the configured size limit",
+                            details={"task_id": task_id},
+                        )
+                return httpx.Response(
+                    response.status_code,
+                    content=bytes(payload),
+                    headers=response.headers,
+                    request=response.request,
+                )
+        except MinerUApiError:
+            raise
+        except httpx.RequestError as exc:
+            raise MinerUApiError(code=error_code, message=self._redacted_network_message(exc), details={"task_id": task_id}) from exc
+        finally:
+            if self._transport is None:
+                client.close()
 
     def _client(self) -> httpx.Client:
         headers = {}
@@ -335,12 +528,51 @@ class MinerUApiClient:
             )
         return httpx.Client(
             headers=headers,
-            timeout=self._timeout_sec,
+            timeout=self._http_timeout_sec,
             transport=self._transport,
         )
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
+
+    def _task_error(
+        self,
+        *,
+        code: str,
+        message: str,
+        task_id: str,
+        history: list[str],
+        queued_history: list[int],
+    ) -> MinerUApiError:
+        return MinerUApiError(
+            code=code,
+            message=message,
+            details={
+                "task_id": task_id,
+                "task_status_history": list(history),
+                "queued_ahead_history": list(queued_history),
+            },
+        )
+
+    @staticmethod
+    def _enrich_task_error(
+        exc: MinerUApiError,
+        *,
+        task_id: str,
+        history: list[str],
+        queued_history: list[int],
+    ) -> MinerUApiError:
+        details = dict(exc.details)
+        details.setdefault("task_id", task_id)
+        details.setdefault("task_status_history", list(history))
+        details.setdefault("queued_ahead_history", list(queued_history))
+        return MinerUApiError(code=exc.code, message=exc.message, details=details)
+
+    def _redacted_network_message(self, exc: httpx.RequestError) -> str:
+        message = str(exc).strip() or exc.__class__.__name__
+        if self._api_token:
+            message = message.replace(self._api_token, "[redacted]")
+        return message
 
     @staticmethod
     def _bool_text(value: bool) -> str:

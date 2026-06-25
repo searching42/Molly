@@ -162,7 +162,7 @@ def normalize_mineru_output_bundle(
                         "raw_type": raw_type,
                         "reading_order": order,
                         "text_level": str(raw.get("text_level") or ""),
-                        "image_path": str(raw.get("image_path") or ""),
+                        "image_path": str(raw.get("image_path") or raw.get("img_path") or ""),
                         "coordinate_system": "mineru_bbox_0_1000",
                     },
                 )
@@ -224,19 +224,29 @@ def _load_content_payload(bundle: MinerUOutputBundle) -> list[dict[str, Any]] | 
             continue
         payload = _read_json(Path(raw_path))
         if isinstance(payload, list):
-            filtered = [item for item in payload if isinstance(item, dict)]
+            filtered = _flatten_content_items(payload)
             if payload and not filtered:
                 raise ValueError(f"{Path(raw_path).name} does not contain valid structured content items")
             return filtered
         if isinstance(payload, dict):
             content_list = payload.get("content_list")
             if isinstance(content_list, list):
-                filtered = [item for item in content_list if isinstance(item, dict)]
+                filtered = _flatten_content_items(content_list)
                 if content_list and not filtered:
                     raise ValueError(f"{Path(raw_path).name} does not contain valid structured content items")
                 return filtered
         raise ValueError(f"{Path(raw_path).name} has an unsupported structured content format")
     return None
+
+
+def _flatten_content_items(value: list[Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            items.append(item)
+        elif isinstance(item, list):
+            items.extend(child for child in item if isinstance(child, dict))
+    return items
 
 
 def _build_pages(content_payload: list[dict[str, Any]] | None, middle_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -255,6 +265,12 @@ def _build_pages(content_payload: list[dict[str, Any]] | None, middle_payload: d
                 page_payload["width"] = float(item["width"])
             if isinstance(item.get("height"), (int, float)):
                 page_payload["height"] = float(item["height"])
+            page_size = item.get("page_size")
+            if isinstance(page_size, list) and len(page_size) >= 2:
+                if isinstance(page_size[0], (int, float)):
+                    page_payload["width"] = float(page_size[0])
+                if isinstance(page_size[1], (int, float)):
+                    page_payload["height"] = float(page_size[1])
             pages.append(page_payload)
     if content_payload:
         for item in content_payload:
@@ -302,7 +318,16 @@ def _extract_title_from_markdown(markdown: str, fallback: str) -> str:
 
 
 def _element_text(raw: dict[str, Any]) -> str:
-    for key in ("text", "content", "latex", "caption"):
+    if isinstance(raw.get("list_items"), list):
+        list_text = "\n".join(str(item).strip() for item in raw["list_items"] if str(item).strip())
+        if list_text:
+            return list_text
+    for key in ("text", "content", "latex", "caption", "code_body", "image_caption"):
+        if isinstance(raw.get(key), list):
+            value = "\n".join(str(item).strip() for item in raw[key] if str(item).strip())
+            if value:
+                return value
+            continue
         value = str(raw.get(key) or "").strip()
         if value:
             return value
@@ -340,8 +365,8 @@ def _table_from_content_item(
                 warnings.append(parse_warning)
         except ValueError as exc:
             warnings.append(f"table_html_parse_warning: {exc}")
-    caption = str(raw.get("table_caption") or raw.get("caption") or "").strip()
-    footnote = str(raw.get("table_footnote") or raw.get("footnote") or "").strip()
+    caption = _text_from_string_or_list(raw.get("table_caption") or raw.get("caption"))
+    footnotes = _list_from_string_or_list(raw.get("table_footnote") or raw.get("footnote"))
     if not headers and isinstance(raw.get("headers"), list):
         headers = [str(item).strip() for item in raw["headers"] if str(item).strip()]
     if not rows and isinstance(raw.get("rows"), list):
@@ -356,7 +381,7 @@ def _table_from_content_item(
         caption=caption,
         headers=headers,
         rows=rows,
-        footnotes=[footnote] if footnote else [],
+        footnotes=footnotes,
         page=page,
         markdown=markdown,
         source_bbox=_bbox_dict(bbox),
@@ -364,6 +389,19 @@ def _table_from_content_item(
     if html:
         table.rows = [{**row} for row in table.rows]
     return table, warnings
+
+
+def _text_from_string_or_list(value: Any) -> str:
+    if isinstance(value, list):
+        return "\n".join(str(item).strip() for item in value if str(item).strip())
+    return str(value or "").strip()
+
+
+def _list_from_string_or_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    clean = str(value or "").strip()
+    return [clean] if clean else []
 
 
 def _table_markdown(headers: list[str], rows: list[dict[str, str]]) -> str:

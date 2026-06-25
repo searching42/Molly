@@ -130,6 +130,17 @@ class MinerUApiDocumentParseProvider(DocumentParseProvider):
             )
         except (MinerUApiError, OSError, ValueError) as exc:
             error = _error_from_exception(exc)
+            if isinstance(exc, MinerUApiError):
+                remote_task_id = str(exc.details.get("task_id") or remote_task_id)
+                task_status_history = [
+                    str(item).strip()
+                    for item in (exc.details.get("task_status_history") or task_status_history)
+                    if str(item).strip()
+                ]
+                queued_history = [
+                    int(item)
+                    for item in (exc.details.get("queued_ahead_history") or queued_history)
+                ]
             bundle = discover_mineru_output_bundle_fallback(bundle_dir)
             if bundle_dir.exists() and any(bundle_dir.iterdir()):
                 try:
@@ -150,6 +161,26 @@ class MinerUApiDocumentParseProvider(DocumentParseProvider):
                 mineru_version=mineru_version,
                 protocol_version=protocol_version,
             )
+            audit_path = write_json(
+                resolved.output_dir / f"{request.run_id}_parser_audit.json",
+                {
+                    "run_id": request.run_id,
+                    "provider": self.provider_name,
+                    "parser_backend": parser_backend,
+                    "input_pdf": str(resolved.input_pdf),
+                    "remote_task_id": remote_task_id,
+                    "source_pdf_sha256": audit.source_pdf_sha256,
+                    "api_base_url": self.client.base_url,
+                    "task_status_history": task_status_history,
+                    "queued_ahead_history": queued_history,
+                    "extracted_relative_paths": extracted_relative_paths,
+                    "warnings": warnings,
+                    "mineru_version": mineru_version,
+                    "protocol_version": protocol_version,
+                    "error": error.model_dump(mode="json"),
+                    "created_at": now_iso(),
+                },
+            )
             return DocumentParseResult(
                 ok=False,
                 status="failed",
@@ -162,7 +193,7 @@ class MinerUApiDocumentParseProvider(DocumentParseProvider):
                     output_dir=resolved.output_dir,
                     parsed_document_json=resolved.output_dir / f"{request.run_id}_parsed_document.json",
                     parsed_document_markdown=resolved.output_dir / f"{request.run_id}_parsed_document.md",
-                    parser_audit_json=resolved.output_dir / f"{request.run_id}_parser_audit.json",
+                    parser_audit_json=audit_path,
                     bundle=bundle,
                 ),
                 remote_task_id=remote_task_id,

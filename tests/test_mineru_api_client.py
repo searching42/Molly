@@ -84,6 +84,95 @@ def test_mineru_api_client_parse_pdf_uses_task_api_and_downloads_zip(tmp_path: P
     assert any(method == "GET" and path == "/tasks/task-123/result" for method, path, _ in requests_seen)
 
 
+def test_mineru_api_client_polls_with_interval_and_submits_once(tmp_path: Path) -> None:
+    pdf = write_synthetic_pdf(tmp_path / "paper.pdf")
+    calls = {"submit": 0, "status": 0}
+    sleeps: list[float] = []
+    now = {"value": 100.0}
+
+    def fake_monotonic() -> float:
+        return now["value"]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        now["value"] += seconds
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/tasks":
+            calls["submit"] += 1
+            return httpx.Response(202, json={"task_id": "task-123"})
+        if request.url.path == "/tasks/task-123":
+            calls["status"] += 1
+            if calls["status"] < 3:
+                return httpx.Response(200, json={"task_id": "task-123", "state": "processing"})
+            return httpx.Response(200, json={"task_id": "task-123", "state": "completed"})
+        if request.url.path == "/tasks/task-123/result":
+            return httpx.Response(200, content=build_zip_from_dir(fixture_mineru_output_dir()))
+        raise AssertionError(f"unexpected {request.method} {request.url.path}")
+
+    client = MinerUApiClient(
+        base_url="http://127.0.0.1:8000",
+        http_timeout_sec=5,
+        task_timeout_sec=20,
+        poll_interval_sec=2,
+        max_poll_attempts=5,
+        monotonic=fake_monotonic,
+        sleep=fake_sleep,
+        transport=httpx.MockTransport(handler),
+    )
+    request = DocumentParseRequest(
+        run_id="mineru-api",
+        input_pdf=str(pdf),
+        output_dir=str(tmp_path / "out"),
+        provider="mineru_api",
+    )
+
+    outcome = client.parse_pdf(request=request, input_pdf=pdf, output_dir=tmp_path / "bundle")
+
+    assert outcome.task_status_history == ["processing", "processing", "completed"]
+    assert calls == {"submit": 1, "status": 3}
+    assert sleeps == [2, 2]
+
+
+def test_mineru_api_client_rejects_invalid_timing_configuration() -> None:
+    with pytest.raises(ValueError, match="http_timeout_sec must be positive"):
+        MinerUApiClient(base_url="http://127.0.0.1:8000", http_timeout_sec=0)
+    with pytest.raises(ValueError, match="task_timeout_sec must be positive"):
+        MinerUApiClient(base_url="http://127.0.0.1:8000", task_timeout_sec=0)
+    with pytest.raises(ValueError, match="poll_interval_sec must be positive"):
+        MinerUApiClient(base_url="http://127.0.0.1:8000", poll_interval_sec=0)
+    with pytest.raises(ValueError, match="max_poll_attempts must be positive"):
+        MinerUApiClient(base_url="http://127.0.0.1:8000", max_poll_attempts=0)
+
+
+def test_mineru_api_client_wraps_transport_errors_and_redacts_token() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("cannot connect with secret-token", request=request)
+
+    client = MinerUApiClient(
+        base_url="http://127.0.0.1:8000",
+        api_token="secret-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(MinerUApiError) as exc_info:
+        client.health()
+
+    error = exc_info.value.to_error_dict()
+    assert error["code"] == "api_unavailable"
+    assert "secret-token" not in str(error)
+
+
+def test_mineru_api_client_rejects_base_url_userinfo_query_and_fragment() -> None:
+    for value in [
+        "https://token@example.com",
+        "https://mineru.example.com?token=secret",
+        "https://mineru.example.com/#secret",
+    ]:
+        with pytest.raises(ValueError, match="must not include userinfo, query, or fragment"):
+            MinerUApiClient(base_url=value)
+
+
 def test_mineru_api_client_rejects_non_loopback_without_allow_remote_upload(tmp_path: Path) -> None:
     pdf = write_synthetic_pdf(tmp_path / "paper.pdf")
     client = MinerUApiClient(
@@ -178,6 +267,35 @@ def test_safe_extract_result_archive_rejects_traversal_and_symlink(tmp_path: Pat
             destination_dir=tmp_path / "out2",
             original_pdf=pdf,
         )
+
+
+def test_safe_extract_result_archive_rejects_member_count_and_uncompressed_limits_before_writing(tmp_path: Path) -> None:
+    pdf = write_synthetic_pdf(tmp_path / "paper.pdf")
+    many_members = io.BytesIO()
+    with zipfile.ZipFile(many_members, "w") as archive:
+        archive.writestr("a.txt", "a")
+        archive.writestr("b.txt", "b")
+    with pytest.raises(MinerUApiError, match="too many files"):
+        safe_extract_result_archive(
+            archive_bytes=many_members.getvalue(),
+            destination_dir=tmp_path / "too-many",
+            original_pdf=pdf,
+            max_member_count=1,
+        )
+    assert not (tmp_path / "too-many" / "a.txt").exists()
+
+    large_member = io.BytesIO()
+    with zipfile.ZipFile(large_member, "w") as archive:
+        archive.writestr("large.txt", "x" * 32)
+    with pytest.raises(MinerUApiError, match="member exceeds"):
+        safe_extract_result_archive(
+            archive_bytes=large_member.getvalue(),
+            destination_dir=tmp_path / "large",
+            original_pdf=pdf,
+            max_member_bytes=8,
+            max_total_uncompressed_bytes=64,
+        )
+    assert not (tmp_path / "large" / "large.txt").exists()
 
 
 def test_mineru_api_client_times_out_without_resubmission(tmp_path: Path) -> None:

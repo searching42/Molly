@@ -17,9 +17,31 @@
     "type": "table",
     "page_idx": 0,
     "order": 3,
-    "table_caption": "Table 1 OLED measurements",
-    "table_footnote": "Synthetic fixture values.",
+    "table_caption": ["Table 1 OLED measurements"],
+    "table_footnote": ["Synthetic fixture values."],
     "table_body": "<table><tr><th>SMILES</th><th>PLQY</th><th>lambda_em</th></tr><tr><td>CCO</td><td>0.65</td><td>520</td></tr></table>",
     "bbox": [10, 140, 900, 320]
+  },
+  {
+    "type": "image",
+    "page_idx": 0,
+    "order": 4,
+    "img_path": "images/figure_1.png",
+    "image_caption": ["Figure 1 synthetic structure"],
+    "bbox": [20, 340, 360, 560]
+  },
+  {
+    "type": "code",
+    "page_idx": 0,
+    "order": 5,
+    "code_body": "print('oled')",
+    "bbox": [20, 580, 500, 700]
+  },
+  {
+    "type": "list",
+    "page_idx": 0,
+    "order": 6,
+    "list_items": ["Validate PLQY", "Preserve provenance"],
+    "bbox": [20, 720, 500, 860]
   }
 ]

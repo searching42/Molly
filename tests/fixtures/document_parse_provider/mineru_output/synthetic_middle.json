@@ -5,8 +5,7 @@
   "pdf_info": [
     {
       "page_idx": 0,
-      "width": 1000,
-      "height": 1400
+      "page_size": [1000, 1400]
     }
   ]
 }
