@@ -726,10 +726,12 @@ HARDEN-004 resolved
 The route-extension cleanup and permission hardening layers are now behind the
 e2e safety net. Storage inventory/checking and the local worker control plane
 are also in place. The run-plan queue bridge now has schema, local execution,
-CLI, stable summary, and feature-flagged internal route coverage. The next
-hardening phase should satisfy the default-route migration gates before
-replacing `/api/run-plan/execute`, adding remote workers, migrating storage to
-SQLite, or broadening science workflow integrations.
+CLI, stable summary, feature-flagged internal route coverage, and a minimal
+feature-flagged queued canary for `/api/run-plan/execute`. The default route
+still uses synchronous execution unless `AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY`
+is enabled. The next hardening phase should keep satisfying the migration gates
+before making queued execution the default, adding remote workers, migrating
+storage to SQLite, or broadening science workflow integrations.
 
 ## Science Track
 
@@ -888,6 +890,8 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #119: completed. Implement target-job acquisition support in
   `WorkerQueue.acquire()` and `WorkerQueuePoller` before default-route queue
   migration.
-- Next: harden run-plan queue target selector semantics so the service helper
+- PR #120: completed. Harden run-plan queue target selector semantics so the service helper
   never processes an externally selected job and never leaves orphan queued
   jobs on selector mismatch.
+- Next: add and observe a feature-flagged `/api/run-plan/execute` queued canary.
+  The flag can be turned off to immediately return to the synchronous route.
