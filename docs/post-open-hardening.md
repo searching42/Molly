@@ -82,9 +82,16 @@ blur into the already-resolved OPEN series.
 - Resolved: PR #139 adds the queued-canary operational rollback drill and
   operator runbook, proving that flag-off rollback returns new requests to sync
   without mutating existing jobs, retry children, or leases.
+- Resolved: PR #141 adds document parsing provider infrastructure: a stable
+  provider contract, a direct MinerU task-API client, safe result-bundle
+  extraction, official-style MinerU output normalization, a pdfplumber
+  baseline provider, a manual CLI, and deterministic benchmark fixtures.
 - Next recommended queued-canary work: deepen observability beyond the current
   minimal telemetry surface, or decide whether retry needs actor/audit/route
   hardening beyond the current local helper.
+- Next recommended parsing work: perform a manual live MinerU acceptance run
+  against an explicitly configured endpoint, then connect the provider layer to
+  a narrow Phase 3 parsed-document → confirmed-dataset → Phase 1 bridge.
 - Default-route migration is still not recommended.
 
 ## HARDEN-001: Introduce Explicit App Extension Registry
