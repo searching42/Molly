@@ -272,6 +272,9 @@ def _normalize_content_item(
         "title_content",
         "paragraph_content",
         "text_content",
+        "code_content",
+        "algorithm_content",
+        "math_content",
         "code_body",
         "list_items",
         "table_body",
@@ -288,7 +291,7 @@ def _normalize_content_item(
         if key in content and key not in normalized:
             normalized[key] = content[key]
     if "text" not in normalized:
-        for key in ("title_content", "paragraph_content", "text_content"):
+        for key in ("title_content", "paragraph_content", "text_content", "code_content", "algorithm_content", "math_content"):
             value = content.get(key)
             if value:
                 normalized["text"] = value
@@ -366,16 +369,32 @@ def _extract_title_from_markdown(markdown: str, fallback: str) -> str:
 
 def _element_text(raw: dict[str, Any]) -> str:
     if isinstance(raw.get("list_items"), list):
-        list_text = "\n".join(str(item).strip() for item in raw["list_items"] if str(item).strip())
+        list_text = _span_sequence_text(raw["list_items"], delimiter="\n")
         if list_text:
             return list_text
-    for key in ("text", "content", "latex", "caption", "code_body", "image_caption"):
+    for key in (
+        "text",
+        "title_content",
+        "paragraph_content",
+        "text_content",
+        "code_content",
+        "algorithm_content",
+        "math_content",
+        "latex",
+        "caption",
+        "code_body",
+        "image_caption",
+        "content",
+    ):
         if isinstance(raw.get(key), list):
-            value = "\n".join(str(item).strip() for item in raw[key] if str(item).strip())
+            value = _span_text(raw[key])
             if value:
                 return value
             continue
         if isinstance(raw.get(key), dict):
+            value = _span_text(raw[key])
+            if value:
+                return value
             continue
         value = str(raw.get(key) or "").strip()
         if value:
@@ -389,7 +408,10 @@ def _element_type(raw_type: str) -> str:
         "text": "paragraph",
         "list": "list",
         "code": "code",
+        "algorithm": "code",
         "equation": "equation",
+        "math": "equation",
+        "formula": "equation",
         "image": "image",
         "chart": "chart",
     }
@@ -441,16 +463,58 @@ def _table_from_content_item(
 
 
 def _text_from_string_or_list(value: Any) -> str:
-    if isinstance(value, list):
-        return "\n".join(str(item).strip() for item in value if str(item).strip())
-    return str(value or "").strip()
+    return _span_text(value)
 
 
 def _list_from_string_or_list(value: Any) -> list[str]:
     if isinstance(value, list):
+        if any(isinstance(item, dict) or isinstance(item, list) for item in value):
+            text = _span_text(value)
+            return [text] if text else []
         return [str(item).strip() for item in value if str(item).strip()]
     clean = str(value or "").strip()
     return [clean] if clean else []
+
+
+def _span_sequence_text(value: list[Any], *, delimiter: str) -> str:
+    return delimiter.join(part for item in value if (part := _span_text(item)))
+
+
+def _span_text(value: Any, *, _nested: bool = False) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value if _nested else value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value).strip()
+    if isinstance(value, list):
+        joined = "".join(part for item in value if (part := _span_text(item, _nested=True)))
+        return joined if _nested else joined.strip()
+    if not isinstance(value, dict):
+        return ""
+
+    parts: list[str] = []
+    for key in (
+        "text",
+        "value",
+        "title_content",
+        "paragraph_content",
+        "text_content",
+        "code_content",
+        "algorithm_content",
+        "math_content",
+        "code_body",
+        "latex",
+        "caption",
+        "content",
+        "children",
+    ):
+        if key in value:
+            part = _span_text(value[key], _nested=True)
+            if part:
+                parts.append(part)
+    joined = "".join(parts)
+    return joined if _nested else joined.strip()
 
 
 def _table_markdown(headers: list[str], rows: list[dict[str, str]]) -> str:

@@ -91,27 +91,55 @@ def test_mineru_output_normalizer_supports_content_list_v2_nested_pages(tmp_path
                 [
                     {
                         "type": "title",
-                        "content": {"title_content": "Official V2 Title"},
+                        "content": {
+                            "title_content": [
+                                {"type": "text", "text": "Official "},
+                                {"type": "text", "text": "V2 Title"},
+                            ]
+                        },
                         "bbox": [0, 0, 100, 20],
                     },
                     {
                         "type": "text",
-                        "content": {"paragraph_content": "Nested page text"},
+                        "content": {
+                            "paragraph_content": [
+                                {"type": "text", "text": "Nested "},
+                                {
+                                    "type": "hyperlink",
+                                    "url": "https://example.test/paper",
+                                    "children": [{"type": "text", "text": "linked"}],
+                                },
+                                {"type": "text", "text": " page text"},
+                            ]
+                        },
                         "bbox": [1, 2, 3, 4],
                     },
                     {
                         "type": "list",
-                        "content": {"list_items": ["first bullet", "second bullet"]},
+                        "content": {
+                            "list_items": [
+                                [{"type": "text", "text": "first bullet"}],
+                                [{"type": "text", "text": "second bullet"}],
+                            ]
+                        },
                     },
                     {
                         "type": "code",
-                        "content": {"code_body": "print('v2')"},
+                        "content": {"code_content": [{"type": "text", "text": "print('v2')"}]},
+                    },
+                    {
+                        "type": "algorithm",
+                        "content": {"algorithm_content": [{"type": "text", "text": "for i in range(n)"}]},
+                    },
+                    {
+                        "type": "equation",
+                        "content": {"math_content": [{"type": "text", "text": "E = h nu"}]},
                     },
                     {
                         "type": "image",
                         "content": {
                             "img_path": "images/v2-figure.png",
-                            "image_caption": ["Official V2 figure"],
+                            "image_caption": [{"type": "text", "text": "Official V2 figure"}],
                         },
                     },
                 ],
@@ -119,8 +147,14 @@ def test_mineru_output_normalizer_supports_content_list_v2_nested_pages(tmp_path
                     {
                         "type": "table",
                         "content": {
-                            "table_caption": ["Second page table"],
-                            "table_footnote": ["Official V2 footnote"],
+                            "table_caption": [
+                                {"type": "text", "text": "Second "},
+                                {"type": "text", "text": "page table"},
+                            ],
+                            "table_footnote": [
+                                {"type": "text", "text": "Official "},
+                                {"type": "text", "text": "V2 footnote"},
+                            ],
                             "table_body": "<table><tr><th>A</th></tr><tr><td>B</td></tr></table>",
                         },
                     }
@@ -151,9 +185,12 @@ def test_mineru_output_normalizer_supports_content_list_v2_nested_pages(tmp_path
     assert [page["page"] for page in normalized.parsed_document.pages] == [1, 2]
     by_type = {element.type: element for element in normalized.parsed_document.elements}
     assert by_type["title"].text == "Official V2 Title"
-    assert by_type["paragraph"].text == "Nested page text"
+    assert by_type["paragraph"].text == "Nested linked page text"
     assert by_type["list"].text == "first bullet\nsecond bullet"
-    assert by_type["code"].text == "print('v2')"
+    element_texts = {element.text for element in normalized.parsed_document.elements}
+    assert "print('v2')" in element_texts
+    assert "for i in range(n)" in element_texts
+    assert by_type["equation"].text == "E = h nu"
     assert by_type["image"].metadata["image_path"] == "images/v2-figure.png"
     assert normalized.parsed_document.tables[0].page == 2
     assert normalized.parsed_document.tables[0].caption == "Second page table"
