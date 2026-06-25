@@ -367,6 +367,7 @@ Recommended next work should keep the same safety posture:
 4. Only after local controls stay green, revisit remote worker contracts and
   storage migration design.
 5. Target-job acquisition is implemented at the queue/poller layer, while the
-   run-plan service helper is constrained to the job it just enqueued. Default
-   route migration still needs canary tests before replacing synchronous
-   execution.
+   run-plan service helper is constrained to the job it just enqueued. A
+   feature-flagged `/api/run-plan/execute` queued canary can exercise that path,
+   but synchronous execution remains the default until the migration gates are
+   green.

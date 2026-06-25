@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import ai4s_agent.adapters as adapter_exports
 import ai4s_agent.executor as executor_module
@@ -12,6 +13,31 @@ from ai4s_agent.app import create_app
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
 from ai4s_agent.schemas import AtomicTaskSpec, GateName, RiskLevel, RunStatus
 from ai4s_agent.storage import ProjectStorage
+from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
+
+
+class FakeRunPlanExecutor:
+    def __init__(self, execution: dict[str, Any], calls: list[dict[str, Any]]) -> None:
+        self.execution = dict(execution)
+        self.calls = calls
+
+    def execute(
+        self,
+        *,
+        project_id: str,
+        run_plan,
+        input_artifacts: dict[str, Any] | None = None,
+        task_options: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            {
+                "project_id": project_id,
+                "run_plan": run_plan,
+                "input_artifacts": input_artifacts,
+                "task_options": task_options,
+            }
+        )
+        return dict(self.execution)
 
 
 def _write_training_csv(path: Path) -> None:
@@ -20,6 +46,18 @@ def _write_training_csv(path: Path) -> None:
         split = "train" if idx < 24 else "valid" if idx < 30 else "test"
         rows.append(f"CC{'C' * (idx % 5)}O,{0.45 + idx * 0.01:.3f},{500 + idx},{split}")
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def _default_queue_dir(workspace: Path, project_id: str, run_id: str) -> Path:
+    return workspace / ".ai4s_internal" / "run_plan_queues" / project_id / run_id
+
+
+def _fake_executor_factory(execution: dict[str, Any], calls: list[dict[str, Any]]):
+    def factory(storage: ProjectStorage) -> FakeRunPlanExecutor:
+        assert isinstance(storage, ProjectStorage)
+        return FakeRunPlanExecutor(execution, calls)
+
+    return factory
 
 
 def test_run_plan_executor_runs_low_risk_baseline_chain_and_registers_artifacts(tmp_path: Path) -> None:
@@ -769,11 +807,113 @@ def test_run_plan_execute_endpoint_runs_executor_and_returns_stage_state(tmp_pat
 
     assert resp.status_code == 200
     assert resp.json["execution"]["status"] == RunStatus.SUCCEEDED.value
+    assert "execution_backend" not in resp.json
     storage = ProjectStorage(tmp_path)
     state = storage.read_stage_state("proj-exec-api", "r-exec-api")
     assert state is not None
     assert state.status == RunStatus.SUCCEEDED
     assert "baseline_report" in storage.read_artifact_registry("proj-exec-api", "r-exec-api")
+
+
+def test_run_plan_execute_endpoint_queued_canary_uses_queue_bridge(tmp_path: Path) -> None:
+    run_plan = expand_run_plan(run_id="r-exec-canary", requested_tasks=["train_model"], available_artifacts=[])
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    app.config["AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY"] = True
+    app.config["AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"] = _fake_executor_factory(
+        {
+            "ok": True,
+            "run_id": "r-exec-canary",
+            "status": RunStatus.WAITING_USER.value,
+            "waiting_task": "train_model",
+            "required_gates": [GateName.TRAIN_CONFIG.value],
+        },
+        calls,
+    )
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/run-plan/execute",
+        json={
+            "project_id": "proj-exec-canary",
+            "run_plan": run_plan.model_dump(mode="json"),
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json["ok"] is True
+    assert resp.json["execution_backend"] == "queued_canary"
+    assert resp.json["execution"]["status"] == RunStatus.WAITING_USER.value
+    assert resp.json["execution"]["waiting_user"] is True
+    assert resp.json["execution"]["waiting_task"] == "train_model"
+    assert resp.json["execution"]["required_gates"] == [GateName.TRAIN_CONFIG.value]
+    assert resp.json["queue_summary"]["ok"] is True
+    assert resp.json["queue_summary"]["final_job"]["status"] == "succeeded"
+    assert resp.json["queue_summary"]["final_lease"]["status"] == "completed"
+    assert len(calls) == 1
+    assert calls[0]["project_id"] == "proj-exec-canary"
+
+
+def test_run_plan_execute_endpoint_queued_canary_does_not_consume_existing_job(tmp_path: Path) -> None:
+    run_plan = expand_run_plan(run_id="r-exec-canary-existing", requested_tasks=["train_model"], available_artifacts=[])
+    queue_dir = _default_queue_dir(tmp_path, "proj-exec-canary-existing", "r-exec-canary-existing")
+    queue = WorkerQueue(JsonWorkerQueueStore(queue_dir))
+    old_job = queue.enqueue("proj-exec-canary-existing", "r-exec-canary-existing", {"task_id": "old_job"})
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    app.config["AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY"] = True
+    app.config["AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"] = _fake_executor_factory(
+        {"ok": True, "run_id": "r-exec-canary-existing", "status": RunStatus.WAITING_USER.value},
+        calls,
+    )
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/run-plan/execute",
+        json={
+            "project_id": "proj-exec-canary-existing",
+            "run_plan": run_plan.model_dump(mode="json"),
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json["execution_backend"] == "queued_canary"
+    assert resp.json["queue_summary"]["queued_job_id"] != old_job["job_id"]
+    assert queue.status(old_job["job_id"])["status"] == "queued"
+    assert len(calls) == 1
+
+
+def test_run_plan_execute_endpoint_queued_canary_failed_execution_is_not_success(tmp_path: Path) -> None:
+    run_plan = expand_run_plan(run_id="r-exec-canary-failed", requested_tasks=["train_model"], available_artifacts=[])
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    calls: list[dict[str, Any]] = []
+    app.config["AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY"] = True
+    app.config["AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"] = _fake_executor_factory(
+        {
+            "ok": False,
+            "run_id": "r-exec-canary-failed",
+            "status": RunStatus.FAILED.value,
+            "error": {"message": "adapter failed"},
+        },
+        calls,
+    )
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/run-plan/execute",
+        json={
+            "project_id": "proj-exec-canary-failed",
+            "run_plan": run_plan.model_dump(mode="json"),
+        },
+    )
+
+    assert resp.status_code == 400
+    assert resp.json["ok"] is False
+    assert resp.json["execution_backend"] == "queued_canary"
+    assert resp.json["execution"]["status"] == RunStatus.FAILED.value
+    assert resp.json["queue_summary"]["ok"] is False
+    assert resp.json["queue_summary"]["final_job"]["status"] == "failed"
+    assert len(calls) == 1
 
 
 def test_run_plan_execute_endpoint_writes_monitoring_log_tail(tmp_path: Path) -> None:

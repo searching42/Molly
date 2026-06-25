@@ -242,6 +242,22 @@ python -m ai4s_agent.run_plan_queue_cli \
   --max-iterations 10
 ```
 
+Default execute route queued canary:
+
+`POST /api/run-plan/execute` remains synchronous by default. When
+`AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY` is enabled, the route runs through
+the same local run-plan queue service helper and returns the normal `execution`
+field plus `execution_backend="queued_canary"` and `queue_summary`. The canary
+uses the service-level invariant that only the newly enqueued job can be
+processed, so a non-empty queue cannot redirect the request to an older job.
+Turning the flag off immediately restores the synchronous route. The canary does
+not change `/api/run-plan/resume`, does not enable remote workers, and does not
+migrate queue storage to SQLite.
+
+Failed queued executor results are not treated as successful route execution:
+the canary returns `ok=false`, a failed execution payload, and the queue summary
+for review.
+
 The CLI is an internal-only module entrypoint for local debugging and controlled
 experiments. It reads a `RunPlan` JSON file, creates a file-backed dedicated
 `WorkerQueue`, calls `run_run_plan_via_local_queue(...)`, prints a JSON summary,
@@ -677,8 +693,8 @@ Default-route migration hard gates:
 4. `RunPlanQueueExecutionSummary` must be validated consistently by route, CLI,
    service helper, and tests.
 5. The dedicated queue limitation is resolved for the internal run-plan helper
-   by targeting only the newly created job; default-route migration still needs
-   canary coverage around the same invariant.
+   by targeting only the newly created job; the default execute route canary
+   uses the same invariant while it remains feature-flagged.
 6. `waiting_user` uses the current compatibility contract: terminal succeeded
    queue state plus explicit waiting metadata in summary, status, and audit.
    A full queued resume engine remains future work.

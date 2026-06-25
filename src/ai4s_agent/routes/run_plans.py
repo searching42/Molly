@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from flask import Flask, jsonify, request
+from flask import Flask, current_app, jsonify, request
 from pydantic import ValidationError
 
+from ai4s_agent._utils import truthy
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.job_manager import JobManager
 from ai4s_agent.planner import build_plan, diff_run_plans, expand_run_plan
+from ai4s_agent.run_plan_queue_lifecycle import internal_run_plan_queue_dir
+from ai4s_agent.run_plan_queue_service import run_run_plan_via_local_queue
 from ai4s_agent.schemas import RunPlan, RunStatus
 from ai4s_agent.storage import ProjectStorage
+from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
+
+
+RUN_PLAN_EXECUTE_QUEUED_CANARY_FLAG = "AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY"
+RUN_PLAN_QUEUE_EXECUTOR_FACTORY_CONFIG = "AI4S_RUN_PLAN_QUEUE_EXECUTOR_FACTORY"
 
 
 def register_run_plan_routes(app: Flask, *, projects: ProjectStorage, jobs: JobManager) -> None:
@@ -93,6 +102,20 @@ def register_run_plan_routes(app: Flask, *, projects: ProjectStorage, jobs: JobM
         run_plan: RunPlan | None = None
         try:
             run_plan = RunPlan.model_validate(run_plan_payload)
+            if run_plan_execute_queued_canary_enabled(current_app):
+                _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution started via queued canary")
+                response_payload, status_code = _execute_run_plan_queued_canary_response(
+                    projects=projects,
+                    project_id=project_id,
+                    run_plan=run_plan,
+                    input_artifacts={str(k): str(v) for k, v in input_artifacts.items()},
+                    task_options=_task_options(task_options),
+                    executor_factory=current_app.config.get(RUN_PLAN_QUEUE_EXECUTOR_FACTORY_CONFIG),
+                )
+                execution = response_payload.get("execution") if isinstance(response_payload.get("execution"), dict) else {}
+                if isinstance(execution, dict):
+                    _log_run_plan_execution_result(jobs, project_id, run_plan.run_id, execution)
+                return jsonify(response_payload), status_code
             _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution started")
             execution = RunPlanExecutor(storage=projects).execute(
                 project_id=project_id,
@@ -175,6 +198,63 @@ def _request_json_object() -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
     return payload
+
+
+def run_plan_execute_queued_canary_enabled(app: Any) -> bool:
+    if RUN_PLAN_EXECUTE_QUEUED_CANARY_FLAG in app.config:
+        return truthy(app.config.get(RUN_PLAN_EXECUTE_QUEUED_CANARY_FLAG))
+    return truthy(os.environ.get(RUN_PLAN_EXECUTE_QUEUED_CANARY_FLAG))
+
+
+def _execute_run_plan_queued_canary_response(
+    *,
+    projects: ProjectStorage,
+    project_id: str,
+    run_plan: RunPlan,
+    input_artifacts: dict[str, str],
+    task_options: dict[str, dict[str, object]],
+    executor_factory: Any = None,
+) -> tuple[dict[str, Any], int]:
+    queue_dir = internal_run_plan_queue_dir(projects.workspace_dir, project_id, run_plan.run_id)
+    queue = WorkerQueue(JsonWorkerQueueStore(queue_dir))
+    summary = run_run_plan_via_local_queue(
+        queue=queue,
+        storage=projects,
+        project_id=project_id,
+        run_plan=run_plan,
+        input_artifacts=input_artifacts,
+        task_options=task_options,
+        require_empty_queue=False,
+        target_project_id=project_id,
+        target_run_id=run_plan.run_id,
+        executor_factory=executor_factory,
+    )
+    execution = _execution_from_queue_summary(summary)
+    ok = bool(summary.get("ok")) and bool(summary.get("terminal"))
+    status_code = 200 if ok else 400
+    return (
+        {
+            "ok": ok,
+            "execution": execution,
+            "execution_backend": "queued_canary",
+            "queue_summary": summary,
+        },
+        status_code,
+    )
+
+
+def _execution_from_queue_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    final_job = summary.get("final_job") if isinstance(summary.get("final_job"), dict) else {}
+    result = final_job.get("result") if isinstance(final_job.get("result"), dict) else None
+    if result is not None:
+        return dict(result)
+    error = final_job.get("error") if isinstance(final_job.get("error"), dict) else {}
+    reason = str(error.get("reason") or "").strip()
+    if reason:
+        return {"status": RunStatus.FAILED.value, "error": {"message": reason}}
+    if not bool(summary.get("terminal")):
+        return {"status": "QUEUED_CANARY_NOT_TERMINAL"}
+    return {"status": RunStatus.FAILED.value}
 
 
 def _string_list(value: object) -> list[str]:
