@@ -80,6 +80,7 @@ jobs:
             tests/test_queued_execute_canary_failure_parity.py
             tests/test_queued_execute_canary_queue_recovery.py
             tests/test_queued_execute_canary_cancellation_retry.py
+            tests/test_queued_execute_canary_operational_rollback.py
           )
           selected_tests=("${default_tests[@]}")
           if [ "${RUN_EXTENDED_CANARY}" = "true" ]; then

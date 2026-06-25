@@ -321,6 +321,10 @@ Rollback:
 - Sync responses do not include `queue_summary`.
 - Sync runs do not create per-run queue files under
   `.ai4s_internal/run_plan_queues/<project_id>/<run_id>`.
+- PR #139 adds the deterministic rollback drill proving that this flag-off step
+  changes routing for new requests only.
+- Existing queued jobs, retry children, and lease records remain unchanged
+  during rollback.
 - No remote worker or SQLite migration is involved.
 
 The CLI is an internal-only module entrypoint for local debugging and controlled

@@ -142,6 +142,10 @@ Rollback evidence:
   the sync path.
 - Sync rollback does not touch existing queued jobs.
 - Rollback to sync must not touch existing queued jobs from other runs.
+- PR #139 adds a deterministic operational rollback drill plus an operator
+  runbook.
+- The rollback drill proves that flag-off rollback changes routing for new
+  requests only and does not mutate existing jobs, retry children, or leases.
 - Sync fallback must not process or mutate queued jobs.
 - Rollback does not require any database or storage migration.
 
@@ -601,10 +605,12 @@ production-sized fixture boundary without claiming production-sized proof. PR
 claiming production-grade telemetry. PR #135 adds minimal structured telemetry
 for queued canary runs at the local review/test level only. PR #136 adds an
 optional manual queued-canary evidence workflow skeleton. PR #137 defines
-retry/requeue semantics without implementing retry behavior. The next
-engineering PR should implement only narrow explicit retry behavior if needed,
-or deepen observability further. The default-migration readiness checklist is
-now documented, but this is still not enough to justify default migration.
+retry/requeue semantics without implementing retry behavior. PR #138 adds
+atomic one-shot retry-child creation for eligible failed local queue jobs. PR
+#139 adds a deterministic operational rollback drill and operator runbook,
+proving that flag-off rollback returns new requests to sync without mutating
+existing queue state. The default-migration readiness checklist is now
+documented, but this is still not enough to justify default migration.
 
 Do not move `train_model`, generation, literature, or mining tasks into the
 queued canary yet.
