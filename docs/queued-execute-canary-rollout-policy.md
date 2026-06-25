@@ -120,6 +120,12 @@ Queue safety:
 - PR #131 adds cancellation coverage for queued execute canary.
 - Cancelled queued jobs must not be mistaken for the target job.
 - Sync fallback must not process or mutate cancelled queued jobs.
+- PR #137 defines explicit retry/requeue semantics in docs only.
+- Lease attempts and stale lease recovery are not explicit retry.
+- Stale recovery keeps the same `job_id`; explicit retry must create a new
+  `job_id`.
+- The original failed job must remain immutable for any future explicit retry.
+- `WAITING_USER` must continue to use the gate/resume path rather than retry.
 - If explicit retry/requeue production semantics are not implemented yet,
   default migration remains blocked until retry behavior is defined and tested.
 - This does not expand the allowlist.
@@ -367,6 +373,26 @@ Current decision:
 - default migration remains blocked
 - queued execution remains feature-flagged and allowlisted
 
+## Retry And Requeue Semantics
+
+PR #137 adds `docs/queued-canary-retry-requeue-semantics.md`.
+
+That contract keeps the current queue behavior and future explicit retry
+behavior separate:
+
+- lease attempts remain acquisition-count semantics only
+- stale lease recovery keeps the same `job_id`
+- explicit retry must create a new `job_id`
+- the original failed job remains immutable
+- `WAITING_USER` continues to use resume, not retry
+- cancelled jobs are not retryable
+- succeeded jobs are not retryable
+- queued/running jobs are not retryable
+- explicit retry remains docs-only until a narrow follow-up PR implements it
+
+This still does not implement retry/requeue operations, automatic retry, API
+routes, allowlist expansion, or default migration.
+
 ## Telemetry and Observability Checklist
 
 This checklist documents the minimum observability surface expected before the
@@ -561,11 +587,12 @@ production semantics remain future work. PR #132 documents and guards the
 production-sized fixture boundary without claiming production-sized proof. PR
 #133 documents and guards the telemetry/observability checklist without
 claiming production-grade telemetry. PR #135 adds minimal structured telemetry
-for queued canary runs at the local review/test level only. The next
-engineering PR should add a separate optional manual/nightly workflow
-skeleton, or deepen observability beyond the current minimal telemetry. The
-default-migration readiness checklist is now documented, but this is still not
-enough to justify default migration.
+for queued canary runs at the local review/test level only. PR #136 adds an
+optional manual queued-canary evidence workflow skeleton. PR #137 defines
+retry/requeue semantics without implementing retry behavior. The next
+engineering PR should implement only narrow explicit retry behavior if needed,
+or deepen observability further. The default-migration readiness checklist is
+now documented, but this is still not enough to justify default migration.
 
 Do not move `train_model`, generation, literature, or mining tasks into the
 queued canary yet.

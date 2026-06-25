@@ -72,9 +72,12 @@ blur into the already-resolved OPEN series.
 - Resolved: PR #136 adds an optional manual queued-canary evidence workflow
   skeleton, while explicitly not enabling scheduled nightly execution, not
   adding large fixture data, and not changing default CI behavior.
-- Next recommended queued-canary work: deepen observability beyond the
-  current minimal telemetry surface, or keep the manual workflow unscheduled
-  until production-sized/runtime/storage constraints are clearer.
+- Resolved: PR #137 defines explicit retry/requeue semantics for the local
+  queued execute canary at the docs/test level, while explicitly not adding
+  retry operations, queue mutations, or API routes.
+- Next recommended queued-canary work: implement only narrow explicit retry
+  behavior if needed, or deepen observability beyond the current minimal
+  telemetry surface.
 - Default-route migration is still not recommended.
 
 ## HARDEN-001: Introduce Explicit App Extension Registry
@@ -992,6 +995,10 @@ The goal is a closed, auditable demo rather than full automation.
   skeleton for bounded evidence collection. This PR does not enable a
   schedule, does not run on `pull_request` or `push`, and does not make
   queued execution default.
-- Next: deepen observability beyond the current minimal telemetry surface, or
-  keep the manual workflow unscheduled until production-sized/runtime/storage
-  constraints are clearer. Do not proceed to default-route migration yet.
+- PR #137: completed. Define retry/requeue semantics for the local queued
+  execute canary without implementing retry behavior. This PR keeps lease
+  attempts, stale recovery, explicit retry, and rerun/new execution as
+  separate concepts and keeps default migration blocked.
+- Next: implement only narrow explicit retry behavior if needed, or deepen
+  observability beyond the current minimal telemetry surface. Do not proceed
+  to default-route migration yet.
