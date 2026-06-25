@@ -101,12 +101,17 @@ Queue safety:
 - No old job is consumed.
 - No orphan queued jobs are left after invalid target selectors.
 - No queue files are created for sync fallback.
+- PR #127 adds repeated-run stability coverage for existing allowlisted queued
+  execute chains. Repeated queued canary runs must isolate queue state by project_id/run_id,
+  preserve stable response shape, and preserve stable logical artifact ids.
+- This does not expand the allowlist.
 
 Rollback evidence:
 
 - Disabling `AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY` immediately returns to
   the sync path.
 - Sync rollback does not touch existing queued jobs.
+- Rollback to sync must not touch existing queued jobs from other runs.
 - Rollback does not require any database or storage migration.
 
 No hidden scope expansion:
