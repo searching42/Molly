@@ -68,3 +68,18 @@ def test_queued_execute_canary_rollout_policy_documents_artifact_parity_fixture(
         "This does not expand the allowlist",
     ]:
         assert required in text
+
+
+def test_queued_execute_canary_rollout_policy_documents_failure_parity_fixture() -> None:
+    text = _policy_text()
+
+    for required in [
+        "PR #126 adds failure classification parity fixture",
+        "failed status",
+        "failed task",
+        "useful error message fields",
+        "Exact error strings are not required",
+        "Queued executor failed dict must not be treated as success",
+        "This does not expand the allowlist",
+    ]:
+        assert required in text
