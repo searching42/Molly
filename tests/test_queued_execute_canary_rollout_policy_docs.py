@@ -124,3 +124,17 @@ def test_queued_execute_canary_rollout_policy_documents_second_allowlisted_chain
         "This still does not justify default migration by itself",
     ]:
         assert required in text
+
+
+def test_queued_execute_canary_rollout_policy_documents_cancellation_and_retry_boundary() -> None:
+    text = _policy_text()
+
+    for required in [
+        "PR #131 adds cancellation coverage",
+        "Cancelled queued jobs must not be mistaken for the target job",
+        "Sync fallback must not process or mutate cancelled queued jobs",
+        "retry",
+        "This does not expand the allowlist",
+        "This does not enable remote workers or SQLite",
+    ]:
+        assert required in text

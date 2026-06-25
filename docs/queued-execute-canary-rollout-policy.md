@@ -117,6 +117,11 @@ Queue safety:
   canary.
 - Stale running jobs must not be mistaken for the target job.
 - Target-job selection must remain valid after stale lease recovery.
+- PR #131 adds cancellation coverage for queued execute canary.
+- Cancelled queued jobs must not be mistaken for the target job.
+- Sync fallback must not process or mutate cancelled queued jobs.
+- If explicit retry/requeue production semantics are not implemented yet,
+  default migration remains blocked until retry behavior is defined and tested.
 - This does not expand the allowlist.
 
 Rollback evidence:
@@ -202,9 +207,11 @@ Current green coverage already exists for:
 - second allowlisted chain parity
 - failure classification parity
 - repeated-run stability
+- cancellation coverage
 - stale lease and queue recovery coverage
 - target-job safety
 - sync fallback compatibility
+- retry remains documented as future production work
 
 ### 2. Still Blocking Default Migration
 
@@ -213,6 +220,7 @@ The following items still block default migration:
 - the allowlist still covers only a small set of low-risk chains
 - production-sized datasets are not yet proven
 - long-running or heavy adapters are not yet proven
+- explicit retry/requeue production semantics are not yet defined
 - `train_model` remains excluded
 - generation remains excluded
 - literature/mining remains excluded
@@ -230,6 +238,8 @@ The following are required before default migration:
 - failure parity coverage for success, failure, and partial failure cases
 - repeated-run stability coverage across broader run counts
 - queue recovery coverage for stale running, cancellation, and retry paths
+- explicit retry/requeue production semantics defined and tested, if queued
+  execution is to move beyond current canary scope
 - storage backend decision completed
 - remote worker decision completed
 - sync fallback and queued canary telemetry both defined and reviewable
@@ -252,10 +262,12 @@ Current decision: do not make queued execution default.
 
 Keep the queued canary feature-flagged. Keep the allowlist conservative.
 
-PR #130 adds a second allowlisted chain parity fixture. The next engineering
-PR should add queue cancellation/retry coverage, or add a production-sized
-fixture for an allowlisted chain. The default-migration readiness checklist is
-now documented, but this is still not enough to justify default migration.
+PR #130 adds a second allowlisted chain parity fixture. PR #131 adds
+cancellation coverage plus explicit documentation that retry/requeue
+production semantics remain future work. The next engineering PR should add a
+production-sized fixture for an allowlisted chain, or tighten the
+telemetry/observability checklist. The default-migration readiness checklist
+is now documented, but this is still not enough to justify default migration.
 
 Do not move `train_model`, generation, literature, or mining tasks into the
 queued canary yet.

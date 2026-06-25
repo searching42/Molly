@@ -36,10 +36,12 @@ def test_default_migration_readiness_checklist_names_existing_coverage() -> None
         "second allowlisted chain parity",
         "failure classification parity",
         "repeated-run stability",
+        "cancellation coverage",
         "stale lease",
         "queue recovery",
         "target-job safety",
         "sync fallback",
+        "retry",
     ]:
         assert required in text
 
