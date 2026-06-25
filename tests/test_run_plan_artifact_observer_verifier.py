@@ -30,10 +30,35 @@ from tests.test_phase2_generation_screening_demo import (
 from tests.test_phase3_literature_dataset_demo import _run_phase3_fixture
 
 
+def _rewrite_metric_artifact(
+    workspace_dir: Path,
+    *,
+    project_id: str,
+    run_id: str,
+    artifact_id: str,
+    payload: dict[str, Any],
+) -> None:
+    storage = ProjectStorage(workspace_dir)
+    run_dir = storage.run_dir(project_id, run_id)
+    registry = storage.read_artifact_registry(project_id, run_id)
+    raw_path = str(registry[artifact_id])
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = run_dir / path
+    write_json(path.resolve(), payload)
+
+
 def test_artifact_verifier_continues_for_phase1_workflow_fixture(tmp_path: Path) -> None:
     project_id = "phase1-demo-project"
     run_id = "phase1-demo-run"
     _response, summary, _calls, app = execute_phase1_demo(tmp_path)
+    _rewrite_metric_artifact(
+        tmp_path,
+        project_id=project_id,
+        run_id=run_id,
+        artifact_id="baseline_metrics",
+        payload={"properties": [{"property_id": "plqy", "metrics": {"r2": 0.42, "mae": 0.11}}]},
+    )
     client = app.test_client()
     status_response = client.get(
         f"/api/internal/run-plan/queue/status?project_id={project_id}&run_id={run_id}",
@@ -57,6 +82,21 @@ def test_artifact_verifier_continues_for_phase1_workflow_fixture(tmp_path: Path)
 
 def test_artifact_verifier_recommends_rerun_for_oled_multiobjective_fixture_metrics(tmp_path: Path) -> None:
     _response, summary, _calls, app = execute_oled_demo(tmp_path)
+    _rewrite_metric_artifact(
+        tmp_path,
+        project_id=OLED_PROJECT_ID,
+        run_id=OLED_RUN_ID,
+        artifact_id="multi_property_model_metrics",
+        payload={
+            "properties": [
+                {"property_id": "plqy", "metrics": {"r2": -0.31, "mae": 0.42}},
+                {"property_id": "lambda_em_nm", "metrics": {"r2": 0.21, "mae": 6.5}},
+                {"property_id": "homo_ev", "metrics": {"r2": 0.18, "mae": 0.07}},
+                {"property_id": "lumo_ev", "metrics": {"r2": 0.14, "mae": 0.08}},
+                {"property_id": "delta_e_st_ev", "metrics": {"r2": 0.09, "mae": 0.03}},
+            ]
+        },
+    )
     client = app.test_client()
     status_response = client.get(
         f"/api/internal/run-plan/queue/status?project_id={OLED_PROJECT_ID}&run_id={OLED_RUN_ID}",
@@ -83,6 +123,13 @@ def test_artifact_verifier_recommends_rerun_for_oled_multiobjective_fixture_metr
 
 def test_artifact_verifier_continues_for_phase2_generation_fixture(tmp_path: Path) -> None:
     _response, summary, _calls, app = execute_phase2_demo(tmp_path)
+    _rewrite_metric_artifact(
+        tmp_path,
+        project_id=PHASE2_PROJECT_ID,
+        run_id=PHASE2_RUN_ID,
+        artifact_id="baseline_metrics",
+        payload={"properties": [{"property_id": "plqy", "metrics": {"r2": 0.28, "mae": 0.13}}]},
+    )
     client = app.test_client()
     status_response = client.get(
         f"/api/internal/run-plan/queue/status?project_id={PHASE2_PROJECT_ID}&run_id={PHASE2_RUN_ID}",
