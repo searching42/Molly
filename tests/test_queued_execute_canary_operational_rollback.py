@@ -257,4 +257,3 @@ def test_operational_rollback_flag_off_routes_new_requests_to_sync_without_mutat
 
     assert len(calls) == 3
     assert [call["run_id"] for call in calls] == [success_run_id, failed_run_id, reenabled_run_id]
-
