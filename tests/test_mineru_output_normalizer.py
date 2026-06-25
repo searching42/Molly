@@ -84,7 +84,7 @@ def test_mineru_output_normalizer_supports_content_list_v2_nested_pages(tmp_path
     pdf = write_synthetic_pdf(tmp_path / "paper.pdf")
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
-    (bundle_dir / "synthetic.md").write_text("# V2 Fixture", encoding="utf-8")
+    (bundle_dir / "synthetic.md").write_text("V2 fixture body without heading", encoding="utf-8")
     (bundle_dir / "synthetic_content_list_v2.json").write_text(
         json.dumps(
             [
@@ -107,6 +107,7 @@ def test_mineru_output_normalizer_supports_content_list_v2_nested_pages(tmp_path
                                 {
                                     "type": "hyperlink",
                                     "url": "https://example.test/paper",
+                                    "content": [{"type": "text", "text": "linked"}],
                                     "children": [{"type": "text", "text": "linked"}],
                                 },
                                 {"type": "text", "text": " page text"},
@@ -132,7 +133,7 @@ def test_mineru_output_normalizer_supports_content_list_v2_nested_pages(tmp_path
                         "content": {"algorithm_content": [{"type": "text", "text": "for i in range(n)"}]},
                     },
                     {
-                        "type": "equation",
+                        "type": "equation_interline",
                         "content": {"math_content": [{"type": "text", "text": "E = h nu"}]},
                     },
                     {
@@ -184,6 +185,7 @@ def test_mineru_output_normalizer_supports_content_list_v2_nested_pages(tmp_path
 
     assert [page["page"] for page in normalized.parsed_document.pages] == [1, 2]
     by_type = {element.type: element for element in normalized.parsed_document.elements}
+    assert normalized.parsed_document.metadata["title"] == "Official V2 Title"
     assert by_type["title"].text == "Official V2 Title"
     assert by_type["paragraph"].text == "Nested linked page text"
     assert by_type["list"].text == "first bullet\nsecond bullet"

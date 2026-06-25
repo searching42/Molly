@@ -130,7 +130,7 @@ def normalize_mineru_output_bundle(
             raw_type = str(raw.get("type") or raw.get("category") or raw.get("block_type") or "text").strip().lower()
             order = int(raw.get("order") or raw.get("sort_id") or index)
             if raw_type == "title" and title == input_pdf.stem:
-                title = str(raw.get("text") or raw.get("content") or title).strip() or title
+                title = _element_text(raw) or title
             if raw_type == "table":
                 table, table_warnings = _table_from_content_item(
                     raw,
@@ -410,6 +410,7 @@ def _element_type(raw_type: str) -> str:
         "code": "code",
         "algorithm": "code",
         "equation": "equation",
+        "equation_interline": "equation",
         "math": "equation",
         "formula": "equation",
         "image": "image",
@@ -494,6 +495,7 @@ def _span_text(value: Any, *, _nested: bool = False) -> str:
         return ""
 
     parts: list[str] = []
+    content_text = _span_text(value.get("content"), _nested=True) if "content" in value else ""
     for key in (
         "text",
         "value",
@@ -509,8 +511,10 @@ def _span_text(value: Any, *, _nested: bool = False) -> str:
         "content",
         "children",
     ):
+        if key == "children" and content_text:
+            continue
         if key in value:
-            part = _span_text(value[key], _nested=True)
+            part = content_text if key == "content" and content_text else _span_text(value[key], _nested=True)
             if part:
                 parts.append(part)
     joined = "".join(parts)
