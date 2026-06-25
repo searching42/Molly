@@ -245,14 +245,31 @@ python -m ai4s_agent.run_plan_queue_cli \
 ## Queued execute canary observability and rollback
 
 `POST /api/run-plan/execute` remains synchronous by default. When
-`AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY` is enabled, the route runs through
-the same local run-plan queue service helper and returns the normal `execution`
-field plus `execution_backend="queued_canary"` and `queue_summary`. The canary
-uses the service-level invariant that only the newly enqueued job can be
-processed, so a non-empty queue cannot redirect the request to an older job.
-Turning the flag off immediately restores the synchronous route. The canary does
-not change `/api/run-plan/resume`, does not enable remote workers, and does not
-migrate queue storage to SQLite.
+`AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY` is enabled, the flag acts as a
+master switch only. The route uses the same local run-plan queue service helper
+only when every `run_plan.tasks[].task_id` is on the low-risk canary allowlist.
+The initial allowlist is:
+
+- `inspect_dataset`
+- `clean_dataset`
+- `check_trainability`
+- `run_baseline`
+- `render_report`
+
+Allowlisted queued responses return the normal `execution` field plus
+`execution_backend="queued_canary"` and `queue_summary`. The canary uses the
+service-level invariant that only the newly enqueued job can be processed, so a
+non-empty queue cannot redirect the request to an older job.
+
+If the flag is enabled but the task chain contains `train_model`, generation,
+literature/mining tasks, unknown task ids, or any other non-allowlisted task,
+the request falls back to the synchronous executor path. This fallback preserves
+the sync response shape: no `execution_backend` and no `queue_summary`. It
+records `RunPlan execution backend: sync_fallback_not_allowlisted` plus the
+disallowed task ids in run logs. Turning the flag off immediately restores the
+synchronous route for all task chains. The canary does not change
+`/api/run-plan/resume`, does not enable remote workers, and does not migrate
+queue storage to SQLite.
 
 Failed queued executor results are not treated as successful route execution:
 the canary returns `ok=false`, a failed execution payload, and the queue summary
@@ -264,11 +281,14 @@ Observability:
   include `execution_backend` or `queue_summary`.
 - The sync path records a `RunPlan execution backend: sync` log marker while
   preserving the existing `RunPlan execution started` log.
-- With the flag on, the response includes `execution_backend="queued_canary"`
-  and `queue_summary`.
+- With the flag on and the task chain allowlisted, the response includes
+  `execution_backend="queued_canary"` and `queue_summary`.
 - The queued canary path records a `RunPlan execution backend: queued_canary`
   log marker and still logs terminal `WAITING_USER`, `FAILED`, or completed
   execution status.
+- With the flag on and the task chain not allowlisted, the fallback path records
+  `sync_fallback_not_allowlisted`, logs the disallowed task ids, and returns the
+  same response shape as synchronous execution.
 
 Rollback:
 
