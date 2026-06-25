@@ -46,6 +46,12 @@ blur into the already-resolved OPEN series.
 - Science priority: a small but closed OLED demo with literature provenance,
   model training diagnostics, candidate generation, screening, and report
   artifacts.
+- Resolved: PR #128 adds queue recovery and stale lease coverage for the
+  feature-flagged queued execute canary without changing route behavior,
+  allowlist scope, remote-worker posture, or SQLite/storage decisions.
+- Next recommended queued-canary work: add a second allowlisted chain parity
+  fixture or add an explicit default-migration readiness checklist test.
+- Default-route migration is still not recommended.
 
 ## HARDEN-001: Introduce Explicit App Extension Registry
 
@@ -925,6 +931,10 @@ The goal is a closed, auditable demo rather than full automation.
   canary, proving repeated allowlisted runs isolate queue state by
   project/run, keep response shape and logical artifacts stable, and do not let
   rollback touch existing queued jobs.
-- Next: add queue recovery/stale lease coverage for the queued canary, or add a
-  second allowlisted chain parity fixture. Do not proceed to default-route
+- PR #128: completed. Add queue recovery/stale lease coverage for the queued
+  canary, proving stale running jobs are not mistaken for the target job,
+  target-job selection remains valid after recovery, and sync fallback does not
+  process queued jobs.
+- Next: add a second allowlisted chain parity fixture, or add an explicit
+  default-migration readiness checklist test. Do not proceed to default-route
   migration yet.

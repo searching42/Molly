@@ -97,3 +97,17 @@ def test_queued_execute_canary_rollout_policy_documents_repeated_run_stability()
         "This does not expand the allowlist",
     ]:
         assert required in text
+
+
+def test_queued_execute_canary_rollout_policy_documents_queue_recovery_and_stale_lease_coverage() -> None:
+    text = _policy_text()
+
+    for required in [
+        "PR #128 adds queue recovery and stale lease coverage",
+        "Stale running jobs must not be mistaken for the target job",
+        "Target-job selection must remain valid after stale lease recovery",
+        "Sync fallback must not process or mutate queued jobs",
+        "This does not enable remote workers or SQLite",
+        "This does not expand the allowlist",
+    ]:
+        assert required in text

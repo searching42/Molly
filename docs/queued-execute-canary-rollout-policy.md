@@ -104,6 +104,10 @@ Queue safety:
 - PR #127 adds repeated-run stability coverage for existing allowlisted queued
   execute chains. Repeated queued canary runs must isolate queue state by project_id/run_id,
   preserve stable response shape, and preserve stable logical artifact ids.
+- PR #128 adds queue recovery and stale lease coverage for queued execute
+  canary.
+- Stale running jobs must not be mistaken for the target job.
+- Target-job selection must remain valid after stale lease recovery.
 - This does not expand the allowlist.
 
 Rollback evidence:
@@ -112,12 +116,14 @@ Rollback evidence:
   the sync path.
 - Sync rollback does not touch existing queued jobs.
 - Rollback to sync must not touch existing queued jobs from other runs.
+- Sync fallback must not process or mutate queued jobs.
 - Rollback does not require any database or storage migration.
 
 No hidden scope expansion:
 
 - No remote worker.
 - No SQLite migration.
+- This does not enable remote workers or SQLite.
 - No default-route migration.
 - No heavy adapters.
 
@@ -180,8 +186,9 @@ Default migration is not allowed until:
 Keep the queued canary feature-flagged. Keep the allowlist conservative.
 
 The next engineering PR should add parity fixtures for one additional
-low-risk allowlisted chain or add artifact registry parity tests for the
-existing allowlisted chains.
+low-risk allowlisted chain or add an explicit default-migration readiness
+checklist test. Queue recovery and stale lease behavior now have rollout
+coverage, but this is still not enough to justify default migration.
 
 Do not move `train_model`, generation, literature, or mining tasks into the
 queued canary yet.
