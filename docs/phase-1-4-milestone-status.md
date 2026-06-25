@@ -46,6 +46,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 strict resume stage/gate validation | Completed as validation-only waiting-stage and executor-gate hardening | `src/ai4s_agent/run_plan_resume_stage_gate.py` |
 | Phase 4 internal resume intent execution bridge | Completed as feature-flagged one-time internal bridge | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
 | Phase 4 user-confirmed resume loop | Completed as review → application → validation → actual resume → post-resume review (PR #118) | `tests/test_user_confirmed_resume_loop_e2e.py` |
+| Phase 4 queued execute canary | Completed as feature-flagged observability/rollback evidence, not default migration | `tests/test_run_plan_executor.py` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -369,5 +370,9 @@ Recommended next work should keep the same safety posture:
 5. Target-job acquisition is implemented at the queue/poller layer, while the
    run-plan service helper is constrained to the job it just enqueued. A
    feature-flagged `/api/run-plan/execute` queued canary can exercise that path,
-   but synchronous execution remains the default until the migration gates are
-   green.
+   and rollback evidence shows disabling the flag returns to the sync response
+   shape. Synchronous execution remains the default until the migration gates
+   are green.
+6. Remaining canary migration work includes a low-risk task-chain allowlist,
+   rollout policy, default migration decision, remote worker contract, SQLite or
+   storage migration decision, and production scientific adapter validation.

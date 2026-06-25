@@ -104,6 +104,7 @@ def register_run_plan_routes(app: Flask, *, projects: ProjectStorage, jobs: JobM
             run_plan = RunPlan.model_validate(run_plan_payload)
             if run_plan_execute_queued_canary_enabled(current_app):
                 _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution started via queued canary")
+                _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution backend: queued_canary")
                 response_payload, status_code = _execute_run_plan_queued_canary_response(
                     projects=projects,
                     project_id=project_id,
@@ -117,6 +118,7 @@ def register_run_plan_routes(app: Flask, *, projects: ProjectStorage, jobs: JobM
                     _log_run_plan_execution_result(jobs, project_id, run_plan.run_id, execution)
                 return jsonify(response_payload), status_code
             _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution started")
+            _add_run_plan_log(jobs, project_id, run_plan.run_id, "INFO", "RunPlan execution backend: sync")
             execution = RunPlanExecutor(storage=projects).execute(
                 project_id=project_id,
                 run_plan=run_plan,
@@ -217,6 +219,7 @@ def _execute_run_plan_queued_canary_response(
 ) -> tuple[dict[str, Any], int]:
     queue_dir = internal_run_plan_queue_dir(projects.workspace_dir, project_id, run_plan.run_id)
     queue = WorkerQueue(JsonWorkerQueueStore(queue_dir))
+    captured_execution: dict[str, Any] = {}
     summary = run_run_plan_via_local_queue(
         queue=queue,
         storage=projects,
@@ -227,9 +230,9 @@ def _execute_run_plan_queued_canary_response(
         require_empty_queue=False,
         target_project_id=project_id,
         target_run_id=run_plan.run_id,
-        executor_factory=executor_factory,
+        executor_factory=_capture_executor_factory(executor_factory, captured_execution),
     )
-    execution = _execution_from_queue_summary(summary)
+    execution = _execution_from_queue_summary(summary, captured_execution=captured_execution)
     ok = bool(summary.get("ok")) and bool(summary.get("terminal"))
     status_code = 200 if ok else 400
     return (
@@ -243,11 +246,13 @@ def _execute_run_plan_queued_canary_response(
     )
 
 
-def _execution_from_queue_summary(summary: dict[str, Any]) -> dict[str, Any]:
+def _execution_from_queue_summary(summary: dict[str, Any], *, captured_execution: dict[str, Any] | None = None) -> dict[str, Any]:
     final_job = summary.get("final_job") if isinstance(summary.get("final_job"), dict) else {}
     result = final_job.get("result") if isinstance(final_job.get("result"), dict) else None
     if result is not None:
         return dict(result)
+    if isinstance(captured_execution, dict) and captured_execution:
+        return dict(captured_execution)
     error = final_job.get("error") if isinstance(final_job.get("error"), dict) else {}
     reason = str(error.get("reason") or "").strip()
     if reason:
@@ -255,6 +260,39 @@ def _execution_from_queue_summary(summary: dict[str, Any]) -> dict[str, Any]:
     if not bool(summary.get("terminal")):
         return {"status": "QUEUED_CANARY_NOT_TERMINAL"}
     return {"status": RunStatus.FAILED.value}
+
+
+def _capture_executor_factory(executor_factory: Any, captured_execution: dict[str, Any]):
+    def factory(storage: ProjectStorage):
+        executor = executor_factory(storage) if executor_factory is not None else RunPlanExecutor(storage=storage)
+        return _CapturingRunPlanExecutor(executor, captured_execution)
+
+    return factory
+
+
+class _CapturingRunPlanExecutor:
+    def __init__(self, executor: Any, captured_execution: dict[str, Any]) -> None:
+        self.executor = executor
+        self.captured_execution = captured_execution
+
+    def execute(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        input_artifacts: dict[str, Any] | None = None,
+        task_options: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        execution = self.executor.execute(
+            project_id=project_id,
+            run_plan=run_plan,
+            input_artifacts=input_artifacts,
+            task_options=task_options,
+        )
+        if isinstance(execution, dict):
+            self.captured_execution.clear()
+            self.captured_execution.update(execution)
+        return execution
 
 
 def _string_list(value: object) -> list[str]:

@@ -729,9 +729,12 @@ are also in place. The run-plan queue bridge now has schema, local execution,
 CLI, stable summary, feature-flagged internal route coverage, and a minimal
 feature-flagged queued canary for `/api/run-plan/execute`. The default route
 still uses synchronous execution unless `AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY`
-is enabled. The next hardening phase should keep satisfying the migration gates
-before making queued execution the default, adding remote workers, migrating
-storage to SQLite, or broadening science workflow integrations.
+is enabled. Canary observability now records backend markers in run logs, and
+rollback evidence tests prove that disabling the flag returns the route to the
+sync response shape without creating queue files for sync runs. The next
+hardening phase should keep satisfying the migration gates before making queued
+execution the default, adding remote workers, migrating storage to SQLite, or
+broadening science workflow integrations.
 
 ## Science Track
 
@@ -893,5 +896,11 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #120: completed. Harden run-plan queue target selector semantics so the service helper
   never processes an externally selected job and never leaves orphan queued
   jobs on selector mismatch.
-- Next: add and observe a feature-flagged `/api/run-plan/execute` queued canary.
-  The flag can be turned off to immediately return to the synchronous route.
+- PR #121: completed. Add a feature-flagged `/api/run-plan/execute` queued
+  canary. The flag can be turned off to immediately return to the synchronous
+  route.
+- PR #122: completed. Add queued execute canary observability and rollback
+  evidence tests. The canary remains feature-flagged, preserves sync response
+  compatibility when disabled, does not change `/api/run-plan/resume`, does not
+  enable remote workers, and does not migrate queue storage to SQLite.
+- Next: allow queued canary for selected low-risk task chains only.
