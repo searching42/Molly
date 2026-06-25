@@ -56,3 +56,15 @@ def test_queued_execute_canary_docs_do_not_claim_default_migration() -> None:
     ]:
         assert forbidden not in text
 
+
+def test_queued_execute_canary_rollout_policy_documents_artifact_parity_fixture() -> None:
+    text = _policy_text()
+
+    for required in [
+        "PR #125 adds first artifact registry parity fixture",
+        "logical artifact ids",
+        "file existence",
+        "Exact paths/hashes are not required",
+        "This does not expand the allowlist",
+    ]:
+        assert required in text
