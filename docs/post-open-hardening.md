@@ -51,8 +51,11 @@ blur into the already-resolved OPEN series.
   allowlist scope, remote-worker posture, or SQLite/storage decisions.
 - Resolved: PR #129 documents and guards the default-migration readiness
   checklist for the queued execute canary.
-- Next recommended queued-canary work: add a second allowlisted chain parity
-  fixture, or add explicit cancellation/retry coverage.
+- Resolved: PR #130 adds a second allowlisted chain parity fixture for the
+  feature-flagged queued execute canary, using the actual second fully
+  allowlisted planner expansion instead of broadening the allowlist.
+- Next recommended queued-canary work: add explicit cancellation/retry
+  coverage, or add a production-sized fixture for an allowlisted chain.
 - Default-route migration is still not recommended.
 
 ## HARDEN-001: Introduce Explicit App Extension Registry
@@ -940,5 +943,10 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #129: completed. Add a default-migration readiness checklist plus doc
   guard coverage for the queued canary, clarifying that current canary
   coverage is still insufficient for default migration.
-- Next: add a second allowlisted chain parity fixture, or add
-  cancellation/retry coverage. Do not proceed to default-route migration yet.
+- PR #130: completed. Add a second allowlisted chain parity fixture for the
+  queued canary. The current planner expansion for `render_report` still
+  reaches non-allowlisted tasks, so this parity fixture intentionally uses
+  the actual second all-allowlisted chain, `check_trainability`, without
+  expanding the allowlist.
+- Next: add cancellation/retry coverage, or add a production-sized fixture
+  for an allowlisted chain. Do not proceed to default-route migration yet.

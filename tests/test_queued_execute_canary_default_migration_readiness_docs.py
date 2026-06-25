@@ -33,6 +33,7 @@ def test_default_migration_readiness_checklist_names_existing_coverage() -> None
 
     for required in [
         "artifact registry parity",
+        "second allowlisted chain parity",
         "failure classification parity",
         "repeated-run stability",
         "stale lease",
