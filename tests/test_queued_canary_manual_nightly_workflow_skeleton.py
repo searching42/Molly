@@ -39,6 +39,7 @@ def test_manual_nightly_workflow_skeleton_uses_conservative_inputs_and_bounded_e
         "tests/test_queued_execute_canary_observability_checklist_docs.py",
         "tests/test_queued_execute_canary_nightly_fixture_lane_docs.py",
         "tests/test_queued_execute_canary_production_sized_boundary.py",
+        "tests/test_queued_execute_canary_operational_rollback.py",
     ]:
         assert required in text
 

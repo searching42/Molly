@@ -79,6 +79,9 @@ blur into the already-resolved OPEN series.
   for eligible failed local queue jobs plus an allowlisted queued-canary retry
   helper, while explicitly not adding a public retry API, automatic retry, or
   route changes.
+- Resolved: PR #139 adds the queued-canary operational rollback drill and
+  operator runbook, proving that flag-off rollback returns new requests to sync
+  without mutating existing jobs, retry children, or leases.
 - Next recommended queued-canary work: deepen observability beyond the current
   minimal telemetry surface, or decide whether retry needs actor/audit/route
   hardening beyond the current local helper.
@@ -1008,6 +1011,10 @@ The goal is a closed, auditable demo rather than full automation.
   helper. The original failed job remains immutable, the retry child receives a
   new `job_id`, and there is still no public retry API, automatic retry, or
   route behavior change.
+- PR #139: completed. Add the queued-canary operational rollback drill and
+  operator runbook. Flag-off rollback now has deterministic route-level
+  evidence: new requests return to sync, existing queue state remains
+  unchanged, and no new queue is created for the sync run.
 - Next: deepen observability beyond the current minimal telemetry surface, or
   decide whether retry needs actor/audit/route hardening beyond the current
   local helper. Do not proceed to default-route migration yet.
