@@ -242,7 +242,7 @@ python -m ai4s_agent.run_plan_queue_cli \
   --max-iterations 10
 ```
 
-Default execute route queued canary:
+## Queued execute canary observability and rollback
 
 `POST /api/run-plan/execute` remains synchronous by default. When
 `AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY` is enabled, the route runs through
@@ -257,6 +257,27 @@ migrate queue storage to SQLite.
 Failed queued executor results are not treated as successful route execution:
 the canary returns `ok=false`, a failed execution payload, and the queue summary
 for review.
+
+Observability:
+
+- With the flag off, the response remains backward compatible and does not
+  include `execution_backend` or `queue_summary`.
+- The sync path records a `RunPlan execution backend: sync` log marker while
+  preserving the existing `RunPlan execution started` log.
+- With the flag on, the response includes `execution_backend="queued_canary"`
+  and `queue_summary`.
+- The queued canary path records a `RunPlan execution backend: queued_canary`
+  log marker and still logs terminal `WAITING_USER`, `FAILED`, or completed
+  execution status.
+
+Rollback:
+
+- Disable `AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY`.
+- Requests immediately return to the synchronous executor path.
+- Sync responses do not include `queue_summary`.
+- Sync runs do not create per-run queue files under
+  `.ai4s_internal/run_plan_queues/<project_id>/<run_id>`.
+- No remote worker or SQLite migration is involved.
 
 The CLI is an internal-only module entrypoint for local debugging and controlled
 experiments. It reads a `RunPlan` JSON file, creates a file-backed dedicated
