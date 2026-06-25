@@ -55,7 +55,7 @@ blur into the already-resolved OPEN series.
   feature-flagged queued execute canary, using the actual second fully
   allowlisted planner expansion instead of broadening the allowlist.
 - Resolved: PR #131 adds cancellation coverage for the queued execute canary
-  and documents that retry/requeue production semantics remain future work.
+  and documents the retry/requeue boundary before implementation.
 - Resolved: PR #132 documents and guards the production-sized fixture
   boundary for the queued execute canary, while explicitly keeping
   production-sized or nightly fixture proof out of the current PR.
@@ -75,9 +75,13 @@ blur into the already-resolved OPEN series.
 - Resolved: PR #137 defines explicit retry/requeue semantics for the local
   queued execute canary at the docs/test level, while explicitly not adding
   retry operations, queue mutations, or API routes.
-- Next recommended queued-canary work: implement only narrow explicit retry
-  behavior if needed, or deepen observability beyond the current minimal
-  telemetry surface.
+- Resolved: PR #138 implements atomic one-shot explicit retry-child creation
+  for eligible failed local queue jobs plus an allowlisted queued-canary retry
+  helper, while explicitly not adding a public retry API, automatic retry, or
+  route changes.
+- Next recommended queued-canary work: deepen observability beyond the current
+  minimal telemetry surface, or decide whether retry needs actor/audit/route
+  hardening beyond the current local helper.
 - Default-route migration is still not recommended.
 
 ## HARDEN-001: Introduce Explicit App Extension Registry
@@ -973,7 +977,7 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #131: completed. Add cancellation coverage for the queued canary and
   prove that sync fallback does not process or mutate cancelled queued jobs.
   Because the queue still has no explicit retry/requeue production API, retry
-  semantics remain documented future work rather than new behavior in this PR.
+  semantics remain a future production concern beyond that PR's scope.
 - PR #132: completed. Document and guard the production-sized fixture boundary
   for the queued canary. This PR keeps the boundary explicit: current small
   deterministic fixtures are useful for control-plane confidence, but they are
@@ -999,6 +1003,11 @@ The goal is a closed, auditable demo rather than full automation.
   execute canary without implementing retry behavior. This PR keeps lease
   attempts, stale recovery, explicit retry, and rerun/new execution as
   separate concepts and keeps default migration blocked.
-- Next: implement only narrow explicit retry behavior if needed, or deepen
-  observability beyond the current minimal telemetry surface. Do not proceed
-  to default-route migration yet.
+- PR #138: completed. Implement atomic one-shot retry-child creation for
+  eligible failed local queue jobs plus the allowlisted queued-canary retry
+  helper. The original failed job remains immutable, the retry child receives a
+  new `job_id`, and there is still no public retry API, automatic retry, or
+  route behavior change.
+- Next: deepen observability beyond the current minimal telemetry surface, or
+  decide whether retry needs actor/audit/route hardening beyond the current
+  local helper. Do not proceed to default-route migration yet.

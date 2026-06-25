@@ -46,7 +46,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 4 strict resume stage/gate validation | Completed as validation-only waiting-stage and executor-gate hardening | `src/ai4s_agent/run_plan_resume_stage_gate.py` |
 | Phase 4 internal resume intent execution bridge | Completed as feature-flagged one-time internal bridge | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
 | Phase 4 user-confirmed resume loop | Completed as review → application → validation → actual resume → post-resume review (PR #118) | `tests/test_user_confirmed_resume_loop_e2e.py` |
-| Phase 4 queued execute canary | Completed as feature-flagged, allowlisted, rollout-policy documented, first and second chain parity started, artifact registry parity fixture started, failure classification parity fixture started, repeated-run stability coverage started, queue recovery/stale lease coverage started, cancellation coverage started, retry/requeue semantics documented, production-sized fixture boundary documented, optional nightly production-sized fixture lane designed, telemetry/observability checklist documented, minimal structured telemetry implemented, optional manual/nightly workflow skeleton added, and default-migration readiness checklist documented; not default migrated | `tests/test_run_plan_executor.py`, `tests/test_queued_execute_canary_artifact_parity.py`, `tests/test_queued_execute_canary_failure_parity.py`, `tests/test_queued_execute_canary_second_chain_parity.py`, `tests/test_queued_execute_canary_cancellation_retry.py`, `tests/test_queued_execute_canary_retry_requeue_semantics_docs.py`, `tests/test_queued_execute_canary_minimal_telemetry.py`, `tests/test_queued_execute_canary_production_sized_boundary.py`, `tests/test_queued_execute_canary_nightly_fixture_lane_docs.py`, `tests/test_queued_execute_canary_observability_checklist_docs.py`, `tests/test_queued_execute_canary_repeated_run_stability.py`, `tests/test_queued_execute_canary_queue_recovery.py`, `tests/test_queued_execute_canary_default_migration_readiness_docs.py`, `tests/test_queued_canary_manual_nightly_workflow_skeleton.py`, `.github/workflows/queued-canary-manual-nightly.yml`, `docs/queued-execute-canary-rollout-policy.md`, `docs/queued-canary-retry-requeue-semantics.md` |
+| Phase 4 queued execute canary | Completed as feature-flagged, allowlisted, rollout-policy documented, first and second chain parity started, artifact registry parity fixture started, failure classification parity fixture started, repeated-run stability coverage started, queue recovery/stale lease coverage started, cancellation coverage started, retry/requeue semantics documented, atomic one-shot explicit retry-child creation implemented for eligible allowlisted local queue jobs, production-sized fixture boundary documented, optional nightly production-sized fixture lane designed, telemetry/observability checklist documented, minimal structured telemetry implemented, optional manual/nightly workflow skeleton added, and default-migration readiness checklist documented; not default migrated | `tests/test_run_plan_executor.py`, `tests/test_queued_execute_canary_artifact_parity.py`, `tests/test_queued_execute_canary_failure_parity.py`, `tests/test_queued_execute_canary_second_chain_parity.py`, `tests/test_queued_execute_canary_cancellation_retry.py`, `tests/test_queued_execute_canary_retry_requeue_semantics_docs.py`, `tests/test_queued_execute_canary_explicit_retry.py`, `tests/test_worker_queue_explicit_retry.py`, `tests/test_queued_execute_canary_minimal_telemetry.py`, `tests/test_queued_execute_canary_production_sized_boundary.py`, `tests/test_queued_execute_canary_nightly_fixture_lane_docs.py`, `tests/test_queued_execute_canary_observability_checklist_docs.py`, `tests/test_queued_execute_canary_repeated_run_stability.py`, `tests/test_queued_execute_canary_queue_recovery.py`, `tests/test_queued_execute_canary_default_migration_readiness_docs.py`, `tests/test_queued_canary_manual_nightly_workflow_skeleton.py`, `.github/workflows/queued-canary-manual-nightly.yml`, `docs/queued-execute-canary-rollout-policy.md`, `docs/queued-canary-retry-requeue-semantics.md` |
 
 ## Phase 1: Queued Workflow Fixture
 
@@ -398,14 +398,13 @@ Recommended next work should keep the same safety posture:
     that actual second chain without expanding the allowlist.
 11. Cancellation coverage has started for existing allowlisted queued execute
     chains. Cancelled queued jobs are not treated as the target job, and sync
-    fallback does not process or mutate cancelled queued jobs. Explicit retry
-    production semantics remain future work because the queue currently has no
-    public retry/requeue API.
-12. Retry/requeue semantics are now documented explicitly. Lease attempts,
-    stale recovery, explicit retry, and rerun/new execution are separate
-    concepts. Stale recovery keeps the same `job_id`; any future explicit
-    retry must create a new `job_id` and keep the original failed job
-    immutable.
+    fallback does not process or mutate cancelled queued jobs.
+12. Retry/requeue semantics are now documented explicitly and partially
+    implemented. Lease attempts, stale recovery, explicit retry, and rerun/new
+    execution are separate concepts. Stale recovery keeps the same `job_id`;
+    PR #138 adds atomic one-shot explicit retry-child creation with a new
+    `job_id`, preserved source-job immutability, and no public retry/requeue
+    API.
 13. Production-sized fixture boundary documentation has started. Current
     parity fixtures remain small and deterministic; they are useful for
     control-plane confidence, but they are not production-sized proof. A
@@ -427,6 +426,7 @@ Recommended next work should keep the same safety posture:
     that does not touch existing queued jobs.
 18. Remaining canary migration work includes broader observability wiring if
     needed, optional scheduled/nightly enablement only after policy gates are
-    satisfied, narrow explicit retry behavior if queued execution needs it,
-    the default migration decision, remote worker contract, SQLite or storage
-    migration decision, and production scientific adapter validation.
+    satisfied, any future actor/audit/public-route hardening for retry if
+    queued execution needs it, the default migration decision, remote worker
+    contract, SQLite or storage migration decision, and production scientific
+    adapter validation.

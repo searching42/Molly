@@ -120,14 +120,20 @@ Queue safety:
 - PR #131 adds cancellation coverage for queued execute canary.
 - Cancelled queued jobs must not be mistaken for the target job.
 - Sync fallback must not process or mutate cancelled queued jobs.
-- PR #137 defines explicit retry/requeue semantics in docs only.
+- PR #137 defines explicit retry/requeue semantics.
+- PR #138 implements atomic one-shot retry-child creation for eligible failed
+  local queue jobs plus an allowlisted queued-canary retry helper.
 - Lease attempts and stale lease recovery are not explicit retry.
 - Stale recovery keeps the same `job_id`; explicit retry must create a new
   `job_id`.
-- The original failed job must remain immutable for any future explicit retry.
+- The original failed job remains immutable for explicit retry.
 - `WAITING_USER` must continue to use the gate/resume path rather than retry.
-- If explicit retry/requeue production semantics are not implemented yet,
-  default migration remains blocked until retry behavior is defined and tested.
+- PR #138 still does not add a public retry route, automatic retry, or retry
+  for non-allowlisted chains such as `train_model`, generation, or
+  literature/mining.
+- If explicit retry/requeue production semantics are not yet hardened beyond
+  local one-shot child creation, default migration remains blocked until retry
+  behavior is defined and tested at production scope.
 - This does not expand the allowlist.
 
 Rollback evidence:
@@ -375,7 +381,8 @@ Current decision:
 
 ## Retry And Requeue Semantics
 
-PR #137 adds `docs/queued-canary-retry-requeue-semantics.md`.
+PR #137 adds `docs/queued-canary-retry-requeue-semantics.md`, and PR #138
+implements the narrowest allowed follow-up.
 
 That contract keeps the current queue behavior and future explicit retry
 behavior separate:
@@ -388,7 +395,10 @@ behavior separate:
 - cancelled jobs are not retryable
 - succeeded jobs are not retryable
 - queued/running jobs are not retryable
-- explicit retry remains docs-only until a narrow follow-up PR implements it
+- PR #138 implements only atomic one-shot retry-child creation under the local
+  queue lock plus the allowlisted queued-canary helper
+- there is still no public retry API, automatic retry, or route behavior
+  change
 
 This still does not implement retry/requeue operations, automatic retry, API
 routes, allowlist expansion, or default migration.
@@ -535,7 +545,8 @@ The following items still block default migration:
 - the allowlist still covers only a small set of low-risk chains
 - production-sized datasets are not yet proven
 - long-running or heavy adapters are not yet proven
-- explicit retry/requeue production semantics are not yet defined
+- explicit retry/requeue production semantics are not yet hardened beyond local
+  one-shot child creation
 - `train_model` remains excluded
 - generation remains excluded
 - literature/mining remains excluded
@@ -556,8 +567,9 @@ The following are required before default migration:
 - queue recovery coverage for stale running, cancellation, and retry paths
 - production-sized fixture policy defined, potentially via nightly or offline
   coverage that still respects CI constraints
-- explicit retry/requeue production semantics defined and tested, if queued
-  execution is to move beyond current canary scope
+- explicit retry/requeue production semantics hardened beyond local one-shot
+  child creation and tested at production scope, if queued execution is to
+  move beyond current canary scope
 - storage backend decision completed
 - remote worker decision completed
 - sync fallback and queued canary telemetry both defined and reviewable
