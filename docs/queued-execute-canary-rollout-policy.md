@@ -76,6 +76,12 @@ Artifact registry parity:
 - An allowlisted queued canary run registers the same logical artifacts as the
   synchronous path for the same task chain.
 - Missing or differently named artifacts block allowlist expansion.
+- PR #125 adds first artifact registry parity fixture for an existing
+  allowlisted chain. The fixture compares logical artifact ids and file existence
+  across sync and queued canary runs.
+- Exact paths/hashes are not required unless artifacts are deterministic and
+  run-id-independent.
+- This does not expand the allowlist.
 
 Failure classification parity:
 

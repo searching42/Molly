@@ -913,6 +913,10 @@ The goal is a closed, auditable demo rather than full automation.
   decision matrix in `docs/queued-execute-canary-rollout-policy.md`, with
   green criteria, red disable conditions, allowlist expansion rules, and default
   migration exit criteria.
-- Next: add parity fixtures for one additional low-risk allowlisted chain, or
-  add artifact registry parity tests for existing allowlisted chains. Do not
-  proceed to default-route migration yet.
+- PR #125: completed. Add artifact registry parity fixture coverage for an
+  existing allowlisted queued execute chain, comparing sync and queued canary
+  logical artifact ids and artifact file existence without expanding the
+  allowlist.
+- Next: add failure classification parity fixture for an allowlisted chain, or
+  add repeated-run stability coverage for the queued canary. Do not proceed to
+  default-route migration yet.
