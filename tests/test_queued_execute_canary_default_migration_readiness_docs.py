@@ -16,6 +16,7 @@ def test_default_migration_readiness_checklist_documents_green_and_blocking_item
     for required in [
         "Default Migration Readiness Checklist",
         "Production-Sized Fixture Boundary",
+        "Telemetry and Observability Checklist",
         "Current Green Coverage",
         "Still Blocking Default Migration",
         "Required Before Default Migration",
@@ -26,6 +27,9 @@ def test_default_migration_readiness_checklist_documents_green_and_blocking_item
         "SQLite",
         "nightly",
         "CI constraints",
+        "no centralized telemetry sink",
+        "no dashboard",
+        "no alerting",
         "Default migration remains blocked",
         "/api/run-plan/resume",
     ]:

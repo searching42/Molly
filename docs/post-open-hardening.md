@@ -59,9 +59,12 @@ blur into the already-resolved OPEN series.
 - Resolved: PR #132 documents and guards the production-sized fixture
   boundary for the queued execute canary, while explicitly keeping
   production-sized or nightly fixture proof out of the current PR.
-- Next recommended queued-canary work: tighten the
-  telemetry/observability checklist, or design an optional nightly
-  production-sized fixture lane.
+- Resolved: PR #133 documents and guards the queued canary
+  telemetry/observability checklist, while explicitly not implementing
+  production telemetry or changing route behavior.
+- Next recommended queued-canary work: implement minimal structured telemetry
+  fields for queued canary, or design an optional nightly production-sized
+  fixture lane.
 - Default-route migration is still not recommended.
 
 ## HARDEN-001: Introduce Explicit App Extension Registry
@@ -963,6 +966,10 @@ The goal is a closed, auditable demo rather than full automation.
   deterministic fixtures are useful for control-plane confidence, but they are
   not production-sized proof. No medium or nightly fixture lane is enabled
   yet.
-- Next: tighten the telemetry/observability checklist, or design an optional
-  nightly production-sized fixture lane. Do not proceed to default-route
-  migration yet.
+- PR #133: completed. Document and guard the telemetry/observability
+  checklist for the queued canary. This PR does not implement production
+  telemetry, does not change `/api/run-plan/execute`, and does not make queued
+  execution default.
+- Next: implement minimal structured telemetry fields for queued canary, or
+  design an optional nightly production-sized fixture lane. Do not proceed to
+  default-route migration yet.

@@ -235,6 +235,94 @@ Current decision:
 - a production-sized or nightly boundary fixture policy still needs to exist
 - Default migration remains blocked
 
+## Telemetry and Observability Checklist
+
+This checklist documents the minimum observability surface expected before the
+queued canary can move toward a broader rollout. It does not mean production
+telemetry is implemented today.
+
+### Required backend markers
+
+Queued canary observability must distinguish:
+
+- sync path
+- queued_canary path
+- sync_fallback_not_allowlisted
+- failed queued canary
+- rollback to sync
+
+Current existing coverage already references:
+
+- `RunPlan execution backend: sync`
+- `RunPlan execution backend: queued_canary`
+- `RunPlan execution backend: sync_fallback_not_allowlisted`
+- `execution_backend="queued_canary"`
+- `queue_summary`
+
+### Required identity fields
+
+Queued canary observability must be able to locate:
+
+- `project_id`
+- `run_id`
+- `job_id`
+- `lease_id`
+- `worker_id`
+- `execution_backend`
+- `queued_job_id`
+- `final_job.status`
+- `final_lease.status`
+
+### Required execution state fields
+
+Queued canary observability must surface:
+
+- execution status
+- executed tasks
+- failed task
+- waiting task
+- required gates
+- error message or error type
+- cancellation status
+- stale lease or recovery events
+- queue final state
+
+### Required safety evidence
+
+Queued canary observability must prove:
+
+- old job not consumed
+- cancelled job not consumed
+- stale job not mistaken for target job
+- sync fallback does not create queue files
+- sync fallback does not mutate queue jobs
+- non-allowlisted tasks do not reach queued backend
+- rollback to sync does not touch existing queued jobs
+
+### Still missing / not production-grade
+
+Current gaps remain explicit:
+
+- no centralized telemetry sink
+- no dashboard
+- no alerting
+- no SLO or SLA policy
+- no production correlation id policy
+- no remote worker metrics
+- no SQLite or storage migration metrics
+- no production-sized or nightly telemetry fixture
+- no default migration readiness from telemetry alone
+
+### Current decision
+
+Current decision: telemetry checklist is documented but not fully implemented
+as production observability.
+
+- Keep queued canary feature-flagged.
+- Keep allowlist conservative.
+- Default migration remains blocked until telemetry/observability is
+  implemented and tested.
+
 ## Default Migration Readiness Checklist
 
 ### 1. Current Green Coverage
@@ -252,6 +340,7 @@ Current green coverage already exists for:
 - target-job safety
 - sync fallback compatibility
 - retry remains documented as future production work
+- observability checklist documented
 
 ### 2. Still Blocking Default Migration
 
@@ -267,6 +356,7 @@ The following items still block default migration:
 - the remote worker contract is not defined
 - the SQLite/storage migration decision is not complete
 - queue observability is not yet production-grade
+- no centralized telemetry sink, dashboard, or alerting exists yet
 - operational rollback and alerting policy is not yet complete
 - `/api/run-plan/resume` does not have a default-migration strategy
 
@@ -285,6 +375,7 @@ The following are required before default migration:
 - storage backend decision completed
 - remote worker decision completed
 - sync fallback and queued canary telemetry both defined and reviewable
+- telemetry and observability implemented beyond documentation-only checklist
 - default migration must have a one-step rollback path
 - all non-allowlisted tasks must continue to force sync fallback
 - owner, rollout, and rollback steps must be explicit in the docs
@@ -308,10 +399,12 @@ PR #130 adds a second allowlisted chain parity fixture. PR #131 adds
 cancellation coverage plus explicit documentation that retry/requeue
 production semantics remain future work. PR #132 documents and guards the
 production-sized fixture boundary without claiming production-sized proof. The
-next engineering PR should tighten the telemetry/observability checklist, or
-design an optional nightly production-sized fixture lane. The default-migration
-readiness checklist is now documented, but this is still not enough to justify
-default migration.
+PR #133 documents and guards the telemetry/observability checklist without
+claiming production-grade telemetry. The next engineering PR should implement
+minimal structured telemetry fields for queued canary, or design an optional
+nightly production-sized fixture lane. The default-migration readiness
+checklist is now documented, but this is still not enough to justify default
+migration.
 
 Do not move `train_model`, generation, literature, or mining tasks into the
 queued canary yet.
