@@ -637,8 +637,11 @@ Default-route migration hard gates:
    semantics before any cleanup/recovery route is considered.
 4. `RunPlanQueueExecutionSummary` must be validated consistently by route, CLI,
    service helper, and integration tests.
-5. The dedicated-queue limitation must be resolved either with guaranteed
-   per-request dedicated queues or target-job acquisition.
+5. The dedicated-queue limitation is addressed for the internal run-plan helper
+   by low-level target acquisition plus service-level ownership of the newly
+   created job. `WorkerQueue.acquire(...)` can target an arbitrary known job,
+   but `run_run_plan_via_local_queue(...)` must only process the job it just
+   enqueued.
 6. `waiting_user` semantics must stay explicit. PR #94 defines the first
    compatibility contract: queue jobs finish as `succeeded`, while summary,
    status, and audit surfaces carry waiting metadata. A full queued resume
@@ -655,8 +658,9 @@ Default-route migration hard gates:
    review findings → proposal → application → validation → one-time execute →
    post-resume review artifacts/card refresh.
 10. Target-job acquisition now has selector-level support in queue/poller APIs;
-    default-route migration still requires one-time, actor/permission/audit-safe
-    target-safe execution proofs.
+    service-level hardening keeps `run_run_plan_via_local_queue(...)` scoped to
+    its newly created job. Default-route migration still requires canary
+    coverage for actor/permission/audit-safe target execution.
 
 Do not jump directly to remote worker support or SQLite migration. Remote worker
 contracts should wait until the local default-route migration gates are met;
@@ -884,3 +888,6 @@ The goal is a closed, auditable demo rather than full automation.
 - PR #119: completed. Implement target-job acquisition support in
   `WorkerQueue.acquire()` and `WorkerQueuePoller` before default-route queue
   migration.
+- Next: harden run-plan queue target selector semantics so the service helper
+  never processes an externally selected job and never leaves orphan queued
+  jobs on selector mismatch.

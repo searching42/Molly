@@ -89,6 +89,11 @@ result = poller.poll_once()
 `poll(max_iterations=N)` repeats this bounded sequence and returns the
 per-iteration results.
 
+The low-level `WorkerQueue.acquire(...)` and `WorkerQueuePoller` selectors are
+queue-control primitives. They can target a known `job_id`, `project_id`, or
+`run_id` when a caller already owns the queue semantics. Higher-level run-plan
+helpers intentionally expose a narrower contract.
+
 The poller can also bind to a task runner explicitly:
 
 ```python
@@ -216,10 +221,13 @@ This helper is opt-in internal service plumbing. It enqueues a validated
 `WorkerQueuePoller`, runs a bounded `LocalWorkerLoop`, and returns queue/lease
 terminal state plus poll actions. By default the helper requires a dedicated
 queue with no existing queued or running jobs. If `require_empty_queue=False`,
-it targets the newly created `target_job_id` and can safely run on shared queues
-with optional `target_project_id`/`target_run_id` selectors. It does not add API
-routes, does not change the default synchronous `/api/run-plan/execute` path,
-does not connect remote workers, and does not change storage.
+it still targets only the newly created job. Callers cannot provide an external
+`target_job_id`; any optional project/run target selectors must match the
+helper's own `project_id` and `run_plan.run_id` before enqueue. This prevents a
+failed selector from leaving an orphan queued run-plan job. The service helper
+does not add API routes, does not change the default synchronous
+`/api/run-plan/execute` path, does not connect remote workers, and does not
+change storage.
 
 Internal queued run-plan CLI:
 
@@ -668,8 +676,9 @@ Default-route migration hard gates:
    queued/running jobs.
 4. `RunPlanQueueExecutionSummary` must be validated consistently by route, CLI,
    service helper, and tests.
-5. The dedicated queue limitation must be resolved with dedicated per-request
-   queues or target-job acquisition.
+5. The dedicated queue limitation is resolved for the internal run-plan helper
+   by targeting only the newly created job; default-route migration still needs
+   canary coverage around the same invariant.
 6. `waiting_user` uses the current compatibility contract: terminal succeeded
    queue state plus explicit waiting metadata in summary, status, and audit.
    A full queued resume engine remains future work.

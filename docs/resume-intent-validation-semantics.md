@@ -467,6 +467,9 @@ Default-route migration is out of scope until:
 4. Current `RunPlan` compatibility checks cover task ids, task order, gates,
    and stage state.
 5. `target-job` acquisition or strict dedicated-queue guarantees are in place.
+   For the internal run-plan helper, this means the service targets only the
+   job it just enqueued; low-level queue selectors must not let callers redirect
+   the helper to an unrelated job.
 6. Stale-intent detection and execution-snapshot consistency are tested.
 7. Existing `/api/run-plan/resume` snapshot/gate tests remain green.
 8. A user confirmation gate still explicitly authorizes final resume execution.
@@ -478,7 +481,8 @@ Default-route migration is out of scope until:
 The current validation/execution loop is internal and opt-in only. Before default
 queue execution can replace synchronous execution, the following hard gates remain:
 
-1. target-job acquisition for queue workers (or strict dedicated queue contract).
+1. target-job acquisition for queue workers plus service-level ownership checks
+   that prevent externally selected run-plan jobs.
 2. full queued `WAITING_USER` resume engine (resume semantics beyond terminal-
    compatible metadata).
 3. queued resume should still include post-execute review/card refresh.
@@ -490,8 +494,8 @@ queue execution can replace synchronous execution, the following hard gates rema
 
 Remaining engineering milestones after PR #118 are migration-focused:
 
-1. Implement safe `target-job` acquisition (or equivalent dedicated-queue
-   isolation) in the run-plan queue execution path.
+1. Keep target-job acquisition constrained to service-owned run-plan jobs in
+   the internal queue path.
 2. Add deterministic post-resume queue/job verification before any default-route
    queue migration.
 3. Keep PR #117-style resume bridge as internal-only until the above migration
