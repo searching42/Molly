@@ -181,14 +181,72 @@ Default migration is not allowed until:
 - default-route canary is stable across repeated runs.
 - `/api/run-plan/resume` remains unaffected or has its own migration policy.
 
+## Default Migration Readiness Checklist
+
+### 1. Current Green Coverage
+
+Current green coverage already exists for:
+
+- response compatibility and rollback evidence
+- low-risk allowlist enforcement
+- artifact registry parity
+- failure classification parity
+- repeated-run stability
+- stale lease and queue recovery coverage
+- target-job safety
+- sync fallback compatibility
+
+### 2. Still Blocking Default Migration
+
+The following items still block default migration:
+
+- the allowlist still covers only a small set of low-risk chains
+- a second allowlisted chain parity fixture is not yet covered
+- production-sized datasets are not yet proven
+- long-running or heavy adapters are not yet proven
+- `train_model` remains excluded
+- generation remains excluded
+- literature/mining remains excluded
+- the remote worker contract is not defined
+- the SQLite/storage migration decision is not complete
+- queue observability is not yet production-grade
+- operational rollback and alerting policy is not yet complete
+- `/api/run-plan/resume` does not have a default-migration strategy
+
+### 3. Required Before Default Migration
+
+The following are required before default migration:
+
+- at least two allowlisted task chains with artifact parity coverage
+- failure parity coverage for success, failure, and partial failure cases
+- repeated-run stability coverage across broader run counts
+- queue recovery coverage for stale running, cancellation, and retry paths
+- storage backend decision completed
+- remote worker decision completed
+- sync fallback and queued canary telemetry both defined and reviewable
+- default migration must have a one-step rollback path
+- all non-allowlisted tasks must continue to force sync fallback
+- owner, rollout, and rollback steps must be explicit in the docs
+
+### 4. Explicit Current Decision
+
+Current decision: do not make queued execution default.
+
+- Keep `AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY` feature-flagged.
+- Keep the low-risk allowlist conservative.
+- second allowlisted chain parity fixture
+- queue cancellation/retry fixture
+- production-sized fixture
+- observability checklist
+
 ## Current Recommendation
 
 Keep the queued canary feature-flagged. Keep the allowlist conservative.
 
-The next engineering PR should add parity fixtures for one additional
-low-risk allowlisted chain or add an explicit default-migration readiness
-checklist test. Queue recovery and stale lease behavior now have rollout
-coverage, but this is still not enough to justify default migration.
+The next engineering PR should add a second allowlisted chain parity fixture,
+or add queue cancellation/retry coverage. The default-migration readiness
+checklist is now documented, but this is still not enough to justify default
+migration.
 
 Do not move `train_model`, generation, literature, or mining tasks into the
 queued canary yet.
