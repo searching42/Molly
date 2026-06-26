@@ -16,18 +16,39 @@ from ai4s_agent.document_parse_live_acceptance import (
     main,
     run_document_parse_live_acceptance,
 )
-from document_parse_test_helpers import build_zip_from_dir, fixture_mineru_output_dir
+from document_parse_test_helpers import fixture_mineru_output_dir
+
+
+def _mineru_zip_payload(*, nested: bool = True, quality_miss: bool = False) -> bytes:
+    bundle = fixture_mineru_output_dir()
+    content_list = json.loads((bundle / "synthetic_content_list.json").read_text(encoding="utf-8"))
+    if quality_miss:
+        for item in content_list:
+            if item.get("type") == "table":
+                item["table_body"] = "<table><tr><th>SMILES</th><th>PLQY</th><th>lambda_em</th></tr><tr><td>CCO</td><td>0.10</td><td>999</td></tr></table>"
+    prefix = Path("paper") / "hybrid_auto" if nested else Path("")
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(bundle.rglob("*")):
+            if not path.is_file():
+                continue
+            arcname = prefix / path.relative_to(bundle)
+            if path.name == "synthetic_content_list.json":
+                archive.writestr(str(arcname), json.dumps(content_list))
+            else:
+                archive.write(path, arcname=str(arcname))
+    return payload.getvalue()
 
 
 def _success_transport(*, token_seen: list[str] | None = None, calls: dict[str, int] | None = None) -> httpx.MockTransport:
-    zip_payload = build_zip_from_dir(fixture_mineru_output_dir())
+    zip_payload = _mineru_zip_payload()
     counters = calls if calls is not None else {"submit": 0, "status": 0, "result": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         if token_seen is not None:
             token_seen.append(str(request.headers.get("authorization") or ""))
         if request.url.path == "/health":
-            return httpx.Response(200, json={"status": "ok", "version_name": "mineru-live-test", "protocol_version": "v1"})
+            return httpx.Response(200, json={"status": "ok", "version_name": "mineru-live-test", "protocol_version": 2})
         if request.url.path == "/tasks":
             counters["submit"] = counters.get("submit", 0) + 1
             return httpx.Response(202, json={"task_id": "task-live-123"})
@@ -40,7 +61,7 @@ def _success_transport(*, token_seen: list[str] | None = None, calls: dict[str, 
                     "state": "completed",
                     "_backend": "hybrid-engine",
                     "_version_name": "mineru-live-test",
-                    "protocol_version": "v1",
+                    "protocol_version": 2,
                     "queued_ahead": 0,
                 },
             )
@@ -53,30 +74,38 @@ def _success_transport(*, token_seen: list[str] | None = None, calls: dict[str, 
 
 
 def _quality_miss_transport() -> httpx.MockTransport:
-    bundle = fixture_mineru_output_dir()
-    content_list = json.loads((bundle / "synthetic_content_list.json").read_text(encoding="utf-8"))
-    for item in content_list:
-        if item.get("type") == "table":
-            item["table_body"] = "<table><tr><th>SMILES</th><th>PLQY</th><th>lambda_em</th></tr><tr><td>CCO</td><td>0.10</td><td>999</td></tr></table>"
-    payload = io.BytesIO()
-    with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(bundle.rglob("*")):
-            if not path.is_file():
-                continue
-            if path.name == "synthetic_content_list.json":
-                archive.writestr(path.name, json.dumps(content_list))
-            else:
-                archive.write(path, arcname=str(path.relative_to(bundle)))
-    zip_payload = payload.getvalue()
+    zip_payload = _mineru_zip_payload(quality_miss=True)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/health":
-            return httpx.Response(200, json={"status": "ok"})
+            return httpx.Response(200, json={"status": "ok", "protocol_version": 2})
         if request.url.path == "/tasks":
             return httpx.Response(202, json={"task_id": "task-quality"})
         if request.url.path == "/tasks/task-quality":
-            return httpx.Response(200, json={"task_id": "task-quality", "state": "completed"})
+            return httpx.Response(200, json={"task_id": "task-quality", "state": "completed", "protocol_version": 2})
         if request.url.path == "/tasks/task-quality/result":
+            return httpx.Response(200, content=zip_payload)
+        raise AssertionError(f"unexpected {request.method} {request.url.path}")
+
+    return httpx.MockTransport(handler)
+
+
+def _protocol_transport(*, health_protocol: Any = 2, status_protocol: Any = 2) -> httpx.MockTransport:
+    zip_payload = _mineru_zip_payload()
+
+    def with_protocol(payload: dict[str, Any], value: Any) -> dict[str, Any]:
+        if value is not None:
+            payload["protocol_version"] = value
+        return payload
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json=with_protocol({"status": "ok"}, health_protocol))
+        if request.url.path == "/tasks":
+            return httpx.Response(202, json={"task_id": "task-protocol"})
+        if request.url.path == "/tasks/task-protocol":
+            return httpx.Response(200, json=with_protocol({"task_id": "task-protocol", "state": "completed"}, status_protocol))
+        if request.url.path == "/tasks/task-protocol/result":
             return httpx.Response(200, content=zip_payload)
         raise AssertionError(f"unexpected {request.method} {request.url.path}")
 
@@ -99,7 +128,8 @@ def test_live_acceptance_passes_with_mock_mineru_and_pdfplumber_baseline(tmp_pat
     assert report.mineru.ok is True
     assert report.mineru.remote_task_id == "task-live-123"
     assert report.mineru.task_status_history == ["completed"]
-    assert report.mineru.markdown_path == "mineru/mineru_bundle/synthetic.md"
+    assert report.mineru.protocol_version == "2"
+    assert report.mineru.markdown_path == "mineru/mineru_bundle/paper/hybrid_auto/synthetic.md"
     assert report.pdfplumber is not None
     assert report.pdfplumber.ok is True
     assert report.comparison is not None
@@ -128,9 +158,34 @@ def test_live_acceptance_passes_with_mock_mineru_and_pdfplumber_baseline(tmp_pat
         resolved = (run_root / rel_path).resolve()
         assert run_root.resolve() in resolved.parents or resolved == run_root.resolve()
         assert resolved.exists(), rel_path
-    assert report.mineru.markdown_path == "mineru/mineru_bundle/synthetic.md"
+    assert report.mineru.markdown_path == "mineru/mineru_bundle/paper/hybrid_auto/synthetic.md"
     mineru_audit = json.loads((run_root / report.mineru.parser_audit_path).read_text(encoding="utf-8"))
     assert mineru_audit["source_pdf_sha256"] == report.source_pdf_sha256
+
+
+@pytest.mark.parametrize(
+    ("health_protocol", "status_protocol", "expected_code"),
+    [
+        (None, None, "missing_protocol_version"),
+        (2, 1, "unsupported_protocol_version"),
+    ],
+)
+def test_live_acceptance_requires_mineru_protocol_v2(
+    tmp_path: Path,
+    health_protocol: Any,
+    status_protocol: Any,
+    expected_code: str,
+) -> None:
+    report = run_document_parse_live_acceptance(
+        run_id=f"mineru-protocol-{expected_code}",
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:8000",
+        endpoint_kind="mineru_api",
+        transport=_protocol_transport(health_protocol=health_protocol, status_protocol=status_protocol),
+    )
+
+    assert report.decision == "failed"
+    assert any(error.code == expected_code for error in report.errors)
 
 
 def test_live_acceptance_needs_review_when_threshold_misses(tmp_path: Path) -> None:
@@ -378,6 +433,35 @@ def test_live_acceptance_invalid_configuration_returns_failed_report(tmp_path: P
     )
     assert threshold.decision == "failed"
     assert any(error.code == "invalid_threshold" for error in threshold.errors)
+
+
+def test_live_acceptance_non_empty_run_dir_is_rejected_before_invalid_config_overwrite(tmp_path: Path) -> None:
+    run_root = tmp_path / "acceptance" / "existing-run"
+    first = run_document_parse_live_acceptance(
+        run_id="existing-run",
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:8000",
+        endpoint_kind="mineru_api",
+        transport=_success_transport(),
+    )
+    original_report = (run_root / "acceptance_report.json").read_text(encoding="utf-8")
+    original_summary = (run_root / "acceptance_summary.md").read_text(encoding="utf-8")
+
+    second = run_document_parse_live_acceptance(
+        run_id="existing-run",
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:8000",
+        endpoint_kind="mineru_api",
+        task_timeout_sec=0,
+        transport=_success_transport(),
+    )
+
+    assert first.decision == "passed"
+    assert second.decision == "failed"
+    assert any(error.code == "output_directory_not_empty" for error in second.errors)
+    assert not any(error.code == "configuration_error" for error in second.errors)
+    assert (run_root / "acceptance_report.json").read_text(encoding="utf-8") == original_report
+    assert (run_root / "acceptance_summary.md").read_text(encoding="utf-8") == original_summary
 
 
 def test_live_acceptance_cli_exit_codes_and_rejects_reused_output_dir(tmp_path: Path) -> None:

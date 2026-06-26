@@ -28,6 +28,7 @@ EndpointKind = Literal["mineru_api", "mineru_router", "compatible_endpoint"]
 
 _SCHEMA_VERSION = "document_parse_live_acceptance.v1"
 _SOURCE_FIXTURE = "synthetic_oled_table_v1"
+_EXPECTED_MINERU_PROTOCOL_VERSION = "2"
 _GOLD: dict[str, Any] = {
     "page_count": 1,
     "text_contains": ["Synthetic", "OLED", "PLQY"],
@@ -157,9 +158,9 @@ def run_document_parse_live_acceptance(
     clean_run_id = str(run_id or "").strip()
     root = Path(output_dir).expanduser().resolve()
     run_id_error = _run_id_error(clean_run_id)
-    run_root = (root / clean_run_id).resolve() if run_id_error is None else (root / "invalid-run-id").resolve()
+    run_root = (root / clean_run_id).resolve() if run_id_error is None else root
     if run_id_error is not None:
-        report = _failed_report(
+        return _failed_report(
             run_id=clean_run_id,
             run_root=run_root,
             endpoint_kind=endpoint_kind,
@@ -170,13 +171,10 @@ def run_document_parse_live_acceptance(
             thresholds=threshold_model,
             errors=[run_id_error],
         )
-        run_root.mkdir(parents=True, exist_ok=True)
-        _persist_report(report, run_root)
-        return report
     if run_root.parent != root:
-        report = _failed_report(
+        return _failed_report(
             run_id=clean_run_id,
-            run_root=root / "invalid-run-id",
+            run_root=root,
             endpoint_kind=endpoint_kind,
             api_url=api_url,
             backend=backend,
@@ -190,9 +188,24 @@ def run_document_parse_live_acceptance(
                 )
             ],
         )
-        (root / "invalid-run-id").mkdir(parents=True, exist_ok=True)
-        _persist_report(report, root / "invalid-run-id")
-        return report
+    if run_root.exists() and any(run_root.iterdir()):
+        return _failed_report(
+            run_id=clean_run_id,
+            run_root=run_root,
+            endpoint_kind=endpoint_kind,
+            api_url=api_url,
+            backend=backend,
+            effort=effort,
+            parse_method=parse_method,
+            thresholds=threshold_model,
+            errors=[
+                DocumentParseAcceptanceError(
+                    code="output_directory_not_empty",
+                    message="run-specific acceptance output directory must be empty",
+                    details={"output_dir": str(run_root)},
+                )
+            ],
+        )
     config_errors = _configuration_errors(
         thresholds=threshold_model,
         http_timeout_sec=http_timeout_sec,
@@ -215,24 +228,6 @@ def run_document_parse_live_acceptance(
         )
         _persist_report(report, run_root)
         return report
-    if run_root.exists() and any(run_root.iterdir()):
-        return _failed_report(
-            run_id=clean_run_id,
-            run_root=run_root,
-            endpoint_kind=endpoint_kind,
-            api_url=api_url,
-            backend=backend,
-            effort=effort,
-            parse_method=parse_method,
-            thresholds=threshold_model,
-            errors=[
-                DocumentParseAcceptanceError(
-                    code="output_directory_not_empty",
-                    message="run-specific acceptance output directory must be empty",
-                    details={"output_dir": str(run_root)},
-                )
-            ],
-        )
     run_root.mkdir(parents=True, exist_ok=True)
     source_pdf = run_root / "synthetic_source.pdf"
     warnings: list[str] = ["synthetic fixture comparison only; not production scientific extraction evidence"]
@@ -500,8 +495,20 @@ def _acceptance_findings(
         return findings
     if not mineru.source_pdf_sha256:
         findings.append(DocumentParseAcceptanceError(code="missing_source_hash", message="source PDF hash is absent"))
-    if mineru.audit_source_pdf_sha256 and mineru.audit_source_pdf_sha256 != mineru.source_pdf_sha256:
+    if not mineru.audit_source_pdf_sha256:
+        findings.append(DocumentParseAcceptanceError(code="missing_audit_source_hash", message="provider audit source hash is absent"))
+    elif mineru.audit_source_pdf_sha256 != mineru.source_pdf_sha256:
         findings.append(DocumentParseAcceptanceError(code="source_hash_mismatch", message="provider audit source hash does not match generated source PDF hash"))
+    if not mineru.protocol_version:
+        findings.append(DocumentParseAcceptanceError(code="missing_protocol_version", message="MinerU API protocol version is absent"))
+    elif _normalize_protocol_version(mineru.protocol_version) != _EXPECTED_MINERU_PROTOCOL_VERSION:
+        findings.append(
+            DocumentParseAcceptanceError(
+                code="unsupported_protocol_version",
+                message=f"MinerU API protocol version must be {_EXPECTED_MINERU_PROTOCOL_VERSION}",
+                details={"observed": mineru.protocol_version, "expected": _EXPECTED_MINERU_PROTOCOL_VERSION},
+            )
+        )
     if not mineru.parser_audit_path:
         findings.append(DocumentParseAcceptanceError(code="missing_parser_audit", message="parser audit path is absent"))
     if not mineru.parsed_document_path:
@@ -535,7 +542,10 @@ def _acceptance_findings(
 def _decision(*, mineru: DocumentParseProviderAcceptance, errors: list[DocumentParseAcceptanceError]) -> AcceptanceDecision:
     fatal_codes = {
         "missing_source_hash",
+        "missing_audit_source_hash",
         "source_hash_mismatch",
+        "missing_protocol_version",
+        "unsupported_protocol_version",
         "missing_parser_audit",
         "missing_parsed_document",
         "expected_table_absent",
@@ -809,10 +819,19 @@ def _rel(path: Path, root: Path) -> str:
 
 
 def _bundle_root(outputs: Any) -> Path | None:
+    output_dir = Path(str(outputs.output_dir or "")).expanduser() if str(outputs.output_dir or "").strip() else None
+    if output_dir is not None:
+        candidate = (output_dir / "mineru_bundle").resolve()
+        if candidate.exists() and candidate.is_dir():
+            return candidate
     for raw in (outputs.content_list_json, outputs.content_list_v2_json, outputs.middle_json):
         if raw:
             return Path(raw).expanduser().resolve().parent
     return None
+
+
+def _normalize_protocol_version(value: Any) -> str:
+    return str(value or "").strip()
 
 
 def _bundle_ref(path: str, *, bundle_root: Path | None, root: Path) -> str:
