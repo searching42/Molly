@@ -186,6 +186,26 @@ Current benchmark interpretation:
 
 The synthetic fixture lives under `tests/fixtures/document_parse_provider/`.
 
+## Manual Live Acceptance
+
+`src/ai4s_agent/document_parse_live_acceptance.py` provides an opt-in manual
+acceptance runner for a real explicitly configured MinerU API-compatible
+endpoint.
+
+The runner:
+
+- generates a deterministic synthetic PDF
+- parses it through `DocumentParseService` with `provider="mineru_api"`
+- parses the same PDF through `provider="pdfplumber"` when requested
+- benchmarks both outputs against the same semantic gold fixture
+- writes `acceptance_report.json` and `acceptance_summary.md`
+- redacts API credentials and stores only a redacted API origin
+
+It does not run in ordinary CI and does not call a live service unless an
+operator supplies `--api-url`.
+
+Operator procedure: `docs/mineru-live-api-acceptance.md`.
+
 ## Deployment Policy
 
 - Small explicit API jobs:
@@ -204,7 +224,7 @@ design.
 
 This provider-layer PR does not:
 
-- call a live MinerU service in CI
+- call a live MinerU service in ordinary CI
 - install MinerU models or GPU dependencies in Molly
 - introduce an MCP server
 - perform web search or live paper acquisition
@@ -218,7 +238,8 @@ This provider-layer PR does not:
 
 The next parsing milestone should be:
 
-1. a manual live MinerU acceptance run against an explicitly configured
-   endpoint, then
+1. manual live MinerU acceptance evidence against an explicitly configured
+   endpoint, when an operator has a local `mineru-api` or `mineru-router`
+   available, then
 2. a narrow Phase 3 parsed-document -> confirmed-dataset -> Phase 1 bridge that
    uses this provider layer without changing route defaults.
