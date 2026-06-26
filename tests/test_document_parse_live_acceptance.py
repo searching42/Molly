@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 
 from ai4s_agent.document_parse_live_acceptance import (
     DocumentParseAcceptanceThresholds,
@@ -51,6 +52,37 @@ def _success_transport(*, token_seen: list[str] | None = None, calls: dict[str, 
     return httpx.MockTransport(handler)
 
 
+def _quality_miss_transport() -> httpx.MockTransport:
+    bundle = fixture_mineru_output_dir()
+    content_list = json.loads((bundle / "synthetic_content_list.json").read_text(encoding="utf-8"))
+    for item in content_list:
+        if item.get("type") == "table":
+            item["table_body"] = "<table><tr><th>SMILES</th><th>PLQY</th><th>lambda_em</th></tr><tr><td>CCO</td><td>0.10</td><td>999</td></tr></table>"
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(bundle.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.name == "synthetic_content_list.json":
+                archive.writestr(path.name, json.dumps(content_list))
+            else:
+                archive.write(path, arcname=str(path.relative_to(bundle)))
+    zip_payload = payload.getvalue()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/tasks":
+            return httpx.Response(202, json={"task_id": "task-quality"})
+        if request.url.path == "/tasks/task-quality":
+            return httpx.Response(200, json={"task_id": "task-quality", "state": "completed"})
+        if request.url.path == "/tasks/task-quality/result":
+            return httpx.Response(200, content=zip_payload)
+        raise AssertionError(f"unexpected {request.method} {request.url.path}")
+
+    return httpx.MockTransport(handler)
+
+
 def test_live_acceptance_passes_with_mock_mineru_and_pdfplumber_baseline(tmp_path: Path) -> None:
     calls = {"submit": 0, "status": 0, "result": 0}
 
@@ -67,7 +99,7 @@ def test_live_acceptance_passes_with_mock_mineru_and_pdfplumber_baseline(tmp_pat
     assert report.mineru.ok is True
     assert report.mineru.remote_task_id == "task-live-123"
     assert report.mineru.task_status_history == ["completed"]
-    assert report.mineru.markdown_path == "synthetic.md"
+    assert report.mineru.markdown_path == "mineru/mineru_bundle/synthetic.md"
     assert report.pdfplumber is not None
     assert report.pdfplumber.ok is True
     assert report.comparison is not None
@@ -80,6 +112,25 @@ def test_live_acceptance_passes_with_mock_mineru_and_pdfplumber_baseline(tmp_pat
     ).decision == "passed"
     assert report.outputs["source_pdf"].endswith("synthetic_source.pdf")
     assert report.outputs["acceptance_report"] == "acceptance_report.json"
+    run_root = tmp_path / "acceptance" / "mineru-live-smoke"
+    for rel_path in [
+        report.outputs["source_pdf"],
+        report.outputs["acceptance_report"],
+        report.outputs["acceptance_summary"],
+        report.mineru.markdown_path,
+        report.mineru.content_list_path,
+        report.mineru.middle_json_path,
+        report.mineru.parsed_document_path,
+        report.mineru.parser_audit_path,
+        report.pdfplumber.parsed_document_path,
+        report.pdfplumber.parser_audit_path,
+    ]:
+        resolved = (run_root / rel_path).resolve()
+        assert run_root.resolve() in resolved.parents or resolved == run_root.resolve()
+        assert resolved.exists(), rel_path
+    assert report.mineru.markdown_path == "mineru/mineru_bundle/synthetic.md"
+    mineru_audit = json.loads((run_root / report.mineru.parser_audit_path).read_text(encoding="utf-8"))
+    assert mineru_audit["source_pdf_sha256"] == report.source_pdf_sha256
 
 
 def test_live_acceptance_needs_review_when_threshold_misses(tmp_path: Path) -> None:
@@ -88,8 +139,8 @@ def test_live_acceptance_needs_review_when_threshold_misses(tmp_path: Path) -> N
         output_dir=tmp_path / "acceptance",
         api_url="http://127.0.0.1:8000",
         endpoint_kind="mineru_api",
-        thresholds=DocumentParseAcceptanceThresholds(normalized_text_token_recall=1.01),
-        transport=_success_transport(),
+        thresholds=DocumentParseAcceptanceThresholds(simple_cell_exact_match_rate=0.90),
+        transport=_quality_miss_transport(),
     )
 
     assert report.decision == "needs_review"
@@ -274,6 +325,61 @@ def test_live_acceptance_security_redacts_token_and_rejects_unsafe_inputs(tmp_pa
     assert "allow_remote_upload" in remote.mineru.error.message
 
 
+@pytest.mark.parametrize("run_id", ["../escape", "nested/run", "nested\\run", ".", ".."])
+def test_live_acceptance_rejects_unsafe_run_id_without_path_escape(tmp_path: Path, run_id: str) -> None:
+    report = run_document_parse_live_acceptance(
+        run_id=run_id,
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:8000",
+        endpoint_kind="mineru_api",
+        transport=_success_transport(),
+    )
+
+    assert report.decision == "failed"
+    assert any(error.code == "invalid_run_id" for error in report.errors)
+    assert not (tmp_path / "escape").exists()
+
+
+def test_live_acceptance_rejects_absolute_run_id_without_path_escape(tmp_path: Path) -> None:
+    escaped_root = tmp_path / "absolute-escape"
+    report = run_document_parse_live_acceptance(
+        run_id=str(escaped_root),
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:8000",
+        endpoint_kind="mineru_api",
+        transport=_success_transport(),
+    )
+
+    assert report.decision == "failed"
+    assert any(error.code == "invalid_run_id" for error in report.errors)
+    assert not escaped_root.exists()
+
+
+def test_live_acceptance_invalid_configuration_returns_failed_report(tmp_path: Path) -> None:
+    timing = run_document_parse_live_acceptance(
+        run_id="bad-timing",
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:8000",
+        endpoint_kind="mineru_api",
+        task_timeout_sec=0,
+        transport=_success_transport(),
+    )
+    assert timing.decision == "failed"
+    assert any(error.code == "configuration_error" for error in timing.errors)
+    assert (tmp_path / "acceptance" / "bad-timing" / "acceptance_report.json").exists()
+
+    threshold = run_document_parse_live_acceptance(
+        run_id="bad-threshold",
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:8000",
+        endpoint_kind="mineru_api",
+        thresholds=DocumentParseAcceptanceThresholds(normalized_text_token_recall=1.1),
+        transport=_success_transport(),
+    )
+    assert threshold.decision == "failed"
+    assert any(error.code == "invalid_threshold" for error in threshold.errors)
+
+
 def test_live_acceptance_cli_exit_codes_and_rejects_reused_output_dir(tmp_path: Path) -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -285,12 +391,12 @@ def test_live_acceptance_cli_exit_codes_and_rejects_reused_output_dir(tmp_path: 
             str(tmp_path / "needs-review"),
             "--run-id",
             "needs-review",
-            "--min-text-recall",
-            "1.01",
+            "--min-cell-match",
+            "0.90",
         ],
         stdout=stdout,
         stderr=stderr,
-        transport=_success_transport(),
+        transport=_quality_miss_transport(),
     )
     assert needs_review_code == 2
     assert json.loads(stdout.getvalue())["decision"] == "needs_review"
@@ -326,6 +432,26 @@ def test_live_acceptance_cli_exit_codes_and_rejects_reused_output_dir(tmp_path: 
     )
     assert reused.decision == "failed"
     assert any(error.code == "output_directory_not_empty" for error in reused.errors)
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--api-url",
+                "http://127.0.0.1:8000",
+                "--output",
+                str(tmp_path / "low-effort"),
+                "--run-id",
+                "low-effort",
+                "--effort",
+                "low",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+            transport=_success_transport(),
+        )
+    assert "invalid choice" in stderr.getvalue()
 
 
 def test_live_acceptance_comparison_uses_same_pdf_and_no_fallback(tmp_path: Path) -> None:

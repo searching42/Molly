@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -70,6 +71,7 @@ class DocumentParseProviderAcceptance(BaseModel):
     provider: str
     parser_backend: str = ""
     source_pdf_sha256: str = ""
+    audit_source_pdf_sha256: str = ""
     elapsed_seconds: float = 0.0
     remote_task_id: str = ""
     task_status_history: list[str] = Field(default_factory=list)
@@ -154,7 +156,65 @@ def run_document_parse_live_acceptance(
     threshold_model = thresholds or DocumentParseAcceptanceThresholds()
     clean_run_id = str(run_id or "").strip()
     root = Path(output_dir).expanduser().resolve()
-    run_root = root / clean_run_id if clean_run_id else root / "missing-run-id"
+    run_id_error = _run_id_error(clean_run_id)
+    run_root = (root / clean_run_id).resolve() if run_id_error is None else (root / "invalid-run-id").resolve()
+    if run_id_error is not None:
+        report = _failed_report(
+            run_id=clean_run_id,
+            run_root=run_root,
+            endpoint_kind=endpoint_kind,
+            api_url=api_url,
+            backend=backend,
+            effort=effort,
+            parse_method=parse_method,
+            thresholds=threshold_model,
+            errors=[run_id_error],
+        )
+        run_root.mkdir(parents=True, exist_ok=True)
+        _persist_report(report, run_root)
+        return report
+    if run_root.parent != root:
+        report = _failed_report(
+            run_id=clean_run_id,
+            run_root=root / "invalid-run-id",
+            endpoint_kind=endpoint_kind,
+            api_url=api_url,
+            backend=backend,
+            effort=effort,
+            parse_method=parse_method,
+            thresholds=threshold_model,
+            errors=[
+                DocumentParseAcceptanceError(
+                    code="invalid_run_id",
+                    message="run_id must stay directly under the acceptance output root",
+                )
+            ],
+        )
+        (root / "invalid-run-id").mkdir(parents=True, exist_ok=True)
+        _persist_report(report, root / "invalid-run-id")
+        return report
+    config_errors = _configuration_errors(
+        thresholds=threshold_model,
+        http_timeout_sec=http_timeout_sec,
+        task_timeout_sec=task_timeout_sec,
+        poll_interval_sec=poll_interval_sec,
+        max_poll_attempts=max_poll_attempts,
+    )
+    if config_errors:
+        run_root.mkdir(parents=True, exist_ok=True)
+        report = _failed_report(
+            run_id=clean_run_id,
+            run_root=run_root,
+            endpoint_kind=endpoint_kind,
+            api_url=api_url,
+            backend=backend,
+            effort=effort,
+            parse_method=parse_method,
+            thresholds=threshold_model,
+            errors=config_errors,
+        )
+        _persist_report(report, run_root)
+        return report
     if run_root.exists() and any(run_root.iterdir()):
         return _failed_report(
             run_id=clean_run_id,
@@ -222,30 +282,54 @@ def run_document_parse_live_acceptance(
         return report
 
     source_hash = _sha256_file(source_pdf)
-    service = _service(
-        api_url=api_url,
-        api_token=api_token,
-        transport=transport,
-        http_timeout_sec=http_timeout_sec,
-        task_timeout_sec=task_timeout_sec,
-        poll_interval_sec=poll_interval_sec,
-        max_poll_attempts=max_poll_attempts,
-        monotonic=monotonic,
-        sleep=sleep,
-    )
-    mineru_result, mineru_elapsed = _parse_with_service(
-        service,
-        DocumentParseRequest(
-            run_id=f"{clean_run_id}-mineru",
-            input_pdf=str(source_pdf),
-            output_dir=str(run_root / "mineru"),
-            provider="mineru_api",
-            parse_method=parse_method,
+    try:
+        service = _service(
+            api_url=api_url,
+            api_token=api_token,
+            transport=transport,
+            http_timeout_sec=http_timeout_sec,
+            task_timeout_sec=task_timeout_sec,
+            poll_interval_sec=poll_interval_sec,
+            max_poll_attempts=max_poll_attempts,
+            monotonic=monotonic,
+            sleep=sleep,
+        )
+        mineru_result, mineru_elapsed = _parse_with_service(
+            service,
+            DocumentParseRequest(
+                run_id=f"{clean_run_id}-mineru",
+                input_pdf=str(source_pdf),
+                output_dir=str(run_root / "mineru"),
+                provider="mineru_api",
+                parse_method=parse_method,
+                backend=backend,
+                effort=effort,
+                allow_remote_upload=allow_remote_upload,
+            ),
+        )
+    except Exception as exc:
+        report = _failed_report(
+            run_id=clean_run_id,
+            run_root=run_root,
+            endpoint_kind=endpoint_kind,
+            api_url=origin,
             backend=backend,
             effort=effort,
-            allow_remote_upload=allow_remote_upload,
-        ),
-    )
+            parse_method=parse_method,
+            thresholds=threshold_model,
+            errors=[
+                DocumentParseAcceptanceError(
+                    code="configuration_error",
+                    message=str(exc).strip() or exc.__class__.__name__,
+                    details={"exception_type": exc.__class__.__name__},
+                )
+            ],
+            warnings=warnings,
+        )
+        report.outputs["source_pdf"] = _rel(source_pdf, run_root)
+        report.source_pdf_sha256 = source_hash
+        _persist_report(report, run_root)
+        return report
     mineru = _provider_acceptance(
         result=mineru_result,
         elapsed_seconds=mineru_elapsed,
@@ -262,22 +346,32 @@ def run_document_parse_live_acceptance(
         )
     pdfplumber = None
     if compare_pdfplumber:
-        pdf_result, pdf_elapsed = _parse_with_service(
-            service,
-            DocumentParseRequest(
+        try:
+            pdf_result, pdf_elapsed = _parse_with_service(
+                service,
+                DocumentParseRequest(
+                    run_id=f"{clean_run_id}-pdfplumber",
+                    input_pdf=str(source_pdf),
+                    output_dir=str(run_root / "pdfplumber"),
+                    provider="pdfplumber",
+                ),
+            )
+        except Exception as exc:
+            pdf_result = _provider_exception_result(
+                request_provider="pdfplumber",
                 run_id=f"{clean_run_id}-pdfplumber",
-                input_pdf=str(source_pdf),
-                output_dir=str(run_root / "pdfplumber"),
-                provider="pdfplumber",
-            ),
-        )
+                input_pdf=source_pdf,
+                output_dir=run_root / "pdfplumber",
+                exc=exc,
+            )
+            pdf_elapsed = 0.0
         pdfplumber = _provider_acceptance(
             result=pdf_result,
             elapsed_seconds=pdf_elapsed,
             root=run_root,
             source_pdf_sha256=source_hash,
         )
-    errors.extend(_acceptance_findings(mineru=mineru, thresholds=threshold_model))
+    errors.extend(_acceptance_findings(mineru=mineru, thresholds=threshold_model, root=run_root))
     comparison = _comparison(mineru, pdfplumber) if pdfplumber is not None else None
     decision = _decision(mineru=mineru, errors=errors)
     report = DocumentParseLiveAcceptanceReport(
@@ -363,19 +457,25 @@ def _provider_acceptance(
         else None
     )
     outputs = result.outputs
+    bundle_root = _bundle_root(outputs)
     return DocumentParseProviderAcceptance(
         ok=bool(result.ok),
         provider=result.provider,
         parser_backend=result.parser_backend,
         source_pdf_sha256=source_pdf_sha256 or result.audit.source_pdf_sha256,
+        audit_source_pdf_sha256=result.audit.source_pdf_sha256,
         elapsed_seconds=elapsed_seconds,
         remote_task_id=result.remote_task_id,
         task_status_history=list(result.audit.task_status_history),
         queued_ahead_history=list(result.audit.queued_ahead_history),
         mineru_version=result.audit.mineru_version,
         protocol_version=result.audit.protocol_version,
-        output_bundle_refs={path: path for path in outputs.extracted_paths if path},
-        markdown_path=_bundle_artifact_ref(outputs.extracted_paths, suffix=".md") or (
+        output_bundle_refs={
+            path: _bundle_ref(path, bundle_root=bundle_root, root=root)
+            for path in outputs.extracted_paths
+            if path
+        },
+        markdown_path=_bundle_artifact_ref(outputs.extracted_paths, suffix=".md", bundle_root=bundle_root, root=root) or (
             _rel(Path(outputs.parsed_document_markdown), root) if outputs.parsed_document_markdown else ""
         ),
         content_list_path=_rel(Path(outputs.content_list_json), root) if outputs.content_list_json else "",
@@ -393,18 +493,22 @@ def _acceptance_findings(
     *,
     mineru: DocumentParseProviderAcceptance,
     thresholds: DocumentParseAcceptanceThresholds,
+    root: Path,
 ) -> list[DocumentParseAcceptanceError]:
     findings: list[DocumentParseAcceptanceError] = []
     if not mineru.ok:
         return findings
     if not mineru.source_pdf_sha256:
         findings.append(DocumentParseAcceptanceError(code="missing_source_hash", message="source PDF hash is absent"))
+    if mineru.audit_source_pdf_sha256 and mineru.audit_source_pdf_sha256 != mineru.source_pdf_sha256:
+        findings.append(DocumentParseAcceptanceError(code="source_hash_mismatch", message="provider audit source hash does not match generated source PDF hash"))
     if not mineru.parser_audit_path:
         findings.append(DocumentParseAcceptanceError(code="missing_parser_audit", message="parser audit path is absent"))
     if not mineru.parsed_document_path:
         findings.append(DocumentParseAcceptanceError(code="missing_parsed_document", message="parsed document path is absent"))
     if not mineru.content_list_path and not mineru.content_list_v2_path:
         findings.append(DocumentParseAcceptanceError(code="structured_output_missing", message="structured MinerU content list is absent"))
+    findings.extend(_evidence_ref_findings(mineru, root=root))
     benchmark = mineru.benchmark_result
     if benchmark is None:
         findings.append(DocumentParseAcceptanceError(code="missing_benchmark", message="benchmark result is absent"))
@@ -429,7 +533,16 @@ def _acceptance_findings(
 
 
 def _decision(*, mineru: DocumentParseProviderAcceptance, errors: list[DocumentParseAcceptanceError]) -> AcceptanceDecision:
-    if not mineru.ok or any(error.code in {"missing_source_hash", "missing_parser_audit", "missing_parsed_document", "expected_table_absent"} for error in errors):
+    fatal_codes = {
+        "missing_source_hash",
+        "source_hash_mismatch",
+        "missing_parser_audit",
+        "missing_parsed_document",
+        "expected_table_absent",
+        "evidence_path_escape",
+        "evidence_path_missing",
+    }
+    if not mineru.ok or any(error.code in fatal_codes for error in errors):
         return "failed"
     if errors:
         return "needs_review"
@@ -563,6 +676,85 @@ def _failed_report(
     )
 
 
+def _run_id_error(value: str) -> DocumentParseAcceptanceError | None:
+    clean = str(value or "").strip()
+    if not clean:
+        return DocumentParseAcceptanceError(code="invalid_run_id", message="run_id required")
+    if clean in {".", ".."} or "/" in clean or "\\" in clean:
+        return DocumentParseAcceptanceError(code="invalid_run_id", message="run_id must be a single safe path segment")
+    if Path(clean).name != clean:
+        return DocumentParseAcceptanceError(code="invalid_run_id", message="run_id must be a single safe path segment")
+    return None
+
+
+def _configuration_errors(
+    *,
+    thresholds: DocumentParseAcceptanceThresholds,
+    http_timeout_sec: float,
+    task_timeout_sec: float,
+    poll_interval_sec: float,
+    max_poll_attempts: int,
+) -> list[DocumentParseAcceptanceError]:
+    errors: list[DocumentParseAcceptanceError] = []
+    for label, value in {
+        "http_timeout_sec": http_timeout_sec,
+        "task_timeout_sec": task_timeout_sec,
+        "poll_interval_sec": poll_interval_sec,
+    }.items():
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            parsed = 0.0
+        if not math.isfinite(parsed) or parsed <= 0:
+            errors.append(DocumentParseAcceptanceError(code="configuration_error", message=f"{label} must be positive"))
+    try:
+        attempts = int(max_poll_attempts)
+    except (TypeError, ValueError):
+        attempts = 0
+    if attempts <= 0:
+        errors.append(DocumentParseAcceptanceError(code="configuration_error", message="max_poll_attempts must be positive"))
+    for label, value in thresholds.model_dump(mode="json").items():
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed < 0.0 or parsed > 1.0:
+            errors.append(DocumentParseAcceptanceError(code="invalid_threshold", message=f"{label} must be between 0 and 1"))
+    return errors
+
+
+def _provider_exception_result(
+    *,
+    request_provider: str,
+    run_id: str,
+    input_pdf: Path,
+    output_dir: Path,
+    exc: BaseException,
+) -> DocumentParseResult:
+    from ai4s_agent.document_parse_provider import DocumentParseAudit, DocumentParseOutputRefs
+
+    return DocumentParseResult(
+        ok=False,
+        status="failed",
+        provider=request_provider,
+        parser_backend="unknown",
+        run_id=run_id,
+        input_pdf=str(input_pdf),
+        parsed_document=None,
+        outputs=DocumentParseOutputRefs(output_dir=str(output_dir)),
+        remote_task_id="",
+        warnings=[],
+        error=DocumentParseError(
+            code="provider_exception",
+            message=str(exc).strip() or exc.__class__.__name__,
+            details={"exception_type": exc.__class__.__name__},
+        ),
+        audit=DocumentParseAudit(
+            source_pdf_sha256=_sha256_file(input_pdf) if input_pdf.exists() else "",
+            request_provider=request_provider,
+            selected_provider=request_provider,
+            parser_backend="unknown",
+        ),
+    )
+
+
 def _write_acceptance_pdf(path: Path) -> Path:
     try:
         from reportlab.lib import colors
@@ -616,13 +808,52 @@ def _rel(path: Path, root: Path) -> str:
         return str(path)
 
 
-def _bundle_artifact_ref(paths: list[str], *, suffix: str) -> str:
+def _bundle_root(outputs: Any) -> Path | None:
+    for raw in (outputs.content_list_json, outputs.content_list_v2_json, outputs.middle_json):
+        if raw:
+            return Path(raw).expanduser().resolve().parent
+    return None
+
+
+def _bundle_ref(path: str, *, bundle_root: Path | None, root: Path) -> str:
+    clean = str(path or "").strip()
+    if not clean:
+        return ""
+    if bundle_root is None:
+        return clean
+    return _rel(bundle_root / clean, root)
+
+
+def _bundle_artifact_ref(paths: list[str], *, suffix: str, bundle_root: Path | None, root: Path) -> str:
     lowered_suffix = suffix.lower()
     for path in paths:
         clean = str(path or "").strip()
         if clean.lower().endswith(lowered_suffix):
-            return clean
+            return _bundle_ref(clean, bundle_root=bundle_root, root=root)
     return ""
+
+
+def _evidence_ref_findings(provider: DocumentParseProviderAcceptance, *, root: Path) -> list[DocumentParseAcceptanceError]:
+    findings: list[DocumentParseAcceptanceError] = []
+    for label, rel_path in {
+        "markdown_path": provider.markdown_path,
+        "content_list_path": provider.content_list_path,
+        "content_list_v2_path": provider.content_list_v2_path,
+        "middle_json_path": provider.middle_json_path,
+        "parsed_document_path": provider.parsed_document_path,
+        "parser_audit_path": provider.parser_audit_path,
+    }.items():
+        clean = str(rel_path or "").strip()
+        if not clean:
+            continue
+        resolved = (root / clean).resolve()
+        root_resolved = root.resolve()
+        if resolved != root_resolved and root_resolved not in resolved.parents:
+            findings.append(DocumentParseAcceptanceError(code="evidence_path_escape", message=f"{label} escapes acceptance root"))
+            continue
+        if not resolved.exists():
+            findings.append(DocumentParseAcceptanceError(code="evidence_path_missing", message=f"{label} does not exist"))
+    return findings
 
 
 def _redact_details(details: dict[str, Any]) -> dict[str, Any]:
@@ -677,7 +908,7 @@ def main(
     output.write(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
     output.write("\n")
     if report.outputs.get("acceptance_report"):
-        err.write(f"acceptance report: {Path(args.output).expanduser().resolve() / args.run_id / report.outputs['acceptance_report']}\n")
+        err.write(f"acceptance report: {_cli_report_root(args.output, args.run_id) / report.outputs['acceptance_report']}\n")
     if report.decision == "passed":
         return 0
     if report.decision == "needs_review":
@@ -695,7 +926,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--backend", default="hybrid-engine")
-    parser.add_argument("--effort", default="medium", choices=["low", "medium", "high"])
+    parser.add_argument("--effort", default="medium", choices=["medium", "high"])
     parser.add_argument("--parse-method", default="auto")
     parser.add_argument("--allow-remote-upload", action="store_true")
     parser.add_argument("--compare-pdfplumber", action="store_true")
@@ -707,6 +938,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-header-match", type=float, default=1.0)
     parser.add_argument("--min-cell-match", type=float, default=0.90)
     return parser
+
+
+def _cli_report_root(output_dir: str | Path, run_id: str) -> Path:
+    root = Path(output_dir).expanduser().resolve()
+    clean_run_id = str(run_id or "").strip()
+    if _run_id_error(clean_run_id) is not None:
+        return root / "invalid-run-id"
+    return root / clean_run_id
 
 
 if __name__ == "__main__":  # pragma: no cover
