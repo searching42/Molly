@@ -32,7 +32,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 1 queued workflow fixture | Completed for local lightweight fixture | `tests/test_phase1_queued_workflow_demo.py` |
 | Phase 2 deterministic generation screening fixture | Completed for deterministic local generation bridge | `tests/test_phase2_generation_screening_demo.py` |
 | Phase 3 literature-to-dataset fixture | Completed for parsed-table fixture to confirmed dataset | `tests/test_phase3_literature_dataset_demo.py` |
-| Phase 3 document parsing provider layer | Completed as provider/API/normalizer/baseline infrastructure, not yet the full scientific closed loop | `src/ai4s_agent/document_parse_service.py`, `docs/document-parsing-providers.md` |
+| Phase 3 document parsing provider layer | Completed as provider/API/normalizer/baseline infrastructure plus opt-in live acceptance evidence, not yet the full scientific closed loop | `src/ai4s_agent/document_parse_service.py`, `src/ai4s_agent/document_parse_live_acceptance.py`, `docs/document-parsing-providers.md` |
 | OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
 | Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
 | Phase 4 reviewable replan proposal | Completed as deterministic non-executable proposal | `src/ai4s_agent/run_plan_replan_proposal.py` |
@@ -153,6 +153,8 @@ Supporting infrastructure now exists for the next parsing step:
 - official-style MinerU output normalization into `ParsedDocument`
 - a deterministic pdfplumber baseline provider
 - a manual CLI and benchmark fixture
+- an opt-in live MinerU API acceptance runner that writes redacted
+  service/protocol, normalization, benchmark, and comparison evidence
 
 That provider layer is not yet wired into the full Phase 3 scientific closed
 loop by default and does not change current route defaults.
