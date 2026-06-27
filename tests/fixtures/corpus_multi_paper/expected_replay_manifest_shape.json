@@ -1,0 +1,19 @@
+{
+  "required_top_level_keys": [
+    "run_id",
+    "input_documents",
+    "artifacts",
+    "hashes",
+    "replay_steps",
+    "external_services_required"
+  ],
+  "external_services_required": false,
+  "replay_steps": [
+    "load_parsed_documents",
+    "extract_corpus_records",
+    "audit_conflicts",
+    "build_confirmed_dataset",
+    "run_phase1_full_pipeline",
+    "generate_corpus_report"
+  ]
+}

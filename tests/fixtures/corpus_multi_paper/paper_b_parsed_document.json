@@ -1,0 +1,28 @@
+{
+  "paper_id": "corpus-paper-b",
+  "source_path": "synthetic://corpus-paper-b.pdf",
+  "parser_backend": "mineru-normalized-fixture",
+  "metadata": {
+    "source_document_id": "doc-b",
+    "parser_provider": "mineru_api",
+    "title": "Synthetic corpus paper B"
+  },
+  "pages": [{"page": 1, "text": "Synthetic OLED table B."}],
+  "elements": [],
+  "tables": [
+    {
+      "table_id": "table_b_001",
+      "caption": "Paper B synthetic OLED properties",
+      "headers": ["molecule_id", "SMILES", "PLQY", "lambda_em_nm", "confidence"],
+      "rows": [
+        {"molecule_id": "b-001", "SMILES": "CCO", "PLQY": "66%", "lambda_em_nm": "513", "confidence": "0.95"},
+        {"molecule_id": "b-002", "SMILES": "CCN", "PLQY": "0.91", "lambda_em_nm": "500", "confidence": "0.94"},
+        {"molecule_id": "b-003", "SMILES": "CCCl", "PLQY": "36%", "lambda_em_nm": "460", "confidence": "0.89"}
+      ],
+      "footnotes": ["Synthetic fixture only."],
+      "page": 1,
+      "markdown": "",
+      "source_bbox": {"x0": 70.0, "top": 120.0, "x1": 540.0, "bottom": 390.0}
+    }
+  ]
+}

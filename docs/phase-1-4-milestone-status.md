@@ -35,6 +35,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 3 document parsing provider layer | Completed as provider/API/normalizer/baseline infrastructure plus opt-in live acceptance evidence, not yet the full scientific closed loop | `src/ai4s_agent/document_parse_service.py`, `src/ai4s_agent/document_parse_live_acceptance.py`, `docs/document-parsing-providers.md` |
 | Phase 3 to Phase 1 scientific dataset pipeline | Completed for deterministic `ParsedDocument` consumption, explicit dataset confirmation, Phase 1 baseline execution, and candidate ranking | `src/ai4s_agent/phase3_scientific_extractor.py`, `src/ai4s_agent/scientific_dataset_builder.py`, `src/ai4s_agent/phase3_to_phase1_bridge.py`, `src/ai4s_agent/workflows/phase3_to_phase1_workflow.py`, `tests/test_phase3_to_phase1_workflow.py`, `docs/phase-3-to-phase-1-pipeline.md` |
 | Phase 1 training and ranking stabilization | Completed for confirmed-dataset-only training orchestration, deterministic model-based candidate ranking, and scientific report generation | `src/ai4s_agent/phase1_training_orchestrator.py`, `src/ai4s_agent/phase1_candidate_ranker.py`, `src/ai4s_agent/phase1_report_generator.py`, `src/ai4s_agent/workflows/phase1_full_pipeline.py`, `tests/test_phase1_full_pipeline.py`, `docs/phase-1-training-and-ranking-pipeline.md` |
+| Multi-paper corpus evaluation and reproducibility audit | Completed for offline multi-document `ParsedDocument` fixtures, cross-paper conflict rejection, corpus replay manifests, and confirmed Phase 1 execution | `src/ai4s_agent/phase3_corpus_extractor.py`, `src/ai4s_agent/corpus_conflict_auditor.py`, `src/ai4s_agent/corpus_reproducibility_auditor.py`, `src/ai4s_agent/workflows/corpus_to_phase1_workflow.py`, `tests/test_corpus_to_phase1_workflow.py`, `docs/corpus-evaluation-and-reproducibility-audit.md` |
 | OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
 | Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
 | Phase 4 reviewable replan proposal | Completed as deterministic non-executable proposal | `src/ai4s_agent/run_plan_replan_proposal.py` |
@@ -261,6 +262,53 @@ Boundaries:
 - Does not modify Phase 3 extraction or dataset building.
 - Does not introduce LLM calls, external APIs, new ML frameworks, remote
   training services, or GPU requirements.
+- Does not change queued-canary, retry, rollback, or worker queue behavior.
+
+## Multi-Paper Corpus Evaluation And Reproducibility Audit
+
+The corpus layer proves deterministic behavior across multiple parsed
+scientific documents before any confirmed corpus dataset reaches Phase 1.
+
+Completed behavior:
+
+- Consumes multiple `ParsedDocument` fixtures offline.
+- Reuses the single-document Phase 3 scientific extractor without modifying
+  parsing providers or extraction semantics.
+- Preserves corpus-level provenance:
+  - `paper_id`
+  - `source_document_id`
+  - `parsed_document_path`
+  - `parser_provider`
+  - `parser_backend`
+- Detects consistent duplicates and unresolved cross-paper conflicts.
+- Rejects unresolved conflicts before dataset confirmation and training.
+- Carries invalid SMILES and missing-property rows into rejected-record audit
+  output with deterministic reason codes.
+- Builds corpus candidate/training/rejected dataset artifacts through the
+  existing dataset builder.
+- Keeps `DatasetConfirmation` mandatory before Phase 1.
+- Preserves the Phase 1 manifest-to-training-CSV binding.
+- Runs the stabilized Phase 1 full pipeline only on confirmed, non-conflicting
+  corpus training data.
+- Writes lineage, replay, reproducibility, and corpus summary reports.
+
+Evidence:
+
+- `tests/test_phase3_corpus_extractor.py`
+- `tests/test_corpus_conflict_auditor.py`
+- `tests/test_corpus_reproducibility_auditor.py`
+- `tests/test_corpus_report_generator.py`
+- `tests/test_corpus_to_phase1_workflow.py`
+- `tests/fixtures/corpus_multi_paper/`
+- `docs/corpus-evaluation-and-reproducibility-audit.md`
+
+Boundaries:
+
+- Does not modify MinerU providers or document parsing infrastructure.
+- Does not call live MinerU, LLMs, or external APIs.
+- Does not modify Phase 1 model internals or introduce new ML frameworks.
+- Does not weaken `DatasetConfirmation`.
+- Does not bypass manifest-to-training-CSV binding.
 - Does not change queued-canary, retry, rollback, or worker queue behavior.
 
 ## OLED Property Profile And Multi-Objective Screening
