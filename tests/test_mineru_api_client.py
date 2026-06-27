@@ -13,6 +13,10 @@ from ai4s_agent.mineru_api_client import MinerUApiClient, MinerUApiError, safe_e
 from document_parse_test_helpers import build_zip_from_dir, fixture_mineru_output_dir, write_synthetic_pdf
 
 
+def _stream_response(content: bytes, *, headers: dict[str, str] | None = None, status_code: int = 200) -> httpx.Response:
+    return httpx.Response(status_code, stream=httpx.ByteStream(content), headers=headers)
+
+
 def test_mineru_api_client_parse_pdf_uses_task_api_and_downloads_zip(tmp_path: Path) -> None:
     pdf = write_synthetic_pdf(tmp_path / "paper.pdf")
     requests_seen: list[tuple[str, str, bytes]] = []
@@ -56,7 +60,7 @@ def test_mineru_api_client_parse_pdf_uses_task_api_and_downloads_zip(tmp_path: P
                 },
             )
         if request.method == "GET" and request.url.path == "/tasks/task-123/result":
-            return httpx.Response(200, content=zip_payload, headers={"content-type": "application/zip"})
+            return _stream_response(zip_payload, headers={"content-type": "application/zip"})
         raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
 
     client = MinerUApiClient(
@@ -84,6 +88,40 @@ def test_mineru_api_client_parse_pdf_uses_task_api_and_downloads_zip(tmp_path: P
     assert any(method == "GET" and path == "/tasks/task-123/result" for method, path, _ in requests_seen)
 
 
+def test_mineru_api_client_downloads_result_zip_as_raw_bytes(tmp_path: Path) -> None:
+    pdf = write_synthetic_pdf(tmp_path / "paper.pdf")
+    zip_payload = build_zip_from_dir(fixture_mineru_output_dir())
+    result_accept_encoding = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal result_accept_encoding
+        if request.method == "POST" and request.url.path == "/tasks":
+            return httpx.Response(202, json={"task_id": "task-raw"})
+        if request.method == "GET" and request.url.path == "/tasks/task-raw":
+            return httpx.Response(200, json={"task_id": "task-raw", "state": "completed"})
+        if request.method == "GET" and request.url.path == "/tasks/task-raw/result":
+            result_accept_encoding = request.headers.get("accept-encoding", "")
+            return _stream_response(zip_payload, headers={"content-type": "application/zip", "content-encoding": "deflate"})
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    client = MinerUApiClient(
+        base_url="http://127.0.0.1:8000",
+        transport=httpx.MockTransport(handler),
+    )
+    request = DocumentParseRequest(
+        run_id="mineru-api",
+        input_pdf=str(pdf),
+        output_dir=str(tmp_path / "out"),
+        provider="mineru_api",
+    )
+
+    outcome = client.parse_pdf(request=request, input_pdf=pdf, output_dir=tmp_path / "bundle")
+
+    assert result_accept_encoding == "identity"
+    assert "synthetic_content_list.json" in outcome.extracted_relative_paths
+    assert (tmp_path / "bundle" / "synthetic.md").exists()
+
+
 def test_mineru_api_client_polls_with_interval_and_submits_once(tmp_path: Path) -> None:
     pdf = write_synthetic_pdf(tmp_path / "paper.pdf")
     calls = {"submit": 0, "status": 0}
@@ -107,7 +145,7 @@ def test_mineru_api_client_polls_with_interval_and_submits_once(tmp_path: Path) 
                 return httpx.Response(200, json={"task_id": "task-123", "state": "processing"})
             return httpx.Response(200, json={"task_id": "task-123", "state": "completed"})
         if request.url.path == "/tasks/task-123/result":
-            return httpx.Response(200, content=build_zip_from_dir(fixture_mineru_output_dir()))
+            return _stream_response(build_zip_from_dir(fixture_mineru_output_dir()))
         raise AssertionError(f"unexpected {request.method} {request.url.path}")
 
     client = MinerUApiClient(
@@ -218,7 +256,7 @@ def test_mineru_api_client_rejects_oversized_result_and_does_not_leak_token(tmp_
         if request.url.path == "/tasks/task-123":
             return httpx.Response(200, json={"task_id": "task-123", "state": "completed"})
         if request.url.path == "/tasks/task-123/result":
-            return httpx.Response(200, content=b"x" * 32)
+            return _stream_response(b"x" * 32)
         raise AssertionError(f"unexpected {request.method} {request.url.path}")
 
     client = MinerUApiClient(
@@ -240,6 +278,43 @@ def test_mineru_api_client_rejects_oversized_result_and_does_not_leak_token(tmp_
     error = exc_info.value.to_error_dict()
     assert error["code"] == "oversized_result"
     assert "secret-token" not in str(error)
+
+
+def test_mineru_api_client_result_download_failure_preserves_response_payload(tmp_path: Path) -> None:
+    pdf = write_synthetic_pdf(tmp_path / "paper.pdf")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/tasks":
+            return httpx.Response(202, json={"task_id": "task-500"})
+        if request.url.path == "/tasks/task-500":
+            return httpx.Response(200, json={"task_id": "task-500", "state": "completed"})
+        if request.url.path == "/tasks/task-500/result":
+            return _stream_response(
+                b'{"error":"download failed","detail":"bundle expired"}',
+                headers={"content-type": "application/json"},
+                status_code=500,
+            )
+        raise AssertionError(f"unexpected {request.method} {request.url.path}")
+
+    client = MinerUApiClient(
+        base_url="http://127.0.0.1:8000",
+        transport=httpx.MockTransport(handler),
+    )
+    request = DocumentParseRequest(
+        run_id="mineru-api",
+        input_pdf=str(pdf),
+        output_dir=str(tmp_path / "out"),
+        provider="mineru_api",
+    )
+
+    with pytest.raises(MinerUApiError) as exc_info:
+        client.parse_pdf(request=request, input_pdf=pdf, output_dir=tmp_path / "bundle")
+
+    error = exc_info.value.to_error_dict()
+    assert error["code"] == "result_download_failure"
+    assert error["details"]["task_id"] == "task-500"
+    assert error["details"]["status_code"] == 500
+    assert error["details"]["response_json"] == {"error": "download failed", "detail": "bundle expired"}
 
 
 def test_safe_extract_result_archive_rejects_traversal_and_symlink(tmp_path: Path) -> None:

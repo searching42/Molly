@@ -40,6 +40,10 @@ def _mineru_zip_payload(*, nested: bool = True, quality_miss: bool = False) -> b
     return payload.getvalue()
 
 
+def _stream_response(content: bytes, *, headers: dict[str, str] | None = None, status_code: int = 200) -> httpx.Response:
+    return httpx.Response(status_code, stream=httpx.ByteStream(content), headers=headers)
+
+
 def _success_transport(*, token_seen: list[str] | None = None, calls: dict[str, int] | None = None) -> httpx.MockTransport:
     zip_payload = _mineru_zip_payload()
     counters = calls if calls is not None else {"submit": 0, "status": 0, "result": 0}
@@ -67,7 +71,7 @@ def _success_transport(*, token_seen: list[str] | None = None, calls: dict[str, 
             )
         if request.url.path == "/tasks/task-live-123/result":
             counters["result"] = counters.get("result", 0) + 1
-            return httpx.Response(200, content=zip_payload)
+            return _stream_response(zip_payload)
         raise AssertionError(f"unexpected {request.method} {request.url.path}")
 
     return httpx.MockTransport(handler)
@@ -84,7 +88,7 @@ def _quality_miss_transport() -> httpx.MockTransport:
         if request.url.path == "/tasks/task-quality":
             return httpx.Response(200, json={"task_id": "task-quality", "state": "completed", "protocol_version": 2})
         if request.url.path == "/tasks/task-quality/result":
-            return httpx.Response(200, content=zip_payload)
+            return _stream_response(zip_payload)
         raise AssertionError(f"unexpected {request.method} {request.url.path}")
 
     return httpx.MockTransport(handler)
@@ -106,7 +110,7 @@ def _protocol_transport(*, health_protocol: Any = 2, status_protocol: Any = 2) -
         if request.url.path == "/tasks/task-protocol":
             return httpx.Response(200, json=with_protocol({"task_id": "task-protocol", "state": "completed"}, status_protocol))
         if request.url.path == "/tasks/task-protocol/result":
-            return httpx.Response(200, content=zip_payload)
+            return _stream_response(zip_payload)
         raise AssertionError(f"unexpected {request.method} {request.url.path}")
 
     return httpx.MockTransport(handler)
@@ -254,7 +258,7 @@ def test_live_acceptance_failed_submission_timeout_download_and_unsafe_zip(tmp_p
         if request.url.path == "/tasks/task-download":
             return httpx.Response(200, json={"task_id": "task-download", "state": "completed"})
         if request.url.path == "/tasks/task-download/result":
-            return httpx.Response(500, json={"error": "download failed"})
+            return _stream_response(b'{"error":"download failed"}', headers={"content-type": "application/json"}, status_code=500)
         raise AssertionError(f"unexpected {request.url.path}")
 
     scenarios.append(("result-download", httpx.MockTransport(result_download_failure), "result_download_failure"))
@@ -271,7 +275,7 @@ def test_live_acceptance_failed_submission_timeout_download_and_unsafe_zip(tmp_p
         if request.url.path == "/tasks/task-zip":
             return httpx.Response(200, json={"task_id": "task-zip", "state": "completed"})
         if request.url.path == "/tasks/task-zip/result":
-            return httpx.Response(200, content=malicious.getvalue())
+            return _stream_response(malicious.getvalue())
         raise AssertionError(f"unexpected {request.url.path}")
 
     scenarios.append(("unsafe-zip", httpx.MockTransport(unsafe_zip), "unsafe_result_archive"))
@@ -306,7 +310,7 @@ def test_live_acceptance_invalid_output_bundle_persists_failure_audit(tmp_path: 
         if request.url.path == "/tasks/task-invalid":
             return httpx.Response(200, json={"task_id": "task-invalid", "state": "completed"})
         if request.url.path == "/tasks/task-invalid/result":
-            return httpx.Response(200, content=invalid_zip.getvalue())
+            return _stream_response(invalid_zip.getvalue())
         raise AssertionError(f"unexpected {request.url.path}")
 
     report = run_document_parse_live_acceptance(

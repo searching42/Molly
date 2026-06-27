@@ -26,7 +26,7 @@ def test_mineru_provider_returns_stable_failure_result_with_task_audit(tmp_path:
                 return httpx.Response(200, json={"task_id": "task-123", "state": "pending", "queued_ahead": 4})
             return httpx.Response(200, json={"task_id": "task-123", "state": "completed", "queued_ahead": 0})
         if request.url.path == "/tasks/task-123/result":
-            return httpx.Response(500, json={"error": "download failed"})
+            return httpx.Response(500, stream=httpx.ByteStream(b'{"error":"download failed"}'), headers={"content-type": "application/json"})
         raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
 
     client = MinerUApiClient(
