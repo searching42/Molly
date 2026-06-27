@@ -1,0 +1,17 @@
+{
+  "run_id": "phase3-to-phase1-fixture",
+  "input_record_count": 15,
+  "merged_record_count": 13,
+  "conflict_count": 1,
+  "non_conflicting_record_count": 12,
+  "conflicts": [
+    {
+      "smiles": "CCN",
+      "property_id": "plqy",
+      "min_value": 0.58,
+      "max_value": 0.91,
+      "tolerance": 0.03,
+      "status": "needs_review"
+    }
+  ]
+}
