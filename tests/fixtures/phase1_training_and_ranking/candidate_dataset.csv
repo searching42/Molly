@@ -1,0 +1,10 @@
+candidate_id,SMILES,paper_id,page,table_id,row_id,source_dataset_id
+cand_000001,CCO,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000001,sci_000001
+cand_000002,CCCO,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000003,sci_000003
+cand_000003,c1ccccc1,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000004,sci_000004
+cand_000004,CCCl,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000005,sci_000005
+cand_000005,CCBr,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000007,sci_000007
+cand_000006,CC(C)O,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000008,sci_000008
+cand_000007,C1CCCCC1,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000009,sci_000009
+cand_000008,CCOC,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000010,sci_000010
+cand_000009,CC(=O)O,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000011,sci_000011

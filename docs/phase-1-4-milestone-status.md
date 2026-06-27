@@ -34,6 +34,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 3 literature-to-dataset fixture | Completed for parsed-table fixture to confirmed dataset | `tests/test_phase3_literature_dataset_demo.py` |
 | Phase 3 document parsing provider layer | Completed as provider/API/normalizer/baseline infrastructure plus opt-in live acceptance evidence, not yet the full scientific closed loop | `src/ai4s_agent/document_parse_service.py`, `src/ai4s_agent/document_parse_live_acceptance.py`, `docs/document-parsing-providers.md` |
 | Phase 3 to Phase 1 scientific dataset pipeline | Completed for deterministic `ParsedDocument` consumption, explicit dataset confirmation, Phase 1 baseline execution, and candidate ranking | `src/ai4s_agent/phase3_scientific_extractor.py`, `src/ai4s_agent/scientific_dataset_builder.py`, `src/ai4s_agent/phase3_to_phase1_bridge.py`, `src/ai4s_agent/workflows/phase3_to_phase1_workflow.py`, `tests/test_phase3_to_phase1_workflow.py`, `docs/phase-3-to-phase-1-pipeline.md` |
+| Phase 1 training and ranking stabilization | Completed for confirmed-dataset-only training orchestration, deterministic model-based candidate ranking, and scientific report generation | `src/ai4s_agent/phase1_training_orchestrator.py`, `src/ai4s_agent/phase1_candidate_ranker.py`, `src/ai4s_agent/phase1_report_generator.py`, `src/ai4s_agent/workflows/phase1_full_pipeline.py`, `tests/test_phase1_full_pipeline.py`, `docs/phase-1-training-and-ranking-pipeline.md` |
 | OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
 | Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
 | Phase 4 reviewable replan proposal | Completed as deterministic non-executable proposal | `src/ai4s_agent/run_plan_replan_proposal.py` |
@@ -212,6 +213,55 @@ Boundaries:
 - Does not modify Phase 1 model implementations or add ML frameworks.
 - Does not trust extraction output automatically; `DatasetConfirmation` is the
   required boundary before model training.
+
+## Phase 1 Training And Ranking Stabilization
+
+Phase 1 now has a deterministic local pipeline for confirmed scientific
+datasets.
+
+Completed behavior:
+
+- Accepts only datasets with explicit `DatasetConfirmation.confirmed=True`.
+- Also checks the dataset manifest confirmation/status before training.
+- Raises `DatasetNotConfirmedError` for unconfirmed input and does not fallback
+  into training.
+- Uses existing Phase 1 adapters for dataset inspection, cleaning,
+  trainability, baseline evaluation, model training, candidate prediction,
+  ranking, and reporting.
+- Keeps baseline evaluation outputs separate from trained model outputs.
+- Enforces RDKit Morgan fingerprints for the stabilized feature pipeline.
+- Writes reproducibility hashes for:
+  - confirmed dataset bytes
+  - training configuration
+  - trained model artifacts
+  - ranking outputs
+- Produces:
+  - `training_metadata.json`
+  - `feature_config.json`
+  - model package artifacts
+  - `ranked_candidates.csv`
+  - `ranking_metadata.json`
+  - `report.json`
+  - `report.md`
+  - `report_summary.json`
+  - `full_phase1_pipeline.json`
+
+Evidence:
+
+- `tests/test_phase1_training_orchestrator.py`
+- `tests/test_phase1_candidate_ranker.py`
+- `tests/test_phase1_report_generator.py`
+- `tests/test_phase1_full_pipeline.py`
+- `tests/fixtures/phase1_training_and_ranking/`
+- `docs/phase-1-training-and-ranking-pipeline.md`
+
+Boundaries:
+
+- Does not modify MinerU providers or parsing.
+- Does not modify Phase 3 extraction or dataset building.
+- Does not introduce LLM calls, external APIs, new ML frameworks, remote
+  training services, or GPU requirements.
+- Does not change queued-canary, retry, rollback, or worker queue behavior.
 
 ## OLED Property Profile And Multi-Objective Screening
 
