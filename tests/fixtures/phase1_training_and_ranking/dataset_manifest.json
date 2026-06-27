@@ -1,0 +1,22 @@
+{
+  "run_id": "phase1-training-ranking-fixture",
+  "generated_at": "2026-06-27T00:00:00Z",
+  "status": "confirmed",
+  "candidate_record_count": 9,
+  "training_record_count": 9,
+  "rejected_record_count": 0,
+  "confirmation": {
+    "confirmed": true,
+    "confirmed_by": "test-fixture",
+    "confirmation_source": "phase3-to-phase1-fixture",
+    "confirmation_timestamp": "2026-06-27T00:00:00Z"
+  },
+  "provenance_fields": ["paper_id", "page", "table_id", "row_id"],
+  "source_fixture": "tests/fixtures/phase3_to_phase1/expected_dataset.csv",
+  "validation_rules": {
+    "smiles": "rdkit_mol_from_smiles_required",
+    "plqy_range": [0.0, 1.0],
+    "lambda_em_nm_range": [350.0, 900.0],
+    "duplicate_policy": "merge_consistent_reject_conflicting"
+  }
+}
