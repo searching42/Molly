@@ -18,5 +18,9 @@
     "plqy_range": [0.0, 1.0],
     "lambda_em_nm_range": [350.0, 900.0],
     "duplicate_policy": "merge_consistent_reject_conflicting"
+  },
+  "artifacts": {
+    "training_dataset_csv": "confirmed_training_dataset.csv",
+    "candidate_dataset_csv": "candidate_dataset.csv"
   }
 }

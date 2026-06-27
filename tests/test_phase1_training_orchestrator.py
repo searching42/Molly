@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -74,6 +75,58 @@ def test_phase1_training_orchestrator_rejects_unconfirmed_dataset(tmp_path: Path
         )
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_confirmation",
+        "missing_status",
+        "awaiting_confirmation_status",
+        "confirmation_false",
+    ],
+)
+def test_phase1_training_orchestrator_manifest_confirmation_is_fail_closed(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    manifest = _manifest_variant(tmp_path, mutation)
+
+    with pytest.raises(DatasetNotConfirmedError):
+        run_phase1_training(
+            confirmed_training_dataset_csv=FIXTURE_DIR / "confirmed_training_dataset.csv",
+            dataset_manifest_json=manifest,
+            output_dir=tmp_path / "out",
+            run_id=f"phase1-{mutation}",
+            confirmation=_confirmation(),
+            property_ids=["plqy"],
+            n_bits=64,
+            generated_at=GENERATED_AT,
+            min_numeric_ratio=0.5,
+            min_nonempty=1,
+        )
+
+
+def test_phase1_training_orchestrator_rejects_manifest_bound_to_different_training_csv(
+    tmp_path: Path,
+) -> None:
+    manifest = _copy_fixture_manifest(tmp_path)
+    wrong_csv = tmp_path / "different_training_dataset.csv"
+    shutil.copyfile(FIXTURE_DIR / "confirmed_training_dataset.csv", wrong_csv)
+
+    with pytest.raises(DatasetNotConfirmedError):
+        run_phase1_training(
+            confirmed_training_dataset_csv=wrong_csv,
+            dataset_manifest_json=manifest,
+            output_dir=tmp_path / "out",
+            run_id="phase1-manifest-csv-mismatch",
+            confirmation=_confirmation(),
+            property_ids=["plqy"],
+            n_bits=64,
+            generated_at=GENERATED_AT,
+            min_numeric_ratio=0.5,
+            min_nonempty=1,
+        )
+
+
 def _confirmation() -> DatasetConfirmation:
     return DatasetConfirmation(
         confirmed=True,
@@ -81,3 +134,30 @@ def _confirmation() -> DatasetConfirmation:
         confirmation_source="phase3-to-phase1-fixture",
         confirmation_timestamp=GENERATED_AT,
     )
+
+
+def _manifest_variant(tmp_path: Path, mutation: str) -> Path:
+    path = _copy_fixture_manifest(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if mutation == "missing_confirmation":
+        payload.pop("confirmation", None)
+    elif mutation == "missing_status":
+        payload.pop("status", None)
+    elif mutation == "awaiting_confirmation_status":
+        payload["status"] = "awaiting_confirmation"
+    elif mutation == "confirmation_false":
+        payload["confirmation"]["confirmed"] = False
+    else:
+        raise AssertionError(f"unknown mutation: {mutation}")
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _copy_fixture_manifest(tmp_path: Path) -> Path:
+    fixture_copy_dir = tmp_path / "manifest_fixture"
+    fixture_copy_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(FIXTURE_DIR / "confirmed_training_dataset.csv", fixture_copy_dir / "confirmed_training_dataset.csv")
+    shutil.copyfile(FIXTURE_DIR / "candidate_dataset.csv", fixture_copy_dir / "candidate_dataset.csv")
+    manifest = fixture_copy_dir / "dataset_manifest.json"
+    shutil.copyfile(FIXTURE_DIR / "dataset_manifest.json", manifest)
+    return manifest

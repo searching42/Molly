@@ -60,7 +60,12 @@ def run_phase1_training(
     props = property_ids or ["plqy"]
 
     manifest = _load_json(manifest_path)
-    _require_confirmed(confirmation=confirmation, dataset_manifest=manifest)
+    _require_confirmed(
+        confirmation=confirmation,
+        dataset_manifest=manifest,
+        dataset_manifest_path=manifest_path,
+        training_csv=training_csv,
+    )
     _require_rdkit_morgan()
 
     dataset_hash = _sha256_file(training_csv)
@@ -208,15 +213,47 @@ def run_phase1_training(
     )
 
 
-def _require_confirmed(*, confirmation: DatasetConfirmation, dataset_manifest: dict[str, Any]) -> None:
+def _require_confirmed(
+    *,
+    confirmation: DatasetConfirmation,
+    dataset_manifest: dict[str, Any],
+    dataset_manifest_path: Path,
+    training_csv: Path,
+) -> None:
     if not confirmation.confirmed:
         raise DatasetNotConfirmedError("Phase 1 training requires DatasetConfirmation.confirmed=True")
-    manifest_confirmation = dataset_manifest.get("confirmation") if isinstance(dataset_manifest, dict) else {}
-    if isinstance(manifest_confirmation, dict) and manifest_confirmation.get("confirmed") is not True:
-        raise DatasetNotConfirmedError("dataset_manifest confirmation is not confirmed")
+    if not isinstance(dataset_manifest, dict):
+        raise DatasetNotConfirmedError("dataset_manifest must be an object")
+
     status = str(dataset_manifest.get("status") or "").strip()
-    if status and status != "confirmed":
+    if status != "confirmed":
         raise DatasetNotConfirmedError(f"dataset_manifest status is not confirmed: {status}")
+
+    manifest_confirmation = dataset_manifest.get("confirmation")
+    if not isinstance(manifest_confirmation, dict):
+        raise DatasetNotConfirmedError("dataset_manifest confirmation is missing")
+    if manifest_confirmation.get("confirmed") is not True:
+        raise DatasetNotConfirmedError("dataset_manifest confirmation is not confirmed")
+
+    artifacts = dataset_manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise DatasetNotConfirmedError("dataset_manifest artifacts are missing")
+    manifest_training_csv = str(artifacts.get("training_dataset_csv") or "").strip()
+    if not manifest_training_csv:
+        raise DatasetNotConfirmedError("dataset_manifest artifacts.training_dataset_csv is missing")
+    expected_training_csv = _resolve_manifest_path(manifest_training_csv, base=dataset_manifest_path.parent)
+    actual_training_csv = training_csv.expanduser().resolve()
+    if expected_training_csv != actual_training_csv:
+        raise DatasetNotConfirmedError(
+            "dataset_manifest training_dataset_csv does not match the requested training dataset"
+        )
+
+
+def _resolve_manifest_path(path_raw: str, *, base: Path) -> Path:
+    path = Path(path_raw).expanduser()
+    if not path.is_absolute():
+        path = base / path
+    return path.resolve()
 
 
 def _require_rdkit_morgan() -> None:
