@@ -398,7 +398,7 @@ class MinerUApiClient:
             raise MinerUApiError(
                 code="result_download_failure",
                 message=f"MinerU result download failed with HTTP {response.status_code}",
-                details={"task_id": task_id},
+                details=self._response_error_details(response=response, task_id=task_id),
             )
         extracted = safe_extract_result_archive(
             archive_bytes=response.content,
@@ -494,9 +494,9 @@ class MinerUApiClient:
     def _stream_request_bytes(self, method: str, url: str, *, error_code: str, task_id: str) -> httpx.Response:
         client = self._client()
         try:
-            with client.stream(method, url) as response:
+            with client.stream(method, url, headers={"Accept-Encoding": "identity"}) as response:
                 payload = bytearray()
-                for chunk in response.iter_bytes():
+                for chunk in response.iter_raw():
                     payload.extend(chunk)
                     if len(payload) > self._max_result_bytes:
                         raise MinerUApiError(
@@ -504,10 +504,12 @@ class MinerUApiClient:
                             message="MinerU result archive exceeds the configured size limit",
                             details={"task_id": task_id},
                         )
+                headers = dict(response.headers)
+                headers.pop("content-encoding", None)
                 return httpx.Response(
                     response.status_code,
                     content=bytes(payload),
-                    headers=response.headers,
+                    headers=headers,
                     request=response.request,
                 )
         except MinerUApiError:
@@ -517,6 +519,27 @@ class MinerUApiClient:
         finally:
             if self._transport is None:
                 client.close()
+
+    @staticmethod
+    def _response_error_details(*, response: httpx.Response, task_id: str) -> dict[str, Any]:
+        details: dict[str, Any] = {
+            "task_id": task_id,
+            "status_code": response.status_code,
+        }
+        body = response.content
+        if not body:
+            return details
+        content_type = str(response.headers.get("content-type") or "").lower()
+        if "json" in content_type:
+            try:
+                details["response_json"] = json.loads(body.decode("utf-8"))
+                return details
+            except (UnicodeDecodeError, ValueError):
+                pass
+        preview_bytes = body[:4096]
+        details["response_body_preview"] = preview_bytes.decode("utf-8", errors="replace")
+        details["response_body_truncated"] = len(body) > len(preview_bytes)
+        return details
 
     def _client(self) -> httpx.Client:
         headers = {}

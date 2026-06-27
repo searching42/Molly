@@ -50,7 +50,7 @@ def test_document_parse_cli_mineru_uses_injected_transport(tmp_path: Path) -> No
         if request.url.path == "/tasks/task-123":
             return httpx.Response(200, json={"task_id": "task-123", "state": "completed", "_backend": "hybrid-engine"})
         if request.url.path == "/tasks/task-123/result":
-            return httpx.Response(200, content=zip_payload)
+            return httpx.Response(200, stream=httpx.ByteStream(zip_payload))
         raise AssertionError(f"unexpected {request.method} {request.url.path}")
 
     stdout = io.StringIO()
