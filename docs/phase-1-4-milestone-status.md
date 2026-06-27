@@ -1,6 +1,6 @@
 # Phase 1-4 Milestone Status
 
-Date: 2026-06-25
+Date: 2026-06-27
 
 This document consolidates the current AI4Science/OLED workflow milestone
 status after the Phase 1-4 fixture and review-loop work. It is a status and
@@ -33,6 +33,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 2 deterministic generation screening fixture | Completed for deterministic local generation bridge | `tests/test_phase2_generation_screening_demo.py` |
 | Phase 3 literature-to-dataset fixture | Completed for parsed-table fixture to confirmed dataset | `tests/test_phase3_literature_dataset_demo.py` |
 | Phase 3 document parsing provider layer | Completed as provider/API/normalizer/baseline infrastructure plus opt-in live acceptance evidence, not yet the full scientific closed loop | `src/ai4s_agent/document_parse_service.py`, `src/ai4s_agent/document_parse_live_acceptance.py`, `docs/document-parsing-providers.md` |
+| Phase 3 to Phase 1 scientific dataset pipeline | Completed for deterministic `ParsedDocument` consumption, explicit dataset confirmation, Phase 1 baseline execution, and candidate ranking | `src/ai4s_agent/phase3_scientific_extractor.py`, `src/ai4s_agent/scientific_dataset_builder.py`, `src/ai4s_agent/phase3_to_phase1_bridge.py`, `src/ai4s_agent/workflows/phase3_to_phase1_workflow.py`, `tests/test_phase3_to_phase1_workflow.py`, `docs/phase-3-to-phase-1-pipeline.md` |
 | OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
 | Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
 | Phase 4 reviewable replan proposal | Completed as deterministic non-executable proposal | `src/ai4s_agent/run_plan_replan_proposal.py` |
@@ -158,6 +159,59 @@ Supporting infrastructure now exists for the next parsing step:
 
 That provider layer is not yet wired into the full Phase 3 scientific closed
 loop by default and does not change current route defaults.
+
+## Phase 3 To Phase 1 Scientific Dataset Pipeline
+
+The first deterministic bridge from parsed scientific documents into the Phase
+1 baseline stack is now available as a local workflow.
+
+Completed behavior:
+
+- Consumes `ParsedDocument` only; MinerU and pdfplumber remain upstream parser
+  providers.
+- Extracts structured scientific records from parsed tables without LLM calls,
+  external APIs, MinerU calls, or PDF parsing.
+- Extracts and normalizes:
+  - `SMILES`
+  - `PLQY`
+  - `lambda_em_nm`
+- Preserves mandatory training-data provenance:
+  - `paper_id`
+  - `page`
+  - `table_id`
+  - `row_id`
+- Detects duplicate SMILES and conflicting property values.
+- Builds candidate and training datasets through RDKit SMILES validation,
+  numeric sanity checks, duplicate resolution, and rejection reason tracking.
+- Requires explicit `DatasetConfirmation` before Phase 1 is invoked.
+- Reuses existing Phase 1 adapters for inspection, cleaning, trainability,
+  baseline evaluation, baseline training, prediction, ranking, and report
+  rendering.
+- Writes deterministic workflow artifacts:
+  - `full_pipeline_report.json`
+  - `scientific_dataset_manifest.json`
+  - `phase1_baseline_report.json`
+  - `candidate_ranking.json`
+
+Evidence:
+
+- `tests/test_phase3_scientific_extractor.py`
+- `tests/test_scientific_dataset_builder.py`
+- `tests/test_phase3_to_phase1_bridge.py`
+- `tests/test_phase3_to_phase1_workflow.py`
+- `tests/fixtures/phase3_to_phase1/`
+- `docs/phase-3-to-phase-1-pipeline.md`
+
+Boundaries:
+
+- Does not modify MinerU providers or the document parsing layer.
+- Does not add APIs, routes, queued-canary behavior, retry behavior, rollback
+  behavior, or worker queue behavior.
+- Does not use LLM-based extraction.
+- Does not call live services.
+- Does not modify Phase 1 model implementations or add ML frameworks.
+- Does not trust extraction output automatically; `DatasetConfirmation` is the
+  required boundary before model training.
 
 ## OLED Property Profile And Multi-Objective Screening
 
