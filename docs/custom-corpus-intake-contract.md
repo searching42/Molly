@@ -240,6 +240,20 @@ Human review does not automatically mean training admission. A separate dataset
 admission gate should verify manifest binding, review completeness, and
 redaction safety before any real/custom records can become training data.
 
+The full intended boundary chain is:
+
+```text
+custom corpus manifest
+-> custom corpus dry-run
+-> human review artifact
+-> admission request
+-> future dataset builder
+```
+
+The admission request contract is documented in
+`docs/custom-corpus-dataset-admission-gate.md`. It validates structure and
+artifact binding only; it does not create datasets or admit records.
+
 ## Pass/Fail Criteria For Custom Corpus Dry-Run
 
 Pass criteria:

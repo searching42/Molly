@@ -121,6 +121,23 @@ Future evidence PR template:
 docs/evidence/templates/custom-corpus-human-review-evidence-template.md
 ```
 
+## After Human Review: Admission Gate Contract
+
+A review artifact alone does not admit data. The next boundary is an admission
+request that binds reviewed records to the source dry-run, source manifest,
+review manifest, and artifact hashes.
+
+The admission gate contract is documented in:
+
+```text
+docs/custom-corpus-dataset-admission-gate.md
+```
+
+That gate validates structural eligibility only. A future implementation must
+still materialize data separately, and must explicitly bind admission records
+to reviewed records and source artifacts before any training data can be
+created.
+
 ## Boundaries
 
 - Human review artifacts do not automatically admit training data.
