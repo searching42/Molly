@@ -8,6 +8,10 @@ This contract does not admit training data. It does not create candidate or
 training CSVs, does not set `DatasetConfirmation.confirmed=true`, and does not
 run Phase 1.
 
+For the complete custom corpus governance path, see
+`docs/custom-corpus-governance-runbook.md`. The #155-#160 stage summary is in
+`docs/custom-corpus-governance-stage-summary-20260628.md`.
+
 ## Workflow Boundary
 
 ```text

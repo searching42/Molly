@@ -9,6 +9,10 @@ This runner does not admit training data. It always uses
 `DatasetConfirmation.confirmed=false`, verifies Phase 1 remains `not_run`, and
 marks the run failed if Phase 1 executes.
 
+For the complete custom corpus governance path, see
+`docs/custom-corpus-governance-runbook.md`. The #155-#160 stage summary is in
+`docs/custom-corpus-governance-stage-summary-20260628.md`.
+
 ## What It Does
 
 ```text
