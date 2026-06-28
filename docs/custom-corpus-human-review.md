@@ -138,6 +138,13 @@ still materialize data separately, and must explicitly bind admission records
 to reviewed records and source artifacts before any training data can be
 created.
 
+The package binding validator then checks review/admission consistency against
+the source manifest and dry-run report before any future materialization step:
+
+```text
+docs/custom-corpus-admission-package-binding.md
+```
+
 ## Boundaries
 
 - Human review artifacts do not automatically admit training data.

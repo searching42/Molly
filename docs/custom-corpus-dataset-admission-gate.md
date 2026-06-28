@@ -93,6 +93,41 @@ The validator returns a safe summary decision:
 
 Structural validation errors still fail the CLI with exit code `1`.
 
+## Package Binding Validator
+
+Admission request validation alone is not enough for future dataset
+materialization. A request can be structurally valid while still pointing at
+the wrong dry-run report, review manifest, or source manifest.
+
+The package binding validator checks the request against the full artifact set:
+
+```text
+custom corpus manifest
+-> dry-run report
+-> human review manifest
+-> admission request
+```
+
+Use:
+
+```bash
+python -m ai4s_agent.custom_corpus_admission_package \
+  --manifest /path/outside/git/custom-corpus-manifest.json \
+  --dry-run-report /path/outside/git/dry_run_report.json \
+  --review-manifest /path/outside/git/review_manifest.json \
+  --admission-request /path/outside/git/admission_request.json
+```
+
+It verifies SHA-256 bindings, id consistency, dry-run confirmation boundaries,
+and review/admission record consistency. It still does not create datasets or
+admit records.
+
+Detailed package validation behavior is documented in:
+
+```text
+docs/custom-corpus-admission-package-binding.md
+```
+
 ## Validation
 
 Validate an admission request offline:

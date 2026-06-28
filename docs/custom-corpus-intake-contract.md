@@ -244,15 +244,21 @@ The full intended boundary chain is:
 
 ```text
 custom corpus manifest
--> custom corpus dry-run
--> human review artifact
+-> custom corpus dry-run report
+-> human review manifest
 -> admission request
+-> package binding validator
 -> future dataset builder
 ```
 
 The admission request contract is documented in
 `docs/custom-corpus-dataset-admission-gate.md`. It validates structure and
 artifact binding only; it does not create datasets or admit records.
+
+The package binding validator is documented in
+`docs/custom-corpus-admission-package-binding.md`. It checks the request
+against the manifest, dry-run report, and review manifest before any future
+dataset materialization.
 
 ## Pass/Fail Criteria For Custom Corpus Dry-Run
 
