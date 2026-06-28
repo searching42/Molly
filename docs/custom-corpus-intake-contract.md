@@ -205,11 +205,24 @@ docs/custom-corpus-dry-run.md
 
 ## Human Review Boundary
 
-A future human review workflow may produce artifacts such as:
+Human review artifacts are defined in:
 
-- `reviewed_records.jsonl`
-- `review_manifest.json`
-- `review_summary.md`
+```text
+docs/custom-corpus-human-review.md
+```
+
+The review schema validates redacted manual review metadata for extracted
+custom corpus records. Custom dry-run output alone is not enough for training
+admission. Reviewed records still require a separate future admission gate.
+
+Future dataset admission must verify:
+
+- source manifest binding
+- source dry-run report hash binding
+- review completeness
+- rejection/needs-review handling
+- redaction safety
+- project admission policy
 
 Review record fields may include:
 
