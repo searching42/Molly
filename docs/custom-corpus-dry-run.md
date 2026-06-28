@@ -135,6 +135,22 @@ docs/custom-corpus-human-review.md
 Even after review, a separate future dataset admission gate is required before
 any custom corpus record can enter training.
 
+## Dry-Run To Review To Admission
+
+The current custom corpus chain is:
+
+```text
+dry-run source artifacts
+-> human review summaries
+-> admission gate validation
+-> future dataset builder/admission implementation
+```
+
+Dry-runs produce source artifacts. Human review summarizes selected records.
+The admission gate validates a reviewed admission request. None of these steps
+currently run Phase 1, set `DatasetConfirmation.confirmed=true`, or create
+training datasets.
+
 ## Troubleshooting
 
 - `invalid_manifest`: fix schema version, ids, URL safety, SHA-256 format, or
