@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 from contextlib import redirect_stderr
@@ -33,6 +34,7 @@ from ai4s_agent.mineru_endpoint_profiles import (
     load_mineru_endpoint_profile_config,
     resolve_mineru_endpoint_profile,
 )
+from ai4s_agent.mineru_endpoint_preflight import MinerUEndpointPreflightReport
 from ai4s_agent.scientific_dataset_builder import DatasetConfirmation
 from ai4s_agent.workflows.corpus_to_phase1_workflow import CorpusToPhase1WorkflowResult, run_corpus_to_phase1_workflow
 
@@ -75,6 +77,23 @@ class CorpusLiveWorkflowSummary(BaseModel):
     top_ranked_candidate_count: int = 0
 
 
+class CorpusLivePreflightBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preflight_report_path: str = ""
+    preflight_run_id: str = ""
+    preflight_decision: str = ""
+    preflight_health_status: str = ""
+    preflight_protocol_version: str = ""
+    preflight_redacted_api_origin: str = ""
+    preflight_endpoint_profile_name: str = ""
+    preflight_routing_policy_name: str = ""
+    preflight_artifact_sha256: str = ""
+    require_preflight_match: bool = False
+    matched: bool = False
+    mismatches: list[str] = Field(default_factory=list)
+
+
 class CorpusLiveAcceptanceReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -88,6 +107,7 @@ class CorpusLiveAcceptanceReport(BaseModel):
     requested_effort: str
     requested_parse_method: str
     endpoint_profile: MinerUEndpointProfileReportSummary = Field(default_factory=MinerUEndpointProfileReportSummary)
+    preflight_binding: CorpusLivePreflightBinding = Field(default_factory=CorpusLivePreflightBinding)
     source_fixture: str = _SOURCE_FIXTURE
     source_pdf_sha256_values: dict[str, str] = Field(default_factory=dict)
     parse_results: list[CorpusLiveParseEntry] = Field(default_factory=list)
@@ -127,6 +147,9 @@ def run_document_parse_corpus_live_acceptance(
     min_numeric_ratio: float = 0.6,
     min_nonempty: int = 30,
     endpoint_profile_summary: dict[str, Any] | MinerUEndpointProfileReportSummary | None = None,
+    preflight_report_path: str | Path | None = None,
+    require_preflight_match: bool = False,
+    preflight_artifact_sha256: str = "",
 ) -> CorpusLiveAcceptanceReport:
     generated = generated_at or now_iso()
     clean_run_id = str(run_id or "").strip()
@@ -135,6 +158,7 @@ def run_document_parse_corpus_live_acceptance(
     run_root = (root / clean_run_id).resolve() if run_id_error is None else root
     warnings = ["manual opt-in synthetic corpus acceptance only; not production scientific accuracy evidence"]
     errors: list[dict[str, Any]] = []
+    preflight_binding = CorpusLivePreflightBinding()
 
     if run_id_error is not None:
         errors.append(_error(run_id_error.code, run_id_error.message))
@@ -255,6 +279,35 @@ def run_document_parse_corpus_live_acceptance(
         )
         _persist_report(report, run_root)
         return report
+
+    if preflight_report_path:
+        preflight_binding, preflight_warnings, preflight_errors = _preflight_binding(
+            preflight_report_path=preflight_report_path,
+            preflight_artifact_sha256=preflight_artifact_sha256,
+            require_preflight_match=bool(require_preflight_match),
+            expected_origin=origin,
+            endpoint_profile_summary=endpoint_profile_summary,
+        )
+        warnings.extend(preflight_warnings)
+        errors.extend(preflight_errors)
+        if preflight_errors:
+            run_root.mkdir(parents=True, exist_ok=True)
+            report = _report(
+                run_id=clean_run_id,
+                generated_at=generated,
+                decision="failed",
+                endpoint_kind=endpoint_kind,
+                api_url=origin,
+                backend=backend,
+                effort=effort,
+                parse_method=parse_method,
+                endpoint_profile_summary=endpoint_profile_summary,
+                preflight_binding=preflight_binding,
+                warnings=warnings,
+                errors=errors,
+            )
+            _persist_report(report, run_root)
+            return report
 
     run_root.mkdir(parents=True, exist_ok=True)
     generated_pdfs_dir = run_root / "generated_pdfs"
@@ -411,6 +464,7 @@ def run_document_parse_corpus_live_acceptance(
         requested_effort=effort,
         requested_parse_method=parse_method,
         endpoint_profile=_endpoint_profile_summary(endpoint_profile_summary),
+        preflight_binding=preflight_binding,
         source_pdf_sha256_values={item.document_id: item.sha256 for item in corpus_pdfs},
         parse_results=parse_results,
         corpus_workflow=workflow_summary,
@@ -431,6 +485,66 @@ def run_document_parse_corpus_live_acceptance(
         report.outputs["pdfplumber_baselines"] = _rel(run_root / "pdfplumber_baselines", run_root)
     _persist_report(report, run_root)
     return report
+
+
+def _preflight_binding(
+    *,
+    preflight_report_path: str | Path,
+    preflight_artifact_sha256: str,
+    require_preflight_match: bool,
+    expected_origin: str,
+    endpoint_profile_summary: dict[str, Any] | MinerUEndpointProfileReportSummary | None,
+) -> tuple[CorpusLivePreflightBinding, list[str], list[dict[str, Any]]]:
+    path = Path(preflight_report_path).expanduser()
+    binding = CorpusLivePreflightBinding(
+        preflight_report_path=_safe_path_label(path),
+        preflight_artifact_sha256=_safe_sha256(preflight_artifact_sha256),
+        require_preflight_match=bool(require_preflight_match),
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        report = MinerUEndpointPreflightReport.model_validate(payload)
+    except Exception:
+        return binding, [], [_error("invalid_preflight_report", "preflight report is missing, unreadable, or invalid")]
+
+    profile = report.profile
+    health = report.health
+    binding = binding.model_copy(
+        update={
+            "preflight_run_id": report.run_id,
+            "preflight_decision": report.decision,
+            "preflight_health_status": health.status,
+            "preflight_protocol_version": health.protocol_version,
+            "preflight_redacted_api_origin": profile.redacted_api_origin,
+            "preflight_endpoint_profile_name": profile.endpoint_profile_name,
+            "preflight_routing_policy_name": profile.routing_policy_name,
+        }
+    )
+    expected_profile = _endpoint_profile_summary(endpoint_profile_summary)
+    mismatches: list[str] = []
+    if report.decision != "passed":
+        mismatches.append("preflight_decision_not_passed")
+    if str(health.status or "").strip().lower() not in {"healthy", "ok"}:
+        mismatches.append("preflight_health_status_unhealthy")
+    if str(health.protocol_version or "").strip() != _EXPECTED_PROTOCOL_VERSION:
+        mismatches.append("preflight_protocol_version_mismatch")
+    if str(profile.redacted_api_origin or "").strip() != str(expected_origin or "").strip():
+        mismatches.append("redacted_api_origin_mismatch")
+    if expected_profile.endpoint_profile_name and profile.endpoint_profile_name != expected_profile.endpoint_profile_name:
+        mismatches.append("endpoint_profile_name_mismatch")
+    if expected_profile.routing_policy_name and profile.routing_policy_name != expected_profile.routing_policy_name:
+        mismatches.append("routing_policy_name_mismatch")
+
+    binding = binding.model_copy(update={"matched": not mismatches, "mismatches": mismatches})
+    if mismatches and require_preflight_match:
+        return binding, [], [
+            _error(
+                "preflight_match_failed",
+                "preflight report does not match this live acceptance endpoint",
+                {"mismatches": mismatches},
+            )
+        ]
+    return binding, [f"preflight_binding_warning:{item}" for item in mismatches], []
 
 
 def _parse_document(*, service: Any, request: DocumentParseRequest) -> tuple[DocumentParseResult, float]:
@@ -547,6 +661,7 @@ def _report(
     effort: str,
     parse_method: str,
     endpoint_profile_summary: dict[str, Any] | MinerUEndpointProfileReportSummary | None = None,
+    preflight_binding: CorpusLivePreflightBinding | None = None,
     warnings: list[str],
     errors: list[dict[str, Any]],
 ) -> CorpusLiveAcceptanceReport:
@@ -560,6 +675,7 @@ def _report(
         requested_effort=effort,
         requested_parse_method=parse_method,
         endpoint_profile=_endpoint_profile_summary(endpoint_profile_summary),
+        preflight_binding=preflight_binding or CorpusLivePreflightBinding(),
         warnings=warnings,
         errors=errors,
     )
@@ -592,6 +708,7 @@ def _summary_markdown(report: CorpusLiveAcceptanceReport) -> str:
         f"- decision: {report.decision}",
         f"- endpoint_kind: {report.endpoint_kind}",
         f"- redacted_api_origin: {report.redacted_api_origin}",
+        f"- preflight: {report.preflight_binding.preflight_decision or 'not_provided'}",
         f"- documents: {len(report.parse_results)}",
         f"- corpus workflow: {report.corpus_workflow.status or 'not_run'}",
         f"- Phase 1 status: {report.corpus_workflow.phase1_status}",
@@ -632,6 +749,27 @@ def _configuration_errors(
     if attempts <= 0:
         errors.append(_error("configuration_error", "max_poll_attempts must be positive"))
     return errors
+
+
+def _safe_path_label(path: Path) -> str:
+    name = path.name or "preflight_report.json"
+    if _contains_credential_marker(name):
+        return "[redacted-preflight-report-path]"
+    return name
+
+
+def _safe_sha256(value: str) -> str:
+    clean = str(value or "").strip().lower()
+    if not clean:
+        return ""
+    if re.fullmatch(r"(sha256:)?[0-9a-f]{64}", clean):
+        return clean if clean.startswith("sha256:") else f"sha256:{clean}"
+    return "[invalid-sha256-redacted]"
+
+
+def _contains_credential_marker(value: str) -> bool:
+    lowered = str(value or "").lower()
+    return any(marker in lowered for marker in ("token", "secret", "authorization", "password", "bearer"))
 
 
 def _error(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -717,6 +855,9 @@ def main(
         poll_interval_sec=float(resolved["poll_interval_sec"]),
         max_poll_attempts=int(resolved["max_poll_attempts"]),
         endpoint_profile_summary=resolved["endpoint_profile_summary"],
+        preflight_report_path=args.preflight_report,
+        require_preflight_match=bool(args.require_preflight_match),
+        preflight_artifact_sha256=args.preflight_artifact_sha256,
         transport=transport,
         n_bits=int(args.n_bits),
         topn=int(args.topn),
@@ -816,6 +957,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--topn", type=int, default=10)
     parser.add_argument("--min-numeric-ratio", type=float, default=0.6)
     parser.add_argument("--min-nonempty", type=int, default=30)
+    parser.add_argument("--preflight-report", default="")
+    parser.add_argument("--preflight-artifact-sha256", default="")
+    parser.add_argument("--require-preflight-match", action="store_true")
     return parser
 
 
