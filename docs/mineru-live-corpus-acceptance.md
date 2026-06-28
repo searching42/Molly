@@ -61,6 +61,43 @@ parse PDFs or perform fallback routing.
 MinerU model downloads and VLM preload can make the first startup slow. Treat
 first startup separately from steady-state acceptance behavior.
 
+## Bind A Preflight Report
+
+Corpus live acceptance can optionally bind a prior `preflight_report.json`
+before it submits any parsing task:
+
+```bash
+python -m ai4s_agent.document_parse_corpus_live_acceptance \
+  --endpoint-profile-file docs/examples/mineru-endpoint-profiles.example.json \
+  --routing-policy manual-primary \
+  --output /tmp/molly-mineru-corpus-acceptance \
+  --run-id "mineru-corpus-live-$(date +%Y%m%d-%H%M%S)" \
+  --preflight-report /tmp/molly-mineru-preflight/<run-id>/preflight_report.json
+```
+
+By default, preflight mismatches are recorded as warnings so existing direct
+manual acceptance workflows are not broken. Add `--require-preflight-match` to
+make mismatches fail before parsing:
+
+```bash
+python -m ai4s_agent.document_parse_corpus_live_acceptance \
+  --endpoint-profile-file docs/examples/mineru-endpoint-profiles.example.json \
+  --routing-policy manual-primary \
+  --output /tmp/molly-mineru-corpus-acceptance \
+  --run-id "mineru-corpus-live-$(date +%Y%m%d-%H%M%S)" \
+  --preflight-report /tmp/molly-mineru-preflight/<run-id>/preflight_report.json \
+  --preflight-artifact-sha256 sha256:<artifact-sha256> \
+  --require-preflight-match
+```
+
+The binding checks that the preflight decision is `passed`, health status is
+`healthy` or `ok`, protocol version is `2`, the redacted API origin matches the
+resolved acceptance endpoint, and profile/policy names match when profile mode
+is used. Invalid or unreadable preflight reports are structured failures. The
+acceptance report records only a safe report filename, preflight run id,
+decision, health status, protocol version, redacted origin, profile/policy
+names, mismatch codes, and the optional artifact SHA-256.
+
 ## SSH Tunnel
 
 If MinerU runs on a workstation or GPU node, tunnel the loopback API to the
@@ -294,6 +331,20 @@ Tokens and authorization headers must not appear in stdout, stderr,
 - MinerU parsed the PDFs but did not preserve enough table structure for the
   corpus conflict audit to detect the synthetic duplicate/conflict evidence.
 - Inspect `parsed_documents/` and `mineru_bundles/`.
+
+`failed` with `invalid_preflight_report`:
+
+- The path passed to `--preflight-report` was missing, unreadable, or not a
+  valid `mineru_endpoint_preflight.v1` report.
+- Re-run `python -m ai4s_agent.mineru_endpoint_preflight` and pass the new
+  `preflight_report.json`.
+
+`failed` with `preflight_match_failed`:
+
+- `--require-preflight-match` was enabled and the preflight report did not
+  match the acceptance endpoint, protocol, health status, or selected
+  profile/policy.
+- Inspect `preflight_binding.mismatches` in `acceptance_report.json`.
 
 `awaiting_confirmation`:
 

@@ -141,6 +141,239 @@ def test_corpus_live_acceptance_records_endpoint_profile_metadata(tmp_path: Path
     assert "super-secret" not in payload
 
 
+def test_corpus_live_acceptance_matched_preflight_binding_is_recorded(tmp_path: Path) -> None:
+    service = FakeDocumentParseService()
+    preflight_report = _write_preflight_report(
+        tmp_path / "preflight" / "preflight_report.json",
+        run_id="mineru-preflight-ok",
+        decision="passed",
+        origin="http://127.0.0.1:18000",
+        profile_name="node45-loopback",
+        policy_name="manual-primary",
+        health_status="healthy",
+        protocol_version="2",
+    )
+
+    report = run_document_parse_corpus_live_acceptance(
+        run_id="mineru-corpus-preflight-match",
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:18000/private-path",
+        endpoint_kind="mineru_api",
+        service=service,
+        compare_pdfplumber=False,
+        confirm_synthetic_dataset=False,
+        generated_at="2026-06-28T00:00:00Z",
+        endpoint_profile_summary={
+            "endpoint_profile_name": "node45-loopback",
+            "routing_policy_name": "manual-primary",
+            "redacted_api_origin": "http://127.0.0.1:18000",
+            "endpoint_kind": "mineru_api",
+        },
+        preflight_report_path=preflight_report,
+        preflight_artifact_sha256="sha256:" + "a" * 64,
+    )
+
+    assert report.decision == "awaiting_confirmation"
+    assert report.preflight_binding.preflight_report_path == "preflight_report.json"
+    assert report.preflight_binding.preflight_run_id == "mineru-preflight-ok"
+    assert report.preflight_binding.preflight_decision == "passed"
+    assert report.preflight_binding.preflight_health_status == "healthy"
+    assert report.preflight_binding.preflight_protocol_version == "2"
+    assert report.preflight_binding.preflight_artifact_sha256 == "sha256:" + "a" * 64
+    assert report.preflight_binding.matched is True
+    assert report.preflight_binding.mismatches == []
+    assert not any(warning.startswith("preflight_") for warning in report.warnings)
+    assert service.providers == ["mineru_api", "mineru_api", "mineru_api"]
+
+
+def test_corpus_live_acceptance_mismatched_preflight_origin_warns_without_require(
+    tmp_path: Path,
+) -> None:
+    service = FakeDocumentParseService()
+    preflight_report = _write_preflight_report(
+        tmp_path / "preflight" / "preflight_report.json",
+        decision="passed",
+        origin="http://127.0.0.1:19000",
+        health_status="ok",
+        protocol_version="2",
+    )
+
+    report = run_document_parse_corpus_live_acceptance(
+        run_id="mineru-corpus-preflight-origin-warning",
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:18000",
+        endpoint_kind="mineru_api",
+        service=service,
+        compare_pdfplumber=False,
+        confirm_synthetic_dataset=False,
+        generated_at="2026-06-28T00:00:00Z",
+        preflight_report_path=preflight_report,
+    )
+
+    assert report.decision == "awaiting_confirmation"
+    assert report.preflight_binding.matched is False
+    assert "redacted_api_origin_mismatch" in report.preflight_binding.mismatches
+    assert "preflight_binding_warning:redacted_api_origin_mismatch" in report.warnings
+    assert not any(error["code"] == "preflight_match_failed" for error in report.errors)
+    assert service.providers == ["mineru_api", "mineru_api", "mineru_api"]
+
+
+def test_corpus_live_acceptance_mismatched_preflight_origin_fails_when_required(
+    tmp_path: Path,
+) -> None:
+    service = FakeDocumentParseService()
+    preflight_report = _write_preflight_report(
+        tmp_path / "preflight" / "preflight_report.json",
+        decision="passed",
+        origin="http://127.0.0.1:19000",
+        health_status="healthy",
+        protocol_version="2",
+    )
+
+    report = run_document_parse_corpus_live_acceptance(
+        run_id="mineru-corpus-preflight-origin-failure",
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:18000",
+        endpoint_kind="mineru_api",
+        service=service,
+        compare_pdfplumber=False,
+        confirm_synthetic_dataset=False,
+        generated_at="2026-06-28T00:00:00Z",
+        preflight_report_path=preflight_report,
+        require_preflight_match=True,
+    )
+
+    assert report.decision == "failed"
+    assert [error["code"] for error in report.errors] == ["preflight_match_failed"]
+    assert report.preflight_binding.mismatches == ["redacted_api_origin_mismatch"]
+    assert service.providers == []
+
+
+def test_corpus_live_acceptance_failed_preflight_blocks_only_when_required(tmp_path: Path) -> None:
+    warning_service = FakeDocumentParseService()
+    preflight_report = _write_preflight_report(
+        tmp_path / "preflight" / "preflight_report.json",
+        decision="failed",
+        origin="http://127.0.0.1:18000",
+        health_status="healthy",
+        protocol_version="2",
+    )
+
+    warning_report = run_document_parse_corpus_live_acceptance(
+        run_id="mineru-corpus-preflight-failed-warning",
+        output_dir=tmp_path / "acceptance-warning",
+        api_url="http://127.0.0.1:18000",
+        endpoint_kind="mineru_api",
+        service=warning_service,
+        compare_pdfplumber=False,
+        confirm_synthetic_dataset=False,
+        generated_at="2026-06-28T00:00:00Z",
+        preflight_report_path=preflight_report,
+    )
+
+    assert warning_report.decision == "awaiting_confirmation"
+    assert warning_report.preflight_binding.mismatches == ["preflight_decision_not_passed"]
+    assert "preflight_binding_warning:preflight_decision_not_passed" in warning_report.warnings
+    assert warning_service.providers == ["mineru_api", "mineru_api", "mineru_api"]
+
+    failing_service = FakeDocumentParseService()
+    failing_report = run_document_parse_corpus_live_acceptance(
+        run_id="mineru-corpus-preflight-failed-required",
+        output_dir=tmp_path / "acceptance-required",
+        api_url="http://127.0.0.1:18000",
+        endpoint_kind="mineru_api",
+        service=failing_service,
+        compare_pdfplumber=False,
+        confirm_synthetic_dataset=False,
+        generated_at="2026-06-28T00:00:00Z",
+        preflight_report_path=preflight_report,
+        require_preflight_match=True,
+    )
+
+    assert failing_report.decision == "failed"
+    assert failing_report.errors[0]["code"] == "preflight_match_failed"
+    assert failing_service.providers == []
+
+
+def test_corpus_live_acceptance_invalid_preflight_report_is_structured_and_redacted(
+    tmp_path: Path,
+) -> None:
+    service = FakeDocumentParseService()
+    secret_dir = tmp_path / "private-abc123"
+    secret_dir.mkdir()
+    bad_report = secret_dir / "preflight_report.json"
+    bad_report.write_text("{not json", encoding="utf-8")
+
+    report = run_document_parse_corpus_live_acceptance(
+        run_id="mineru-corpus-invalid-preflight",
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:18000",
+        endpoint_kind="mineru_api",
+        service=service,
+        compare_pdfplumber=False,
+        confirm_synthetic_dataset=False,
+        generated_at="2026-06-28T00:00:00Z",
+        preflight_report_path=bad_report,
+    )
+    raw = report.model_dump_json()
+
+    assert report.decision == "failed"
+    assert [error["code"] for error in report.errors] == ["invalid_preflight_report"]
+    assert report.preflight_binding.preflight_report_path == "preflight_report.json"
+    assert "abc123" not in raw
+    assert str(secret_dir) not in raw
+    assert service.providers == []
+
+
+def test_corpus_live_acceptance_cli_passes_preflight_binding_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai4s_agent import document_parse_corpus_live_acceptance as module
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(**kwargs: Any) -> CorpusLiveAcceptanceReport:
+        captured.update(kwargs)
+        return CorpusLiveAcceptanceReport(
+            run_id=kwargs["run_id"],
+            generated_at="2026-06-28T00:00:00Z",
+            decision="awaiting_confirmation",
+            endpoint_kind="mineru_api",
+            redacted_api_origin="http://127.0.0.1:18000",
+            requested_backend="hybrid-engine",
+            requested_effort="medium",
+            requested_parse_method="auto",
+        )
+
+    monkeypatch.setattr(module, "run_document_parse_corpus_live_acceptance", fake_run)
+    stdout = io.StringIO()
+
+    code = main(
+        [
+            "--api-url",
+            "http://127.0.0.1:18000",
+            "--endpoint-kind",
+            "mineru-api",
+            "--output",
+            str(tmp_path / "acceptance"),
+            "--run-id",
+            "mineru-corpus-cli-preflight",
+            "--preflight-report",
+            str(tmp_path / "preflight" / "preflight_report.json"),
+            "--preflight-artifact-sha256",
+            "sha256:" + "b" * 64,
+            "--require-preflight-match",
+        ],
+        stdout=stdout,
+    )
+
+    assert code == 2
+    assert captured["preflight_report_path"] == str(tmp_path / "preflight" / "preflight_report.json")
+    assert captured["preflight_artifact_sha256"] == "sha256:" + "b" * 64
+    assert captured["require_preflight_match"] is True
+
+
 def test_corpus_live_acceptance_cli_profile_errors_are_structured_and_redacted(tmp_path: Path) -> None:
     profile_path = tmp_path / "bad-corpus-profiles.json"
     profile_path.write_text(
@@ -430,3 +663,45 @@ def _assert_report_paths_are_safe(report: CorpusLiveAcceptanceReport, run_root: 
         resolved = (root / rel_path).resolve()
         assert resolved == root or root in resolved.parents, rel_path
         assert resolved.exists(), rel_path
+
+
+def _write_preflight_report(
+    path: Path,
+    *,
+    run_id: str = "mineru-preflight-test",
+    decision: str,
+    origin: str,
+    profile_name: str = "",
+    policy_name: str = "",
+    health_status: str,
+    protocol_version: str,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "mineru_endpoint_preflight.v1",
+        "run_id": run_id,
+        "generated_at": "2026-06-28T00:00:00Z",
+        "decision": decision,
+        "profile": {
+            "endpoint_profile_name": profile_name,
+            "routing_policy_name": policy_name,
+            "redacted_api_origin": origin,
+            "endpoint_kind": "mineru_api",
+        },
+        "health": {
+            "ok": health_status.lower() in {"healthy", "ok"},
+            "http_status_code": 200,
+            "status": health_status,
+            "mineru_version": "3.4.0",
+            "protocol_version": protocol_version,
+            "response_schema_valid": True,
+            "elapsed_seconds": 0.1,
+            "health_path": "/health",
+        },
+        "environment": {},
+        "warnings": [],
+        "errors": [],
+        "outputs": {"preflight_report": "preflight_report.json"},
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
