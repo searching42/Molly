@@ -76,6 +76,9 @@ def test_example_profile_loads_and_resolves_default_policy() -> None:
         (lambda payload: payload["profiles"][0].update(api_url="http://user:pass@127.0.0.1:18000"), "userinfo"),
         (lambda payload: payload["profiles"][0].update(api_url="http://127.0.0.1:18000?token=abc"), "query"),
         (lambda payload: payload["profiles"][0].update(api_url="http://127.0.0.1:18000#token"), "fragment"),
+        (lambda payload: payload["profiles"][0].update(health_path="/health?token=abc"), "health_path"),
+        (lambda payload: payload["profiles"][0].update(health_path="/health#frag"), "health_path"),
+        (lambda payload: payload["profiles"][0].update(health_path="/health/token"), "credential"),
         (lambda payload: payload["profiles"][0].update(api_token="actual-secret-value"), "credential"),
     ],
 )

@@ -291,8 +291,9 @@ def _check_health(
     except Exception:
         payload = None
     parsed = _parse_health_payload(payload)
+    healthy_status = str(parsed["status"]).strip().lower() in {"healthy", "ok"}
     return MinerUEndpointHealthSummary(
-        ok=response.status_code == 200 and parsed["schema_valid"],
+        ok=response.status_code == 200 and parsed["schema_valid"] and healthy_status,
         http_status_code=response.status_code,
         status=parsed["status"],
         mineru_version=parsed["mineru_version"],
@@ -329,6 +330,14 @@ def _health_errors(*, health: MinerUEndpointHealthSummary, expected_protocol_ver
         errors.append(_error("invalid_health_schema", "MinerU health response must be a JSON object with status and protocol_version"))
     if not health.status:
         errors.append(_error("missing_status", "MinerU health response is missing status"))
+    elif health.status.strip().lower() not in {"healthy", "ok"}:
+        errors.append(
+            _error(
+                "unhealthy_status",
+                "MinerU health status is not healthy",
+                {"observed": health.status, "accepted": ["healthy", "ok"]},
+            )
+        )
     if not health.protocol_version:
         errors.append(_error("missing_protocol_version", "MinerU health response is missing protocol_version"))
     elif health.protocol_version != str(expected_protocol_version):
@@ -467,8 +476,7 @@ def _error(code: str, message: str, details: dict[str, Any] | None = None) -> di
 
 def _safe_error(message: str) -> str:
     safe = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted]", message, flags=re.IGNORECASE)
-    safe = re.sub(r"secret[-_A-Za-z0-9]*", "[redacted]", safe, flags=re.IGNORECASE)
-    safe = re.sub(r"token[-_A-Za-z0-9]*", "[redacted]", safe, flags=re.IGNORECASE)
+    safe = re.sub(r"(token|secret|authorization|password)[A-Za-z0-9._~+/=-]*", "[redacted]", safe, flags=re.IGNORECASE)
     return safe
 
 

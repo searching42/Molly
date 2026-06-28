@@ -102,6 +102,7 @@ def test_preflight_passes_with_mock_health_profile_and_redacted_report(tmp_path:
     ("payload", "expected_code"),
     [
         ({"status": "healthy", "version": "3.4.0", "protocol_version": 1}, "unsupported_protocol_version"),
+        ({"status": "down", "version": "3.4.0", "protocol_version": 2}, "unhealthy_status"),
         ({"status": "healthy", "version": "3.4.0"}, "missing_protocol_version"),
         ({"version": "3.4.0", "protocol_version": 2}, "missing_status"),
         (["not", "object"], "invalid_health_schema"),
@@ -162,6 +163,56 @@ def test_preflight_rejects_profile_config_with_sensitive_api_url(tmp_path: Path)
     assert any(error["code"] == "profile_config_error" for error in report.errors)
     assert "secret" not in raw.lower()
     assert "abc" not in raw
+
+
+def test_preflight_rejects_profile_config_with_sensitive_health_path(tmp_path: Path) -> None:
+    config_path = _profile_config(tmp_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["profiles"][0]["health_path"] = "/health?token=abc"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = run_mineru_endpoint_preflight(
+        output_dir=tmp_path / "out",
+        run_id="preflight-sensitive-health-path",
+        profile_config=config_path,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"status": "healthy"})),
+    )
+    raw = report.model_dump_json()
+
+    assert report.decision == "failed"
+    assert any(error["code"] == "profile_config_error" for error in report.errors)
+    assert "abc" not in raw
+    assert "token=abc" not in raw
+
+
+def test_preflight_cli_rejects_sensitive_health_path_without_leaking_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _patch_environment(monkeypatch)
+    exit_code = main(
+        [
+            "--api-url",
+            "http://127.0.0.1:18000",
+            "--endpoint-kind",
+            "mineru-api",
+            "--health-path",
+            "/health?token=abc",
+            "--output",
+            str(tmp_path / "out"),
+            "--run-id",
+            "preflight-cli-sensitive-health-path",
+        ],
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"status": "healthy", "protocol_version": 2})),
+    )
+    stdout = capsys.readouterr().out
+
+    assert exit_code == 1
+    payload = json.loads(stdout)
+    assert payload["decision"] == "failed"
+    assert "abc" not in stdout
+    assert "token=abc" not in stdout
 
 
 def test_preflight_cli_writes_report_and_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

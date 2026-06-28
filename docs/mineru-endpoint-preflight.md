@@ -17,6 +17,7 @@ resolved health endpoint:
 - HTTP status code
 - health response is a JSON object
 - `status` is present
+- `status` is `healthy` or `ok`
 - MinerU version fields such as `version`, `version_name`, or `_version_name`
 - `protocol_version`
 - protocol version matches the expected value, normally `2`
@@ -29,6 +30,11 @@ It writes:
 The report records only the redacted API origin. It does not record API tokens,
 Authorization headers, userinfo, query strings, URL fragments, or complete
 sensitive URLs.
+
+`health_path` must be a path-only value such as `/health`. Values containing
+query strings, fragments, userinfo, or credential-like terms such as `token`,
+`secret`, `authorization`, or `password` are rejected before any report is
+written.
 
 ## Environment Diagnostics
 
@@ -90,7 +96,8 @@ each manual check.
 valid schema, and reported the expected protocol version.
 
 `failed` means the profile was invalid, health was unreachable, HTTP status was
-not 200, schema fields were missing, or protocol version did not match.
+not 200, schema fields were missing, health status was not `healthy` or `ok`, or
+protocol version did not match.
 
 Environment issues are recorded as warnings unless they prevent running the
 command itself. They are diagnostic hints, not automatic routing or fallback
