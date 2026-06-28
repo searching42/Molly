@@ -132,6 +132,12 @@ Detailed package validation behavior is documented in:
 docs/custom-corpus-admission-package-binding.md
 ```
 
+The future materialization boundary is designed in:
+
+```text
+docs/custom-corpus-dataset-materialization-boundary.md
+```
+
 ## Validation
 
 Validate an admission request offline:

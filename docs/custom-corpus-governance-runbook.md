@@ -315,3 +315,21 @@ candidate/training artifacts, explicit operator confirmation and review
 completeness gates, provenance binding, rollback/deletion behavior, and why
 automatic Phase 1 should remain disabled until the materialization contract is
 reviewed.
+
+## Materialization Boundary Design
+
+The materialization boundary design is documented in:
+
+```text
+docs/custom-corpus-dataset-materialization-boundary.md
+```
+
+Future evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-materialization-evidence-template.md
+```
+
+This design is now documented, but implementation remains intentionally
+absent. A future implementation should begin with schema and planner tests, not
+training CSV generation or automatic Phase 1 admission.
