@@ -37,6 +37,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 1 training and ranking stabilization | Completed for confirmed-dataset-only training orchestration, deterministic model-based candidate ranking, and scientific report generation | `src/ai4s_agent/phase1_training_orchestrator.py`, `src/ai4s_agent/phase1_candidate_ranker.py`, `src/ai4s_agent/phase1_report_generator.py`, `src/ai4s_agent/workflows/phase1_full_pipeline.py`, `tests/test_phase1_full_pipeline.py`, `docs/phase-1-training-and-ranking-pipeline.md` |
 | Multi-paper corpus evaluation and reproducibility audit | Completed for offline multi-document `ParsedDocument` fixtures, cross-paper conflict rejection, corpus replay manifests, and confirmed Phase 1 execution | `src/ai4s_agent/phase3_corpus_extractor.py`, `src/ai4s_agent/corpus_conflict_auditor.py`, `src/ai4s_agent/corpus_reproducibility_auditor.py`, `src/ai4s_agent/workflows/corpus_to_phase1_workflow.py`, `tests/test_corpus_to_phase1_workflow.py`, `docs/corpus-evaluation-and-reproducibility-audit.md` |
 | MinerU live corpus acceptance bridge | Completed as a manual opt-in bridge and reusable operator gate from self-hosted MinerU parsing to the corpus workflow, with offline-tested endpoint profile/routing policy resolution, endpoint preflight diagnostics, optional preflight-report binding, and no CI live-service dependency | `src/ai4s_agent/document_parse_corpus_live_acceptance.py`, `src/ai4s_agent/corpus_live_acceptance_fixtures.py`, `src/ai4s_agent/mineru_endpoint_profiles.py`, `src/ai4s_agent/mineru_endpoint_preflight.py`, `tests/test_document_parse_corpus_live_acceptance.py`, `tests/test_mineru_endpoint_profiles.py`, `tests/test_mineru_endpoint_preflight.py`, `docs/mineru-live-corpus-acceptance.md`, `docs/mineru-endpoint-preflight.md`, `docs/mineru-manual-live-acceptance-gate.md` |
+| Custom corpus intake contract | Documented as a contract-only next boundary for future user-supplied PDF dry-runs; custom/private corpora remain excluded from auto-confirmation and Phase 1 admission | `docs/custom-corpus-intake-contract.md`, `docs/examples/custom-corpus-manifest.example.json`, `docs/evidence/templates/custom-corpus-dry-run-evidence-template.md` |
 | OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
 | Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
 | Phase 4 reviewable replan proposal | Completed as deterministic non-executable proposal | `src/ai4s_agent/run_plan_replan_proposal.py` |
@@ -344,6 +345,10 @@ Completed behavior:
 - Documents the self-hosted MinerU live acceptance path as a reusable manual
   operator gate, with artifact packaging, SHA-256 recording, pass/fail
   criteria, and a generic redacted evidence template.
+- Documents the next custom corpus intake boundary as contract-only work:
+  future custom/private dry-runs must keep `DatasetConfirmation.confirmed` set
+  to `false`, must not run Phase 1 by default, and must preserve redaction
+  requirements before any real/custom records can be admitted for training.
 - Writes corpus-level acceptance evidence:
   - `acceptance_report.json`
   - `acceptance_summary.md`
@@ -367,6 +372,9 @@ Evidence:
 - `docs/mineru-endpoint-preflight.md`
 - `docs/mineru-manual-live-acceptance-gate.md`
 - `docs/evidence/templates/mineru-preflight-bound-live-corpus-evidence-template.md`
+- `docs/custom-corpus-intake-contract.md`
+- `docs/examples/custom-corpus-manifest.example.json`
+- `docs/evidence/templates/custom-corpus-dry-run-evidence-template.md`
 
 Boundaries:
 
@@ -383,6 +391,9 @@ Boundaries:
 - Does not weaken `DatasetConfirmation`.
 - Does not bypass manifest-to-training-CSV binding.
 - Does not change queued-canary, retry, rollback, or worker queue behavior.
+- Does not implement a custom corpus runner yet.
+- Does not admit custom/private corpora to Phase 1 automatically.
+- Does not commit real PDFs or private artifacts.
 
 ## OLED Property Profile And Multi-Objective Screening
 
