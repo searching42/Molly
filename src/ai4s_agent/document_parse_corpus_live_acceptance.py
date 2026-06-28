@@ -27,6 +27,12 @@ from ai4s_agent.document_parse_live_acceptance import (
     _service,
 )
 from ai4s_agent.document_parse_provider import DocumentParseRequest, DocumentParseResult
+from ai4s_agent.mineru_endpoint_profiles import (
+    MinerUEndpointProfileConfigError,
+    MinerUEndpointProfileReportSummary,
+    load_mineru_endpoint_profile_config,
+    resolve_mineru_endpoint_profile,
+)
 from ai4s_agent.scientific_dataset_builder import DatasetConfirmation
 from ai4s_agent.workflows.corpus_to_phase1_workflow import CorpusToPhase1WorkflowResult, run_corpus_to_phase1_workflow
 
@@ -81,6 +87,7 @@ class CorpusLiveAcceptanceReport(BaseModel):
     requested_backend: str
     requested_effort: str
     requested_parse_method: str
+    endpoint_profile: MinerUEndpointProfileReportSummary = Field(default_factory=MinerUEndpointProfileReportSummary)
     source_fixture: str = _SOURCE_FIXTURE
     source_pdf_sha256_values: dict[str, str] = Field(default_factory=dict)
     parse_results: list[CorpusLiveParseEntry] = Field(default_factory=list)
@@ -119,6 +126,7 @@ def run_document_parse_corpus_live_acceptance(
     topn: int = 10,
     min_numeric_ratio: float = 0.6,
     min_nonempty: int = 30,
+    endpoint_profile_summary: dict[str, Any] | MinerUEndpointProfileReportSummary | None = None,
 ) -> CorpusLiveAcceptanceReport:
     generated = generated_at or now_iso()
     clean_run_id = str(run_id or "").strip()
@@ -139,6 +147,7 @@ def run_document_parse_corpus_live_acceptance(
             backend=backend,
             effort=effort,
             parse_method=parse_method,
+            endpoint_profile_summary=endpoint_profile_summary,
             warnings=warnings,
             errors=errors,
         )
@@ -155,6 +164,7 @@ def run_document_parse_corpus_live_acceptance(
             backend=backend,
             effort=effort,
             parse_method=parse_method,
+            endpoint_profile_summary=endpoint_profile_summary,
             warnings=warnings,
             errors=errors,
         )
@@ -177,6 +187,7 @@ def run_document_parse_corpus_live_acceptance(
             backend=backend,
             effort=effort,
             parse_method=parse_method,
+            endpoint_profile_summary=endpoint_profile_summary,
             warnings=warnings,
             errors=errors,
         )
@@ -196,6 +207,7 @@ def run_document_parse_corpus_live_acceptance(
             backend=backend,
             effort=effort,
             parse_method=parse_method,
+            endpoint_profile_summary=endpoint_profile_summary,
             warnings=warnings,
             errors=errors,
         )
@@ -213,6 +225,7 @@ def run_document_parse_corpus_live_acceptance(
             backend=backend,
             effort=effort,
             parse_method=parse_method,
+            endpoint_profile_summary=endpoint_profile_summary,
             warnings=warnings,
             errors=errors,
         )
@@ -236,6 +249,7 @@ def run_document_parse_corpus_live_acceptance(
             backend=backend,
             effort=effort,
             parse_method=parse_method,
+            endpoint_profile_summary=endpoint_profile_summary,
             warnings=warnings,
             errors=errors,
         )
@@ -259,6 +273,7 @@ def run_document_parse_corpus_live_acceptance(
             backend=backend,
             effort=effort,
             parse_method=parse_method,
+            endpoint_profile_summary=endpoint_profile_summary,
             warnings=warnings,
             errors=errors,
         )
@@ -395,6 +410,7 @@ def run_document_parse_corpus_live_acceptance(
         requested_backend=backend,
         requested_effort=effort,
         requested_parse_method=parse_method,
+        endpoint_profile=_endpoint_profile_summary(endpoint_profile_summary),
         source_pdf_sha256_values={item.document_id: item.sha256 for item in corpus_pdfs},
         parse_results=parse_results,
         corpus_workflow=workflow_summary,
@@ -530,6 +546,7 @@ def _report(
     backend: str,
     effort: str,
     parse_method: str,
+    endpoint_profile_summary: dict[str, Any] | MinerUEndpointProfileReportSummary | None = None,
     warnings: list[str],
     errors: list[dict[str, Any]],
 ) -> CorpusLiveAcceptanceReport:
@@ -542,9 +559,20 @@ def _report(
         requested_backend=backend,
         requested_effort=effort,
         requested_parse_method=parse_method,
+        endpoint_profile=_endpoint_profile_summary(endpoint_profile_summary),
         warnings=warnings,
         errors=errors,
     )
+
+
+def _endpoint_profile_summary(
+    value: dict[str, Any] | MinerUEndpointProfileReportSummary | None,
+) -> MinerUEndpointProfileReportSummary:
+    if value is None:
+        return MinerUEndpointProfileReportSummary()
+    if isinstance(value, MinerUEndpointProfileReportSummary):
+        return value
+    return MinerUEndpointProfileReportSummary.model_validate(value)
 
 
 def _persist_report(report: CorpusLiveAcceptanceReport, run_root: Path) -> None:
@@ -650,24 +678,45 @@ def main(
     else:
         with redirect_stderr(stderr):
             args = parser.parse_args(argv)
+    try:
+        resolved = _resolve_cli_endpoint(args, parser=parser)
+    except MinerUEndpointProfileConfigError as exc:
+        report = _report(
+            run_id=str(args.run_id or "").strip(),
+            generated_at=now_iso(),
+            decision="failed",
+            endpoint_kind="mineru_api",
+            api_url="",
+            backend="hybrid-engine",
+            effort="medium",
+            parse_method="auto",
+            warnings=["manual opt-in synthetic corpus acceptance only; not production scientific accuracy evidence"],
+            errors=[_error("endpoint_profile_error", str(exc))],
+        )
+        _persist_report(report, _cli_report_root(args.output, args.run_id))
+        output.write(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+        output.write("\n")
+        err.write(f"acceptance report: {_cli_report_root(args.output, args.run_id) / report.outputs['acceptance_report']}\n")
+        return 1
     token = os.environ.get("MINERU_API_TOKEN") or os.environ.get("AI4S_MINERU_API_TOKEN") or ""
     report = run_document_parse_corpus_live_acceptance(
         run_id=args.run_id,
         output_dir=args.output,
-        api_url=args.api_url,
-        endpoint_kind=str(args.endpoint_kind).replace("-", "_"),
-        backend=args.backend,
-        effort=args.effort,
-        parse_method=args.parse_method,
-        allow_remote_upload=bool(args.allow_remote_upload),
-        compare_pdfplumber=bool(args.compare_pdfplumber),
+        api_url=resolved["api_url"],
+        endpoint_kind=resolved["endpoint_kind"],
+        backend=resolved["backend"],
+        effort=resolved["effort"],
+        parse_method=resolved["parse_method"],
+        allow_remote_upload=resolved["allow_remote_upload"],
+        compare_pdfplumber=resolved["compare_pdfplumber"],
         confirm_synthetic_dataset=bool(args.confirm_synthetic_dataset),
         confirmed_by=args.confirmed_by,
         api_token=token,
-        http_timeout_sec=float(args.http_timeout_sec),
-        task_timeout_sec=float(args.task_timeout_sec),
-        poll_interval_sec=float(args.poll_interval_sec),
-        max_poll_attempts=int(args.max_poll_attempts),
+        http_timeout_sec=float(resolved["http_timeout_sec"]),
+        task_timeout_sec=float(resolved["task_timeout_sec"]),
+        poll_interval_sec=float(resolved["poll_interval_sec"]),
+        max_poll_attempts=int(resolved["max_poll_attempts"]),
+        endpoint_profile_summary=resolved["endpoint_profile_summary"],
         transport=transport,
         n_bits=int(args.n_bits),
         topn=int(args.topn),
@@ -685,26 +734,84 @@ def main(
     return 1
 
 
+def _resolve_cli_endpoint(args: argparse.Namespace, *, parser: argparse.ArgumentParser) -> dict[str, Any]:
+    if args.endpoint_profile_file:
+        config = load_mineru_endpoint_profile_config(args.endpoint_profile_file)
+        resolved = resolve_mineru_endpoint_profile(
+            config,
+            profile_name=args.endpoint_profile,
+            policy_name=args.routing_policy,
+            profile_source_path=args.endpoint_profile_file,
+            cli_overrides={
+                "api_url": args.api_url,
+                "endpoint_kind": args.endpoint_kind,
+                "backend": args.backend,
+                "effort": args.effort,
+                "parse_method": args.parse_method,
+                "allow_remote_upload": args.allow_remote_upload,
+                "compare_pdfplumber": args.compare_pdfplumber,
+                "http_timeout_sec": args.http_timeout_sec,
+                "task_timeout_sec": args.task_timeout_sec,
+                "poll_interval_sec": args.poll_interval_sec,
+                "max_poll_attempts": args.max_poll_attempts,
+            },
+        )
+        profile = resolved.profile
+        return {
+            "api_url": profile.api_url,
+            "endpoint_kind": profile.endpoint_kind,
+            "backend": profile.backend,
+            "effort": profile.effort,
+            "parse_method": profile.parse_method,
+            "allow_remote_upload": profile.allow_remote_upload,
+            "compare_pdfplumber": profile.compare_pdfplumber,
+            "http_timeout_sec": profile.http_timeout_sec,
+            "task_timeout_sec": profile.task_timeout_sec,
+            "poll_interval_sec": profile.poll_interval_sec,
+            "max_poll_attempts": profile.max_poll_attempts,
+            "endpoint_profile_summary": resolved.redacted_summary(base_dir=Path.cwd()),
+        }
+    if not args.api_url:
+        parser.error("--api-url is required unless --endpoint-profile-file is provided")
+    return {
+        "api_url": args.api_url,
+        "endpoint_kind": str(args.endpoint_kind or "mineru-api").replace("-", "_"),
+        "backend": args.backend or "hybrid-engine",
+        "effort": args.effort or "medium",
+        "parse_method": args.parse_method or "auto",
+        "allow_remote_upload": bool(args.allow_remote_upload),
+        "compare_pdfplumber": bool(args.compare_pdfplumber),
+        "http_timeout_sec": 60.0 if args.http_timeout_sec is None else float(args.http_timeout_sec),
+        "task_timeout_sec": 900.0 if args.task_timeout_sec is None else float(args.task_timeout_sec),
+        "poll_interval_sec": 1.0 if args.poll_interval_sec is None else float(args.poll_interval_sec),
+        "max_poll_attempts": 600 if args.max_poll_attempts is None else int(args.max_poll_attempts),
+        "endpoint_profile_summary": None,
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m ai4s_agent.document_parse_corpus_live_acceptance",
         description="Manual MinerU live corpus acceptance bridge for synthetic multi-paper PDFs.",
     )
-    parser.add_argument("--api-url", required=True)
-    parser.add_argument("--endpoint-kind", default="mineru-api", choices=["mineru-api", "mineru-router"])
+    parser.add_argument("--api-url", default=None)
+    parser.add_argument("--endpoint-profile-file", default="")
+    parser.add_argument("--endpoint-profile", default=None)
+    parser.add_argument("--routing-policy", default=None)
+    parser.add_argument("--endpoint-kind", default=None, choices=["mineru-api", "mineru-router"])
     parser.add_argument("--output", required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--backend", default="hybrid-engine")
-    parser.add_argument("--effort", default="medium", choices=["medium", "high"])
-    parser.add_argument("--parse-method", default="auto")
-    parser.add_argument("--allow-remote-upload", action="store_true")
-    parser.add_argument("--compare-pdfplumber", action="store_true")
+    parser.add_argument("--backend", default=None)
+    parser.add_argument("--effort", default=None, choices=["medium", "high"])
+    parser.add_argument("--parse-method", default=None)
+    parser.add_argument("--allow-remote-upload", action="store_true", default=None)
+    parser.add_argument("--compare-pdfplumber", action="store_true", default=None)
     parser.add_argument("--confirm-synthetic-dataset", action="store_true")
     parser.add_argument("--confirmed-by", default="")
-    parser.add_argument("--http-timeout-sec", type=float, default=60.0)
-    parser.add_argument("--task-timeout-sec", type=float, default=900.0)
-    parser.add_argument("--poll-interval-sec", type=float, default=1.0)
-    parser.add_argument("--max-poll-attempts", type=int, default=600)
+    parser.add_argument("--http-timeout-sec", type=float, default=None)
+    parser.add_argument("--task-timeout-sec", type=float, default=None)
+    parser.add_argument("--poll-interval-sec", type=float, default=None)
+    parser.add_argument("--max-poll-attempts", type=int, default=None)
     parser.add_argument("--n-bits", type=int, default=256)
     parser.add_argument("--topn", type=int, default=10)
     parser.add_argument("--min-numeric-ratio", type=float, default=0.6)

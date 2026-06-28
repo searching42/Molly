@@ -384,6 +384,120 @@ def test_live_acceptance_security_redacts_token_and_rejects_unsafe_inputs(tmp_pa
     assert "allow_remote_upload" in remote.mineru.error.message
 
 
+def test_live_acceptance_cli_uses_endpoint_profile_without_leaking_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_path = tmp_path / "mineru-profiles.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "mineru_endpoint_profiles.v1",
+                "profiles": [
+                    {
+                        "name": "node45-loopback",
+                        "api_url": "http://127.0.0.1:8000",
+                        "endpoint_kind": "mineru-api",
+                        "backend": "hybrid-engine",
+                        "effort": "medium",
+                        "allow_remote_upload": True,
+                        "compare_pdfplumber": True,
+                    }
+                ],
+                "routing_policies": [
+                    {
+                        "name": "manual-primary",
+                        "default_profile": "node45-loopback",
+                        "fallback_profiles": [],
+                        "mode": "manual",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    token_seen: list[str] = []
+    monkeypatch.setenv("MINERU_API_TOKEN", "profile-secret-token")
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    code = main(
+        [
+            "--endpoint-profile-file",
+            str(profile_path),
+            "--routing-policy",
+            "manual-primary",
+            "--output",
+            str(tmp_path / "acceptance"),
+            "--run-id",
+            "mineru-profile-cli",
+        ],
+        stdout=stdout,
+        stderr=stderr,
+        transport=_success_transport(token_seen=token_seen),
+    )
+
+    payload = json.loads(stdout.getvalue())
+    report_text = (tmp_path / "acceptance" / "mineru-profile-cli" / "acceptance_report.json").read_text(
+        encoding="utf-8"
+    )
+    assert code == 0
+    assert payload["decision"] == "passed"
+    assert payload["endpoint_profile"]["endpoint_profile_name"] == "node45-loopback"
+    assert payload["endpoint_profile"]["routing_policy_name"] == "manual-primary"
+    assert payload["endpoint_profile"]["redacted_api_origin"] == "http://127.0.0.1:8000"
+    assert payload["requested_backend"] == "hybrid-engine"
+    assert payload["mineru"]["ok"] is True
+    assert any("profile-secret-token" in header for header in token_seen)
+    assert "profile-secret-token" not in stdout.getvalue()
+    assert "profile-secret-token" not in stderr.getvalue()
+    assert "profile-secret-token" not in report_text
+
+
+def test_live_acceptance_cli_profile_errors_are_structured_and_redacted(tmp_path: Path) -> None:
+    profile_path = tmp_path / "bad-profiles.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "mineru_endpoint_profiles.v1",
+                "profiles": [
+                    {
+                        "name": "bad",
+                        "api_url": "http://127.0.0.1:8000?token=super-secret",
+                        "endpoint_kind": "mineru-api",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    code = main(
+        [
+            "--endpoint-profile-file",
+            str(profile_path),
+            "--endpoint-profile",
+            "bad",
+            "--output",
+            str(tmp_path / "acceptance"),
+            "--run-id",
+            "bad-profile",
+        ],
+        stdout=stdout,
+        stderr=stderr,
+        transport=_success_transport(),
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert code == 1
+    assert payload["decision"] == "failed"
+    assert payload["errors"][0]["code"] == "endpoint_profile_error"
+    assert "super-secret" not in stdout.getvalue()
+    assert "super-secret" not in stderr.getvalue()
+
+
 @pytest.mark.parametrize("run_id", ["../escape", "nested/run", "nested\\run", ".", ".."])
 def test_live_acceptance_rejects_unsafe_run_id_without_path_escape(tmp_path: Path, run_id: str) -> None:
     report = run_document_parse_live_acceptance(

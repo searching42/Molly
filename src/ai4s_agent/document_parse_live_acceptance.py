@@ -22,6 +22,12 @@ from ai4s_agent.document_parse_pdfplumber import PdfPlumberDocumentParseProvider
 from ai4s_agent.document_parse_provider import DocumentParseError, DocumentParseRequest, DocumentParseResult
 from ai4s_agent.document_parse_service import DocumentParseService
 from ai4s_agent.mineru_api_client import MinerUApiClient
+from ai4s_agent.mineru_endpoint_profiles import (
+    MinerUEndpointProfileConfigError,
+    MinerUEndpointProfileReportSummary,
+    load_mineru_endpoint_profile_config,
+    resolve_mineru_endpoint_profile,
+)
 
 AcceptanceDecision = Literal["passed", "needs_review", "failed"]
 EndpointKind = Literal["mineru_api", "mineru_router", "compatible_endpoint"]
@@ -122,6 +128,7 @@ class DocumentParseLiveAcceptanceReport(BaseModel):
     requested_backend: str
     requested_effort: str
     requested_parse_method: str
+    endpoint_profile: MinerUEndpointProfileReportSummary = Field(default_factory=MinerUEndpointProfileReportSummary)
     source_pdf_sha256: str = ""
     source_fixture: str = _SOURCE_FIXTURE
     mineru: DocumentParseProviderAcceptance
@@ -150,6 +157,7 @@ def run_document_parse_live_acceptance(
     task_timeout_sec: float = 300.0,
     poll_interval_sec: float = 1.0,
     max_poll_attempts: int = 120,
+    endpoint_profile_summary: dict[str, Any] | MinerUEndpointProfileReportSummary | None = None,
     transport: httpx.BaseTransport | None = None,
     monotonic: Any | None = None,
     sleep: Any | None = None,
@@ -170,6 +178,7 @@ def run_document_parse_live_acceptance(
             parse_method=parse_method,
             thresholds=threshold_model,
             errors=[run_id_error],
+            endpoint_profile_summary=endpoint_profile_summary,
         )
     if run_root.parent != root:
         return _failed_report(
@@ -187,6 +196,7 @@ def run_document_parse_live_acceptance(
                     message="run_id must stay directly under the acceptance output root",
                 )
             ],
+            endpoint_profile_summary=endpoint_profile_summary,
         )
     if run_root.exists() and any(run_root.iterdir()):
         return _failed_report(
@@ -205,6 +215,7 @@ def run_document_parse_live_acceptance(
                     details={"output_dir": str(run_root)},
                 )
             ],
+            endpoint_profile_summary=endpoint_profile_summary,
         )
     config_errors = _configuration_errors(
         thresholds=threshold_model,
@@ -225,6 +236,7 @@ def run_document_parse_live_acceptance(
             parse_method=parse_method,
             thresholds=threshold_model,
             errors=config_errors,
+            endpoint_profile_summary=endpoint_profile_summary,
         )
         _persist_report(report, run_root)
         return report
@@ -247,6 +259,7 @@ def run_document_parse_live_acceptance(
             thresholds=threshold_model,
             errors=errors,
             warnings=warnings,
+            endpoint_profile_summary=endpoint_profile_summary,
         )
         _persist_report(report, run_root)
         return report
@@ -272,6 +285,7 @@ def run_document_parse_live_acceptance(
             thresholds=threshold_model,
             errors=errors,
             warnings=warnings,
+            endpoint_profile_summary=endpoint_profile_summary,
         )
         _persist_report(report, run_root)
         return report
@@ -320,6 +334,7 @@ def run_document_parse_live_acceptance(
                 )
             ],
             warnings=warnings,
+            endpoint_profile_summary=endpoint_profile_summary,
         )
         report.outputs["source_pdf"] = _rel(source_pdf, run_root)
         report.source_pdf_sha256 = source_hash
@@ -378,6 +393,7 @@ def run_document_parse_live_acceptance(
         requested_backend=backend,
         requested_effort=effort,
         requested_parse_method=parse_method,
+        endpoint_profile=_endpoint_profile_summary(endpoint_profile_summary),
         source_pdf_sha256=source_hash,
         mineru=mineru,
         pdfplumber=pdfplumber,
@@ -664,6 +680,7 @@ def _failed_report(
     thresholds: DocumentParseAcceptanceThresholds,
     errors: list[DocumentParseAcceptanceError],
     warnings: list[str] | None = None,
+    endpoint_profile_summary: dict[str, Any] | MinerUEndpointProfileReportSummary | None = None,
 ) -> DocumentParseLiveAcceptanceReport:
     return DocumentParseLiveAcceptanceReport(
         run_id=run_id,
@@ -674,6 +691,7 @@ def _failed_report(
         requested_backend=backend,
         requested_effort=effort,
         requested_parse_method=parse_method,
+        endpoint_profile=_endpoint_profile_summary(endpoint_profile_summary),
         mineru=DocumentParseProviderAcceptance(
             ok=False,
             provider="mineru_api",
@@ -695,6 +713,16 @@ def _run_id_error(value: str) -> DocumentParseAcceptanceError | None:
     if Path(clean).name != clean:
         return DocumentParseAcceptanceError(code="invalid_run_id", message="run_id must be a single safe path segment")
     return None
+
+
+def _endpoint_profile_summary(
+    value: dict[str, Any] | MinerUEndpointProfileReportSummary | None,
+) -> MinerUEndpointProfileReportSummary:
+    if value is None:
+        return MinerUEndpointProfileReportSummary()
+    if isinstance(value, MinerUEndpointProfileReportSummary):
+        return value
+    return MinerUEndpointProfileReportSummary.model_validate(value)
 
 
 def _configuration_errors(
@@ -901,27 +929,56 @@ def main(
     else:
         with redirect_stderr(stderr):
             args = parser.parse_args(argv)
+    try:
+        resolved = _resolve_cli_endpoint(args, parser=parser)
+    except MinerUEndpointProfileConfigError as exc:
+        report = _failed_report(
+            run_id=str(args.run_id or "").strip(),
+            run_root=_cli_report_root(args.output, args.run_id),
+            endpoint_kind="mineru_api",
+            api_url="",
+            backend="hybrid-engine",
+            effort="medium",
+            parse_method="auto",
+            thresholds=DocumentParseAcceptanceThresholds(
+                normalized_text_token_recall=float(args.min_text_recall),
+                header_match_rate=float(args.min_header_match),
+                simple_cell_exact_match_rate=float(args.min_cell_match),
+            ),
+            errors=[
+                DocumentParseAcceptanceError(
+                    code="endpoint_profile_error",
+                    message=str(exc),
+                )
+            ],
+        )
+        _persist_report(report, _cli_report_root(args.output, args.run_id))
+        output.write(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
+        output.write("\n")
+        err.write(f"acceptance report: {_cli_report_root(args.output, args.run_id) / report.outputs['acceptance_report']}\n")
+        return 1
     token = os.environ.get("MINERU_API_TOKEN") or os.environ.get("AI4S_MINERU_API_TOKEN") or ""
     report = run_document_parse_live_acceptance(
         run_id=args.run_id,
         output_dir=args.output,
-        api_url=args.api_url,
-        endpoint_kind=str(args.endpoint_kind).replace("-", "_"),
-        backend=args.backend,
-        effort=args.effort,
-        parse_method=args.parse_method,
-        allow_remote_upload=bool(args.allow_remote_upload),
-        compare_pdfplumber=bool(args.compare_pdfplumber),
+        api_url=resolved["api_url"],
+        endpoint_kind=resolved["endpoint_kind"],
+        backend=resolved["backend"],
+        effort=resolved["effort"],
+        parse_method=resolved["parse_method"],
+        allow_remote_upload=resolved["allow_remote_upload"],
+        compare_pdfplumber=resolved["compare_pdfplumber"],
         thresholds=DocumentParseAcceptanceThresholds(
             normalized_text_token_recall=float(args.min_text_recall),
             header_match_rate=float(args.min_header_match),
             simple_cell_exact_match_rate=float(args.min_cell_match),
         ),
         api_token=token,
-        http_timeout_sec=float(args.http_timeout_sec),
-        task_timeout_sec=float(args.task_timeout_sec),
-        poll_interval_sec=float(args.poll_interval_sec),
-        max_poll_attempts=int(args.max_poll_attempts),
+        http_timeout_sec=float(resolved["http_timeout_sec"]),
+        task_timeout_sec=float(resolved["task_timeout_sec"]),
+        poll_interval_sec=float(resolved["poll_interval_sec"]),
+        max_poll_attempts=int(resolved["max_poll_attempts"]),
+        endpoint_profile_summary=resolved["endpoint_profile_summary"],
         transport=transport,
     )
     output.write(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
@@ -935,24 +992,82 @@ def main(
     return 1
 
 
+def _resolve_cli_endpoint(args: argparse.Namespace, *, parser: argparse.ArgumentParser) -> dict[str, Any]:
+    if args.endpoint_profile_file:
+        config = load_mineru_endpoint_profile_config(args.endpoint_profile_file)
+        resolved = resolve_mineru_endpoint_profile(
+            config,
+            profile_name=args.endpoint_profile,
+            policy_name=args.routing_policy,
+            profile_source_path=args.endpoint_profile_file,
+            cli_overrides={
+                "api_url": args.api_url,
+                "endpoint_kind": args.endpoint_kind,
+                "backend": args.backend,
+                "effort": args.effort,
+                "parse_method": args.parse_method,
+                "allow_remote_upload": args.allow_remote_upload,
+                "compare_pdfplumber": args.compare_pdfplumber,
+                "http_timeout_sec": args.http_timeout_sec,
+                "task_timeout_sec": args.task_timeout_sec,
+                "poll_interval_sec": args.poll_interval_sec,
+                "max_poll_attempts": args.max_poll_attempts,
+            },
+        )
+        profile = resolved.profile
+        return {
+            "api_url": profile.api_url,
+            "endpoint_kind": profile.endpoint_kind,
+            "backend": profile.backend,
+            "effort": profile.effort,
+            "parse_method": profile.parse_method,
+            "allow_remote_upload": profile.allow_remote_upload,
+            "compare_pdfplumber": profile.compare_pdfplumber,
+            "http_timeout_sec": profile.http_timeout_sec,
+            "task_timeout_sec": profile.task_timeout_sec,
+            "poll_interval_sec": profile.poll_interval_sec,
+            "max_poll_attempts": profile.max_poll_attempts,
+            "endpoint_profile_summary": resolved.redacted_summary(base_dir=Path.cwd()),
+        }
+    if not args.api_url:
+        parser.error("--api-url is required unless --endpoint-profile-file is provided")
+    return {
+        "api_url": args.api_url,
+        "endpoint_kind": str(args.endpoint_kind or "mineru-api").replace("-", "_"),
+        "backend": args.backend or "hybrid-engine",
+        "effort": args.effort or "medium",
+        "parse_method": args.parse_method or "auto",
+        "allow_remote_upload": bool(args.allow_remote_upload),
+        "compare_pdfplumber": bool(args.compare_pdfplumber),
+        "http_timeout_sec": 30.0 if args.http_timeout_sec is None else float(args.http_timeout_sec),
+        "task_timeout_sec": 300.0 if args.task_timeout_sec is None else float(args.task_timeout_sec),
+        "poll_interval_sec": 1.0 if args.poll_interval_sec is None else float(args.poll_interval_sec),
+        "max_poll_attempts": 120 if args.max_poll_attempts is None else int(args.max_poll_attempts),
+        "endpoint_profile_summary": None,
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m ai4s_agent.document_parse_live_acceptance",
         description="Manual live MinerU API acceptance runner with pdfplumber baseline comparison.",
     )
-    parser.add_argument("--api-url", required=True)
-    parser.add_argument("--endpoint-kind", default="mineru-api", choices=["mineru-api", "mineru-router", "compatible-endpoint"])
+    parser.add_argument("--api-url", default=None)
+    parser.add_argument("--endpoint-profile-file", default="")
+    parser.add_argument("--endpoint-profile", default=None)
+    parser.add_argument("--routing-policy", default=None)
+    parser.add_argument("--endpoint-kind", default=None, choices=["mineru-api", "mineru-router", "compatible-endpoint"])
     parser.add_argument("--output", required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--backend", default="hybrid-engine")
-    parser.add_argument("--effort", default="medium", choices=["medium", "high"])
-    parser.add_argument("--parse-method", default="auto")
-    parser.add_argument("--allow-remote-upload", action="store_true")
-    parser.add_argument("--compare-pdfplumber", action="store_true")
-    parser.add_argument("--http-timeout-sec", type=float, default=30.0)
-    parser.add_argument("--task-timeout-sec", type=float, default=300.0)
-    parser.add_argument("--poll-interval-sec", type=float, default=1.0)
-    parser.add_argument("--max-poll-attempts", type=int, default=120)
+    parser.add_argument("--backend", default=None)
+    parser.add_argument("--effort", default=None, choices=["medium", "high"])
+    parser.add_argument("--parse-method", default=None)
+    parser.add_argument("--allow-remote-upload", action="store_true", default=None)
+    parser.add_argument("--compare-pdfplumber", action="store_true", default=None)
+    parser.add_argument("--http-timeout-sec", type=float, default=None)
+    parser.add_argument("--task-timeout-sec", type=float, default=None)
+    parser.add_argument("--poll-interval-sec", type=float, default=None)
+    parser.add_argument("--max-poll-attempts", type=int, default=None)
     parser.add_argument("--min-text-recall", type=float, default=0.80)
     parser.add_argument("--min-header-match", type=float, default=1.0)
     parser.add_argument("--min-cell-match", type=float, default=0.90)

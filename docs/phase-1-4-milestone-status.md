@@ -36,7 +36,7 @@ literature acquisition, and default-route migration remain future work.
 | Phase 3 to Phase 1 scientific dataset pipeline | Completed for deterministic `ParsedDocument` consumption, explicit dataset confirmation, Phase 1 baseline execution, and candidate ranking | `src/ai4s_agent/phase3_scientific_extractor.py`, `src/ai4s_agent/scientific_dataset_builder.py`, `src/ai4s_agent/phase3_to_phase1_bridge.py`, `src/ai4s_agent/workflows/phase3_to_phase1_workflow.py`, `tests/test_phase3_to_phase1_workflow.py`, `docs/phase-3-to-phase-1-pipeline.md` |
 | Phase 1 training and ranking stabilization | Completed for confirmed-dataset-only training orchestration, deterministic model-based candidate ranking, and scientific report generation | `src/ai4s_agent/phase1_training_orchestrator.py`, `src/ai4s_agent/phase1_candidate_ranker.py`, `src/ai4s_agent/phase1_report_generator.py`, `src/ai4s_agent/workflows/phase1_full_pipeline.py`, `tests/test_phase1_full_pipeline.py`, `docs/phase-1-training-and-ranking-pipeline.md` |
 | Multi-paper corpus evaluation and reproducibility audit | Completed for offline multi-document `ParsedDocument` fixtures, cross-paper conflict rejection, corpus replay manifests, and confirmed Phase 1 execution | `src/ai4s_agent/phase3_corpus_extractor.py`, `src/ai4s_agent/corpus_conflict_auditor.py`, `src/ai4s_agent/corpus_reproducibility_auditor.py`, `src/ai4s_agent/workflows/corpus_to_phase1_workflow.py`, `tests/test_corpus_to_phase1_workflow.py`, `docs/corpus-evaluation-and-reproducibility-audit.md` |
-| MinerU live corpus acceptance bridge | Completed as a manual opt-in bridge from real self-hosted MinerU parsing to the corpus workflow, with no CI live-service dependency | `src/ai4s_agent/document_parse_corpus_live_acceptance.py`, `src/ai4s_agent/corpus_live_acceptance_fixtures.py`, `tests/test_document_parse_corpus_live_acceptance.py`, `docs/mineru-live-corpus-acceptance.md` |
+| MinerU live corpus acceptance bridge | Completed as a manual opt-in bridge from real self-hosted MinerU parsing to the corpus workflow, with offline-tested endpoint profile/routing policy resolution and no CI live-service dependency | `src/ai4s_agent/document_parse_corpus_live_acceptance.py`, `src/ai4s_agent/corpus_live_acceptance_fixtures.py`, `src/ai4s_agent/mineru_endpoint_profiles.py`, `tests/test_document_parse_corpus_live_acceptance.py`, `tests/test_mineru_endpoint_profiles.py`, `docs/mineru-live-corpus-acceptance.md` |
 | OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
 | Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
 | Phase 4 reviewable replan proposal | Completed as deterministic non-executable proposal | `src/ai4s_agent/run_plan_replan_proposal.py` |
@@ -332,6 +332,9 @@ Completed behavior:
     `awaiting_confirmation` and Phase 1 does not run
   - with `--confirm-synthetic-dataset --confirmed-by ...`, the synthetic
     dataset may reach Phase 1
+- Resolves optional MinerU endpoint profiles and declarative manual routing
+  policies from local JSON without reading tokens from profile files.
+- Records only redacted endpoint profile metadata in acceptance reports.
 - Writes corpus-level acceptance evidence:
   - `acceptance_report.json`
   - `acceptance_summary.md`
@@ -346,7 +349,9 @@ Evidence:
 
 - `src/ai4s_agent/document_parse_corpus_live_acceptance.py`
 - `src/ai4s_agent/corpus_live_acceptance_fixtures.py`
+- `src/ai4s_agent/mineru_endpoint_profiles.py`
 - `tests/test_document_parse_corpus_live_acceptance.py`
+- `tests/test_mineru_endpoint_profiles.py`
 - `docs/mineru-live-corpus-acceptance.md`
 
 Boundaries:
@@ -355,6 +360,8 @@ Boundaries:
 - Does not change MinerU provider protocol, ZIP extraction, output
   normalization, document parsing schema, Phase 3 extraction, dataset builder,
   or Phase 1 model internals.
+- Does not implement automatic live fallback, retry orchestration, canary
+  routing, rollback, scheduling, or worker-pool dispatch.
 - Does not call live MinerU in tests or CI.
 - Does not use LLMs or external APIs.
 - Does not weaken `DatasetConfirmation`.
