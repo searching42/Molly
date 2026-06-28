@@ -89,6 +89,23 @@ A package can have `validation_status=passed` and
 `admission_decision=needs_review` when the package is internally consistent
 but still contains records needing review.
 
+## After Package Validation: Materialization Boundary
+
+Package validation is necessary but not sufficient for candidate or training
+artifact creation. It verifies governance binding only; it does not produce
+candidate records, training CSVs, or Phase 1 inputs.
+
+The future materialization boundary is designed in:
+
+```text
+docs/custom-corpus-dataset-materialization-boundary.md
+```
+
+Any future materializer must add explicit operator confirmation, review
+completeness checks, provenance binding, rollback/deletion design, and
+redacted evidence before package-validated records can become candidate
+artifacts.
+
 ## Redaction Policy
 
 The summary includes only safe basenames, safe ids, SHA-256 values, counts,

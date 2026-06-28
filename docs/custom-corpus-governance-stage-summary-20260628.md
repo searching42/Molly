@@ -77,3 +77,16 @@ The next step should be a design-only PR that defines how package-validated
 admission records could become materialized candidate/training artifacts,
 which explicit operator gates are required, and how rollback/deletion and
 provenance binding will work before any runtime implementation is added.
+
+## Post-Runbook Design Note
+
+The materialization boundary design was added after the #155-#161 governance
+runbook work:
+
+```text
+docs/custom-corpus-dataset-materialization-boundary.md
+```
+
+It documents the future materialization boundary, but still does not implement
+materialization. The custom corpus path remains protected before candidate or
+training artifacts are created.
