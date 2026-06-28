@@ -67,8 +67,7 @@ class MinerUEndpointProfile(BaseModel):
             raise ValueError("poll_interval_sec must be positive")
         if self.max_poll_attempts <= 0:
             raise ValueError("max_poll_attempts must be positive")
-        if not self.health_path.startswith("/"):
-            raise ValueError("health_path must start with /")
+        _validate_health_path(self.health_path)
         return self
 
 
@@ -243,6 +242,24 @@ def _redacted_origin(api_url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _validate_health_path(health_path: str) -> None:
+    clean = str(health_path or "").strip()
+    if not clean.startswith("/"):
+        raise ValueError("health_path must start with /")
+    parsed = urlparse(clean)
+    if parsed.scheme or parsed.netloc:
+        raise ValueError("health_path must be path-only")
+    if parsed.query or "?" in clean:
+        raise ValueError("health_path must not include query")
+    if parsed.fragment or "#" in clean:
+        raise ValueError("health_path must not include fragment")
+    if "@" in clean:
+        raise ValueError("health_path must not include userinfo")
+    lowered = clean.lower()
+    if any(marker in lowered for marker in ("token", "secret", "authorization", "password")):
+        raise ValueError("health_path must not contain credential-like values")
+
+
 def _safe_origin(api_url: str) -> str:
     try:
         return _redacted_origin(api_url)
@@ -274,6 +291,18 @@ def _reject_secret_keys(value: Any) -> None:
 def _safe_error_message(message: str) -> str:
     clean = str(message or "").strip()
     lowered_clean = clean.lower()
+    if "health_path" in lowered_clean:
+        if "must not include query" in lowered_clean:
+            return "health_path must not include query"
+        if "must not include fragment" in lowered_clean:
+            return "health_path must not include fragment"
+        if "must not include userinfo" in lowered_clean:
+            return "health_path must not include userinfo"
+        if "path-only" in lowered_clean:
+            return "health_path must be path-only"
+        if "credential-like" in lowered_clean or any(marker in lowered_clean for marker in ("token", "secret", "authorization", "password")):
+            return "health_path must not contain credential-like values"
+        return "health_path is invalid"
     if "must not include query" in lowered_clean:
         return "api_url must not include query"
     if "must not include fragment" in lowered_clean:

@@ -44,6 +44,20 @@ Check health:
 curl http://127.0.0.1:18000/health
 ```
 
+Run Molly's endpoint preflight before parsing:
+
+```bash
+python -m ai4s_agent.mineru_endpoint_preflight \
+  --profile-config docs/examples/mineru-endpoint-profiles.example.json \
+  --policy-name manual-primary \
+  --output /tmp/molly-mineru-preflight \
+  --run-id "mineru-preflight-$(date +%Y%m%d-%H%M%S)"
+```
+
+The preflight checks health reachability, protocol version, redacted endpoint
+metadata, and node45-oriented CUDA/vLLM environment diagnostics. It does not
+parse PDFs or perform fallback routing.
+
 MinerU model downloads and VLM preload can make the first startup slow. Treat
 first startup separately from steady-state acceptance behavior.
 
