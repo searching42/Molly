@@ -16,7 +16,7 @@
     {
       "document_id": "doc-example-001",
       "pdf_path": "/path/outside/git/doc-example-001.pdf",
-      "pdf_sha256": "sha256:<64-hex-digest>",
+      "pdf_sha256": "",
       "title": "Example Paper Title",
       "doi": "",
       "source_url": "",

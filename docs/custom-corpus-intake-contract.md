@@ -1,11 +1,12 @@
 # Custom Corpus Intake Contract
 
-This document defines a future intake contract for user-supplied PDF corpora.
+This document defines the intake contract for user-supplied PDF corpora.
 It describes how custom, private, public, or mixed real-PDF corpora may be
-declared before they enter a controlled Molly dry-run path.
+declared before they enter the controlled Molly dry-run path.
 
-This is a contract document only. It does not implement a runner, add CLI
-flags, call live services, admit production datasets, or modify
+The dry-run implementation is documented in
+`docs/custom-corpus-dry-run.md`. The implementation follows this contract but
+does not call live services in CI, admit production datasets, or modify
 `DatasetConfirmation` behavior.
 
 ## Purpose
@@ -13,9 +14,8 @@ flags, call live services, admit production datasets, or modify
 The contract defines how future custom/private/public real-PDF corpora may be
 described and admitted into a controlled Molly dry-run path.
 
-It exists to make the next boundary explicit before implementation:
+It exists to keep the custom corpus boundary explicit:
 
-- this is not the runner implementation
 - this is not production dataset admission
 - this does not permit auto-confirmation
 - this does not validate scientific extraction quality
@@ -40,10 +40,11 @@ endpoint profile
 -> Phase 1
 ```
 
-The custom corpus contract is the next boundary:
+The custom corpus dry-run is the next boundary:
 
 - synthetic live acceptance proves parser infrastructure
-- custom corpus dry-run will test controlled data admission
+- custom corpus dry-run tests controlled parsing and corpus audit without
+  training admission
 - production dataset admission requires human review and explicit confirmation
 
 No custom/private corpus should use `--confirm-synthetic-dataset`. That flag is
@@ -79,12 +80,12 @@ Policy rules:
 
 ## Custom Corpus Manifest Contract
 
-Future dry-runs should read a manifest that describes the corpus without
+Dry-runs read a manifest that describes the corpus without
 placing private document content or sensitive locations into committed
 evidence.
 
-This PR defines the intended schema shape only. It does not add validation
-code.
+`src/ai4s_agent/custom_corpus_manifest.py` validates this schema before any
+parse request is submitted.
 
 Top-level fields:
 
@@ -179,12 +180,12 @@ Committed redacted evidence may include:
 - artifact bundle SHA-256 values
 - reviewed summary metrics
 
-## Future Dry-Run Behavior
+## Dry-Run Behavior
 
-A future custom corpus dry-run runner should:
+The custom corpus dry-run runner:
 
 - read a manifest
-- verify manifest shape
+- verify manifest shape and PDF hashes when supplied
 - parse PDFs through configured MinerU/pdfplumber providers
 - write local artifacts outside git
 - run corpus audit if `ParsedDocument` outputs are produced
@@ -193,8 +194,14 @@ A future custom corpus dry-run runner should:
 - produce a dry-run report with redacted metadata
 - require a separate human review workflow before training admission
 
-The future runner should stop before Phase 1 unless a later explicit
-human-reviewed dataset admission mechanism exists.
+The runner stops before Phase 1. If Phase 1 runs, the dry-run report is marked
+failed with `phase1_ran_for_custom_corpus`.
+
+Implementation details are in:
+
+```text
+docs/custom-corpus-dry-run.md
+```
 
 ## Human Review Boundary
 
@@ -220,7 +227,7 @@ Human review does not automatically mean training admission. A separate dataset
 admission gate should verify manifest binding, review completeness, and
 redaction safety before any real/custom records can become training data.
 
-## Pass/Fail Criteria For Future Custom Corpus Dry-Run
+## Pass/Fail Criteria For Custom Corpus Dry-Run
 
 Pass criteria:
 
@@ -247,13 +254,12 @@ Fail criteria:
 
 ## Boundaries
 
-- No code behavior changes in this PR.
-- No new runner.
-- No live service calls.
+- Dry-run runner only.
+- No live service calls in tests or CI.
 - No live CI.
 - No MinerU Cloud API provider.
 - No automatic fallback, retry, queue, rollback, or scheduler.
 - No `DatasetConfirmation` weakening.
-- No Phase 1 changes.
+- No Phase 1 admission for custom corpora.
 - No production dataset admission.
 - No real PDFs committed.
