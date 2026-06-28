@@ -50,6 +50,8 @@ def test_custom_corpus_dry_run_parses_and_stops_before_phase1(tmp_path: Path) ->
     assert report.confirmation_boundary.training_dataset_admitted is False
     assert report.parse_summary.attempted == 3
     assert report.parse_summary.success == 3
+    assert len(report.parse_results) == 3
+    assert not any(error["code"] == "report_redaction_failed" for error in report.errors)
     assert service.providers == ["mineru_api", "mineru_api", "mineru_api"]
     assert report.manifest_summary.manifest_path == "manifest.json"
 
@@ -310,6 +312,67 @@ def test_custom_corpus_dry_run_marks_failure_if_phase1_runs(tmp_path: Path) -> N
     assert report.errors[0]["code"] == "phase1_ran_for_custom_corpus"
 
 
+def test_custom_corpus_dry_run_provider_path_leak_is_fail_closed(tmp_path: Path) -> None:
+    pdfs = write_synthetic_live_corpus_pdfs(tmp_path / "pdfs")
+    manifest = _write_manifest(tmp_path / "manifest.json", pdfs)
+    leaked_pdf_path = str(Path(pdfs[0].pdf_path).resolve())
+    leaked_manifest_path = str(manifest.resolve())
+
+    report = run_custom_corpus_dry_run(
+        manifest=manifest,
+        output_dir=tmp_path / "dry-runs",
+        run_id="custom-dry-run-provider-leak",
+        api_url="http://127.0.0.1:18000",
+        service=LeakyDocumentParseService(leaked_message=f"provider failed while reading {leaked_pdf_path}"),
+        workflow_runner=_fake_workflow(),
+        generated_at="2026-06-28T00:00:00Z",
+    )
+    run_root = tmp_path / "dry-runs" / "custom-dry-run-provider-leak"
+    persisted = (run_root / "dry_run_report.json").read_text(encoding="utf-8")
+    summary = (run_root / "dry_run_summary.md").read_text(encoding="utf-8")
+    raw = report.model_dump_json() + persisted + summary
+
+    assert report.decision == "failed"
+    assert [error["code"] for error in report.errors] == ["report_redaction_failed"]
+    assert report.parse_results == []
+    assert report.outputs == {"dry_run_report": "dry_run_report.json", "dry_run_summary": "dry_run_summary.md"}
+    assert leaked_pdf_path not in raw
+    assert leaked_manifest_path not in raw
+    assert str(tmp_path) not in raw
+
+
+def test_custom_corpus_dry_run_workflow_path_leak_is_fail_closed(tmp_path: Path) -> None:
+    pdfs = write_synthetic_live_corpus_pdfs(tmp_path / "pdfs")
+    manifest = _write_manifest(tmp_path / "manifest.json", pdfs)
+    leaked_pdf_path = str(Path(pdfs[0].pdf_path).resolve())
+    leaked_manifest_path = str(manifest.resolve())
+
+    def leaky_workflow(**_: Any) -> CorpusToPhase1WorkflowResult:
+        raise RuntimeError(f"workflow failed for {leaked_manifest_path} and {leaked_pdf_path}")
+
+    report = run_custom_corpus_dry_run(
+        manifest=manifest,
+        output_dir=tmp_path / "dry-runs",
+        run_id="custom-dry-run-workflow-leak",
+        api_url="http://127.0.0.1:18000",
+        service=FakeDocumentParseService(),
+        workflow_runner=leaky_workflow,
+        generated_at="2026-06-28T00:00:00Z",
+    )
+    run_root = tmp_path / "dry-runs" / "custom-dry-run-workflow-leak"
+    persisted = (run_root / "dry_run_report.json").read_text(encoding="utf-8")
+    summary = (run_root / "dry_run_summary.md").read_text(encoding="utf-8")
+    raw = report.model_dump_json() + persisted + summary
+
+    assert report.decision == "failed"
+    assert [error["code"] for error in report.errors] == ["report_redaction_failed"]
+    assert report.parse_results == []
+    assert report.outputs == {"dry_run_report": "dry_run_report.json", "dry_run_summary": "dry_run_summary.md"}
+    assert leaked_pdf_path not in raw
+    assert leaked_manifest_path not in raw
+    assert str(tmp_path) not in raw
+
+
 class FakeDocumentParseService:
     def __init__(self, *, fail_document_id: str = "", protocol_version: str = "2") -> None:
         self.fail_document_id = fail_document_id
@@ -383,6 +446,42 @@ class FakeDocumentParseService:
             api_base_url="http://127.0.0.1:18000",
             mineru_version="fake-mineru",
             protocol_version=self.protocol_version if selected_provider == "mineru_api" else "",
+        )
+
+
+class LeakyDocumentParseService:
+    def __init__(self, *, leaked_message: str) -> None:
+        self.leaked_message = leaked_message
+        self.providers: list[str] = []
+
+    def parse(self, request: DocumentParseRequest) -> DocumentParseResult:
+        self.providers.append(request.provider)
+        output_dir = Path(request.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        audit_path = output_dir / f"{request.run_id}_parser_audit.json"
+        audit_path.write_text("{}", encoding="utf-8")
+        return DocumentParseResult(
+            ok=False,
+            status="failed",
+            provider=request.provider,
+            parser_backend=f"mineru_api:{request.backend}",
+            run_id=request.run_id,
+            input_pdf=request.input_pdf,
+            parsed_document=None,
+            outputs=DocumentParseOutputRefs(output_dir=str(output_dir), parser_audit_json=str(audit_path)),
+            remote_task_id="",
+            warnings=[],
+            error=DocumentParseError(code="mineru_parse_failed", message=self.leaked_message, details={}),
+            audit=DocumentParseAudit(
+                source_pdf_sha256=_sha256_file(Path(request.input_pdf)),
+                request_provider=request.provider,
+                selected_provider=request.provider,
+                selection_reason="leaky_fake",
+                parser_backend=f"mineru_api:{request.backend}",
+                api_base_url="http://127.0.0.1:18000",
+                mineru_version="fake-mineru",
+                protocol_version="2",
+            ),
         )
 
 

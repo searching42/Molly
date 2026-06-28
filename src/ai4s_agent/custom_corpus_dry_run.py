@@ -44,7 +44,11 @@ from ai4s_agent.mineru_endpoint_profiles import (
     MinerUEndpointProfileConfigError,
     MinerUEndpointProfileReportSummary,
 )
-from ai4s_agent.mineru_preflight_binding import PreflightBindingSummary, load_and_bind_preflight_report
+from ai4s_agent.mineru_preflight_binding import (
+    PreflightBindingSummary,
+    contains_credential_marker,
+    load_and_bind_preflight_report,
+)
 from ai4s_agent.scientific_dataset_builder import DatasetConfirmation
 from ai4s_agent.workflows.corpus_to_phase1_workflow import CorpusToPhase1WorkflowResult, run_corpus_to_phase1_workflow
 
@@ -259,7 +263,11 @@ def run_custom_corpus_dry_run(
         forbidden_report_values.extend(
             str(Path(document.pdf_path).expanduser().resolve()) for document in manifest_model.documents if document.pdf_path
         )
+        forbidden_report_values.extend(
+            str(Path(document.pdf_path).expanduser().resolve().parent) for document in manifest_model.documents if document.pdf_path
+        )
         forbidden_report_values.append(str(manifest_path.expanduser().resolve()))
+        forbidden_report_values.append(str(manifest_path.expanduser().resolve().parent))
 
     if manifest_model is not None:
         errors.extend(_pdf_preflight_errors(manifest_model))
@@ -607,16 +615,141 @@ def _enforce_report_redaction(
     report: CustomCorpusDryRunReport,
     forbidden_values: list[str],
 ) -> CustomCorpusDryRunReport:
-    payload = report.model_dump_json()
-    leaked = [
-        value
-        for value in forbidden_values
-        if value and len(value) > 4 and value in payload
-    ]
-    if not leaked:
+    forbidden = _normalized_forbidden_values(forbidden_values)
+    if not _contains_forbidden_material(report, forbidden):
         return report
-    errors = [*report.errors, _error("report_redaction_failed", "dry-run report contained forbidden private path material")]
-    return report.model_copy(update={"decision": "failed", "errors": errors})
+    minimal = _minimal_safe_failure_report(report, forbidden)
+    if _contains_forbidden_material(minimal, forbidden):
+        minimal = _ultra_minimal_safe_failure_report(report, forbidden)
+    return minimal
+
+
+def _minimal_safe_failure_report(
+    report: CustomCorpusDryRunReport,
+    forbidden_values: list[str],
+) -> CustomCorpusDryRunReport:
+    endpoint_profile = report.endpoint_profile
+    if _contains_forbidden_material(endpoint_profile, forbidden_values):
+        endpoint_profile = MinerUEndpointProfileReportSummary()
+    preflight_binding = report.preflight_binding
+    if _contains_forbidden_material(preflight_binding, forbidden_values):
+        preflight_binding = PreflightBindingSummary()
+    manifest_summary = _safe_minimal_manifest_summary(report.manifest_summary, forbidden_values)
+    warnings = [
+        warning
+        for warning in report.warnings
+        if not _contains_forbidden_material(str(warning), forbidden_values)
+    ]
+    return CustomCorpusDryRunReport(
+        run_id=report.run_id,
+        generated_at=report.generated_at,
+        decision="failed",
+        corpus_id=report.corpus_id,
+        corpus_class=report.corpus_class,
+        redacted_api_origin=report.redacted_api_origin,
+        endpoint_kind=report.endpoint_kind,
+        requested_backend=report.requested_backend,
+        requested_effort=report.requested_effort,
+        requested_parse_method=report.requested_parse_method,
+        endpoint_profile=endpoint_profile,
+        preflight_binding=preflight_binding,
+        manifest_summary=manifest_summary,
+        parse_summary=CustomCorpusParseSummary(
+            attempted=report.parse_summary.attempted,
+            success=report.parse_summary.success,
+            failed=report.parse_summary.failed,
+            parsed_document_count=report.parse_summary.parsed_document_count,
+            parser_warning_count=report.parse_summary.parser_warning_count,
+        ),
+        confirmation_boundary=CustomCorpusConfirmationBoundary(
+            dataset_confirmation_confirmed=False,
+            phase1_status=_safe_phase1_status(report.confirmation_boundary.phase1_status),
+            training_dataset_admitted=False,
+        ),
+        warnings=warnings,
+        errors=[_error("report_redaction_failed", "dry-run report contained forbidden private path material")],
+        outputs={},
+    )
+
+
+def _ultra_minimal_safe_failure_report(
+    report: CustomCorpusDryRunReport,
+    forbidden_values: list[str],
+) -> CustomCorpusDryRunReport:
+    run_id = report.run_id if not _contains_forbidden_material(report.run_id, forbidden_values) else "[redacted-run-id]"
+    redacted_origin = (
+        report.redacted_api_origin
+        if not _contains_forbidden_material(report.redacted_api_origin, forbidden_values)
+        else ""
+    )
+    return CustomCorpusDryRunReport(
+        run_id=run_id,
+        generated_at=report.generated_at,
+        decision="failed",
+        corpus_id="",
+        corpus_class="",
+        redacted_api_origin=redacted_origin,
+        endpoint_kind=report.endpoint_kind,
+        requested_backend=report.requested_backend,
+        requested_effort=report.requested_effort,
+        requested_parse_method=report.requested_parse_method,
+        confirmation_boundary=CustomCorpusConfirmationBoundary(
+            dataset_confirmation_confirmed=False,
+            phase1_status="not_run",
+            training_dataset_admitted=False,
+        ),
+        errors=[_error("report_redaction_failed", "dry-run report contained forbidden private path material")],
+        outputs={},
+    )
+
+
+def _safe_minimal_manifest_summary(
+    summary: CustomCorpusManifestSummary,
+    forbidden_values: list[str],
+) -> CustomCorpusManifestSummary:
+    manifest_path = str(summary.manifest_path or "").strip()
+    if _contains_forbidden_material(manifest_path, forbidden_values):
+        manifest_path = Path(manifest_path).name if manifest_path else ""
+    documents = [
+        label if not _contains_forbidden_material(label, forbidden_values) else "[redacted-document]"
+        for label in summary.documents
+    ]
+    return CustomCorpusManifestSummary(
+        manifest_path=manifest_path,
+        document_count=summary.document_count,
+        pdf_hash_coverage=dict(summary.pdf_hash_coverage),
+        documents=documents,
+    )
+
+
+def _safe_phase1_status(value: str) -> str:
+    clean = str(value or "").strip()
+    return clean if clean in {"not_run", "success", "failed", "awaiting_confirmation"} else "not_run"
+
+
+def _normalized_forbidden_values(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        clean = str(value or "").strip()
+        if len(clean) <= 4:
+            continue
+        if clean not in normalized:
+            normalized.append(clean)
+    return normalized
+
+
+def _contains_forbidden_material(payload: Any, forbidden_values: list[str]) -> bool:
+    if isinstance(payload, BaseModel):
+        return _contains_forbidden_material(payload.model_dump(mode="json"), forbidden_values)
+    if isinstance(payload, dict):
+        return any(_contains_forbidden_material(value, forbidden_values) for value in payload.values())
+    if isinstance(payload, list):
+        return any(_contains_forbidden_material(value, forbidden_values) for value in payload)
+    if isinstance(payload, str):
+        if contains_credential_marker(payload):
+            return True
+        return any(value in payload for value in forbidden_values)
+    return False
 
 
 def _error(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
