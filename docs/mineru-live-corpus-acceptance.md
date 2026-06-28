@@ -6,6 +6,11 @@ self-hosted MinerU endpoint into Molly's corpus-level scientific workflow.
 It is not part of ordinary CI. It does not run automatically on pull requests,
 pushes, schedules, or local test runs.
 
+For the complete reusable operator workflow, including preflight artifact
+packaging, SHA-256 recording, preflight-bound corpus acceptance, pass/fail
+criteria, and evidence redaction, see
+`docs/mineru-manual-live-acceptance-gate.md`.
+
 ## Purpose
 
 The single-document live acceptance runner validates one synthetic PDF through
@@ -97,6 +102,12 @@ is used. Invalid or unreadable preflight reports are structured failures. The
 acceptance report records only a safe report filename, preflight run id,
 decision, health status, protocol version, redacted origin, profile/policy
 names, mismatch codes, and the optional artifact SHA-256.
+
+This runbook describes the individual commands. The manual acceptance gate
+runbook describes the complete reusable operator workflow. Other GPU hosts can
+reuse the same path by creating a local endpoint profile, running endpoint
+preflight, binding that preflight report to live corpus acceptance, and
+committing only a redacted evidence summary.
 
 ## SSH Tunnel
 
