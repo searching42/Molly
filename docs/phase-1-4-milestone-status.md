@@ -41,6 +41,7 @@ literature acquisition, and default-route migration remain future work.
 | Custom corpus human review schema | Introduced an offline review artifact schema and validator for custom corpus records; review artifacts still do not admit training data and do not change Phase 1 or `DatasetConfirmation` behavior | `src/ai4s_agent/custom_corpus_review.py`, `tests/test_custom_corpus_review.py`, `docs/custom-corpus-human-review.md`, `docs/examples/custom-corpus-review-manifest.example.json` |
 | Custom corpus admission gate contract | Introduced an offline admission request schema and validator for structurally checking reviewed custom corpus packages; no dataset materialization, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_admission.py`, `tests/test_custom_corpus_admission.py`, `docs/custom-corpus-dataset-admission-gate.md`, `docs/examples/custom-corpus-admission-request.example.json` |
 | Custom corpus admission package binding validator | Added offline package validation across manifest, dry-run report, review manifest, and admission request; validates hash, id, review/action, and dry-run boundary consistency without dataset materialization, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_admission_package.py`, `tests/test_custom_corpus_admission_package.py`, `docs/custom-corpus-admission-package-binding.md`, `docs/evidence/templates/custom-corpus-admission-package-validation-template.md` |
+| Custom corpus governance runbook | Added an operator-facing runbook and #155-#160 stage summary for the custom corpus path through package validation; dataset materialization remains intentionally unimplemented, with Phase 1 and `DatasetConfirmation` unchanged | `docs/custom-corpus-governance-runbook.md`, `docs/custom-corpus-governance-stage-summary-20260628.md` |
 | OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
 | Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
 | Phase 4 reviewable replan proposal | Completed as deterministic non-executable proposal | `src/ai4s_agent/run_plan_replan_proposal.py` |
@@ -362,6 +363,10 @@ Completed behavior:
   package validation checks artifact hash, id, review/action, and dry-run
   boundary consistency across manifest, dry-run report, review manifest, and
   admission request without materializing datasets.
+- Adds the custom corpus governance runbook and stage summary:
+  the custom corpus path is documented through package validation, while
+  dataset materialization remains intentionally unimplemented and Phase 1 plus
+  `DatasetConfirmation` remain unchanged.
 - Writes corpus-level acceptance evidence:
   - `acceptance_report.json`
   - `acceptance_summary.md`
@@ -407,6 +412,8 @@ Evidence:
 - `tests/test_custom_corpus_admission_package.py`
 - `docs/custom-corpus-admission-package-binding.md`
 - `docs/evidence/templates/custom-corpus-admission-package-validation-template.md`
+- `docs/custom-corpus-governance-runbook.md`
+- `docs/custom-corpus-governance-stage-summary-20260628.md`
 
 Boundaries:
 
@@ -433,6 +440,8 @@ Boundaries:
 - Admission package binding validation still does not materialize datasets,
   create candidate/training CSVs, run Phase 1, change `DatasetConfirmation`, or
   admit training data.
+- The governance runbook is documentation only and does not implement dataset
+  materialization, Phase 1 execution, or `DatasetConfirmation` changes.
 - Does not commit real PDFs or private artifacts.
 
 ## OLED Property Profile And Multi-Objective Screening

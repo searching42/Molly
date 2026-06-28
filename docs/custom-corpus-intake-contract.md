@@ -9,6 +9,10 @@ The dry-run implementation is documented in
 does not call live services in CI, admit production datasets, or modify
 `DatasetConfirmation` behavior.
 
+Full custom corpus governance is summarized in
+`docs/custom-corpus-governance-runbook.md`. The #155-#160 stage summary is in
+`docs/custom-corpus-governance-stage-summary-20260628.md`.
+
 ## Purpose
 
 The contract defines how future custom/private/public real-PDF corpora may be

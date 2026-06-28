@@ -15,6 +15,10 @@ It only verifies artifact binding and governance consistency. It does not
 admit training data, create datasets, parse PDFs, call MinerU, run Phase 1, or
 set `DatasetConfirmation.confirmed=true`.
 
+For the complete custom corpus governance path, see
+`docs/custom-corpus-governance-runbook.md`. The #155-#160 stage summary is in
+`docs/custom-corpus-governance-stage-summary-20260628.md`.
+
 ## Required Inputs
 
 The CLI requires:

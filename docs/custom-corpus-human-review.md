@@ -9,6 +9,10 @@ This layer validates review metadata only. It does not admit training data,
 set `DatasetConfirmation.confirmed=true`, create a training dataset, or run
 Phase 1.
 
+For the complete custom corpus governance path, see
+`docs/custom-corpus-governance-runbook.md`. The #155-#160 stage summary is in
+`docs/custom-corpus-governance-stage-summary-20260628.md`.
+
 ## Workflow Boundary
 
 ```text
