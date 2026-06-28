@@ -151,6 +151,11 @@ The admission gate validates a reviewed admission request. None of these steps
 currently run Phase 1, set `DatasetConfirmation.confirmed=true`, or create
 training datasets.
 
+The dry-run report participates in package-level hash binding. Future
+admission package validation verifies that a review manifest and admission
+request refer to the exact dry-run report artifact that produced the reviewed
+records.
+
 ## Troubleshooting
 
 - `invalid_manifest`: fix schema version, ids, URL safety, SHA-256 format, or

@@ -40,6 +40,7 @@ literature acquisition, and default-route migration remain future work.
 | Custom corpus dry-run runner | Implemented as a controlled manifest-described local PDF dry-run path; preserves `DatasetConfirmation.confirmed=false`, verifies Phase 1 remains `not_run`, and produces redacted dry-run evidence without production dataset admission | `src/ai4s_agent/custom_corpus_manifest.py`, `src/ai4s_agent/custom_corpus_dry_run.py`, `tests/test_custom_corpus_manifest.py`, `tests/test_custom_corpus_dry_run.py`, `docs/custom-corpus-dry-run.md`, `docs/custom-corpus-intake-contract.md` |
 | Custom corpus human review schema | Introduced an offline review artifact schema and validator for custom corpus records; review artifacts still do not admit training data and do not change Phase 1 or `DatasetConfirmation` behavior | `src/ai4s_agent/custom_corpus_review.py`, `tests/test_custom_corpus_review.py`, `docs/custom-corpus-human-review.md`, `docs/examples/custom-corpus-review-manifest.example.json` |
 | Custom corpus admission gate contract | Introduced an offline admission request schema and validator for structurally checking reviewed custom corpus packages; no dataset materialization, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_admission.py`, `tests/test_custom_corpus_admission.py`, `docs/custom-corpus-dataset-admission-gate.md`, `docs/examples/custom-corpus-admission-request.example.json` |
+| Custom corpus admission package binding validator | Added offline package validation across manifest, dry-run report, review manifest, and admission request; validates hash, id, review/action, and dry-run boundary consistency without dataset materialization, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_admission_package.py`, `tests/test_custom_corpus_admission_package.py`, `docs/custom-corpus-admission-package-binding.md`, `docs/evidence/templates/custom-corpus-admission-package-validation-template.md` |
 | OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
 | Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
 | Phase 4 reviewable replan proposal | Completed as deterministic non-executable proposal | `src/ai4s_agent/run_plan_replan_proposal.py` |
@@ -357,6 +358,10 @@ Completed behavior:
 - Introduces the custom corpus admission gate contract:
   admission requests can be structurally validated offline, but no dataset is
   materialized, Phase 1 is not run, and `DatasetConfirmation` is unchanged.
+- Adds the custom corpus admission package binding validator:
+  package validation checks artifact hash, id, review/action, and dry-run
+  boundary consistency across manifest, dry-run report, review manifest, and
+  admission request without materializing datasets.
 - Writes corpus-level acceptance evidence:
   - `acceptance_report.json`
   - `acceptance_summary.md`
@@ -398,6 +403,10 @@ Evidence:
 - `docs/custom-corpus-dataset-admission-gate.md`
 - `docs/examples/custom-corpus-admission-request.example.json`
 - `docs/evidence/templates/custom-corpus-admission-gate-evidence-template.md`
+- `src/ai4s_agent/custom_corpus_admission_package.py`
+- `tests/test_custom_corpus_admission_package.py`
+- `docs/custom-corpus-admission-package-binding.md`
+- `docs/evidence/templates/custom-corpus-admission-package-validation-template.md`
 
 Boundaries:
 
@@ -421,6 +430,9 @@ Boundaries:
   training datasets, and do not implement admission.
 - Admission gate validation does not materialize datasets, create
   candidate/training CSVs, run Phase 1, or admit training data.
+- Admission package binding validation still does not materialize datasets,
+  create candidate/training CSVs, run Phase 1, change `DatasetConfirmation`, or
+  admit training data.
 - Does not commit real PDFs or private artifacts.
 
 ## OLED Property Profile And Multi-Objective Screening
