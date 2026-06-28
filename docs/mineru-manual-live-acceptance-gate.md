@@ -354,6 +354,22 @@ Use a local or redacted host label. Do not encode private hostnames, user names,
 public IP addresses, or private paths in the filename unless they are intended
 for review.
 
+## Next Boundary: Custom Corpus Intake
+
+This manual gate validates infrastructure using Molly-generated synthetic PDFs.
+Real, custom, public, private, or mixed PDF corpora require a separate intake
+contract before any dry-run runner is implemented.
+
+See:
+
+```text
+docs/custom-corpus-intake-contract.md
+```
+
+No custom or private corpus should use `--confirm-synthetic-dataset`. Future
+custom corpus dry-runs must remain unconfirmed until human review and a
+separate dataset admission mechanism exist.
+
 ## Relationship To Existing Docs
 
 - `docs/mineru-live-corpus-acceptance.md` describes individual live corpus
