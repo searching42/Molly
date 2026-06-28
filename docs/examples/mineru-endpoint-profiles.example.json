@@ -1,0 +1,34 @@
+{
+  "schema_version": "mineru_endpoint_profiles.v1",
+  "profiles": [
+    {
+      "name": "node45-loopback",
+      "api_url": "http://127.0.0.1:18000",
+      "endpoint_kind": "mineru-api",
+      "backend": "hybrid-engine",
+      "effort": "medium",
+      "parse_method": "auto",
+      "allow_remote_upload": true,
+      "compare_pdfplumber": true,
+      "http_timeout_sec": 60,
+      "task_timeout_sec": 900,
+      "poll_interval_sec": 1,
+      "max_poll_attempts": 600,
+      "expected_protocol_version": "2",
+      "health_path": "/health",
+      "notes": [
+        "Use this profile through an SSH tunnel that maps local 127.0.0.1:18000 to the remote MinerU loopback service.",
+        "Service launch environment, CUDA library ordering, and VLM preload are managed outside Molly.",
+        "Do not add tokens or authorization headers to profile files; use MINERU_API_TOKEN or AI4S_MINERU_API_TOKEN only."
+      ]
+    }
+  ],
+  "routing_policies": [
+    {
+      "name": "manual-primary",
+      "default_profile": "node45-loopback",
+      "fallback_profiles": [],
+      "mode": "manual"
+    }
+  ]
+}

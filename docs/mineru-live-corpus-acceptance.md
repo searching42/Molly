@@ -66,6 +66,78 @@ Then run Molly against:
 http://127.0.0.1:18000
 ```
 
+## Endpoint Profiles
+
+Direct CLI mode remains supported. Existing commands that pass `--api-url`,
+`--endpoint-kind`, `--backend`, `--effort`, and timing flags continue to work.
+
+For repeatable manual runs, the live acceptance CLIs can also resolve endpoint
+settings from a checked-in example profile or a user-supplied local profile:
+
+```bash
+python -m ai4s_agent.document_parse_corpus_live_acceptance \
+  --endpoint-profile-file docs/examples/mineru-endpoint-profiles.example.json \
+  --routing-policy manual-primary \
+  --output /tmp/molly-mineru-corpus-acceptance \
+  --run-id "mineru-corpus-live-$(date +%Y%m%d-%H%M%S)"
+```
+
+The example profile uses only a loopback URL:
+
+```text
+http://127.0.0.1:18000
+```
+
+This is the recommended shape for node45-style manual runs: start MinerU on the
+remote node bound to loopback, establish the SSH tunnel, and keep Molly pointed
+at the local loopback endpoint. Do not put real public IPs, host credentials,
+tokens, authorization headers, local artifact paths, or generated acceptance
+bundles in profile files.
+
+Profile-based unconfirmed corpus run:
+
+```bash
+python -m ai4s_agent.document_parse_corpus_live_acceptance \
+  --endpoint-profile-file docs/examples/mineru-endpoint-profiles.example.json \
+  --endpoint-profile node45-loopback \
+  --output /tmp/molly-mineru-corpus-acceptance \
+  --run-id "mineru-corpus-live-unconfirmed-$(date +%Y%m%d-%H%M%S)"
+```
+
+Profile-based confirmed synthetic run:
+
+```bash
+python -m ai4s_agent.document_parse_corpus_live_acceptance \
+  --endpoint-profile-file docs/examples/mineru-endpoint-profiles.example.json \
+  --routing-policy manual-primary \
+  --output /tmp/molly-mineru-corpus-acceptance \
+  --run-id "mineru-corpus-live-confirmed-$(date +%Y%m%d-%H%M%S)" \
+  --confirm-synthetic-dataset \
+  --confirmed-by test-fixture \
+  --n-bits 64 \
+  --topn 3 \
+  --min-numeric-ratio 0.5 \
+  --min-nonempty 1
+```
+
+Explicit CLI flags override profile values. This lets a user keep a stable
+profile while overriding a local port, backend, effort, parse method, upload
+setting, pdfplumber comparison setting, or timeout for a specific run.
+
+Routing policies are declarative and manual in this PR. A policy can record the
+intended primary profile and fallback profile names for operator visibility,
+but the runner does not perform automatic live fallback, retry orchestration,
+canary routing, rollback, scheduling, or worker-pool dispatch.
+
+Tokens still come only from environment variables:
+
+- `MINERU_API_TOKEN`
+- `AI4S_MINERU_API_TOKEN`
+
+Profile files must not contain secrets. Acceptance reports include only a
+redacted endpoint profile summary with profile names, routing policy names,
+resolved non-secret options, and redacted API origin.
+
 ## Run Without Confirmation
 
 This mode parses the corpus and builds candidate/rejected/manifest artifacts,

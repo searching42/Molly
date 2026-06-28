@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from ai4s_agent.adapters.phase3 import _sha256_file
 from ai4s_agent.corpus_live_acceptance_fixtures import write_synthetic_live_corpus_pdfs
 from ai4s_agent.document_parse_corpus_live_acceptance import (
     CorpusLiveAcceptanceReport,
+    main,
     run_document_parse_corpus_live_acceptance,
 )
 from ai4s_agent.document_parse_provider import (
@@ -98,6 +100,88 @@ def test_corpus_live_acceptance_confirmed_reaches_phase1_and_detects_conflicts(t
         "pdfplumber",
     ]
     _assert_report_paths_are_safe(report, tmp_path / "acceptance" / "mineru-corpus-confirmed")
+
+
+def test_corpus_live_acceptance_records_endpoint_profile_metadata(tmp_path: Path) -> None:
+    service = FakeDocumentParseService()
+
+    report = run_document_parse_corpus_live_acceptance(
+        run_id="mineru-corpus-profile-metadata",
+        output_dir=tmp_path / "acceptance",
+        api_url="http://127.0.0.1:18000/private-path",
+        endpoint_kind="mineru_api",
+        service=service,
+        compare_pdfplumber=False,
+        confirm_synthetic_dataset=False,
+        generated_at="2026-06-28T00:00:00Z",
+        endpoint_profile_summary={
+            "endpoint_profile_name": "node45-loopback",
+            "routing_policy_name": "manual-primary",
+            "profile_source_path": "docs/examples/mineru-endpoint-profiles.example.json",
+            "redacted_api_origin": "http://127.0.0.1:18000",
+            "endpoint_kind": "mineru_api",
+            "backend": "hybrid-engine",
+            "effort": "medium",
+            "parse_method": "auto",
+            "http_timeout_sec": 60.0,
+            "task_timeout_sec": 900.0,
+            "poll_interval_sec": 1.0,
+            "max_poll_attempts": 600,
+            "routing_fallback_profile_names": ["node45-backup"],
+        },
+    )
+
+    assert report.decision == "awaiting_confirmation"
+    assert report.endpoint_profile.endpoint_profile_name == "node45-loopback"
+    assert report.endpoint_profile.routing_policy_name == "manual-primary"
+    assert report.endpoint_profile.redacted_api_origin == "http://127.0.0.1:18000"
+    assert report.endpoint_profile.routing_fallback_profile_names == ["node45-backup"]
+    payload = report.model_dump_json()
+    assert "private-path" not in payload
+    assert "super-secret" not in payload
+
+
+def test_corpus_live_acceptance_cli_profile_errors_are_structured_and_redacted(tmp_path: Path) -> None:
+    profile_path = tmp_path / "bad-corpus-profiles.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "mineru_endpoint_profiles.v1",
+                "profiles": [
+                    {
+                        "name": "bad",
+                        "api_url": "http://127.0.0.1:18000?token=corpus-secret",
+                        "endpoint_kind": "mineru-api",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    code = main(
+        [
+            "--endpoint-profile-file",
+            str(profile_path),
+            "--endpoint-profile",
+            "bad",
+            "--output",
+            str(tmp_path / "acceptance"),
+            "--run-id",
+            "bad-corpus-profile",
+        ],
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert code == 1
+    assert payload["decision"] == "failed"
+    assert payload["errors"][0]["code"] == "endpoint_profile_error"
+    assert "corpus-secret" not in stdout.getvalue()
+    assert "corpus-secret" not in stderr.getvalue()
 
 
 def test_corpus_live_acceptance_requires_confirmed_by_when_confirming(tmp_path: Path) -> None:
