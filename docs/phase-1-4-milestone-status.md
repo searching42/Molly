@@ -38,6 +38,7 @@ literature acquisition, and default-route migration remain future work.
 | Multi-paper corpus evaluation and reproducibility audit | Completed for offline multi-document `ParsedDocument` fixtures, cross-paper conflict rejection, corpus replay manifests, and confirmed Phase 1 execution | `src/ai4s_agent/phase3_corpus_extractor.py`, `src/ai4s_agent/corpus_conflict_auditor.py`, `src/ai4s_agent/corpus_reproducibility_auditor.py`, `src/ai4s_agent/workflows/corpus_to_phase1_workflow.py`, `tests/test_corpus_to_phase1_workflow.py`, `docs/corpus-evaluation-and-reproducibility-audit.md` |
 | MinerU live corpus acceptance bridge | Completed as a manual opt-in bridge and reusable operator gate from self-hosted MinerU parsing to the corpus workflow, with offline-tested endpoint profile/routing policy resolution, endpoint preflight diagnostics, optional preflight-report binding, and no CI live-service dependency | `src/ai4s_agent/document_parse_corpus_live_acceptance.py`, `src/ai4s_agent/corpus_live_acceptance_fixtures.py`, `src/ai4s_agent/mineru_endpoint_profiles.py`, `src/ai4s_agent/mineru_endpoint_preflight.py`, `tests/test_document_parse_corpus_live_acceptance.py`, `tests/test_mineru_endpoint_profiles.py`, `tests/test_mineru_endpoint_preflight.py`, `docs/mineru-live-corpus-acceptance.md`, `docs/mineru-endpoint-preflight.md`, `docs/mineru-manual-live-acceptance-gate.md` |
 | Custom corpus dry-run runner | Implemented as a controlled manifest-described local PDF dry-run path; preserves `DatasetConfirmation.confirmed=false`, verifies Phase 1 remains `not_run`, and produces redacted dry-run evidence without production dataset admission | `src/ai4s_agent/custom_corpus_manifest.py`, `src/ai4s_agent/custom_corpus_dry_run.py`, `tests/test_custom_corpus_manifest.py`, `tests/test_custom_corpus_dry_run.py`, `docs/custom-corpus-dry-run.md`, `docs/custom-corpus-intake-contract.md` |
+| Custom corpus human review schema | Introduced an offline review artifact schema and validator for custom corpus records; review artifacts still do not admit training data and do not change Phase 1 or `DatasetConfirmation` behavior | `src/ai4s_agent/custom_corpus_review.py`, `tests/test_custom_corpus_review.py`, `docs/custom-corpus-human-review.md`, `docs/examples/custom-corpus-review-manifest.example.json` |
 | OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
 | Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
 | Phase 4 reviewable replan proposal | Completed as deterministic non-executable proposal | `src/ai4s_agent/run_plan_replan_proposal.py` |
@@ -349,6 +350,9 @@ Completed behavior:
   custom/private dry-runs keep `DatasetConfirmation.confirmed` set to `false`,
   verify Phase 1 remains `not_run`, and preserve redaction requirements before
   any real/custom records can be considered for future training admission.
+- Introduces the custom corpus human review artifact boundary:
+  review manifests are validated offline, but they do not admit training data,
+  do not set `DatasetConfirmation.confirmed=true`, and do not run Phase 1.
 - Writes corpus-level acceptance evidence:
   - `acceptance_report.json`
   - `acceptance_summary.md`
@@ -380,6 +384,11 @@ Evidence:
 - `docs/custom-corpus-intake-contract.md`
 - `docs/examples/custom-corpus-manifest.example.json`
 - `docs/evidence/templates/custom-corpus-dry-run-evidence-template.md`
+- `src/ai4s_agent/custom_corpus_review.py`
+- `tests/test_custom_corpus_review.py`
+- `docs/custom-corpus-human-review.md`
+- `docs/examples/custom-corpus-review-manifest.example.json`
+- `docs/evidence/templates/custom-corpus-human-review-evidence-template.md`
 
 Boundaries:
 
@@ -399,6 +408,8 @@ Boundaries:
 - Does not admit custom/private corpora to Phase 1 automatically.
 - Does not implement human review or production dataset admission for custom
   corpora.
+- Human review artifacts do not change `DatasetConfirmation`, do not create
+  training datasets, and do not implement admission.
 - Does not commit real PDFs or private artifacts.
 
 ## OLED Property Profile And Multi-Objective Screening

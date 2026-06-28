@@ -116,6 +116,25 @@ The report must not include:
 - raw `ParsedDocument` text
 - raw MinerU bundle content
 
+## After Dry-Run: Human Review
+
+Dry-run outputs may inform a later human review artifact, but they still do not
+admit training data. Use `custom_corpus_review.v1` review manifests to record
+short, redacted review decisions for extracted records or fields.
+
+Do not commit raw `ParsedDocument` outputs, full reports, raw extracted text,
+MinerU bundles, pdfplumber baselines, private paths, or local PDF paths as part
+of review evidence.
+
+Human review artifacts are documented in:
+
+```text
+docs/custom-corpus-human-review.md
+```
+
+Even after review, a separate future dataset admission gate is required before
+any custom corpus record can enter training.
+
 ## Troubleshooting
 
 - `invalid_manifest`: fix schema version, ids, URL safety, SHA-256 format, or
