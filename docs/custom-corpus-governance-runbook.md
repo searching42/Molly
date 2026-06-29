@@ -22,6 +22,7 @@ custom corpus manifest
 -> property candidate review queue
 -> human review artifact
 -> property review binding validator
+-> property admission readiness planner
 -> admission request
 -> package binding validator
 -> materialization plan
@@ -38,6 +39,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_candidate_review_queue.v1`
 - `custom_corpus_review.v1`
 - `custom_corpus_property_review_binding.v1`
+- `custom_corpus_property_admission_readiness.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 - `custom_corpus_materialization.v1`
@@ -278,7 +280,38 @@ Fail criteria:
 - complete queue binding is required but records are missing reviews
 - binding summary redaction fails
 
-## Step 8: Admission Request
+## Step 8: Property Admission Readiness Planner
+
+The property admission readiness planner reads a property review binding
+summary and a manually-created `custom_corpus_review.v1` manifest. It
+summarizes accepted, queue-bound review records as future admission candidates
+and rejected records as future exclusions. It does not create admission
+actions.
+
+References:
+
+- `docs/custom-corpus-property-admission-readiness.md`
+- `docs/evidence/templates/custom-corpus-property-admission-readiness-evidence-template.md`
+
+Pass criteria:
+
+- binding summary validates
+- review manifest ids, corpus id, dry-run id, and source hashes match the
+  binding summary
+- accepted records are queue-bound and include extracted, normalized, and
+  provenance summaries
+- at least one accepted record is admission-ready
+- redaction checks pass
+
+Fail criteria:
+
+- binding summary is failed
+- complete binding is required but binding is incomplete
+- no accepted records are admission-ready
+- accepted records are missing required summaries or binding membership
+- readiness summary redaction fails
+
+## Step 9: Admission Request
 
 The admission request records governance intent. It may mark reviewed accepted
 records as `admit`, or mark records as `exclude` or `needs_review`. It does
@@ -316,7 +349,7 @@ Fail criteria:
 - missing required hashes
 - private path or token-like content
 
-## Step 9: Admission Package Binding Validator
+## Step 10: Admission Package Binding Validator
 
 The package validator checks the four artifacts together:
 
@@ -418,6 +451,7 @@ Allowed:
 - property candidate review queue builder
 - human review schema and validator
 - property review binding validator
+- property admission readiness planner
 - admission request schema and validator
 - admission package binding validator
 - materialization plan schema and validator

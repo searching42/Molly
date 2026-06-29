@@ -98,6 +98,25 @@ PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_review_binding \
   --require-complete-queue
 ```
 
+## After Binding: Admission Readiness Planner
+
+Binding validation checks queue-to-review consistency. The next optional
+planning boundary identifies reviewed records that are eligible for future
+admission planning:
+
+```text
+docs/custom-corpus-property-admission-readiness.md
+```
+
+Future readiness evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-admission-readiness-evidence-template.md
+```
+
+Readiness planning still does not create admission requests or admission
+actions.
+
 ## Boundaries
 
 - The binding validator does not perform human review.
