@@ -124,6 +124,21 @@ property_training_admission_request_draft_precheck_redaction_failed
 
 Unsafe Markdown is not written.
 
+## After Draft Precheck: Execution Request Builder
+
+After a draft package precheck passes, the execution request builder can write
+a reviewable request artifact for a future training admission execution gate.
+
+References:
+
+- `docs/custom-corpus-property-training-admission-execution-request.md`
+- `docs/evidence/templates/custom-corpus-property-training-admission-execution-request-evidence-template.md`
+
+The execution request builder creates request artifacts only. It does not
+execute training admission, admit training data, create training or candidate
+CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, modify
+`DatasetConfirmation`, or run model training/evaluation.
+
 ## Boundaries
 
 - The precheck validates a draft package only.

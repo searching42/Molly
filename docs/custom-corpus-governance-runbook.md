@@ -40,6 +40,7 @@ custom corpus manifest
 -> property training admission request preflight
 -> property training admission request draft
 -> property training admission request draft precheck
+-> property training admission execution request
 -> future training admission execution
 ```
 
@@ -77,6 +78,8 @@ Concrete artifact schemas:
 - `custom_corpus_property_training_admission_request_draft.v1`
 - `custom_corpus_property_training_admission_request_draft_builder.v1`
 - `custom_corpus_property_training_admission_request_draft_precheck.v1`
+- `custom_corpus_property_training_admission_execution_request.v1`
+- `custom_corpus_property_training_admission_execution_request_builder.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -1197,6 +1200,81 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - precheck redaction fails
 
+## Step 26: Property Training Admission Execution Request
+
+The property training admission execution request builder reads the training
+admission request draft, draft summary, draft package precheck, request plan,
+request preflight, training admission readiness summary, quarantine candidate
+preflight summary, and quarantine candidate records. It can write a reviewable
+execution request after explicit operator confirmation. It is not execution:
+no training admission is executed, no training data is admitted, and no
+training artifact is produced.
+
+References:
+
+- `docs/custom-corpus-property-training-admission-execution-request.md`
+- `docs/custom-corpus-property-training-admission-request-draft-precheck.md`
+- `docs/evidence/templates/custom-corpus-property-training-admission-execution-request-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_admission_execution_request \
+  --training-admission-request-draft /path/outside/git/property_training_admission_request.draft.json \
+  --training-admission-request-draft-summary /path/outside/git/property_training_admission_request_draft_summary.json \
+  --training-admission-request-draft-precheck /path/outside/git/property_training_admission_request_draft_precheck_summary.json \
+  --training-admission-request-plan /path/outside/git/property_training_admission_request_plan_summary.json \
+  --training-admission-request-preflight /path/outside/git/property_training_admission_request_preflight_summary.json \
+  --training-admission-readiness-summary /path/outside/git/property_training_admission_readiness_summary.json \
+  --quarantine-candidate-preflight-summary /path/outside/git/property_quarantine_candidate_preflight_summary.json \
+  --quarantine-candidate-records /path/outside/git/property_quarantine_candidate_records.json \
+  --output-dir /path/outside/git/property-training-admission-execution-request \
+  --execution-request-id property-training-admission-execution-request-001 \
+  --created-by operator-redacted \
+  --confirm-training-admission-execution-request-output
+```
+
+Pass criteria:
+
+- explicit execution-request-output confirmation is present
+- draft package precheck status is `passed`
+- draft status is `written`
+- request plan status is `planned`
+- request preflight status is `passed`
+- readiness status is `ready`
+- planned candidate ids match draft records and quarantine candidate records
+- source hashes and ids match across draft, precheck, plan, preflight,
+  readiness, and quarantine artifacts
+- excluded, blocked, and needs-review records are not requested
+- output directory is clean
+- no training data is admitted
+- no training or candidate CSV/JSONL/Parquet/LMDB artifact is created
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- request, summary, and Markdown redaction checks pass
+
+Needs-review criteria:
+
+- draft precheck is `needs_review`
+- `--allow-draft-precheck-needs-review` is explicitly set
+- no hard consistency check failed
+
+Fail criteria:
+
+- confirmation is missing
+- draft precheck is blocked
+- draft precheck is needs-review without explicit allowance
+- draft, request plan, request preflight, readiness, or quarantine evidence is
+  blocked
+- source hashes or ids mismatch
+- draft/planned/execution record ids or counts mismatch
+- planned candidate records derive from excluded, blocked, or needs-review
+  records
+- output directory is non-empty
+- raw text, private paths, token-like values, PDF names, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted artifacts
+- request redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -1479,6 +1557,7 @@ Allowed:
 - property training admission request preflight
 - property training admission request draft builder
 - property training admission request draft precheck
+- property training admission execution request builder
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
