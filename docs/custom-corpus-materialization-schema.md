@@ -123,6 +123,17 @@ execute the plan, run a materializer, create materialized records, create
 candidate/training artifacts, admit training data, run Phase 1, or change
 `DatasetConfirmation`.
 
+Materializer execution request preflight is downstream of materialization
+plans, dry-run evidence, and execution requests:
+
+```text
+docs/custom-corpus-property-materializer-execution-preflight.md
+```
+
+The preflight summary is separate from this materialization plan schema. It
+contains no materialized data, no candidate/training artifacts, and no raw
+property values or provenance text.
+
 ## Plan Contents
 
 A materialization plan includes:
