@@ -31,6 +31,7 @@ custom corpus manifest
 -> materializer execution request
 -> materializer execution request preflight
 -> property quarantine materializer
+-> property quarantine candidate preflight
 -> future training admission boundary
 -> future training artifacts
 ```
@@ -61,6 +62,7 @@ Existing artifact schemas:
 - `custom_corpus_property_materializer_execution_preflight.v1`
 - `custom_corpus_property_quarantine_materialization.v1`
 - `custom_corpus_property_quarantine_materializer.v1`
+- `custom_corpus_property_quarantine_candidate_preflight.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
 property path. They still stop before training admission, training artifacts,
@@ -150,6 +152,12 @@ The property quarantine materializer sits after execution preflight. It writes
 candidate-only quarantine records and safe summary/evidence artifacts. It does
 not create training data, training CSV/JSONL/Parquet/LMDB artifacts, Phase 1
 inputs, or `DatasetConfirmation` changes.
+
+The property quarantine candidate preflight sits after quarantine
+materialization and before any future training admission request. It checks
+candidate-only quarantine artifacts and upstream evidence only. It is not
+training admission, creates no training artifact, does not run Phase 1, and
+does not change `DatasetConfirmation`.
 
 ## Materialization Definition
 
@@ -260,6 +268,16 @@ docs/custom-corpus-property-quarantine-materializer.md
 It writes candidate-only quarantine artifacts after a passed execution
 preflight and explicit confirmation. These artifacts are still not training
 data and are necessary but not sufficient for any future training admission.
+
+The property quarantine candidate preflight is documented in:
+
+```text
+docs/custom-corpus-property-quarantine-candidate-preflight.md
+```
+
+It checks candidate-only quarantine artifacts before future training admission
+planning. It produces no training data, training CSV/JSONL/Parquet/LMDB
+artifacts, Phase 1 execution, or `DatasetConfirmation` changes.
 
 ## Offline Materialization Planner
 
@@ -595,9 +613,10 @@ Recommended future sequence:
 10. `test/docs: add property materialization dry-run runner`
 11. `test/docs: add property materializer execution request builder`
 12. `test/docs: add property quarantine materializer runner`
-13. `docs: record small public quarantine materialization evidence`
-14. `docs/test: design training admission boundary from quarantined candidates`
-15. only later: implement explicit training artifact builder if all previous
+13. `test/docs: add property quarantine candidate preflight`
+14. `docs: record small public quarantine materialization evidence`
+15. `docs/test: design training admission boundary from quarantined candidates`
+16. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

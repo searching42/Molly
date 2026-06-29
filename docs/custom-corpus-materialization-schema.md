@@ -145,6 +145,16 @@ execution request. Those records are not training data, do not create
 training CSV/JSONL/Parquet/LMDB artifacts, do not run Phase 1, and do not
 change `DatasetConfirmation`.
 
+The property quarantine candidate preflight is downstream of candidate-only
+quarantine artifacts:
+
+```text
+docs/custom-corpus-property-quarantine-candidate-preflight.md
+```
+
+The preflight summary is separate from any future training dataset schema. It
+checks schema/status/hash/id/record consistency and contains no training data.
+
 ## Plan Contents
 
 A materialization plan includes:

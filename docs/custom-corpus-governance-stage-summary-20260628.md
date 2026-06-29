@@ -30,6 +30,7 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_materializer_execution_preflight.v1
 -> custom_corpus_property_quarantine_materialization.v1
 -> custom_corpus_property_quarantine_materializer.v1
+-> custom_corpus_property_quarantine_candidate_preflight.v1
 -> future training admission boundary
 ```
 
@@ -41,8 +42,9 @@ request planning, admission draft generation, draft precheck, cross-artifact
 package binding validation, materialization plan drafting, materialization plan
 preflight, safe offline planning, no-data materialization dry-runs, request-only
 future-materializer handoff artifacts, request preflight, and candidate-only
-quarantine materialization. It does not admit training data, create training
-CSV/JSONL/Parquet/LMDB artifacts, or run Phase 1.
+quarantine materialization, and quarantine candidate preflight. It does not
+admit training data, create training CSV/JSONL/Parquet/LMDB artifacts, or run
+Phase 1.
 
 ## Completed PRs
 
@@ -378,3 +380,18 @@ summary/evidence artifacts after a passed execution preflight and explicit
 operator confirmation. It still does not admit training data, create training
 CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change `DatasetConfirmation`,
 call an LLM or agent, call MinerU, parse PDFs, or perform evaluation/RL.
+
+## Property Quarantine Candidate Preflight Note
+
+The property quarantine candidate preflight was added after quarantine
+materialization:
+
+```text
+docs/custom-corpus-property-quarantine-candidate-preflight.md
+```
+
+It checks candidate-only quarantine artifacts before any future training
+admission request. It still does not admit training data, create training
+CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
+artifacts, run Phase 1, change `DatasetConfirmation`, run model
+training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
