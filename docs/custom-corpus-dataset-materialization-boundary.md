@@ -38,8 +38,8 @@ custom corpus manifest
 -> property training admission request draft
 -> property training admission request draft precheck
 -> property training admission execution request
--> future training admission boundary
--> future training artifacts
+-> property training admission execution request preflight
+-> future training admission execution
 ```
 
 Existing artifact schemas:
@@ -77,6 +77,7 @@ Existing artifact schemas:
 - `custom_corpus_property_training_admission_request_draft_precheck.v1`
 - `custom_corpus_property_training_admission_execution_request.v1`
 - `custom_corpus_property_training_admission_execution_request_builder.v1`
+- `custom_corpus_property_training_admission_execution_request_preflight.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
 property path. They still stop before training admission, training artifacts,
@@ -403,6 +404,16 @@ It writes a reviewable execution request from draft-precheck-passed evidence.
 The request is not training admission execution, contains no training data,
 produces no training artifacts, and leaves Phase 1 and `DatasetConfirmation`
 unchanged.
+
+The property training admission execution request preflight is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-execution-request-preflight.md
+```
+
+It checks the execution request package before any future training admission
+execution. The preflight is not execution, produces no training artifact, and
+leaves Phase 1 and `DatasetConfirmation` unchanged.
 
 ## Offline Materialization Planner
 
@@ -743,9 +754,10 @@ Recommended future sequence:
 15. `test/docs: add property training admission request planner`
 16. `test/docs: add property training admission request draft package precheck`
 17. `test/docs: add property training admission execution request builder`
-18. `docs: record small public quarantine materialization evidence`
-19. `docs/test: design training admission boundary from quarantined candidates`
-20. only later: implement explicit training artifact builder if all previous
+18. `test/docs: add property training admission execution request preflight`
+19. `docs: record small public quarantine materialization evidence`
+20. `docs/test: design training admission boundary from quarantined candidates`
+21. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

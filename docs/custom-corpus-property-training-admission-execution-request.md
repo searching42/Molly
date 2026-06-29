@@ -152,6 +152,25 @@ property_training_admission_execution_request_redaction_failed
 
 Unsafe request and Markdown artifacts are not written.
 
+## After Execution Request: Execution Request Preflight
+
+The execution request preflight is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-execution-request-preflight.md
+```
+
+Future evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-admission-execution-request-preflight-evidence-template.md
+```
+
+The execution request builder writes a reviewable request artifact. The
+execution request preflight validates package consistency after the request is
+written. It still does not execute training admission, admit training data,
+create training artifacts, run Phase 1, or change `DatasetConfirmation`.
+
 ## Boundaries
 
 - The builder writes a training admission execution request only.

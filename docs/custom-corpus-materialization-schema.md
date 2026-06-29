@@ -227,6 +227,17 @@ execute training admission, create training or candidate
 CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, or change
 `DatasetConfirmation`.
 
+Training admission execution request preflight is downstream of execution
+request generation:
+
+```text
+docs/custom-corpus-property-training-admission-execution-request-preflight.md
+```
+
+The preflight summary is separate from any training dataset schema and contains
+no training data. It validates execution-request package schema, status,
+hashes, ids, and record consistency only.
+
 ## Plan Contents
 
 A materialization plan includes:
