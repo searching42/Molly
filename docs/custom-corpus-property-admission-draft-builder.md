@@ -92,6 +92,19 @@ Draft generation is blocked when:
 - generated `custom_corpus_admission.v1` validation fails
 - redaction checks fail
 
+## After Draft Generation: Package Precheck
+
+After a reviewable admission draft is generated, the next property-specific
+step is the package precheck:
+
+- `docs/custom-corpus-property-admission-draft-package-precheck.md`
+- `docs/evidence/templates/custom-corpus-property-admission-draft-package-precheck-evidence-template.md`
+
+The precheck compares the draft against upstream property evidence before an
+operator submits the package to the formal admission package binding
+validator. It is not formal package binding and does not create
+`custom_corpus_admission_package_validation.v1`.
+
 ## CLI Usage
 
 ```bash

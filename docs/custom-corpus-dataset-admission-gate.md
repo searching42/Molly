@@ -177,6 +177,17 @@ docs/custom-corpus-property-admission-draft-builder.md
 The draft artifact does not admit training data. Explicit package binding and
 later materialization remain separate downstream gates.
 
+Property admission draft package precheck can confirm draft consistency before
+formal package binding:
+
+```text
+docs/custom-corpus-property-admission-draft-package-precheck.md
+```
+
+The precheck is not admission package validation. It does not create
+`custom_corpus_admission_package_validation.v1`; formal package binding remains
+a separate explicit step.
+
 The future materialization boundary is designed in:
 
 ```text
