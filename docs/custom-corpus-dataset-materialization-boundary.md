@@ -27,6 +27,7 @@ custom corpus manifest
 -> property materialization plan draft
 -> property materialization plan preflight
 -> property-aware offline materialization planner
+-> property materialization dry-run
 -> future materialization boundary
 -> future candidate/training artifacts
 ```
@@ -52,6 +53,7 @@ Existing artifact schemas:
 - `custom_corpus_materialization.v1`
 - `custom_corpus_materialization_planner.v1`
 - `custom_corpus_property_materialization_planner_runner.v1`
+- `custom_corpus_property_materialization_dry_run.v1`
 
 All current steps stop before materialization.
 
@@ -117,6 +119,12 @@ evidence. It can write `custom_corpus_materialization_planner.v1` planner
 output plus a property-aware wrapper summary, but it still does not run a
 materializer, execute materialization, create candidate/training CSVs, admit
 training data, run Phase 1, or change `DatasetConfirmation`.
+
+The property materialization dry-run runner sits after the property-aware
+planner runner. It validates the existing planner output and upstream evidence
+through a no-data dry-run report. The dry-run report is not materialization,
+does not create candidate/training artifacts, and does not run a real
+materializer.
 
 ## Materialization Definition
 
@@ -188,6 +196,15 @@ docs/custom-corpus-property-materialization-planner-runner.md
 It invokes the offline planner after preflight gating and explicit operator
 confirmation. It remains planner execution only; it is not materialization.
 
+The property materialization dry-run runner is documented in:
+
+```text
+docs/custom-corpus-property-materialization-dry-run.md
+```
+
+It consumes planner output and validates future materializer-readiness without
+creating materialized data.
+
 ## Offline Materialization Planner
 
 The offline planner is documented in:
@@ -211,6 +228,12 @@ Property-aware planner-runner evidence template:
 
 ```text
 docs/evidence/templates/custom-corpus-property-materialization-planner-evidence-template.md
+```
+
+Property materialization dry-run evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-materialization-dry-run-evidence-template.md
 ```
 
 ## Required Inputs For A Future Materializer
@@ -513,10 +536,11 @@ Recommended future sequence:
 7. `test/docs: add property materialization plan draft builder`
 8. `test/docs: add property materialization plan preflight`
 9. `test/docs: add property-aware offline materialization planner runner`
-10. `test: add dry-run-only materializer writing candidate artifacts outside git`
-11. `docs: record small public materialization dry-run evidence`
-12. `docs/test: design training admission boundary from materialized candidates`
-13. only later: implement explicit training artifact builder if all previous
+10. `test/docs: add property materialization dry-run runner`
+11. `test: add dry-run-only materializer writing candidate artifacts outside git`
+12. `docs: record small public materialization dry-run evidence`
+13. `docs/test: design training admission boundary from materialized candidates`
+14. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

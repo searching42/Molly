@@ -49,6 +49,24 @@ offline_materialization_planner_output.json
 The property-aware wrapper summary links that planner output back to the
 property package binding, materialization plan draft, and preflight evidence.
 
+## After Planner: Property Materialization Dry-Run
+
+The downstream no-data dry-run is documented in:
+
+```text
+docs/custom-corpus-property-materialization-dry-run.md
+```
+
+Future dry-run evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-property-materialization-dry-run-evidence-template.md
+```
+
+The planner runner executes the offline planner. The dry-run consumes that
+planner output and validates future materializer-readiness without creating
+materialized data. Real materializer execution remains separate.
+
 ## Inputs
 
 The runner requires:

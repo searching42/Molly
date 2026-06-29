@@ -30,6 +30,7 @@ custom corpus manifest
 -> property materialization plan draft
 -> property materialization plan preflight
 -> property-aware offline materialization planner
+-> property materialization dry-run
 -> future materializer
 ```
 
@@ -54,6 +55,7 @@ Concrete artifact schemas:
 - `custom_corpus_materialization.v1`
 - `custom_corpus_materialization_planner.v1`
 - `custom_corpus_property_materialization_planner_runner.v1`
+- `custom_corpus_property_materialization_dry_run.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -706,6 +708,72 @@ Fail criteria:
 - offline planner reports blocked/failed status or claims materialized output
 - summary redaction fails
 
+## Step 16: Property Materialization Dry-Run
+
+The property materialization dry-run runner reads the offline planner output,
+the property planner wrapper summary, the materialization plan, and upstream
+package/admission evidence. It validates future materializer-readiness and
+writes a no-data dry-run report plus redacted evidence. It is not materializer
+execution. It does not execute materialization, create materialized records,
+create candidate/training CSV/JSONL/Parquet/LMDB artifacts, admit training
+data, run Phase 1, or modify `DatasetConfirmation`.
+
+References:
+
+- `docs/custom-corpus-property-materialization-dry-run.md`
+- `docs/custom-corpus-property-materialization-planner-runner.md`
+- `docs/evidence/templates/custom-corpus-property-materialization-dry-run-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_materialization_dry_run \
+  --manifest /path/outside/git/custom-corpus-manifest.json \
+  --dry-run-report /path/outside/git/dry_run_report.json \
+  --review-manifest /path/outside/git/custom-corpus-review.json \
+  --admission-request /path/outside/git/custom-corpus-admission-request.json \
+  --formal-package-validation /path/outside/git/custom_corpus_admission_package_validation.json \
+  --property-package-binding-summary /path/outside/git/property_package_binding_summary.json \
+  --materialization-plan /path/outside/git/custom_corpus_materialization.draft.json \
+  --materialization-plan-preflight-summary /path/outside/git/property_materialization_plan_preflight_summary.json \
+  --offline-planner-output /path/outside/git/offline_materialization_planner_output.json \
+  --property-planner-summary /path/outside/git/property_materialization_planner_summary.json \
+  --output-dir /tmp/property-materialization-dry-run \
+  --dry-run-id property-materialization-dry-run-<date> \
+  --confirm-materialization-dry-run
+```
+
+Pass criteria:
+
+- dry-run status is `passed`
+- explicit dry-run confirmation flag is present
+- planner summary status is `planned`, or `needs_review` is explicitly
+  allowed
+- offline planner output status is `planned`
+- source hashes match actual input files
+- materialization plan validates
+- materialization record ids and counts match upstream planner/preflight
+  evidence
+- materialization records derive only from admitted, accepted records
+- excluded, blocked, and needs-review records are not materialization records
+- no materialized output or candidate/training artifact paths are claimed
+- dry-run report and evidence redaction checks pass
+
+Fail criteria:
+
+- confirmation flag is missing
+- planner summary failed or has errors
+- planner summary is `needs_review` without explicit allowance
+- offline planner output is failed/blocked or schema-invalid
+- offline planner output claims materialized records, candidate/training
+  artifacts, Phase 1 execution, training admission, or `DatasetConfirmation`
+  mutation
+- source hashes or ids mismatch
+- dry-run was confirmed, Phase 1 ran, or training was admitted
+- materialization records include excluded, blocked, or needs-review records
+- output directory is not clean
+- dry-run redaction fails
+
 ## Artifact Retention Policy
 
 Full local artifacts remain outside git. Committed PRs should include only
@@ -765,6 +833,7 @@ Allowed:
 - property materialization plan draft builder
 - property materialization plan preflight
 - property-aware offline materialization planner runner
+- property materialization dry-run runner
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

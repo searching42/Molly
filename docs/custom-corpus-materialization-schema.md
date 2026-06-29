@@ -100,6 +100,17 @@ The runner writes planner output and a property wrapper summary only. It does
 not run a materializer, execute materialization, create candidate/training
 CSVs, admit training data, run Phase 1, or change `DatasetConfirmation`.
 
+The property materialization dry-run consumes the materialization plan and
+planner output as separate inputs:
+
+```text
+docs/custom-corpus-property-materialization-dry-run.md
+```
+
+The dry-run report is separate from this materialization plan schema. It
+validates hashes, statuses, ids, and record selections without writing
+candidate/training data or executing materialization.
+
 ## Plan Contents
 
 A materialization plan includes:
@@ -194,6 +205,12 @@ Property-aware runner evidence template:
 
 ```text
 docs/evidence/templates/custom-corpus-property-materialization-planner-evidence-template.md
+```
+
+Property materialization dry-run evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-materialization-dry-run-evidence-template.md
 ```
 
 Plan validation checks structure and intent. The planner summarizes intended
