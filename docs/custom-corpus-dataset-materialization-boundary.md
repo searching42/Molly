@@ -34,6 +34,7 @@ custom corpus manifest
 -> property quarantine candidate preflight
 -> property training admission readiness
 -> property training admission request planner
+-> property training admission request preflight
 -> future training admission boundary
 -> future training artifacts
 ```
@@ -67,6 +68,7 @@ Existing artifact schemas:
 - `custom_corpus_property_quarantine_candidate_preflight.v1`
 - `custom_corpus_property_training_admission_readiness.v1`
 - `custom_corpus_property_training_admission_request_plan.v1`
+- `custom_corpus_property_training_admission_request_preflight.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
 property path. They still stop before training admission, training artifacts,
@@ -176,6 +178,14 @@ request-plan evidence only. It does not create a training admission request,
 create training admission actions, admit training data, create training or
 candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, run model
 training/evaluation, or change `DatasetConfirmation`.
+
+The property training admission request preflight sits after request planning
+and before any future training admission execution. It validates the plan,
+readiness summary, and quarantine candidate preflight summary only. It does
+not create or execute a training admission request, admit training data,
+materialize datasets, create training or candidate CSV/JSONL/Parquet/LMDB
+artifacts, run Phase 1, run model training/evaluation, or change
+`DatasetConfirmation`.
 
 ## Materialization Definition
 
@@ -320,6 +330,17 @@ safe request plan for a future training admission request. It does not create
 the request, create training admission actions, admit training data, create
 training or candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, or change
 `DatasetConfirmation`.
+
+The property training admission request preflight is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-request-preflight.md
+```
+
+It checks whether request-plan evidence remains consistent with readiness and
+quarantine candidate preflight evidence before any future training admission
+execution request. It does not execute admission, create training data,
+materialize datasets, run Phase 1, or change `DatasetConfirmation`.
 
 ## Offline Materialization Planner
 

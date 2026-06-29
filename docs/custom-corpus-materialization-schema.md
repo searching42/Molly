@@ -180,6 +180,17 @@ admission actions, admit training data, create training or candidate
 CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, or change
 `DatasetConfirmation`.
 
+Training admission request preflight is downstream of request planning:
+
+```text
+docs/custom-corpus-property-training-admission-request-preflight.md
+```
+
+The preflight summary validates request-plan/readiness/quarantine consistency
+before any future execution request. It is not materialization input and does
+not execute training admission, admit training data, create datasets, run
+Phase 1, or change `DatasetConfirmation`.
+
 ## Plan Contents
 
 A materialization plan includes:

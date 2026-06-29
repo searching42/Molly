@@ -33,6 +33,7 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_quarantine_candidate_preflight.v1
 -> custom_corpus_property_training_admission_readiness.v1
 -> custom_corpus_property_training_admission_request_plan.v1
+-> custom_corpus_property_training_admission_request_preflight.v1
 -> future training admission boundary
 ```
 
@@ -428,5 +429,22 @@ planning evidence for a future training admission request. It still does not
 generate a training admission request, create training admission actions, admit
 training data, create training CSV/JSONL/Parquet/LMDB artifacts, create
 candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.
+
+## Property Training Admission Request Preflight Note
+
+The property training admission request preflight was added after request
+planning:
+
+```text
+docs/custom-corpus-property-training-admission-request-preflight.md
+```
+
+It validates request plan, readiness, and quarantine candidate preflight
+consistency before any future training admission execution layer. It still
+does not generate or execute a training admission request, admit training
+data, create training CSV/JSONL/Parquet/LMDB artifacts, create candidate
+CSV/JSONL/Parquet/LMDB artifacts, materialize datasets, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.
