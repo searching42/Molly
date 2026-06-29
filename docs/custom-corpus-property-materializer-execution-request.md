@@ -127,6 +127,15 @@ internally consistent, and safe. It does not run a real materializer, execute
 materialization, create materialized records, create candidate/training
 artifacts, run Phase 1, or modify `DatasetConfirmation`.
 
+After preflight, the property quarantine materializer can write candidate-only
+quarantine artifacts:
+
+```text
+docs/custom-corpus-property-quarantine-materializer.md
+```
+
+Those artifacts remain quarantined and are not training data.
+
 ## CLI Usage
 
 ```bash

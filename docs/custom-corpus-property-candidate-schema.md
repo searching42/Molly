@@ -29,21 +29,15 @@ any extractor.
 
 ## Governance Chain
 
-The custom corpus path becomes:
+The full current custom corpus governance path is maintained in:
 
 ```text
-custom corpus manifest
--> custom corpus dry-run
--> property candidate manifest
--> property candidate planner
--> property candidate review queue
--> human review artifact
--> admission request
--> package binding validator
--> materialization plan
--> offline materialization planner
--> future materializer
+docs/custom-corpus-governance-runbook.md
 ```
+
+This schema sits before human review and before all admission,
+package-binding, materialization-plan, execution-preflight, and candidate
+quarantine materialization steps.
 
 A valid property candidate manifest is necessary but not sufficient for human
 review, admission, materialization, or training.

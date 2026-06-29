@@ -2,8 +2,8 @@
 
 ## Summary
 
-Molly now has a full custom corpus governance chain through offline
-materialization planning:
+Molly now has a custom corpus governance chain through candidate-only property
+quarantine materialization:
 
 ```text
 custom_corpus_manifest.v1
@@ -28,7 +28,9 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_materialization_dry_run.v1
 -> custom_corpus_property_materializer_execution_request.v1
 -> custom_corpus_property_materializer_execution_preflight.v1
--> future materializer
+-> custom_corpus_property_quarantine_materialization.v1
+-> custom_corpus_property_quarantine_materializer.v1
+-> future training admission boundary
 ```
 
 The chain supports controlled custom corpus intake, unconfirmed dry-runs,
@@ -37,10 +39,10 @@ review-planning summaries, property candidate review queue artifacts, human
 review artifacts, queue-to-review binding validation, admission readiness and
 request planning, admission draft generation, draft precheck, cross-artifact
 package binding validation, materialization plan drafting, materialization plan
-preflight, safe offline planning, and no-data materialization dry-runs. It
-can now produce request-only future-materializer handoff artifacts and
-preflight those requests before future materializer submission. It does not
-materialize records into datasets and does not run Phase 1.
+preflight, safe offline planning, no-data materialization dry-runs, request-only
+future-materializer handoff artifacts, request preflight, and candidate-only
+quarantine materialization. It does not admit training data, create training
+CSV/JSONL/Parquet/LMDB artifacts, or run Phase 1.
 
 ## Completed PRs
 
@@ -112,7 +114,7 @@ docs/custom-corpus-dataset-materialization-boundary.md
 ```
 
 It documents the future materialization boundary, but still does not implement
-materialization. The custom corpus path remains protected before candidate or
+training materialization. The custom corpus path remains protected before
 training artifacts are created.
 
 ## Post-Design Schema Note
@@ -125,7 +127,7 @@ docs/custom-corpus-materialization-schema.md
 ```
 
 It validates candidate-only materialization intent and source binding, but
-still does not implement a materializer or create candidate/training artifacts.
+still does not create training artifacts.
 
 ## Post-Schema Planner Note
 
@@ -361,3 +363,18 @@ submission. It still does not run a real materializer, execute
 materialization, admit training data, call an LLM or agent, perform
 evaluation/RL, create candidate/training CSV/JSONL/Parquet/LMDB artifacts, run
 Phase 1, or change `DatasetConfirmation`.
+
+## Property Quarantine Materializer Note
+
+The property quarantine materializer was added after execution request
+preflight:
+
+```text
+docs/custom-corpus-property-quarantine-materializer.md
+```
+
+It can write candidate-only quarantine materialization records plus safe
+summary/evidence artifacts after a passed execution preflight and explicit
+operator confirmation. It still does not admit training data, create training
+CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change `DatasetConfirmation`,
+call an LLM or agent, call MinerU, parse PDFs, or perform evaluation/RL.
