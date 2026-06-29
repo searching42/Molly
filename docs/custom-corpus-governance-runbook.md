@@ -18,6 +18,7 @@ intent, and future materialization separated.
 custom corpus manifest
 -> custom corpus dry-run
 -> property candidate manifest
+-> property candidate planner
 -> human review artifact
 -> admission request
 -> package binding validator
@@ -31,6 +32,7 @@ Concrete artifact schemas:
 - `custom_corpus_manifest.v1`
 - `custom_corpus_dry_run.v1`
 - `custom_corpus_property_candidate.v1`
+- `custom_corpus_property_candidate_planner.v1`
 - `custom_corpus_review.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
@@ -145,7 +147,35 @@ Fail criteria:
 - needs-review records without explanatory text
 - unsafe labels, private paths, credential-like strings, or raw article text
 
-## Step 4: Human Review Artifact
+## Step 4: Property Candidate Planner
+
+The property candidate planner produces review queue planning only. It reads a
+validated `custom_corpus_property_candidate.v1` manifest, groups safe counts by
+field/property family/value kind/unit status/source, and identifies reviewable
+and blocked record ids. It does not create the review manifest.
+
+References:
+
+- `docs/custom-corpus-property-candidate-planner.md`
+- `docs/evidence/templates/custom-corpus-property-candidate-planner-evidence-template.md`
+
+Pass criteria:
+
+- planner status is `planned` when reviewable candidates exist
+- review queue includes candidate and needs-review records with
+  `review_required=true`
+- rejected records and `review_required=false` records are blocked
+- output contains safe ids and aggregate counts only
+- no raw values, provenance summaries, private paths, or token leakage
+
+Fail criteria:
+
+- source candidate manifest is invalid
+- planner summary redaction fails
+- no reviewable property candidates exist, in which case planner status is
+  `blocked`
+
+## Step 5: Human Review Artifact
 
 Human review summarizes extracted custom corpus records. The review artifact
 does not admit data. Review decisions are `accept`, `reject`, and
@@ -185,7 +215,7 @@ Fail criteria:
 - overlong raw article text
 - invalid decision-specific fields
 
-## Step 5: Admission Request
+## Step 6: Admission Request
 
 The admission request records governance intent. It may mark reviewed accepted
 records as `admit`, or mark records as `exclude` or `needs_review`. It does
@@ -223,7 +253,7 @@ Fail criteria:
 - missing required hashes
 - private path or token-like content
 
-## Step 6: Admission Package Binding Validator
+## Step 7: Admission Package Binding Validator
 
 The package validator checks the four artifacts together:
 
@@ -321,6 +351,7 @@ Allowed:
 - custom corpus dry-run runner
 - public dry-run evidence
 - property candidate schema and validator
+- property candidate planner
 - human review schema and validator
 - admission request schema and validator
 - admission package binding validator

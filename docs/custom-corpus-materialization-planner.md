@@ -52,6 +52,16 @@ numeric scientific properties are discovered, normalized, reviewed, and deemed
 trainable. Those decisions belong outside the planner and must not be inferred
 from planner output.
 
+The property candidate planner is upstream of human review:
+
+```text
+docs/custom-corpus-property-candidate-planner.md
+```
+
+Do not confuse property candidate review planning with materialization
+planning. This materialization planner is downstream of human review,
+admission, package validation, and the materialization plan.
+
 ## Planner Outputs
 
 The planner can write:
