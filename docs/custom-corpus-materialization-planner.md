@@ -33,6 +33,18 @@ The planner does not read raw PDFs, ParsedDocument files, MinerU bundles,
 corpus workflow outputs, or package source artifacts. It uses the plan as the
 only input and relies on the plan validator for structural safety.
 
+## Scientific Property Scope
+
+The planner does not define scientific property extraction scope. It only
+consumes materialization records already selected by the materialization plan.
+The only property-like field currently carried through this layer is
+`field_name`.
+
+A future property candidate and trainability decision layer should define how
+numeric scientific properties are discovered, normalized, reviewed, and deemed
+trainable. That decision belongs outside the planner and must not be inferred
+from planner output.
+
 ## Planner Outputs
 
 The planner can write:
