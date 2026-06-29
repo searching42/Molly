@@ -8,6 +8,7 @@ materialization planning:
 ```text
 custom_corpus_manifest.v1
 -> custom_corpus_dry_run.v1
+-> custom_corpus_property_candidate.v1
 -> custom_corpus_review.v1
 -> custom_corpus_admission.v1
 -> custom_corpus_admission_package_validation.v1
@@ -17,9 +18,10 @@ custom_corpus_manifest.v1
 ```
 
 The chain supports controlled custom corpus intake, unconfirmed dry-runs,
-human review artifacts, admission-intent validation, cross-artifact package
-binding validation, materialization plan validation, and safe offline planning.
-It does not materialize records into datasets and does not run Phase 1.
+open-ended numeric property candidate manifests, human review artifacts,
+admission-intent validation, cross-artifact package binding validation,
+materialization plan validation, and safe offline planning. It does not
+materialize records into datasets and does not run Phase 1.
 
 ## Completed PRs
 
@@ -118,4 +120,18 @@ docs/custom-corpus-materialization-planner.md
 It reads a valid `custom_corpus_materialization.v1` plan and produces safe
 JSON/Markdown planning summaries. It still does not implement a materializer,
 create candidate/training artifacts, run Phase 1, or change
+`DatasetConfirmation`.
+
+## Pre-Review Property Candidate Note
+
+The property candidate schema was added as a pre-review layer:
+
+```text
+docs/custom-corpus-property-candidate-schema.md
+```
+
+It represents open-ended numeric scientific property candidates without a
+fixed property whitelist. It still does not implement a property extraction
+runner, call an LLM or agent, evaluate extraction accuracy, implement Agentic
+RL, materialize data, create candidate/training CSVs, run Phase 1, or change
 `DatasetConfirmation`.

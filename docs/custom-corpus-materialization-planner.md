@@ -40,9 +40,16 @@ consumes materialization records already selected by the materialization plan.
 The only property-like field currently carried through this layer is
 `field_name`.
 
-A future property candidate and trainability decision layer should define how
+The pre-review property candidate layer is documented in:
+
+```text
+docs/custom-corpus-property-candidate-schema.md
+```
+
+The property candidate schema defines the pre-review candidate representation.
+Future extraction and trainability decision implementations should define how
 numeric scientific properties are discovered, normalized, reviewed, and deemed
-trainable. That decision belongs outside the planner and must not be inferred
+trainable. Those decisions belong outside the planner and must not be inferred
 from planner output.
 
 ## Planner Outputs

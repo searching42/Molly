@@ -38,6 +38,7 @@ literature acquisition, and default-route migration remain future work.
 | Multi-paper corpus evaluation and reproducibility audit | Completed for offline multi-document `ParsedDocument` fixtures, cross-paper conflict rejection, corpus replay manifests, and confirmed Phase 1 execution | `src/ai4s_agent/phase3_corpus_extractor.py`, `src/ai4s_agent/corpus_conflict_auditor.py`, `src/ai4s_agent/corpus_reproducibility_auditor.py`, `src/ai4s_agent/workflows/corpus_to_phase1_workflow.py`, `tests/test_corpus_to_phase1_workflow.py`, `docs/corpus-evaluation-and-reproducibility-audit.md` |
 | MinerU live corpus acceptance bridge | Completed as a manual opt-in bridge and reusable operator gate from self-hosted MinerU parsing to the corpus workflow, with offline-tested endpoint profile/routing policy resolution, endpoint preflight diagnostics, optional preflight-report binding, and no CI live-service dependency | `src/ai4s_agent/document_parse_corpus_live_acceptance.py`, `src/ai4s_agent/corpus_live_acceptance_fixtures.py`, `src/ai4s_agent/mineru_endpoint_profiles.py`, `src/ai4s_agent/mineru_endpoint_preflight.py`, `tests/test_document_parse_corpus_live_acceptance.py`, `tests/test_mineru_endpoint_profiles.py`, `tests/test_mineru_endpoint_preflight.py`, `docs/mineru-live-corpus-acceptance.md`, `docs/mineru-endpoint-preflight.md`, `docs/mineru-manual-live-acceptance-gate.md` |
 | Custom corpus dry-run runner | Implemented as a controlled manifest-described local PDF dry-run path; preserves `DatasetConfirmation.confirmed=false`, verifies Phase 1 remains `not_run`, and produces redacted dry-run evidence without production dataset admission | `src/ai4s_agent/custom_corpus_manifest.py`, `src/ai4s_agent/custom_corpus_dry_run.py`, `tests/test_custom_corpus_manifest.py`, `tests/test_custom_corpus_dry_run.py`, `docs/custom-corpus-dry-run.md`, `docs/custom-corpus-intake-contract.md` |
+| Custom corpus property candidate schema | Added `custom_corpus_property_candidate.v1` and an offline validator for open-ended numeric property candidates before human review; no property extraction runner, LLM/agent call, materialization, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_candidate.py`, `tests/test_custom_corpus_property_candidate.py`, `docs/custom-corpus-property-candidate-schema.md`, `docs/examples/custom-corpus-property-candidates.example.json` |
 | Custom corpus human review schema | Introduced an offline review artifact schema and validator for custom corpus records; review artifacts still do not admit training data and do not change Phase 1 or `DatasetConfirmation` behavior | `src/ai4s_agent/custom_corpus_review.py`, `tests/test_custom_corpus_review.py`, `docs/custom-corpus-human-review.md`, `docs/examples/custom-corpus-review-manifest.example.json` |
 | Custom corpus admission gate contract | Introduced an offline admission request schema and validator for structurally checking reviewed custom corpus packages; no dataset materialization, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_admission.py`, `tests/test_custom_corpus_admission.py`, `docs/custom-corpus-dataset-admission-gate.md`, `docs/examples/custom-corpus-admission-request.example.json` |
 | Custom corpus admission package binding validator | Added offline package validation across manifest, dry-run report, review manifest, and admission request; validates hash, id, review/action, and dry-run boundary consistency without dataset materialization, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_admission_package.py`, `tests/test_custom_corpus_admission_package.py`, `docs/custom-corpus-admission-package-binding.md`, `docs/evidence/templates/custom-corpus-admission-package-validation-template.md` |
@@ -356,6 +357,11 @@ Completed behavior:
   custom/private dry-runs keep `DatasetConfirmation.confirmed` set to `false`,
   verify Phase 1 remains `not_run`, and preserve redaction requirements before
   any real/custom records can be considered for future training admission.
+- Adds the custom corpus property candidate schema:
+  open-ended numeric property candidates can be validated before human review
+  without a fixed property whitelist, but no property extraction runner,
+  LLM/agent call, evaluation/RL, materialization, candidate/training CSV
+  creation, Phase 1 execution, or `DatasetConfirmation` change is implemented.
 - Introduces the custom corpus human review artifact boundary:
   review manifests are validated offline, but they do not admit training data,
   do not set `DatasetConfirmation.confirmed=true`, and do not run Phase 1.
@@ -414,6 +420,11 @@ Evidence:
 - `docs/custom-corpus-intake-contract.md`
 - `docs/examples/custom-corpus-manifest.example.json`
 - `docs/evidence/templates/custom-corpus-dry-run-evidence-template.md`
+- `src/ai4s_agent/custom_corpus_property_candidate.py`
+- `tests/test_custom_corpus_property_candidate.py`
+- `docs/custom-corpus-property-candidate-schema.md`
+- `docs/examples/custom-corpus-property-candidates.example.json`
+- `docs/evidence/templates/custom-corpus-property-candidates-evidence-template.md`
 - `src/ai4s_agent/custom_corpus_review.py`
 - `tests/test_custom_corpus_review.py`
 - `docs/custom-corpus-human-review.md`

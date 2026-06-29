@@ -17,6 +17,7 @@ intent, and future materialization separated.
 ```text
 custom corpus manifest
 -> custom corpus dry-run
+-> property candidate manifest
 -> human review artifact
 -> admission request
 -> package binding validator
@@ -29,6 +30,7 @@ Concrete artifact schemas:
 
 - `custom_corpus_manifest.v1`
 - `custom_corpus_dry_run.v1`
+- `custom_corpus_property_candidate.v1`
 - `custom_corpus_review.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
@@ -110,7 +112,40 @@ Fail criteria:
 - private paths leak into report
 - manifest, hash, or preflight mismatch
 
-## Step 3: Human Review Artifact
+## Step 3: Property Candidate Manifest
+
+The property candidate manifest records open-ended numeric scientific property
+candidates before human review. It defines reviewable numeric property
+candidates without defining a fixed whitelist of accepted scientific fields.
+The schema validates evidence structure, numeric representation, units, entity
+binding, provenance summaries, confidence, and trainability decision status.
+
+References:
+
+- `docs/custom-corpus-property-candidate-schema.md`
+- `docs/examples/custom-corpus-property-candidates.example.json`
+- `docs/evidence/templates/custom-corpus-property-candidates-evidence-template.md`
+
+Pass criteria:
+
+- manifest validates
+- `field_name` and `canonical_property_guess` are safe labels
+- candidate records have finite numeric values and entity/provenance binding
+- units are explicit, inferred, not applicable, or review-blocking
+- rejected records include reasons
+- needs-review records include notes or decision reasons
+- no raw text, private path, or token leakage
+
+Fail criteria:
+
+- duplicate property candidate ids or targets
+- candidate records with unknown or non-finite numeric values
+- candidate records with missing unit evidence outside allowed cases
+- rejected records without rejection reasons
+- needs-review records without explanatory text
+- unsafe labels, private paths, credential-like strings, or raw article text
+
+## Step 4: Human Review Artifact
 
 Human review summarizes extracted custom corpus records. The review artifact
 does not admit data. Review decisions are `accept`, `reject`, and
@@ -150,7 +185,7 @@ Fail criteria:
 - overlong raw article text
 - invalid decision-specific fields
 
-## Step 4: Admission Request
+## Step 5: Admission Request
 
 The admission request records governance intent. It may mark reviewed accepted
 records as `admit`, or mark records as `exclude` or `needs_review`. It does
@@ -188,7 +223,7 @@ Fail criteria:
 - missing required hashes
 - private path or token-like content
 
-## Step 5: Admission Package Binding Validator
+## Step 6: Admission Package Binding Validator
 
 The package validator checks the four artifacts together:
 
@@ -285,6 +320,7 @@ Allowed:
 - manifest contract and validator
 - custom corpus dry-run runner
 - public dry-run evidence
+- property candidate schema and validator
 - human review schema and validator
 - admission request schema and validator
 - admission package binding validator
