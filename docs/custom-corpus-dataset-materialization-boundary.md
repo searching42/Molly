@@ -25,6 +25,7 @@ custom corpus manifest
 -> property admission draft package precheck
 -> property-aware package binding validation
 -> property materialization plan draft
+-> property materialization plan preflight
 -> future materialization boundary
 -> future candidate/training artifacts
 ```
@@ -46,6 +47,7 @@ Existing artifact schemas:
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 - `custom_corpus_property_materialization_plan_draft_builder.v1`
+- `custom_corpus_property_materialization_plan_preflight.v1`
 - `custom_corpus_materialization.v1`
 
 All current steps stop before materialization.
@@ -101,6 +103,11 @@ reviewable `custom_corpus_materialization.v1` draft, but that draft does not
 materialize data. Materialization still requires offline planner and future
 materializer boundaries.
 
+The property materialization plan preflight sits after draft generation and
+before the offline materialization planner. It checks schema/status/hash/record
+consistency for the draft, but does not run the planner, run a materializer, or
+execute materialization.
+
 ## Materialization Definition
 
 Materialization means transforming package-validated admitted records into
@@ -152,6 +159,15 @@ docs/custom-corpus-property-materialization-plan-draft.md
 
 It creates a reviewable plan draft only. The draft is not materialization and
 does not invoke the offline materialization planner or any future materializer.
+
+The property materialization plan preflight is documented in:
+
+```text
+docs/custom-corpus-property-materialization-plan-preflight.md
+```
+
+It checks a reviewable draft before offline planner submission. It does not
+materialize data and does not invoke the planner.
 
 ## Offline Materialization Planner
 

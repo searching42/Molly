@@ -79,6 +79,16 @@ Draft artifacts must validate against this existing materialization schema.
 They are not execution artifacts and do not create candidate records, CSVs, or
 Phase 1 inputs.
 
+Materialization plan drafts can be preflighted before offline planner
+submission:
+
+```text
+docs/custom-corpus-property-materialization-plan-preflight.md
+```
+
+Preflight validates schema, status, hashes, ids, and record consistency. It
+does not execute the plan or create materialized artifacts.
+
 ## Plan Contents
 
 A materialization plan includes:
