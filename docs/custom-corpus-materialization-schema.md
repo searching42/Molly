@@ -96,6 +96,25 @@ The CLI reads local JSON only, prints a safe JSON summary, and optionally
 writes that summary. It does not call MinerU, parse PDFs, run corpus workflow,
 create candidate/training artifacts, or modify `DatasetConfirmation`.
 
+## After Plan Validation: Offline Planner
+
+After a plan validates, the offline planner can produce a safe execution
+summary for a future materializer:
+
+```text
+docs/custom-corpus-materialization-planner.md
+```
+
+Future planner evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-materialization-planner-evidence-template.md
+```
+
+Plan validation checks structure and intent. The planner summarizes intended
+future outputs and rollback labels, but still does not create candidate
+artifacts, candidate/training CSVs, Phase 1 inputs, or materialized records.
+
 ## Summary Output
 
 The summary records safe ids, status fields, counts, source hashes, rollback

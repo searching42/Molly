@@ -2,7 +2,8 @@
 
 ## Summary
 
-Molly now has a full custom corpus governance chain through package validation:
+Molly now has a full custom corpus governance chain through offline
+materialization planning:
 
 ```text
 custom_corpus_manifest.v1
@@ -10,13 +11,15 @@ custom_corpus_manifest.v1
 -> custom_corpus_review.v1
 -> custom_corpus_admission.v1
 -> custom_corpus_admission_package_validation.v1
--> future dataset materialization
+-> custom_corpus_materialization.v1
+-> custom_corpus_materialization_planner.v1
+-> future materializer
 ```
 
 The chain supports controlled custom corpus intake, unconfirmed dry-runs,
-human review artifacts, admission-intent validation, and cross-artifact package
-binding validation. It does not materialize records into datasets and does not
-run Phase 1.
+human review artifacts, admission-intent validation, cross-artifact package
+binding validation, materialization plan validation, and safe offline planning.
+It does not materialize records into datasets and does not run Phase 1.
 
 ## Completed PRs
 
@@ -102,3 +105,17 @@ docs/custom-corpus-materialization-schema.md
 
 It validates candidate-only materialization intent and source binding, but
 still does not implement a materializer or create candidate/training artifacts.
+
+## Post-Schema Planner Note
+
+The offline materialization planner was added after the materialization plan
+schema:
+
+```text
+docs/custom-corpus-materialization-planner.md
+```
+
+It reads a valid `custom_corpus_materialization.v1` plan and produces safe
+JSON/Markdown planning summaries. It still does not implement a materializer,
+create candidate/training artifacts, run Phase 1, or change
+`DatasetConfirmation`.
