@@ -3,7 +3,7 @@
 ## Summary
 
 Molly now has a custom corpus governance chain through candidate-only property
-quarantine materialization:
+quarantine materialization and training admission readiness:
 
 ```text
 custom_corpus_manifest.v1
@@ -31,6 +31,7 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_quarantine_materialization.v1
 -> custom_corpus_property_quarantine_materializer.v1
 -> custom_corpus_property_quarantine_candidate_preflight.v1
+-> custom_corpus_property_training_admission_readiness.v1
 -> future training admission boundary
 ```
 
@@ -42,9 +43,9 @@ request planning, admission draft generation, draft precheck, cross-artifact
 package binding validation, materialization plan drafting, materialization plan
 preflight, safe offline planning, no-data materialization dry-runs, request-only
 future-materializer handoff artifacts, request preflight, and candidate-only
-quarantine materialization, and quarantine candidate preflight. It does not
-admit training data, create training CSV/JSONL/Parquet/LMDB artifacts, or run
-Phase 1.
+quarantine materialization, quarantine candidate preflight, and training
+admission readiness evidence. It does not admit training data, create training
+CSV/JSONL/Parquet/LMDB artifacts, or run Phase 1.
 
 ## Completed PRs
 
@@ -395,3 +396,19 @@ admission request. It still does not admit training data, create training
 CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
 artifacts, run Phase 1, change `DatasetConfirmation`, run model
 training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
+
+## Property Training Admission Readiness Note
+
+The property training admission readiness planner was added after quarantine
+candidate preflight:
+
+```text
+docs/custom-corpus-property-training-admission-readiness.md
+```
+
+It checks quarantine-candidate-preflight-passed artifacts for future training
+admission readiness. It still does not create a training admission request,
+admit training data, create training CSV/JSONL/Parquet/LMDB artifacts, create
+candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.
