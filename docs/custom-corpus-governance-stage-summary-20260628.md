@@ -90,3 +90,15 @@ docs/custom-corpus-dataset-materialization-boundary.md
 It documents the future materialization boundary, but still does not implement
 materialization. The custom corpus path remains protected before candidate or
 training artifacts are created.
+
+## Post-Design Schema Note
+
+The materialization plan schema was added after the materialization boundary
+design:
+
+```text
+docs/custom-corpus-materialization-schema.md
+```
+
+It validates candidate-only materialization intent and source binding, but
+still does not implement a materializer or create candidate/training artifacts.

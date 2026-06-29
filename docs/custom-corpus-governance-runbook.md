@@ -20,7 +20,8 @@ custom corpus manifest
 -> human review artifact
 -> admission request
 -> package binding validator
--> future dataset materialization
+-> materialization plan
+-> future materializer
 ```
 
 Concrete artifact schemas:
@@ -30,6 +31,7 @@ Concrete artifact schemas:
 - `custom_corpus_review.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
+- `custom_corpus_materialization.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -284,6 +286,7 @@ Allowed:
 - human review schema and validator
 - admission request schema and validator
 - admission package binding validator
+- materialization plan schema and validator
 - redacted summary/evidence templates
 
 ## Current Non-Goals
@@ -333,3 +336,27 @@ docs/evidence/templates/custom-corpus-materialization-evidence-template.md
 This design is now documented, but implementation remains intentionally
 absent. A future implementation should begin with schema and planner tests, not
 training CSV generation or automatic Phase 1 admission.
+
+## Materialization Plan Schema
+
+The pre-materialization plan schema is documented in:
+
+```text
+docs/custom-corpus-materialization-schema.md
+```
+
+Safe example:
+
+```text
+docs/examples/custom-corpus-materialization-plan.example.json
+```
+
+Future evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-materialization-plan-evidence-template.md
+```
+
+Materialization plan validation still does not create candidate artifacts,
+training artifacts, or Phase 1 inputs. It records and validates candidate-only
+operator intent before any future materializer exists.
