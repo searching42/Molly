@@ -23,7 +23,7 @@ custom corpus manifest
 -> property admission request planner
 -> property admission request draft
 -> property admission draft package precheck
--> admission package binding validation
+-> property-aware package binding validation
 -> future materialization boundary
 -> future candidate/training artifacts
 ```
@@ -41,6 +41,7 @@ Existing artifact schemas:
 - `custom_corpus_property_admission_request_plan.v1`
 - `custom_corpus_property_admission_draft_builder.v1`
 - `custom_corpus_property_admission_draft_package_precheck.v1`
+- `custom_corpus_property_package_binding.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 
@@ -84,6 +85,12 @@ and formal package binding. It can report whether the draft and upstream
 property summaries are consistent enough to attempt package binding, but it
 does not create `custom_corpus_admission_package_validation.v1` and does not
 directly materialize data.
+
+The property-aware package binding runner sits after precheck and calls the
+formal package binding validator. It can produce
+`custom_corpus_admission_package_validation.v1`, but package binding output
+alone still does not directly materialize data. Materialization requires a
+materialization plan and future materializer.
 
 ## Materialization Definition
 
@@ -443,10 +450,11 @@ Recommended future sequence:
 3. `docs/test: add custom corpus materialization schema`
 4. `test: add offline materialization planner`
 5. `test/docs: add property admission draft package precheck`
-6. `test: add dry-run-only materializer writing candidate artifacts outside git`
-7. `docs: record small public materialization dry-run evidence`
-8. `docs/test: design training admission boundary from materialized candidates`
-9. only later: implement explicit training artifact builder if all previous
+6. `test/docs: add property-aware admission package binding runner`
+7. `test: add dry-run-only materializer writing candidate artifacts outside git`
+8. `docs: record small public materialization dry-run evidence`
+9. `docs/test: design training admission boundary from materialized candidates`
+10. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

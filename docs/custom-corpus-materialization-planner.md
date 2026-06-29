@@ -99,6 +99,17 @@ docs/custom-corpus-property-admission-draft-package-precheck.md
 It does not create package validation artifacts and is not materialization
 planning.
 
+The property-aware package binding runner is upstream of materialization
+planning:
+
+```text
+docs/custom-corpus-property-package-binding.md
+```
+
+It runs formal package validation for the property-candidate path, but the
+materialization planner remains downstream of formal package validation and a
+separate materialization plan.
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
 human review, property review binding, readiness, request planning when
