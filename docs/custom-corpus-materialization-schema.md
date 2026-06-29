@@ -202,6 +202,18 @@ contain safe ids and hashes only, contain no training data, and do not execute
 materialization, create datasets, run Phase 1, or change
 `DatasetConfirmation`.
 
+Training admission request draft precheck is downstream of request drafts:
+
+```text
+docs/custom-corpus-property-training-admission-request-draft-precheck.md
+```
+
+The precheck summary is separate from any training dataset schema and contains
+no training data. It validates draft package schema, status, hashes, ids, and
+record consistency only. It does not execute training admission, create
+training or candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, or change
+`DatasetConfirmation`.
+
 ## Plan Contents
 
 A materialization plan includes:

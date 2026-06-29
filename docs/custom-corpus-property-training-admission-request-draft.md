@@ -149,6 +149,24 @@ LMDB, candidate CSV, candidate JSONL, candidate Parquet, candidate LMDB,
 Phase 1 artifacts, `DatasetConfirmation` artifacts, model training artifacts,
 or evaluation artifacts.
 
+## After Request Draft: Draft Package Precheck
+
+After a reviewable draft is written, the draft package precheck can validate
+the draft, draft summary, request plan, request preflight, training admission
+readiness summary, quarantine candidate preflight summary, and quarantine
+candidate records as one package.
+
+References:
+
+- `docs/custom-corpus-property-training-admission-request-draft-precheck.md`
+- `docs/evidence/templates/custom-corpus-property-training-admission-request-draft-precheck-evidence-template.md`
+
+The draft precheck validates package consistency only. It does not execute
+training admission, admit training data, create training or candidate
+CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, modify
+`DatasetConfirmation`, or run model training/evaluation. Actual training
+admission execution remains separate and unimplemented.
+
 ## Redaction Behavior
 
 Before writing any artifact, the builder scans draft, summary, and Markdown

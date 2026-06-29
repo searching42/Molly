@@ -39,6 +39,7 @@ custom corpus manifest
 -> property training admission request planner
 -> property training admission request preflight
 -> property training admission request draft
+-> property training admission request draft precheck
 -> future training admission execution
 ```
 
@@ -75,6 +76,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_training_admission_request_preflight.v1`
 - `custom_corpus_property_training_admission_request_draft.v1`
 - `custom_corpus_property_training_admission_request_draft_builder.v1`
+- `custom_corpus_property_training_admission_request_draft_precheck.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -1126,6 +1128,75 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted artifacts
 - draft redaction fails
 
+## Step 25: Property Training Admission Request Draft Precheck
+
+The property training admission request draft package precheck reads the
+training admission request draft, draft summary, request plan, request
+preflight, training admission readiness summary, quarantine candidate
+preflight summary, and quarantine candidate records. It validates package
+consistency before any future training admission execution. It is not
+execution: no training admission is executed, no training data is admitted,
+and no training artifact is produced.
+
+References:
+
+- `docs/custom-corpus-property-training-admission-request-draft-precheck.md`
+- `docs/custom-corpus-property-training-admission-request-draft.md`
+- `docs/evidence/templates/custom-corpus-property-training-admission-request-draft-precheck-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_admission_request_draft_precheck \
+  --training-admission-request-draft /path/outside/git/property_training_admission_request.draft.json \
+  --training-admission-request-draft-summary /path/outside/git/property_training_admission_request_draft_summary.json \
+  --training-admission-request-plan /path/outside/git/property_training_admission_request_plan_summary.json \
+  --training-admission-request-preflight /path/outside/git/property_training_admission_request_preflight_summary.json \
+  --training-admission-readiness-summary /path/outside/git/property_training_admission_readiness_summary.json \
+  --quarantine-candidate-preflight-summary /path/outside/git/property_quarantine_candidate_preflight_summary.json \
+  --quarantine-candidate-records /path/outside/git/property_quarantine_candidate_records.json \
+  --output-summary /tmp/property-training-admission-request-draft-precheck-summary.json \
+  --output-markdown /tmp/property-training-admission-request-draft-precheck-summary.md
+```
+
+Pass criteria:
+
+- draft and draft summary schemas validate
+- draft status is `written`
+- request plan status is `planned`
+- request preflight status is `passed`
+- readiness status is `ready`
+- planned candidate ids match draft records and quarantine candidate records
+- source hashes and ids match across draft, summary, plan, preflight,
+  readiness, and quarantine artifacts
+- excluded, blocked, and needs-review records are not draft records
+- no training data is admitted
+- no training or candidate CSV/JSONL/Parquet/LMDB artifact is created
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- summary and Markdown redaction checks pass
+
+Needs-review criteria:
+
+- no hard consistency check failed
+- draft or upstream evidence carries allowed needs-review or partial status
+- `--allow-draft-needs-review` is explicitly set
+
+Fail criteria:
+
+- draft, summary, request plan, preflight, readiness, or quarantine schema is
+  invalid
+- draft, request preflight, request plan, or readiness is blocked
+- source hashes or ids mismatch
+- draft record counts or ids mismatch
+- planned candidate records derive from excluded, blocked, or needs-review
+  records
+- draft package claims training admission, Phase 1 execution, or
+  `DatasetConfirmation` mutation
+- raw text, private paths, token-like values, PDF names, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
+- precheck redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -1407,6 +1478,7 @@ Allowed:
 - property training admission request planner
 - property training admission request preflight
 - property training admission request draft builder
+- property training admission request draft precheck
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
