@@ -14,20 +14,28 @@ custom_corpus_manifest.v1
 -> custom_corpus_review.v1
 -> custom_corpus_property_review_binding.v1
 -> custom_corpus_property_admission_readiness.v1
+-> custom_corpus_property_admission_request_plan.v1
+-> custom_corpus_property_admission_draft_builder.v1
+-> custom_corpus_property_admission_draft_package_precheck.v1
 -> custom_corpus_admission.v1
+-> custom_corpus_property_package_binding.v1
 -> custom_corpus_admission_package_validation.v1
+-> custom_corpus_property_materialization_plan_draft_builder.v1
+-> custom_corpus_property_materialization_plan_preflight.v1
 -> custom_corpus_materialization.v1
 -> custom_corpus_materialization_planner.v1
+-> custom_corpus_property_materialization_planner_runner.v1
 -> future materializer
 ```
 
 The chain supports controlled custom corpus intake, unconfirmed dry-runs,
 open-ended numeric property candidate manifests, property candidate
 review-planning summaries, property candidate review queue artifacts, human
-review artifacts, queue-to-review binding validation, admission readiness
-planning, admission-intent validation, cross-artifact package binding
-validation, materialization plan validation, and safe offline planning. It does
-not materialize records into datasets and does not run Phase 1.
+review artifacts, queue-to-review binding validation, admission readiness and
+request planning, admission draft generation, draft precheck, cross-artifact
+package binding validation, materialization plan drafting, materialization plan
+preflight, and safe offline planning. It does not materialize records into
+datasets and does not run Phase 1.
 
 ## Completed PRs
 
@@ -288,3 +296,18 @@ submission. It still does not run materialization, invoke the offline
 materialization planner, run any materializer, admit training data, call an LLM
 or agent, perform evaluation/RL, create candidate/training CSVs, run Phase 1,
 or change `DatasetConfirmation`.
+
+## Property-Aware Offline Materialization Planner Runner Note
+
+The property-aware offline materialization planner runner was added after
+preflight:
+
+```text
+docs/custom-corpus-property-materialization-planner-runner.md
+```
+
+It can invoke the existing offline materialization planner with property
+preflight/package gating and write a property-aware wrapper summary. It still
+does not run a materializer, execute materialization, admit training data, call
+an LLM or agent, perform evaluation/RL, create candidate/training CSVs, run
+Phase 1, or change `DatasetConfirmation`.

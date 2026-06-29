@@ -131,13 +131,31 @@ Preflight output can be used as evidence before invoking this offline planner.
 It does not substitute for the planner, and the planner remains a separate
 explicit step.
 
+The property-aware offline materialization planner runner can invoke this
+planner with property preflight/package evidence:
+
+```text
+docs/custom-corpus-property-materialization-planner-runner.md
+```
+
+Runner evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-materialization-planner-evidence-template.md
+```
+
+The runner calls this offline planner only after explicit confirmation and
+preflight gating. It writes a property-aware wrapper summary, but it still
+does not run a materializer, execute materialization, create candidate/training
+CSVs, admit training data, run Phase 1, or modify `DatasetConfirmation`.
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
 human review, property review binding, readiness, request planning when
 applicable, explicit admission draft review, draft package precheck when used,
 formal package validation, property materialization plan drafting when used,
-property materialization plan preflight when used, and the materialization
-plan.
+property materialization plan preflight when used, property-aware planner
+runner gating when used, and the materialization plan.
 
 ## Planner Outputs
 

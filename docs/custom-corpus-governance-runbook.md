@@ -29,7 +29,7 @@ custom corpus manifest
 -> property-aware package binding validator
 -> property materialization plan draft
 -> property materialization plan preflight
--> offline materialization planner
+-> property-aware offline materialization planner
 -> future materializer
 ```
 
@@ -53,6 +53,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_materialization_plan_preflight.v1`
 - `custom_corpus_materialization.v1`
 - `custom_corpus_materialization_planner.v1`
+- `custom_corpus_property_materialization_planner_runner.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -645,6 +646,66 @@ Fail criteria:
 - materialization record counts or ids mismatch the draft summary
 - summary redaction fails
 
+## Step 15: Property-Aware Offline Materialization Planner
+
+The property-aware offline materialization planner runner reads the
+preflight-checked `custom_corpus_materialization.v1` plan draft and upstream
+package/admission evidence, requires explicit operator confirmation, invokes
+the existing offline materialization planner, and writes a property-aware
+wrapper summary. It is planner execution only. It does not run a materializer,
+execute materialization, create candidate/training CSVs, admit training data,
+run Phase 1, or modify `DatasetConfirmation`.
+
+References:
+
+- `docs/custom-corpus-property-materialization-planner-runner.md`
+- `docs/custom-corpus-materialization-planner.md`
+- `docs/evidence/templates/custom-corpus-property-materialization-planner-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_materialization_planner_runner \
+  --manifest /path/outside/git/custom-corpus-manifest.json \
+  --dry-run-report /path/outside/git/dry_run_report.json \
+  --review-manifest /path/outside/git/custom-corpus-review.json \
+  --admission-request /path/outside/git/custom-corpus-admission-request.json \
+  --formal-package-validation /path/outside/git/custom_corpus_admission_package_validation.json \
+  --property-package-binding-summary /path/outside/git/property_package_binding_summary.json \
+  --materialization-plan /path/outside/git/custom_corpus_materialization.draft.json \
+  --materialization-plan-draft-summary /path/outside/git/property_materialization_plan_draft_summary.json \
+  --materialization-plan-preflight-summary /path/outside/git/property_materialization_plan_preflight_summary.json \
+  --output-dir /tmp/property-materialization-planner \
+  --planner-run-id property-materialization-planner-<date> \
+  --confirm-offline-materialization-planner
+```
+
+Pass criteria:
+
+- planner status is `planned`
+- explicit planner confirmation flag is present
+- preflight status is `passed`, or `needs_review` is explicitly allowed
+- preflight errors are empty
+- source hashes match actual input files
+- materialization plan validates
+- materialization records derive only from admitted, accepted records
+- excluded, blocked, and needs-review records are not materialization records
+- offline planner output status is `planned`
+- wrapper redaction checks pass
+
+Fail criteria:
+
+- confirmation flag is missing
+- preflight failed or has errors
+- preflight is `needs_review` without explicit allowance
+- package binding or formal package validation failed
+- draft status is not `written`
+- materialization decision is not `planned`
+- source hashes or ids mismatch
+- dry-run was confirmed, Phase 1 ran, or training was admitted
+- offline planner reports blocked/failed status or claims materialized output
+- summary redaction fails
+
 ## Artifact Retention Policy
 
 Full local artifacts remain outside git. Committed PRs should include only
@@ -703,6 +764,7 @@ Allowed:
 - admission package binding validator
 - property materialization plan draft builder
 - property materialization plan preflight
+- property-aware offline materialization planner runner
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

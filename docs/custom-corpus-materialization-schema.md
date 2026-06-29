@@ -89,6 +89,17 @@ docs/custom-corpus-property-materialization-plan-preflight.md
 Preflight validates schema, status, hashes, ids, and record consistency. It
 does not execute the plan or create materialized artifacts.
 
+After preflight, the property-aware offline materialization planner runner can
+invoke the existing offline planner with property package/preflight evidence:
+
+```text
+docs/custom-corpus-property-materialization-planner-runner.md
+```
+
+The runner writes planner output and a property wrapper summary only. It does
+not run a materializer, execute materialization, create candidate/training
+CSVs, admit training data, run Phase 1, or change `DatasetConfirmation`.
+
 ## Plan Contents
 
 A materialization plan includes:
@@ -177,6 +188,12 @@ Future planner evidence template:
 
 ```text
 docs/evidence/templates/custom-corpus-materialization-planner-evidence-template.md
+```
+
+Property-aware runner evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-materialization-planner-evidence-template.md
 ```
 
 Plan validation checks structure and intent. The planner summarizes intended
