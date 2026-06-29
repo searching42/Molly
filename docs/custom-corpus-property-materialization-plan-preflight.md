@@ -35,6 +35,26 @@ docs/custom-corpus-materialization-planner.md
 Preflight output can be used as evidence before invoking the planner. It does
 not substitute for the planner, and it never invokes the planner itself.
 
+## After Preflight: Property-Aware Planner Runner
+
+The property-aware offline materialization planner runner is documented in:
+
+```text
+docs/custom-corpus-property-materialization-planner-runner.md
+```
+
+Future runner evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-property-materialization-planner-evidence-template.md
+```
+
+The runner consumes this preflight summary, requires explicit operator
+confirmation, invokes the existing offline planner, and writes a
+property-aware wrapper summary. It still does not run a materializer, execute
+materialization, create candidate/training CSVs, admit training data, run
+Phase 1, or modify `DatasetConfirmation`.
+
 ## Inputs
 
 The preflight reads:

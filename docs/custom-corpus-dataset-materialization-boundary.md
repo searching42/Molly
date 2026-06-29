@@ -26,6 +26,7 @@ custom corpus manifest
 -> property-aware package binding validation
 -> property materialization plan draft
 -> property materialization plan preflight
+-> property-aware offline materialization planner
 -> future materialization boundary
 -> future candidate/training artifacts
 ```
@@ -49,6 +50,8 @@ Existing artifact schemas:
 - `custom_corpus_property_materialization_plan_draft_builder.v1`
 - `custom_corpus_property_materialization_plan_preflight.v1`
 - `custom_corpus_materialization.v1`
+- `custom_corpus_materialization_planner.v1`
+- `custom_corpus_property_materialization_planner_runner.v1`
 
 All current steps stop before materialization.
 
@@ -107,6 +110,13 @@ The property materialization plan preflight sits after draft generation and
 before the offline materialization planner. It checks schema/status/hash/record
 consistency for the draft, but does not run the planner, run a materializer, or
 execute materialization.
+
+The property-aware offline materialization planner runner sits after preflight
+and invokes the existing offline planner with property-specific gating
+evidence. It can write `custom_corpus_materialization_planner.v1` planner
+output plus a property-aware wrapper summary, but it still does not run a
+materializer, execute materialization, create candidate/training CSVs, admit
+training data, run Phase 1, or change `DatasetConfirmation`.
 
 ## Materialization Definition
 
@@ -169,6 +179,15 @@ docs/custom-corpus-property-materialization-plan-preflight.md
 It checks a reviewable draft before offline planner submission. It does not
 materialize data and does not invoke the planner.
 
+The property-aware offline materialization planner runner is documented in:
+
+```text
+docs/custom-corpus-property-materialization-planner-runner.md
+```
+
+It invokes the offline planner after preflight gating and explicit operator
+confirmation. It remains planner execution only; it is not materialization.
+
 ## Offline Materialization Planner
 
 The offline planner is documented in:
@@ -187,6 +206,12 @@ The planner reads a valid `custom_corpus_materialization.v1` plan and produces
 a safe JSON or Markdown planning summary. Planner output is not candidate
 data, does not imply training admission, and does not create materialized
 records or candidate/training artifacts.
+
+Property-aware planner-runner evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-materialization-planner-evidence-template.md
+```
 
 ## Required Inputs For A Future Materializer
 
@@ -486,10 +511,12 @@ Recommended future sequence:
 5. `test/docs: add property admission draft package precheck`
 6. `test/docs: add property-aware admission package binding runner`
 7. `test/docs: add property materialization plan draft builder`
-7. `test: add dry-run-only materializer writing candidate artifacts outside git`
-8. `docs: record small public materialization dry-run evidence`
-9. `docs/test: design training admission boundary from materialized candidates`
-10. only later: implement explicit training artifact builder if all previous
+8. `test/docs: add property materialization plan preflight`
+9. `test/docs: add property-aware offline materialization planner runner`
+10. `test: add dry-run-only materializer writing candidate artifacts outside git`
+11. `docs: record small public materialization dry-run evidence`
+12. `docs/test: design training admission boundary from materialized candidates`
+13. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the
