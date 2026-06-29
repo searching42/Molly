@@ -58,9 +58,15 @@ The property candidate planner is upstream of human review:
 docs/custom-corpus-property-candidate-planner.md
 ```
 
-Do not confuse property candidate review planning with materialization
-planning. This materialization planner is downstream of human review,
-admission, package validation, and the materialization plan.
+The property candidate review queue builder is also upstream of human review:
+
+```text
+docs/custom-corpus-property-candidate-review-queue.md
+```
+
+Do not confuse property candidate review planning or review queue preparation
+with materialization planning. This materialization planner is downstream of
+human review, admission, package validation, and the materialization plan.
 
 ## Planner Outputs
 

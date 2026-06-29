@@ -106,6 +106,25 @@ The planner may list future output labels:
 These are labels only. The planner must not create these files unless the user
 explicitly requested the planner's own JSON or Markdown summary path.
 
+## After Planning: Review Queue Builder
+
+After planner output is available, the review queue builder can create
+review-preparation artifacts:
+
+```text
+docs/custom-corpus-property-candidate-review-queue.md
+```
+
+Future review queue evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-candidate-review-queue-evidence-template.md
+```
+
+Planner output is safe planning only. The review queue builder creates
+review-preparation artifacts, but still does not create review decisions or a
+`custom_corpus_review.v1` manifest.
+
 ## Redaction And Fail-Closed Behavior
 
 Before writing or printing planner summaries, the planner scans serialized

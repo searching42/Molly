@@ -43,6 +43,10 @@ earlier pre-review layer for representing numeric property candidates, and the
 property candidate planner output is review-planning evidence rather than
 materialization input.
 
+The property candidate review queue builder is also upstream of human review.
+Materialization plans must not consume review queue artifacts directly;
+materialization requires review, admission, and package validation.
+
 ## Plan Contents
 
 A materialization plan includes:

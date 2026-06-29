@@ -16,6 +16,7 @@ custom corpus manifest
 -> custom corpus dry-run
 -> property candidate manifest
 -> property candidate planner
+-> property candidate review queue
 -> human review artifact
 -> admission request
 -> admission package binding validation
@@ -29,6 +30,7 @@ Existing artifact schemas:
 - `custom_corpus_dry_run.v1`
 - `custom_corpus_property_candidate.v1`
 - `custom_corpus_property_candidate_planner.v1`
+- `custom_corpus_property_candidate_review_queue.v1`
 - `custom_corpus_review.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
@@ -43,6 +45,12 @@ The property candidate planner also sits before human review. It creates safe
 review-planning summaries only; materialization still consumes reviewed,
 admitted, package-validated, and materialization-plan records rather than raw
 property candidate manifests directly.
+
+The property candidate review queue builder sits after the planner and before
+human review. It creates review-preparation artifacts only. Raw property
+candidates and review queue artifacts do not directly materialize; future
+materialization still requires review, admission, package validation, and a
+materialization plan.
 
 ## Materialization Definition
 
