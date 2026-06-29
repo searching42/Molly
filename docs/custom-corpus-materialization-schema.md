@@ -238,6 +238,17 @@ The preflight summary is separate from any training dataset schema and contains
 no training data. It validates execution-request package schema, status,
 hashes, ids, and record consistency only.
 
+Training admission execution dry-run is downstream of execution request
+preflight:
+
+```text
+docs/custom-corpus-property-training-admission-execution-dry-run.md
+```
+
+The dry-run report is separate from any training dataset schema and contains no
+training data. It simulates future execution as labels only and does not create
+training artifacts.
+
 ## Plan Contents
 
 A materialization plan includes:
