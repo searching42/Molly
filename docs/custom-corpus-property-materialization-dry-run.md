@@ -38,6 +38,27 @@ would be considered by a future materializer, but it does not create the
 future materializer, write materialized records, write candidate artifacts, or
 perform rollback/deletion work.
 
+## After Dry-Run: Execution Request Builder
+
+After a dry-run passes, an operator may create a request-only materializer
+execution packet:
+
+```text
+docs/custom-corpus-property-materializer-execution-request.md
+```
+
+Evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-materializer-execution-request-evidence-template.md
+```
+
+The execution request builder consumes the dry-run report and upstream
+evidence, then writes safe request artifacts for a future materializer. It
+still does not run a materializer, execute materialization, create
+candidate/training CSVs, admit training data, run Phase 1, or modify
+`DatasetConfirmation`.
+
 ## Inputs
 
 The dry-run requires:
