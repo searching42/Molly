@@ -29,11 +29,19 @@ Open-ended numeric scientific property candidates are documented in:
 docs/custom-corpus-property-candidate-schema.md
 ```
 
+The upstream review-planning layer is documented in:
+
+```text
+docs/custom-corpus-property-candidate-planner.md
+```
+
 Materialization plans consume records already selected through review and
 admission. The materialization plan schema does not discover scientific
 properties, define a property whitelist, normalize numeric property evidence,
 or decide whether a property is trainable. The property candidate schema is the
-earlier pre-review layer for representing numeric property candidates.
+earlier pre-review layer for representing numeric property candidates, and the
+property candidate planner output is review-planning evidence rather than
+materialization input.
 
 ## Plan Contents
 

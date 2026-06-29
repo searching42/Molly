@@ -35,6 +35,7 @@ The custom corpus path becomes:
 custom corpus manifest
 -> custom corpus dry-run
 -> property candidate manifest
+-> property candidate planner
 -> human review artifact
 -> admission request
 -> package binding validator
@@ -150,6 +151,26 @@ PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_candidate \
 
 The CLI validates local JSON only, prints a safe JSON summary, optionally
 writes that summary, and returns nonzero on invalid manifests.
+
+## After Candidate Validation: Offline Planner
+
+After a candidate manifest validates, the offline planner can produce a safe
+review-planning summary:
+
+```text
+docs/custom-corpus-property-candidate-planner.md
+```
+
+Future planner evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-candidate-planner-evidence-template.md
+```
+
+Property candidate validation checks structure and trainability decision
+fields. The planner prepares aggregate counts, safe record id lists, and review
+queue planning, but still does not create human review artifacts, perform
+human review, or call an LLM or agent.
 
 ## Boundaries
 
