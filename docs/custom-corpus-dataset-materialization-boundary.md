@@ -14,6 +14,7 @@ create candidate/training CSVs, or certify scientific correctness.
 ```text
 custom corpus manifest
 -> custom corpus dry-run
+-> property candidate manifest
 -> human review artifact
 -> admission request
 -> admission package binding validation
@@ -25,11 +26,16 @@ Existing artifact schemas:
 
 - `custom_corpus_manifest.v1`
 - `custom_corpus_dry_run.v1`
+- `custom_corpus_property_candidate.v1`
 - `custom_corpus_review.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 
 All current steps stop before materialization.
+
+The property candidate schema represents open-ended numeric scientific
+property candidates before review. It does not define a property whitelist,
+call LLMs or agents, evaluate extraction accuracy, or materialize data.
 
 ## Materialization Definition
 
@@ -384,12 +390,13 @@ Evidence must not commit:
 
 Recommended future sequence:
 
-1. `docs/test: add custom corpus materialization schema`
-2. `test: add offline materialization planner`
-3. `test: add dry-run-only materializer writing candidate artifacts outside git`
-4. `docs: record small public materialization dry-run evidence`
-5. `docs/test: design training admission boundary from materialized candidates`
-6. only later: implement explicit training artifact builder if all previous
+1. `docs/test: add custom corpus property candidate schema`
+2. `docs/test: add custom corpus materialization schema`
+3. `test: add offline materialization planner`
+4. `test: add dry-run-only materializer writing candidate artifacts outside git`
+5. `docs: record small public materialization dry-run evidence`
+6. `docs/test: design training admission boundary from materialized candidates`
+7. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

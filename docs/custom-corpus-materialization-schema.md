@@ -21,6 +21,20 @@ docs/custom-corpus-dataset-materialization-boundary.md
 The plan schema is the first pre-materialization artifact after package
 validation. It validates intent and binding only.
 
+## Relationship To Property Candidates
+
+Open-ended numeric scientific property candidates are documented in:
+
+```text
+docs/custom-corpus-property-candidate-schema.md
+```
+
+Materialization plans consume records already selected through review and
+admission. The materialization plan schema does not discover scientific
+properties, define a property whitelist, normalize numeric property evidence,
+or decide whether a property is trainable. The property candidate schema is the
+earlier pre-review layer for representing numeric property candidates.
+
 ## Plan Contents
 
 A materialization plan includes:
