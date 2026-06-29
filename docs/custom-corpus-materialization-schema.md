@@ -166,6 +166,20 @@ no training data. It reports safe candidate ids and hash bindings only; it does
 not create training or candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1,
 admit training data, or change `DatasetConfirmation`.
 
+Training admission request planning is downstream of training admission
+readiness:
+
+```text
+docs/custom-corpus-property-training-admission-request-planner.md
+```
+
+The request plan summary is separate from any training admission request schema
+and is not materialization input. It reports safe candidate ids and hash
+bindings only; it does not create a training admission request, create training
+admission actions, admit training data, create training or candidate
+CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, or change
+`DatasetConfirmation`.
+
 ## Plan Contents
 
 A materialization plan includes:

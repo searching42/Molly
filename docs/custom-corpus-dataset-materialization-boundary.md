@@ -33,6 +33,7 @@ custom corpus manifest
 -> property quarantine materializer
 -> property quarantine candidate preflight
 -> property training admission readiness
+-> property training admission request planner
 -> future training admission boundary
 -> future training artifacts
 ```
@@ -65,6 +66,7 @@ Existing artifact schemas:
 - `custom_corpus_property_quarantine_materializer.v1`
 - `custom_corpus_property_quarantine_candidate_preflight.v1`
 - `custom_corpus_property_training_admission_readiness.v1`
+- `custom_corpus_property_training_admission_request_plan.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
 property path. They still stop before training admission, training artifacts,
@@ -167,6 +169,13 @@ quarantine-candidate-preflight-passed artifacts and emits safe readiness
 evidence only. It does not admit training data, create training or candidate
 CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, run model training/evaluation,
 or change `DatasetConfirmation`.
+
+The property training admission request planner sits after training admission
+readiness and before any future training admission request. It emits safe
+request-plan evidence only. It does not create a training admission request,
+create training admission actions, admit training data, create training or
+candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, run model
+training/evaluation, or change `DatasetConfirmation`.
 
 ## Materialization Definition
 
@@ -299,6 +308,18 @@ admission readiness. It produces no training admission request, training data,
 training CSV/JSONL/Parquet/LMDB artifacts, candidate CSV/JSONL/Parquet/LMDB
 artifacts, Phase 1 execution, model training/evaluation, or
 `DatasetConfirmation` changes.
+
+The property training admission request planner is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-request-planner.md
+```
+
+It checks readiness-ready or explicitly allowed partial artifacts and emits a
+safe request plan for a future training admission request. It does not create
+the request, create training admission actions, admit training data, create
+training or candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, or change
+`DatasetConfirmation`.
 
 ## Offline Materialization Planner
 
@@ -636,9 +657,10 @@ Recommended future sequence:
 12. `test/docs: add property quarantine materializer runner`
 13. `test/docs: add property quarantine candidate preflight`
 14. `test/docs: add property training admission readiness planner`
-15. `docs: record small public quarantine materialization evidence`
-16. `docs/test: design training admission boundary from quarantined candidates`
-17. only later: implement explicit training artifact builder if all previous
+15. `test/docs: add property training admission request planner`
+16. `docs: record small public quarantine materialization evidence`
+17. `docs/test: design training admission boundary from quarantined candidates`
+18. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

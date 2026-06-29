@@ -36,6 +36,7 @@ custom corpus manifest
 -> property quarantine materializer
 -> property quarantine candidate preflight
 -> property training admission readiness
+-> property training admission request planner
 -> future training admission request
 ```
 
@@ -68,6 +69,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_quarantine_materializer.v1`
 - `custom_corpus_property_quarantine_candidate_preflight.v1`
 - `custom_corpus_property_training_admission_readiness.v1`
+- `custom_corpus_property_training_admission_request_plan.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -1128,6 +1130,81 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - readiness redaction fails
 
+## Step 22: Property Training Admission Request Planning
+
+The property training admission request planner reads training admission
+readiness evidence, candidate-only quarantine records, quarantine preflight
+evidence, and upstream property governance artifacts. It reports how a future
+training admission request could be organized. It is request planning only:
+no training admission request is generated, no training action is created,
+and no training data is admitted.
+
+References:
+
+- `docs/custom-corpus-property-training-admission-request-planner.md`
+- `docs/custom-corpus-property-training-admission-readiness.md`
+- `docs/evidence/templates/custom-corpus-property-training-admission-request-plan-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_admission_request_planner \
+  --manifest /path/outside/git/custom-corpus-manifest.json \
+  --dry-run-report /path/outside/git/dry_run_report.json \
+  --review-manifest /path/outside/git/custom-corpus-review.json \
+  --admission-request /path/outside/git/custom-corpus-admission-request.json \
+  --formal-package-validation /path/outside/git/custom_corpus_admission_package_validation.json \
+  --property-package-binding-summary /path/outside/git/property_package_binding_summary.json \
+  --materialization-plan /path/outside/git/custom_corpus_materialization.draft.json \
+  --materialization-plan-preflight-summary /path/outside/git/property_materialization_plan_preflight_summary.json \
+  --offline-planner-output /path/outside/git/offline_materialization_planner_output.json \
+  --property-planner-summary /path/outside/git/property_materialization_planner_summary.json \
+  --materialization-dry-run-report /path/outside/git/property_materialization_dry_run_report.json \
+  --execution-request /path/outside/git/property_materializer_execution_request.json \
+  --execution-request-summary /path/outside/git/property_materializer_execution_request_summary.json \
+  --execution-preflight-summary /path/outside/git/property_materializer_execution_preflight_summary.json \
+  --quarantine-candidate-records /path/outside/git/property_quarantine_candidate_records.json \
+  --quarantine-materializer-summary /path/outside/git/property_quarantine_materializer_summary.json \
+  --quarantine-candidate-preflight-summary /path/outside/git/property_quarantine_candidate_preflight_summary.json \
+  --training-admission-readiness-summary /path/outside/git/property_training_admission_readiness_summary.json \
+  --output-summary /tmp/property-training-admission-request-plan-summary.json \
+  --output-markdown /tmp/property-training-admission-request-plan-summary.md
+```
+
+Pass criteria:
+
+- training admission readiness schema validates
+- readiness status is `ready`
+- planned candidate ids match quarantined candidate ids
+- candidate/materialization/execution record counts and ids match
+- source hashes and ids match local input files and upstream summaries
+- planned candidates derive only from admitted, accepted records
+- excluded, blocked, and needs-review records are not planned as candidates
+- no training data is admitted
+- no training or candidate CSV/JSONL/Parquet/LMDB artifact is created
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- summary and Markdown redaction checks pass
+
+Partial criteria:
+
+- no hard consistency check failed
+- training admission readiness status is `partial` and strict ready mode is
+  not requested
+
+Fail criteria:
+
+- training admission readiness failed or has errors
+- `partial` readiness appears while strict ready mode is requested
+- source hashes or ids mismatch
+- candidate/materialization/execution record counts or ids mismatch
+- planned candidate records derive from excluded, blocked, or needs-review
+  records
+- minimum planned candidate count is not met
+- raw text, private paths, token-like values, PDF names, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
+- request-plan redaction fails
+
 ## Artifact Retention Policy
 
 Full local artifacts remain outside git. Committed PRs should include only
@@ -1193,6 +1270,7 @@ Allowed:
 - property quarantine materializer
 - property quarantine candidate preflight
 - property training admission readiness planner
+- property training admission request planner
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

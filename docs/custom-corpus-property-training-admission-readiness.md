@@ -35,6 +35,26 @@ data. A future training admission layer must still define operator
 confirmation, trainability policy, output format, rollback/deletion behavior,
 and additional evidence requirements.
 
+## After Readiness: Training Admission Request Planning
+
+The request planner is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-request-planner.md
+```
+
+Future evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-admission-request-plan-evidence-template.md
+```
+
+Readiness evidence identifies candidate-only quarantine records that may be
+eligible for future training admission planning. The request planner converts
+that evidence into a safe planning summary only. It still does not create a
+training admission request, create training admission actions, admit training
+data, or create training CSV/JSONL/Parquet/LMDB artifacts.
+
 ## Inputs
 
 The planner requires:
