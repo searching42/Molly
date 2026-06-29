@@ -25,6 +25,25 @@ admit. This precheck reads the dry-run report after it exists and verifies that
 the report remains bound to the full upstream package. A passed precheck is
 necessary but not sufficient for future training admission execution.
 
+## After Dry-Run Precheck: Training Admission Execution Ledger
+
+The downstream execution ledger is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-execution-ledger.md
+```
+
+Future evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-admission-execution-ledger-evidence-template.md
+```
+
+The dry-run precheck validates simulation evidence. The execution ledger can
+commit safe admission decisions into a ledger, but training dataset
+materialization remains separate and no training CSV/JSONL/Parquet/LMDB files
+are created by the ledger.
+
 ## Inputs
 
 The precheck requires:

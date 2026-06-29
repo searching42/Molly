@@ -2,8 +2,8 @@
 
 ## Summary
 
-Molly now has a custom corpus governance chain through candidate-only property
-quarantine materialization and training admission readiness:
+Molly now has a custom corpus governance chain through a controlled property
+training admission execution ledger:
 
 ```text
 custom_corpus_manifest.v1
@@ -35,7 +35,15 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_training_admission_request_plan.v1
 -> custom_corpus_property_training_admission_request_preflight.v1
 -> custom_corpus_property_training_admission_request_draft.v1
--> future training admission boundary
+-> custom_corpus_property_training_admission_request_draft_builder.v1
+-> custom_corpus_property_training_admission_request_draft_precheck.v1
+-> custom_corpus_property_training_admission_execution_request.v1
+-> custom_corpus_property_training_admission_execution_request_builder.v1
+-> custom_corpus_property_training_admission_execution_request_preflight.v1
+-> custom_corpus_property_training_admission_execution_dry_run.v1
+-> custom_corpus_property_training_admission_execution_dry_run_precheck.v1
+-> custom_corpus_property_training_admission_execution_ledger.v1
+-> future training dataset materialization boundary
 ```
 
 The chain supports controlled custom corpus intake, unconfirmed dry-runs,
@@ -47,7 +55,8 @@ package binding validation, materialization plan drafting, materialization plan
 preflight, safe offline planning, no-data materialization dry-runs, request-only
 future-materializer handoff artifacts, request preflight, and candidate-only
 quarantine materialization, quarantine candidate preflight, and training
-admission readiness evidence. It does not admit training data, create training
+admission readiness evidence through safe ledger admission. It does not
+materialize training datasets, create training
 CSV/JSONL/Parquet/LMDB artifacts, or run Phase 1.
 
 ## Completed PRs
@@ -543,6 +552,21 @@ Execution dry-run reports can now be checked against execution request,
 preflight, draft, plan, readiness, and quarantine evidence before future
 training admission execution. This still does not run the dry-run, execute
 training admission, admit training data, create training
+CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
+artifacts, run Phase 1, change `DatasetConfirmation`, run model
+training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
+
+## Property Training Admission Execution Ledger Note
+
+The property training admission execution ledger was added after dry-run
+precheck:
+
+```text
+docs/custom-corpus-property-training-admission-execution-ledger.md
+```
+
+Dry-run-precheck-passed packages can now commit safe admission decisions into
+a ledger. This still does not materialize a training dataset, create training
 CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
 artifacts, run Phase 1, change `DatasetConfirmation`, run model
 training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.

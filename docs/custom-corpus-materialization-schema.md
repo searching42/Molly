@@ -178,6 +178,17 @@ preflight, draft, plan, readiness, and quarantine evidence. It does not execute
 training admission, create training data, create training artifacts, run Phase
 1, or change `DatasetConfirmation`.
 
+Training admission execution ledger is downstream of dry-run precheck:
+
+```text
+docs/custom-corpus-property-training-admission-execution-ledger.md
+```
+
+The ledger schema is separate from any future training dataset schema. It
+records safe ID/hash-only ledger admissions and contains no serialized training
+dataset rows, no training CSV/JSONL/Parquet/LMDB paths, and no candidate
+CSV/JSONL/Parquet/LMDB paths.
+
 Training admission request planning is downstream of training admission
 readiness:
 
