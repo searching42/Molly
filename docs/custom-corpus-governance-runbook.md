@@ -21,6 +21,7 @@ custom corpus manifest
 -> admission request
 -> package binding validator
 -> materialization plan
+-> offline materialization planner
 -> future materializer
 ```
 
@@ -32,6 +33,7 @@ Concrete artifact schemas:
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 - `custom_corpus_materialization.v1`
+- `custom_corpus_materialization_planner.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -287,6 +289,7 @@ Allowed:
 - admission request schema and validator
 - admission package binding validator
 - materialization plan schema and validator
+- offline materialization planner
 - redacted summary/evidence templates
 
 ## Current Non-Goals
@@ -304,20 +307,21 @@ Allowed:
 
 ## Recommended Next Implementation Boundary
 
-The next implementation, if pursued, should start with a carefully constrained
-materialization design document, not immediate code.
+The next implementation, if pursued, should remain carefully constrained to a
+dry-run-only materializer that writes candidate artifacts outside git. It
+should not jump directly to training CSV generation or automatic Phase 1
+execution.
 
 Recommended next PR:
 
 ```text
-docs: design custom corpus dataset materialization boundary
+test: add dry-run-only custom corpus materializer
 ```
 
-That design should define how admitted records would be transformed into
-candidate/training artifacts, explicit operator confirmation and review
-completeness gates, provenance binding, rollback/deletion behavior, and why
-automatic Phase 1 should remain disabled until the materialization contract is
-reviewed.
+That implementation should consume the validated plan and planner output,
+write candidate-only artifacts under a clean local output directory, prove
+rollback and redaction behavior, and still keep training admission and Phase 1
+disabled.
 
 ## Materialization Boundary Design
 
@@ -360,3 +364,22 @@ docs/evidence/templates/custom-corpus-materialization-plan-evidence-template.md
 Materialization plan validation still does not create candidate artifacts,
 training artifacts, or Phase 1 inputs. It records and validates candidate-only
 operator intent before any future materializer exists.
+
+## Offline Materialization Planner
+
+The offline planner is documented in:
+
+```text
+docs/custom-corpus-materialization-planner.md
+```
+
+Future planner evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-materialization-planner-evidence-template.md
+```
+
+Planner output summarizes intended future output labels, rollback labels, and
+candidate/excluded counts from a validated materialization plan. It still does
+not create candidate artifacts, candidate/training CSVs, materialized records,
+or Phase 1 inputs.

@@ -44,6 +44,7 @@ literature acquisition, and default-route migration remain future work.
 | Custom corpus governance runbook | Added an operator-facing runbook and #155-#160 stage summary for the custom corpus path through package validation; dataset materialization remains intentionally unimplemented, with Phase 1 and `DatasetConfirmation` unchanged | `docs/custom-corpus-governance-runbook.md`, `docs/custom-corpus-governance-stage-summary-20260628.md` |
 | Custom corpus materialization boundary design | Added a docs-only design for future package-validated custom corpus materialization; no materializer, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `docs/custom-corpus-dataset-materialization-boundary.md`, `docs/evidence/templates/custom-corpus-materialization-evidence-template.md` |
 | Custom corpus materialization plan schema | Added `custom_corpus_materialization.v1` and an offline validator for candidate-only materialization intent; no materializer, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_materialization.py`, `tests/test_custom_corpus_materialization.py`, `docs/custom-corpus-materialization-schema.md`, `docs/examples/custom-corpus-materialization-plan.example.json` |
+| Custom corpus offline materialization planner | Added an offline planner that reads valid materialization plans and emits safe JSON/Markdown planning summaries; no candidate/training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_materialization_planner.py`, `tests/test_custom_corpus_materialization_planner.py`, `docs/custom-corpus-materialization-planner.md`, `docs/evidence/templates/custom-corpus-materialization-planner-evidence-template.md` |
 | OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
 | Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
 | Phase 4 reviewable replan proposal | Completed as deterministic non-executable proposal | `src/ai4s_agent/run_plan_replan_proposal.py` |
@@ -377,6 +378,11 @@ Completed behavior:
   candidate-only materialization intent can be validated offline, but no
   materializer, candidate/training CSV creation, Phase 1 execution, or
   `DatasetConfirmation` change is implemented.
+- Adds the custom corpus offline materialization planner:
+  a valid materialization plan can produce safe JSON/Markdown planning
+  summaries with planned output labels, rollback labels, and candidate/excluded
+  counts, but no candidate/training artifacts are created and Phase 1 plus
+  `DatasetConfirmation` remain unchanged.
 - Writes corpus-level acceptance evidence:
   - `acceptance_report.json`
   - `acceptance_summary.md`
@@ -430,6 +436,10 @@ Evidence:
 - `tests/test_custom_corpus_materialization.py`
 - `docs/custom-corpus-materialization-schema.md`
 - `docs/examples/custom-corpus-materialization-plan.example.json`
+- `src/ai4s_agent/custom_corpus_materialization_planner.py`
+- `tests/test_custom_corpus_materialization_planner.py`
+- `docs/custom-corpus-materialization-planner.md`
+- `docs/evidence/templates/custom-corpus-materialization-planner-evidence-template.md`
 - `docs/evidence/templates/custom-corpus-materialization-plan-evidence-template.md`
 
 Boundaries:

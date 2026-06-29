@@ -74,6 +74,25 @@ source hash binding, candidate-only mode, explicit confirmation metadata,
 record selection, and dry-run/package boundaries. It does not create outputs,
 candidate CSVs, training CSVs, or Phase 1 inputs.
 
+## Offline Materialization Planner
+
+The offline planner is documented in:
+
+```text
+docs/custom-corpus-materialization-planner.md
+```
+
+Future planner evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-materialization-planner-evidence-template.md
+```
+
+The planner reads a valid `custom_corpus_materialization.v1` plan and produces
+a safe JSON or Markdown planning summary. Planner output is not candidate
+data, does not imply training admission, and does not create materialized
+records or candidate/training artifacts.
+
 ## Required Inputs For A Future Materializer
 
 A future materializer must require:
