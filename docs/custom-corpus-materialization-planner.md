@@ -64,9 +64,16 @@ The property candidate review queue builder is also upstream of human review:
 docs/custom-corpus-property-candidate-review-queue.md
 ```
 
+The property review binding validator is upstream of admission:
+
+```text
+docs/custom-corpus-property-review-binding.md
+```
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
-human review, admission, package validation, and the materialization plan.
+human review, property review binding when applicable, admission, package
+validation, and the materialization plan.
 
 ## Planner Outputs
 

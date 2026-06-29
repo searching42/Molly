@@ -12,6 +12,7 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_candidate_planner.v1
 -> custom_corpus_property_candidate_review_queue.v1
 -> custom_corpus_review.v1
+-> custom_corpus_property_review_binding.v1
 -> custom_corpus_admission.v1
 -> custom_corpus_admission_package_validation.v1
 -> custom_corpus_materialization.v1
@@ -22,9 +23,10 @@ custom_corpus_manifest.v1
 The chain supports controlled custom corpus intake, unconfirmed dry-runs,
 open-ended numeric property candidate manifests, property candidate
 review-planning summaries, property candidate review queue artifacts, human
-review artifacts, admission-intent validation, cross-artifact package binding
-validation, materialization plan validation, and safe offline planning. It does
-not materialize records into datasets and does not run Phase 1.
+review artifacts, queue-to-review binding validation, admission-intent
+validation, cross-artifact package binding validation, materialization plan
+validation, and safe offline planning. It does not materialize records into
+datasets and does not run Phase 1.
 
 ## Completed PRs
 
@@ -167,3 +169,18 @@ safe review-preparation artifacts. It still does not create human review
 decisions, generate `custom_corpus_review.v1`, admit data, materialize data,
 call an LLM or agent, perform evaluation/RL, create candidate/training CSVs,
 run Phase 1, or change `DatasetConfirmation`.
+
+## Property Review Binding Validator Note
+
+The property review binding validator was added as a queue-to-review
+consistency layer:
+
+```text
+docs/custom-corpus-property-review-binding.md
+```
+
+It validates manually-created `custom_corpus_review.v1` manifests against
+property candidate review queue artifacts. It still does not create review
+decisions, generate review manifests, admit data, materialize data, call an LLM
+or agent, perform evaluation/RL, create candidate/training CSVs, run Phase 1,
+or change `DatasetConfirmation`.

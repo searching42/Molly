@@ -47,6 +47,10 @@ The property candidate review queue builder is also upstream of human review.
 Materialization plans must not consume review queue artifacts directly;
 materialization requires review, admission, and package validation.
 
+The property review binding validator checks the queue-to-review link upstream
+of admission. Materialization plans must consume records that passed human
+review and admission; binding evidence alone is not a materialization input.
+
 ## Plan Contents
 
 A materialization plan includes:

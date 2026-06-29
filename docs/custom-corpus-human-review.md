@@ -38,6 +38,16 @@ docs/custom-corpus-property-candidate-review-queue.md
 Queue records do not imply accept, reject, or needs-review outcomes. Reviewers
 must still create explicit `custom_corpus_review.v1` decisions.
 
+For property candidate reviews, the queue-to-review binding validator checks
+that manually-created review decisions correspond to queue records before any
+admission request uses them:
+
+```text
+docs/custom-corpus-property-review-binding.md
+```
+
+The binding validator does not create review decisions and does not admit data.
+
 ## Schema
 
 Review manifests use:

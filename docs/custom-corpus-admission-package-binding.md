@@ -76,6 +76,20 @@ Review/admission binding:
 - admitted records must include safe provenance, normalized value summary, and
   admission reason
 
+## Property Candidate Review Binding Evidence
+
+Property candidate review binding is upstream evidence for property-candidate
+review flows:
+
+```text
+docs/custom-corpus-property-review-binding.md
+```
+
+It verifies that a human review manifest corresponds to a property candidate
+review queue. Package binding still validates the manifest, dry-run report,
+review manifest, and admission request package. Do not substitute review queue
+artifacts for human review artifacts.
+
 ## Decision Semantics
 
 The summary has two independent decision fields:
