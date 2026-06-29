@@ -43,6 +43,7 @@ custom corpus manifest
 -> property training admission execution request
 -> property training admission execution request preflight
 -> property training admission execution dry-run
+-> property training admission execution dry-run precheck
 -> future training admission execution
 ```
 
@@ -1432,6 +1433,84 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - dry-run redaction fails
 
+## Step 29: Property Training Admission Execution Dry-Run Precheck
+
+The property training admission execution dry-run precheck reads the dry-run
+report, execution request package, execution request preflight, request draft,
+draft precheck, request plan, request preflight, training admission readiness
+summary, quarantine candidate preflight summary, and quarantine candidate
+records. It verifies that the dry-run report remains fully bound to upstream
+evidence before any future training admission execution layer. It does not run
+the dry-run, execute training admission, admit training data, create training
+artifacts, run Phase 1, change `DatasetConfirmation`, or run model training or
+evaluation.
+
+References:
+
+- `docs/custom-corpus-property-training-admission-execution-dry-run-precheck.md`
+- `docs/custom-corpus-property-training-admission-execution-dry-run.md`
+- `docs/evidence/templates/custom-corpus-property-training-admission-execution-dry-run-precheck-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_admission_execution_dry_run_precheck \
+  --training-admission-execution-dry-run-report /path/outside/git/property_training_admission_execution_dry_run_report.json \
+  --training-admission-execution-request /path/outside/git/property_training_admission_execution_request.json \
+  --training-admission-execution-request-summary /path/outside/git/property_training_admission_execution_request_summary.json \
+  --training-admission-execution-request-preflight /path/outside/git/property_training_admission_execution_request_preflight_summary.json \
+  --training-admission-request-draft /path/outside/git/property_training_admission_request.draft.json \
+  --training-admission-request-draft-summary /path/outside/git/property_training_admission_request_draft_summary.json \
+  --training-admission-request-draft-precheck /path/outside/git/property_training_admission_request_draft_precheck_summary.json \
+  --training-admission-request-plan /path/outside/git/property_training_admission_request_plan_summary.json \
+  --training-admission-request-preflight /path/outside/git/property_training_admission_request_preflight_summary.json \
+  --training-admission-readiness-summary /path/outside/git/property_training_admission_readiness_summary.json \
+  --quarantine-candidate-preflight-summary /path/outside/git/property_quarantine_candidate_preflight_summary.json \
+  --quarantine-candidate-records /path/outside/git/property_quarantine_candidate_records.json \
+  --output-summary /path/outside/git/property_training_admission_execution_dry_run_precheck_summary.json \
+  --output-markdown /path/outside/git/property_training_admission_execution_dry_run_precheck_summary.md
+```
+
+Pass criteria:
+
+- dry-run report status is `passed`
+- execution request preflight status is `passed`
+- execution request status is `written`
+- draft package precheck status is `passed`
+- draft status is `written`
+- request plan status is `planned`
+- request preflight status is `passed`
+- readiness status is `ready`
+- dry-run record ids, execution record ids, and planned candidate ids match
+- source hashes and ids match across dry-run, request, preflight, draft, plan,
+  readiness, and quarantine artifacts
+- excluded, blocked, and needs-review records are not present
+- no training data is admitted
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- summary and Markdown redaction checks pass
+
+Needs-review criteria:
+
+- dry-run or upstream evidence is `needs_review` or partial
+- `--allow-dry-run-needs-review` is explicitly set
+- no hard consistency check failed
+
+Fail criteria:
+
+- dry-run report is blocked or invalid
+- dry-run report is needs-review without explicit allowance
+- readiness is blocked
+- source hashes or ids mismatch
+- planned candidate records derive from excluded, blocked, or needs-review
+  records
+- `training_admitted=true`
+- Phase 1 is not `not_run`
+- `DatasetConfirmation` changed
+- raw text, private paths, token-like values, PDF names, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
+- precheck redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -1715,6 +1794,9 @@ Allowed:
 - property training admission request draft builder
 - property training admission request draft precheck
 - property training admission execution request builder
+- property training admission execution request preflight
+- property training admission execution dry-run
+- property training admission execution dry-run precheck
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

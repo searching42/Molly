@@ -529,3 +529,20 @@ admit training data, create training CSV/JSONL/Parquet/LMDB artifacts, create
 candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.
+
+## Property Training Admission Execution Dry-Run Precheck Note
+
+The property training admission execution dry-run precheck was added after
+execution dry-run:
+
+```text
+docs/custom-corpus-property-training-admission-execution-dry-run-precheck.md
+```
+
+Execution dry-run reports can now be checked against execution request,
+preflight, draft, plan, readiness, and quarantine evidence before future
+training admission execution. This still does not run the dry-run, execute
+training admission, admit training data, create training
+CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
+artifacts, run Phase 1, change `DatasetConfirmation`, run model
+training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
