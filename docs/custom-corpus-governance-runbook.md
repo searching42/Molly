@@ -37,6 +37,7 @@ custom corpus manifest
 -> property quarantine candidate preflight
 -> property training admission readiness
 -> property training admission request planner
+-> property training admission request preflight
 -> future training admission request
 ```
 
@@ -70,6 +71,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_quarantine_candidate_preflight.v1`
 - `custom_corpus_property_training_admission_readiness.v1`
 - `custom_corpus_property_training_admission_request_plan.v1`
+- `custom_corpus_property_training_admission_request_preflight.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -1205,6 +1207,67 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - request-plan redaction fails
 
+## Step 23: Property Training Admission Request Preflight
+
+The property training admission request preflight reads the request plan,
+training admission readiness summary, and quarantine candidate preflight
+summary. It validates schema, status, SHA, id, and candidate eligibility
+consistency before any future training admission request execution layer can
+be introduced. It is preflight only: no training admission is executed, no
+training request is generated, and no training data is created.
+
+References:
+
+- `docs/custom-corpus-property-training-admission-request-preflight.md`
+- `docs/custom-corpus-property-training-admission-request-planner.md`
+- `docs/evidence/templates/custom-corpus-property-training-admission-request-preflight-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_admission_request_preflight \
+  --training-admission-request-plan /path/outside/git/property_training_admission_request_plan_summary.json \
+  --training-admission-readiness-summary /path/outside/git/property_training_admission_readiness_summary.json \
+  --quarantine-candidate-preflight-summary /path/outside/git/property_quarantine_candidate_preflight_summary.json \
+  --output-summary /tmp/property-training-admission-request-preflight-summary.json \
+  --output-markdown /tmp/property-training-admission-request-preflight-summary.md
+```
+
+Pass criteria:
+
+- request plan schema validates
+- readiness status is `ready`
+- quarantine candidate preflight status is `passed`
+- planned candidate ids match quarantined candidate ids
+- source hashes and ids match across the plan/readiness/preflight summaries
+- excluded, blocked, and needs-review records are not planned as candidates
+- no training data is admitted
+- no training or candidate CSV/JSONL/Parquet/LMDB artifact is created
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- summary and Markdown redaction checks pass
+
+Partial criteria:
+
+- no hard consistency check failed
+- request plan/readiness/preflight evidence carries allowed partial or
+  needs-review status
+
+Fail criteria:
+
+- request plan, readiness, or quarantine candidate preflight schema is invalid
+- readiness is `blocked`
+- quarantine candidate preflight failed
+- source hashes or ids mismatch
+- candidate ids or counts mismatch
+- planned candidate records derive from excluded, blocked, or needs-review
+  records
+- candidate artifact claims training admission, Phase 1 execution, or
+  `DatasetConfirmation` mutation
+- raw text, private paths, token-like values, PDF names, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
+- preflight redaction fails
+
 ## Artifact Retention Policy
 
 Full local artifacts remain outside git. Committed PRs should include only
@@ -1271,6 +1334,7 @@ Allowed:
 - property quarantine candidate preflight
 - property training admission readiness planner
 - property training admission request planner
+- property training admission request preflight
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

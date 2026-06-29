@@ -25,6 +25,26 @@ consumes that readiness summary as evidence. It does not rerun readiness,
 does not run quarantine candidate preflight, does not run the quarantine
 materializer, and does not modify candidate records.
 
+## After Request Planning: Request Preflight
+
+The preflight layer is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-request-preflight.md
+```
+
+Future evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-admission-request-preflight-evidence-template.md
+```
+
+Request plans are still non-authoritative planning evidence. The preflight
+checks whether a request plan is safe to become input to a future training
+admission execution request. It still does not generate that request, admit
+training data, materialize datasets, run Phase 1, change
+`DatasetConfirmation`, or run model training/evaluation.
+
 ## Inputs
 
 The planner requires:
