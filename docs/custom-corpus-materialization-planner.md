@@ -186,6 +186,16 @@ docs/custom-corpus-property-materializer-execution-preflight.md
 It checks request consistency only. It does not execute materialization and
 does not invoke this planner.
 
+The property quarantine materializer is downstream of execution preflight:
+
+```text
+docs/custom-corpus-property-quarantine-materializer.md
+```
+
+It writes candidate-only quarantine records from preflight-checked execution
+requests. It does not create training artifacts, admit training data, run
+Phase 1, or change `DatasetConfirmation`.
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
 human review, property review binding, readiness, request planning when
@@ -193,8 +203,8 @@ applicable, explicit admission draft review, draft package precheck when used,
 formal package validation, property materialization plan drafting when used,
 property materialization plan preflight when used, property-aware planner
 runner gating when used, property materialization dry-run when used, and the
-materializer execution request and request preflight when used. It remains
-separate from any future materializer.
+materializer execution request, request preflight, and quarantine materializer
+when used. It remains separate from any future training admission path.
 
 ## Planner Outputs
 

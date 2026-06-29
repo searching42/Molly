@@ -33,7 +33,8 @@ custom corpus manifest
 -> property materialization dry-run
 -> materializer execution request
 -> materializer execution request preflight
--> future materializer
+-> property quarantine materializer
+-> future training admission boundary
 ```
 
 Concrete artifact schemas:
@@ -61,6 +62,8 @@ Concrete artifact schemas:
 - `custom_corpus_property_materializer_execution_request.v1`
 - `custom_corpus_property_materializer_execution_request_builder.v1`
 - `custom_corpus_property_materializer_execution_preflight.v1`
+- `custom_corpus_property_quarantine_materialization.v1`
+- `custom_corpus_property_quarantine_materializer.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -905,6 +908,75 @@ Fail criteria:
 - execution records include unsafe values or paths
 - preflight redaction fails
 
+## Step 19: Property Quarantine Materializer
+
+The property quarantine materializer consumes a preflight-checked execution
+request and writes candidate-only quarantine records, a safe summary, and
+redacted evidence. It is the first property-path step that can write candidate
+materialized records, but those records remain quarantined. It does not create
+training artifacts, admit training data, run Phase 1, or modify
+`DatasetConfirmation`.
+
+References:
+
+- `docs/custom-corpus-property-quarantine-materializer.md`
+- `docs/custom-corpus-property-materializer-execution-preflight.md`
+- `docs/evidence/templates/custom-corpus-property-quarantine-materializer-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_quarantine_materializer \
+  --manifest /path/outside/git/custom-corpus-manifest.json \
+  --dry-run-report /path/outside/git/dry_run_report.json \
+  --review-manifest /path/outside/git/custom-corpus-review.json \
+  --admission-request /path/outside/git/custom-corpus-admission-request.json \
+  --formal-package-validation /path/outside/git/custom_corpus_admission_package_validation.json \
+  --property-package-binding-summary /path/outside/git/property_package_binding_summary.json \
+  --materialization-plan /path/outside/git/custom_corpus_materialization.draft.json \
+  --materialization-plan-preflight-summary /path/outside/git/property_materialization_plan_preflight_summary.json \
+  --offline-planner-output /path/outside/git/offline_materialization_planner_output.json \
+  --property-planner-summary /path/outside/git/property_materialization_planner_summary.json \
+  --materialization-dry-run-report /path/outside/git/property_materialization_dry_run_report.json \
+  --execution-request /path/outside/git/property_materializer_execution_request.json \
+  --execution-request-summary /path/outside/git/property_materializer_execution_request_summary.json \
+  --execution-preflight-summary /path/outside/git/property_materializer_execution_preflight_summary.json \
+  --output-dir /tmp/property-quarantine-materializer \
+  --quarantine-run-id property-quarantine-materializer-<date> \
+  --created-by operator-redacted \
+  --confirm-quarantine-materialization
+```
+
+Pass criteria:
+
+- explicit quarantine materialization confirmation flag is present
+- execution preflight status is `passed`, or `needs_review` is explicitly
+  allowed
+- execution request status is `written`
+- execution mode is `request_only`
+- materializer status before this step is `not_run`
+- Phase 1 remains `not_run`
+- training admitted remains false
+- `DatasetConfirmation` remains unchanged
+- all source hashes match actual input files
+- candidate records derive only from admitted, accepted materialization records
+- excluded, blocked, and needs-review records are not quarantined candidates
+- output directory is clean
+- candidate artifact, summary, and evidence redaction checks pass
+
+Fail criteria:
+
+- confirmation flag is missing
+- execution preflight failed or has errors
+- execution preflight is `needs_review` without explicit allowance
+- source hashes or ids mismatch
+- execution request is not written or is not request-only
+- Phase 1 ran, training was admitted, or `DatasetConfirmation` changed
+- candidate records derive from excluded, blocked, or needs-review records
+- no candidate records are produced
+- output directory is not clean
+- quarantine materializer redaction fails
+
 ## Artifact Retention Policy
 
 Full local artifacts remain outside git. Committed PRs should include only
@@ -966,13 +1038,15 @@ Allowed:
 - property-aware offline materialization planner runner
 - property materialization dry-run runner
 - property materializer execution request builder
+- property materializer execution request preflight
+- property quarantine materializer
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
 
 ## Current Non-Goals
 
-- no dataset materialization
+- no training dataset materialization
 - no candidate/training CSV
 - no Phase 1
 - no `DatasetConfirmation` change

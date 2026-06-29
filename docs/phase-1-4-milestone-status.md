@@ -53,12 +53,13 @@ literature acquisition, and default-route migration remain future work.
 | Custom corpus property materialization dry-run runner | Added a no-data dry-run runner that validates offline planner outputs against upstream property governance evidence; no real materializer execution, materialization execution, candidate/training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_materialization_dry_run.py`, `tests/test_custom_corpus_property_materialization_dry_run.py`, `docs/custom-corpus-property-materialization-dry-run.md`, `docs/evidence/templates/custom-corpus-property-materialization-dry-run-evidence-template.md` |
 | Custom corpus property materializer execution request builder | Added an offline builder that turns passed property materialization dry-run packages into request-only future-materializer handoff artifacts; no real materializer execution, materialization execution, candidate/training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_materializer_execution_request.py`, `tests/test_custom_corpus_property_materializer_execution_request.py`, `docs/custom-corpus-property-materializer-execution-request.md`, `docs/evidence/templates/custom-corpus-property-materializer-execution-request-evidence-template.md` |
 | Custom corpus property materializer execution request preflight | Added an offline preflight that checks request-only future-materializer handoff artifacts before future materializer submission; no real materializer execution, materialization execution, candidate/training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_materializer_execution_preflight.py`, `tests/test_custom_corpus_property_materializer_execution_preflight.py`, `docs/custom-corpus-property-materializer-execution-preflight.md`, `docs/evidence/templates/custom-corpus-property-materializer-execution-preflight-evidence-template.md` |
+| Custom corpus property quarantine materializer | Added a candidate-only quarantine materializer that writes quarantined property candidate records after execution preflight; no training data admission, training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_quarantine_materializer.py`, `tests/test_custom_corpus_property_quarantine_materializer.py`, `docs/custom-corpus-property-quarantine-materializer.md`, `docs/evidence/templates/custom-corpus-property-quarantine-materializer-evidence-template.md` |
 | Custom corpus human review schema | Introduced an offline review artifact schema and validator for custom corpus records; review artifacts still do not admit training data and do not change Phase 1 or `DatasetConfirmation` behavior | `src/ai4s_agent/custom_corpus_review.py`, `tests/test_custom_corpus_review.py`, `docs/custom-corpus-human-review.md`, `docs/examples/custom-corpus-review-manifest.example.json` |
 | Custom corpus admission gate contract | Introduced an offline admission request schema and validator for structurally checking reviewed custom corpus packages; no dataset materialization, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_admission.py`, `tests/test_custom_corpus_admission.py`, `docs/custom-corpus-dataset-admission-gate.md`, `docs/examples/custom-corpus-admission-request.example.json` |
 | Custom corpus admission package binding validator | Added offline package validation across manifest, dry-run report, review manifest, and admission request; validates hash, id, review/action, and dry-run boundary consistency without dataset materialization, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_admission_package.py`, `tests/test_custom_corpus_admission_package.py`, `docs/custom-corpus-admission-package-binding.md`, `docs/evidence/templates/custom-corpus-admission-package-validation-template.md` |
-| Custom corpus governance runbook | Added an operator-facing runbook and #155-#160 stage summary for the custom corpus path through package validation; dataset materialization remains intentionally unimplemented, with Phase 1 and `DatasetConfirmation` unchanged | `docs/custom-corpus-governance-runbook.md`, `docs/custom-corpus-governance-stage-summary-20260628.md` |
-| Custom corpus materialization boundary design | Added a docs-only design for future package-validated custom corpus materialization; no materializer, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `docs/custom-corpus-dataset-materialization-boundary.md`, `docs/evidence/templates/custom-corpus-materialization-evidence-template.md` |
-| Custom corpus materialization plan schema | Added `custom_corpus_materialization.v1` and an offline validator for candidate-only materialization intent; no materializer, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_materialization.py`, `tests/test_custom_corpus_materialization.py`, `docs/custom-corpus-materialization-schema.md`, `docs/examples/custom-corpus-materialization-plan.example.json` |
+| Custom corpus governance runbook | Added an operator-facing runbook and #155-#160 stage summary for the custom corpus path through package validation; training materialization remains intentionally unimplemented, with Phase 1 and `DatasetConfirmation` unchanged | `docs/custom-corpus-governance-runbook.md`, `docs/custom-corpus-governance-stage-summary-20260628.md` |
+| Custom corpus materialization boundary design | Added a docs-only design for package-validated custom corpus materialization boundaries; no training materializer, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `docs/custom-corpus-dataset-materialization-boundary.md`, `docs/evidence/templates/custom-corpus-materialization-evidence-template.md` |
+| Custom corpus materialization plan schema | Added `custom_corpus_materialization.v1` and an offline validator for candidate-only materialization intent; no training materializer, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_materialization.py`, `tests/test_custom_corpus_materialization.py`, `docs/custom-corpus-materialization-schema.md`, `docs/examples/custom-corpus-materialization-plan.example.json` |
 | Custom corpus offline materialization planner | Added an offline planner that reads valid materialization plans and emits safe JSON/Markdown planning summaries; no candidate/training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_materialization_planner.py`, `tests/test_custom_corpus_materialization_planner.py`, `docs/custom-corpus-materialization-planner.md`, `docs/evidence/templates/custom-corpus-materialization-planner-evidence-template.md` |
 | OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
 | Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
@@ -446,6 +447,11 @@ Completed behavior:
   but no real materializer, materialization execution, candidate/training
   artifact creation, Phase 1 execution, or `DatasetConfirmation` change is
   implemented.
+- Adds the custom corpus property quarantine materializer:
+  execution-preflight-passed requests can now produce candidate-only
+  quarantine materialization artifacts plus safe evidence, but no training
+  data admission, training CSV/JSONL/Parquet/LMDB creation, Phase 1 execution,
+  or `DatasetConfirmation` change is implemented.
 - Introduces the custom corpus human review artifact boundary:
   review manifests are validated offline, but they do not admit training data,
   do not set `DatasetConfirmation.confirmed=true`, and do not run Phase 1.
@@ -458,15 +464,15 @@ Completed behavior:
   admission request without materializing datasets.
 - Adds the custom corpus governance runbook and stage summary:
   the custom corpus path is documented through package validation, while
-  dataset materialization remains intentionally unimplemented and Phase 1 plus
+  training materialization remains intentionally unimplemented and Phase 1 plus
   `DatasetConfirmation` remain unchanged.
 - Adds the custom corpus materialization boundary design:
-  future materialization requirements are documented, but no materializer,
+  materialization requirements are documented, but no training materializer,
   candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation`
   change is implemented.
 - Adds the custom corpus materialization plan schema:
   candidate-only materialization intent can be validated offline, but no
-  materializer, candidate/training CSV creation, Phase 1 execution, or
+  training materializer, candidate/training CSV creation, Phase 1 execution, or
   `DatasetConfirmation` change is implemented.
 - Adds the custom corpus offline materialization planner:
   a valid materialization plan can produce safe JSON/Markdown planning

@@ -22,6 +22,25 @@ whether that existing request is internally consistent, hash-bound to the
 same upstream evidence, and still safe for a future materializer handoff.
 Real materializer execution remains separate.
 
+## After Preflight: Property Quarantine Materializer
+
+The property quarantine materializer is documented in:
+
+```text
+docs/custom-corpus-property-quarantine-materializer.md
+```
+
+Evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-quarantine-materializer-evidence-template.md
+```
+
+The quarantine materializer consumes a preflight-checked execution request and
+writes candidate-only quarantine artifacts. It still does not admit training
+data, create training CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, or modify
+`DatasetConfirmation`.
+
 ## Inputs
 
 The preflight requires:

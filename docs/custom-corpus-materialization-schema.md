@@ -134,6 +134,17 @@ The preflight summary is separate from this materialization plan schema. It
 contains no materialized data, no candidate/training artifacts, and no raw
 property values or provenance text.
 
+The property quarantine materializer is downstream of execution preflight:
+
+```text
+docs/custom-corpus-property-quarantine-materializer.md
+```
+
+It can write candidate-only quarantine records from a preflight-checked
+execution request. Those records are not training data, do not create
+training CSV/JSONL/Parquet/LMDB artifacts, do not run Phase 1, and do not
+change `DatasetConfirmation`.
+
 ## Plan Contents
 
 A materialization plan includes:

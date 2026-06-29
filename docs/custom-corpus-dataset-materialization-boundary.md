@@ -30,8 +30,9 @@ custom corpus manifest
 -> property materialization dry-run
 -> materializer execution request
 -> materializer execution request preflight
--> future materialization boundary
--> future candidate/training artifacts
+-> property quarantine materializer
+-> future training admission boundary
+-> future training artifacts
 ```
 
 Existing artifact schemas:
@@ -58,8 +59,12 @@ Existing artifact schemas:
 - `custom_corpus_property_materialization_dry_run.v1`
 - `custom_corpus_property_materializer_execution_request.v1`
 - `custom_corpus_property_materializer_execution_preflight.v1`
+- `custom_corpus_property_quarantine_materialization.v1`
+- `custom_corpus_property_quarantine_materializer.v1`
 
-All current steps stop before materialization.
+Current steps now include a candidate-only quarantine materializer for the
+property path. They still stop before training admission, training artifacts,
+Phase 1, and `DatasetConfirmation` mutation.
 
 The property candidate schema represents open-ended numeric scientific
 property candidates before review. It does not define a property whitelist,
@@ -141,6 +146,11 @@ generation and before any future materializer. It validates the request and
 upstream dry-run/planner evidence only. It is not materialization and produces
 no candidate/training artifact.
 
+The property quarantine materializer sits after execution preflight. It writes
+candidate-only quarantine records and safe summary/evidence artifacts. It does
+not create training data, training CSV/JSONL/Parquet/LMDB artifacts, Phase 1
+inputs, or `DatasetConfirmation` changes.
+
 ## Materialization Definition
 
 Materialization means transforming package-validated admitted records into
@@ -157,7 +167,10 @@ Examples of future materialized artifacts may include:
 - rollback manifest
 - redacted evidence summary
 
-This PR does not create any of these artifacts.
+The implemented property quarantine materializer writes only
+`property_quarantine_candidate_records.json` plus safe summary/evidence
+artifacts. It does not create training CSVs, training JSONL/Parquet/LMDB
+artifacts, Phase 1 inputs, or training data admission.
 
 ## Materialization Plan Schema
 
@@ -237,6 +250,16 @@ docs/custom-corpus-property-materializer-execution-preflight.md
 
 It checks request readiness before future materializer submission, but it does
 not run a materializer or produce candidate/training artifacts.
+
+The property quarantine materializer is documented in:
+
+```text
+docs/custom-corpus-property-quarantine-materializer.md
+```
+
+It writes candidate-only quarantine artifacts after a passed execution
+preflight and explicit confirmation. These artifacts are still not training
+data and are necessary but not sufficient for any future training admission.
 
 ## Offline Materialization Planner
 
@@ -571,9 +594,9 @@ Recommended future sequence:
 9. `test/docs: add property-aware offline materialization planner runner`
 10. `test/docs: add property materialization dry-run runner`
 11. `test/docs: add property materializer execution request builder`
-12. `test: add dry-run-only materializer writing candidate artifacts outside git`
-13. `docs: record small public materialization dry-run evidence`
-14. `docs/test: design training admission boundary from materialized candidates`
+12. `test/docs: add property quarantine materializer runner`
+13. `docs: record small public quarantine materialization evidence`
+14. `docs/test: design training admission boundary from quarantined candidates`
 15. only later: implement explicit training artifact builder if all previous
    gates pass
 
@@ -582,8 +605,7 @@ next PR.
 
 ## Non-Goals
 
-- no code implementation
-- no materializer
+- no unrestricted or training materializer
 - no candidate CSV
 - no training CSV
 - no Phase 1 execution
