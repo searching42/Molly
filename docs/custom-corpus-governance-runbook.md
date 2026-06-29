@@ -26,7 +26,7 @@ custom corpus manifest
 -> property admission request planner
 -> property admission request draft
 -> property admission draft package precheck
--> package binding validator
+-> property-aware package binding validator
 -> materialization plan
 -> offline materialization planner
 -> future materializer
@@ -45,6 +45,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_admission_request_plan.v1`
 - `custom_corpus_property_admission_draft_builder.v1`
 - `custom_corpus_property_admission_draft_package_precheck.v1`
+- `custom_corpus_property_package_binding.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 - `custom_corpus_materialization.v1`
@@ -455,9 +456,11 @@ Fail criteria:
 - needs-review records appear as admitted draft records
 - summary redaction fails
 
-## Step 12: Admission Package Binding Validator
+## Step 12: Property-Aware Package Binding Validator
 
-The package validator checks the four artifacts together:
+The property-aware package binding runner checks the property precheck summary
+and then calls the existing formal package validator on the four standard
+artifacts:
 
 - custom corpus manifest
 - dry-run report
@@ -465,27 +468,34 @@ The package validator checks the four artifacts together:
 - admission request
 
 It validates hash binding, id consistency, review/admission record matching,
-and the dry-run confirmation boundary. It still does not materialize data.
+and the dry-run confirmation boundary through formal package validation. It
+still does not materialize data.
 
 References:
 
+- `docs/custom-corpus-property-package-binding.md`
 - `docs/custom-corpus-admission-package-binding.md`
-- `docs/evidence/templates/custom-corpus-admission-package-validation-template.md`
+- `docs/evidence/templates/custom-corpus-property-package-binding-evidence-template.md`
 
 Example command:
 
 ```bash
-PYTHONPATH=src python -m ai4s_agent.custom_corpus_admission_package \
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_package_binding \
   --manifest /path/outside/git/custom-corpus-manifest.json \
   --dry-run-report /path/outside/git/dry_run_report.json \
   --review-manifest /path/outside/git/custom-corpus-review.json \
   --admission-request /path/outside/git/custom-corpus-admission-request.json \
-  --output-summary /tmp/admission-package-validation-summary.json
+  --property-precheck-summary /path/outside/git/property_precheck_summary.json \
+  --output-dir /tmp/property-package-binding \
+  --binding-run-id property-package-binding-<date> \
+  --confirm-formal-package-binding
 ```
 
 Pass criteria:
 
-- package validation status is `passed`
+- property-aware binding status is `passed`
+- property precheck status is `passed`
+- formal package validation status is `passed`
 - artifact hashes match
 - `corpus_id`, `dry_run_id`, and `review_manifest_id` match
 - dry-run decision is `passed`
@@ -506,6 +516,7 @@ Fail criteria:
 - review record is missing
 - review/action mismatch
 - rejected or needs-review record is admitted
+- property precheck failed or was not explicitly allowed
 - summary redaction failure
 
 ## Artifact Retention Policy
@@ -561,6 +572,7 @@ Allowed:
 - property admission request planner
 - property admission draft builder
 - property admission draft package precheck
+- property-aware package binding runner
 - admission request schema and validator
 - admission package binding validator
 - materialization plan schema and validator

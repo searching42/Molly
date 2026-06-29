@@ -138,6 +138,21 @@ decide whether to run formal package binding, but it is not a substitute for
 consumes the actual manifest, dry-run report, review manifest, and admission
 request artifacts.
 
+## Property-Aware Package Binding Runner
+
+The property-aware package binding runner calls this existing formal package
+binding validator after gating on property precheck evidence:
+
+```text
+docs/custom-corpus-property-package-binding.md
+```
+
+Its formal package validation output remains
+`custom_corpus_admission_package_validation.v1`. The additional
+property-aware wrapper summary links the formal output to the property
+precheck. Materialization still requires a separate materialization plan and a
+future materializer.
+
 ## Decision Semantics
 
 The summary has two independent decision fields:

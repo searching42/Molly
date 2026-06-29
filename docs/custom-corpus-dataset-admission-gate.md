@@ -188,6 +188,16 @@ The precheck is not admission package validation. It does not create
 `custom_corpus_admission_package_validation.v1`; formal package binding remains
 a separate explicit step.
 
+The property-aware package binding runner is the formal package validation
+step for the property-candidate path:
+
+```text
+docs/custom-corpus-property-package-binding.md
+```
+
+It runs formal package binding validation, but it does not admit training data
+by itself. Downstream materialization remains separate.
+
 The future materialization boundary is designed in:
 
 ```text

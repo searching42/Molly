@@ -110,6 +110,19 @@ paths, private paths, ParsedDocument text, MinerU bundle paths, tokens,
 Authorization headers, cookies, private emails, raw PDF names, or raw PDF
 paths.
 
+## After Precheck: Property-Aware Package Binding
+
+The next property-candidate path step is the property-aware package binding
+runner:
+
+- `docs/custom-corpus-property-package-binding.md`
+- `docs/evidence/templates/custom-corpus-property-package-binding-evidence-template.md`
+
+The precheck is not package binding. The property-aware package binding runner
+performs formal package binding validation through the existing package
+validator and links the formal output back to property precheck evidence.
+Materialization remains separate.
+
 ## Redaction Behavior
 
 Before printing or writing JSON/Markdown, the precheck serializes the output

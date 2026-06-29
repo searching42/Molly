@@ -244,3 +244,17 @@ formal package binding. It still does not run formal package binding, create
 `custom_corpus_admission_package_validation.v1`, admit training data,
 materialize data, call an LLM or agent, perform evaluation/RL, create
 candidate/training CSVs, run Phase 1, or change `DatasetConfirmation`.
+
+## Property-Aware Package Binding Runner Note
+
+The property-aware package binding runner was added after precheck:
+
+```text
+docs/custom-corpus-property-package-binding.md
+```
+
+It gates formal package validation on property precheck evidence and writes a
+formal `custom_corpus_admission_package_validation.v1` summary plus a
+property-aware wrapper summary. It still does not materialize data, admit
+training data, call an LLM or agent, perform evaluation/RL, create
+candidate/training CSVs, run Phase 1, or change `DatasetConfirmation`.
