@@ -70,10 +70,16 @@ The property review binding validator is upstream of admission:
 docs/custom-corpus-property-review-binding.md
 ```
 
+The property admission readiness planner is upstream of explicit admission:
+
+```text
+docs/custom-corpus-property-admission-readiness.md
+```
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
-human review, property review binding when applicable, admission, package
-validation, and the materialization plan.
+human review, property review binding and readiness when applicable, explicit
+admission, package validation, and the materialization plan.
 
 ## Planner Outputs
 

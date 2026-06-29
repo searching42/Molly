@@ -13,6 +13,7 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_candidate_review_queue.v1
 -> custom_corpus_review.v1
 -> custom_corpus_property_review_binding.v1
+-> custom_corpus_property_admission_readiness.v1
 -> custom_corpus_admission.v1
 -> custom_corpus_admission_package_validation.v1
 -> custom_corpus_materialization.v1
@@ -23,10 +24,10 @@ custom_corpus_manifest.v1
 The chain supports controlled custom corpus intake, unconfirmed dry-runs,
 open-ended numeric property candidate manifests, property candidate
 review-planning summaries, property candidate review queue artifacts, human
-review artifacts, queue-to-review binding validation, admission-intent
-validation, cross-artifact package binding validation, materialization plan
-validation, and safe offline planning. It does not materialize records into
-datasets and does not run Phase 1.
+review artifacts, queue-to-review binding validation, admission readiness
+planning, admission-intent validation, cross-artifact package binding
+validation, materialization plan validation, and safe offline planning. It does
+not materialize records into datasets and does not run Phase 1.
 
 ## Completed PRs
 
@@ -184,3 +185,18 @@ property candidate review queue artifacts. It still does not create review
 decisions, generate review manifests, admit data, materialize data, call an LLM
 or agent, perform evaluation/RL, create candidate/training CSVs, run Phase 1,
 or change `DatasetConfirmation`.
+
+## Property Admission Readiness Planner Note
+
+The property admission readiness planner was added as a pre-admission planning
+layer:
+
+```text
+docs/custom-corpus-property-admission-readiness.md
+```
+
+It summarizes accepted, queue-bound human review records as future admission
+candidates. It still does not generate admission requests, create admission
+actions, admit data, materialize data, call an LLM or agent, perform
+evaluation/RL, create candidate/training CSVs, run Phase 1, or change
+`DatasetConfirmation`.

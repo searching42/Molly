@@ -90,6 +90,15 @@ review queue. Package binding still validates the manifest, dry-run report,
 review manifest, and admission request package. Do not substitute review queue
 artifacts for human review artifacts.
 
+Property admission readiness is also upstream evidence:
+
+```text
+docs/custom-corpus-property-admission-readiness.md
+```
+
+Readiness summaries do not substitute for `custom_corpus_admission.v1` request
+artifacts. Package binding still requires the explicit admission request.
+
 ## Decision Semantics
 
 The summary has two independent decision fields:

@@ -19,6 +19,7 @@ custom corpus manifest
 -> property candidate review queue
 -> human review artifact
 -> property review binding validator
+-> property admission readiness planner
 -> admission request
 -> admission package binding validation
 -> future materialization boundary
@@ -34,6 +35,7 @@ Existing artifact schemas:
 - `custom_corpus_property_candidate_review_queue.v1`
 - `custom_corpus_review.v1`
 - `custom_corpus_property_review_binding.v1`
+- `custom_corpus_property_admission_readiness.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 
@@ -57,6 +59,10 @@ materialization plan.
 The property review binding validator sits after human review and before
 admission. It validates queue-to-review consistency only. Review queue and
 binding evidence do not directly materialize data.
+
+The property admission readiness planner sits after review binding and before
+admission. It summarizes accepted, queue-bound human review records for future
+admission planning only. Readiness evidence does not directly materialize data.
 
 ## Materialization Definition
 

@@ -146,6 +146,17 @@ docs/custom-corpus-property-review-binding.md
 The binding summary can be used as pre-admission evidence, but admission
 remains a separate request and validation boundary.
 
+Property admission readiness summaries are the next pre-admission planning
+artifact:
+
+```text
+docs/custom-corpus-property-admission-readiness.md
+```
+
+Future admission requests for property candidates should use readiness
+summaries as pre-admission evidence. Readiness does not replace admission; the
+admission request remains separate and explicit.
+
 The future materialization boundary is designed in:
 
 ```text

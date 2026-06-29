@@ -51,6 +51,10 @@ The property review binding validator checks the queue-to-review link upstream
 of admission. Materialization plans must consume records that passed human
 review and admission; binding evidence alone is not a materialization input.
 
+The property admission readiness planner is also upstream evidence. It can
+summarize accepted reviewed records for future admission planning, but
+materialization plans must consume records that passed explicit admission.
+
 ## Plan Contents
 
 A materialization plan includes:
