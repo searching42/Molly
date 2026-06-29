@@ -465,3 +465,19 @@ data, create training CSV/JSONL/Parquet/LMDB artifacts, create candidate
 CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change `DatasetConfirmation`,
 run model training/evaluation, call an LLM or agent, call MinerU, or parse
 PDFs.
+
+## Property Training Admission Request Draft Precheck Note
+
+The property training admission request draft package precheck was added after
+request draft generation:
+
+```text
+docs/custom-corpus-property-training-admission-request-draft-precheck.md
+```
+
+Reviewable request draft packages can now be checked before future training
+admission execution. This still does not execute training admission, admit
+training data, create training CSV/JSONL/Parquet/LMDB artifacts, create
+candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.

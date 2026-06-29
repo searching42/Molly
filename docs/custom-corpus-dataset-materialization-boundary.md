@@ -36,6 +36,7 @@ custom corpus manifest
 -> property training admission request planner
 -> property training admission request preflight
 -> property training admission request draft
+-> property training admission request draft precheck
 -> future training admission boundary
 -> future training artifacts
 ```
@@ -72,6 +73,7 @@ Existing artifact schemas:
 - `custom_corpus_property_training_admission_request_preflight.v1`
 - `custom_corpus_property_training_admission_request_draft.v1`
 - `custom_corpus_property_training_admission_request_draft_builder.v1`
+- `custom_corpus_property_training_admission_request_draft_precheck.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
 property path. They still stop before training admission, training artifacts,
@@ -196,6 +198,13 @@ reviewable draft request only. It does not execute training admission, admit
 training data, materialize datasets, create training or candidate
 CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, run model training/evaluation,
 or change `DatasetConfirmation`.
+
+The property training admission request draft package precheck sits after
+draft generation and before any future training admission execution. It
+validates the draft package and upstream request/readiness/quarantine
+evidence only. It does not execute training admission, admit training data,
+produce training artifacts, run Phase 1, run model training/evaluation, or
+change `DatasetConfirmation`.
 
 ## Materialization Definition
 
@@ -362,6 +371,17 @@ It writes a reviewable draft request from preflight-passed request planning
 evidence. The draft is not training admission execution, contains no training
 data, produces no training artifacts, and leaves Phase 1 and
 `DatasetConfirmation` unchanged.
+
+The property training admission request draft package precheck is documented
+in:
+
+```text
+docs/custom-corpus-property-training-admission-request-draft-precheck.md
+```
+
+It checks draft package consistency before future training admission
+execution. The precheck is not execution, produces no training artifact, and
+leaves Phase 1 and `DatasetConfirmation` unchanged.
 
 ## Offline Materialization Planner
 
@@ -700,9 +720,10 @@ Recommended future sequence:
 13. `test/docs: add property quarantine candidate preflight`
 14. `test/docs: add property training admission readiness planner`
 15. `test/docs: add property training admission request planner`
-16. `docs: record small public quarantine materialization evidence`
-17. `docs/test: design training admission boundary from quarantined candidates`
-18. only later: implement explicit training artifact builder if all previous
+16. `test/docs: add property training admission request draft package precheck`
+17. `docs: record small public quarantine materialization evidence`
+18. `docs/test: design training admission boundary from quarantined candidates`
+19. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the
