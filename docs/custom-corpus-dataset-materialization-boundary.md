@@ -49,6 +49,31 @@ Examples of future materialized artifacts may include:
 
 This PR does not create any of these artifacts.
 
+## Materialization Plan Schema
+
+The pre-materialization plan schema is documented in:
+
+```text
+docs/custom-corpus-materialization-schema.md
+```
+
+Safe example plan:
+
+```text
+docs/examples/custom-corpus-materialization-plan.example.json
+```
+
+Future plan evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-materialization-plan-evidence-template.md
+```
+
+This schema is still pre-materialization. It validates operator intent,
+source hash binding, candidate-only mode, explicit confirmation metadata,
+record selection, and dry-run/package boundaries. It does not create outputs,
+candidate CSVs, training CSVs, or Phase 1 inputs.
+
 ## Required Inputs For A Future Materializer
 
 A future materializer must require:
