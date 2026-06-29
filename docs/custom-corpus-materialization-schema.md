@@ -214,6 +214,19 @@ record consistency only. It does not execute training admission, create
 training or candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, or change
 `DatasetConfirmation`.
 
+Training admission execution requests are downstream of draft package
+precheck:
+
+```text
+docs/custom-corpus-property-training-admission-execution-request.md
+```
+
+The execution request artifact is separate from any training dataset schema.
+It carries safe IDs and hashes only, contains no training data, and does not
+execute training admission, create training or candidate
+CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, or change
+`DatasetConfirmation`.
+
 ## Plan Contents
 
 A materialization plan includes:
