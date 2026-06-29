@@ -165,6 +165,17 @@ docs/evidence/templates/custom-corpus-property-materialization-dry-run-evidence-
 The dry-run does not create materialized records, candidate/training CSVs, or
 candidate/training JSONL/Parquet/LMDB artifacts.
 
+The property materializer execution request builder is downstream of the
+dry-run:
+
+```text
+docs/custom-corpus-property-materializer-execution-request.md
+```
+
+It creates request-only handoff artifacts for a future materializer. It does
+not run this planner, run a materializer, execute materialization, or create
+candidate/training artifacts.
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
 human review, property review binding, readiness, request planning when
@@ -172,7 +183,8 @@ applicable, explicit admission draft review, draft package precheck when used,
 formal package validation, property materialization plan drafting when used,
 property materialization plan preflight when used, property-aware planner
 runner gating when used, property materialization dry-run when used, and the
-materialization plan.
+materializer execution request when used. It remains separate from any future
+materializer.
 
 ## Planner Outputs
 

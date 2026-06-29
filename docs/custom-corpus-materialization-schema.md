@@ -111,6 +111,18 @@ The dry-run report is separate from this materialization plan schema. It
 validates hashes, statuses, ids, and record selections without writing
 candidate/training data or executing materialization.
 
+The property materializer execution request builder can consume a passed
+dry-run report and this materialization plan as separate inputs:
+
+```text
+docs/custom-corpus-property-materializer-execution-request.md
+```
+
+Execution request artifacts carry safe ids and hashes only. They do not
+execute the plan, run a materializer, create materialized records, create
+candidate/training artifacts, admit training data, run Phase 1, or change
+`DatasetConfirmation`.
+
 ## Plan Contents
 
 A materialization plan includes:

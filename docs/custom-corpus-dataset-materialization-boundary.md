@@ -28,6 +28,7 @@ custom corpus manifest
 -> property materialization plan preflight
 -> property-aware offline materialization planner
 -> property materialization dry-run
+-> materializer execution request
 -> future materialization boundary
 -> future candidate/training artifacts
 ```
@@ -54,6 +55,7 @@ Existing artifact schemas:
 - `custom_corpus_materialization_planner.v1`
 - `custom_corpus_property_materialization_planner_runner.v1`
 - `custom_corpus_property_materialization_dry_run.v1`
+- `custom_corpus_property_materializer_execution_request.v1`
 
 All current steps stop before materialization.
 
@@ -125,6 +127,12 @@ planner runner. It validates the existing planner output and upstream evidence
 through a no-data dry-run report. The dry-run report is not materialization,
 does not create candidate/training artifacts, and does not run a real
 materializer.
+
+The property materializer execution request builder sits after the dry-run. It
+can write request-only handoff artifacts for a future materializer, but it
+still does not run the materializer, execute materialization, create
+candidate/training artifacts, admit training data, run Phase 1, or change
+`DatasetConfirmation`.
 
 ## Materialization Definition
 
@@ -204,6 +212,15 @@ docs/custom-corpus-property-materialization-dry-run.md
 
 It consumes planner output and validates future materializer-readiness without
 creating materialized data.
+
+The property materializer execution request builder is documented in:
+
+```text
+docs/custom-corpus-property-materializer-execution-request.md
+```
+
+It creates a request-only future-materializer handoff after a passed dry-run.
+The request is not execution and does not create materialized data.
 
 ## Offline Materialization Planner
 
@@ -537,10 +554,11 @@ Recommended future sequence:
 8. `test/docs: add property materialization plan preflight`
 9. `test/docs: add property-aware offline materialization planner runner`
 10. `test/docs: add property materialization dry-run runner`
-11. `test: add dry-run-only materializer writing candidate artifacts outside git`
-12. `docs: record small public materialization dry-run evidence`
-13. `docs/test: design training admission boundary from materialized candidates`
-14. only later: implement explicit training artifact builder if all previous
+11. `test/docs: add property materializer execution request builder`
+12. `test: add dry-run-only materializer writing candidate artifacts outside git`
+13. `docs: record small public materialization dry-run evidence`
+14. `docs/test: design training admission boundary from materialized candidates`
+15. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the
