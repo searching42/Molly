@@ -25,6 +25,25 @@ quarantine candidate preflight summary agree on schemas, statuses, ids,
 candidate eligibility, and SHA-256 bindings. Future training admission
 execution remains unimplemented.
 
+## After Request Preflight: Training Admission Request Draft
+
+The draft builder is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-request-draft.md
+```
+
+Future evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-admission-request-draft-evidence-template.md
+```
+
+Preflight validates request planning evidence. The draft builder can write a
+reviewable training admission request draft from preflight-passed inputs.
+Actual training admission execution remains separate and unimplemented, and
+the draft produces no training artifact.
+
 ## Inputs
 
 The preflight requires:
