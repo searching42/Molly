@@ -24,6 +24,7 @@ custom corpus manifest
 -> property admission request draft
 -> property admission draft package precheck
 -> property-aware package binding validation
+-> property materialization plan draft
 -> future materialization boundary
 -> future candidate/training artifacts
 ```
@@ -44,6 +45,8 @@ Existing artifact schemas:
 - `custom_corpus_property_package_binding.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
+- `custom_corpus_property_materialization_plan_draft_builder.v1`
+- `custom_corpus_materialization.v1`
 
 All current steps stop before materialization.
 
@@ -92,6 +95,12 @@ formal package binding validator. It can produce
 alone still does not directly materialize data. Materialization requires a
 materialization plan and future materializer.
 
+The property materialization plan draft builder sits after formal package
+binding. It can map package-validated property admission records into a
+reviewable `custom_corpus_materialization.v1` draft, but that draft does not
+materialize data. Materialization still requires offline planner and future
+materializer boundaries.
+
 ## Materialization Definition
 
 Materialization means transforming package-validated admitted records into
@@ -134,6 +143,15 @@ This schema is still pre-materialization. It validates operator intent,
 source hash binding, candidate-only mode, explicit confirmation metadata,
 record selection, and dry-run/package boundaries. It does not create outputs,
 candidate CSVs, training CSVs, or Phase 1 inputs.
+
+The property materialization plan draft builder is documented in:
+
+```text
+docs/custom-corpus-property-materialization-plan-draft.md
+```
+
+It creates a reviewable plan draft only. The draft is not materialization and
+does not invoke the offline materialization planner or any future materializer.
 
 ## Offline Materialization Planner
 
@@ -451,6 +469,7 @@ Recommended future sequence:
 4. `test: add offline materialization planner`
 5. `test/docs: add property admission draft package precheck`
 6. `test/docs: add property-aware admission package binding runner`
+7. `test/docs: add property materialization plan draft builder`
 7. `test: add dry-run-only materializer writing candidate artifacts outside git`
 8. `docs: record small public materialization dry-run evidence`
 9. `docs/test: design training admission boundary from materialized candidates`

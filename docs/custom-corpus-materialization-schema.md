@@ -68,6 +68,17 @@ Property-aware package binding output is also upstream evidence: it may link a
 property precheck to formal package validation, but it is not materialization
 execution.
 
+Property package-validated admission records can be mapped to reviewable
+materialization plan drafts by:
+
+```text
+docs/custom-corpus-property-materialization-plan-draft.md
+```
+
+Draft artifacts must validate against this existing materialization schema.
+They are not execution artifacts and do not create candidate records, CSVs, or
+Phase 1 inputs.
+
 ## Plan Contents
 
 A materialization plan includes:

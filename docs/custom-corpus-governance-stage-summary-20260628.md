@@ -258,3 +258,19 @@ formal `custom_corpus_admission_package_validation.v1` summary plus a
 property-aware wrapper summary. It still does not materialize data, admit
 training data, call an LLM or agent, perform evaluation/RL, create
 candidate/training CSVs, run Phase 1, or change `DatasetConfirmation`.
+
+## Property Materialization Plan Draft Builder Note
+
+The property materialization plan draft builder was added after property-aware
+package binding:
+
+```text
+docs/custom-corpus-property-materialization-plan-draft.md
+```
+
+It maps formal package-validated property admissions into a reviewable
+`custom_corpus_materialization.v1` draft plus safe summary/evidence artifacts.
+It still does not run materialization, invoke the offline materialization
+planner, run any materializer, admit training data, call an LLM or agent,
+perform evaluation/RL, create candidate/training CSVs, run Phase 1, or change
+`DatasetConfirmation`.

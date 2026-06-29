@@ -27,7 +27,7 @@ custom corpus manifest
 -> property admission request draft
 -> property admission draft package precheck
 -> property-aware package binding validator
--> materialization plan
+-> property materialization plan draft
 -> offline materialization planner
 -> future materializer
 ```
@@ -48,6 +48,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_package_binding.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
+- `custom_corpus_property_materialization_plan_draft_builder.v1`
 - `custom_corpus_materialization.v1`
 - `custom_corpus_materialization_planner.v1`
 
@@ -519,6 +520,65 @@ Fail criteria:
 - property precheck failed or was not explicitly allowed
 - summary redaction failure
 
+## Step 13: Property Materialization Plan Draft
+
+The property materialization plan draft builder reads a formally
+package-validated property admission package and writes a reviewable
+`custom_corpus_materialization.v1` draft. It maps admitted, accepted property
+records into candidate-only materialization plan records. It does not run the
+offline materialization planner, run a materializer, create candidate/training
+CSVs, admit training data, run Phase 1, or modify `DatasetConfirmation`.
+
+References:
+
+- `docs/custom-corpus-property-materialization-plan-draft.md`
+- `docs/custom-corpus-materialization-schema.md`
+- `docs/evidence/templates/custom-corpus-property-materialization-plan-draft-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_materialization_plan_draft \
+  --manifest /path/outside/git/custom-corpus-manifest.json \
+  --dry-run-report /path/outside/git/dry_run_report.json \
+  --review-manifest /path/outside/git/custom-corpus-review.json \
+  --admission-request /path/outside/git/custom-corpus-admission-request.json \
+  --formal-package-validation /path/outside/git/custom_corpus_admission_package_validation.json \
+  --property-package-binding-summary /path/outside/git/property_package_binding_summary.json \
+  --output-dir /tmp/property-materialization-plan-draft \
+  --materialization-plan-id property-materialization-plan-draft-<date> \
+  --dataset-target example-candidate-target \
+  --created-by operator-redacted \
+  --confirm-materialization-plan-draft-output
+```
+
+Pass criteria:
+
+- explicit draft output confirmation is present
+- property-aware package binding status is `passed`
+- formal package validation status is `passed`
+- artifact hashes match actual input files
+- corpus, dry-run, review manifest, and admission request ids match
+- dry-run decision is `passed`
+- dry-run `DatasetConfirmation` is false
+- dry-run Phase 1 status is `not_run`
+- dry-run training admitted is false
+- at least one admitted record becomes a materialization draft record
+- generated draft validates as `custom_corpus_materialization.v1`
+- redaction checks pass
+
+Fail criteria:
+
+- confirmation flag is missing
+- package binding failed
+- package binding is `needs_review` without explicit allowance
+- formal package validation failed
+- source hashes or ids mismatch
+- dry-run was confirmed, Phase 1 ran, or training was admitted
+- no materialization draft records are produced
+- generated draft fails materialization schema validation
+- private path or token-like content appears in draft artifacts
+
 ## Artifact Retention Policy
 
 Full local artifacts remain outside git. Committed PRs should include only
@@ -575,6 +635,7 @@ Allowed:
 - property-aware package binding runner
 - admission request schema and validator
 - admission package binding validator
+- property materialization plan draft builder
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
