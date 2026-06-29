@@ -497,3 +497,19 @@ training admission, admit training data, create training CSV/JSONL/Parquet/LMDB
 artifacts, create candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1,
 change `DatasetConfirmation`, run model training/evaluation, call an LLM or
 agent, call MinerU, or parse PDFs.
+
+## Property Training Admission Execution Request Preflight Note
+
+The property training admission execution request preflight was added after
+execution request generation:
+
+```text
+docs/custom-corpus-property-training-admission-execution-request-preflight.md
+```
+
+Reviewable execution request packages can now be checked before future
+training admission execution. This still does not execute training admission,
+admit training data, create training CSV/JSONL/Parquet/LMDB artifacts, create
+candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.
