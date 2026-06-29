@@ -36,6 +36,7 @@ custom corpus manifest
 -> custom corpus dry-run
 -> property candidate manifest
 -> property candidate planner
+-> property candidate review queue
 -> human review artifact
 -> admission request
 -> package binding validator
@@ -171,6 +172,16 @@ Property candidate validation checks structure and trainability decision
 fields. The planner prepares aggregate counts, safe record id lists, and review
 queue planning, but still does not create human review artifacts, perform
 human review, or call an LLM or agent.
+
+Validated property candidate manifests can also feed the offline review queue
+builder:
+
+```text
+docs/custom-corpus-property-candidate-review-queue.md
+```
+
+Review queue artifacts remain pre-review artifacts. They prepare material for a
+future reviewer, but they do not create `custom_corpus_review.v1` decisions.
 
 ## Boundaries
 

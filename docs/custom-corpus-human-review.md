@@ -18,6 +18,7 @@ For the complete custom corpus governance path, see
 ```text
 custom corpus dry-run
 -> extracted/rejected/candidate records
+-> optional property candidate review queue
 -> custom_corpus_review.v1 artifact
 -> future dataset admission gate
 ```
@@ -26,6 +27,16 @@ The review artifact is intentionally separate from admission. A future
 admission gate must still verify manifest binding, source artifact hashes,
 review completeness, redaction safety, and project policy before any record can
 become training data.
+
+Future human review may use property candidate review queue artifacts as input
+material:
+
+```text
+docs/custom-corpus-property-candidate-review-queue.md
+```
+
+Queue records do not imply accept, reject, or needs-review outcomes. Reviewers
+must still create explicit `custom_corpus_review.v1` decisions.
 
 ## Schema
 
