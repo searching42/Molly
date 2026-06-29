@@ -110,11 +110,22 @@ It runs formal package validation for the property-candidate path, but the
 materialization planner remains downstream of formal package validation and a
 separate materialization plan.
 
+The property materialization plan draft builder can create a reviewable
+`custom_corpus_materialization.v1` draft after formal package validation:
+
+```text
+docs/custom-corpus-property-materialization-plan-draft.md
+```
+
+This is still upstream of the offline materialization planner. The draft
+builder does not invoke this planner or any materializer.
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
 human review, property review binding, readiness, request planning when
 applicable, explicit admission draft review, draft package precheck when used,
-formal package validation, and the materialization plan.
+formal package validation, property materialization plan drafting when used,
+and the materialization plan.
 
 ## Planner Outputs
 

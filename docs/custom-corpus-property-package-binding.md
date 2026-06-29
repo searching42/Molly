@@ -86,6 +86,26 @@ The runner creates a clean run directory:
 The run directory must be absent or empty. This PR does not implement
 overwrite.
 
+## After Package Binding: Materialization Plan Draft
+
+The next property-candidate boundary is documented in:
+
+```text
+docs/custom-corpus-property-materialization-plan-draft.md
+```
+
+Future draft evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-property-materialization-plan-draft-evidence-template.md
+```
+
+Property-aware package binding runs formal package validation. The downstream
+materialization plan draft builder can create a reviewable
+`custom_corpus_materialization.v1` draft from package-validated property
+admission records. That draft is still not materialization, and the offline
+materialization planner and future materializer remain separate.
+
 ## Status Meanings
 
 `passed` means the property precheck passed, local checks passed, and formal
