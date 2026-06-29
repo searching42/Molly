@@ -44,7 +44,8 @@ custom corpus manifest
 -> property training admission execution request preflight
 -> property training admission execution dry-run
 -> property training admission execution dry-run precheck
--> future training admission execution
+-> property training admission execution ledger
+-> future training dataset materialization
 ```
 
 Concrete artifact schemas:
@@ -85,6 +86,8 @@ Concrete artifact schemas:
 - `custom_corpus_property_training_admission_execution_request_builder.v1`
 - `custom_corpus_property_training_admission_execution_request_preflight.v1`
 - `custom_corpus_property_training_admission_execution_dry_run.v1`
+- `custom_corpus_property_training_admission_execution_dry_run_precheck.v1`
+- `custom_corpus_property_training_admission_execution_ledger.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -1511,6 +1514,88 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - precheck redaction fails
 
+## Step 30: Property Training Admission Execution Ledger
+
+The property training admission execution ledger reads the dry-run precheck,
+dry-run report, execution request package, execution request preflight, request
+draft, draft precheck, request plan, request preflight, training admission
+readiness summary, quarantine candidate preflight summary, and quarantine
+candidate records. It commits safe admission decisions into a ledger only. It
+is not training dataset materialization: no training CSV/JSONL/Parquet/LMDB,
+candidate CSV/JSONL/Parquet/LMDB, Phase 1 artifact, `DatasetConfirmation`
+change, model training, or evaluation is produced.
+
+References:
+
+- `docs/custom-corpus-property-training-admission-execution-ledger.md`
+- `docs/custom-corpus-property-training-admission-execution-dry-run-precheck.md`
+- `docs/evidence/templates/custom-corpus-property-training-admission-execution-ledger-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_admission_execution_ledger \
+  --training-admission-execution-dry-run-precheck /path/outside/git/property_training_admission_execution_dry_run_precheck_summary.json \
+  --training-admission-execution-dry-run-report /path/outside/git/property_training_admission_execution_dry_run_report.json \
+  --training-admission-execution-request /path/outside/git/property_training_admission_execution_request.json \
+  --training-admission-execution-request-summary /path/outside/git/property_training_admission_execution_request_summary.json \
+  --training-admission-execution-request-preflight /path/outside/git/property_training_admission_execution_request_preflight_summary.json \
+  --training-admission-request-draft /path/outside/git/property_training_admission_request.draft.json \
+  --training-admission-request-draft-summary /path/outside/git/property_training_admission_request_draft_summary.json \
+  --training-admission-request-draft-precheck /path/outside/git/property_training_admission_request_draft_precheck_summary.json \
+  --training-admission-request-plan /path/outside/git/property_training_admission_request_plan_summary.json \
+  --training-admission-request-preflight /path/outside/git/property_training_admission_request_preflight_summary.json \
+  --training-admission-readiness-summary /path/outside/git/property_training_admission_readiness_summary.json \
+  --quarantine-candidate-preflight-summary /path/outside/git/property_quarantine_candidate_preflight_summary.json \
+  --quarantine-candidate-records /path/outside/git/property_quarantine_candidate_records.json \
+  --output-dir /path/outside/git/property-training-admission-execution-ledger \
+  --execution-ledger-id property-training-admission-execution-ledger-001 \
+  --created-by operator-redacted \
+  --confirm-training-admission-ledger-write
+```
+
+Pass criteria:
+
+- explicit ledger write confirmation is present
+- dry-run precheck status is `passed`
+- dry-run report status is `passed`
+- execution request preflight status is `passed`
+- execution request status is `written`
+- draft package precheck status is `passed`
+- draft status is `written`
+- request plan status is `planned`
+- request preflight status is `passed`
+- readiness status is `ready`
+- dry-run record ids, execution record ids, and planned candidate ids match
+- source hashes and ids match across all upstream artifacts
+- excluded, blocked, and needs-review records are not present
+- ledger records set `training_admitted=true`
+- ledger records keep Phase 1 `not_run`
+- ledger records keep `DatasetConfirmation` unchanged
+- ledger and evidence redaction checks pass
+
+Needs-review criteria:
+
+- dry-run precheck or upstream evidence is `needs_review` or partial
+- `--allow-dry-run-precheck-needs-review` is explicitly set
+- no hard consistency check failed
+
+Fail criteria:
+
+- confirmation is missing
+- dry-run precheck is blocked or invalid
+- dry-run precheck is needs-review without explicit allowance
+- dry-run report is blocked or invalid
+- source hashes or ids mismatch
+- planned candidate records derive from excluded, blocked, or needs-review
+  records
+- output directory is non-empty
+- Phase 1 is not `not_run`
+- `DatasetConfirmation` changed
+- raw text, private paths, token-like values, PDF names, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
+- ledger redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -1797,6 +1882,7 @@ Allowed:
 - property training admission execution request preflight
 - property training admission execution dry-run
 - property training admission execution dry-run precheck
+- property training admission execution ledger
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
