@@ -38,7 +38,8 @@ custom corpus manifest
 -> property training admission readiness
 -> property training admission request planner
 -> property training admission request preflight
--> future training admission request
+-> property training admission request draft
+-> future training admission execution
 ```
 
 Concrete artifact schemas:
@@ -72,6 +73,8 @@ Concrete artifact schemas:
 - `custom_corpus_property_training_admission_readiness.v1`
 - `custom_corpus_property_training_admission_request_plan.v1`
 - `custom_corpus_property_training_admission_request_preflight.v1`
+- `custom_corpus_property_training_admission_request_draft.v1`
+- `custom_corpus_property_training_admission_request_draft_builder.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -1055,6 +1058,74 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - preflight redaction fails
 
+## Step 24: Property Training Admission Request Draft
+
+The property training admission request draft builder reads request preflight,
+request plan, training admission readiness, quarantine candidate preflight,
+and quarantine candidate record artifacts. It can write a reviewable training
+admission request draft after explicit operator confirmation. It is not
+execution: no training admission is executed, no training data is admitted,
+and no training artifact is produced.
+
+References:
+
+- `docs/custom-corpus-property-training-admission-request-draft.md`
+- `docs/custom-corpus-property-training-admission-request-preflight.md`
+- `docs/evidence/templates/custom-corpus-property-training-admission-request-draft-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_admission_request_draft \
+  --training-admission-request-plan /path/outside/git/property_training_admission_request_plan_summary.json \
+  --training-admission-request-preflight /path/outside/git/property_training_admission_request_preflight_summary.json \
+  --training-admission-readiness-summary /path/outside/git/property_training_admission_readiness_summary.json \
+  --quarantine-candidate-preflight-summary /path/outside/git/property_quarantine_candidate_preflight_summary.json \
+  --quarantine-candidate-records /path/outside/git/property_quarantine_candidate_records.json \
+  --output-dir /path/outside/git/property-training-admission-request-draft \
+  --request-draft-id property-training-admission-request-draft-001 \
+  --created-by operator-redacted \
+  --confirm-training-admission-request-draft-output
+```
+
+Pass criteria:
+
+- explicit draft-output confirmation is present
+- request preflight status is `passed`
+- request plan status is `planned`
+- readiness status is `ready`
+- planned candidate ids match quarantine candidate ids
+- source hashes and ids match across plan/preflight/readiness/quarantine
+  artifacts
+- excluded, blocked, and needs-review records are not drafted
+- output directory is clean
+- no training data is admitted
+- no training or candidate CSV/JSONL/Parquet/LMDB artifact is created
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- draft, summary, and Markdown redaction checks pass
+
+Needs-review criteria:
+
+- request preflight is `partial`
+- `--allow-preflight-partial` is explicitly set
+- no hard consistency check failed
+
+Fail criteria:
+
+- confirmation is missing
+- request preflight is blocked
+- request preflight is partial without explicit allowance
+- request plan, readiness, or quarantine evidence is blocked
+- source hashes or ids mismatch
+- planned candidate ids are missing or below threshold
+- planned candidate records derive from excluded, blocked, or needs-review
+  records
+- output directory is non-empty
+- raw text, private paths, token-like values, PDF names, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted artifacts
+- draft redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -1335,6 +1406,7 @@ Allowed:
 - property training admission readiness planner
 - property training admission request planner
 - property training admission request preflight
+- property training admission request draft builder
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

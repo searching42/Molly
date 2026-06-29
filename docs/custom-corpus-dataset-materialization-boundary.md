@@ -35,6 +35,7 @@ custom corpus manifest
 -> property training admission readiness
 -> property training admission request planner
 -> property training admission request preflight
+-> property training admission request draft
 -> future training admission boundary
 -> future training artifacts
 ```
@@ -69,6 +70,8 @@ Existing artifact schemas:
 - `custom_corpus_property_training_admission_readiness.v1`
 - `custom_corpus_property_training_admission_request_plan.v1`
 - `custom_corpus_property_training_admission_request_preflight.v1`
+- `custom_corpus_property_training_admission_request_draft.v1`
+- `custom_corpus_property_training_admission_request_draft_builder.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
 property path. They still stop before training admission, training artifacts,
@@ -186,6 +189,13 @@ not create or execute a training admission request, admit training data,
 materialize datasets, create training or candidate CSV/JSONL/Parquet/LMDB
 artifacts, run Phase 1, run model training/evaluation, or change
 `DatasetConfirmation`.
+
+The property training admission request draft builder sits after request
+preflight and before any future training admission execution. It writes a
+reviewable draft request only. It does not execute training admission, admit
+training data, materialize datasets, create training or candidate
+CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, run model training/evaluation,
+or change `DatasetConfirmation`.
 
 ## Materialization Definition
 
@@ -341,6 +351,17 @@ It checks whether request-plan evidence remains consistent with readiness and
 quarantine candidate preflight evidence before any future training admission
 execution request. It does not execute admission, create training data,
 materialize datasets, run Phase 1, or change `DatasetConfirmation`.
+
+The property training admission request draft builder is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-request-draft.md
+```
+
+It writes a reviewable draft request from preflight-passed request planning
+evidence. The draft is not training admission execution, contains no training
+data, produces no training artifacts, and leaves Phase 1 and
+`DatasetConfirmation` unchanged.
 
 ## Offline Materialization Planner
 

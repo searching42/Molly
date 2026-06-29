@@ -34,6 +34,7 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_training_admission_readiness.v1
 -> custom_corpus_property_training_admission_request_plan.v1
 -> custom_corpus_property_training_admission_request_preflight.v1
+-> custom_corpus_property_training_admission_request_draft.v1
 -> future training admission boundary
 ```
 
@@ -448,3 +449,19 @@ data, create training CSV/JSONL/Parquet/LMDB artifacts, create candidate
 CSV/JSONL/Parquet/LMDB artifacts, materialize datasets, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.
+
+## Property Training Admission Request Draft Note
+
+The property training admission request draft builder was added after request
+preflight:
+
+```text
+docs/custom-corpus-property-training-admission-request-draft.md
+```
+
+Request-preflight-passed plans can now produce reviewable training admission
+request drafts. This still does not execute training admission, admit training
+data, create training CSV/JSONL/Parquet/LMDB artifacts, create candidate
+CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change `DatasetConfirmation`,
+run model training/evaluation, call an LLM or agent, call MinerU, or parse
+PDFs.

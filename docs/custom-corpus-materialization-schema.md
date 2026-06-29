@@ -191,6 +191,17 @@ before any future execution request. It is not materialization input and does
 not execute training admission, admit training data, create datasets, run
 Phase 1, or change `DatasetConfirmation`.
 
+Training admission request drafts are downstream of request preflight:
+
+```text
+docs/custom-corpus-property-training-admission-request-draft.md
+```
+
+The request draft schema is separate from any training dataset schema. Drafts
+contain safe ids and hashes only, contain no training data, and do not execute
+materialization, create datasets, run Phase 1, or change
+`DatasetConfirmation`.
+
 ## Plan Contents
 
 A materialization plan includes:
