@@ -123,6 +123,25 @@ Return codes:
 - `1` when manifest validation fails, the run directory is non-empty,
   redaction fails, or the queue is empty without `--allow-empty-queue`
 
+## After Queue Preparation: Review Binding Validator
+
+Queue artifacts can guide human review, but reviewers must still create
+explicit `custom_corpus_review.v1` decisions. The property review binding
+validator checks that a manually-created review manifest corresponds to the
+review queue:
+
+```text
+docs/custom-corpus-property-review-binding.md
+```
+
+Future binding evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-review-binding-evidence-template.md
+```
+
+The binding validator does not create review decisions or a review manifest.
+
 ## Boundaries
 
 - The review queue builder does not implement property extraction.

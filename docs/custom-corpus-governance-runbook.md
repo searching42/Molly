@@ -21,6 +21,7 @@ custom corpus manifest
 -> property candidate planner
 -> property candidate review queue
 -> human review artifact
+-> property review binding validator
 -> admission request
 -> package binding validator
 -> materialization plan
@@ -36,6 +37,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_candidate_planner.v1`
 - `custom_corpus_property_candidate_review_queue.v1`
 - `custom_corpus_review.v1`
+- `custom_corpus_property_review_binding.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 - `custom_corpus_materialization.v1`
@@ -247,7 +249,36 @@ Fail criteria:
 - overlong raw article text
 - invalid decision-specific fields
 
-## Step 7: Admission Request
+## Step 7: Property Review Binding Validator
+
+The property review binding validator verifies that a manually-created
+`custom_corpus_review.v1` manifest corresponds to the property candidate review
+queue. It does not create review decisions.
+
+References:
+
+- `docs/custom-corpus-property-review-binding.md`
+- `docs/evidence/templates/custom-corpus-property-review-binding-evidence-template.md`
+
+Pass criteria:
+
+- queue and review manifest corpus/dry-run ids match
+- source manifest and dry-run report hashes match
+- every reviewed property candidate exists in the queue
+- no blocked queue record is reviewed
+- accepted records include extracted, normalized, and provenance summaries
+- completeness requirements are satisfied when enabled
+
+Fail criteria:
+
+- queue or review manifest is invalid
+- source hashes or ids mismatch
+- unknown or blocked records are reviewed
+- accepted records lack required summaries
+- complete queue binding is required but records are missing reviews
+- binding summary redaction fails
+
+## Step 8: Admission Request
 
 The admission request records governance intent. It may mark reviewed accepted
 records as `admit`, or mark records as `exclude` or `needs_review`. It does
@@ -285,7 +316,7 @@ Fail criteria:
 - missing required hashes
 - private path or token-like content
 
-## Step 8: Admission Package Binding Validator
+## Step 9: Admission Package Binding Validator
 
 The package validator checks the four artifacts together:
 
@@ -386,6 +417,7 @@ Allowed:
 - property candidate planner
 - property candidate review queue builder
 - human review schema and validator
+- property review binding validator
 - admission request schema and validator
 - admission package binding validator
 - materialization plan schema and validator

@@ -132,6 +132,20 @@ Detailed package validation behavior is documented in:
 docs/custom-corpus-admission-package-binding.md
 ```
 
+## Property Candidate Review Binding
+
+For property candidate reviews, future admission requests should be based on
+queue-bound human review manifests. The property review binding validator
+checks that a manually-created `custom_corpus_review.v1` manifest corresponds
+to the property candidate review queue:
+
+```text
+docs/custom-corpus-property-review-binding.md
+```
+
+The binding summary can be used as pre-admission evidence, but admission
+remains a separate request and validation boundary.
+
 The future materialization boundary is designed in:
 
 ```text
