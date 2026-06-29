@@ -176,6 +176,16 @@ It creates request-only handoff artifacts for a future materializer. It does
 not run this planner, run a materializer, execute materialization, or create
 candidate/training artifacts.
 
+The downstream materializer execution request preflight consumes the execution
+request and upstream dry-run/planner evidence:
+
+```text
+docs/custom-corpus-property-materializer-execution-preflight.md
+```
+
+It checks request consistency only. It does not execute materialization and
+does not invoke this planner.
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
 human review, property review binding, readiness, request planning when
@@ -183,8 +193,8 @@ applicable, explicit admission draft review, draft package precheck when used,
 formal package validation, property materialization plan drafting when used,
 property materialization plan preflight when used, property-aware planner
 runner gating when used, property materialization dry-run when used, and the
-materializer execution request when used. It remains separate from any future
-materializer.
+materializer execution request and request preflight when used. It remains
+separate from any future materializer.
 
 ## Planner Outputs
 

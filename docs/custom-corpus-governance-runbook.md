@@ -32,6 +32,7 @@ custom corpus manifest
 -> property-aware offline materialization planner
 -> property materialization dry-run
 -> materializer execution request
+-> materializer execution request preflight
 -> future materializer
 ```
 
@@ -59,6 +60,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_materialization_dry_run.v1`
 - `custom_corpus_property_materializer_execution_request.v1`
 - `custom_corpus_property_materializer_execution_request_builder.v1`
+- `custom_corpus_property_materializer_execution_preflight.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -838,6 +840,70 @@ Fail criteria:
 - materialization records include excluded, blocked, or needs-review records
 - output directory is not clean
 - request redaction fails
+
+## Step 18: Property Materializer Execution Request Preflight
+
+The property materializer execution request preflight reads the request-only
+execution packet, execution request builder summary, materialization dry-run
+report, and upstream package/planner evidence. It validates request
+consistency before future materializer submission. It is not materializer
+execution, is not materialization, and produces no candidate/training
+artifact.
+
+References:
+
+- `docs/custom-corpus-property-materializer-execution-preflight.md`
+- `docs/custom-corpus-property-materializer-execution-request.md`
+- `docs/evidence/templates/custom-corpus-property-materializer-execution-preflight-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_materializer_execution_preflight \
+  --manifest /path/outside/git/custom-corpus-manifest.json \
+  --dry-run-report /path/outside/git/dry_run_report.json \
+  --review-manifest /path/outside/git/custom-corpus-review.json \
+  --admission-request /path/outside/git/custom-corpus-admission-request.json \
+  --formal-package-validation /path/outside/git/custom_corpus_admission_package_validation.json \
+  --property-package-binding-summary /path/outside/git/property_package_binding_summary.json \
+  --materialization-plan /path/outside/git/custom_corpus_materialization.draft.json \
+  --materialization-plan-preflight-summary /path/outside/git/property_materialization_plan_preflight_summary.json \
+  --offline-planner-output /path/outside/git/offline_materialization_planner_output.json \
+  --property-planner-summary /path/outside/git/property_materialization_planner_summary.json \
+  --materialization-dry-run-report /path/outside/git/property_materialization_dry_run_report.json \
+  --execution-request /path/outside/git/property_materializer_execution_request.json \
+  --execution-request-summary /path/outside/git/property_materializer_execution_request_summary.json \
+  --output-summary /tmp/property-materializer-execution-preflight-summary.json \
+  --output-markdown /tmp/property-materializer-execution-preflight-summary.md
+```
+
+Pass criteria:
+
+- execution request status is `written`
+- execution mode is `request_only`
+- materializer status is `not_run`
+- Phase 1 remains `not_run`
+- training admitted remains false
+- `DatasetConfirmation` changed is false
+- dry-run status is `passed`, or `needs_review` is allowed by non-strict mode
+- all source hashes match actual input files
+- materialization and execution record ids/counts match upstream evidence
+- execution records derive only from admitted, accepted materialization records
+- excluded, blocked, and needs-review records are not execution request records
+- execution records contain safe ids and hashes only
+- preflight summary and Markdown redaction checks pass
+
+Fail criteria:
+
+- execution request or summary schema is invalid
+- request status is not `written`
+- materializer status changes from `not_run`
+- Phase 1 ran, training was admitted, or `DatasetConfirmation` changed
+- dry-run failed or strict mode rejects needs-review evidence
+- source hashes or ids mismatch
+- execution records include excluded, blocked, or needs-review records
+- execution records include unsafe values or paths
+- preflight redaction fails
 
 ## Artifact Retention Policy
 

@@ -107,6 +107,26 @@ Execution records use `planned_action=request_materialize_candidate`. That
 field is a request label only. It is not materialization and is not training
 admission.
 
+## After Execution Request: Materializer Execution Preflight
+
+After the request is written, operators can preflight the request before any
+future materializer submission:
+
+```text
+docs/custom-corpus-property-materializer-execution-preflight.md
+```
+
+Evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-materializer-execution-preflight-evidence-template.md
+```
+
+The execution preflight checks whether the request remains hash-bound,
+internally consistent, and safe. It does not run a real materializer, execute
+materialization, create materialized records, create candidate/training
+artifacts, run Phase 1, or modify `DatasetConfirmation`.
+
 ## CLI Usage
 
 ```bash

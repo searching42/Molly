@@ -29,6 +29,7 @@ custom corpus manifest
 -> property-aware offline materialization planner
 -> property materialization dry-run
 -> materializer execution request
+-> materializer execution request preflight
 -> future materialization boundary
 -> future candidate/training artifacts
 ```
@@ -56,6 +57,7 @@ Existing artifact schemas:
 - `custom_corpus_property_materialization_planner_runner.v1`
 - `custom_corpus_property_materialization_dry_run.v1`
 - `custom_corpus_property_materializer_execution_request.v1`
+- `custom_corpus_property_materializer_execution_preflight.v1`
 
 All current steps stop before materialization.
 
@@ -133,6 +135,11 @@ can write request-only handoff artifacts for a future materializer, but it
 still does not run the materializer, execute materialization, create
 candidate/training artifacts, admit training data, run Phase 1, or change
 `DatasetConfirmation`.
+
+The property materializer execution request preflight sits after request
+generation and before any future materializer. It validates the request and
+upstream dry-run/planner evidence only. It is not materialization and produces
+no candidate/training artifact.
 
 ## Materialization Definition
 
@@ -221,6 +228,15 @@ docs/custom-corpus-property-materializer-execution-request.md
 
 It creates a request-only future-materializer handoff after a passed dry-run.
 The request is not execution and does not create materialized data.
+
+The property materializer execution request preflight is documented in:
+
+```text
+docs/custom-corpus-property-materializer-execution-preflight.md
+```
+
+It checks request readiness before future materializer submission, but it does
+not run a materializer or produce candidate/training artifacts.
 
 ## Offline Materialization Planner
 
