@@ -229,3 +229,18 @@ request plans and manually-created review manifests. It still does not run
 package binding, admit training data, materialize data, call an LLM or agent,
 perform evaluation/RL, create candidate/training CSVs, run Phase 1, or change
 `DatasetConfirmation`.
+
+## Property Admission Draft Package Precheck Note
+
+The property admission draft package precheck was added after the draft
+builder:
+
+```text
+docs/custom-corpus-property-admission-draft-package-precheck.md
+```
+
+It checks reviewable admission drafts against upstream property evidence before
+formal package binding. It still does not run formal package binding, create
+`custom_corpus_admission_package_validation.v1`, admit training data,
+materialize data, call an LLM or agent, perform evaluation/RL, create
+candidate/training CSVs, run Phase 1, or change `DatasetConfirmation`.

@@ -121,6 +121,23 @@ explicit operator review. Package binding must consume the actual draft or
 admission request artifact plus the manifest, dry-run report, and review
 manifest. The request plan alone is insufficient for package binding.
 
+## Property Admission Draft Package Precheck
+
+Property admission draft package precheck is upstream evidence before formal
+package binding:
+
+```text
+docs/custom-corpus-property-admission-draft-package-precheck.md
+```
+
+The precheck compares a reviewable admission draft against the manifest,
+dry-run report, review manifest, draft summary, request plan summary,
+readiness summary, and review binding summary. Its output may help an operator
+decide whether to run formal package binding, but it is not a substitute for
+`custom_corpus_admission_package_validation.v1`. Formal package binding still
+consumes the actual manifest, dry-run report, review manifest, and admission
+request artifacts.
+
 ## Decision Semantics
 
 The summary has two independent decision fields:

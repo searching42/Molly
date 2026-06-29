@@ -62,6 +62,8 @@ actual admission; request-plan summaries do not replace
 
 An admission draft alone is not sufficient materialization input.
 Materialization plans must consume package-validated admission artifacts.
+Property admission draft package precheck is upstream evidence only; it does
+not replace formal package validation and is not a materialization input.
 
 ## Plan Contents
 

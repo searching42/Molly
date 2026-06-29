@@ -25,6 +25,7 @@ custom corpus manifest
 -> property admission readiness planner
 -> property admission request planner
 -> property admission request draft
+-> property admission draft package precheck
 -> package binding validator
 -> materialization plan
 -> offline materialization planner
@@ -43,6 +44,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_admission_readiness.v1`
 - `custom_corpus_property_admission_request_plan.v1`
 - `custom_corpus_property_admission_draft_builder.v1`
+- `custom_corpus_property_admission_draft_package_precheck.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 - `custom_corpus_materialization.v1`
@@ -403,7 +405,57 @@ Fail criteria:
 - generated draft fails `custom_corpus_admission.v1` validation
 - private path or token-like content appears in draft artifacts
 
-## Step 11: Admission Package Binding Validator
+## Step 11: Property Admission Draft Package Precheck
+
+The property admission draft package precheck reads the admission draft plus
+upstream property governance summaries and reports whether the draft appears
+ready for later formal package binding. It is not formal package binding and
+does not create `custom_corpus_admission_package_validation.v1`.
+
+References:
+
+- `docs/custom-corpus-property-admission-draft-package-precheck.md`
+- `docs/evidence/templates/custom-corpus-property-admission-draft-package-precheck-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_admission_draft_package_precheck \
+  --manifest /path/outside/git/custom-corpus-manifest.json \
+  --dry-run-report /path/outside/git/dry_run_report.json \
+  --review-manifest /path/outside/git/custom-corpus-review.json \
+  --admission-draft /path/outside/git/custom_corpus_admission.draft.json \
+  --draft-summary /path/outside/git/property_admission_draft_summary.json \
+  --request-plan-summary /path/outside/git/property_admission_request_plan_summary.json \
+  --readiness-summary /path/outside/git/property_admission_readiness_summary.json \
+  --review-binding-summary /path/outside/git/property_review_binding_summary.json \
+  --output-summary /tmp/property-admission-draft-package-precheck-summary.json
+```
+
+Pass criteria:
+
+- precheck status is `passed`
+- dry-run decision is `passed`
+- `DatasetConfirmation.confirmed=false`
+- Phase 1 status is `not_run`
+- training dataset admitted is `false`
+- draft, request plan, readiness, and review binding ids match
+- non-empty artifact hashes match actual input files
+- admission draft record ids match upstream admit/exclude ids
+- reviewed blocked or unknown review records are not in the draft
+- redaction checks pass
+
+Fail criteria:
+
+- any input schema is invalid
+- dry-run was confirmed, Phase 1 ran, or training was admitted
+- draft, request plan, readiness, or review binding is blocked or failed
+- required source hashes mismatch
+- admission draft records do not match upstream property evidence
+- needs-review records appear as admitted draft records
+- summary redaction fails
+
+## Step 12: Admission Package Binding Validator
 
 The package validator checks the four artifacts together:
 
@@ -508,6 +560,7 @@ Allowed:
 - property admission readiness planner
 - property admission request planner
 - property admission draft builder
+- property admission draft package precheck
 - admission request schema and validator
 - admission package binding validator
 - materialization plan schema and validator

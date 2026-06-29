@@ -89,11 +89,21 @@ The property admission draft builder is upstream of package binding:
 docs/custom-corpus-property-admission-draft-builder.md
 ```
 
+The property admission draft package precheck is also upstream of formal
+package binding:
+
+```text
+docs/custom-corpus-property-admission-draft-package-precheck.md
+```
+
+It does not create package validation artifacts and is not materialization
+planning.
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
 human review, property review binding, readiness, request planning when
-applicable, explicit admission draft review, package validation, and the
-materialization plan.
+applicable, explicit admission draft review, draft package precheck when used,
+formal package validation, and the materialization plan.
 
 ## Planner Outputs
 
