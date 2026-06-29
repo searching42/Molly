@@ -215,3 +215,17 @@ plans. It still does not generate `custom_corpus_admission.v1`, create
 admission actions, admit data, materialize data, call an LLM or agent, perform
 evaluation/RL, create candidate/training CSVs, run Phase 1, or change
 `DatasetConfirmation`.
+
+## Property Admission Draft Builder Note
+
+The property admission draft builder was added after the request planner:
+
+```text
+docs/custom-corpus-property-admission-draft-builder.md
+```
+
+It can generate reviewable `custom_corpus_admission.v1` draft artifacts from
+request plans and manually-created review manifests. It still does not run
+package binding, admit training data, materialize data, call an LLM or agent,
+perform evaluation/RL, create candidate/training CSVs, run Phase 1, or change
+`DatasetConfirmation`.

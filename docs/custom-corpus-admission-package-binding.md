@@ -109,6 +109,18 @@ Request plans can describe what a future admission request should contain, but
 they do not substitute for `custom_corpus_admission.v1`. Package binding still
 validates real manifest, dry-run, review, and admission package artifacts.
 
+Property admission drafts are closer to package binding, but still require
+operator review before use:
+
+```text
+docs/custom-corpus-property-admission-draft-builder.md
+```
+
+An admission draft can become an input to future package binding only after
+explicit operator review. Package binding must consume the actual draft or
+admission request artifact plus the manifest, dry-run report, and review
+manifest. The request plan alone is insufficient for package binding.
+
 ## Decision Semantics
 
 The summary has two independent decision fields:
