@@ -101,6 +101,24 @@ property_training_admission_execution_request_preflight_redaction_failed
 
 Unsafe Markdown is not written.
 
+## After Execution Request Preflight: Execution Dry-Run
+
+The execution dry-run is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-execution-dry-run.md
+```
+
+Future evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-admission-execution-dry-run-evidence-template.md
+```
+
+The execution request preflight validates request package consistency. The
+execution dry-run simulates future admission execution as labels only. Actual
+training admission execution remains separate and unimplemented.
+
 ## Boundaries
 
 - The preflight validates an execution request only.
