@@ -157,6 +157,16 @@ Future admission requests for property candidates should use readiness
 summaries as pre-admission evidence. Readiness does not replace admission; the
 admission request remains separate and explicit.
 
+Property admission request planning is another upstream evidence step:
+
+```text
+docs/custom-corpus-property-admission-request-planner.md
+```
+
+Future admission requests can be drafted from request-plan evidence, but a
+request plan does not replace an explicit `custom_corpus_admission.v1`
+artifact. Admission remains separate and explicit.
+
 The future materialization boundary is designed in:
 
 ```text

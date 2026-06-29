@@ -55,6 +55,11 @@ The property admission readiness planner is also upstream evidence. It can
 summarize accepted reviewed records for future admission planning, but
 materialization plans must consume records that passed explicit admission.
 
+The property admission request planner is upstream evidence, not a
+materialization input. Materialization plans must consume records that passed
+actual admission; request-plan summaries do not replace
+`custom_corpus_admission.v1`.
+
 ## Plan Contents
 
 A materialization plan includes:

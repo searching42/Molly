@@ -23,6 +23,7 @@ custom corpus manifest
 -> human review artifact
 -> property review binding validator
 -> property admission readiness planner
+-> property admission request planner
 -> admission request
 -> package binding validator
 -> materialization plan
@@ -40,6 +41,7 @@ Concrete artifact schemas:
 - `custom_corpus_review.v1`
 - `custom_corpus_property_review_binding.v1`
 - `custom_corpus_property_admission_readiness.v1`
+- `custom_corpus_property_admission_request_plan.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 - `custom_corpus_materialization.v1`
@@ -311,7 +313,51 @@ Fail criteria:
 - accepted records are missing required summaries or binding membership
 - readiness summary redaction fails
 
-## Step 9: Admission Request
+## Step 9: Property Admission Request Planner
+
+The property admission request planner reads an admission readiness summary and
+a manually-created `custom_corpus_review.v1` manifest. It produces a safe plan
+for what a future admission request would need to contain. It does not create
+admission actions or a `custom_corpus_admission.v1` artifact.
+
+References:
+
+- `docs/custom-corpus-property-admission-request-planner.md`
+- `docs/evidence/templates/custom-corpus-property-admission-request-plan-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_admission_request_planner \
+  --admission-readiness-summary /path/outside/git/property-admission-readiness-summary.json \
+  --review-manifest /path/outside/git/custom-corpus-review.json \
+  --output-summary /tmp/custom-corpus-property-admission-request-plan-summary.json \
+  --output-markdown /tmp/custom-corpus-property-admission-request-plan-summary.md \
+  --require-ready-status
+```
+
+Pass criteria:
+
+- readiness summary validates
+- review manifest ids, corpus id, dry-run id, and source hashes match the
+  readiness summary
+- accepted records planned for future admit have extracted, normalized, and
+  provenance summaries
+- rejected records planned for future exclude have reject decisions
+- at least one future admit or exclude record is planned
+- redaction checks pass
+
+Fail criteria:
+
+- readiness status is blocked
+- ready status is required but readiness is partial
+- readiness errors are present
+- future admit is planned from a non-accept review
+- future exclude is planned from a non-reject review
+- required accepted-record summaries are missing
+- request-plan summary redaction fails
+
+## Step 10: Admission Request
 
 The admission request records governance intent. It may mark reviewed accepted
 records as `admit`, or mark records as `exclude` or `needs_review`. It does
@@ -349,7 +395,7 @@ Fail criteria:
 - missing required hashes
 - private path or token-like content
 
-## Step 10: Admission Package Binding Validator
+## Step 11: Admission Package Binding Validator
 
 The package validator checks the four artifacts together:
 
@@ -452,6 +498,7 @@ Allowed:
 - human review schema and validator
 - property review binding validator
 - property admission readiness planner
+- property admission request planner
 - admission request schema and validator
 - admission package binding validator
 - materialization plan schema and validator

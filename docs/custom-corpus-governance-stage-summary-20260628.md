@@ -200,3 +200,18 @@ candidates. It still does not generate admission requests, create admission
 actions, admit data, materialize data, call an LLM or agent, perform
 evaluation/RL, create candidate/training CSVs, run Phase 1, or change
 `DatasetConfirmation`.
+
+## Property Admission Request Planner Note
+
+The property admission request planner was added as the next pre-admission
+planning layer:
+
+```text
+docs/custom-corpus-property-admission-request-planner.md
+```
+
+It summarizes admission-ready review records into safe future admission request
+plans. It still does not generate `custom_corpus_admission.v1`, create
+admission actions, admit data, materialize data, call an LLM or agent, perform
+evaluation/RL, create candidate/training CSVs, run Phase 1, or change
+`DatasetConfirmation`.
