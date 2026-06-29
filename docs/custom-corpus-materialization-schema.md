@@ -60,6 +60,9 @@ materialization input. Materialization plans must consume records that passed
 actual admission; request-plan summaries do not replace
 `custom_corpus_admission.v1`.
 
+An admission draft alone is not sufficient materialization input.
+Materialization plans must consume package-validated admission artifacts.
+
 ## Plan Contents
 
 A materialization plan includes:

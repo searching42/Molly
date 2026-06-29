@@ -120,6 +120,26 @@ it fails closed with:
 property_admission_request_plan_summary_redaction_failed
 ```
 
+## After Request Planning: Admission Draft Builder
+
+The next boundary is documented in:
+
+```text
+docs/custom-corpus-property-admission-draft-builder.md
+```
+
+Future evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-property-admission-draft-evidence-template.md
+```
+
+The request planner outputs planning summaries only. The draft builder can
+write a reviewable `custom_corpus_admission.v1` draft artifact from a valid
+request plan and review manifest. That draft still needs explicit downstream
+validation; it is not package binding, materialization, training admission, or
+Phase 1 confirmation.
+
 ## Boundaries
 
 - Admission request planning is not admission.

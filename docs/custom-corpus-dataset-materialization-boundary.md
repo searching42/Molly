@@ -21,7 +21,7 @@ custom corpus manifest
 -> property review binding validator
 -> property admission readiness planner
 -> property admission request planner
--> admission request
+-> property admission request draft
 -> admission package binding validation
 -> future materialization boundary
 -> future candidate/training artifacts
@@ -38,6 +38,7 @@ Existing artifact schemas:
 - `custom_corpus_property_review_binding.v1`
 - `custom_corpus_property_admission_readiness.v1`
 - `custom_corpus_property_admission_request_plan.v1`
+- `custom_corpus_property_admission_draft_builder.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 
@@ -70,6 +71,11 @@ The property admission request planner sits after readiness and before the
 actual admission request. It prepares request-plan evidence only. Materialization
 still requires actual admission, package validation, and a materialization plan;
 request-plan evidence does not directly materialize data.
+
+The property admission draft builder can write a reviewable
+`custom_corpus_admission.v1` draft, but the draft is still upstream of package
+binding. It does not directly materialize data, and materialization still
+requires package validation and a materialization plan.
 
 ## Materialization Definition
 

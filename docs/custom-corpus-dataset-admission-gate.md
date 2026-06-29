@@ -167,6 +167,16 @@ Future admission requests can be drafted from request-plan evidence, but a
 request plan does not replace an explicit `custom_corpus_admission.v1`
 artifact. Admission remains separate and explicit.
 
+The property admission draft builder can create reviewable admission request
+drafts:
+
+```text
+docs/custom-corpus-property-admission-draft-builder.md
+```
+
+The draft artifact does not admit training data. Explicit package binding and
+later materialization remain separate downstream gates.
+
 The future materialization boundary is designed in:
 
 ```text

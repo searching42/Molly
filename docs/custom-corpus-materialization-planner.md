@@ -83,11 +83,17 @@ request creation:
 docs/custom-corpus-property-admission-request-planner.md
 ```
 
+The property admission draft builder is upstream of package binding:
+
+```text
+docs/custom-corpus-property-admission-draft-builder.md
+```
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
 human review, property review binding, readiness, request planning when
-applicable, explicit admission, package validation, and the materialization
-plan.
+applicable, explicit admission draft review, package validation, and the
+materialization plan.
 
 ## Planner Outputs
 

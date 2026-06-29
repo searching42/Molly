@@ -24,7 +24,7 @@ custom corpus manifest
 -> property review binding validator
 -> property admission readiness planner
 -> property admission request planner
--> admission request
+-> property admission request draft
 -> package binding validator
 -> materialization plan
 -> offline materialization planner
@@ -42,6 +42,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_review_binding.v1`
 - `custom_corpus_property_admission_readiness.v1`
 - `custom_corpus_property_admission_request_plan.v1`
+- `custom_corpus_property_admission_draft_builder.v1`
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 - `custom_corpus_materialization.v1`
@@ -357,43 +358,50 @@ Fail criteria:
 - required accepted-record summaries are missing
 - request-plan summary redaction fails
 
-## Step 10: Admission Request
+## Step 10: Property Admission Request Draft
 
-The admission request records governance intent. It may mark reviewed accepted
-records as `admit`, or mark records as `exclude` or `needs_review`. It does
-not materialize data, create candidate/training CSVs, set `DatasetConfirmation`,
-or run Phase 1.
+The property admission draft builder writes a reviewable
+`custom_corpus_admission.v1` draft from a request plan and a manually-created
+review manifest. The draft records governance intent, but it does not admit
+training data, run package binding, materialize data, create
+candidate/training CSVs, set `DatasetConfirmation`, or run Phase 1.
 
 References:
 
+- `docs/custom-corpus-property-admission-draft-builder.md`
 - `docs/custom-corpus-dataset-admission-gate.md`
-- `docs/examples/custom-corpus-admission-request.example.json`
-- `docs/evidence/templates/custom-corpus-admission-gate-evidence-template.md`
+- `docs/evidence/templates/custom-corpus-property-admission-draft-evidence-template.md`
 
 Example command:
 
 ```bash
-PYTHONPATH=src python -m ai4s_agent.custom_corpus_admission \
-  --admission-request /path/outside/git/custom-corpus-admission-request.json \
-  --output-summary /tmp/custom-corpus-admission-summary.json
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_admission_draft_builder \
+  --admission-request-plan /path/outside/git/property-admission-request-plan-summary.json \
+  --review-manifest /path/outside/git/custom-corpus-review.json \
+  --output-dir /tmp/custom-corpus-property-admission-draft \
+  --admission-request-id property-admission-draft-<date> \
+  --dataset-target example-candidate-target \
+  --created-by operator-redacted \
+  --confirm-admission-draft-output
 ```
 
 Pass criteria:
 
-- request validates
-- required hashes are present
-- action/review decision rules hold
-- dataset target is a safe label
-- summary decision is recorded as `eligible`, `needs_review`, or `ineligible`
+- request plan validates and is not blocked
+- explicit draft output confirmation is present
+- review manifest ids and source hashes match the request plan
+- generated draft validates as `custom_corpus_admission.v1`
+- blocked records are not included in the draft admission request
+- redaction checks pass
 
 Fail criteria:
 
-- admit without accepted review
-- rejected record admitted
-- needs-review record admitted
-- missing reasons
-- missing required hashes
-- private path or token-like content
+- confirmation flag is missing
+- request plan is blocked
+- request plan is partial and partial output is not explicitly allowed
+- no draft admission records are created
+- generated draft fails `custom_corpus_admission.v1` validation
+- private path or token-like content appears in draft artifacts
 
 ## Step 11: Admission Package Binding Validator
 
@@ -499,6 +507,7 @@ Allowed:
 - property review binding validator
 - property admission readiness planner
 - property admission request planner
+- property admission draft builder
 - admission request schema and validator
 - admission package binding validator
 - materialization plan schema and validator
