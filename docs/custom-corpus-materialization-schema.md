@@ -166,6 +166,18 @@ no training data. It reports safe candidate ids and hash bindings only; it does
 not create training or candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1,
 admit training data, or change `DatasetConfirmation`.
 
+Training admission execution dry-run precheck is downstream of the execution
+dry-run:
+
+```text
+docs/custom-corpus-property-training-admission-execution-dry-run-precheck.md
+```
+
+The precheck validates an existing dry-run report against the upstream request,
+preflight, draft, plan, readiness, and quarantine evidence. It does not execute
+training admission, create training data, create training artifacts, run Phase
+1, or change `DatasetConfirmation`.
+
 Training admission request planning is downstream of training admission
 readiness:
 

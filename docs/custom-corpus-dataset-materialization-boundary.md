@@ -40,6 +40,7 @@ custom corpus manifest
 -> property training admission execution request
 -> property training admission execution request preflight
 -> property training admission execution dry-run
+-> property training admission execution dry-run precheck
 -> future training admission execution
 ```
 
@@ -427,6 +428,18 @@ It simulates execution-request-preflight-passed packages before future
 training admission execution. The dry-run is not execution, produces no
 training artifact, and leaves Phase 1 and `DatasetConfirmation` unchanged.
 
+The property training admission execution dry-run precheck is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-execution-dry-run-precheck.md
+```
+
+It validates an existing execution dry-run report against the execution
+request, request preflight, draft package, request plan, readiness summary, and
+quarantine candidate records before any future training admission execution.
+The precheck is not execution, creates no training artifact, and leaves Phase 1
+and `DatasetConfirmation` unchanged.
+
 ## Offline Materialization Planner
 
 The offline planner is documented in:
@@ -768,9 +781,10 @@ Recommended future sequence:
 17. `test/docs: add property training admission execution request builder`
 18. `test/docs: add property training admission execution request preflight`
 19. `test/docs: add property training admission execution dry-run`
-20. `docs: record small public quarantine materialization evidence`
-21. `docs/test: design training admission boundary from quarantined candidates`
-22. only later: implement explicit training artifact builder if all previous
+20. `test/docs: add property training admission execution dry-run precheck`
+21. `docs: record small public quarantine materialization evidence`
+22. `docs/test: design training admission boundary from quarantined candidates`
+23. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

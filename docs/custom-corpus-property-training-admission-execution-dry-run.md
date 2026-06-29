@@ -22,6 +22,25 @@ The preflight validates package consistency for an existing execution request.
 This dry-run then simulates future training admission execution as labels only.
 Actual training admission execution remains separate and unimplemented.
 
+## After Dry-Run: Dry-Run Precheck
+
+The downstream dry-run precheck is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-execution-dry-run-precheck.md
+```
+
+Future evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-admission-execution-dry-run-precheck-evidence-template.md
+```
+
+The precheck reads an existing dry-run report and validates that it remains
+bound to the execution request, execution request preflight, draft package,
+request plan, readiness summary, and quarantine candidate records. It still
+does not execute training admission or create training artifacts.
+
 ## Inputs
 
 The dry-run requires:
