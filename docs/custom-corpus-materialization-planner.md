@@ -76,10 +76,18 @@ The property admission readiness planner is upstream of explicit admission:
 docs/custom-corpus-property-admission-readiness.md
 ```
 
+The property admission request planner is also upstream of actual admission
+request creation:
+
+```text
+docs/custom-corpus-property-admission-request-planner.md
+```
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
-human review, property review binding and readiness when applicable, explicit
-admission, package validation, and the materialization plan.
+human review, property review binding, readiness, request planning when
+applicable, explicit admission, package validation, and the materialization
+plan.
 
 ## Planner Outputs
 

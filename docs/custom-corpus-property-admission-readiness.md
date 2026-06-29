@@ -98,6 +98,25 @@ is detected, it fails closed with:
 property_admission_readiness_summary_redaction_failed
 ```
 
+## After Readiness: Admission Request Planner
+
+The next pre-admission planning boundary is documented in:
+
+```text
+docs/custom-corpus-property-admission-request-planner.md
+```
+
+Future evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-property-admission-request-plan-evidence-template.md
+```
+
+The readiness summary identifies records eligible for future admission
+planning. The admission request planner prepares safe request-planning
+summaries from readiness and human review artifacts. It still does not create
+`custom_corpus_admission.v1`, admission actions, or admission requests.
+
 ## Boundaries
 
 - Admission readiness is not admission.

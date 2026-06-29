@@ -99,6 +99,16 @@ docs/custom-corpus-property-admission-readiness.md
 Readiness summaries do not substitute for `custom_corpus_admission.v1` request
 artifacts. Package binding still requires the explicit admission request.
 
+Property admission request plans are upstream evidence too:
+
+```text
+docs/custom-corpus-property-admission-request-planner.md
+```
+
+Request plans can describe what a future admission request should contain, but
+they do not substitute for `custom_corpus_admission.v1`. Package binding still
+validates real manifest, dry-run, review, and admission package artifacts.
+
 ## Decision Semantics
 
 The summary has two independent decision fields:
