@@ -149,13 +149,30 @@ preflight gating. It writes a property-aware wrapper summary, but it still
 does not run a materializer, execute materialization, create candidate/training
 CSVs, admit training data, run Phase 1, or modify `DatasetConfirmation`.
 
+The property materialization dry-run consumes planner output and validates
+future materializer-readiness without running a real materializer:
+
+```text
+docs/custom-corpus-property-materialization-dry-run.md
+```
+
+Dry-run evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-materialization-dry-run-evidence-template.md
+```
+
+The dry-run does not create materialized records, candidate/training CSVs, or
+candidate/training JSONL/Parquet/LMDB artifacts.
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
 human review, property review binding, readiness, request planning when
 applicable, explicit admission draft review, draft package precheck when used,
 formal package validation, property materialization plan drafting when used,
 property materialization plan preflight when used, property-aware planner
-runner gating when used, and the materialization plan.
+runner gating when used, property materialization dry-run when used, and the
+materialization plan.
 
 ## Planner Outputs
 

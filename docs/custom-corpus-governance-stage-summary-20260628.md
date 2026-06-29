@@ -25,6 +25,7 @@ custom_corpus_manifest.v1
 -> custom_corpus_materialization.v1
 -> custom_corpus_materialization_planner.v1
 -> custom_corpus_property_materialization_planner_runner.v1
+-> custom_corpus_property_materialization_dry_run.v1
 -> future materializer
 ```
 
@@ -34,8 +35,8 @@ review-planning summaries, property candidate review queue artifacts, human
 review artifacts, queue-to-review binding validation, admission readiness and
 request planning, admission draft generation, draft precheck, cross-artifact
 package binding validation, materialization plan drafting, materialization plan
-preflight, and safe offline planning. It does not materialize records into
-datasets and does not run Phase 1.
+preflight, safe offline planning, and no-data materialization dry-runs. It
+does not materialize records into datasets and does not run Phase 1.
 
 ## Completed PRs
 
@@ -310,4 +311,19 @@ It can invoke the existing offline materialization planner with property
 preflight/package gating and write a property-aware wrapper summary. It still
 does not run a materializer, execute materialization, admit training data, call
 an LLM or agent, perform evaluation/RL, create candidate/training CSVs, run
+Phase 1, or change `DatasetConfirmation`.
+
+## Property Materialization Dry-Run Runner Note
+
+The property materialization dry-run runner was added after the property-aware
+offline materialization planner runner:
+
+```text
+docs/custom-corpus-property-materialization-dry-run.md
+```
+
+It can validate planner output through a no-data materialization dry-run report
+and evidence summary. It still does not run a real materializer, execute
+materialization, admit training data, call an LLM or agent, perform
+evaluation/RL, create candidate/training CSV/JSONL/Parquet/LMDB artifacts, run
 Phase 1, or change `DatasetConfirmation`.
