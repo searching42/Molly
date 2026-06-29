@@ -81,6 +81,24 @@ warnings, and redaction status.
 `redacted_property_quarantine_materializer_evidence.md` is a human-readable
 evidence summary for review.
 
+## After Quarantine Materialization: Quarantine Candidate Preflight
+
+The quarantine candidate preflight is documented in:
+
+```text
+docs/custom-corpus-property-quarantine-candidate-preflight.md
+```
+
+Evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-quarantine-candidate-preflight-evidence-template.md
+```
+
+The quarantine materializer writes candidate-only artifacts. The preflight
+checks those artifacts before any future training admission request. Training
+admission remains separate, and the preflight produces no training artifact.
+
 ## Candidate Record Rules
 
 The runner writes candidate quarantine records only for execution records that

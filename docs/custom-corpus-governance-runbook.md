@@ -34,7 +34,8 @@ custom corpus manifest
 -> materializer execution request
 -> materializer execution request preflight
 -> property quarantine materializer
--> future training admission boundary
+-> property quarantine candidate preflight
+-> future training admission
 ```
 
 Concrete artifact schemas:
@@ -64,6 +65,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_materializer_execution_preflight.v1`
 - `custom_corpus_property_quarantine_materialization.v1`
 - `custom_corpus_property_quarantine_materializer.v1`
+- `custom_corpus_property_quarantine_candidate_preflight.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -977,6 +979,76 @@ Fail criteria:
 - output directory is not clean
 - quarantine materializer redaction fails
 
+## Step 20: Property Quarantine Candidate Preflight
+
+The property quarantine candidate preflight reads candidate-only quarantine
+records, the quarantine materializer summary, the execution preflight summary,
+and upstream property governance evidence. It checks whether quarantined
+candidate records remain internally consistent and safe before any future
+training admission request. It is not training admission and produces no
+training artifact.
+
+References:
+
+- `docs/custom-corpus-property-quarantine-candidate-preflight.md`
+- `docs/custom-corpus-property-quarantine-materializer.md`
+- `docs/evidence/templates/custom-corpus-property-quarantine-candidate-preflight-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_quarantine_candidate_preflight \
+  --manifest /path/outside/git/custom-corpus-manifest.json \
+  --dry-run-report /path/outside/git/dry_run_report.json \
+  --review-manifest /path/outside/git/custom-corpus-review.json \
+  --admission-request /path/outside/git/custom-corpus-admission-request.json \
+  --formal-package-validation /path/outside/git/custom_corpus_admission_package_validation.json \
+  --property-package-binding-summary /path/outside/git/property_package_binding_summary.json \
+  --materialization-plan /path/outside/git/custom_corpus_materialization.draft.json \
+  --materialization-plan-preflight-summary /path/outside/git/property_materialization_plan_preflight_summary.json \
+  --offline-planner-output /path/outside/git/offline_materialization_planner_output.json \
+  --property-planner-summary /path/outside/git/property_materialization_planner_summary.json \
+  --materialization-dry-run-report /path/outside/git/property_materialization_dry_run_report.json \
+  --execution-request /path/outside/git/property_materializer_execution_request.json \
+  --execution-request-summary /path/outside/git/property_materializer_execution_request_summary.json \
+  --execution-preflight-summary /path/outside/git/property_materializer_execution_preflight_summary.json \
+  --quarantine-candidate-records /path/outside/git/property_quarantine_candidate_records.json \
+  --quarantine-materializer-summary /path/outside/git/property_quarantine_materializer_summary.json \
+  --output-summary /tmp/property-quarantine-candidate-preflight-summary.json \
+  --output-markdown /tmp/property-quarantine-candidate-preflight-summary.md
+```
+
+Pass criteria:
+
+- quarantine candidate artifact and summary schemas validate
+- quarantine materializer status is `written`, or `needs_review` is allowed
+- candidate materialization mode is `candidate_quarantine`
+- candidate records are present and count/id fields match
+- candidate records have quarantine boundary labels
+- execution preflight status is `passed`, or `needs_review` is allowed
+- all source hashes match actual input files
+- candidate records derive only from admitted, accepted materialization records
+- excluded, blocked, and needs-review records are not candidate records
+- no training data is admitted
+- no training or candidate CSV/JSONL/Parquet/LMDB artifact is created
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- summary and Markdown redaction checks pass
+
+Fail criteria:
+
+- quarantine candidate artifact or summary schema is invalid
+- quarantine materializer failed or has errors
+- needs-review evidence appears while strict no-needs-review mode is requested
+- source hashes or ids mismatch
+- candidate/materialization/execution record counts or ids mismatch
+- candidate records derive from excluded, blocked, or needs-review records
+- candidate artifact claims training admission, Phase 1 execution, or
+  `DatasetConfirmation` mutation
+- raw text, private paths, token-like values, PDF names, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
+- preflight redaction fails
+
 ## Artifact Retention Policy
 
 Full local artifacts remain outside git. Committed PRs should include only
@@ -1040,6 +1112,7 @@ Allowed:
 - property materializer execution request builder
 - property materializer execution request preflight
 - property quarantine materializer
+- property quarantine candidate preflight
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
