@@ -99,6 +99,25 @@ The builder creates a clean run directory:
 The run directory must be absent or empty. This PR does not implement
 overwrite.
 
+## After Draft Generation: Materialization Plan Preflight
+
+The next boundary is documented in:
+
+```text
+docs/custom-corpus-property-materialization-plan-preflight.md
+```
+
+Future preflight evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-property-materialization-plan-preflight-evidence-template.md
+```
+
+The draft builder creates a reviewable materialization plan draft. The
+preflight checks whether that draft is ready for offline materialization
+planner submission. The offline materialization planner remains a separate
+explicit step, and the future materializer remains separate from both.
+
 ## Validation Behavior
 
 The builder checks:

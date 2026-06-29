@@ -120,12 +120,24 @@ docs/custom-corpus-property-materialization-plan-draft.md
 This is still upstream of the offline materialization planner. The draft
 builder does not invoke this planner or any materializer.
 
+The property materialization plan preflight can check the draft before planner
+submission:
+
+```text
+docs/custom-corpus-property-materialization-plan-preflight.md
+```
+
+Preflight output can be used as evidence before invoking this offline planner.
+It does not substitute for the planner, and the planner remains a separate
+explicit step.
+
 Do not confuse property candidate review planning or review queue preparation
 with materialization planning. This materialization planner is downstream of
 human review, property review binding, readiness, request planning when
 applicable, explicit admission draft review, draft package precheck when used,
 formal package validation, property materialization plan drafting when used,
-and the materialization plan.
+property materialization plan preflight when used, and the materialization
+plan.
 
 ## Planner Outputs
 

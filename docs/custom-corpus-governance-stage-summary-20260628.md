@@ -274,3 +274,17 @@ It still does not run materialization, invoke the offline materialization
 planner, run any materializer, admit training data, call an LLM or agent,
 perform evaluation/RL, create candidate/training CSVs, run Phase 1, or change
 `DatasetConfirmation`.
+
+## Property Materialization Plan Preflight Note
+
+The property materialization plan preflight was added after draft generation:
+
+```text
+docs/custom-corpus-property-materialization-plan-preflight.md
+```
+
+It checks reviewable materialization plan drafts before offline planner
+submission. It still does not run materialization, invoke the offline
+materialization planner, run any materializer, admit training data, call an LLM
+or agent, perform evaluation/RL, create candidate/training CSVs, run Phase 1,
+or change `DatasetConfirmation`.

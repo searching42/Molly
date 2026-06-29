@@ -28,6 +28,7 @@ custom corpus manifest
 -> property admission draft package precheck
 -> property-aware package binding validator
 -> property materialization plan draft
+-> property materialization plan preflight
 -> offline materialization planner
 -> future materializer
 ```
@@ -49,6 +50,7 @@ Concrete artifact schemas:
 - `custom_corpus_admission.v1`
 - `custom_corpus_admission_package_validation.v1`
 - `custom_corpus_property_materialization_plan_draft_builder.v1`
+- `custom_corpus_property_materialization_plan_preflight.v1`
 - `custom_corpus_materialization.v1`
 - `custom_corpus_materialization_planner.v1`
 
@@ -579,6 +581,70 @@ Fail criteria:
 - generated draft fails materialization schema validation
 - private path or token-like content appears in draft artifacts
 
+## Step 14: Property Materialization Plan Preflight
+
+The property materialization plan preflight reads a reviewable
+`custom_corpus_materialization.v1` draft, its draft-builder summary, and
+upstream package/admission evidence. It checks whether the draft appears ready
+for offline materialization planner submission. It is not planner execution,
+does not run a materializer, does not execute materialization, does not create
+candidate/training CSVs, does not admit training data, does not run Phase 1,
+and does not modify `DatasetConfirmation`.
+
+References:
+
+- `docs/custom-corpus-property-materialization-plan-preflight.md`
+- `docs/custom-corpus-materialization-planner.md`
+- `docs/evidence/templates/custom-corpus-property-materialization-plan-preflight-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_materialization_plan_preflight \
+  --manifest /path/outside/git/custom-corpus-manifest.json \
+  --dry-run-report /path/outside/git/dry_run_report.json \
+  --review-manifest /path/outside/git/custom-corpus-review.json \
+  --admission-request /path/outside/git/custom-corpus-admission-request.json \
+  --formal-package-validation /path/outside/git/custom_corpus_admission_package_validation.json \
+  --property-package-binding-summary /path/outside/git/property_package_binding_summary.json \
+  --materialization-plan-draft /path/outside/git/custom_corpus_materialization.draft.json \
+  --materialization-plan-draft-summary /path/outside/git/property_materialization_plan_draft_summary.json \
+  --output-summary /tmp/property-materialization-plan-preflight-summary.json \
+  --output-markdown /tmp/property-materialization-plan-preflight-summary.md
+```
+
+Pass criteria:
+
+- preflight status is `passed`
+- source hashes match actual input files
+- corpus, dry-run, review manifest, admission request, and materialization
+  plan ids match
+- package binding status is `passed`
+- formal package validation status is `passed`
+- materialization draft status is `written`
+- materialization decision is `planned`
+- dry-run `DatasetConfirmation` is false
+- dry-run Phase 1 status is `not_run`
+- dry-run training admitted is false
+- materialization records derive only from admitted, accepted records
+- excluded, blocked, and needs-review records are not materialization records
+- redaction checks pass
+
+Fail criteria:
+
+- any input schema is invalid
+- package binding failed
+- package binding is `needs_review` while strict package-binding pass is
+  required
+- formal package validation failed
+- draft status is not `written`
+- materialization decision is not `planned`
+- source hashes or ids mismatch
+- dry-run was confirmed, Phase 1 ran, or training was admitted
+- materialization records include excluded, blocked, or needs-review records
+- materialization record counts or ids mismatch the draft summary
+- summary redaction fails
+
 ## Artifact Retention Policy
 
 Full local artifacts remain outside git. Committed PRs should include only
@@ -636,6 +702,7 @@ Allowed:
 - admission request schema and validator
 - admission package binding validator
 - property materialization plan draft builder
+- property materialization plan preflight
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
