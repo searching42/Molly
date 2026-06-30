@@ -47,7 +47,7 @@ custom corpus manifest
 -> property training dataset materialization plan precheck
 -> property training dataset row contract
 -> property training dataset row contract precheck
--> future training dataset materialization dry-run
+-> property training dataset materialization dry-run
 -> future training dataset writer/materializer
 ```
 
@@ -98,12 +98,15 @@ Existing artifact schemas:
 - `custom_corpus_property_training_dataset_row_contract.v1`
 - `custom_corpus_property_training_dataset_row_contract_builder.v1`
 - `custom_corpus_property_training_dataset_row_contract_precheck.v1`
+- `custom_corpus_property_training_dataset_materialization_dry_run.v1`
+- `custom_corpus_property_training_dataset_materialization_dry_run_summary.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
 property path, a controlled training admission execution ledger, a ledger
 precheck, a training dataset materialization planner, a materialization plan
-precheck, a row contract, and a row contract precheck. They still stop before
-training dataset writing, training artifacts, Phase 1, and
+precheck, a row contract, a row contract precheck, and a training dataset
+materialization dry-run. They still stop before training dataset writing,
+training artifacts, Phase 1, and
 `DatasetConfirmation` mutation.
 
 The property candidate schema represents open-ended numeric scientific
@@ -218,6 +221,13 @@ not create or execute a training admission request, admit training data,
 materialize datasets, create training or candidate CSV/JSONL/Parquet/LMDB
 artifacts, run Phase 1, run model training/evaluation, or change
 `DatasetConfirmation`.
+
+The property training dataset materialization dry-run sits after row contract
+precheck and before any future dataset writer. It generates safe row preview
+summaries only. It does not serialize training rows, create training dataset
+artifacts, create training or candidate CSV/JSONL/Parquet/LMDB artifacts,
+generate conformers or DPA3 structures, run Phase 1, run model
+training/evaluation, or change `DatasetConfirmation`.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a
@@ -880,9 +890,10 @@ Recommended future sequence:
 24. `test/docs: add property training dataset materialization plan precheck`
 25. `test/docs: add property training dataset row contract`
 26. `test/docs: add property training dataset row contract precheck`
-27. `docs: record small public quarantine materialization evidence`
-28. `docs/test: design training admission boundary from quarantined candidates`
-29. only later: implement explicit training artifact builder if all previous
+27. `test/docs: add property training dataset materialization dry-run`
+28. `docs: record small public quarantine materialization evidence`
+29. `docs/test: design training admission boundary from quarantined candidates`
+30. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

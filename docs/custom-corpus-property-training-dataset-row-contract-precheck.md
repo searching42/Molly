@@ -107,6 +107,26 @@ Return codes:
 - `0` for `passed` or `needs_review`
 - `1` for `blocked`
 
+## After Precheck: Training Dataset Materialization Dry-Run
+
+After the row contract package passes precheck, a dry-run can produce safe row
+preview summaries before any dataset writer work:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-dry-run.md
+```
+
+Future dry-run evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-dataset-materialization-dry-run-evidence-template.md
+```
+
+The dry-run validates the full package chain again and emits report, summary,
+and Markdown evidence. It still does not serialize training rows, create
+training dataset artifacts, write CSV/JSONL/Parquet/LMDB files, generate
+conformers or DPA3 structures, run Phase 1, or change `DatasetConfirmation`.
+
 ## Redaction
 
 Summary and Markdown evidence may include safe field names, schema/status
