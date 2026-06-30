@@ -658,3 +658,20 @@ row previews, create training CSV/JSONL/Parquet/LMDB artifacts, create
 candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3
 structures, run Phase 1, change `DatasetConfirmation`, run model
 training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
+
+## Property Training Dataset Materialization Dry-Run Note
+
+The property training dataset materialization dry-run was added after row
+contract precheck:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-dry-run.md
+```
+
+Row-contract-precheck-passed packages can now produce safe row preview
+summaries before future dataset writer work. This still does not serialize
+training rows, write a training dataset, create training
+CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
+artifacts, generate conformers, create DPA3 structures, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.

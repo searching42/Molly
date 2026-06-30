@@ -249,6 +249,20 @@ validates schema, status, hashes, ids, field contracts, and record references,
 but contains no serialized training dataset rows, no row previews, and no
 training or candidate output artifacts.
 
+Training dataset materialization dry-run is downstream of row contract
+precheck:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-dry-run.md
+```
+
+The dry-run report is separate from actual dataset schema files and future
+dataset writer outputs. It may contain safe row preview summaries, field
+coverage counts, model-family labels, and output-format labels, but it does
+not serialize training rows, create training or candidate
+CSV/JSONL/Parquet/LMDB artifacts, generate conformers or DPA3 structures, run
+Phase 1, or change `DatasetConfirmation`.
+
 Training admission request planning is downstream of training admission
 readiness:
 
