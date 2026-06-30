@@ -263,6 +263,17 @@ not serialize training rows, create training or candidate
 CSV/JSONL/Parquet/LMDB artifacts, generate conformers or DPA3 structures, run
 Phase 1, or change `DatasetConfirmation`.
 
+Training dataset materialization dry-run precheck is downstream of the dry-run:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-dry-run-precheck.md
+```
+
+The precheck summary is separate from dataset artifacts and actual dataset
+schema files. It validates the dry-run package and upstream SHA/id/status/row
+preview chain, but contains no serialized training dataset rows and creates no
+training or candidate CSV/JSONL/Parquet/LMDB artifacts.
+
 Training admission request planning is downstream of training admission
 readiness:
 

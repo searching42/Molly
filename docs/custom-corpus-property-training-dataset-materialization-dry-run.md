@@ -100,6 +100,27 @@ CLI return codes:
 - `0` for `passed` or `needs_review`
 - `1` for `blocked`
 
+## After Materialization Dry-Run: Dry-Run Precheck
+
+After a dry-run writes row preview summaries, the package can be independently
+checked before any future dataset writer request:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-dry-run-precheck.md
+```
+
+Future dry-run precheck evidence should use:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-dataset-materialization-dry-run-precheck-evidence-template.md
+```
+
+The dry-run precheck validates dry-run package consistency, source hashes,
+row-preview summaries, field coverage, model-family labels, output-format
+labels, and upstream evidence. It still does not serialize training rows,
+create dataset artifacts, write CSV/JSONL/Parquet/LMDB files, generate
+conformers or DPA3 structures, run Phase 1, or change `DatasetConfirmation`.
+
 ## CLI Usage
 
 ```bash
