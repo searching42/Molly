@@ -52,6 +52,7 @@ custom corpus manifest
 -> property training dataset row contract precheck
 -> property training dataset materialization dry-run
 -> property training dataset materialization dry-run precheck
+-> property training dataset writer execution request
 -> future training dataset writer/materializer
 ```
 
@@ -106,6 +107,8 @@ Concrete artifact schemas:
 - `custom_corpus_property_training_dataset_materialization_dry_run.v1`
 - `custom_corpus_property_training_dataset_materialization_dry_run_summary.v1`
 - `custom_corpus_property_training_dataset_materialization_dry_run_precheck.v1`
+- `custom_corpus_property_training_dataset_writer_execution_request.v1`
+- `custom_corpus_property_training_dataset_writer_execution_request_builder.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -2188,6 +2191,62 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - precheck redaction fails
 
+## Step 38: Property Training Dataset Writer Execution Request
+
+The property training dataset writer execution request builder reads the
+materialization dry-run precheck, dry-run report and summary, row contract
+package, materialization plan package, ledger evidence, execution dry-run
+evidence, execution request evidence, request draft evidence, request
+plan/preflight evidence, training admission readiness evidence, and quarantine
+candidate evidence. It writes a reviewable request packet for a future dataset
+writer. It is not writer execution: no training dataset artifact,
+training/candidate CSV/JSONL/Parquet/LMDB file, conformer, DPA3 structure,
+Phase 1 artifact, `DatasetConfirmation` change, model training, or evaluation
+is produced.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-writer-execution-request.md`
+- `docs/custom-corpus-property-training-dataset-materialization-dry-run-precheck.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-writer-execution-request-evidence-template.md`
+
+Pass criteria:
+
+- materialization dry-run precheck status is `passed`
+- dry-run report and summary status are `passed`
+- source hashes and ids match across all upstream artifacts
+- row preview count and ids match the request records
+- requested output formats are labels only
+- excluded, blocked, and needs-review candidates are not present
+- `training_dataset_materialized=false`
+- `dataset_artifact_created=false`
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- request redaction checks pass
+
+Needs-review criteria:
+
+- dry-run precheck or upstream evidence is `needs_review` or `partial`
+- `--allow-dry-run-precheck-needs-review` is explicitly set
+- no hard consistency check failed
+
+Fail criteria:
+
+- confirmation flag is missing
+- dry-run precheck, report, or summary schema is invalid
+- dry-run precheck is blocked or needs-review without explicit allowance
+- source hashes or ids mismatch
+- row preview ids, planned dataset records, ledger records, or candidate ids
+  mismatch
+- requested output format is unknown
+- request records include raw values, raw rows, serialized rows, output paths,
+  or unsafe values
+- generated request implies dataset writing, Phase 1 execution, or
+  `DatasetConfirmation` mutation
+- raw text, private paths, token-like values, PDF names, serialized rows, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
+- request redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -2482,6 +2541,7 @@ Allowed:
 - property training dataset row contract precheck
 - property training dataset materialization dry-run
 - property training dataset materialization dry-run precheck
+- property training dataset writer execution request
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
