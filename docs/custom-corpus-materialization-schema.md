@@ -494,6 +494,12 @@ It does not create training CSV/JSONL/Parquet/LMDB artifacts, candidate
 CSV/JSONL/Parquet/LMDB artifacts, conformers, DPA3 structures, Phase 1
 artifacts, or `DatasetConfirmation` changes.
 
+The writer execution request preflight is downstream of the writer execution
+request. Its summary is separate from dataset artifacts and contains no
+serialized training dataset rows. It validates schema, status, hashes, ids,
+record counts, output-format labels, and boundary fields before any future
+controlled writer.
+
 ## Boundaries
 
 - This schema does not implement materialization.

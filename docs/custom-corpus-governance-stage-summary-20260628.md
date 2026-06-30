@@ -708,3 +708,19 @@ artifacts, create candidate CSV/JSONL/Parquet/LMDB artifacts, generate
 conformers, create DPA3 structures, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.
+
+## Property Training Dataset Writer Execution Request Preflight Note
+
+The property training dataset writer execution request preflight was added
+after writer execution request:
+
+```text
+docs/custom-corpus-property-training-dataset-writer-execution-request-preflight.md
+```
+
+Writer execution request packages can now be checked before future controlled
+writer work. This still does not execute a writer, write a training dataset,
+serialize training rows, create training CSV/JSONL/Parquet/LMDB artifacts,
+create candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create
+DPA3 structures, run Phase 1, change `DatasetConfirmation`, run model
+training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.

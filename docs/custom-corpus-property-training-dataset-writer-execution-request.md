@@ -12,6 +12,25 @@ training admission readiness evidence, and quarantine candidate evidence.
 It does not execute a writer.
 It does not create a dataset.
 
+## After Writer Execution Request: Request Preflight
+
+After a writer execution request is created, the request preflight can validate
+the request package before any future controlled dataset writer:
+
+```text
+docs/custom-corpus-property-training-dataset-writer-execution-request-preflight.md
+```
+
+Future evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-dataset-writer-execution-request-preflight-evidence-template.md
+```
+
+The writer execution request records a future request only. The request
+preflight validates the package. The controlled dataset writer remains
+separate.
+
 ## Purpose
 
 The builder answers whether dry-run row preview summaries can be safely turned

@@ -53,7 +53,8 @@ custom corpus manifest
 -> property training dataset materialization dry-run
 -> property training dataset materialization dry-run precheck
 -> property training dataset writer execution request
--> future training dataset writer/materializer
+-> property training dataset writer execution request preflight
+-> future controlled training dataset writer
 ```
 
 Concrete artifact schemas:
@@ -109,6 +110,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_training_dataset_materialization_dry_run_precheck.v1`
 - `custom_corpus_property_training_dataset_writer_execution_request.v1`
 - `custom_corpus_property_training_dataset_writer_execution_request_builder.v1`
+- `custom_corpus_property_training_dataset_writer_execution_request_preflight.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -2247,6 +2249,66 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - request redaction fails
 
+## Step 39: Property Training Dataset Writer Execution Request Preflight
+
+The property training dataset writer execution request preflight reads the
+writer execution request, writer execution request summary, materialization
+dry-run precheck, dry-run report and summary, row contract package,
+materialization plan package, ledger evidence, execution dry-run evidence,
+execution request evidence, request draft evidence, request plan/preflight
+evidence, training admission readiness evidence, and quarantine candidate
+evidence. It validates the request package before any future controlled
+dataset writer. It is not writer execution: no training dataset artifact,
+training/candidate CSV/JSONL/Parquet/LMDB file, conformer, DPA3 structure,
+Phase 1 artifact, `DatasetConfirmation` change, model training, or evaluation
+is produced.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-writer-execution-request-preflight.md`
+- `docs/custom-corpus-property-training-dataset-writer-execution-request.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-writer-execution-request-preflight-evidence-template.md`
+
+Pass criteria:
+
+- writer execution request status is `written`
+- writer execution request summary binds to the request
+- dry-run precheck status is `passed`
+- dry-run report and summary status are `passed`
+- source hashes and ids match across all upstream artifacts
+- writer request record count and ids match request records
+- row preview ids match dry-run report previews
+- requested writer mode and output formats are labels only
+- excluded, blocked, and needs-review candidates are not present
+- `writer_executed=false`
+- `training_dataset_materialized=false`
+- `dataset_artifact_created=false`
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- preflight redaction checks pass
+
+Needs-review criteria:
+
+- writer request or upstream evidence is `needs_review` or `partial`
+- `--allow-writer-request-needs-review` is explicitly set
+- no hard consistency check failed
+
+Fail criteria:
+
+- writer request or summary schema is invalid
+- writer request is blocked or needs-review without explicit allowance
+- source hashes or ids mismatch
+- writer request record ids, row preview ids, planned dataset records, ledger
+  records, or candidate ids mismatch
+- requested writer mode or output format is unknown
+- request records include raw values, raw rows, serialized rows, output paths,
+  or unsafe values
+- generated preflight implies writer execution, Phase 1 execution, or
+  `DatasetConfirmation` mutation
+- raw text, private paths, token-like values, PDF names, serialized rows, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
+- preflight redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -2542,6 +2604,7 @@ Allowed:
 - property training dataset materialization dry-run
 - property training dataset materialization dry-run precheck
 - property training dataset writer execution request
+- property training dataset writer execution request preflight
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
