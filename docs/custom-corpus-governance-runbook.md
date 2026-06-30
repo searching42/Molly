@@ -48,6 +48,7 @@ custom corpus manifest
 -> property training admission execution ledger precheck
 -> property training dataset materialization planner
 -> property training dataset materialization plan precheck
+-> property training dataset row contract
 -> future training dataset writer/materializer
 ```
 
@@ -96,6 +97,8 @@ Concrete artifact schemas:
 - `custom_corpus_property_training_dataset_materialization_plan.v1`
 - `custom_corpus_property_training_dataset_materialization_planner.v1`
 - `custom_corpus_property_training_dataset_materialization_plan_precheck.v1`
+- `custom_corpus_property_training_dataset_row_contract.v1`
+- `custom_corpus_property_training_dataset_row_contract_builder.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -1846,6 +1849,96 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - precheck redaction fails
 
+## Step 34: Property Training Dataset Row Contract
+
+The property training dataset row contract builder reads a materialization
+plan-precheck-passed package, the materialization plan and planner summary,
+the execution ledger package, dry-run evidence, execution request evidence,
+request draft evidence, request plan/preflight evidence, training admission
+readiness evidence, and quarantine candidate evidence. It validates the full
+chain again and writes a contract-only artifact that defines future row
+semantics. It is not dataset writing: no training CSV/JSONL/Parquet/LMDB,
+candidate CSV/JSONL/Parquet/LMDB, conformer, DPA3 structure, Phase 1 artifact,
+`DatasetConfirmation` change, model training, or evaluation is produced.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-row-contract.md`
+- `docs/custom-corpus-property-training-dataset-materialization-plan-precheck.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-row-contract-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_dataset_row_contract \
+  --training-dataset-materialization-plan-precheck /path/outside/git/property_training_dataset_materialization_plan_precheck_summary.json \
+  --training-dataset-materialization-plan /path/outside/git/property_training_dataset_materialization_plan.json \
+  --training-dataset-materialization-planner-summary /path/outside/git/property_training_dataset_materialization_planner_summary.json \
+  --training-admission-execution-ledger-precheck /path/outside/git/property_training_admission_execution_ledger_precheck_summary.json \
+  --training-admission-execution-ledger /path/outside/git/property_training_admission_execution_ledger.json \
+  --training-admission-execution-ledger-summary /path/outside/git/property_training_admission_execution_ledger_summary.json \
+  --training-admission-execution-dry-run-precheck /path/outside/git/property_training_admission_execution_dry_run_precheck_summary.json \
+  --training-admission-execution-dry-run-report /path/outside/git/property_training_admission_execution_dry_run_report.json \
+  --training-admission-execution-request /path/outside/git/property_training_admission_execution_request.json \
+  --training-admission-execution-request-summary /path/outside/git/property_training_admission_execution_request_summary.json \
+  --training-admission-execution-request-preflight /path/outside/git/property_training_admission_execution_request_preflight_summary.json \
+  --training-admission-request-draft /path/outside/git/property_training_admission_request.draft.json \
+  --training-admission-request-draft-summary /path/outside/git/property_training_admission_request_draft_summary.json \
+  --training-admission-request-draft-precheck /path/outside/git/property_training_admission_request_draft_precheck_summary.json \
+  --training-admission-request-plan /path/outside/git/property_training_admission_request_plan_summary.json \
+  --training-admission-request-preflight /path/outside/git/property_training_admission_request_preflight_summary.json \
+  --training-admission-readiness-summary /path/outside/git/property_training_admission_readiness_summary.json \
+  --quarantine-candidate-preflight-summary /path/outside/git/property_quarantine_candidate_preflight_summary.json \
+  --quarantine-candidate-records /path/outside/git/property_quarantine_candidate_records.json \
+  --output-dir /path/outside/git/property-training-dataset-row-contract \
+  --row-contract-id property-training-dataset-row-contract-001 \
+  --created-by operator-redacted \
+  --confirm-training-dataset-row-contract
+```
+
+Pass criteria:
+
+- explicit row-contract confirmation is present
+- materialization plan precheck status is `passed`
+- materialization plan status is `planned`
+- execution ledger status is `committed`
+- source hashes and ids match across all upstream artifacts
+- planned dataset records exist and meet the minimum configured count
+- planned candidate ids match plan records, ledger records, and upstream
+  readiness/quarantine evidence
+- excluded, blocked, and needs-review candidates are not present
+- required and optional row fields are defined
+- provenance, quality flag, split/dedup, model-family compatibility, and output
+  format compatibility contracts are defined as safe labels and descriptors
+- `training_dataset_materialized=false`
+- `dataset_artifact_created=false`
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- row contract redaction checks pass
+
+Needs-review criteria:
+
+- plan precheck or upstream evidence is `needs_review`
+- `--allow-materialization-plan-precheck-needs-review` is explicitly set
+- no hard consistency check failed
+
+Fail criteria:
+
+- confirmation is missing
+- materialization plan precheck is blocked or invalid
+- materialization plan precheck is needs-review without explicit allowance
+- source hashes or ids mismatch
+- no planned dataset records exist
+- planned records derive from excluded, blocked, or needs-review candidates
+- dataset name, model-family labels, output format labels, or row references
+  are unsafe
+- generated contract implies dataset writing, serialized rows, conformer
+  generation, DPA3 structure generation, Phase 1 execution, or
+  `DatasetConfirmation` mutation
+- raw text, private paths, token-like values, PDF names, serialized rows, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
+- row contract redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -2136,6 +2229,7 @@ Allowed:
 - property training admission execution ledger precheck
 - property training dataset materialization planner
 - property training dataset materialization plan precheck
+- property training dataset row contract
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

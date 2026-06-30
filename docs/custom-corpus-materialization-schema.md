@@ -227,6 +227,17 @@ dataset artifacts, training CSV/JSONL/Parquet/LMDB artifacts, candidate
 CSV/JSONL/Parquet/LMDB artifacts, Phase 1 inputs, or `DatasetConfirmation`
 changes.
 
+Training dataset row contract is downstream of materialization plan precheck:
+
+```text
+docs/custom-corpus-property-training-dataset-row-contract.md
+```
+
+The row contract schema is separate from actual dataset schema files. It
+defines future row semantics and contains no serialized training dataset rows,
+no output file paths, no conformers, and no DPA3 structures. Future dataset
+writers must remain separate from this contract layer.
+
 Training admission request planning is downstream of training admission
 readiness:
 

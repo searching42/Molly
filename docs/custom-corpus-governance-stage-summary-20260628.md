@@ -3,7 +3,7 @@
 ## Summary
 
 Molly now has a custom corpus governance chain through a controlled property
-training dataset materialization plan precheck:
+training dataset row contract:
 
 ```text
 custom_corpus_manifest.v1
@@ -47,6 +47,8 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_training_dataset_materialization_plan.v1
 -> custom_corpus_property_training_dataset_materialization_planner.v1
 -> custom_corpus_property_training_dataset_materialization_plan_precheck.v1
+-> custom_corpus_property_training_dataset_row_contract.v1
+-> custom_corpus_property_training_dataset_row_contract_builder.v1
 -> future training dataset writer/materializer boundary
 ```
 
@@ -60,8 +62,8 @@ preflight, safe offline planning, no-data materialization dry-runs, request-only
 future-materializer handoff artifacts, request preflight, and candidate-only
 quarantine materialization, quarantine candidate preflight, and training
 admission readiness evidence through safe ledger admission. It does not
-materialize training datasets, create training
-CSV/JSONL/Parquet/LMDB artifacts, or run Phase 1.
+materialize training datasets, create training CSV/JSONL/Parquet/LMDB
+artifacts, or run Phase 1.
 
 ## Completed PRs
 
@@ -623,3 +625,19 @@ dataset writer. This still does not write a training dataset, create training
 CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
 artifacts, run Phase 1, change `DatasetConfirmation`, run model
 training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
+
+## Property Training Dataset Row Contract Note
+
+The property training dataset row contract was added after materialization
+plan precheck:
+
+```text
+docs/custom-corpus-property-training-dataset-row-contract.md
+```
+
+Materialization-plan-precheck-passed packages can now define future row
+semantics before any dataset writer. This still does not write a training
+dataset, create training CSV/JSONL/Parquet/LMDB artifacts, create candidate
+CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3 structures,
+run Phase 1, change `DatasetConfirmation`, run model training/evaluation, call
+an LLM or agent, call MinerU, or parse PDFs.
