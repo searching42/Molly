@@ -512,6 +512,13 @@ no serialized training dataset rows. It validates the binding plan schema,
 status, hashes, ids, field bindings, record counts, dedup/split labels, and
 boundary fields before any future controlled writer.
 
+The writer value source manifest is downstream of input binding plan
+preflight. Its schema is separate from dataset artifacts and contains no
+serialized training dataset rows. It records safe value-source authorization
+metadata with source labels, basenames, hashes, field names, and
+derivation-rule labels only; source payloads are not read and values are not
+materialized.
+
 ## Boundaries
 
 - This schema does not implement materialization.

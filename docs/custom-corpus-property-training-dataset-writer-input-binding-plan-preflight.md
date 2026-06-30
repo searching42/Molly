@@ -166,6 +166,19 @@ paths, credentials, PDF names or paths, CSV/JSONL/Parquet/LMDB paths, raw
 article text, raw table rows, serialized rows, conformer data, DPA3 structure
 data, obvious SMILES strings, or InChI strings.
 
+## After Input Binding Plan Preflight: Writer Value Source Manifest Planner
+
+After a writer input binding plan preflight passes, the next governance layer
+is the writer value source manifest planner:
+
+- `docs/custom-corpus-property-training-dataset-writer-value-source-manifest-planner.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-writer-value-source-manifest-evidence-template.md`
+
+The input binding plan preflight validates field-source bindings. The value
+source manifest planner defines which value-bearing source artifacts may be
+used later by a future controlled writer and which value-bearing row fields
+they may satisfy. The controlled dataset writer remains separate.
+
 ## Boundaries
 
 - The preflight validates writer input binding plans only.
