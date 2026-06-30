@@ -53,6 +53,8 @@ custom corpus manifest
 -> property training dataset writer execution request preflight
 -> property training dataset writer input binding planner
 -> property training dataset writer input binding plan preflight
+-> property training dataset writer value source manifest planner
+-> future value source manifest preflight
 -> future controlled training dataset writer
 ```
 
@@ -271,6 +273,13 @@ bindings, dedup/split rules, and boundary flags only. It does not execute a
 writer, materialize values, serialize training rows, create training/candidate
 CSV/JSONL/Parquet/LMDB artifacts, generate conformers or DPA3 structures, run
 Phase 1, run model training/evaluation, or change `DatasetConfirmation`.
+
+The property training dataset writer value source manifest planner sits after
+input binding plan preflight and before any future value source manifest
+preflight or controlled writer. It emits value-source authorization metadata
+only: source payloads are not read, values are not materialized, no training
+artifact is produced, Phase 1 remains separate, and `DatasetConfirmation`
+remains unchanged.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a
@@ -939,9 +948,10 @@ Recommended future sequence:
 30. `test/docs: add property training dataset writer execution request preflight`
 31. `test/docs: add property training dataset writer input binding planner`
 32. `test/docs: add property training dataset writer input binding plan preflight`
-33. `docs: record small public quarantine materialization evidence`
-34. `docs/test: design training admission boundary from quarantined candidates`
-35. only later: implement explicit training artifact builder if all previous
+33. `test/docs: add property training dataset writer value source manifest planner`
+34. `docs: record small public quarantine materialization evidence`
+35. `docs/test: design training admission boundary from quarantined candidates`
+36. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the
