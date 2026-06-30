@@ -4,8 +4,7 @@ The property training dataset writer input binding planner creates a safe
 field-source binding plan for future controlled dataset writer work.
 
 It sits after the property training dataset writer execution request preflight
-and before any future writer input binding preflight or controlled dataset
-writer.
+and before the property training dataset writer input binding plan preflight.
 
 The planner answers which allowed source artifact and derivation rule should
 populate each future row field. It does not materialize field values and it
@@ -185,6 +184,20 @@ before writing. It fail-closes if forbidden material appears, including local
 paths, private paths, credentials, PDF names or paths, CSV/JSONL/Parquet/LMDB
 paths, raw article text, raw table rows, serialized rows, conformer data, DPA3
 structure data, obvious SMILES strings, or InChI strings.
+
+## After Planning: Input Binding Plan Preflight
+
+After a writer input binding plan is generated, the next governance layer is
+the input binding plan preflight:
+
+- `docs/custom-corpus-property-training-dataset-writer-input-binding-plan-preflight.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-writer-input-binding-plan-preflight-evidence-template.md`
+
+The planner output is not authoritative by itself. The preflight revalidates
+the binding plan against upstream writer request, row contract, dry-run,
+materialization, ledger, readiness, and quarantine evidence before any future
+controlled writer can use it. The preflight still does not execute a writer,
+materialize values, or serialize training rows.
 
 ## Boundaries
 

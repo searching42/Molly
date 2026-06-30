@@ -52,7 +52,7 @@ custom corpus manifest
 -> property training dataset writer execution request
 -> property training dataset writer execution request preflight
 -> property training dataset writer input binding planner
--> future writer input binding preflight
+-> property training dataset writer input binding plan preflight
 -> future controlled training dataset writer
 ```
 
@@ -257,13 +257,20 @@ training artifact is produced, Phase 1 remains separate, and
 `DatasetConfirmation` remains unchanged.
 
 The property training dataset writer input binding planner sits after writer
-execution request preflight and before any future writer input binding
-preflight or controlled writer. It binds future row fields to allowed source
-artifact labels, hashes, source record ids, and derivation rules only. It does
-not execute a writer, materialize values, serialize training rows, create
-training/candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers or
-DPA3 structures, run Phase 1, run model training/evaluation, or change
-`DatasetConfirmation`.
+execution request preflight and before writer input binding plan preflight. It
+binds future row fields to allowed source artifact labels, hashes, source
+record ids, and derivation rules only. It does not execute a writer,
+materialize values, serialize training rows, create training/candidate
+CSV/JSONL/Parquet/LMDB artifacts, generate conformers or DPA3 structures, run
+Phase 1, run model training/evaluation, or change `DatasetConfirmation`.
+
+The property training dataset writer input binding plan preflight sits after
+the input binding planner and before any future controlled writer. It
+validates the binding plan package, source hashes, ids, record counts, field
+bindings, dedup/split rules, and boundary flags only. It does not execute a
+writer, materialize values, serialize training rows, create training/candidate
+CSV/JSONL/Parquet/LMDB artifacts, generate conformers or DPA3 structures, run
+Phase 1, run model training/evaluation, or change `DatasetConfirmation`.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a
@@ -931,9 +938,10 @@ Recommended future sequence:
 29. `test/docs: add property training dataset writer execution request`
 30. `test/docs: add property training dataset writer execution request preflight`
 31. `test/docs: add property training dataset writer input binding planner`
-32. `docs: record small public quarantine materialization evidence`
-33. `docs/test: design training admission boundary from quarantined candidates`
-34. only later: implement explicit training artifact builder if all previous
+32. `test/docs: add property training dataset writer input binding plan preflight`
+33. `docs: record small public quarantine materialization evidence`
+34. `docs/test: design training admission boundary from quarantined candidates`
+35. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the
