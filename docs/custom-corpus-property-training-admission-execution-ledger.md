@@ -22,6 +22,26 @@ The dry-run precheck validates simulation evidence. The execution ledger
 commits safe admission decisions into an append-only-style ledger artifact.
 Training dataset materialization remains separate and unimplemented.
 
+## After Ledger: Execution Ledger Precheck
+
+After a ledger is written, the next offline layer is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-execution-ledger-precheck.md
+```
+
+Future evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-admission-execution-ledger-precheck-evidence-template.md
+```
+
+The ledger precheck validates the committed ledger and upstream
+ID/SHA/status/record chain before any future training dataset materialization
+step. It is not materialization, does not create training data, does not create
+training or candidate CSV/JSONL/Parquet/LMDB artifacts, does not run Phase 1,
+and does not modify `DatasetConfirmation`.
+
 ## Inputs
 
 The ledger writer requires:

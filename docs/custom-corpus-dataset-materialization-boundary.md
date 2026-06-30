@@ -42,6 +42,7 @@ custom corpus manifest
 -> property training admission execution dry-run
 -> property training admission execution dry-run precheck
 -> property training admission execution ledger
+-> property training admission execution ledger precheck
 -> future training dataset materialization
 ```
 
@@ -84,10 +85,13 @@ Existing artifact schemas:
 - `custom_corpus_property_training_admission_execution_dry_run.v1`
 - `custom_corpus_property_training_admission_execution_dry_run_precheck.v1`
 - `custom_corpus_property_training_admission_execution_ledger.v1`
+- `custom_corpus_property_training_admission_execution_ledger_summary.v1`
+- `custom_corpus_property_training_admission_execution_ledger_precheck.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
-property path and a controlled training admission execution ledger. They still
-stop before training dataset materialization, training artifacts, Phase 1, and
+property path, a controlled training admission execution ledger, and a ledger
+precheck before future training dataset materialization. They still stop
+before training dataset materialization, training artifacts, Phase 1, and
 `DatasetConfirmation` mutation.
 
 The property candidate schema represents open-ended numeric scientific
@@ -455,6 +459,18 @@ ledger only. Ledger admission is not dataset materialization, creates no
 training artifact, does not run Phase 1, and leaves `DatasetConfirmation`
 unchanged.
 
+The property training admission execution ledger precheck is documented in:
+
+```text
+docs/custom-corpus-property-training-admission-execution-ledger-precheck.md
+```
+
+It validates the committed ledger, ledger summary, and full upstream
+ID/SHA/status/record chain before any future training dataset materialization
+layer. The precheck is not execution, creates no training or candidate
+CSV/JSONL/Parquet/LMDB artifact, does not run Phase 1, and leaves
+`DatasetConfirmation` unchanged.
+
 ## Offline Materialization Planner
 
 The offline planner is documented in:
@@ -798,9 +814,10 @@ Recommended future sequence:
 19. `test/docs: add property training admission execution dry-run`
 20. `test/docs: add property training admission execution dry-run precheck`
 21. `test/docs: add property training admission execution ledger`
-22. `docs: record small public quarantine materialization evidence`
-23. `docs/test: design training admission boundary from quarantined candidates`
-24. only later: implement explicit training artifact builder if all previous
+22. `test/docs: add property training admission execution ledger precheck`
+23. `docs: record small public quarantine materialization evidence`
+24. `docs/test: design training admission boundary from quarantined candidates`
+25. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

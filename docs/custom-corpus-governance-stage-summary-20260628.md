@@ -3,7 +3,7 @@
 ## Summary
 
 Molly now has a custom corpus governance chain through a controlled property
-training admission execution ledger:
+training admission execution ledger precheck:
 
 ```text
 custom_corpus_manifest.v1
@@ -43,6 +43,7 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_training_admission_execution_dry_run.v1
 -> custom_corpus_property_training_admission_execution_dry_run_precheck.v1
 -> custom_corpus_property_training_admission_execution_ledger.v1
+-> custom_corpus_property_training_admission_execution_ledger_precheck.v1
 -> future training dataset materialization boundary
 ```
 
@@ -570,3 +571,21 @@ a ledger. This still does not materialize a training dataset, create training
 CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
 artifacts, run Phase 1, change `DatasetConfirmation`, run model
 training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
+
+## Property Training Admission Execution Ledger Precheck Note
+
+The property training admission execution ledger precheck was added after the
+ledger:
+
+```text
+docs/custom-corpus-property-training-admission-execution-ledger-precheck.md
+```
+
+Committed ledgers can now be checked against the ledger summary, dry-run
+precheck, dry-run report, execution request package, request preflight, draft
+package, request plan, readiness summary, and quarantine candidate evidence
+before any future training dataset materialization layer. This still does not
+materialize a training dataset, create training CSV/JSONL/Parquet/LMDB
+artifacts, create candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1,
+change `DatasetConfirmation`, run model training/evaluation, call an LLM or
+agent, call MinerU, or parse PDFs.

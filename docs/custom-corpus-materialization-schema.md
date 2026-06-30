@@ -189,6 +189,19 @@ records safe ID/hash-only ledger admissions and contains no serialized training
 dataset rows, no training CSV/JSONL/Parquet/LMDB paths, and no candidate
 CSV/JSONL/Parquet/LMDB paths.
 
+Training admission execution ledger precheck is downstream of the ledger:
+
+```text
+docs/custom-corpus-property-training-admission-execution-ledger-precheck.md
+```
+
+The ledger precheck validates the ledger and upstream SHA/id/record chain
+before any future training dataset materialization layer. It is still separate
+from this materialization plan schema and from any future training dataset
+schema. It does not execute materialization, create training or candidate
+CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, or change
+`DatasetConfirmation`.
+
 Training admission request planning is downstream of training admission
 readiness:
 
