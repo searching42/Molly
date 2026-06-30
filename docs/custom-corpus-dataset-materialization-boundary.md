@@ -43,7 +43,8 @@ custom corpus manifest
 -> property training admission execution dry-run precheck
 -> property training admission execution ledger
 -> property training admission execution ledger precheck
--> future training dataset materialization
+-> property training dataset materialization planner
+-> future training dataset writer/materializer
 ```
 
 Existing artifact schemas:
@@ -87,11 +88,13 @@ Existing artifact schemas:
 - `custom_corpus_property_training_admission_execution_ledger.v1`
 - `custom_corpus_property_training_admission_execution_ledger_summary.v1`
 - `custom_corpus_property_training_admission_execution_ledger_precheck.v1`
+- `custom_corpus_property_training_dataset_materialization_plan.v1`
+- `custom_corpus_property_training_dataset_materialization_planner.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
-property path, a controlled training admission execution ledger, and a ledger
-precheck before future training dataset materialization. They still stop
-before training dataset materialization, training artifacts, Phase 1, and
+property path, a controlled training admission execution ledger, a ledger
+precheck, and a training dataset materialization planner. They still stop
+before training dataset writing, training artifacts, Phase 1, and
 `DatasetConfirmation` mutation.
 
 The property candidate schema represents open-ended numeric scientific
@@ -471,6 +474,17 @@ layer. The precheck is not execution, creates no training or candidate
 CSV/JSONL/Parquet/LMDB artifact, does not run Phase 1, and leaves
 `DatasetConfirmation` unchanged.
 
+The property training dataset materialization planner is documented in:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-planner.md
+```
+
+It consumes ledger-precheck-passed packages and writes a plan only. The planner
+is not dataset writing, produces no training or candidate
+CSV/JSONL/Parquet/LMDB artifact, does not run Phase 1, and leaves
+`DatasetConfirmation` unchanged.
+
 ## Offline Materialization Planner
 
 The offline planner is documented in:
@@ -815,9 +829,10 @@ Recommended future sequence:
 20. `test/docs: add property training admission execution dry-run precheck`
 21. `test/docs: add property training admission execution ledger`
 22. `test/docs: add property training admission execution ledger precheck`
-23. `docs: record small public quarantine materialization evidence`
-24. `docs/test: design training admission boundary from quarantined candidates`
-25. only later: implement explicit training artifact builder if all previous
+23. `test/docs: add property training dataset materialization planner`
+24. `docs: record small public quarantine materialization evidence`
+25. `docs/test: design training admission boundary from quarantined candidates`
+26. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

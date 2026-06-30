@@ -27,6 +27,24 @@ precheck validates that ledger and its upstream evidence before a future
 training dataset materialization layer. A passed precheck is necessary but not
 sufficient for future training dataset materialization.
 
+## After Ledger Precheck: Training Dataset Materialization Planner
+
+The next offline layer is documented in:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-planner.md
+```
+
+Future evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-dataset-materialization-plan-evidence-template.md
+```
+
+The ledger precheck validates ledger evidence. The training dataset
+materialization planner creates a plan only. Actual training dataset
+writer/materializer logic remains separate and unimplemented here.
+
 ## Inputs
 
 The precheck requires:

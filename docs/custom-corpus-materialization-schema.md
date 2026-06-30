@@ -202,6 +202,18 @@ schema. It does not execute materialization, create training or candidate
 CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, or change
 `DatasetConfirmation`.
 
+Training dataset materialization planning is downstream of ledger precheck:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-planner.md
+```
+
+The training dataset materialization plan schema is separate from any future
+training dataset schema. It contains no serialized training dataset rows and no
+training/candidate CSV/JSONL/Parquet/LMDB paths. It plans future dataset
+writing only and does not execute materialization, run Phase 1, or change
+`DatasetConfirmation`.
+
 Training admission request planning is downstream of training admission
 readiness:
 

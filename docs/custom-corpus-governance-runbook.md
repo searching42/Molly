@@ -46,7 +46,8 @@ custom corpus manifest
 -> property training admission execution dry-run precheck
 -> property training admission execution ledger
 -> property training admission execution ledger precheck
--> future training dataset materialization
+-> property training dataset materialization planner
+-> future training dataset writer/materializer
 ```
 
 Concrete artifact schemas:
@@ -91,6 +92,8 @@ Concrete artifact schemas:
 - `custom_corpus_property_training_admission_execution_ledger.v1`
 - `custom_corpus_property_training_admission_execution_ledger_summary.v1`
 - `custom_corpus_property_training_admission_execution_ledger_precheck.v1`
+- `custom_corpus_property_training_dataset_materialization_plan.v1`
+- `custom_corpus_property_training_dataset_materialization_planner.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -1674,6 +1677,88 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - precheck redaction fails
 
+## Step 32: Property Training Dataset Materialization Planner
+
+The property training dataset materialization planner reads the ledger
+precheck, ledger, ledger summary, execution dry-run/precheck, execution
+request package, request preflight, draft package, draft precheck, request
+plan, request preflight, training admission readiness summary, quarantine
+candidate preflight summary, and quarantine candidate records. It validates the
+full package again and writes a safe plan for future training dataset writing.
+It is not dataset writing: no training CSV/JSONL/Parquet/LMDB, candidate
+CSV/JSONL/Parquet/LMDB, Phase 1 artifact, `DatasetConfirmation` change, model
+training, or evaluation is produced.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-materialization-planner.md`
+- `docs/custom-corpus-property-training-admission-execution-ledger-precheck.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-materialization-plan-evidence-template.md`
+
+Example command:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_dataset_materialization_planner \
+  --training-admission-execution-ledger-precheck /path/outside/git/property_training_admission_execution_ledger_precheck_summary.json \
+  --training-admission-execution-ledger /path/outside/git/property_training_admission_execution_ledger.json \
+  --training-admission-execution-ledger-summary /path/outside/git/property_training_admission_execution_ledger_summary.json \
+  --training-admission-execution-dry-run-precheck /path/outside/git/property_training_admission_execution_dry_run_precheck_summary.json \
+  --training-admission-execution-dry-run-report /path/outside/git/property_training_admission_execution_dry_run_report.json \
+  --training-admission-execution-request /path/outside/git/property_training_admission_execution_request.json \
+  --training-admission-execution-request-summary /path/outside/git/property_training_admission_execution_request_summary.json \
+  --training-admission-execution-request-preflight /path/outside/git/property_training_admission_execution_request_preflight_summary.json \
+  --training-admission-request-draft /path/outside/git/property_training_admission_request.draft.json \
+  --training-admission-request-draft-summary /path/outside/git/property_training_admission_request_draft_summary.json \
+  --training-admission-request-draft-precheck /path/outside/git/property_training_admission_request_draft_precheck_summary.json \
+  --training-admission-request-plan /path/outside/git/property_training_admission_request_plan_summary.json \
+  --training-admission-request-preflight /path/outside/git/property_training_admission_request_preflight_summary.json \
+  --training-admission-readiness-summary /path/outside/git/property_training_admission_readiness_summary.json \
+  --quarantine-candidate-preflight-summary /path/outside/git/property_quarantine_candidate_preflight_summary.json \
+  --quarantine-candidate-records /path/outside/git/property_quarantine_candidate_records.json \
+  --output-dir /path/outside/git/property-training-dataset-materialization-plan \
+  --materialization-plan-id property-training-dataset-materialization-plan-001 \
+  --created-by operator-redacted \
+  --confirm-training-dataset-materialization-plan
+```
+
+Pass criteria:
+
+- explicit plan confirmation is present
+- ledger precheck status is `passed`
+- execution ledger status is `committed`
+- source hashes and ids match across all upstream artifacts
+- ledger records match dry-run, execution request, draft, and planned
+  candidate records
+- excluded, blocked, and needs-review candidates are not present
+- planned dataset records are safe ID/hash/label summaries only
+- planned dataset records keep `training_dataset_materialized=false`
+- planned dataset records keep `dataset_artifact_created=false`
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- planner redaction checks pass
+
+Needs-review criteria:
+
+- ledger precheck or upstream evidence is `needs_review` or partial
+- `--allow-ledger-precheck-needs-review` is explicitly set
+- no hard consistency check failed
+
+Fail criteria:
+
+- confirmation is missing
+- ledger precheck is blocked or invalid
+- ledger precheck is needs-review without explicit allowance
+- execution ledger is blocked or invalid
+- source hashes or ids mismatch
+- planned records derive from excluded, blocked, or needs-review records
+- output directory is non-empty
+- training/candidate dataset artifact fields indicate materialization
+- Phase 1 is not `not_run`
+- `DatasetConfirmation` changed
+- raw text, private paths, token-like values, PDF names, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
+- planner redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -1962,6 +2047,7 @@ Allowed:
 - property training admission execution dry-run precheck
 - property training admission execution ledger
 - property training admission execution ledger precheck
+- property training dataset materialization planner
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

@@ -3,7 +3,7 @@
 ## Summary
 
 Molly now has a custom corpus governance chain through a controlled property
-training admission execution ledger precheck:
+training dataset materialization planner:
 
 ```text
 custom_corpus_manifest.v1
@@ -44,7 +44,9 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_training_admission_execution_dry_run_precheck.v1
 -> custom_corpus_property_training_admission_execution_ledger.v1
 -> custom_corpus_property_training_admission_execution_ledger_precheck.v1
--> future training dataset materialization boundary
+-> custom_corpus_property_training_dataset_materialization_plan.v1
+-> custom_corpus_property_training_dataset_materialization_planner.v1
+-> future training dataset writer/materializer boundary
 ```
 
 The chain supports controlled custom corpus intake, unconfirmed dry-runs,
@@ -589,3 +591,19 @@ materialize a training dataset, create training CSV/JSONL/Parquet/LMDB
 artifacts, create candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1,
 change `DatasetConfirmation`, run model training/evaluation, call an LLM or
 agent, call MinerU, or parse PDFs.
+
+## Property Training Dataset Materialization Planner Note
+
+The property training dataset materialization planner was added after ledger
+precheck:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-planner.md
+```
+
+Ledger-precheck-passed packages can now produce safe training dataset
+materialization plans for future dataset writing. This still does not write a
+training dataset, create training CSV/JSONL/Parquet/LMDB artifacts, create
+candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.
