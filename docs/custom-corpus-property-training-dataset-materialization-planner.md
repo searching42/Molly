@@ -142,6 +142,28 @@ LMDB, candidate CSV, candidate JSONL, candidate Parquet, candidate LMDB,
 Phase 1 artifacts, `DatasetConfirmation` artifacts, model training artifacts,
 or evaluation artifacts.
 
+## After Materialization Planner: Plan Precheck
+
+The next pre-dataset-writing layer is documented in:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-plan-precheck.md
+```
+
+Future plan precheck evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-dataset-materialization-plan-precheck-evidence-template.md
+```
+
+The planner creates a plan only. The plan precheck validates that plan package
+against the full upstream ledger, dry-run, execution request, request draft,
+request planning, readiness, and quarantine evidence chain. The plan precheck
+still does not create training dataset artifacts, training
+CSV/JSONL/Parquet/LMDB artifacts, candidate CSV/JSONL/Parquet/LMDB artifacts,
+Phase 1 inputs, or `DatasetConfirmation` changes. The future dataset
+writer/materializer remains separate.
+
 ## Boundaries
 
 - The planner creates a plan only.

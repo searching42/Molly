@@ -3,7 +3,7 @@
 ## Summary
 
 Molly now has a custom corpus governance chain through a controlled property
-training dataset materialization planner:
+training dataset materialization plan precheck:
 
 ```text
 custom_corpus_manifest.v1
@@ -46,6 +46,7 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_training_admission_execution_ledger_precheck.v1
 -> custom_corpus_property_training_dataset_materialization_plan.v1
 -> custom_corpus_property_training_dataset_materialization_planner.v1
+-> custom_corpus_property_training_dataset_materialization_plan_precheck.v1
 -> future training dataset writer/materializer boundary
 ```
 
@@ -607,3 +608,18 @@ training dataset, create training CSV/JSONL/Parquet/LMDB artifacts, create
 candidate CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.
+
+## Property Training Dataset Materialization Plan Precheck Note
+
+The property training dataset materialization plan precheck was added after the
+planner:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-plan-precheck.md
+```
+
+Materialization plans can now be checked before any future row contract or
+dataset writer. This still does not write a training dataset, create training
+CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
+artifacts, run Phase 1, change `DatasetConfirmation`, run model
+training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
