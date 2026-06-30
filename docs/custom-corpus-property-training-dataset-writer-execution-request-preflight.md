@@ -76,6 +76,22 @@ file paths, CSV/JSONL/Parquet/LMDB paths, conformer data, DPA3 structures,
 full candidate payloads, full materialized payloads, or full upstream
 payloads.
 
+## After Writer Request Preflight: Writer Input Binding Planner
+
+After a writer execution request package passes preflight, the property
+training dataset writer input binding planner can prepare a safe field-source
+binding plan for future controlled writer work.
+
+The writer request preflight validates request evidence. The input binding
+planner defines how future row fields will be sourced from allowed artifacts
+and derivation-rule labels. It still does not execute a writer, materialize
+values, output canonical SMILES values, or create serialized training rows.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-writer-input-binding-planner.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-writer-input-binding-plan-evidence-template.md`
+
 ## CLI Usage
 
 ```bash

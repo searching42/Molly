@@ -500,6 +500,12 @@ serialized training dataset rows. It validates schema, status, hashes, ids,
 record counts, output-format labels, and boundary fields before any future
 controlled writer.
 
+The writer input binding plan is downstream of the writer execution request
+preflight. Its schema is separate from dataset artifacts and contains no
+serialized training dataset rows. It binds future row fields to allowed source
+artifact labels, source hashes, source record ids, and derivation-rule labels
+before any future controlled writer materializes values.
+
 ## Boundaries
 
 - This schema does not implement materialization.

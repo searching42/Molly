@@ -54,6 +54,8 @@ custom corpus manifest
 -> property training dataset materialization dry-run precheck
 -> property training dataset writer execution request
 -> property training dataset writer execution request preflight
+-> property training dataset writer input binding planner
+-> future writer input binding preflight
 -> future controlled training dataset writer
 ```
 
@@ -2309,6 +2311,58 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - preflight redaction fails
 
+## Step 40: Property Training Dataset Writer Input Binding Planner
+
+The property training dataset writer input binding planner reads the writer
+execution request preflight, writer execution request and summary,
+materialization dry-run evidence, row contract package, materialization plan
+package, ledger evidence, execution dry-run evidence, training admission
+request evidence, training admission readiness evidence, and quarantine
+candidate evidence. It plans how future row fields will be bound to allowed
+source artifact labels, SHA-256 hashes, source record ids, and derivation-rule
+labels before any controlled dataset writer is allowed to materialize values.
+
+It is not dataset writing: no values are materialized, no serialized training
+rows are created, no training/candidate CSV/JSONL/Parquet/LMDB artifact is
+created, no conformer or DPA3 structure is generated, no Phase 1 artifact is
+created, `DatasetConfirmation` is not changed, and no model training or
+evaluation is run.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-writer-input-binding-planner.md`
+- `docs/custom-corpus-property-training-dataset-writer-execution-request-preflight.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-writer-input-binding-plan-evidence-template.md`
+
+Pass criteria:
+
+- writer execution request preflight status is `passed`
+- writer execution request status is `written`
+- dry-run, row contract, materialization plan, ledger, readiness, and
+  quarantine evidence remain hash-bound
+- writer request records, row previews, planned dataset records, ledger
+  records, and candidate ids match
+- excluded, blocked, and needs-review candidates are not present
+- required row fields have safe bindings or explicit allowed needs-review
+  handling
+- value-bearing fields do not expose raw property values, canonical SMILES
+  strings, InChI/InChIKey values, raw table rows, or raw article text
+- dedup and split rules are labels only, with row-id splitting forbidden
+- `writer_executed=false`
+- `training_dataset_materialized=false`
+- `dataset_artifact_created=false`
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- planner redaction checks pass
+
+Needs-review criteria:
+
+- writer request preflight or upstream evidence is `needs_review` or `partial`
+- `--allow-writer-request-preflight-needs-review` is explicitly set
+- required field sources are missing only when
+  `--no-require-all-required-fields-bound` is explicitly set
+- no hard consistency check failed
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -2605,6 +2659,7 @@ Allowed:
 - property training dataset materialization dry-run precheck
 - property training dataset writer execution request
 - property training dataset writer execution request preflight
+- property training dataset writer input binding planner
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
