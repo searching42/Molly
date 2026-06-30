@@ -776,3 +776,20 @@ training rows, create training CSV/JSONL/Parquet/LMDB artifacts, create
 candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3
 structures, run Phase 1, change `DatasetConfirmation`, run model
 training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
+
+## Property Training Dataset Writer Value Source Manifest Preflight Note
+
+The property training dataset writer value source manifest preflight was
+added after the value source manifest planner:
+
+```text
+docs/custom-corpus-property-training-dataset-writer-value-source-manifest-preflight.md
+```
+
+Value-source-manifest-planned packages can now be checked before any future
+controlled writer work. This still does not execute a writer, read source
+payloads, materialize values, write a training dataset, serialize training
+rows, create training CSV/JSONL/Parquet/LMDB artifacts, create candidate
+CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3
+structures, run Phase 1, change `DatasetConfirmation`, run model
+training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
