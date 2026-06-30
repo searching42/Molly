@@ -29,6 +29,25 @@ writing a contract-only artifact.
 The future dataset writer remains separate. A row contract is necessary but
 not sufficient for dataset writing.
 
+## After Row Contract: Row Contract Precheck
+
+The downstream precheck is documented in:
+
+```text
+docs/custom-corpus-property-training-dataset-row-contract-precheck.md
+```
+
+Future evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-dataset-row-contract-precheck-evidence-template.md
+```
+
+The row contract defines semantics. The row contract precheck validates that
+the contract package remains internally consistent, safe, and hash-bound to
+the materialization plan and upstream evidence. Materialization dry-runs and
+dataset writers remain separate and explicit.
+
 ## Output Artifacts
 
 The builder writes a run-scoped directory:

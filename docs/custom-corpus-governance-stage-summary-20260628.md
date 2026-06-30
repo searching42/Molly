@@ -3,7 +3,7 @@
 ## Summary
 
 Molly now has a custom corpus governance chain through a controlled property
-training dataset row contract:
+training dataset row contract precheck:
 
 ```text
 custom_corpus_manifest.v1
@@ -49,6 +49,7 @@ custom_corpus_manifest.v1
 -> custom_corpus_property_training_dataset_materialization_plan_precheck.v1
 -> custom_corpus_property_training_dataset_row_contract.v1
 -> custom_corpus_property_training_dataset_row_contract_builder.v1
+-> custom_corpus_property_training_dataset_row_contract_precheck.v1
 -> future training dataset writer/materializer boundary
 ```
 
@@ -641,3 +642,19 @@ dataset, create training CSV/JSONL/Parquet/LMDB artifacts, create candidate
 CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3 structures,
 run Phase 1, change `DatasetConfirmation`, run model training/evaluation, call
 an LLM or agent, call MinerU, or parse PDFs.
+
+## Property Training Dataset Row Contract Precheck Note
+
+The property training dataset row contract precheck was added after row
+contract:
+
+```text
+docs/custom-corpus-property-training-dataset-row-contract-precheck.md
+```
+
+Row contract packages can now be checked before future materialization dry-run
+or dataset writer work. This still does not write a training dataset, generate
+row previews, create training CSV/JSONL/Parquet/LMDB artifacts, create
+candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3
+structures, run Phase 1, change `DatasetConfirmation`, run model
+training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.

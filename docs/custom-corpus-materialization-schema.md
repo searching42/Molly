@@ -238,6 +238,17 @@ defines future row semantics and contains no serialized training dataset rows,
 no output file paths, no conformers, and no DPA3 structures. Future dataset
 writers must remain separate from this contract layer.
 
+Training dataset row contract precheck is downstream of row contract:
+
+```text
+docs/custom-corpus-property-training-dataset-row-contract-precheck.md
+```
+
+The row contract precheck summary is separate from dataset artifacts. It
+validates schema, status, hashes, ids, field contracts, and record references,
+but contains no serialized training dataset rows, no row previews, and no
+training or candidate output artifacts.
+
 Training admission request planning is downstream of training admission
 readiness:
 
