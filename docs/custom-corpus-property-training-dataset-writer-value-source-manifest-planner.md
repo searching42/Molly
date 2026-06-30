@@ -5,8 +5,8 @@ safe value-source authorization metadata for future controlled dataset writer
 work.
 
 It sits after the property training dataset writer input binding plan
-preflight and before any future value source manifest preflight or controlled
-training dataset writer.
+preflight and before the property training dataset writer value source
+manifest preflight.
 
 ## Purpose
 
@@ -154,6 +154,21 @@ property values, canonical SMILES, InChI/InChIKey values, raw table rows, raw
 article text, local paths, private paths, PDF names or paths, serialized rows,
 training/candidate CSV/JSONL/Parquet/LMDB paths, conformer data, DPA3
 structure data, credentials, or full upstream payloads.
+
+## After Planning: Value Source Manifest Preflight
+
+The value source manifest preflight validates the generated manifest package
+before any future controlled writer can use it.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-writer-value-source-manifest-preflight.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-writer-value-source-manifest-preflight-evidence-template.md`
+
+The preflight is still not writer execution. It does not read source payloads,
+materialize values, serialize rows, create training/candidate
+CSV/JSONL/Parquet/LMDB artifacts, run Phase 1, change `DatasetConfirmation`,
+or run model training/evaluation.
 
 ## Boundaries
 

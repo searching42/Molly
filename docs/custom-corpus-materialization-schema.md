@@ -519,6 +519,14 @@ metadata with source labels, basenames, hashes, field names, and
 derivation-rule labels only; source payloads are not read and values are not
 materialized.
 
+The writer value source manifest preflight is downstream of the value source
+manifest planner. Its summary is separate from dataset artifacts and contains
+no serialized training dataset rows. It validates the manifest package,
+source hashes, ids, value field coverage, source labels, and boundary fields
+before any future controlled writer. It does not read source payloads,
+materialize values, execute a writer, or create training/candidate
+CSV/JSONL/Parquet/LMDB artifacts.
+
 ## Boundaries
 
 - This schema does not implement materialization.
