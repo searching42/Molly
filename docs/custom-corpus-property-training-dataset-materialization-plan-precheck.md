@@ -22,6 +22,26 @@ summary, dry-run evidence, execution request evidence, draft evidence, request
 planning evidence, readiness evidence, and quarantine candidate evidence. It
 then emits safe precheck evidence.
 
+## After Plan Precheck: Training Dataset Row Contract
+
+The downstream row contract is documented in:
+
+```text
+docs/custom-corpus-property-training-dataset-row-contract.md
+```
+
+Future evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-dataset-row-contract-evidence-template.md
+```
+
+The plan precheck validates materialization plan evidence. The row contract
+defines future row semantics before any dataset writer is allowed. It remains
+contract-only and does not create training dataset artifacts, serialized rows,
+CSV/JSONL/Parquet/LMDB outputs, Phase 1 inputs, or `DatasetConfirmation`
+changes.
+
 ## Inputs
 
 The precheck requires:
