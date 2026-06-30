@@ -28,6 +28,26 @@ the full chain again and emits precheck evidence only.
 
 Future dataset writing remains separate.
 
+## After Precheck: Writer Execution Request
+
+After the dry-run package precheck passes, the writer execution request
+builder can create a reviewable request packet for a future dataset writer:
+
+```text
+docs/custom-corpus-property-training-dataset-writer-execution-request.md
+```
+
+Future evidence template:
+
+```text
+docs/evidence/templates/custom-corpus-property-training-dataset-writer-execution-request-evidence-template.md
+```
+
+The writer execution request remains non-executing. It does not run a dataset
+writer, serialize training rows, create training CSV/JSONL/Parquet/LMDB files,
+create candidate CSV/JSONL/Parquet/LMDB files, run Phase 1, or modify
+`DatasetConfirmation`.
+
 ## Validation Rules
 
 The precheck validates:

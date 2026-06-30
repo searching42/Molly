@@ -484,6 +484,16 @@ Future plan evidence template:
 docs/evidence/templates/custom-corpus-materialization-plan-evidence-template.md
 ```
 
+## Property Training Dataset Writer Request Note
+
+The property training dataset writer execution request layer sits downstream
+of row contract, dry-run, and dry-run precheck evidence. It can create a
+reviewable request packet for a future dataset writer, but it is not a
+materialization schema execution and it contains no serialized training rows.
+It does not create training CSV/JSONL/Parquet/LMDB artifacts, candidate
+CSV/JSONL/Parquet/LMDB artifacts, conformers, DPA3 structures, Phase 1
+artifacts, or `DatasetConfirmation` changes.
+
 ## Boundaries
 
 - This schema does not implement materialization.

@@ -691,3 +691,20 @@ training CSV/JSONL/Parquet/LMDB artifacts, create candidate
 CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3 structures,
 run Phase 1, change `DatasetConfirmation`, run model training/evaluation, call
 an LLM or agent, call MinerU, or parse PDFs.
+
+## Property Training Dataset Writer Execution Request Note
+
+The property training dataset writer execution request builder was added after
+dry-run precheck:
+
+```text
+docs/custom-corpus-property-training-dataset-writer-execution-request.md
+```
+
+Dry-run-precheck-passed packages can now produce safe request packets for a
+future dataset writer. This still does not execute a writer, write a training
+dataset, serialize training rows, create training CSV/JSONL/Parquet/LMDB
+artifacts, create candidate CSV/JSONL/Parquet/LMDB artifacts, generate
+conformers, create DPA3 structures, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.

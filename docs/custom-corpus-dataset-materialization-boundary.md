@@ -49,6 +49,7 @@ custom corpus manifest
 -> property training dataset row contract precheck
 -> property training dataset materialization dry-run
 -> property training dataset materialization dry-run precheck
+-> property training dataset writer execution request
 -> future training dataset writer/materializer
 ```
 
@@ -238,6 +239,13 @@ summary, row-preview, field/model/output summary, hash, id, and upstream
 evidence consistency only. It is not dataset writing, row previews remain
 summaries only, no training artifact is produced, Phase 1 remains separate,
 and `DatasetConfirmation` remains unchanged.
+
+The property training dataset writer execution request sits after the dry-run
+precheck and before any future dataset writer execution. It emits a reviewable
+request packet with safe ID/hash-only records. It does not execute a writer,
+create a dataset, create training/candidate CSV/JSONL/Parquet/LMDB artifacts,
+generate conformers or DPA3 structures, run Phase 1, run model
+training/evaluation, or change `DatasetConfirmation`.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a
@@ -902,9 +910,10 @@ Recommended future sequence:
 26. `test/docs: add property training dataset row contract precheck`
 27. `test/docs: add property training dataset materialization dry-run`
 28. `test/docs: add property training dataset materialization dry-run precheck`
-29. `docs: record small public quarantine materialization evidence`
-30. `docs/test: design training admission boundary from quarantined candidates`
-31. only later: implement explicit training artifact builder if all previous
+29. `test/docs: add property training dataset writer execution request`
+30. `docs: record small public quarantine materialization evidence`
+31. `docs/test: design training admission boundary from quarantined candidates`
+32. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the
