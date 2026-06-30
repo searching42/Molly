@@ -51,6 +51,7 @@ custom corpus manifest
 -> property training dataset row contract
 -> property training dataset row contract precheck
 -> property training dataset materialization dry-run
+-> property training dataset materialization dry-run precheck
 -> future training dataset writer/materializer
 ```
 
@@ -104,6 +105,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_training_dataset_row_contract_precheck.v1`
 - `custom_corpus_property_training_dataset_materialization_dry_run.v1`
 - `custom_corpus_property_training_dataset_materialization_dry_run_summary.v1`
+- `custom_corpus_property_training_dataset_materialization_dry_run_precheck.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -2121,6 +2123,71 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - dry-run redaction fails
 
+## Step 37: Property Training Dataset Materialization Dry-Run Precheck
+
+The property training dataset materialization dry-run precheck reads the
+dry-run report, dry-run summary, row contract precheck, row contract package,
+materialization plan package, ledger evidence, execution dry-run evidence,
+execution request evidence, request draft evidence, request plan/preflight
+evidence, training admission readiness evidence, and quarantine candidate
+evidence. It validates the dry-run package before any future dataset writer.
+It is not dataset writing: row previews remain summaries only, and no
+serialized training rows, training CSV/JSONL/Parquet/LMDB, candidate
+CSV/JSONL/Parquet/LMDB, conformer, DPA3 structure, Phase 1 artifact,
+`DatasetConfirmation` change, model training, or evaluation is produced.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-materialization-dry-run-precheck.md`
+- `docs/custom-corpus-property-training-dataset-materialization-dry-run.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-materialization-dry-run-precheck-evidence-template.md`
+
+Pass criteria:
+
+- dry-run report status is `passed`
+- dry-run summary binds to the exact dry-run report SHA-256
+- row contract precheck status is `passed`
+- row contract status is `written`
+- materialization plan status is `planned`
+- execution ledger status is `committed`
+- source hashes and ids match across all upstream artifacts
+- row preview count and ids match report, summary, contract references, plan
+  records, and ledger records
+- field coverage summary matches the row contract
+- model-family compatibility summary reports no conformers or DPA3 structures
+- output-format compatibility summary reports no JSONL, Parquet, LMDB, or CSV
+  files created
+- excluded, blocked, and needs-review candidates are not present
+- `training_dataset_materialized=false`
+- `dataset_artifact_created=false`
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- precheck redaction checks pass
+
+Needs-review criteria:
+
+- dry-run or upstream evidence is `needs_review` or `partial`
+- `--allow-dry-run-needs-review` is explicitly set
+- no hard consistency check failed
+
+Fail criteria:
+
+- dry-run report or summary schema is invalid
+- dry-run report is blocked or needs-review without explicit allowance
+- dry-run summary SHA does not match the dry-run report file
+- source hashes or ids mismatch
+- row preview ids, contract references, planned dataset records, ledger
+  records, or candidate ids mismatch
+- row previews include raw values, raw rows, serialized rows, output paths, or
+  unsafe values
+- model-family summary claims conformers or DPA3 structures were generated
+- output-format summary claims JSONL, Parquet, LMDB, or CSV files were created
+- generated precheck implies dataset writing, Phase 1 execution, or
+  `DatasetConfirmation` mutation
+- raw text, private paths, token-like values, PDF names, serialized rows, or
+  CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
+- precheck redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -2414,6 +2481,7 @@ Allowed:
 - property training dataset row contract
 - property training dataset row contract precheck
 - property training dataset materialization dry-run
+- property training dataset materialization dry-run precheck
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

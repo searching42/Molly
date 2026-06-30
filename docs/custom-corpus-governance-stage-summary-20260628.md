@@ -675,3 +675,19 @@ CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
 artifacts, generate conformers, create DPA3 structures, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.
+
+## Property Training Dataset Materialization Dry-Run Precheck Note
+
+The property training dataset materialization dry-run precheck was added after
+the dry-run:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-dry-run-precheck.md
+```
+
+Dry-run packages can now be validated before future dataset writer work. This
+still does not write a training dataset, serialize training rows, create
+training CSV/JSONL/Parquet/LMDB artifacts, create candidate
+CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3 structures,
+run Phase 1, change `DatasetConfirmation`, run model training/evaluation, call
+an LLM or agent, call MinerU, or parse PDFs.
