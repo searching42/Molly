@@ -55,6 +55,8 @@ custom corpus manifest
 -> property training dataset writer input binding plan preflight
 -> property training dataset writer value source manifest planner
 -> property training dataset writer value source manifest preflight
+-> property training dataset controlled writer execution plan
+-> future controlled writer execution plan preflight
 -> future controlled training dataset writer
 ```
 
@@ -111,6 +113,8 @@ Existing artifact schemas:
 - `custom_corpus_property_training_dataset_writer_value_source_manifest.v1`
 - `custom_corpus_property_training_dataset_writer_value_source_manifest_planner.v1`
 - `custom_corpus_property_training_dataset_writer_value_source_manifest_preflight.v1`
+- `custom_corpus_property_training_dataset_controlled_writer_execution_plan.v1`
+- `custom_corpus_property_training_dataset_controlled_writer_execution_planner.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
 property path, a controlled training admission execution ledger, a ledger
@@ -291,6 +295,17 @@ not execute a writer, read source payloads, materialize values, serialize
 training rows, create training/candidate CSV/JSONL/Parquet/LMDB artifacts,
 generate conformers or DPA3 structures, run Phase 1, run model
 training/evaluation, or change `DatasetConfirmation`.
+
+The property training dataset controlled writer execution plan sits after the
+value source manifest preflight and before any future controlled writer
+execution plan preflight or controlled writer. It defines writer invocation
+policy, allowed source basenames and hashes, output format labels, output
+artifact labels, file naming policy labels, row-count expectations, and
+provenance preservation requirements only. It does not execute a writer, read
+source payloads, materialize values, serialize training rows, create
+training/candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers or
+DPA3 structures, run Phase 1, run model training/evaluation, or change
+`DatasetConfirmation`.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a
@@ -961,9 +976,10 @@ Recommended future sequence:
 32. `test/docs: add property training dataset writer input binding plan preflight`
 33. `test/docs: add property training dataset writer value source manifest planner`
 34. `test/docs: add property training dataset writer value source manifest preflight`
-35. `docs: record small public quarantine materialization evidence`
-36. `docs/test: design training admission boundary from quarantined candidates`
-37. only later: implement explicit training artifact builder if all previous
+35. `test/docs: add property training dataset controlled writer execution plan`
+36. `docs: record small public quarantine materialization evidence`
+37. `docs/test: design training admission boundary from quarantined candidates`
+38. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

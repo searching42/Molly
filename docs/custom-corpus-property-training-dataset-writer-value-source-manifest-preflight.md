@@ -5,7 +5,8 @@ the value-source manifest package produced by the planner before any future
 controlled training dataset writer can use it.
 
 It sits after the property training dataset writer value source manifest
-planner and before any future controlled training dataset writer.
+planner and before the property training dataset controlled writer execution
+plan.
 
 ## Purpose
 
@@ -126,6 +127,22 @@ paths, PDF names or paths, raw article text, raw table rows, raw property
 values, canonical SMILES, InChI/InChIKey values, serialized rows,
 training/candidate CSV/JSONL/Parquet/LMDB paths, conformer data, DPA3
 structure data, credentials, or signed URL markers.
+
+## After Preflight: Controlled Writer Execution Plan
+
+The controlled writer execution plan defines how a future writer may be
+invoked without executing it.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-controlled-writer-execution-plan.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-execution-plan-evidence-template.md`
+
+The execution plan is still not writer execution. It does not read source
+payloads, materialize values, serialize rows, create training/candidate
+CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3
+structures, run Phase 1, change `DatasetConfirmation`, or run model
+training/evaluation.
 
 ## Boundaries
 

@@ -527,6 +527,15 @@ before any future controlled writer. It does not read source payloads,
 materialize values, execute a writer, or create training/candidate
 CSV/JSONL/Parquet/LMDB artifacts.
 
+The controlled writer execution plan is downstream of the value source
+manifest preflight. Its schema is separate from dataset artifacts and contains
+no serialized training dataset rows. It records writer invocation policy,
+allowed source artifact labels/basenames/hashes, requested output format
+labels, planned output artifact labels, row-count expectations, provenance
+preservation requirements, and redaction policy only. It does not execute a
+writer, read source payloads, materialize values, or create
+training/candidate CSV/JSONL/Parquet/LMDB artifacts.
+
 ## Boundaries
 
 - This schema does not implement materialization.
