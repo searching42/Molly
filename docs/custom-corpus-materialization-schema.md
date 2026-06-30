@@ -214,6 +214,19 @@ training/candidate CSV/JSONL/Parquet/LMDB paths. It plans future dataset
 writing only and does not execute materialization, run Phase 1, or change
 `DatasetConfirmation`.
 
+Training dataset materialization plan precheck is downstream of the planner:
+
+```text
+docs/custom-corpus-property-training-dataset-materialization-plan-precheck.md
+```
+
+The precheck summary is separate from any future training dataset schema and
+from serialized dataset rows. It validates schema/status/hash/id/record
+consistency for the existing plan package only. It does not create training
+dataset artifacts, training CSV/JSONL/Parquet/LMDB artifacts, candidate
+CSV/JSONL/Parquet/LMDB artifacts, Phase 1 inputs, or `DatasetConfirmation`
+changes.
+
 Training admission request planning is downstream of training admission
 readiness:
 
