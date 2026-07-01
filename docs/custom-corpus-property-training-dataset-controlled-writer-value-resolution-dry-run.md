@@ -4,8 +4,8 @@ The property training dataset controlled writer value resolution dry-run checks
 whether a future controlled writer could resolve required row fields from only
 the authorized value-bearing source payloads.
 
-It sits after the controlled writer execution plan preflight and before any
-future value-resolution precheck or controlled training dataset writer.
+It sits after the controlled writer execution plan preflight and before the
+value resolution dry-run precheck.
 
 ## Purpose
 
@@ -142,6 +142,21 @@ Return codes:
 
 - `0` for `passed` or `needs_review`
 - `1` for `blocked`
+
+## After Dry-Run: Value Resolution Dry-Run Precheck
+
+The value resolution dry-run precheck validates the emitted dry-run report and
+summary before any future controlled writer boundary:
+
+- `docs/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run-precheck.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run-precheck-evidence-template.md`
+
+The precheck does not read authorized source payloads again. It checks schema,
+status, hashes, ids, counts, boundary flags, record safety, and redaction for
+the already-emitted package. It still does not execute the controlled writer,
+emit values, materialize rows, create training/candidate
+CSV/JSONL/Parquet/LMDB artifacts, generate conformers or DPA3 structures, run
+Phase 1, modify `DatasetConfirmation`, or run model training/evaluation.
 
 ## Redaction
 

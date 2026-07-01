@@ -555,6 +555,14 @@ canonical SMILES, InChI/InChIKey values, output paths, or source payloads, and
 it does not execute a writer or create training/candidate
 CSV/JSONL/Parquet/LMDB artifacts.
 
+The controlled writer value resolution dry-run precheck is downstream of the
+value resolution dry-run. Its summary is separate from dataset artifacts and
+contains no serialized training dataset rows. It validates only the dry-run
+report/summary package for schema, status, hash, id, count, boundary, record
+safety, and redaction consistency before any future controlled writer. It does
+not re-read source payloads, emit values, execute a writer, or create
+training/candidate CSV/JSONL/Parquet/LMDB artifacts.
+
 ## Boundaries
 
 - This schema does not implement materialization.

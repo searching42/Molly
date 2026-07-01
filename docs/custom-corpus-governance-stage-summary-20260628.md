@@ -846,3 +846,22 @@ training CSV/JSONL/Parquet/LMDB artifacts, create candidate
 CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3
 structures, run Phase 1, change `DatasetConfirmation`, run model
 training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
+
+## Property Training Dataset Controlled Writer Value Resolution Dry-Run Precheck Note
+
+The property training dataset controlled writer value resolution dry-run
+precheck was added after value resolution dry-run:
+
+```text
+docs/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run-precheck.md
+```
+
+Value-resolution-dry-run packages can now be checked for schema, status, hash,
+id, count, boundary, record-safety, and redaction consistency before any
+future controlled writer work. This precheck does not re-read authorized
+source payloads, execute a writer, emit values, materialize values into rows,
+write a training dataset, serialize training rows, create training
+CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
+artifacts, generate conformers, create DPA3 structures, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.
