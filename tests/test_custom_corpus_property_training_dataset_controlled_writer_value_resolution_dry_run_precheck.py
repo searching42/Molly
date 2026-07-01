@@ -64,6 +64,7 @@ _FIXTURE_PATH_FORBIDDEN_MARKERS = (
     "values_materialized",
     "writer_executed",
 )
+_FIXTURE_SAFE_CREATED_AT = "2026-01-01T00:00:00Z"
 
 
 def test_valid_dry_run_package_writes_precheck_summary_and_markdown(tmp_path: Path) -> None:
@@ -289,6 +290,21 @@ def test_safe_fixture_root_does_not_inherit_boundary_marker_path(tmp_path: Path)
     assert fixture_root.name.startswith("value_resolution_precheck_fixture_passed_")
 
 
+def test_write_precheck_package_normalizes_unsafe_wall_clock_timestamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "ai4s_agent.custom_corpus_property_training_dataset_controlled_writer_execution_plan.now_iso",
+        lambda: "2026-07-01T00:00:00.720000Z",
+    )
+
+    paths = _write_precheck_package(tmp_path)
+    plan = json.loads(paths["training_dataset_controlled_writer_execution_plan"].read_text(encoding="utf-8"))
+
+    assert plan["created_at"] == _FIXTURE_SAFE_CREATED_AT
+
+
 def test_source_payloads_read_false_blocks(tmp_path: Path) -> None:
     paths = _write_precheck_package(tmp_path)
     _set_report_and_summary(paths, "source_payloads_read", False)
@@ -494,6 +510,7 @@ def test_no_llm_mineru_pdf_or_corpus_workflow_imports_or_calls(
 def _write_precheck_package(tmp_path: Path, *, needs_review: bool = False) -> dict[str, Path]:
     fixture_root = _safe_fixture_root(tmp_path, "review" if needs_review else "passed")
     paths = _write_controlled_preflight_base_package(fixture_root, plan_needs_review=needs_review)
+    _normalize_controlled_execution_plan_fixture(paths)
     preflight_summary_path = fixture_root / "controlled_writer_execution_plan_preflight_summary.json"
     preflight_summary = preflight_property_training_dataset_controlled_writer_execution_plan(
         **_controlled_preflight_kwargs(paths),
@@ -515,7 +532,31 @@ def _write_precheck_package(tmp_path: Path, *, needs_review: bool = False) -> di
     run_dir = paths["value_resolution_output_dir"] / "property-value-resolution-dry-run-001"
     paths["report"] = run_dir / "property_training_dataset_controlled_writer_value_resolution_dry_run_report.json"
     paths["summary"] = run_dir / "property_training_dataset_controlled_writer_value_resolution_dry_run_summary.json"
+    _normalize_value_resolution_dry_run_fixture(paths)
     return paths
+
+
+def _normalize_controlled_execution_plan_fixture(paths: dict[str, Path]) -> None:
+    _mutate_json(
+        paths["training_dataset_controlled_writer_execution_plan"],
+        lambda payload: payload.__setitem__("created_at", _FIXTURE_SAFE_CREATED_AT),
+    )
+    _mutate_json(
+        paths["training_dataset_controlled_writer_execution_planner_summary"],
+        lambda payload: payload.__setitem__("created_at", _FIXTURE_SAFE_CREATED_AT),
+    )
+    _mutate_json(
+        paths["training_dataset_controlled_writer_execution_planner_summary"],
+        lambda payload: payload.__setitem__(
+            "controlled_writer_execution_plan_sha256",
+            sha256_file(paths["training_dataset_controlled_writer_execution_plan"]),
+        ),
+    )
+
+
+def _normalize_value_resolution_dry_run_fixture(paths: dict[str, Path]) -> None:
+    _mutate_json(paths["report"], lambda payload: payload.__setitem__("created_at", _FIXTURE_SAFE_CREATED_AT))
+    _refresh_report_sha(paths)
 
 
 def _safe_fixture_root(tmp_path: Path, label: str) -> Path:
