@@ -1,32 +1,31 @@
-# Custom Corpus Property Training Dataset Controlled Writer Execution Plan
+# Custom Corpus Property Training Dataset Controlled Writer Execution Plan Preflight
 
-The property training dataset controlled writer execution plan defines how a
-future controlled writer may be invoked without running that writer.
+The property training dataset controlled writer execution plan preflight
+validates a controlled writer execution plan package before any future writer
+can be implemented or invoked.
 
-It sits after the value source manifest preflight and before the controlled
-writer execution plan preflight.
+It sits after the controlled writer execution plan and before any future
+controlled training dataset writer.
 
 ## Purpose
 
-The value source manifest preflight validates which value-bearing source
-artifacts a future writer may read. It still does not define writer invocation
-policy, allowed outputs, naming labels, provenance preservation, or redaction
-rules. This planner fills that gap by creating a safe execution plan.
+The controlled writer execution plan defines how a future writer may be
+invoked. This preflight independently checks that the plan is safe,
+hash-bound, internally consistent, and still free of source payload reads,
+materialized values, serialized rows, output paths, and dataset artifacts.
 
-The plan answers what a future controlled writer would be allowed to read,
-write, and preserve. It does not execute the writer and does not create a
-dataset.
+It does not execute a writer and does not create a dataset.
 
 ## Inputs
 
-The planner reads local JSON artifacts only:
+The preflight reads local JSON artifacts only:
 
+- controlled writer execution plan
+- controlled writer execution planner summary
 - value source manifest preflight
-- value source manifest
-- value source manifest planner summary
+- value source manifest and planner summary
 - writer input binding plan preflight
-- writer input binding plan
-- writer input binding planner summary
+- writer input binding plan and planner summary
 - writer execution request preflight
 - writer execution request and summary
 - materialization dry-run precheck, report, and summary
@@ -36,51 +35,51 @@ The planner reads local JSON artifacts only:
 - training admission evidence
 - quarantine candidate evidence
 
-## Plan Schema
+## Schema
 
-The controlled writer execution plan schema is:
-
-```text
-custom_corpus_property_training_dataset_controlled_writer_execution_plan.v1
-```
-
-The planner summary schema is:
+The preflight summary schema is:
 
 ```text
-custom_corpus_property_training_dataset_controlled_writer_execution_planner.v1
+custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight.v1
 ```
 
 Statuses:
 
-- `planned`: the plan and upstream evidence are consistent.
-- `needs_review`: explicitly allowed needs-review evidence remains.
-- `blocked`: schema, status, SHA, id, output-label, safety, boundary, or
+- `passed`: the controlled writer execution plan and upstream evidence are
+  consistent and no needs-review evidence remains.
+- `needs_review`: no hard error exists, but explicitly allowed needs-review
+  or partial evidence remains.
+- `blocked`: schema, status, SHA, id, record, output-label, boundary, or
   redaction checks failed.
 
-## Plan Content
+## Checks
 
-The plan includes:
+The preflight validates:
 
-- safe ids and SHA-256 bindings for all inputs
+- plan schema and planner summary schema
 - `writer_execution_mode=controlled_writer_execution_plan_only`
+- controlled writer plan status
+- upstream preflight, planner, request, dry-run, row contract, materialization
+  plan, ledger, training admission, and quarantine statuses
+- SHA-256 bindings across the full chain
+- corpus, dataset, row contract, materialization plan, writer request, input
+  binding plan, and value source manifest ids
 - requested output formats as labels only
+- planned output artifact labels as labels only, not paths
 - allowed source artifact basenames and SHA-256 hashes
-- allowed value field names
-- row contract id and SHA-256
-- value source manifest id and SHA-256
-- writer input binding plan id and SHA-256
-- planned output artifact labels only, not paths
-- output directory policy labels only
-- file naming policy labels only
-- row count expectations as aggregate counts
-- provenance preservation requirements
-- redaction policy
-- boundary statement
+- allowed value field names against value source manifest coverage
+- row count expectations against value source records, writer request records,
+  and binding records
+- boundary flags showing no writer execution, no source payload reads, no
+  value materialization, no dataset artifacts, no Phase 1, no
+  `DatasetConfirmation` change, no model training, and no evaluation
 
 ## CLI Usage
 
 ```bash
-PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_dataset_controlled_writer_execution_plan \
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight \
+  --training-dataset-controlled-writer-execution-plan /tmp/property_training_dataset_controlled_writer_execution_plan.json \
+  --training-dataset-controlled-writer-execution-planner-summary /tmp/property_training_dataset_controlled_writer_execution_planner_summary.json \
   --training-dataset-writer-value-source-manifest-preflight /tmp/property_training_dataset_writer_value_source_manifest_preflight_summary.json \
   --training-dataset-writer-value-source-manifest /tmp/property_training_dataset_writer_value_source_manifest.json \
   --training-dataset-writer-value-source-manifest-planner-summary /tmp/property_training_dataset_writer_value_source_manifest_planner_summary.json \
@@ -115,62 +114,46 @@ PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_dataset_cont
   --training-admission-readiness-summary /tmp/property_training_admission_readiness_summary.json \
   --quarantine-candidate-preflight-summary /tmp/property_quarantine_candidate_preflight_summary.json \
   --quarantine-candidate-records /tmp/property_quarantine_candidate_records.json \
-  --output-dir /tmp/property-training-dataset-controlled-writer-plan \
-  --controlled-writer-execution-plan-id property-controlled-writer-plan-001 \
-  --created-by operator-redacted \
-  --confirm-training-dataset-controlled-writer-execution-plan
+  --output-summary /tmp/property_training_dataset_controlled_writer_execution_plan_preflight_summary.json \
+  --output-markdown /tmp/property_training_dataset_controlled_writer_execution_plan_preflight_summary.md
 ```
 
 Optional controls:
 
-- `--allow-value-source-manifest-preflight-needs-review`
+- `--allow-controlled-writer-execution-plan-needs-review`
+- `--no-require-controlled-writer-execution-plan-planned`
 - `--minimum-value-source-records <n>`
 
 Return codes:
 
-- `0` for `planned` or `needs_review`
+- `0` for `passed` or `needs_review`
 - `1` for `blocked`
-
-## After Planning: Controlled Writer Execution Plan Preflight
-
-The controlled writer execution plan preflight validates the plan package
-before any future controlled training dataset writer can be implemented or
-invoked:
-
-- `docs/custom-corpus-property-training-dataset-controlled-writer-execution-plan-preflight.md`
-- `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-execution-plan-preflight-evidence-template.md`
-
-The preflight is still not writer execution. It checks schema, status,
-SHA-256 bindings, ids, output-format labels, source artifact basenames,
-allowed value fields, record counts, and boundary flags. It does not read
-source payloads, materialize values, create serialized rows, or create
-training/candidate CSV/JSONL/Parquet/LMDB artifacts.
 
 ## Redaction
 
-The planner scans the plan, summary, and Markdown evidence before writing. It
+The preflight scans the summary and Markdown evidence before writing. It
 fail-closes if forbidden material appears, including raw property values,
 canonical SMILES, InChI/InChIKey values, raw table rows, raw article text,
 local paths, private paths, PDF names or paths, serialized rows,
 training/candidate CSV/JSONL/Parquet/LMDB paths, conformer data, DPA3
-structure data, credentials, or full upstream payloads.
+structure data, credentials, full upstream payloads, or output paths.
 
 ## Boundaries
 
-- The planner creates a controlled writer execution plan only.
-- The planner does not execute a writer.
-- The planner does not read source payloads.
-- The planner does not materialize values.
-- The planner does not create serialized training rows.
-- The planner does not materialize a training dataset.
-- The planner does not create training CSV/JSONL/Parquet/LMDB artifacts.
-- The planner does not create candidate CSV/JSONL/Parquet/LMDB artifacts.
-- The planner does not generate conformers.
-- The planner does not generate DPA3 structures.
-- The planner does not create Uni-Mol or DPA3 input artifacts.
-- The planner does not run Phase 1.
-- The planner does not modify `DatasetConfirmation`.
-- The planner does not run model training or evaluation.
-- The planner does not call LLMs, MinerU, PDF parsers, or corpus workflows.
-- A controlled writer execution plan is necessary but not sufficient for
-  future controlled writer execution.
+- The preflight validates a controlled writer execution plan only.
+- The preflight does not execute a writer.
+- The preflight does not read source payloads.
+- The preflight does not materialize values.
+- The preflight does not create serialized training rows.
+- The preflight does not materialize a training dataset.
+- The preflight does not create training CSV/JSONL/Parquet/LMDB artifacts.
+- The preflight does not create candidate CSV/JSONL/Parquet/LMDB artifacts.
+- The preflight does not generate conformers.
+- The preflight does not generate DPA3 structures.
+- The preflight does not create Uni-Mol or DPA3 input artifacts.
+- The preflight does not run Phase 1.
+- The preflight does not modify `DatasetConfirmation`.
+- The preflight does not run model training or evaluation.
+- The preflight does not call LLMs, MinerU, PDF parsers, or corpus workflows.
+- A passed controlled writer execution plan preflight is necessary but not
+  sufficient for future controlled writer execution.

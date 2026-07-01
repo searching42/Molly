@@ -59,7 +59,7 @@ custom corpus manifest
 -> property training dataset writer value source manifest planner
 -> property training dataset writer value source manifest preflight
 -> property training dataset controlled writer execution plan
--> future controlled writer execution plan preflight
+-> property training dataset controlled writer execution plan preflight
 -> future controlled training dataset writer
 ```
 
@@ -125,6 +125,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_training_dataset_writer_value_source_manifest_preflight.v1`
 - `custom_corpus_property_training_dataset_controlled_writer_execution_plan.v1`
 - `custom_corpus_property_training_dataset_controlled_writer_execution_planner.v1`
+- `custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -2643,6 +2644,78 @@ Fail criteria:
   CSV/JSONL/Parquet/LMDB paths appear in emitted evidence
 - planner redaction fails
 
+## Step 45: Property Training Dataset Controlled Writer Execution Plan Preflight
+
+The property training dataset controlled writer execution plan preflight reads
+the controlled writer execution plan, its planner summary, the value source
+manifest package, the input binding package, writer request package,
+materialization dry-run evidence, row contract package, materialization plan
+package, ledger evidence, training admission evidence, and quarantine
+candidate evidence. It checks whether the controlled writer execution plan is
+safe, hash-bound, internally consistent, and still free of source payload
+reads, materialized values, serialized rows, and output paths before any
+future controlled writer work.
+
+It is not writer execution: no writer is executed, source payloads are not
+read, values are not materialized, no serialized training rows are created,
+no training/candidate CSV/JSONL/Parquet/LMDB artifact is created, no conformer
+or DPA3 structure is generated, no Phase 1 artifact is created,
+`DatasetConfirmation` is not changed, and no model training or evaluation is
+run.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-controlled-writer-execution-plan-preflight.md`
+- `docs/custom-corpus-property-training-dataset-controlled-writer-execution-plan.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-execution-plan-preflight-evidence-template.md`
+
+Pass criteria:
+
+- controlled writer execution plan status is `planned`
+- plan and planner summary schemas validate
+- full-chain source hashes and ids match
+- requested output formats are labels only
+- planned output artifact labels are labels only, not paths
+- allowed source artifact basenames and SHA-256 hashes match
+- allowed value field names match value source records
+- row count expectations match value source, writer request, and binding
+  record counts
+- excluded, blocked, or needs-review candidates do not leak into planned
+  records
+- `writer_executed=false`
+- `source_payloads_read=false`
+- `values_materialized=false`
+- `training_dataset_materialized=false`
+- `dataset_artifact_created=false`
+- `model_training_run=false`
+- `evaluation_run=false`
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- preflight redaction checks pass
+
+Needs-review criteria:
+
+- controlled writer execution plan or upstream evidence is `needs_review` or
+  `partial`
+- explicit allowance is set
+- no hard consistency check failed
+
+Fail criteria:
+
+- schema, status, hash, id, record-count, output-label, source-artifact, or
+  record-id checks fail
+- controlled writer execution plan is blocked or needs-review without
+  explicit allowance
+- output labels or source basenames contain paths or unsafe extensions
+- source payloads are read or values are materialized
+- preflight implies writer execution, Phase 1 execution, `DatasetConfirmation`
+  mutation, model training, or evaluation
+- raw property values, canonical SMILES, InChI/InChIKey values, raw text,
+  private paths, token-like values, PDF names, serialized rows, conformer/DPA3
+  data, output paths, or CSV/JSONL/Parquet/LMDB paths appear in emitted
+  evidence
+- preflight redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -2944,6 +3017,7 @@ Allowed:
 - property training dataset writer value source manifest planner
 - property training dataset writer value source manifest preflight
 - property training dataset controlled writer execution plan
+- property training dataset controlled writer execution plan preflight
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

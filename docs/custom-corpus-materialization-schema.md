@@ -536,6 +536,15 @@ preservation requirements, and redaction policy only. It does not execute a
 writer, read source payloads, materialize values, or create
 training/candidate CSV/JSONL/Parquet/LMDB artifacts.
 
+The controlled writer execution plan preflight is downstream of the
+controlled writer execution plan. Its summary is separate from dataset
+artifacts and contains no serialized training dataset rows. It validates plan
+schema, planner summary schema, statuses, hashes, ids, output-format labels,
+source artifact basenames, allowed value fields, row count expectations, and
+boundary flags before any future controlled writer. It does not execute a
+writer, read source payloads, materialize values, create output paths, or
+create training/candidate CSV/JSONL/Parquet/LMDB artifacts.
+
 ## Boundaries
 
 - This schema does not implement materialization.
