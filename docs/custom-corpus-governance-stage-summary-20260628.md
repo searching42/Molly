@@ -827,3 +827,22 @@ serialize training rows, create training CSV/JSONL/Parquet/LMDB artifacts,
 create candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create
 DPA3 structures, run Phase 1, change `DatasetConfirmation`, run model
 training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
+
+## Property Training Dataset Controlled Writer Value Resolution Dry-Run Note
+
+The property training dataset controlled writer value resolution dry-run was
+added after controlled writer execution plan preflight:
+
+```text
+docs/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run.md
+```
+
+Controlled-writer-execution-plan-preflight-passed packages can now be checked
+for required field resolution from explicitly authorized local JSON source
+payloads. Authorized source payloads may be read, but values are resolved
+internally and not emitted. This still does not execute a writer, materialize
+values into rows, write a training dataset, serialize training rows, create
+training CSV/JSONL/Parquet/LMDB artifacts, create candidate
+CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3
+structures, run Phase 1, change `DatasetConfirmation`, run model
+training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
