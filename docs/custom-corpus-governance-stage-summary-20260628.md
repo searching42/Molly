@@ -884,3 +884,24 @@ CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
 artifacts, generate conformers, create DPA3 structures, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.
+
+## Quarantined Candidate Admission Boundary
+
+The property training dataset quarantined candidate admission boundary was
+added after the small public quarantine materialization evidence packet:
+
+```text
+property training dataset controlled writer value resolution dry-run
+-> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
+-> future controlled training dataset writer
+```
+
+The boundary defines the evidence, status, redaction, and boundary conditions
+required before quarantined property candidates can be considered for future
+controlled writer design. It is docs/test only and does not execute a writer,
+read source payloads, emit raw values, materialize values, serialize rows,
+create training artifacts, generate conformers or DPA3 structures, run Phase 1,
+change `DatasetConfirmation`, run model training/evaluation, call an LLM or
+agent, call MinerU, or parse PDFs.

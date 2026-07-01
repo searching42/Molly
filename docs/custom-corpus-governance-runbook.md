@@ -63,6 +63,7 @@ custom corpus manifest
 -> property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer value resolution dry-run precheck
 -> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
 -> future controlled training dataset writer
 ```
 
@@ -2888,6 +2889,34 @@ Acceptance criteria:
 - no private paths, raw values, article/table text, file names, molecular
   strings, output paths, credentials, or model/evaluation claims appear
 
+## Step 49: Quarantined Candidate Admission Boundary
+
+The property training dataset quarantined candidate admission boundary defines
+which quarantined property candidates and upstream evidence can be considered
+before any future controlled training dataset writer design. It is a docs/test
+boundary only.
+
+It does not execute a writer, read source payloads, emit raw values,
+materialize values into rows, create row serialization, create
+training/candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers or
+DPA3 structures, run Phase 1, change `DatasetConfirmation`, or run model
+training/evaluation.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-quarantined-candidate-admission-boundary.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-quarantined-candidate-admission-boundary-evidence-template.md`
+
+Governance tail:
+
+```text
+property training dataset controlled writer value resolution dry-run
+-> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
+-> future controlled training dataset writer
+```
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -3193,6 +3222,7 @@ Allowed:
 - property training dataset controlled writer value resolution dry-run
 - property training dataset controlled writer value resolution dry-run precheck
 - small public quarantine materialization evidence
+- property training dataset quarantined candidate admission boundary
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

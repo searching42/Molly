@@ -60,6 +60,7 @@ custom corpus manifest
 -> property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer value resolution dry-run precheck
 -> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
 -> future controlled training dataset writer
 ```
 
@@ -344,6 +345,14 @@ value-resolution dry-run precheck as a docs-only acceptance note. It records a
 tiny public/synthetic-public quarantine evidence scope with redacted ids and
 counts only; it does not execute a writer, read source payloads, emit raw
 values, serialize rows, create training artifacts, run Phase 1, or change
+`DatasetConfirmation`.
+
+The property training dataset quarantined candidate admission boundary sits
+after the small public evidence packet and before any future controlled writer.
+It defines the evidence, status, redaction, and boundary conditions required
+before quarantined candidates can be considered for future writer design. It
+does not execute a writer, read source payloads, materialize values, serialize
+rows, create training artifacts, run Phase 1, or change
 `DatasetConfirmation`.
 
 The property training admission request draft builder sits after request

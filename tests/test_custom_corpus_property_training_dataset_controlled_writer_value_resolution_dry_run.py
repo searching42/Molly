@@ -343,16 +343,18 @@ def test_no_llm_mineru_pdf_or_corpus_workflow_imports_or_calls(
 
 
 def _write_value_resolution_package(tmp_path: Path, *, preflight_needs_review: bool = False) -> dict[str, Path]:
-    paths = _write_controlled_preflight_base_package(tmp_path, plan_needs_review=preflight_needs_review)
-    preflight_summary_path = tmp_path / "controlled_writer_execution_plan_preflight_summary.json"
+    fixture_root = tmp_path / "value-resolution-fixture"
+    fixture_root.mkdir(parents=True, exist_ok=False)
+    paths = _write_controlled_preflight_base_package(fixture_root, plan_needs_review=preflight_needs_review)
+    preflight_summary_path = fixture_root / "controlled_writer_execution_plan_preflight_summary.json"
     preflight_summary = preflight_property_training_dataset_controlled_writer_execution_plan(
         **_controlled_preflight_kwargs(paths),
         allow_controlled_writer_execution_plan_needs_review=preflight_needs_review,
         output_summary_path=preflight_summary_path,
     )
-    assert preflight_summary["preflight_status"] in {"passed", "needs_review"}
+    assert preflight_summary["preflight_status"] in {"passed", "needs_review"}, preflight_summary
     paths["training_dataset_controlled_writer_execution_plan_preflight"] = preflight_summary_path
-    paths["value_resolution_output_dir"] = tmp_path / "value-resolution-output"
+    paths["value_resolution_output_dir"] = fixture_root / "value-resolution-output"
     return paths
 
 
