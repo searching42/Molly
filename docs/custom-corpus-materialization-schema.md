@@ -572,16 +572,23 @@ controlled writer.
 
 The property training dataset quarantined candidate admission boundary is
 downstream of the small public evidence packet and upstream of any future
-controlled training dataset writer. It defines required quarantined candidate
-evidence, acceptable review/admission statuses, value-resolution evidence, and
-redaction rules. It is not a dataset schema and contains no serialized dataset
-rows.
+domain validation boundary. It defines required quarantined candidate evidence,
+acceptable review/admission statuses, value-resolution evidence, and redaction
+rules. It is not a dataset schema and contains no serialized dataset rows.
+
+The property training dataset domain validation boundary is downstream of the
+quarantined-candidate admission boundary and upstream of any future controlled
+training dataset writer. It defines scientific/domain checks for property-unit
+compatibility, numeric plausibility labels, provenance labels, condition
+labels, compound/alias association, and duplicate/conflict status. It is not a
+dataset schema and contains no raw values or serialized dataset rows.
 
 ```text
 property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer value resolution dry-run precheck
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
 -> future controlled training dataset writer
 ```
 

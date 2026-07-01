@@ -61,6 +61,7 @@ custom corpus manifest
 -> property training dataset controlled writer value resolution dry-run precheck
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
 -> future controlled training dataset writer
 ```
 
@@ -354,6 +355,14 @@ before quarantined candidates can be considered for future writer design. It
 does not execute a writer, read source payloads, materialize values, serialize
 rows, create training artifacts, run Phase 1, or change
 `DatasetConfirmation`.
+
+The property training dataset domain validation boundary sits after the
+quarantined-candidate admission boundary and before any future controlled
+writer. It defines scientific/domain checks for property-unit compatibility,
+numeric plausibility status, provenance labels, condition labels,
+compound/alias association, and duplicate/conflict status. It does not inspect
+raw values, run calculations, execute a writer, create rows, run Phase 1, or
+change `DatasetConfirmation`.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a
