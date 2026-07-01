@@ -70,7 +70,9 @@ custom corpus manifest
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
 -> property training dataset controlled writer dry-run precheck
+-> property training dataset controlled writer execution request design
 -> future controlled writer execution request
+-> future controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -2926,7 +2928,9 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
 -> property training dataset controlled writer dry-run precheck
+-> property training dataset controlled writer execution request design
 -> future controlled writer execution request
+-> future controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -2962,7 +2966,9 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
 -> property training dataset controlled writer dry-run precheck
+-> property training dataset controlled writer execution request design
 -> future controlled writer execution request
+-> future controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -2999,7 +3005,9 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
 -> property training dataset controlled writer dry-run precheck
+-> property training dataset controlled writer execution request design
 -> future controlled writer execution request
+-> future controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -3064,6 +3072,29 @@ References:
 - `docs/custom-corpus-property-training-dataset-controlled-writer-dry-run-precheck.md`
 - `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-dry-run-precheck-evidence-template.md`
 
+## Step 56: Controlled Writer Execution Request Design
+
+The property training dataset controlled writer execution request design
+defines the future request contract before any execution request artifact
+exists. It requires a passed dry-run precheck, passed dry-run, passed design
+plan preflight, passed domain validation boundary, passed value-resolution
+precheck, accepted candidate counts, zero blocked candidates, zero missing
+required fields, passed redaction, and false or `not_run` writer/materialization
+boundary flags.
+
+It does not create a request, implement request creation, implement request
+preflight, explicitly confirm execution, execute the controlled writer, read
+source payloads, emit raw values, materialize values, serialize rows, create
+training/candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers or DPA3
+structures, run Phase 1, change `DatasetConfirmation`, or run model
+training/evaluation.
+
+References:
+
+- `tests/test_custom_corpus_property_training_dataset_controlled_writer_execution_request_design.py`
+- `docs/custom-corpus-property-training-dataset-controlled-writer-execution-request-design.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-execution-request-design-evidence-template.md`
+
 Governance tail:
 
 ```text
@@ -3077,7 +3108,9 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
 -> property training dataset controlled writer dry-run precheck
+-> property training dataset controlled writer execution request design
 -> future controlled writer execution request
+-> future controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -3113,7 +3146,9 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
 -> property training dataset controlled writer dry-run precheck
+-> property training dataset controlled writer execution request design
 -> future controlled writer execution request
+-> future controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
