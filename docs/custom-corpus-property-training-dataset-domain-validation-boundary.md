@@ -21,7 +21,11 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
--> future controlled training dataset writer implementation
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
 ```
 
 The domain validation boundary is downstream of the quarantined-candidate

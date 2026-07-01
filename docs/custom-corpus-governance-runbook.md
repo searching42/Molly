@@ -66,7 +66,11 @@ custom corpus manifest
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
--> future controlled training dataset writer implementation
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
 ```
 
 Concrete artifact schemas:
@@ -2917,7 +2921,11 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
--> future controlled training dataset writer implementation
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
 ```
 
 ## Step 50: Domain Validation Boundary
@@ -2948,7 +2956,47 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
--> future controlled training dataset writer implementation
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
+```
+
+## Step 52: Controlled Writer Design Plan Preflight
+
+The property training dataset controlled writer design plan preflight validates
+a proposed design-plan JSON package before any future controlled writer
+dry-run design. It checks schema, status, ids, upstream evidence statuses,
+candidate counts, source package refs, value resolution contract fields,
+boundary flags, and redaction.
+
+It does not implement a writer, execute a writer, run a writer dry-run, read
+source payloads, emit raw values, materialize values, serialize rows, create
+training/candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers or
+DPA3 structures, run Phase 1, change `DatasetConfirmation`, or run model
+training/evaluation.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-controlled-writer-design-plan-preflight.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-design-plan-preflight-evidence-template.md`
+- `src/ai4s_agent/custom_corpus_property_training_dataset_controlled_writer_design_plan_preflight.py`
+
+Governance tail:
+
+```text
+property training dataset controlled writer value resolution dry-run
+-> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
+-> property training dataset controlled writer design plan
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
 ```
 
 ## Step 51: Controlled Writer Design Plan
@@ -2979,7 +3027,11 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
--> future controlled training dataset writer implementation
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
 ```
 
 ## Step 21: Property Training Admission Readiness
@@ -3290,6 +3342,7 @@ Allowed:
 - property training dataset quarantined candidate admission boundary
 - property training dataset domain validation boundary
 - property training dataset controlled writer design plan
+- property training dataset controlled writer design plan preflight
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

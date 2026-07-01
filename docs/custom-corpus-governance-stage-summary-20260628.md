@@ -897,7 +897,11 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
--> future controlled training dataset writer implementation
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
 ```
 
 The boundary defines the evidence, status, redaction, and boundary conditions
@@ -919,7 +923,11 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
--> future controlled training dataset writer implementation
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
 ```
 
 The boundary records the scientific/domain checks required before any future
@@ -943,7 +951,11 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
--> future controlled training dataset writer implementation
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
 ```
 
 The design plan records the intended writer contract, input package
@@ -954,3 +966,31 @@ payloads, emit raw values, materialize values, serialize rows, create training
 artifacts, generate conformers or DPA3 structures, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.
+
+## Controlled Writer Design Plan Preflight
+
+The property training dataset controlled writer design plan preflight was
+added after the controlled writer design plan:
+
+```text
+property training dataset controlled writer value resolution dry-run
+-> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
+-> property training dataset controlled writer design plan
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
+```
+
+The preflight validates design-plan packages for schema, status, ids,
+candidate counts, source package refs, value resolution contract, boundary
+flags, and redaction before any future writer dry-run design. It is offline
+and deterministic, and it does not implement or execute a writer, run a writer
+dry-run, read source payloads, emit raw values, materialize values, serialize
+rows, create training artifacts, generate conformers or DPA3 structures, run
+Phase 1, change `DatasetConfirmation`, run model training/evaluation, call an
+LLM or agent, call MinerU, or parse PDFs.

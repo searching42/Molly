@@ -21,7 +21,11 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
--> future controlled training dataset writer implementation
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
 ```
 
 This boundary sits after the small public quarantine materialization evidence
@@ -200,8 +204,9 @@ raw or sensitive material.
 ## Next Step
 
 The next step is the property training dataset domain validation boundary. A
-future controlled training dataset writer implementation remains out of scope
-until the domain boundary, design plan, and later writer-specific gates pass.
+future controlled writer dry-run remains out of scope until the domain
+boundary, design plan, design plan preflight, and later writer-specific gates
+pass.
 
 This boundary evidence does not execute a controlled writer.
 This boundary evidence does not materialize values.
