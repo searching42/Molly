@@ -606,6 +606,12 @@ validates the emitted report/summary/evidence package for schema, checksum,
 basename-only references, aggregate counts, boundary flags, and redaction
 before any future controlled writer execution request design.
 
+The controlled writer execution request design is downstream of the dry-run
+precheck. It defines future request schema labels, safe field categories,
+authorization boundaries, explicit confirmation boundaries, and request
+preflight expectations without creating a request, request preflight, writer
+execution, rows, or dataset artifacts.
+
 ```text
 property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer value resolution dry-run precheck
@@ -617,7 +623,9 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
 -> property training dataset controlled writer dry-run precheck
+-> property training dataset controlled writer execution request design
 -> future controlled writer execution request
+-> future controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 

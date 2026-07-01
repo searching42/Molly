@@ -25,12 +25,15 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
 -> property training dataset controlled writer dry-run precheck
+-> property training dataset controlled writer execution request design
 -> future controlled writer execution request
+-> future controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
 The dry-run precheck is downstream of the controlled writer dry-run. The next
-gate is future controlled writer execution request design, not writer
+gate is property training dataset controlled writer execution request design,
+which is the future controlled writer execution request design step, not writer
 execution.
 
 ## Input Package
@@ -177,5 +180,6 @@ or chemistry tools.
 
 ## Next Step
 
-The next step is future controlled writer execution request design, not writer
-execution.
+The next step is property training dataset controlled writer execution request
+design, which is the future controlled writer execution request design step,
+not writer execution.

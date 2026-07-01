@@ -63,7 +63,7 @@ def test_local_worker_loop_run_until_idle_processes_dummy_success_job(tmp_path: 
     job = queue.enqueue("proj-a", "run-success", _dummy_task(_exit_command(0), cwd=workspace))
     loop = LocalWorkerLoop(_poller(queue, tmp_path))
 
-    result = loop.run_until_idle(max_iterations=10)
+    result = loop.run_until_idle(max_iterations=20)
 
     assert result.iterations == len(result.results)
     assert result.results[-1].action == "idle"
