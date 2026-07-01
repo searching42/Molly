@@ -545,6 +545,16 @@ boundary flags before any future controlled writer. It does not execute a
 writer, read source payloads, materialize values, create output paths, or
 create training/candidate CSV/JSONL/Parquet/LMDB artifacts.
 
+The controlled writer value resolution dry-run is downstream of the
+controlled writer execution plan preflight. Its report and summary are
+separate from dataset artifacts and contain no serialized training dataset
+rows. It may read only explicitly authorized local JSON source payloads to
+check required field coverage, but it emits only safe ids, hashes, labels,
+field names, and aggregate counts. It does not emit raw property values,
+canonical SMILES, InChI/InChIKey values, output paths, or source payloads, and
+it does not execute a writer or create training/candidate
+CSV/JSONL/Parquet/LMDB artifacts.
+
 ## Boundaries
 
 - This schema does not implement materialization.

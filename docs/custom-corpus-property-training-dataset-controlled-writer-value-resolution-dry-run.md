@@ -1,27 +1,27 @@
-# Custom Corpus Property Training Dataset Controlled Writer Execution Plan Preflight
+# Custom Corpus Property Training Dataset Controlled Writer Value Resolution Dry-Run
 
-The property training dataset controlled writer execution plan preflight
-validates a controlled writer execution plan package before any future writer
-can be implemented or invoked.
+The property training dataset controlled writer value resolution dry-run checks
+whether a future controlled writer could resolve required row fields from only
+the authorized value-bearing source payloads.
 
-It sits after the controlled writer execution plan and before the controlled
-writer value resolution dry-run.
+It sits after the controlled writer execution plan preflight and before any
+future value-resolution precheck or controlled training dataset writer.
 
 ## Purpose
 
-The controlled writer execution plan defines how a future writer may be
-invoked. This preflight independently checks that the plan is safe,
-hash-bound, internally consistent, and still free of source payload reads,
-materialized values, serialized rows, output paths, and dataset artifacts.
+The controlled writer execution plan preflight proves the invocation package is
+safe, hash-bound, and label-only. It does not prove that required row fields can
+be resolved from authorized source payloads. This dry-run fills that gap.
 
-It does not execute a writer and does not create a dataset.
+The dry-run may read explicitly authorized local JSON source payloads, but it
+must not emit raw values, serialized rows, output paths, or dataset artifacts.
 
 ## Inputs
 
-The preflight reads local JSON artifacts only:
+The dry-run reads local JSON artifacts only:
 
-- controlled writer execution plan
-- controlled writer execution planner summary
+- controlled writer execution plan preflight
+- controlled writer execution plan and planner summary
 - value source manifest preflight
 - value source manifest and planner summary
 - writer input binding plan preflight
@@ -35,49 +35,61 @@ The preflight reads local JSON artifacts only:
 - training admission evidence
 - quarantine candidate evidence
 
-## Schema
+## Schemas
 
-The preflight summary schema is:
+Report:
 
 ```text
-custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight.v1
+custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run.v1
+```
+
+Summary:
+
+```text
+custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run_summary.v1
 ```
 
 Statuses:
 
-- `passed`: the controlled writer execution plan and upstream evidence are
-  consistent and no needs-review evidence remains.
+- `passed`: every required field resolves and no needs-review evidence remains.
 - `needs_review`: no hard error exists, but explicitly allowed needs-review
-  or partial evidence remains.
-- `blocked`: schema, status, SHA, id, record, output-label, boundary, or
-  redaction checks failed.
+  evidence or missing required field coverage remains.
+- `blocked`: schema, status, SHA, id, source authorization, field-resolution,
+  boundary, output-label, or redaction checks failed.
 
-## Checks
+## Value Resolution
 
-The preflight validates:
+For each writer request or input binding record, the dry-run emits a safe
+resolution record with ids, hashes, source labels, field names, and derivation
+rule labels only.
 
-- plan schema and planner summary schema
-- `writer_execution_mode=controlled_writer_execution_plan_only`
-- controlled writer plan status
-- upstream preflight, planner, request, dry-run, row contract, materialization
-  plan, ledger, training admission, and quarantine statuses
-- SHA-256 bindings across the full chain
-- corpus, dataset, row contract, materialization plan, writer request, input
-  binding plan, and value source manifest ids
-- requested output formats as labels only
-- planned output artifact labels as labels only, not paths
-- allowed source artifact basenames and SHA-256 hashes
-- allowed value field names against value source manifest coverage
-- row count expectations against value source records, writer request records,
-  and binding records
-- boundary flags showing no writer execution, no source payload reads, no
-  value materialization, no dataset artifacts, no Phase 1, no
-  `DatasetConfirmation` change, no model training, and no evaluation
+Resolution records may include:
+
+- value resolution record id
+- writer request record id
+- writer input binding record id
+- row preview id
+- planned dataset record id
+- candidate record id
+- record id
+- document id
+- field name
+- resolved and missing required field names
+- resolved and missing optional field names
+- value source record ids
+- source artifact labels and SHA-256 hashes
+- derivation rule labels
+
+Resolution records must not include raw property values, canonical SMILES,
+InChI/InChIKey values, raw table rows, raw article text, PDF names or paths,
+local paths, serialized rows, output paths, conformer data, DPA3 structures, or
+full source payloads.
 
 ## CLI Usage
 
 ```bash
-PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight \
+PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run \
+  --training-dataset-controlled-writer-execution-plan-preflight /tmp/property_training_dataset_controlled_writer_execution_plan_preflight_summary.json \
   --training-dataset-controlled-writer-execution-plan /tmp/property_training_dataset_controlled_writer_execution_plan.json \
   --training-dataset-controlled-writer-execution-planner-summary /tmp/property_training_dataset_controlled_writer_execution_planner_summary.json \
   --training-dataset-writer-value-source-manifest-preflight /tmp/property_training_dataset_writer_value_source_manifest_preflight_summary.json \
@@ -114,61 +126,50 @@ PYTHONPATH=src python -m ai4s_agent.custom_corpus_property_training_dataset_cont
   --training-admission-readiness-summary /tmp/property_training_admission_readiness_summary.json \
   --quarantine-candidate-preflight-summary /tmp/property_quarantine_candidate_preflight_summary.json \
   --quarantine-candidate-records /tmp/property_quarantine_candidate_records.json \
-  --output-summary /tmp/property_training_dataset_controlled_writer_execution_plan_preflight_summary.json \
-  --output-markdown /tmp/property_training_dataset_controlled_writer_execution_plan_preflight_summary.md
+  --output-dir /tmp/property-training-dataset-value-resolution-dry-run \
+  --value-resolution-dry-run-id property-value-resolution-dry-run-001 \
+  --created-by operator-redacted \
+  --confirm-training-dataset-controlled-writer-value-resolution-dry-run
 ```
 
 Optional controls:
 
-- `--allow-controlled-writer-execution-plan-needs-review`
-- `--no-require-controlled-writer-execution-plan-planned`
-- `--minimum-value-source-records <n>`
+- `--allow-controlled-writer-execution-plan-preflight-needs-review`
+- `--minimum-resolution-records <n>`
+- `--no-require-all-required-fields-resolved`
 
 Return codes:
 
 - `0` for `passed` or `needs_review`
 - `1` for `blocked`
 
-## After Preflight: Value Resolution Dry-Run
-
-The controlled writer value resolution dry-run checks whether required row
-fields can be resolved from explicitly authorized source payloads without
-emitting values or creating dataset artifacts:
-
-- `docs/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run.md`
-- `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run-evidence-template.md`
-
-The dry-run may read authorized local JSON source payloads, but it does not
-execute the controlled writer, serialize training rows, create
-training/candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers or
-DPA3 structures, run Phase 1, modify `DatasetConfirmation`, or run model
-training/evaluation.
-
 ## Redaction
 
-The preflight scans the summary and Markdown evidence before writing. It
-fail-closes if forbidden material appears, including raw property values,
-canonical SMILES, InChI/InChIKey values, raw table rows, raw article text,
-local paths, private paths, PDF names or paths, serialized rows,
+The dry-run scans the report, summary, resolution records, and Markdown before
+writing. It fail-closes if forbidden material appears, including raw property
+values, canonical SMILES, InChI/InChIKey values, raw table rows, raw article
+text, local paths, private paths, PDF names or paths, serialized rows,
 training/candidate CSV/JSONL/Parquet/LMDB paths, conformer data, DPA3
-structure data, credentials, full upstream payloads, or output paths.
+structure data, full upstream payloads, full source payloads, output paths, or
+credentials.
 
 ## Boundaries
 
-- The preflight validates a controlled writer execution plan only.
-- The preflight does not execute a writer.
-- The preflight does not read source payloads.
-- The preflight does not materialize values.
-- The preflight does not create serialized training rows.
-- The preflight does not materialize a training dataset.
-- The preflight does not create training CSV/JSONL/Parquet/LMDB artifacts.
-- The preflight does not create candidate CSV/JSONL/Parquet/LMDB artifacts.
-- The preflight does not generate conformers.
-- The preflight does not generate DPA3 structures.
-- The preflight does not create Uni-Mol or DPA3 input artifacts.
-- The preflight does not run Phase 1.
-- The preflight does not modify `DatasetConfirmation`.
-- The preflight does not run model training or evaluation.
-- The preflight does not call LLMs, MinerU, PDF parsers, or corpus workflows.
-- A passed controlled writer execution plan preflight is necessary but not
-  sufficient for future controlled writer execution.
+- The dry-run is controlled writer value resolution only.
+- The controlled writer is not executed.
+- Authorized source payloads may be read.
+- Values may be resolved internally but are not emitted.
+- Values are not materialized into rows.
+- The dry-run does not create serialized training rows.
+- The dry-run does not materialize a training dataset.
+- The dry-run does not create training CSV/JSONL/Parquet/LMDB artifacts.
+- The dry-run does not create candidate CSV/JSONL/Parquet/LMDB artifacts.
+- The dry-run does not generate conformers.
+- The dry-run does not generate DPA3 structures.
+- The dry-run does not create Uni-Mol or DPA3 input artifacts.
+- The dry-run does not run Phase 1.
+- The dry-run does not modify `DatasetConfirmation`.
+- The dry-run does not run model training or evaluation.
+- The dry-run does not call LLMs, MinerU, PDF parsers, or corpus workflows.
+- A passed value-resolution dry-run is necessary but not sufficient for future
+  controlled writer execution.

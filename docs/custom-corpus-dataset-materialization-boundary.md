@@ -57,6 +57,8 @@ custom corpus manifest
 -> property training dataset writer value source manifest preflight
 -> property training dataset controlled writer execution plan
 -> property training dataset controlled writer execution plan preflight
+-> property training dataset controlled writer value resolution dry-run
+-> future value resolution dry-run precheck
 -> future controlled training dataset writer
 ```
 
@@ -116,6 +118,8 @@ Existing artifact schemas:
 - `custom_corpus_property_training_dataset_controlled_writer_execution_plan.v1`
 - `custom_corpus_property_training_dataset_controlled_writer_execution_planner.v1`
 - `custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight.v1`
+- `custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run.v1`
+- `custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run_summary.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
 property path, a controlled training admission execution ledger, a ledger
@@ -315,6 +319,15 @@ consistent, and still free of source payload reads, materialized values,
 serialized rows, output paths, training/candidate CSV/JSONL/Parquet/LMDB
 artifacts, conformers, DPA3 structures, Phase 1 execution, model
 training/evaluation, and `DatasetConfirmation` changes.
+
+The property training dataset controlled writer value resolution dry-run sits
+after the controlled writer execution plan preflight and before any future
+value-resolution precheck or controlled writer. It may read only explicitly
+authorized local JSON source payloads, resolves required field coverage
+internally, and emits safe report/summary evidence without raw values,
+serialized rows, output paths, training/candidate CSV/JSONL/Parquet/LMDB
+artifacts, conformers, DPA3 structures, Phase 1 execution, model
+training/evaluation, or `DatasetConfirmation` changes.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a
@@ -987,9 +1000,10 @@ Recommended future sequence:
 34. `test/docs: add property training dataset writer value source manifest preflight`
 35. `test/docs: add property training dataset controlled writer execution plan`
 36. `test/docs: add property training dataset controlled writer execution plan preflight`
-37. `docs: record small public quarantine materialization evidence`
-38. `docs/test: design training admission boundary from quarantined candidates`
-39. only later: implement explicit training artifact builder if all previous
+37. `test/docs: add property training dataset controlled writer value resolution dry-run`
+38. `docs: record small public quarantine materialization evidence`
+39. `docs/test: design training admission boundary from quarantined candidates`
+40. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the
