@@ -810,3 +810,20 @@ training rows, create training CSV/JSONL/Parquet/LMDB artifacts, create
 candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create DPA3
 structures, run Phase 1, change `DatasetConfirmation`, run model
 training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
+
+## Property Training Dataset Controlled Writer Execution Plan Preflight Note
+
+The property training dataset controlled writer execution plan preflight was
+added after controlled writer execution planning:
+
+```text
+docs/custom-corpus-property-training-dataset-controlled-writer-execution-plan-preflight.md
+```
+
+Controlled writer execution plan packages can now be checked before any future
+controlled writer implementation or invocation. This still does not execute a
+writer, read source payloads, materialize values, write a training dataset,
+serialize training rows, create training CSV/JSONL/Parquet/LMDB artifacts,
+create candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers, create
+DPA3 structures, run Phase 1, change `DatasetConfirmation`, run model
+training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
