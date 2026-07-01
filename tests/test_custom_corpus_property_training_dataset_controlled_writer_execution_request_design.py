@@ -21,7 +21,7 @@ CHAIN_PHRASE = (
     "-> property training dataset controlled writer dry-run\n"
     "-> property training dataset controlled writer dry-run precheck\n"
     "-> property training dataset controlled writer execution request design\n"
-    "-> future controlled writer execution request\n"
+    "-> property training dataset controlled writer execution request\n"
     "-> future controlled writer execution request preflight\n"
     "-> future explicitly confirmed controlled writer execution"
 )
@@ -223,8 +223,8 @@ def test_dry_run_precheck_doc_points_to_execution_request_design_next() -> None:
         encoding="utf-8"
     )
 
-    assert "future controlled writer execution request design" in text
     assert "property training dataset controlled writer execution request design" in text
+    assert "property training dataset controlled writer execution request" in text
 
 
 def test_execution_request_design_contains_schema_authorization_and_status_semantics() -> None:

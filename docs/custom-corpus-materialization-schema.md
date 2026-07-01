@@ -604,13 +604,20 @@ serialize rows, or create dataset artifacts.
 The controlled writer dry-run precheck is downstream of the dry-run. It
 validates the emitted report/summary/evidence package for schema, checksum,
 basename-only references, aggregate counts, boundary flags, and redaction
-before any future controlled writer execution request design.
+before the controlled writer execution request design/request gates.
 
 The controlled writer execution request design is downstream of the dry-run
 precheck. It defines future request schema labels, safe field categories,
 authorization boundaries, explicit confirmation boundaries, and request
 preflight expectations without creating a request, request preflight, writer
 execution, rows, or dataset artifacts.
+
+The controlled writer execution request is downstream of the request design and
+upstream of any future request preflight. It reads only the dry-run precheck
+summary, writes a hash-bound request JSON, request summary JSON, and redacted
+evidence Markdown, and still does not authorize writer execution, explicitly
+confirm execution, materialize values, serialize rows, or create dataset
+artifacts.
 
 ```text
 property training dataset controlled writer value resolution dry-run
@@ -624,7 +631,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run
 -> property training dataset controlled writer dry-run precheck
 -> property training dataset controlled writer execution request design
--> future controlled writer execution request
+-> property training dataset controlled writer execution request
 -> future controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
