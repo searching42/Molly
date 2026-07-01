@@ -26,7 +26,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run precheck
 -> property training dataset controlled writer execution request design
 -> property training dataset controlled writer execution request
--> future controlled writer execution request preflight
+-> property training dataset controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -243,7 +243,7 @@ contain value-like examples or concrete payloads from those categories.
 ## Hash and Basename Policy
 
 The future request must bind to exact upstream artifact checksums and basenames.
-It must not include local or private paths. A future request preflight must
+It must not include local or private paths. A request preflight must
 recompute referenced request and dry-run checksums from bytes before any later
 confirmation gate.
 
@@ -279,7 +279,7 @@ preflight and a separate explicit confirmation gate.
 
 ## Future Execution Request Preflight Expectations
 
-A future request preflight must validate:
+A request preflight must validate:
 
 - request schema version
 - request summary schema version

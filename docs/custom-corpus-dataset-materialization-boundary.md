@@ -69,7 +69,7 @@ custom corpus manifest
 -> property training dataset controlled writer dry-run precheck
 -> property training dataset controlled writer execution request design
 -> property training dataset controlled writer execution request
--> future controlled writer execution request preflight
+-> property training dataset controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -417,12 +417,22 @@ confirm or execute the writer, serialize rows, create dataset artifacts, run
 Phase 1, change `DatasetConfirmation`, or run model training/evaluation.
 
 The property training dataset controlled writer execution request sits after
-the request design and before any future request preflight. It reads only the
+the request design and before the request preflight. It reads only the
 dry-run precheck summary, creates a hash-bound request package for later
 preflight, keeps writer execution unauthorized, keeps explicit confirmation
 required, and does not read source payloads, emit raw values, materialize
 values, serialize rows, create dataset artifacts, run Phase 1, change
 `DatasetConfirmation`, or run model training/evaluation.
+
+The property training dataset controlled writer execution request preflight
+sits after the request and before any future explicit confirmation gate. It
+validates request JSON, request summary JSON, and optional redacted evidence
+for schema, checksum, basename-only references, aggregate counts,
+authorization flags, explicit-confirmation flags, boundary flags, and
+redaction. It does not rerun the request creator, explicitly confirm
+execution, execute the writer, read source payloads, emit raw values,
+materialize values, serialize rows, create dataset artifacts, run Phase 1,
+change `DatasetConfirmation`, or run model training/evaluation.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a
