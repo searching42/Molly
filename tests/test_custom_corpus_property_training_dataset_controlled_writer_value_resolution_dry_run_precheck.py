@@ -284,6 +284,8 @@ def test_safe_fixture_root_does_not_inherit_boundary_marker_path(tmp_path: Path)
     fixture_root = _safe_fixture_root(marker_tmp_path, "passed")
 
     assert "serialized_rows_created" not in str(fixture_root)
+    assert tmp_path not in fixture_root.parents
+    assert marker_tmp_path not in fixture_root.parents
     assert fixture_root.name.startswith("value_resolution_precheck_fixture_passed_")
 
 
@@ -498,7 +500,9 @@ def _write_precheck_package(tmp_path: Path, *, needs_review: bool = False) -> di
         allow_controlled_writer_execution_plan_needs_review=needs_review,
         output_summary_path=preflight_summary_path,
     )
-    assert preflight_summary["preflight_status"] in {"passed", "needs_review"}, preflight_summary
+    assert preflight_summary["preflight_status"] in {"passed", "needs_review"}, _setup_status_details(
+        preflight_summary
+    )
     paths["training_dataset_controlled_writer_execution_plan_preflight"] = preflight_summary_path
     paths["value_resolution_output_dir"] = fixture_root / "value-resolution-output"
     dry_run_summary = run_property_training_dataset_controlled_writer_value_resolution_dry_run(
@@ -516,18 +520,36 @@ def _write_precheck_package(tmp_path: Path, *, needs_review: bool = False) -> di
 
 def _safe_fixture_root(tmp_path: Path, label: str) -> Path:
     digest = hashlib.sha256(str(tmp_path).encode("utf-8")).hexdigest()[:12]
-    root_parent = tmp_path.parent
-    while root_parent.parent != root_parent and _fixture_path_has_forbidden_marker(root_parent):
-        root_parent = root_parent.parent
+    root_parent = _neutral_fixture_base(tmp_path)
     root_parent.mkdir(parents=True, exist_ok=True)
-    root = root_parent / f"value_resolution_precheck_fixture_{label}_{digest}"
-    root.mkdir(parents=True, exist_ok=False)
-    return root
+    for counter in range(1000):
+        root = root_parent / f"value_resolution_precheck_fixture_{label}_{digest}_{counter:03d}"
+        try:
+            root.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        return root
+    raise AssertionError("unable_to_create_neutral_value_resolution_precheck_fixture_root")
+
+
+def _neutral_fixture_base(tmp_path: Path) -> Path:
+    for candidate in (Path("/tmp"), Path("/private/tmp"), tmp_path.parent):
+        if candidate.exists() and not _fixture_path_has_forbidden_marker(candidate):
+            return candidate / "neutral_value_resolution_precheck_fixture"
+    raise AssertionError("no_neutral_value_resolution_precheck_fixture_base")
 
 
 def _fixture_path_has_forbidden_marker(path: Path) -> bool:
     lowered = str(path).lower()
     return any(marker in lowered for marker in _FIXTURE_PATH_FORBIDDEN_MARKERS)
+
+
+def _setup_status_details(summary: dict[str, object]) -> dict[str, object]:
+    return {
+        "preflight_status": summary.get("preflight_status"),
+        "preflight_errors": summary.get("preflight_errors", []),
+        "preflight_warnings": summary.get("preflight_warnings", summary.get("warnings", [])),
+    }
 
 
 def _kwargs(paths: dict[str, Path], **overrides: object) -> dict[str, object]:
