@@ -23,7 +23,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
--> future controlled writer dry-run implementation
+-> property training dataset controlled writer dry-run
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
