@@ -38,7 +38,8 @@ _CHAIN_PHRASE = (
     "-> property training dataset domain validation boundary\n"
     "-> property training dataset controlled writer design plan\n"
     "-> property training dataset controlled writer design plan preflight\n"
-    "-> future controlled writer dry-run\n"
+    "-> property training dataset controlled writer dry-run design\n"
+    "-> future controlled writer dry-run implementation\n"
     "-> future controlled writer dry-run precheck\n"
     "-> future controlled writer execution request\n"
     "-> future explicitly confirmed controlled writer execution"
@@ -198,7 +199,7 @@ def test_design_plan_preflight_doc_has_required_sections_and_boundaries() -> Non
         assert section in text
     for statement in _PREFLIGHT_BOUNDARY_STATEMENTS:
         assert statement in text
-    assert "future controlled writer dry-run design" in text
+    assert "controlled writer dry-run design" in text
 
 
 def test_design_plan_preflight_template_has_placeholders_and_boundaries() -> None:

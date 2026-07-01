@@ -64,7 +64,8 @@ custom corpus manifest
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
--> future controlled writer dry-run
+-> property training dataset controlled writer dry-run design
+-> future controlled writer dry-run implementation
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
@@ -377,10 +378,16 @@ invariants, and output artifact policy without implementing or executing a
 writer.
 
 The property training dataset controlled writer design plan preflight sits
-after the design plan and before any future controlled writer dry-run. It
+after the design plan and before the controlled writer dry-run design. It
 validates the design-plan package for schema, status, ids, candidate counts,
 source package refs, value resolution contract, boundary flags, and redaction
 without implementing or executing a writer.
+
+The property training dataset controlled writer dry-run design sits after the
+design plan preflight and before any future controlled writer dry-run
+implementation. It defines the future dry-run input/report/summary contracts,
+side-effect boundary, redaction behavior, status semantics, and future precheck
+expectations without implementing or executing a dry-run.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a
@@ -1060,7 +1067,8 @@ Recommended future sequence:
 41. `docs/test: add property training dataset domain validation boundary`
 42. `test/docs: add property training dataset controlled writer design plan`
 43. `test/docs: add property training dataset controlled writer design plan preflight`
-44. only later: implement explicit training artifact builder if all previous
+44. `docs/test: add property training dataset controlled writer dry-run design`
+45. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the
