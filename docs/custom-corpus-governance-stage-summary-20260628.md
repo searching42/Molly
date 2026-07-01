@@ -898,7 +898,8 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
--> future controlled writer dry-run
+-> property training dataset controlled writer dry-run design
+-> future controlled writer dry-run implementation
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
@@ -924,7 +925,8 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
--> future controlled writer dry-run
+-> property training dataset controlled writer dry-run design
+-> future controlled writer dry-run implementation
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
@@ -952,7 +954,8 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
--> future controlled writer dry-run
+-> property training dataset controlled writer dry-run design
+-> future controlled writer dry-run implementation
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
@@ -980,7 +983,8 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
--> future controlled writer dry-run
+-> property training dataset controlled writer dry-run design
+-> future controlled writer dry-run implementation
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
@@ -994,3 +998,33 @@ dry-run, read source payloads, emit raw values, materialize values, serialize
 rows, create training artifacts, generate conformers or DPA3 structures, run
 Phase 1, change `DatasetConfirmation`, run model training/evaluation, call an
 LLM or agent, call MinerU, or parse PDFs.
+
+## Controlled Writer Dry-Run Design
+
+The property training dataset controlled writer dry-run design was added after
+the controlled writer design plan preflight:
+
+```text
+property training dataset controlled writer value resolution dry-run
+-> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
+-> property training dataset controlled writer design plan
+-> property training dataset controlled writer design plan preflight
+-> property training dataset controlled writer dry-run design
+-> future controlled writer dry-run implementation
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
+```
+
+The design defines the future controlled writer dry-run contract, including
+allowed safe input references, report and summary schema labels, would-write
+aggregate counts, side-effect boundaries, redaction behavior, dry-run status
+semantics, and future precheck expectations. It is docs/test only and does not
+implement or execute a dry-run, implement or execute a writer, read source
+payloads, emit raw values, materialize values, serialize rows, create training
+artifacts, generate conformers or DPA3 structures, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.

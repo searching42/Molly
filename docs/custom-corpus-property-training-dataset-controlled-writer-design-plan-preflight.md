@@ -25,15 +25,16 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
--> future controlled writer dry-run
+-> property training dataset controlled writer dry-run design
+-> future controlled writer dry-run implementation
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
 
 This preflight is step 2 in the staged writer path. It validates the design
-plan package before any future controlled writer dry-run design. It does not
-claim that a writer exists or that a dataset artifact exists.
+plan package before the controlled writer dry-run design. It does not claim
+that a writer exists or that a dataset artifact exists.
 
 ## Input Package
 
@@ -156,7 +157,15 @@ This controlled writer design plan preflight does not run Phase 1.
 This controlled writer design plan preflight does not modify DatasetConfirmation.
 This controlled writer design plan preflight does not run model training or evaluation.
 
+## After Preflight: Controlled Writer Dry-Run Design
+
+The next step after this PR is the property training dataset controlled writer
+dry-run design. See
+`docs/custom-corpus-property-training-dataset-controlled-writer-dry-run-design.md`
+and
+`docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-dry-run-design-evidence-template.md`.
+
 ## Next Step
 
-The next step after this PR is future controlled writer dry-run design, not
-writer execution.
+The next step after this PR is controlled writer dry-run design, not writer
+execution.
