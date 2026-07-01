@@ -20,13 +20,13 @@ property training dataset controlled writer value resolution dry-run
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
--> future controlled training dataset writer
+-> property training dataset controlled writer design plan
+-> future controlled training dataset writer implementation
 ```
 
 The domain validation boundary is downstream of the quarantined-candidate
-admission boundary and upstream of any future controlled training dataset
-writer. A passed domain boundary is necessary but not sufficient for writer
-execution.
+admission boundary and upstream of the controlled writer design plan. A passed
+domain boundary is necessary but not sufficient for writer execution.
 
 ## Required Upstream Evidence
 
@@ -275,9 +275,9 @@ The boundary fails if:
 
 ## Next Step
 
-The next step is future controlled training dataset writer design only after
-the domain validation boundary has passed. The writer remains out of scope for
-this PR.
+The next step is the property training dataset controlled writer design plan
+only after the domain validation boundary has passed. The writer
+implementation remains out of scope for this PR.
 
 This domain validation boundary does not execute a controlled writer.
 This domain validation boundary does not emit raw values.

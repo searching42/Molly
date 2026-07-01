@@ -65,7 +65,8 @@ custom corpus manifest
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
--> future controlled training dataset writer
+-> property training dataset controlled writer design plan
+-> future controlled training dataset writer implementation
 ```
 
 Concrete artifact schemas:
@@ -2915,7 +2916,8 @@ property training dataset controlled writer value resolution dry-run
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
--> future controlled training dataset writer
+-> property training dataset controlled writer design plan
+-> future controlled training dataset writer implementation
 ```
 
 ## Step 50: Domain Validation Boundary
@@ -2945,7 +2947,39 @@ property training dataset controlled writer value resolution dry-run
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
--> future controlled training dataset writer
+-> property training dataset controlled writer design plan
+-> future controlled training dataset writer implementation
+```
+
+## Step 51: Controlled Writer Design Plan
+
+The property training dataset controlled writer design plan defines the future
+controlled writer contract before any writer implementation. It records input
+package requirements, admission/domain validation requirements, value
+resolution requirements, output artifact policy, dry-run-first staging,
+confirmation concepts, redaction requirements, implementation blockers, and
+residual risks.
+
+It does not implement a writer, execute a writer, read source payloads, emit
+raw values, materialize values, serialize rows, create training/candidate
+CSV/JSONL/Parquet/LMDB artifacts, generate conformers or DPA3 structures, run
+Phase 1, change `DatasetConfirmation`, or run model training/evaluation.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-controlled-writer-design-plan.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-design-plan-evidence-template.md`
+
+Governance tail:
+
+```text
+property training dataset controlled writer value resolution dry-run
+-> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
+-> property training dataset controlled writer design plan
+-> future controlled training dataset writer implementation
 ```
 
 ## Step 21: Property Training Admission Readiness
@@ -3255,6 +3289,7 @@ Allowed:
 - small public quarantine materialization evidence
 - property training dataset quarantined candidate admission boundary
 - property training dataset domain validation boundary
+- property training dataset controlled writer design plan
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

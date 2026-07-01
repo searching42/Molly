@@ -577,11 +577,18 @@ acceptable review/admission statuses, value-resolution evidence, and redaction
 rules. It is not a dataset schema and contains no serialized dataset rows.
 
 The property training dataset domain validation boundary is downstream of the
-quarantined-candidate admission boundary and upstream of any future controlled
-training dataset writer. It defines scientific/domain checks for property-unit
+quarantined-candidate admission boundary and upstream of the controlled writer
+design plan. It defines scientific/domain checks for property-unit
 compatibility, numeric plausibility labels, provenance labels, condition
 labels, compound/alias association, and duplicate/conflict status. It is not a
 dataset schema and contains no raw values or serialized dataset rows.
+
+The property training dataset controlled writer design plan is downstream of
+the domain validation boundary and upstream of any future controlled training
+dataset writer implementation. It defines the intended writer contract,
+input-package requirements, output artifact policy, dry-run-first staging,
+confirmation concepts, and redaction invariants. It is not a writer
+implementation and creates no dataset artifacts.
 
 ```text
 property training dataset controlled writer value resolution dry-run
@@ -589,7 +596,8 @@ property training dataset controlled writer value resolution dry-run
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
--> future controlled training dataset writer
+-> property training dataset controlled writer design plan
+-> future controlled training dataset writer implementation
 ```
 
 ## Boundaries

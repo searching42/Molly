@@ -896,7 +896,8 @@ property training dataset controlled writer value resolution dry-run
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
--> future controlled training dataset writer
+-> property training dataset controlled writer design plan
+-> future controlled training dataset writer implementation
 ```
 
 The boundary defines the evidence, status, redaction, and boundary conditions
@@ -917,7 +918,8 @@ property training dataset controlled writer value resolution dry-run
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
--> future controlled training dataset writer
+-> property training dataset controlled writer design plan
+-> future controlled training dataset writer implementation
 ```
 
 The boundary records the scientific/domain checks required before any future
@@ -928,3 +930,27 @@ inspect raw values, run calculations, execute a writer, materialize values,
 serialize rows, create training artifacts, generate conformers or DPA3
 structures, run Phase 1, change `DatasetConfirmation`, run model
 training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
+
+## Controlled Writer Design Plan
+
+The property training dataset controlled writer design plan was added after
+the domain validation boundary:
+
+```text
+property training dataset controlled writer value resolution dry-run
+-> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
+-> property training dataset controlled writer design plan
+-> future controlled training dataset writer implementation
+```
+
+The design plan records the intended writer contract, input package
+requirements, output artifact policy, dry-run-first staging, confirmation
+concepts, redaction requirements, implementation blockers, and residual risks.
+It is docs/test only and does not implement or execute a writer, read source
+payloads, emit raw values, materialize values, serialize rows, create training
+artifacts, generate conformers or DPA3 structures, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.
