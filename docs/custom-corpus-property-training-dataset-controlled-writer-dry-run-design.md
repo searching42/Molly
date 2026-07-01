@@ -27,14 +27,14 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
--> future controlled writer dry-run precheck
+-> property training dataset controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
 
 The dry-run design is downstream of the controlled writer design plan
 preflight. It is upstream of the controlled writer dry-run implementation and
-any future dry-run precheck.
+the controlled writer dry-run precheck.
 
 ## Required Upstream Evidence
 
@@ -319,7 +319,7 @@ Future dry-run implementation remains blocked until:
 
 - controlled writer design plan preflight has passed
 - future dry-run schema fields are reviewed
-- future dry-run precheck expectations are reviewed
+- controlled writer dry-run precheck expectations are reviewed
 - side-effect policy is tested
 - redaction policy is tested
 - output directory policy is tested

@@ -10,7 +10,7 @@ dataset artifacts.
 
 The dry-run writes only a redacted report, summary, and evidence Markdown. It
 does not implement controlled writer execution and it does not implement the
-future dry-run precheck.
+controlled writer dry-run precheck.
 
 ## Position in the Governance Chain
 
@@ -24,13 +24,13 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
--> future controlled writer dry-run precheck
+-> property training dataset controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
 
 The dry-run is downstream of the controlled writer dry-run design. It is
-upstream of the future dry-run precheck and does not authorize writer
+upstream of the controlled writer dry-run precheck and does not authorize writer
 execution.
 
 ## Input Package
@@ -184,5 +184,5 @@ calculations.
 
 ## Next Step
 
-The next step is future controlled writer dry-run precheck. Controlled writer
+The next step is property training dataset controlled writer dry-run precheck. Controlled writer
 execution remains a separate future gate.

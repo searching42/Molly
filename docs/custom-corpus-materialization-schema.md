@@ -601,6 +601,11 @@ safe aggregate-only input package and writes redacted report/summary/evidence
 outputs, but it still does not execute a controlled writer, emit values,
 serialize rows, or create dataset artifacts.
 
+The controlled writer dry-run precheck is downstream of the dry-run. It
+validates the emitted report/summary/evidence package for schema, checksum,
+basename-only references, aggregate counts, boundary flags, and redaction
+before any future controlled writer execution request design.
+
 ```text
 property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer value resolution dry-run precheck
@@ -611,7 +616,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
--> future controlled writer dry-run precheck
+-> property training dataset controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
