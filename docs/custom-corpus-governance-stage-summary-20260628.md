@@ -895,13 +895,36 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer value resolution dry-run precheck
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
 -> future controlled training dataset writer
 ```
 
 The boundary defines the evidence, status, redaction, and boundary conditions
-required before quarantined property candidates can be considered for future
-controlled writer design. It is docs/test only and does not execute a writer,
-read source payloads, emit raw values, materialize values, serialize rows,
-create training artifacts, generate conformers or DPA3 structures, run Phase 1,
-change `DatasetConfirmation`, run model training/evaluation, call an LLM or
-agent, call MinerU, or parse PDFs.
+required before quarantined property candidates can enter domain validation. It
+is docs/test only and does not execute a writer, read source payloads, emit raw
+values, materialize values, serialize rows, create training artifacts, generate
+conformers or DPA3 structures, run Phase 1, change `DatasetConfirmation`, run
+model training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
+
+## Domain Validation Boundary
+
+The property training dataset domain validation boundary was added after the
+quarantined-candidate admission boundary:
+
+```text
+property training dataset controlled writer value resolution dry-run
+-> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
+-> future controlled training dataset writer
+```
+
+The boundary records the scientific/domain checks required before any future
+controlled writer design, including property-unit compatibility, numeric
+plausibility status, provenance labels, condition labels, compound/alias
+association, and duplicate/conflict status. It is docs/test only and does not
+inspect raw values, run calculations, execute a writer, materialize values,
+serialize rows, create training artifacts, generate conformers or DPA3
+structures, run Phase 1, change `DatasetConfirmation`, run model
+training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.

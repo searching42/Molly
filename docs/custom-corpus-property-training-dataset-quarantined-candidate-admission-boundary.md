@@ -19,12 +19,14 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer value resolution dry-run precheck
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
 -> future controlled training dataset writer
 ```
 
 This boundary sits after the small public quarantine materialization evidence
-packet and before any future controlled training dataset writer. A passed
-boundary review is necessary but not sufficient for writer execution.
+packet and before the property training dataset domain validation boundary. A
+passed quarantined-candidate boundary review is necessary but not sufficient
+for writer execution.
 
 ## Required Upstream Evidence
 
@@ -190,13 +192,15 @@ raw or sensitive material.
 - This boundary does not certify scientific correctness.
 - Public-safe source labels still require operator review.
 - Needs-review allowances remain human-governed and must be documented.
+- Domain validation remains a separate downstream boundary.
 - A future controlled writer still requires a separate implementation,
-  preflight, review, and approval path.
+  preflight, review, and approval path after domain validation.
 
 ## Next Step
 
-The next step is a future controlled training dataset writer design only after
-this boundary is reviewed. The writer remains out of scope for this PR.
+The next step is the property training dataset domain validation boundary. A
+future controlled training dataset writer remains out of scope until the domain
+boundary and later writer-specific gates pass.
 
 This boundary evidence does not execute a controlled writer.
 This boundary evidence does not materialize values.

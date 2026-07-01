@@ -64,6 +64,7 @@ custom corpus manifest
 -> property training dataset controlled writer value resolution dry-run precheck
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
 -> future controlled training dataset writer
 ```
 
@@ -2893,8 +2894,7 @@ Acceptance criteria:
 
 The property training dataset quarantined candidate admission boundary defines
 which quarantined property candidates and upstream evidence can be considered
-before any future controlled training dataset writer design. It is a docs/test
-boundary only.
+before the domain validation boundary. It is a docs/test boundary only.
 
 It does not execute a writer, read source payloads, emit raw values,
 materialize values into rows, create row serialization, create
@@ -2914,6 +2914,37 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer value resolution dry-run precheck
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
+-> future controlled training dataset writer
+```
+
+## Step 50: Domain Validation Boundary
+
+The property training dataset domain validation boundary defines the
+scientific/domain checks that must pass before quarantined/admitted property
+candidates can be considered for future controlled writer design.
+
+It covers property-unit compatibility, numeric plausibility status, provenance
+labels, condition labels, compound and alias association, duplicate/conflict
+status, missing metadata labels, and human review escalation labels. It does
+not inspect raw values, run calculations, execute a writer, materialize values,
+serialize rows, create training/candidate CSV/JSONL/Parquet/LMDB artifacts,
+generate conformers or DPA3 structures, run Phase 1, change
+`DatasetConfirmation`, or run model training/evaluation.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-domain-validation-boundary.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-domain-validation-boundary-evidence-template.md`
+
+Governance tail:
+
+```text
+property training dataset controlled writer value resolution dry-run
+-> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
 -> future controlled training dataset writer
 ```
 
@@ -3223,6 +3254,7 @@ Allowed:
 - property training dataset controlled writer value resolution dry-run precheck
 - small public quarantine materialization evidence
 - property training dataset quarantined candidate admission boundary
+- property training dataset domain validation boundary
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
