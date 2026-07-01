@@ -25,13 +25,17 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
--> future controlled training dataset writer implementation
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
 ```
 
 The controlled writer design plan is downstream of the domain validation
-boundary. It is upstream of any future writer design-plan preflight, writer
-dry-run, writer dry-run precheck, writer execution request, and explicitly
-confirmed writer execution.
+boundary. It is upstream of the controlled writer design plan preflight and
+any future writer dry-run, writer dry-run precheck, writer execution request,
+and explicitly confirmed writer execution.
 
 ## Required Upstream Evidence
 
@@ -203,7 +207,8 @@ Any future writer implementation must be staged:
 5. controlled writer execution request
 6. explicitly confirmed controlled writer execution
 
-This PR only adds step 1. It does not implement steps 2 through 6.
+Step 2 is the controlled writer design plan preflight. This design plan does
+not implement steps 3 through 6.
 
 ## Confirmation and Operator Control
 
@@ -343,10 +348,22 @@ The design plan fails if:
 - Needs-review handling still requires explicit future policy.
 - Passing this design plan does not authorize writer execution.
 
+## After Design Plan: Design Plan Preflight
+
+The next step is the property training dataset controlled writer design plan
+preflight. See
+`docs/custom-corpus-property-training-dataset-controlled-writer-design-plan-preflight.md`
+and
+`docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-design-plan-preflight-evidence-template.md`.
+
+The preflight validates the design plan package before any future controlled
+writer dry-run design. The future controlled training dataset writer
+implementation remains out of scope.
+
 ## Next Step
 
-The next step is a future controlled writer design-plan preflight. The future
-controlled training dataset writer implementation remains out of scope.
+The next step is the controlled writer design plan preflight. Writer dry-run
+design remains future work after that preflight.
 
 This controlled writer design plan does not implement the controlled writer.
 This controlled writer design plan does not execute the controlled writer.

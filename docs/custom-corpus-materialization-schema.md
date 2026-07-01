@@ -584,11 +584,17 @@ labels, compound/alias association, and duplicate/conflict status. It is not a
 dataset schema and contains no raw values or serialized dataset rows.
 
 The property training dataset controlled writer design plan is downstream of
-the domain validation boundary and upstream of any future controlled training
-dataset writer implementation. It defines the intended writer contract,
-input-package requirements, output artifact policy, dry-run-first staging,
-confirmation concepts, and redaction invariants. It is not a writer
-implementation and creates no dataset artifacts.
+the domain validation boundary and upstream of the controlled writer design
+plan preflight. It defines the intended writer contract, input-package
+requirements, output artifact policy, dry-run-first staging, confirmation
+concepts, and redaction invariants. It is not a writer implementation and
+creates no dataset artifacts.
+
+The property training dataset controlled writer design plan preflight is
+downstream of the design plan and upstream of any future controlled writer
+dry-run. It validates only the design-plan JSON package and emits safe
+summary/evidence outputs. It is not a writer implementation and creates no
+dataset artifacts.
 
 ```text
 property training dataset controlled writer value resolution dry-run
@@ -597,7 +603,11 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
 -> property training dataset controlled writer design plan
--> future controlled training dataset writer implementation
+-> property training dataset controlled writer design plan preflight
+-> future controlled writer dry-run
+-> future controlled writer dry-run precheck
+-> future controlled writer execution request
+-> future explicitly confirmed controlled writer execution
 ```
 
 ## Boundaries

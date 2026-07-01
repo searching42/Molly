@@ -70,7 +70,11 @@ CHAIN_PHRASE = (
     "-> property training dataset quarantined candidate admission boundary\n"
     "-> property training dataset domain validation boundary\n"
     "-> property training dataset controlled writer design plan\n"
-    "-> future controlled training dataset writer implementation"
+    "-> property training dataset controlled writer design plan preflight\n"
+    "-> future controlled writer dry-run\n"
+    "-> future controlled writer dry-run precheck\n"
+    "-> future controlled writer execution request\n"
+    "-> future explicitly confirmed controlled writer execution"
 )
 
 BOUNDARY_STATEMENTS = (
