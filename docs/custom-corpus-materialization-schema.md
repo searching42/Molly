@@ -570,6 +570,21 @@ tiny public/synthetic-public governance acceptance note with redacted ids,
 counts, statuses, residual risks, and next-gate notes before any future
 controlled writer.
 
+The property training dataset quarantined candidate admission boundary is
+downstream of the small public evidence packet and upstream of any future
+controlled training dataset writer. It defines required quarantined candidate
+evidence, acceptable review/admission statuses, value-resolution evidence, and
+redaction rules. It is not a dataset schema and contains no serialized dataset
+rows.
+
+```text
+property training dataset controlled writer value resolution dry-run
+-> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
+-> future controlled training dataset writer
+```
+
 ## Boundaries
 
 - This schema does not implement materialization.
