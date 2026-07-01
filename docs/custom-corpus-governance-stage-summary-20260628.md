@@ -899,7 +899,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
--> future controlled writer dry-run implementation
+-> property training dataset controlled writer dry-run
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
@@ -926,7 +926,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
--> future controlled writer dry-run implementation
+-> property training dataset controlled writer dry-run
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
@@ -955,7 +955,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
--> future controlled writer dry-run implementation
+-> property training dataset controlled writer dry-run
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
@@ -984,7 +984,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
--> future controlled writer dry-run implementation
+-> property training dataset controlled writer dry-run
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
@@ -1013,13 +1013,13 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
--> future controlled writer dry-run implementation
+-> property training dataset controlled writer dry-run
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
 
-The design defines the future controlled writer dry-run contract, including
+The design defines the controlled writer dry-run contract, including
 allowed safe input references, report and summary schema labels, would-write
 aggregate counts, side-effect boundaries, redaction behavior, dry-run status
 semantics, and future precheck expectations. It is docs/test only and does not
@@ -1028,3 +1028,16 @@ payloads, emit raw values, materialize values, serialize rows, create training
 artifacts, generate conformers or DPA3 structures, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.
+
+## Controlled Writer Dry-Run
+
+The property training dataset controlled writer dry-run was added after the
+controlled writer dry-run design and before the future dry-run precheck. It
+validates safe aggregate-only input packages and writes redacted report,
+summary, and Markdown evidence only.
+
+It does not execute a controlled writer, implement writer execution, implement
+the future dry-run precheck, read source payloads, emit raw values,
+materialize values, serialize rows, create training artifacts, generate
+conformers or DPA3 structures, run Phase 1, change `DatasetConfirmation`, run
+model training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.

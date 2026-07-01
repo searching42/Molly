@@ -596,6 +596,11 @@ dry-run. It validates only the design-plan JSON package and emits safe
 summary/evidence outputs. It is not a writer implementation and creates no
 dataset artifacts.
 
+The controlled writer dry-run is downstream of the dry-run design. It reads a
+safe aggregate-only input package and writes redacted report/summary/evidence
+outputs, but it still does not execute a controlled writer, emit values,
+serialize rows, or create dataset artifacts.
+
 ```text
 property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer value resolution dry-run precheck
@@ -605,7 +610,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
--> future controlled writer dry-run implementation
+-> property training dataset controlled writer dry-run
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution

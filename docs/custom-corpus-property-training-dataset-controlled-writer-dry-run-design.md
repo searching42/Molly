@@ -26,15 +26,15 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
--> future controlled writer dry-run implementation
+-> property training dataset controlled writer dry-run
 -> future controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
 
 The dry-run design is downstream of the controlled writer design plan
-preflight. It is upstream of any future controlled writer dry-run
-implementation and any future dry-run precheck.
+preflight. It is upstream of the controlled writer dry-run implementation and
+any future dry-run precheck.
 
 ## Required Upstream Evidence
 
@@ -373,5 +373,5 @@ training, or evaluation.
 
 ## Next Step
 
-The next step is future controlled writer dry-run implementation design and
-review in a separate PR. The implementation remains out of scope for this PR.
+The next step is property training dataset controlled writer dry-run in a
+separate PR. Writer execution remains out of scope for this design.
