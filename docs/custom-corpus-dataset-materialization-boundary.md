@@ -58,7 +58,7 @@ custom corpus manifest
 -> property training dataset controlled writer execution plan
 -> property training dataset controlled writer execution plan preflight
 -> property training dataset controlled writer value resolution dry-run
--> future value resolution dry-run precheck
+-> property training dataset controlled writer value resolution dry-run precheck
 -> future controlled training dataset writer
 ```
 
@@ -120,15 +120,17 @@ Existing artifact schemas:
 - `custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight.v1`
 - `custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run.v1`
 - `custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run_summary.v1`
+- `custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run_precheck.v1`
 
 Current steps now include a candidate-only quarantine materializer for the
 property path, a controlled training admission execution ledger, a ledger
 precheck, a training dataset materialization planner, a materialization plan
-precheck, a row contract, a row contract precheck, and a training dataset
-materialization dry-run, and a training dataset materialization dry-run
-precheck. They still stop before training dataset writing, training artifacts,
-Phase 1, and
-`DatasetConfirmation` mutation.
+precheck, a row contract, a row contract precheck, a training dataset
+materialization dry-run, a training dataset materialization dry-run precheck,
+writer request/binding/value-source planning, controlled writer execution
+planning, value-resolution dry-run, and value-resolution dry-run precheck.
+They still stop before training dataset writing, training artifacts, Phase 1,
+and `DatasetConfirmation` mutation.
 
 The property candidate schema represents open-ended numeric scientific
 property candidates before review. It does not define a property whitelist,
@@ -328,6 +330,12 @@ internally, and emits safe report/summary evidence without raw values,
 serialized rows, output paths, training/candidate CSV/JSONL/Parquet/LMDB
 artifacts, conformers, DPA3 structures, Phase 1 execution, model
 training/evaluation, or `DatasetConfirmation` changes.
+
+The property training dataset controlled writer value resolution dry-run
+precheck sits after the dry-run and before any future controlled writer. It
+validates only the emitted dry-run report/summary package; it does not re-read
+authorized source payloads, execute a writer, emit values, materialize rows, or
+create training/candidate CSV/JSONL/Parquet/LMDB artifacts.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a
@@ -1001,9 +1009,10 @@ Recommended future sequence:
 35. `test/docs: add property training dataset controlled writer execution plan`
 36. `test/docs: add property training dataset controlled writer execution plan preflight`
 37. `test/docs: add property training dataset controlled writer value resolution dry-run`
-38. `docs: record small public quarantine materialization evidence`
-39. `docs/test: design training admission boundary from quarantined candidates`
-40. only later: implement explicit training artifact builder if all previous
+38. `test/docs: add property training dataset controlled writer value resolution dry-run precheck`
+39. `docs: record small public quarantine materialization evidence`
+40. `docs/test: design training admission boundary from quarantined candidates`
+41. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the

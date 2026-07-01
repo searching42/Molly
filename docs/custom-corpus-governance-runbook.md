@@ -61,7 +61,7 @@ custom corpus manifest
 -> property training dataset controlled writer execution plan
 -> property training dataset controlled writer execution plan preflight
 -> property training dataset controlled writer value resolution dry-run
--> future value resolution dry-run precheck
+-> property training dataset controlled writer value resolution dry-run precheck
 -> future controlled training dataset writer
 ```
 
@@ -130,6 +130,7 @@ Concrete artifact schemas:
 - `custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight.v1`
 - `custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run.v1`
 - `custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run_summary.v1`
+- `custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run_precheck.v1`
 
 ## Step 1: Custom Corpus Manifest
 
@@ -2790,6 +2791,71 @@ Fail criteria:
   evidence
 - dry-run redaction fails
 
+## Step 47: Property Training Dataset Controlled Writer Value Resolution Dry-Run Precheck
+
+The property training dataset controlled writer value resolution dry-run
+precheck reads only the dry-run report and dry-run summary emitted by Step 46.
+It validates that the package is schema-valid, hash-bound, internally
+consistent, redacted, and still inside the non-writer boundary before any
+future controlled writer work.
+
+It is not writer execution: the precheck does not re-read authorized source
+payloads, emit values, materialize values into rows, create serialized
+training rows, create training/candidate CSV/JSONL/Parquet/LMDB artifacts,
+generate conformers or DPA3 structures, run Phase 1, change
+`DatasetConfirmation`, or run model training/evaluation.
+
+References:
+
+- `docs/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run-precheck.md`
+- `docs/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run-precheck-evidence-template.md`
+
+Pass criteria:
+
+- report schema is
+  `custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run.v1`
+- summary schema is
+  `custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run_summary.v1`
+- report and summary statuses match
+- dry-run status is `passed`
+- report SHA-256 in the summary matches the actual report file
+- common ids and hashes match where both artifacts provide them
+- resolution record counts match report records
+- required fields are resolved when required
+- resolution records contain only safe ids, hashes, labels, field names,
+  aggregate state, and boundary booleans
+- `controlled_writer_executed=false`
+- `source_payloads_read=true`
+- `values_materialized=false`
+- `serialized_rows_created=false`
+- `training_dataset_materialized=false`
+- `dataset_artifact_created=false`
+- `model_training_run=false`
+- `evaluation_run=false`
+- Phase 1 remains `not_run`
+- `DatasetConfirmation` remains unchanged
+- precheck redaction checks pass
+
+Needs-review criteria:
+
+- dry-run status is `needs_review`
+- explicit allowance is set
+- no hard consistency check failed
+
+Fail criteria:
+
+- schema, status, hash, id, record-count, boundary, record-safety, or
+  redaction checks fail
+- dry-run is blocked, failed, invalid, or needs-review without explicit
+  allowance
+- required values are unresolved while required field resolution is required
+- raw property values, canonical SMILES, InChI/InChIKey values, raw text,
+  private paths, token-like values, PDF names, serialized rows, conformer/DPA3
+  data, output paths, or CSV/JSONL/Parquet/LMDB paths appear in the dry-run
+  package or emitted evidence
+- precheck redaction fails
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -3093,6 +3159,7 @@ Allowed:
 - property training dataset controlled writer execution plan
 - property training dataset controlled writer execution plan preflight
 - property training dataset controlled writer value resolution dry-run
+- property training dataset controlled writer value resolution dry-run precheck
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates
