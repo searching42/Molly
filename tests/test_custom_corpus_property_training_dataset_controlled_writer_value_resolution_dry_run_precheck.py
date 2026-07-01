@@ -30,6 +30,42 @@ from test_custom_corpus_property_training_dataset_controlled_writer_execution_pl
 )
 
 
+_FIXTURE_PATH_FORBIDDEN_MARKERS = (
+    "0.72",
+    ".csv",
+    ".jsonl",
+    ".lmdb",
+    ".parquet",
+    ".pdf",
+    "authorization",
+    "bearer",
+    "c1=cc",
+    "conformer_block",
+    "controlled_writer_executed",
+    "cookie",
+    "dataset_artifact_created",
+    "dataset_confirmation_changed",
+    "dpa3_structure_block",
+    "evaluation_run",
+    "inchi",
+    "model_training_run",
+    "password",
+    "phase1_ran",
+    "phase1_status",
+    "raw_article_text",
+    "raw_table",
+    "secret",
+    "serialized_dataset_row",
+    "serialized_rows_created",
+    "serialized_training_row",
+    "source_payloads_read",
+    "token",
+    "training_dataset_materialized",
+    "values_materialized",
+    "writer_executed",
+)
+
+
 def test_valid_dry_run_package_writes_precheck_summary_and_markdown(tmp_path: Path) -> None:
     paths = _write_precheck_package(tmp_path)
     output_summary = tmp_path / "value-resolution-precheck-summary.json"
@@ -239,6 +275,16 @@ def test_boundary_violations_block(tmp_path: Path, field: str, value: object, er
 
     assert summary["precheck_status"] == "blocked"
     assert error_code in summary["precheck_errors"]
+
+
+def test_safe_fixture_root_does_not_inherit_boundary_marker_path(tmp_path: Path) -> None:
+    marker_tmp_path = tmp_path / "serialized_rows_created" / "case"
+    marker_tmp_path.mkdir(parents=True)
+
+    fixture_root = _safe_fixture_root(marker_tmp_path, "passed")
+
+    assert "serialized_rows_created" not in str(fixture_root)
+    assert fixture_root.name.startswith("value_resolution_precheck_fixture_passed_")
 
 
 def test_source_payloads_read_false_blocks(tmp_path: Path) -> None:
@@ -471,10 +517,17 @@ def _write_precheck_package(tmp_path: Path, *, needs_review: bool = False) -> di
 def _safe_fixture_root(tmp_path: Path, label: str) -> Path:
     digest = hashlib.sha256(str(tmp_path).encode("utf-8")).hexdigest()[:12]
     root_parent = tmp_path.parent
+    while root_parent.parent != root_parent and _fixture_path_has_forbidden_marker(root_parent):
+        root_parent = root_parent.parent
     root_parent.mkdir(parents=True, exist_ok=True)
     root = root_parent / f"value_resolution_precheck_fixture_{label}_{digest}"
     root.mkdir(parents=True, exist_ok=False)
     return root
+
+
+def _fixture_path_has_forbidden_marker(path: Path) -> bool:
+    lowered = str(path).lower()
+    return any(marker in lowered for marker in _FIXTURE_PATH_FORBIDDEN_MARKERS)
 
 
 def _kwargs(paths: dict[str, Path], **overrides: object) -> dict[str, object]:
