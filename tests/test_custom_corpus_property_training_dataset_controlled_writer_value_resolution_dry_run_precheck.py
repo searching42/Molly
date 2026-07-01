@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -443,8 +444,7 @@ def test_no_llm_mineru_pdf_or_corpus_workflow_imports_or_calls(
 
 
 def _write_precheck_package(tmp_path: Path, *, needs_review: bool = False) -> dict[str, Path]:
-    fixture_root = tmp_path / "value-resolution-precheck-fixture"
-    fixture_root.mkdir(parents=True, exist_ok=False)
+    fixture_root = _safe_fixture_root(tmp_path, "review" if needs_review else "passed")
     paths = _write_controlled_preflight_base_package(fixture_root, plan_needs_review=needs_review)
     preflight_summary_path = fixture_root / "controlled_writer_execution_plan_preflight_summary.json"
     preflight_summary = preflight_property_training_dataset_controlled_writer_execution_plan(
@@ -466,6 +466,15 @@ def _write_precheck_package(tmp_path: Path, *, needs_review: bool = False) -> di
     paths["report"] = run_dir / "property_training_dataset_controlled_writer_value_resolution_dry_run_report.json"
     paths["summary"] = run_dir / "property_training_dataset_controlled_writer_value_resolution_dry_run_summary.json"
     return paths
+
+
+def _safe_fixture_root(tmp_path: Path, label: str) -> Path:
+    digest = hashlib.sha256(str(tmp_path).encode("utf-8")).hexdigest()[:12]
+    root_parent = tmp_path.parent
+    root_parent.mkdir(parents=True, exist_ok=True)
+    root = root_parent / f"value_resolution_precheck_fixture_{label}_{digest}"
+    root.mkdir(parents=True, exist_ok=False)
+    return root
 
 
 def _kwargs(paths: dict[str, Path], **overrides: object) -> dict[str, object]:
