@@ -62,6 +62,7 @@ custom corpus manifest
 -> property training dataset controlled writer execution plan preflight
 -> property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
 -> future controlled training dataset writer
 ```
 
@@ -2856,6 +2857,37 @@ Fail criteria:
   package or emitted evidence
 - precheck redaction fails
 
+## Step 48: Small Public Quarantine Materialization Evidence
+
+The small public quarantine materialization evidence packet records a tiny
+public/synthetic-public property corpus acceptance note after value-resolution
+dry-run precheck and before any future controlled writer. It is a docs-only
+evidence checkpoint that bridges synthetic unit tests and later controlled
+writer work.
+
+It is not writer execution: the evidence packet does not read source payloads,
+emit raw values, materialize values into rows, create row serialization,
+create training/candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers
+or DPA3 structures, run Phase 1, change `DatasetConfirmation`, or run model
+training/evaluation.
+
+References:
+
+- `docs/evidence/custom-corpus-small-public-quarantine-materialization-evidence-20260701.md`
+- `docs/evidence/templates/custom-corpus-small-public-quarantine-materialization-evidence-template.md`
+
+Acceptance criteria:
+
+- public/low-risk source boundary is explicit
+- only safe source labels, ids, counts, and statuses are recorded
+- quarantine materialization evidence is redacted
+- training dataset boundary remains false for materialization and artifact
+  creation
+- controlled writer value-resolution dry-run and precheck positions are noted
+- residual risks and next gate are documented
+- no private paths, raw values, article/table text, file names, molecular
+  strings, output paths, credentials, or model/evaluation claims appear
+
 ## Step 21: Property Training Admission Readiness
 
 The property training admission readiness planner reads quarantine candidate
@@ -3160,6 +3192,7 @@ Allowed:
 - property training dataset controlled writer execution plan preflight
 - property training dataset controlled writer value resolution dry-run
 - property training dataset controlled writer value resolution dry-run precheck
+- small public quarantine materialization evidence
 - materialization plan schema and validator
 - offline materialization planner
 - redacted summary/evidence templates

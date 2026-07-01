@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from ai4s_agent.custom_corpus_materialization import sha256_file
+from ai4s_agent.custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight import (
+    preflight_property_training_dataset_controlled_writer_execution_plan,
+)
 from ai4s_agent.custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run import (
     run_property_training_dataset_controlled_writer_value_resolution_dry_run,
 )
@@ -18,8 +21,11 @@ from test_custom_corpus_property_materialization_plan_preflight import _mutate_j
 from test_custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run import (
     _kwargs as _dry_run_kwargs,
 )
-from test_custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run import (
-    _write_value_resolution_package as _write_base_value_resolution_package,
+from test_custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight import (
+    _kwargs as _controlled_preflight_kwargs,
+)
+from test_custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight import (
+    _write_preflight_package as _write_controlled_preflight_base_package,
 )
 
 
@@ -437,14 +443,25 @@ def test_no_llm_mineru_pdf_or_corpus_workflow_imports_or_calls(
 
 
 def _write_precheck_package(tmp_path: Path, *, needs_review: bool = False) -> dict[str, Path]:
-    paths = _write_base_value_resolution_package(tmp_path, preflight_needs_review=needs_review)
+    fixture_root = tmp_path / "value-resolution-precheck-fixture"
+    fixture_root.mkdir(parents=True, exist_ok=False)
+    paths = _write_controlled_preflight_base_package(fixture_root, plan_needs_review=needs_review)
+    preflight_summary_path = fixture_root / "controlled_writer_execution_plan_preflight_summary.json"
+    preflight_summary = preflight_property_training_dataset_controlled_writer_execution_plan(
+        **_controlled_preflight_kwargs(paths),
+        allow_controlled_writer_execution_plan_needs_review=needs_review,
+        output_summary_path=preflight_summary_path,
+    )
+    assert preflight_summary["preflight_status"] in {"passed", "needs_review"}, preflight_summary
+    paths["training_dataset_controlled_writer_execution_plan_preflight"] = preflight_summary_path
+    paths["value_resolution_output_dir"] = fixture_root / "value-resolution-output"
     dry_run_summary = run_property_training_dataset_controlled_writer_value_resolution_dry_run(
         **_dry_run_kwargs(
             paths,
             allow_controlled_writer_execution_plan_preflight_needs_review=needs_review,
         )
     )
-    assert dry_run_summary["dry_run_status"] in {"passed", "needs_review"}
+    assert dry_run_summary["dry_run_status"] in {"passed", "needs_review"}, dry_run_summary
     run_dir = paths["value_resolution_output_dir"] / "property-value-resolution-dry-run-001"
     paths["report"] = run_dir / "property_training_dataset_controlled_writer_value_resolution_dry_run_report.json"
     paths["summary"] = run_dir / "property_training_dataset_controlled_writer_value_resolution_dry_run_summary.json"
