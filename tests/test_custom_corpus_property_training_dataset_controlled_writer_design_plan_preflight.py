@@ -40,7 +40,7 @@ _CHAIN_PHRASE = (
     "-> property training dataset controlled writer design plan preflight\n"
     "-> property training dataset controlled writer dry-run design\n"
     "-> property training dataset controlled writer dry-run\n"
-    "-> future controlled writer dry-run precheck\n"
+    "-> property training dataset controlled writer dry-run precheck\n"
     "-> future controlled writer execution request\n"
     "-> future explicitly confirmed controlled writer execution"
 )

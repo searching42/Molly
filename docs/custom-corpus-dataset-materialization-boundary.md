@@ -66,7 +66,7 @@ custom corpus manifest
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
--> future controlled writer dry-run precheck
+-> property training dataset controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
@@ -389,13 +389,22 @@ dry-run input/report/summary contracts, side-effect boundary, redaction
 behavior, status semantics, and future precheck expectations.
 
 The property training dataset controlled writer dry-run sits after the dry-run
-design and before any future dry-run precheck. It reads only a safe,
+design and before the controlled writer dry-run precheck. It reads only a safe,
 aggregate-only dry-run input package and writes redacted report, summary, and
 Markdown evidence. It does not execute a controlled writer, read source
 payloads, emit raw values, materialize values, serialize rows, create
 training/candidate CSV/JSONL/Parquet/LMDB artifacts, generate conformers or
 DPA3 structures, run Phase 1, change `DatasetConfirmation`, or run model
 training/evaluation.
+
+The property training dataset controlled writer dry-run precheck sits after the
+dry-run and before any future controlled writer execution request design. It
+validates dry-run report/summary/evidence packages for schema, checksum,
+basename-only references, aggregate counts, boundary flags, and redaction. It
+does not rerun the dry-run, execute a controlled writer, read source payloads,
+emit raw values, materialize values, serialize rows, create training/candidate
+CSV/JSONL/Parquet/LMDB artifacts, generate conformers or DPA3 structures, run
+Phase 1, change `DatasetConfirmation`, or run model training/evaluation.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a

@@ -30,6 +30,43 @@ from test_custom_corpus_property_training_dataset_controlled_writer_execution_pl
 )
 
 
+_FIXTURE_PATH_FORBIDDEN_MARKERS = (
+    "0.72",
+    ".csv",
+    ".jsonl",
+    ".lmdb",
+    ".parquet",
+    ".pdf",
+    "authorization",
+    "bearer",
+    "c1=cc",
+    "conformer_block",
+    "controlled_writer_executed",
+    "cookie",
+    "dataset_artifact_created",
+    "dataset_confirmation_changed",
+    "dpa3_structure_block",
+    "evaluation_run",
+    "inchi",
+    "model_training_run",
+    "password",
+    "phase1_ran",
+    "phase1_status",
+    "raw_article_text",
+    "raw_table",
+    "secret",
+    "serialized_dataset_row",
+    "serialized_rows_created",
+    "serialized_training_row",
+    "source_payloads_read",
+    "token",
+    "training_dataset_materialized",
+    "values_materialized",
+    "writer_executed",
+)
+_FIXTURE_SAFE_CREATED_AT = "2026-01-01T00:00:00Z"
+
+
 def test_valid_dry_run_package_writes_precheck_summary_and_markdown(tmp_path: Path) -> None:
     paths = _write_precheck_package(tmp_path)
     output_summary = tmp_path / "value-resolution-precheck-summary.json"
@@ -241,6 +278,33 @@ def test_boundary_violations_block(tmp_path: Path, field: str, value: object, er
     assert error_code in summary["precheck_errors"]
 
 
+def test_safe_fixture_root_does_not_inherit_boundary_marker_path(tmp_path: Path) -> None:
+    marker_tmp_path = tmp_path / "serialized_rows_created" / "case"
+    marker_tmp_path.mkdir(parents=True)
+
+    fixture_root = _safe_fixture_root(marker_tmp_path, "passed")
+
+    assert "serialized_rows_created" not in str(fixture_root)
+    assert tmp_path not in fixture_root.parents
+    assert marker_tmp_path not in fixture_root.parents
+    assert fixture_root.name.startswith("value_resolution_precheck_fixture_passed_")
+
+
+def test_write_precheck_package_normalizes_unsafe_wall_clock_timestamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "ai4s_agent.custom_corpus_property_training_dataset_controlled_writer_execution_plan.now_iso",
+        lambda: "2026-07-01T00:00:00.720000Z",
+    )
+
+    paths = _write_precheck_package(tmp_path)
+    plan = json.loads(paths["training_dataset_controlled_writer_execution_plan"].read_text(encoding="utf-8"))
+
+    assert plan["created_at"] == _FIXTURE_SAFE_CREATED_AT
+
+
 def test_source_payloads_read_false_blocks(tmp_path: Path) -> None:
     paths = _write_precheck_package(tmp_path)
     _set_report_and_summary(paths, "source_payloads_read", False)
@@ -446,13 +510,16 @@ def test_no_llm_mineru_pdf_or_corpus_workflow_imports_or_calls(
 def _write_precheck_package(tmp_path: Path, *, needs_review: bool = False) -> dict[str, Path]:
     fixture_root = _safe_fixture_root(tmp_path, "review" if needs_review else "passed")
     paths = _write_controlled_preflight_base_package(fixture_root, plan_needs_review=needs_review)
+    _normalize_controlled_execution_plan_fixture(paths)
     preflight_summary_path = fixture_root / "controlled_writer_execution_plan_preflight_summary.json"
     preflight_summary = preflight_property_training_dataset_controlled_writer_execution_plan(
         **_controlled_preflight_kwargs(paths),
         allow_controlled_writer_execution_plan_needs_review=needs_review,
         output_summary_path=preflight_summary_path,
     )
-    assert preflight_summary["preflight_status"] in {"passed", "needs_review"}, preflight_summary
+    assert preflight_summary["preflight_status"] in {"passed", "needs_review"}, _setup_status_details(
+        preflight_summary
+    )
     paths["training_dataset_controlled_writer_execution_plan_preflight"] = preflight_summary_path
     paths["value_resolution_output_dir"] = fixture_root / "value-resolution-output"
     dry_run_summary = run_property_training_dataset_controlled_writer_value_resolution_dry_run(
@@ -465,16 +532,65 @@ def _write_precheck_package(tmp_path: Path, *, needs_review: bool = False) -> di
     run_dir = paths["value_resolution_output_dir"] / "property-value-resolution-dry-run-001"
     paths["report"] = run_dir / "property_training_dataset_controlled_writer_value_resolution_dry_run_report.json"
     paths["summary"] = run_dir / "property_training_dataset_controlled_writer_value_resolution_dry_run_summary.json"
+    _normalize_value_resolution_dry_run_fixture(paths)
     return paths
+
+
+def _normalize_controlled_execution_plan_fixture(paths: dict[str, Path]) -> None:
+    _mutate_json(
+        paths["training_dataset_controlled_writer_execution_plan"],
+        lambda payload: payload.__setitem__("created_at", _FIXTURE_SAFE_CREATED_AT),
+    )
+    _mutate_json(
+        paths["training_dataset_controlled_writer_execution_planner_summary"],
+        lambda payload: payload.__setitem__("created_at", _FIXTURE_SAFE_CREATED_AT),
+    )
+    _mutate_json(
+        paths["training_dataset_controlled_writer_execution_planner_summary"],
+        lambda payload: payload.__setitem__(
+            "controlled_writer_execution_plan_sha256",
+            sha256_file(paths["training_dataset_controlled_writer_execution_plan"]),
+        ),
+    )
+
+
+def _normalize_value_resolution_dry_run_fixture(paths: dict[str, Path]) -> None:
+    _mutate_json(paths["report"], lambda payload: payload.__setitem__("created_at", _FIXTURE_SAFE_CREATED_AT))
+    _refresh_report_sha(paths)
 
 
 def _safe_fixture_root(tmp_path: Path, label: str) -> Path:
     digest = hashlib.sha256(str(tmp_path).encode("utf-8")).hexdigest()[:12]
-    root_parent = tmp_path.parent
+    root_parent = _neutral_fixture_base(tmp_path)
     root_parent.mkdir(parents=True, exist_ok=True)
-    root = root_parent / f"value_resolution_precheck_fixture_{label}_{digest}"
-    root.mkdir(parents=True, exist_ok=False)
-    return root
+    for counter in range(1000):
+        root = root_parent / f"value_resolution_precheck_fixture_{label}_{digest}_{counter:03d}"
+        try:
+            root.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        return root
+    raise AssertionError("unable_to_create_neutral_value_resolution_precheck_fixture_root")
+
+
+def _neutral_fixture_base(tmp_path: Path) -> Path:
+    for candidate in (Path("/tmp"), Path("/private/tmp"), tmp_path.parent):
+        if candidate.exists() and not _fixture_path_has_forbidden_marker(candidate):
+            return candidate / "neutral_value_resolution_precheck_fixture"
+    raise AssertionError("no_neutral_value_resolution_precheck_fixture_base")
+
+
+def _fixture_path_has_forbidden_marker(path: Path) -> bool:
+    lowered = str(path).lower()
+    return any(marker in lowered for marker in _FIXTURE_PATH_FORBIDDEN_MARKERS)
+
+
+def _setup_status_details(summary: dict[str, object]) -> dict[str, object]:
+    return {
+        "preflight_status": summary.get("preflight_status"),
+        "preflight_errors": summary.get("preflight_errors", []),
+        "preflight_warnings": summary.get("preflight_warnings", summary.get("warnings", [])),
+    }
 
 
 def _kwargs(paths: dict[str, Path], **overrides: object) -> dict[str, object]:

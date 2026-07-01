@@ -69,7 +69,7 @@ custom corpus manifest
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
--> future controlled writer dry-run precheck
+-> property training dataset controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
@@ -2925,7 +2925,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
--> future controlled writer dry-run precheck
+-> property training dataset controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
@@ -2961,7 +2961,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
--> future controlled writer dry-run precheck
+-> property training dataset controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
@@ -2998,7 +2998,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
--> future controlled writer dry-run precheck
+-> property training dataset controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
@@ -3009,7 +3009,7 @@ The property training dataset controlled writer dry-run design defines the
 dry-run contract before the dry-run implementation. It records allowed
 input references, report and summary schema labels, aggregate
 would-write counts, side-effect boundaries, redaction rules, status semantics,
-and future dry-run precheck expectations.
+and controlled writer dry-run precheck expectations.
 
 It does not implement or execute a dry-run, implement or execute a writer, read
 source payloads, emit raw values, materialize values, serialize rows, create
@@ -3031,7 +3031,7 @@ allowed to assemble rows, without assembling, emitting, serializing, or
 materializing those rows.
 
 It does not execute a controlled writer, implement writer execution, implement
-the future dry-run precheck, read source payloads, emit raw values, materialize
+the controlled writer dry-run precheck, read source payloads, emit raw values, materialize
 values, serialize rows, create training/candidate CSV/JSONL/Parquet/LMDB
 artifacts, generate conformers or DPA3 structures, run Phase 1, change
 `DatasetConfirmation`, or run model training/evaluation.
@@ -3042,6 +3042,27 @@ References:
 - `tests/test_custom_corpus_property_training_dataset_controlled_writer_dry_run.py`
 - `docs/custom-corpus-property-training-dataset-controlled-writer-dry-run.md`
 - `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-dry-run-evidence-template.md`
+
+## Step 55: Controlled Writer Dry-Run Precheck
+
+The property training dataset controlled writer dry-run precheck validates the
+dry-run report and summary package before any future controlled writer
+execution request design. It recomputes the report checksum, checks summary
+basename references, compares report/summary ids, statuses, counts, and
+boundary flags, and verifies redaction.
+
+It does not rerun the dry-run, execute a controlled writer, implement writer
+execution, read source payloads, emit raw values, materialize values, serialize
+rows, create training/candidate CSV/JSONL/Parquet/LMDB artifacts, generate
+conformers or DPA3 structures, run Phase 1, change `DatasetConfirmation`, or
+run model training/evaluation.
+
+References:
+
+- `src/ai4s_agent/custom_corpus_property_training_dataset_controlled_writer_dry_run_precheck.py`
+- `tests/test_custom_corpus_property_training_dataset_controlled_writer_dry_run_precheck.py`
+- `docs/custom-corpus-property-training-dataset-controlled-writer-dry-run-precheck.md`
+- `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-dry-run-precheck-evidence-template.md`
 
 Governance tail:
 
@@ -3055,7 +3076,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
--> future controlled writer dry-run precheck
+-> property training dataset controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
@@ -3091,7 +3112,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer design plan preflight
 -> property training dataset controlled writer dry-run design
 -> property training dataset controlled writer dry-run
--> future controlled writer dry-run precheck
+-> property training dataset controlled writer dry-run precheck
 -> future controlled writer execution request
 -> future explicitly confirmed controlled writer execution
 ```
