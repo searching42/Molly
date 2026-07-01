@@ -25,14 +25,15 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run
 -> property training dataset controlled writer dry-run precheck
 -> property training dataset controlled writer execution request design
--> future controlled writer execution request
+-> property training dataset controlled writer execution request
 -> future controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
-The execution request design sits after the controlled writer dry-run precheck.
-It is before any future execution request artifact, future execution request
-preflight, explicit confirmation gate, or controlled writer execution.
+The execution request design sits after the controlled writer dry-run precheck
+and before the controlled writer execution request artifact creator. It remains
+before any future execution request preflight, explicit confirmation gate, or
+controlled writer execution.
 
 ## Required Upstream Evidence
 
@@ -341,8 +342,8 @@ post-request execution controls.
 
 ## Next Step
 
-The next step is future controlled writer execution request implementation, not
-writer execution.
+The next step is property training dataset controlled writer execution request,
+not writer execution.
 
 After future request implementation, a future execution request preflight is
 still required. After that, a future explicit confirmation gate is still
