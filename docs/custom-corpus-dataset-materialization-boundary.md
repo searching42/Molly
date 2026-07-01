@@ -62,7 +62,8 @@ custom corpus manifest
 -> small public quarantine materialization evidence
 -> property training dataset quarantined candidate admission boundary
 -> property training dataset domain validation boundary
--> future controlled training dataset writer
+-> property training dataset controlled writer design plan
+-> future controlled training dataset writer implementation
 ```
 
 Existing artifact schemas:
@@ -358,11 +359,18 @@ rows, create training artifacts, run Phase 1, or change
 
 The property training dataset domain validation boundary sits after the
 quarantined-candidate admission boundary and before any future controlled
-writer. It defines scientific/domain checks for property-unit compatibility,
-numeric plausibility status, provenance labels, condition labels,
-compound/alias association, and duplicate/conflict status. It does not inspect
-raw values, run calculations, execute a writer, create rows, run Phase 1, or
-change `DatasetConfirmation`.
+writer design plan. It defines scientific/domain checks for property-unit
+compatibility, numeric plausibility status, provenance labels, condition
+labels, compound/alias association, and duplicate/conflict status. It does not
+inspect raw values, run calculations, execute a writer, create rows, run Phase
+1, or change `DatasetConfirmation`.
+
+The property training dataset controlled writer design plan sits after the
+domain validation boundary and before any future controlled training dataset
+writer implementation. It defines the future writer contract, input package
+requirements, dry-run-first staging, confirmation concepts, redaction
+invariants, and output artifact policy without implementing or executing a
+writer.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a
@@ -1039,7 +1047,9 @@ Recommended future sequence:
 38. `test/docs: add property training dataset controlled writer value resolution dry-run precheck`
 39. `docs: record small public quarantine materialization evidence`
 40. `docs/test: design training admission boundary from quarantined candidates`
-41. only later: implement explicit training artifact builder if all previous
+41. `docs/test: add property training dataset domain validation boundary`
+42. `test/docs: add property training dataset controlled writer design plan`
+43. only later: implement explicit training artifact builder if all previous
    gates pass
 
 Direct implementation of training materialization should not happen in the
