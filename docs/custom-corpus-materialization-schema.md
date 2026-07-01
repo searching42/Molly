@@ -563,6 +563,13 @@ safety, and redaction consistency before any future controlled writer. It does
 not re-read source payloads, emit values, execute a writer, or create
 training/candidate CSV/JSONL/Parquet/LMDB artifacts.
 
+The small public quarantine materialization evidence packet is downstream of
+value resolution dry-run precheck as docs/evidence only. It is not a
+materialization schema, writer input schema, or dataset artifact. It records a
+tiny public/synthetic-public governance acceptance note with redacted ids,
+counts, statuses, residual risks, and next-gate notes before any future
+controlled writer.
+
 ## Boundaries
 
 - This schema does not implement materialization.

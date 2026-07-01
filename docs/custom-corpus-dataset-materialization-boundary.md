@@ -59,6 +59,7 @@ custom corpus manifest
 -> property training dataset controlled writer execution plan preflight
 -> property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
 -> future controlled training dataset writer
 ```
 
@@ -128,9 +129,10 @@ precheck, a training dataset materialization planner, a materialization plan
 precheck, a row contract, a row contract precheck, a training dataset
 materialization dry-run, a training dataset materialization dry-run precheck,
 writer request/binding/value-source planning, controlled writer execution
-planning, value-resolution dry-run, and value-resolution dry-run precheck.
-They still stop before training dataset writing, training artifacts, Phase 1,
-and `DatasetConfirmation` mutation.
+planning, value-resolution dry-run, value-resolution dry-run precheck, and a
+small public quarantine materialization evidence checkpoint. They still stop
+before training dataset writing, training artifacts, Phase 1, and
+`DatasetConfirmation` mutation.
 
 The property candidate schema represents open-ended numeric scientific
 property candidates before review. It does not define a property whitelist,
@@ -336,6 +338,13 @@ precheck sits after the dry-run and before any future controlled writer. It
 validates only the emitted dry-run report/summary package; it does not re-read
 authorized source payloads, execute a writer, emit values, materialize rows, or
 create training/candidate CSV/JSONL/Parquet/LMDB artifacts.
+
+The small public quarantine materialization evidence packet sits after the
+value-resolution dry-run precheck as a docs-only acceptance note. It records a
+tiny public/synthetic-public quarantine evidence scope with redacted ids and
+counts only; it does not execute a writer, read source payloads, emit raw
+values, serialize rows, create training artifacts, run Phase 1, or change
+`DatasetConfirmation`.
 
 The property training admission request draft builder sits after request
 preflight and before any future training admission execution. It writes a

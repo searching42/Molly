@@ -865,3 +865,22 @@ CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
 artifacts, generate conformers, create DPA3 structures, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.
+
+## Small Public Quarantine Materialization Evidence Note
+
+A small public quarantine materialization evidence packet was added after
+value resolution dry-run precheck:
+
+```text
+docs/evidence/custom-corpus-small-public-quarantine-materialization-evidence-20260701.md
+```
+
+The packet records a tiny public/synthetic-public quarantine evidence scope
+with redacted ids, counts, statuses, residual risks, and the next gate. It is a
+documented acceptance note only. It does not read source payloads, execute a
+controlled writer, emit raw values, materialize values into rows, write a
+training dataset, serialize training rows, create training
+CSV/JSONL/Parquet/LMDB artifacts, create candidate CSV/JSONL/Parquet/LMDB
+artifacts, generate conformers, create DPA3 structures, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.
