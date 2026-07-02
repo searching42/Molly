@@ -27,12 +27,13 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run precheck
 -> property training dataset controlled writer execution request design
 -> property training dataset controlled writer execution request
--> future controlled writer execution request preflight
+-> property training dataset controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
-The request sits after the controlled writer dry-run precheck and before any
-future request preflight or explicit confirmation gate.
+The request sits after the controlled writer dry-run precheck and before the
+controlled writer execution request preflight or any future explicit
+confirmation gate.
 
 ## Input Summary
 
@@ -109,13 +110,13 @@ error or warning codes.
 A controlled writer execution request is not controlled writer execution. It
 does not authorize writer execution by itself and cannot be inferred from a
 passed dry-run precheck, CI success, or merge status. The request only prepares
-a package for a future request preflight.
+a package for a request preflight.
 
 The request must always set `writer_execution_authorized=false`.
 
 ## Explicit Confirmation Boundary
 
-Explicit confirmation remains required after a future request preflight. The
+Explicit confirmation remains required after a request preflight. The
 request must always set `explicit_confirmation_required=true`. Confirmation
 must be a separate future gate that binds to the exact request id, request hash,
 dry-run precheck hash, and intended execution mode.
@@ -163,10 +164,10 @@ workflows, or perform chemistry calculations.
 
 ## Next Step
 
-The next step is future controlled writer execution request preflight, not
-writer execution.
+The next step is property training dataset controlled writer execution request
+preflight, not writer execution.
 
-After future request preflight, a future explicit confirmation gate is still
+After request preflight, a future explicit confirmation gate is still
 required before controlled writer execution.
 
 This controlled writer execution request does not implement execution request preflight.

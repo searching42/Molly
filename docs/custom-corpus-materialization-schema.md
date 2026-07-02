@@ -613,10 +613,17 @@ preflight expectations without creating a request, request preflight, writer
 execution, rows, or dataset artifacts.
 
 The controlled writer execution request is downstream of the request design and
-upstream of any future request preflight. It reads only the dry-run precheck
+upstream of the request preflight. It reads only the dry-run precheck
 summary, writes a hash-bound request JSON, request summary JSON, and redacted
 evidence Markdown, and still does not authorize writer execution, explicitly
 confirm execution, materialize values, serialize rows, or create dataset
+artifacts.
+
+The controlled writer execution request preflight is downstream of the request
+artifact. It validates request/summary schemas, request checksum, basename-only
+references, aggregate count consistency, authorization flags, explicit
+confirmation requirements, boundary flags, and redaction before any future
+explicit confirmation gate. It does not execute a writer or create dataset
 artifacts.
 
 ```text
@@ -632,7 +639,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run precheck
 -> property training dataset controlled writer execution request design
 -> property training dataset controlled writer execution request
--> future controlled writer execution request preflight
+-> property training dataset controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 

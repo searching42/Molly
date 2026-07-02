@@ -903,7 +903,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run precheck
 -> property training dataset controlled writer execution request design
 -> property training dataset controlled writer execution request
--> future controlled writer execution request preflight
+-> property training dataset controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -932,7 +932,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run precheck
 -> property training dataset controlled writer execution request design
 -> property training dataset controlled writer execution request
--> future controlled writer execution request preflight
+-> property training dataset controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -963,7 +963,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run precheck
 -> property training dataset controlled writer execution request design
 -> property training dataset controlled writer execution request
--> future controlled writer execution request preflight
+-> property training dataset controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -994,7 +994,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run precheck
 -> property training dataset controlled writer execution request design
 -> property training dataset controlled writer execution request
--> future controlled writer execution request preflight
+-> property training dataset controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -1025,7 +1025,7 @@ property training dataset controlled writer value resolution dry-run
 -> property training dataset controlled writer dry-run precheck
 -> property training dataset controlled writer execution request design
 -> property training dataset controlled writer execution request
--> future controlled writer execution request preflight
+-> property training dataset controlled writer execution request preflight
 -> future explicitly confirmed controlled writer execution
 ```
 
@@ -1085,7 +1085,7 @@ training/evaluation, call an LLM or agent, call MinerU, or parse PDFs.
 ## Controlled Writer Execution Request
 
 The property training dataset controlled writer execution request was added
-after the execution request design and before any future request preflight. It
+after the execution request design and before the request preflight. It
 reads only the controlled writer dry-run precheck summary, validates schema,
 status, safe ids, counts, hashes, basenames, redaction status, and boundary
 flags, and emits a request JSON, request summary JSON, and redacted evidence
@@ -1095,5 +1095,22 @@ It does not implement request preflight, explicitly confirm execution, execute
 a controlled writer, authorize writer execution by itself, read source
 payloads, emit raw values, materialize values, serialize rows, create training
 artifacts, generate conformers or DPA3 structures, run Phase 1, change
+`DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
+call MinerU, or parse PDFs.
+
+## Controlled Writer Execution Request Preflight
+
+The property training dataset controlled writer execution request preflight was
+added after the request artifact creator and before any future explicit
+confirmation gate. It reads only request JSON, request summary JSON, and
+optional redacted evidence Markdown, recomputes the request checksum, validates
+schema, status, safe ids, counts, hashes, basenames, authorization flags,
+explicit-confirmation flags, boundary flags, and redaction, and emits a safe
+preflight summary and optional redacted Markdown only when safe.
+
+It does not rerun request creation, explicitly confirm execution, execute a
+controlled writer, authorize writer execution by itself, read source payloads,
+emit raw values, materialize values, serialize rows, create training artifacts,
+generate conformers or DPA3 structures, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.

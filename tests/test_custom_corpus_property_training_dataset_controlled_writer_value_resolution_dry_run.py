@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -20,6 +21,42 @@ from test_custom_corpus_property_training_dataset_controlled_writer_execution_pl
 )
 from test_custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight import (
     _write_preflight_package as _write_controlled_preflight_base_package,
+)
+
+
+_FIXTURE_PATH_FORBIDDEN_MARKERS = (
+    "0.72",
+    ".csv",
+    ".jsonl",
+    ".lmdb",
+    ".parquet",
+    ".pdf",
+    "authorization",
+    "bearer",
+    "c1=cc",
+    "conformer_block",
+    "controlled_writer_executed",
+    "cookie",
+    "dataset_artifact_created",
+    "dataset_confirmation_changed",
+    "dpa3_structure_block",
+    "evaluation_run",
+    "inchi",
+    "model_training_run",
+    "password",
+    "phase1_ran",
+    "phase1_status",
+    "raw_article_text",
+    "raw_table",
+    "secret",
+    "serialized_dataset_row",
+    "serialized_rows_created",
+    "serialized_training_row",
+    "source_payloads_read",
+    "token",
+    "training_dataset_materialized",
+    "values_materialized",
+    "writer_executed",
 )
 
 
@@ -343,8 +380,7 @@ def test_no_llm_mineru_pdf_or_corpus_workflow_imports_or_calls(
 
 
 def _write_value_resolution_package(tmp_path: Path, *, preflight_needs_review: bool = False) -> dict[str, Path]:
-    fixture_root = tmp_path / "value-resolution-fixture"
-    fixture_root.mkdir(parents=True, exist_ok=False)
+    fixture_root = _safe_fixture_root(tmp_path, "review" if preflight_needs_review else "passed")
     paths = _write_controlled_preflight_base_package(fixture_root, plan_needs_review=preflight_needs_review)
     preflight_summary_path = fixture_root / "controlled_writer_execution_plan_preflight_summary.json"
     preflight_summary = preflight_property_training_dataset_controlled_writer_execution_plan(
@@ -352,10 +388,44 @@ def _write_value_resolution_package(tmp_path: Path, *, preflight_needs_review: b
         allow_controlled_writer_execution_plan_needs_review=preflight_needs_review,
         output_summary_path=preflight_summary_path,
     )
-    assert preflight_summary["preflight_status"] in {"passed", "needs_review"}, preflight_summary
+    assert preflight_summary["preflight_status"] in {"passed", "needs_review"}, _setup_status_details(preflight_summary)
     paths["training_dataset_controlled_writer_execution_plan_preflight"] = preflight_summary_path
     paths["value_resolution_output_dir"] = fixture_root / "value-resolution-output"
     return paths
+
+
+def _safe_fixture_root(tmp_path: Path, label: str) -> Path:
+    digest = hashlib.sha256(str(tmp_path).encode("utf-8")).hexdigest()[:12]
+    root_parent = _neutral_fixture_base(tmp_path)
+    root_parent.mkdir(parents=True, exist_ok=True)
+    for counter in range(1000):
+        root = root_parent / f"value_resolution_dry_run_fixture_{label}_{digest}_{counter:03d}"
+        try:
+            root.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        return root
+    raise AssertionError("unable_to_create_neutral_value_resolution_dry_run_fixture_root")
+
+
+def _neutral_fixture_base(tmp_path: Path) -> Path:
+    for candidate in (Path("/tmp"), Path("/private/tmp"), tmp_path.parent):
+        if candidate.exists() and not _fixture_path_has_forbidden_marker(candidate):
+            return candidate / "neutral_value_resolution_dry_run_fixture"
+    raise AssertionError("no_neutral_value_resolution_dry_run_fixture_base")
+
+
+def _fixture_path_has_forbidden_marker(path: Path) -> bool:
+    lowered = str(path).lower()
+    return any(marker in lowered for marker in _FIXTURE_PATH_FORBIDDEN_MARKERS)
+
+
+def _setup_status_details(summary: dict[str, object]) -> dict[str, object]:
+    return {
+        "preflight_status": summary.get("preflight_status"),
+        "preflight_errors": summary.get("preflight_errors", []),
+        "preflight_warnings": summary.get("preflight_warnings", summary.get("warnings", [])),
+    }
 
 
 def _refresh_plan_hashes(paths: dict[str, Path]) -> None:

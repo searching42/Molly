@@ -43,7 +43,7 @@ _CHAIN_PHRASE = (
     "-> property training dataset controlled writer dry-run precheck\n"
     "-> property training dataset controlled writer execution request design\n"
     "-> property training dataset controlled writer execution request\n"
-    "-> future controlled writer execution request preflight\n"
+    "-> property training dataset controlled writer execution request preflight\n"
     "-> future explicitly confirmed controlled writer execution"
 )
 _REQUIRED_DOC_SECTIONS = (
