@@ -55,6 +55,24 @@ layer records the transition id, state before/after, artifact hash, artifact
 type, parent transition hash, and timestamp so the dry-run artifact can be
 audited as part of the provenance chain rather than as a standalone file.
 
+## Real Literature Read-Only Acceptance Branch
+
+Real literature read-only acceptance is a separate local branch:
+
+```text
+real literature local manifest
+-> local parsed-output presence check
+-> redacted paper-level aggregate scan
+-> candidate table aggregate detection
+-> property field coverage aggregate
+-> failure taxonomy aggregate
+-> real literature read-only acceptance evidence
+-> future real candidate quarantine dry-run
+```
+
+That branch does not execute the controlled writer, create execution requests,
+run request preflight, materialize datasets, or create training artifacts.
+
 ## Input Package
 
 The dry-run reads one safe JSON input package with schema:

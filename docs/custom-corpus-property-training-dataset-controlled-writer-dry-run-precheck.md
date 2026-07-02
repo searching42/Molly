@@ -44,6 +44,24 @@ requires the precheck artifact hash to be linked to the transition id and parent
 transition hash. File presence, basename matches, and schema validity are not
 sufficient without this state-linked artifact binding.
 
+## Real Literature Read-Only Acceptance Branch
+
+The real literature branch remains read-only:
+
+```text
+real literature local manifest
+-> local parsed-output presence check
+-> redacted paper-level aggregate scan
+-> candidate table aggregate detection
+-> property field coverage aggregate
+-> failure taxonomy aggregate
+-> real literature read-only acceptance evidence
+-> future real candidate quarantine dry-run
+```
+
+It does not rerun this precheck, execute the writer, create execution requests,
+or create dataset artifacts.
+
 ## Input Package
 
 The precheck reads:

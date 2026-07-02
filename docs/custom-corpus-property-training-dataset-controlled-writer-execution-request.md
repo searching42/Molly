@@ -55,6 +55,24 @@ hash-locks the request artifact and links it to the transition id, parent
 transition hash, state before/after, artifact type, and timestamp. A request
 file without that binding is an orphan artifact and is not execution-ready.
 
+## Real Literature Read-Only Acceptance Branch
+
+The real literature branch is separate from execution request creation:
+
+```text
+real literature local manifest
+-> local parsed-output presence check
+-> redacted paper-level aggregate scan
+-> candidate table aggregate detection
+-> property field coverage aggregate
+-> failure taxonomy aggregate
+-> real literature read-only acceptance evidence
+-> future real candidate quarantine dry-run
+```
+
+It emits aggregate acceptance evidence only and does not create controlled
+writer execution requests.
+
 ## Input Summary
 
 The only input is a controlled writer dry-run precheck summary with schema
