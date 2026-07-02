@@ -47,6 +47,14 @@ execution state machine. Passing dry-run output does not imply
 `EXECUTION_AUTHORIZED`, or `EXECUTED`; those states require explicit adjacent
 transitions with parent-hash continuity and redaction-safe evidence.
 
+## Provenance Binding
+
+No dry-run report or summary is valid unless it is provably bound to the
+`MATERIALIZATION_PREPARED` state transition. The execution provenance binding
+layer records the transition id, state before/after, artifact hash, artifact
+type, parent transition hash, and timestamp so the dry-run artifact can be
+audited as part of the provenance chain rather than as a standalone file.
+
 ## Input Package
 
 The dry-run reads one safe JSON input package with schema:

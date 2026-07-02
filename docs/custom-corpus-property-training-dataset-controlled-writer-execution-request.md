@@ -47,6 +47,14 @@ merge status. The request preflight maps to `REQUEST_PRECHECKED`, and any later
 approval or execution state must be reached by explicit adjacent transitions
 with provenance-hash continuity.
 
+## Provenance Binding
+
+No execution request artifact is valid unless it is provably bound to the
+`REQUEST_CREATED` state transition. The execution provenance binding layer
+hash-locks the request artifact and links it to the transition id, parent
+transition hash, state before/after, artifact type, and timestamp. A request
+file without that binding is an orphan artifact and is not execution-ready.
+
 ## Input Summary
 
 The only input is a controlled writer dry-run precheck summary with schema

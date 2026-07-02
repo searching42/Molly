@@ -670,6 +670,18 @@ schema validity alone cannot create or advance state. Dry-run evidence maps to
 execution request evidence maps to `REQUEST_CREATED`; execution preflight
 evidence maps to `REQUEST_APPROVED`.
 
+## Execution Provenance Binding Layer
+
+No artifact is valid unless it is provably bound to a state transition. The
+binding layer records `transition_id`, `state_before`, `state_after`,
+`artifact_hash`, `artifact_type`, `parent_transition_hash`, and `timestamp`.
+
+The provenance graph treats dry-run reports, precheck summaries, execution
+requests, and future dataset artifacts as transition-bound outputs. It rejects
+orphan artifacts, duplicated transition bindings, hash mismatches, and broken
+parent chains. A terminal execution state is not audit-complete unless the
+terminal transition has a bound artifact.
+
 ## Boundaries
 
 - This schema does not implement materialization.
