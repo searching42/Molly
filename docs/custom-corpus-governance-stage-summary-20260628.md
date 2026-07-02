@@ -1114,3 +1114,32 @@ emit raw values, materialize values, serialize rows, create training artifacts,
 generate conformers or DPA3 structures, run Phase 1, change
 `DatasetConfirmation`, run model training/evaluation, call an LLM or agent,
 call MinerU, or parse PDFs.
+
+## Controlled Writer Execution State Machine
+
+The controlled writer execution state machine was introduced as a core safety
+kernel for the property training dataset path. All operations are now state
+transitions, not standalone validations. The system no longer validates
+artifacts directly. It validates only state transitions and provenance
+integrity.
+
+The immutable state order is:
+
+```text
+QUARANTINED
+-> ADMITTED
+-> DOMAIN_VALIDATED
+-> MATERIALIZATION_PREPARED
+-> REQUEST_CREATED
+-> REQUEST_PRECHECKED
+-> REQUEST_APPROVED
+-> EXECUTION_AUTHORIZED
+-> EXECUTED
+```
+
+The kernel blocks skipped states, forged terminal states, replayed transition
+ids, parent hash mismatches, redaction failures, state regression, parallel
+state conflicts, and implicit state inference from filenames. The existing
+dry-run, precheck, execution request, and execution preflight gates are mapped
+to `MATERIALIZATION_PREPARED`, `REQUEST_PRECHECKED`, `REQUEST_CREATED`, and
+`REQUEST_APPROVED` respectively.

@@ -643,6 +643,33 @@ property training dataset controlled writer value resolution dry-run
 -> future explicitly confirmed controlled writer execution
 ```
 
+## State-Transition Safety Kernel
+
+All operations are now state transitions, not standalone validations. The
+system no longer validates artifacts directly. It validates only state
+transitions and provenance integrity.
+
+The controlled writer execution state machine uses immutable states:
+
+```text
+QUARANTINED
+-> ADMITTED
+-> DOMAIN_VALIDATED
+-> MATERIALIZATION_PREPARED
+-> REQUEST_CREATED
+-> REQUEST_PRECHECKED
+-> REQUEST_APPROVED
+-> EXECUTION_AUTHORIZED
+-> EXECUTED
+```
+
+Each transition must carry `transition_id`, `parent_hash`, `state_before`,
+`state_after`, `evidence_hash`, and `timestamp`. File presence, filenames, and
+schema validity alone cannot create or advance state. Dry-run evidence maps to
+`MATERIALIZATION_PREPARED`; precheck evidence maps to `REQUEST_PRECHECKED`;
+execution request evidence maps to `REQUEST_CREATED`; execution preflight
+evidence maps to `REQUEST_APPROVED`.
+
 ## Boundaries
 
 - This schema does not implement materialization.

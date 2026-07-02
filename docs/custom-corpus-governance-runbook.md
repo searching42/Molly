@@ -76,6 +76,33 @@ custom corpus manifest
 -> future explicitly confirmed controlled writer execution
 ```
 
+State-transition safety kernel:
+
+All operations are now state transitions, not standalone validations. The
+system no longer validates artifacts directly. It validates only state
+transitions and provenance integrity.
+
+The controlled writer execution state machine is:
+
+```text
+QUARANTINED
+-> ADMITTED
+-> DOMAIN_VALIDATED
+-> MATERIALIZATION_PREPARED
+-> REQUEST_CREATED
+-> REQUEST_PRECHECKED
+-> REQUEST_APPROVED
+-> EXECUTION_AUTHORIZED
+-> EXECUTED
+```
+
+Transitions are valid only when the requested edge is adjacent in the DAG, the
+parent hash continues the existing provenance chain, redaction invariants pass,
+and the state is not inferred from file presence or filenames. The dry-run maps
+to `MATERIALIZATION_PREPARED`, precheck maps to `REQUEST_PRECHECKED`, execution
+request maps to `REQUEST_CREATED`, and execution preflight maps to
+`REQUEST_APPROVED`.
+
 Concrete artifact schemas:
 
 - `custom_corpus_manifest.v1`
