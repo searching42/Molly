@@ -35,6 +35,15 @@ property training dataset controlled writer value resolution dry-run
 The preflight sits after execution request creation and before any future
 explicit confirmation gate.
 
+## Provenance Binding
+
+No execution request preflight summary is valid unless it is provably bound to
+the `REQUEST_APPROVED` state transition. The execution provenance binding layer
+links the preflight artifact hash to exactly one transition and requires the
+parent transition hash to continue the request provenance chain. A preflight
+artifact without a matching transition is an orphan artifact and must be
+rejected.
+
 ## Input Package
 
 The preflight reads only:

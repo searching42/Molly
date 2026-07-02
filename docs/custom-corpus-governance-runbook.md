@@ -103,6 +103,20 @@ to `MATERIALIZATION_PREPARED`, precheck maps to `REQUEST_PRECHECKED`, execution
 request maps to `REQUEST_CREATED`, and execution preflight maps to
 `REQUEST_APPROVED`.
 
+Execution provenance binding layer:
+
+No artifact is valid unless it is provably bound to a state transition. The
+binding invariant is:
+
+```text
+state_transition -> artifact -> hash -> provenance_chain
+```
+
+Dry-run reports, precheck summaries, execution requests, and any future dataset
+artifact must be hash-locked and state-linked. The provenance graph rejects
+orphan artifacts, duplicate artifact bindings, broken parent chains, forged
+transition ids, and artifact hashes that do not match the registered output.
+
 Concrete artifact schemas:
 
 - `custom_corpus_manifest.v1`

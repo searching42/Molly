@@ -1143,3 +1143,21 @@ state conflicts, and implicit state inference from filenames. The existing
 dry-run, precheck, execution request, and execution preflight gates are mapped
 to `MATERIALIZATION_PREPARED`, `REQUEST_PRECHECKED`, `REQUEST_CREATED`, and
 `REQUEST_APPROVED` respectively.
+
+## Execution Provenance Binding Layer
+
+The execution provenance binding layer was introduced after the state machine
+to bind state transitions to emitted artifacts. No artifact is valid unless it
+is provably bound to a state transition.
+
+The enforced invariant is:
+
+```text
+state_transition -> artifact -> hash -> provenance_chain
+```
+
+The layer adds immutable artifact registration and provenance graph validation
+for dry-run reports, precheck summaries, execution requests, and future dataset
+artifacts. It rejects orphan artifacts, forged transition ids, artifact hash
+mismatches, duplicate bindings, broken parent chains, and terminal execution
+states without required bound artifacts.

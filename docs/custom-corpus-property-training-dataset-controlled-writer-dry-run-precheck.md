@@ -36,6 +36,14 @@ request design documents the boundary, and the next implemented gate is
 property training dataset controlled writer execution request, not writer
 execution.
 
+## Provenance Binding
+
+No precheck summary is valid unless it is provably bound to the
+`REQUEST_PRECHECKED` state transition. The execution provenance binding layer
+requires the precheck artifact hash to be linked to the transition id and parent
+transition hash. File presence, basename matches, and schema validity are not
+sufficient without this state-linked artifact binding.
+
 ## Input Package
 
 The precheck reads:
