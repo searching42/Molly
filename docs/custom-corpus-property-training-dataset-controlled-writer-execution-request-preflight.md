@@ -44,6 +44,24 @@ parent transition hash to continue the request provenance chain. A preflight
 artifact without a matching transition is an orphan artifact and must be
 rejected.
 
+## Real Literature Read-Only Acceptance Branch
+
+The real literature branch is outside request preflight:
+
+```text
+real literature local manifest
+-> local parsed-output presence check
+-> redacted paper-level aggregate scan
+-> candidate table aggregate detection
+-> property field coverage aggregate
+-> failure taxonomy aggregate
+-> real literature read-only acceptance evidence
+-> future real candidate quarantine dry-run
+```
+
+It does not run this preflight, explicitly confirm execution, execute the
+controlled writer, or create training artifacts.
+
 ## Input Package
 
 The preflight reads only:

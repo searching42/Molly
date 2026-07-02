@@ -682,6 +682,27 @@ orphan artifacts, duplicated transition bindings, hash mismatches, and broken
 parent chains. A terminal execution state is not audit-complete unless the
 terminal transition has a bound artifact.
 
+## Real Literature Read-Only Acceptance Branch
+
+```text
+real literature local manifest
+-> local parsed-output presence check
+-> redacted paper-level aggregate scan
+-> candidate table aggregate detection
+-> property field coverage aggregate
+-> failure taxonomy aggregate
+-> real literature read-only acceptance evidence
+-> future real candidate quarantine dry-run
+```
+
+The branch introduces
+`custom_corpus_real_literature_read_only_acceptance_manifest.v1`,
+`custom_corpus_real_literature_read_only_acceptance_report.v1`, and
+`custom_corpus_real_literature_read_only_acceptance_summary.v1`. These schemas
+are read-only acceptance evidence schemas only. They are not training dataset,
+CSV, JSONL, Parquet, LMDB, candidate-row, or controlled-writer execution
+schemas.
+
 ## Boundaries
 
 - This schema does not implement materialization.

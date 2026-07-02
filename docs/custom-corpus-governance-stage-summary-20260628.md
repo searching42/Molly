@@ -1161,3 +1161,30 @@ for dry-run reports, precheck summaries, execution requests, and future dataset
 artifacts. It rejects orphan artifacts, forged transition ids, artifact hash
 mismatches, duplicate bindings, broken parent chains, and terminal execution
 states without required bound artifacts.
+
+## Real Literature Read-Only Acceptance
+
+The real literature read-only acceptance harness was added as a local-only
+acceptance branch after the governance, state-machine, and provenance binding
+layers. It moves validation beyond synthetic fixtures by reading a safe local
+manifest and aggregate parsed-output summaries for a tiny operator-selected
+OLED or organic optoelectronic paper set.
+
+```text
+real literature local manifest
+-> local parsed-output presence check
+-> redacted paper-level aggregate scan
+-> candidate table aggregate detection
+-> property field coverage aggregate
+-> failure taxonomy aggregate
+-> real literature read-only acceptance evidence
+-> future real candidate quarantine dry-run
+```
+
+It emits only redacted aggregate report, summary, and Markdown evidence. It does
+not commit PDFs, commit raw MinerU outputs, emit raw text, emit raw tables,
+emit raw values, execute a controlled writer, create execution requests, run
+execution request preflight, explicitly confirm execution, materialize training
+datasets, create CSV/JSONL/Parquet/LMDB artifacts, run MinerU, call LLMs or
+agents, parse PDFs, generate conformers or DPA3 structures, run Phase 1, change
+`DatasetConfirmation`, or run model training/evaluation.

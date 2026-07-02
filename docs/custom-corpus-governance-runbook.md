@@ -117,6 +117,26 @@ artifact must be hash-locked and state-linked. The provenance graph rejects
 orphan artifacts, duplicate artifact bindings, broken parent chains, forged
 transition ids, and artifact hashes that do not match the registered output.
 
+Real literature read-only acceptance branch:
+
+```text
+real literature local manifest
+-> local parsed-output presence check
+-> redacted paper-level aggregate scan
+-> candidate table aggregate detection
+-> property field coverage aggregate
+-> failure taxonomy aggregate
+-> real literature read-only acceptance evidence
+-> future real candidate quarantine dry-run
+```
+
+This branch is local-only and read-only. It may inspect safe manifests and
+redacted parsed-output summaries, but it does not execute a writer, create an
+execution request, run execution request preflight, materialize datasets,
+serialize rows, commit PDFs, commit raw MinerU outputs, emit raw text, emit raw
+tables, emit raw values, call MinerU, call LLMs or agents, parse PDFs, or
+create CSV/JSONL/Parquet/LMDB artifacts.
+
 Concrete artifact schemas:
 
 - `custom_corpus_manifest.v1`
