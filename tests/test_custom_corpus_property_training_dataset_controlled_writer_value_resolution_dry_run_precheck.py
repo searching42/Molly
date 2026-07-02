@@ -11,6 +11,7 @@ from ai4s_agent.custom_corpus_materialization import sha256_file
 from ai4s_agent.custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight import (
     preflight_property_training_dataset_controlled_writer_execution_plan,
 )
+import ai4s_agent.custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run as value_resolution_dry_run_module
 from ai4s_agent.custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run import (
     run_property_training_dataset_controlled_writer_value_resolution_dry_run,
 )
@@ -522,13 +523,20 @@ def _write_precheck_package(tmp_path: Path, *, needs_review: bool = False) -> di
     )
     paths["training_dataset_controlled_writer_execution_plan_preflight"] = preflight_summary_path
     paths["value_resolution_output_dir"] = fixture_root / "value-resolution-output"
-    dry_run_summary = run_property_training_dataset_controlled_writer_value_resolution_dry_run(
-        **_dry_run_kwargs(
-            paths,
-            allow_controlled_writer_execution_plan_preflight_needs_review=needs_review,
+    original_now_iso = value_resolution_dry_run_module.now_iso
+    value_resolution_dry_run_module.now_iso = lambda: _FIXTURE_SAFE_CREATED_AT
+    try:
+        dry_run_summary = run_property_training_dataset_controlled_writer_value_resolution_dry_run(
+            **_dry_run_kwargs(
+                paths,
+                allow_controlled_writer_execution_plan_preflight_needs_review=needs_review,
+            )
         )
+    finally:
+        value_resolution_dry_run_module.now_iso = original_now_iso
+    assert dry_run_summary["dry_run_status"] in {"passed", "needs_review"}, _dry_run_setup_status_details(
+        dry_run_summary
     )
-    assert dry_run_summary["dry_run_status"] in {"passed", "needs_review"}, dry_run_summary
     run_dir = paths["value_resolution_output_dir"] / "property-value-resolution-dry-run-001"
     paths["report"] = run_dir / "property_training_dataset_controlled_writer_value_resolution_dry_run_report.json"
     paths["summary"] = run_dir / "property_training_dataset_controlled_writer_value_resolution_dry_run_summary.json"
@@ -590,6 +598,15 @@ def _setup_status_details(summary: dict[str, object]) -> dict[str, object]:
         "preflight_status": summary.get("preflight_status"),
         "preflight_errors": summary.get("preflight_errors", []),
         "preflight_warnings": summary.get("preflight_warnings", summary.get("warnings", [])),
+    }
+
+
+def _dry_run_setup_status_details(summary: dict[str, object]) -> dict[str, object]:
+    return {
+        "dry_run_status": summary.get("dry_run_status"),
+        "dry_run_errors": summary.get("dry_run_errors", []),
+        "dry_run_warnings": summary.get("dry_run_warnings", summary.get("warnings", [])),
+        "redaction_status": summary.get("redaction_status"),
     }
 
 
