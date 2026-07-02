@@ -35,6 +35,18 @@ The request sits after the controlled writer dry-run precheck and before the
 controlled writer execution request preflight or any future explicit
 confirmation gate.
 
+## State Transition Mapping
+
+All operations are now state transitions, not standalone validations. The
+system no longer validates artifacts directly. It validates only state
+transitions and provenance integrity.
+
+The controlled writer execution request maps to `REQUEST_CREATED`. It cannot be
+inferred from a request filename, a passed dry-run precheck, CI success, or
+merge status. The request preflight maps to `REQUEST_PRECHECKED`, and any later
+approval or execution state must be reached by explicit adjacent transitions
+with provenance-hash continuity.
+
 ## Input Summary
 
 The only input is a controlled writer dry-run precheck summary with schema

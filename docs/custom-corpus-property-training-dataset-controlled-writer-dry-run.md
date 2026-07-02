@@ -35,6 +35,18 @@ The dry-run is downstream of the controlled writer dry-run design. It is
 upstream of the controlled writer dry-run precheck and does not authorize writer
 execution.
 
+## State Transition Mapping
+
+All operations are now state transitions, not standalone validations. The
+system no longer validates artifacts directly. It validates only state
+transitions and provenance integrity.
+
+This dry-run maps to `MATERIALIZATION_PREPARED` in the controlled writer
+execution state machine. Passing dry-run output does not imply
+`REQUEST_CREATED`, `REQUEST_PRECHECKED`, `REQUEST_APPROVED`,
+`EXECUTION_AUTHORIZED`, or `EXECUTED`; those states require explicit adjacent
+transitions with parent-hash continuity and redaction-safe evidence.
+
 ## Input Package
 
 The dry-run reads one safe JSON input package with schema:
