@@ -1,0 +1,339 @@
+# OLED AI4Science Pipeline — To Do List
+
+本列表基于当前 MinerU + 文献挖掘 + OLED 数据建模系统的结构性问题整理，目标是将系统从“工程型数据管道”升级为“具备科学有效性的可学习系统”。
+
+---
+
+# 0. 总体目标（必须明确）
+
+## Goal
+
+构建一个满足以下条件的 OLED materials informatics system：
+
+- 数据结构满足物理因果分层
+- 不同性质类型可分离建模
+- 消除 device-level confounding
+- 支持 SMILES / system / device 多粒度学习
+- 可进行科学有效性验证（not only ML metrics）
+
+---
+
+# 1. 数据结构重构（最优先）
+
+## 1.1 三层数据模型设计（必须重做 schema）
+
+### [ ] Task: 定义 Molecular Layer
+- SMILES canonicalization（RDKit）
+- InChIKey mapping
+- intrinsic properties only
+
+Fields:
+- HOMO / LUMO
+- S1 / T1
+- ΔEST
+- dipole moment
+- oscillator strength
+- reorganization energy
+
+---
+
+### [ ] Task: 定义 Interaction Layer（新增核心层）
+
+用于描述“分子 + 环境”的耦合：
+
+Fields:
+- emitter_smiles
+- host_smiles
+- doping_ratio
+- film_type (neat / doped / blend)
+- matrix_type
+- aggregation state (if available)
+
+---
+
+### [ ] Task: 定义 Device Layer
+
+Fields:
+- device_stack (ITO / HTL / EML / ETL / cathode)
+- ETL material
+- HTL material
+- layer thickness (if available)
+- outcoupling structure (CRITICAL)
+- fabrication method
+
+---
+
+### [ ] Task: 定义 Measurement Layer
+
+Fields:
+- EQE / CE / PE
+- luminance (cd/m²)
+- current density
+- roll-off curve
+- max EQE
+- EQE@100 cd/m²
+- measurement temperature
+
+---
+
+# 2. MinerU 抽取层改造
+
+## 2.1 Entity Linking（关键问题）
+
+### [ ] Task: 建立 alias resolution system
+- DACT-II / DACT-II-9 / 1a / compound X mapping
+- unify compound identity
+- use InChIKey as canonical anchor
+
+---
+
+### [ ] Task: 引入 confidence scoring
+- structure extracted from figure > table > text
+- SMILES from PubChem must be cross-validated
+- ambiguous entity flagged
+
+---
+
+### [ ] Task: 脚注解析模块
+- handle *, †, ‡ device variants
+- map to device-level condition modifiers
+
+---
+
+# 3. 数据清洗与标准化
+
+## 3.1 unit normalization
+
+### [ ] Task:
+- unify EQE (%)
+- unify luminance (cd/m²)
+- unify doping ratio (wt%, mol%)
+
+---
+
+## 3.2 condition-aware deduplication
+
+### [ ] Task:
+Do NOT deduplicate across:
+- different outcoupling conditions
+- different ETL/HTL
+- different luminance points
+
+Only deduplicate when:
+- identical molecule + identical device + identical measurement
+
+---
+
+## 3.3 outlier handling
+
+### [ ] Task:
+- detect physically impossible values
+- flag suspicious EQE > theoretical expectation threshold
+- detect duplicated reporting across tables
+
+---
+
+# 4. 数据集分层（非常关键）
+
+## 4.1 raw dataset
+
+### [ ] Task:
+- keep all extracted records
+- no filtering
+- full provenance tracking
+
+---
+
+## 4.2 curated intrinsic dataset
+
+### [ ] Task:
+- only molecular properties
+- exclude device influence
+
+---
+
+## 4.3 curated device baseline dataset
+
+### [ ] Task:
+- remove outcoupling-enhanced records
+- normalize ETL/HTL variations
+- standardized luminance conditions
+
+---
+
+## 4.4 best-reported dataset
+
+### [ ] Task:
+- max performance per system
+- explicitly label as "biased dataset"
+
+---
+
+# 5. Confounder handling（核心研究点）
+
+## 5.1 identify major confounders
+
+### [ ] Task:
+- host material
+- doping concentration
+- outcoupling structures
+- device stack variation
+
+---
+
+## 5.2 explicit tagging
+
+### [ ] Task:
+Add fields:
+- is_outcoupling_modified
+- is_device_optimized
+- is_best_reported
+
+---
+
+## 5.3 causal disentanglement (research contribution)
+
+### [ ] Task:
+Separate:
+- intrinsic molecular efficiency
+- device engineering gain
+- optical extraction gain
+
+---
+
+# 6. Dataset validity checks（必须新增）
+
+## 6.1 learnability test
+
+### [ ] Task:
+- shuffle SMILES baseline test
+- random host assignment test
+- remove device context ablation
+
+---
+
+## 6.2 leakage test
+
+### [ ] Task:
+- split by paper
+- split by molecule
+- split by device family
+
+---
+
+## 6.3 consistency check
+
+### [ ] Task:
+same molecule + same condition must not have conflicting labels
+
+---
+
+# 7. Model baseline system（缺失项）
+
+## 7.1 minimal baselines
+
+### [ ] Task:
+- SMILES → MLP
+- SMILES → GNN (D-MPNN)
+- tabular FT-Transformer
+
+---
+
+## 7.2 multimodal baseline
+
+### [ ] Task:
+- SMILES + host + device → MLP fusion
+- cross-attention model (optional)
+
+---
+
+## 7.3 ablation study（必须）
+
+### [ ] Task:
+- remove host
+- remove device stack
+- remove outcoupling flag
+- measure performance drop
+
+---
+
+# 8. Gold dataset construction（关键）
+
+## 8.1 manual verified set
+
+### [ ] Task:
+- 200–500 OLED devices
+- fully validated from paper + SI + figures
+
+---
+
+## 8.2 use cases
+
+- validation benchmark
+- extraction accuracy
+- model sanity check
+
+---
+
+# 9. Scientific evaluation layer（缺失）
+
+## 9.1 beyond ML metrics
+
+### [ ] Task:
+Add evaluation beyond MAE/R²:
+
+- physics consistency
+- monotonicity checks
+- confounder sensitivity
+- extrapolation tests
+
+---
+
+# 10. Pipeline architecture upgrade
+
+## 10.1 system redesign
+
+### [ ] Task:
+Reframe system as:
+
+Literature → Extraction → Schema graph → Causal dataset → Models → Validation loop
+
+---
+
+## 10.2 add feedback loop (optional future)
+
+### [ ] Task:
+- model suggests missing data
+- active learning loop
+- literature re-mining based on uncertainty
+
+---
+
+# 11. Documentation (important for paper)
+
+## 11.1 dataset paper readiness
+
+### [ ] Task:
+- define schema formally
+- provide ontology diagram
+- define all variables precisely
+
+---
+
+## 11.2 reproducibility
+
+### [ ] Task:
+- deterministic MinerU pipeline
+- versioned dataset snapshots
+- full provenance tracking
+
+---
+
+# 12. Key principle (must enforce)
+
+> Do not optimize extraction accuracy alone.
+> Optimize for learnable physical signal.
+
+---
+
+# End
