@@ -226,12 +226,28 @@ Status:
 
 # 3. 数据清洗与标准化
 
-## 3.1 unit normalization
+## 3.1 Layer-scoped unit normalization
 
-### [ ] Task:
-- unify EQE (%)
-- unify luminance (cd/m²)
-- unify doping ratio (wt%, mol%)
+### [x] Task:
+- normalize HOMO / LUMO / S1 / T1 / ΔEST to eV
+- normalize EQE to %
+- normalize PLQY between fraction / %
+- normalize luminance to cd/m²
+- normalize current density to mA/cm²
+- normalize doping ratio across wt% / mol% / %
+- normalize measurement temperature between K / °C
+- expose normalized value / unit / condition fields on schema reports
+- use normalized target and condition values in OLED feature materialization
+
+Scope:
+- this PR adds layer-scoped unit normalization, not full physical range validation for measurement conditions
+- property value range checks continue to use ontology constraints after unit normalization
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_units.py`
+- integrated in `src/ai4s_agent/domains/oled_layered_schema.py`
+- consumed by `src/ai4s_agent/domains/oled_feature_materialization.py`
+- tested by `tests/test_oled_units.py` and `tests/test_oled_feature_materialization.py`
 
 ---
 
@@ -586,7 +602,7 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 
 1. taxonomy 当前能处理 max EQE (%)、ΔE ST 这类常见表头，但后续 MinerU 表格接入前，建议补一批真实 OLED 表头 fixture，例如 EQEmax, EQE @ 100 cd m-2, Von, λEL, CIE(x,y), FWHM, CE, PE，避免进入抽取流程后再发现 alias 覆盖不足。
 2. gold validation harness 已将 missing_provenance / missing_confidence 升级为 gold set hard gate；后续进入 curated dataset writer 时，还应按 dataset view 类型把这些 warning 升级为 curated training set hard gate。
-3. OledMeasurementCondition 当前已有 luminance/current density/voltage/temperature/atmosphere 等字段，但还没有做物理范围校验或单位标准化。后续 PR 做 oled_units.py 时，可以把这些条件字段和 property units 一起纳入 layer-scoped unit normalization。
+3. OledMeasurementCondition 的 layer-scoped unit normalization 已完成；后续仍建议为 luminance/current density/voltage/temperature 等 condition 字段补物理范围 soft/hard gate，避免异常操作点进入 curated dataset。
 4. 目前 _MEASUREMENT_PERFORMANCE_PROPERTIES 只包含 eqe_percent。后续 taxonomy 扩展 CE、PE、lifetime、turn-on voltage、roll-off 等器件性能指标时，应同步把需要 confounder tagging 的 property id 纳入这个集合，或者改成由 ontology metadata 标记 requires_confounder_context=true。
 
 ---

@@ -126,9 +126,9 @@ def materialize_oled_baseline_feature_table(
                     record_id=gold_record.record_id,
                     feature_view=feature_view,
                     target_property_id=clean_target,
-                    target_value=observation.value,
-                    target_unit=observation.unit,
-                    condition_hash=observation.condition_hash,
+                    target_value=observation.normalized_value,
+                    target_unit=observation.normalized_unit,
+                    condition_hash=observation.normalized_condition_hash,
                     confidence_score=observation.confidence.score if observation.confidence else None,
                     evidence_refs=_evidence_refs(gold_record, observation),
                     features=_features_for_view(gold_record, feature_view, observation),
@@ -212,7 +212,7 @@ def _device_features(gold_record: OledGoldDatasetRecord) -> dict[str, Any]:
 
 
 def _condition_features(observation: OledLayeredCanonicalObservation) -> dict[str, Any]:
-    condition = observation.condition
+    condition = observation.normalized_condition or observation.condition
     return {
         "condition.atmosphere": condition.atmosphere if condition else None,
         "condition.condition_hash": condition.condition_hash if condition else None,

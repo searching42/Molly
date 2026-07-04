@@ -76,6 +76,12 @@ from ai4s_agent.domains.oled_split_leakage import (
     build_oled_leakage_guard_split,
     validate_oled_split_leakage,
 )
+from ai4s_agent.domains.oled_units import (
+    OledUnitNormalizationResult,
+    OledUnitNormalizationStatus,
+    normalize_oled_condition_field,
+    normalize_oled_property_unit,
+)
 
 __all__ = [
     "DEFAULT_OLED_PROPERTY_ONTOLOGY",
@@ -123,6 +129,8 @@ __all__ = [
     "OledSplitAssignment",
     "OledSplitLeakageFinding",
     "OledSplitLeakageReport",
+    "OledUnitNormalizationResult",
+    "OledUnitNormalizationStatus",
     "RepresentationClaim",
     "RepresentationContract",
     "RepresentationContractFinding",
@@ -132,6 +140,8 @@ __all__ = [
     "initialize_oled_ablation_report",
     "materialize_oled_baseline_feature_table",
     "materialize_oled_baseline_feature_tables",
+    "normalize_oled_condition_field",
+    "normalize_oled_property_unit",
     "run_oled_baseline_backend",
     "validate_oled_gold_dataset",
     "validate_oled_split_leakage",

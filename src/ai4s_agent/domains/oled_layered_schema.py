@@ -21,6 +21,12 @@ from ai4s_agent.domains.oled_property_taxonomy import (
     DEFAULT_OLED_PROPERTY_TAXONOMY,
     OledPropertyTaxonomy,
 )
+from ai4s_agent.domains.oled_units import (
+    OledUnitNormalizationResult,
+    OledUnitNormalizationStatus,
+    normalize_oled_condition_field,
+    normalize_oled_property_unit,
+)
 
 
 class OledEvidenceType(str, Enum):
@@ -180,8 +186,13 @@ class OledLayeredCanonicalObservation(BaseModel):
     unit_hint: str
     value: float | int | str | None = None
     unit: str | None = None
+    normalized_value: float | int | str | None = None
+    normalized_unit: str | None = None
+    unit_normalization_status: OledUnitNormalizationStatus = OledUnitNormalizationStatus.UNCHANGED
     condition: OledMeasurementCondition | None = None
     condition_hash: str | None = None
+    normalized_condition: OledMeasurementCondition | None = None
+    normalized_condition_hash: str | None = None
     evidence_sources: list[OledEvidenceSource] = Field(default_factory=list)
     confidence: OledConfidenceAssessment | None = None
 
@@ -271,6 +282,14 @@ class OledLayeredRecord(BaseModel):
                 )
                 continue
 
+            unit_normalization = normalize_oled_property_unit(
+                taxonomy_match.canonical_property_id,
+                property_observation.value,
+                property_observation.unit,
+            )
+            normalized_condition, condition_unit_normalizations = _normalized_measurement_condition(
+                property_observation.condition
+            )
             observations.append(
                 OledLayeredCanonicalObservation(
                     layer=layer,
@@ -280,14 +299,29 @@ class OledLayeredRecord(BaseModel):
                     unit_hint=taxonomy_match.unit_hint,
                     value=property_observation.value,
                     unit=property_observation.unit,
+                    normalized_value=unit_normalization.normalized_value,
+                    normalized_unit=unit_normalization.normalized_unit,
+                    unit_normalization_status=unit_normalization.status,
                     condition=property_observation.condition,
                     condition_hash=(
                         property_observation.condition.condition_hash
                         if property_observation.condition is not None
                         else None
                     ),
+                    normalized_condition=normalized_condition,
+                    normalized_condition_hash=(
+                        normalized_condition.condition_hash if normalized_condition is not None else None
+                    ),
                     evidence_sources=property_observation.evidence_sources,
                     confidence=property_observation.confidence,
+                )
+            )
+            findings.extend(
+                _unit_normalization_findings(
+                    layer=layer,
+                    property_id=taxonomy_match.canonical_property_id,
+                    property_label=property_observation.property_label,
+                    normalizations=[unit_normalization, *condition_unit_normalizations],
                 )
             )
             findings.extend(
@@ -320,10 +354,11 @@ class OledLayeredRecord(BaseModel):
                 property_observation.property_label,
             )
             findings.extend(layer_findings)
-            if _is_numeric_value(property_observation.value):
+            value_for_validation = unit_normalization.normalized_value
+            if _is_numeric_value(value_for_validation):
                 findings.extend(
                     _schema_findings_from_ontology_report(
-                        ontology.validate_value(taxonomy_match.canonical_property_id, property_observation.value),
+                        ontology.validate_value(taxonomy_match.canonical_property_id, value_for_validation),
                         layer,
                         property_observation.property_label,
                     )
@@ -377,6 +412,90 @@ class OledLayeredRecord(BaseModel):
         if self.measurement is not None:
             observations.extend((OledCausalLayer.MEASUREMENT, item) for item in self.measurement.measurements)
         return observations
+
+
+def _normalized_measurement_condition(
+    condition: OledMeasurementCondition | None,
+) -> tuple[OledMeasurementCondition | None, list[OledUnitNormalizationResult]]:
+    if condition is None:
+        return None, []
+
+    updates: dict[str, Any] = {}
+    normalized_units: dict[str, str] = {}
+    results: list[OledUnitNormalizationResult] = []
+    for field_name in _CONDITION_UNIT_FIELDS:
+        value = getattr(condition, field_name)
+        if value is None:
+            continue
+        result = normalize_oled_condition_field(
+            field_name,
+            value,
+            _condition_unit_for(condition, field_name),
+        )
+        results.append(result)
+        updates[field_name] = result.normalized_value
+        if result.normalized_unit:
+            normalized_units[field_name] = result.normalized_unit
+
+    if not updates:
+        return condition, results
+
+    metadata = dict(condition.metadata)
+    existing_normalized_units = metadata.get("normalized_units")
+    merged_normalized_units = (
+        dict(existing_normalized_units)
+        if isinstance(existing_normalized_units, dict)
+        else {}
+    )
+    merged_normalized_units.update(normalized_units)
+    if merged_normalized_units:
+        metadata["normalized_units"] = merged_normalized_units
+    updates["metadata"] = metadata
+    return condition.model_copy(update=updates), results
+
+
+def _condition_unit_for(condition: OledMeasurementCondition, field_name: str) -> str | None:
+    metadata = condition.metadata
+    nested_units = metadata.get("units")
+    if isinstance(nested_units, dict):
+        for key in (field_name, *_CONDITION_UNIT_METADATA_KEYS[field_name]):
+            unit = nested_units.get(key)
+            if unit is not None:
+                return str(unit)
+    for key in _CONDITION_UNIT_METADATA_KEYS[field_name]:
+        unit = metadata.get(key)
+        if unit is not None:
+            return str(unit)
+    return _CONDITION_DEFAULT_UNITS[field_name]
+
+
+def _unit_normalization_findings(
+    *,
+    layer: OledCausalLayer,
+    property_id: str,
+    property_label: str,
+    normalizations: list[OledUnitNormalizationResult],
+) -> list[OledLayeredSchemaFinding]:
+    findings: list[OledLayeredSchemaFinding] = []
+    for normalization in normalizations:
+        code = _UNIT_NORMALIZATION_WARNING_CODES.get(normalization.status)
+        if code is None:
+            continue
+        field_context = f" condition field `{normalization.field_name}`" if normalization.field_name else ""
+        findings.append(
+            OledLayeredSchemaFinding(
+                code=code,
+                severity="warning",
+                message=(
+                    f"property `{property_id}`{field_context} could not be fully unit-normalized: "
+                    f"{normalization.message or normalization.status.value}"
+                ),
+                layer=layer,
+                property_id=property_id,
+                property_label=property_label,
+            )
+        )
+    return findings
 
 
 def _schema_findings_from_ontology_report(
@@ -572,6 +691,22 @@ def _dedup_schema_findings(findings: list[OledLayeredSchemaFinding]) -> list[Ole
 
 
 _MEASUREMENT_PERFORMANCE_PROPERTIES = {"eqe_percent"}
+_CONDITION_UNIT_FIELDS = ("luminance_cd_m2", "current_density_ma_cm2", "temperature_k")
+_CONDITION_DEFAULT_UNITS = {
+    "luminance_cd_m2": "cd/m^2",
+    "current_density_ma_cm2": "mA/cm^2",
+    "temperature_k": "K",
+}
+_CONDITION_UNIT_METADATA_KEYS = {
+    "luminance_cd_m2": ("luminance_unit", "luminance_cd_m2_unit"),
+    "current_density_ma_cm2": ("current_density_unit", "current_density_ma_cm2_unit"),
+    "temperature_k": ("temperature_unit", "temperature_k_unit"),
+}
+_UNIT_NORMALIZATION_WARNING_CODES = {
+    OledUnitNormalizationStatus.MISSING_UNIT: "missing_unit",
+    OledUnitNormalizationStatus.NOT_NUMERIC: "unit_value_not_numeric",
+    OledUnitNormalizationStatus.UNKNOWN_UNIT: "unknown_unit",
+}
 
 
 __all__ = [
