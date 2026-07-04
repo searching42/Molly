@@ -360,6 +360,26 @@ same molecule + same condition must not have conflicting labels
 
 # 7. Model baseline system（缺失项）
 
+## 7.0 Baseline orchestration MVP（轻依赖）
+
+### [x] Task:
+- read gold-valid OLED records
+- generate backend-deferred baseline experiment spec
+- define molecule-only / molecule+interaction / full-context feature views
+- define ablation arms for host removal / device-stack removal / outcoupling-flag removal
+- initialize ablation report schema without attaching a model backend
+
+Scope:
+- this is an experiment contract and report schema, not model training
+- no GNN / D-MPNN / FT-Transformer / heavy backend dependency is introduced
+- real model backend execution remains a later PR
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_baseline_loop.py`
+- tested by `tests/test_oled_baseline_loop.py`
+
+---
+
 ## 7.1 minimal baselines
 
 ### [ ] Task:

@@ -1,6 +1,16 @@
 """Domain-specific catalogs and selection helpers."""
 
 from ai4s_agent.domains.model_registry import DomainModelRegistry
+from ai4s_agent.domains.oled_baseline_loop import (
+    OledAblationReport,
+    OledAblationReportEntry,
+    OledBaselineAblationKind,
+    OledBaselineExperimentArm,
+    OledBaselineExperimentSpec,
+    OledBaselineFeatureView,
+    build_oled_baseline_experiment_spec,
+    initialize_oled_ablation_report,
+)
 from ai4s_agent.domains.oled_contracts import (
     DEFAULT_OLED_REPRESENTATION_CONTRACT,
     OledCausalLayer,
@@ -52,6 +62,12 @@ __all__ = [
     "DEFAULT_OLED_PROPERTY_TAXONOMY",
     "DEFAULT_OLED_REPRESENTATION_CONTRACT",
     "DomainModelRegistry",
+    "OledAblationReport",
+    "OledAblationReportEntry",
+    "OledBaselineAblationKind",
+    "OledBaselineExperimentArm",
+    "OledBaselineExperimentSpec",
+    "OledBaselineFeatureView",
     "OledCausalLayer",
     "OledConfidenceAssessment",
     "OledConfounderFlags",
@@ -83,5 +99,7 @@ __all__ = [
     "RepresentationContract",
     "RepresentationContractFinding",
     "RepresentationContractReport",
+    "build_oled_baseline_experiment_spec",
+    "initialize_oled_ablation_report",
     "validate_oled_gold_dataset",
 ]
