@@ -94,6 +94,36 @@ class OledMeasurementCondition(BaseModel):
         return hashlib.sha256(encoded).hexdigest()
 
 
+class OledConfounderType(str, Enum):
+    HOST_MATERIAL = "host_material"
+    DOPING_CONCENTRATION = "doping_concentration"
+    OUTCOUPLING_STRUCTURE = "outcoupling_structure"
+    DEVICE_STACK_VARIATION = "device_stack_variation"
+    DEVICE_OPTIMIZATION = "device_optimization"
+    BEST_REPORTED = "best_reported"
+
+
+class OledConfounderTag(BaseModel):
+    confounder_type: OledConfounderType
+    affected_layers: set[OledCausalLayer]
+    source_field: str | None = None
+    rationale: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("affected_layers")
+    @classmethod
+    def validate_affected_layers(cls, value: set[OledCausalLayer]) -> set[OledCausalLayer]:
+        if not value:
+            raise ValueError("affected_layers is required")
+        return value
+
+
+class OledConfounderFlags(BaseModel):
+    is_outcoupling_modified: bool = False
+    is_device_optimized: bool = False
+    is_best_reported: bool = False
+
+
 class OledPropertyObservation(BaseModel):
     property_label: str
     value: float | int | str | None = None
@@ -168,6 +198,8 @@ class OledLayeredSchemaFinding(BaseModel):
 class OledLayeredSchemaReport(BaseModel):
     observations: list[OledLayeredCanonicalObservation] = Field(default_factory=list)
     findings: list[OledLayeredSchemaFinding] = Field(default_factory=list)
+    confounder_tags: list[OledConfounderTag] = Field(default_factory=list)
+    confounder_flags: OledConfounderFlags = Field(default_factory=OledConfounderFlags)
 
     @property
     def is_valid(self) -> bool:
@@ -201,12 +233,18 @@ class OledLayeredSchemaReport(BaseModel):
     def finding_codes_for_property(self, property_id: str) -> list[str]:
         return [finding.code for finding in self.findings if finding.property_id == property_id]
 
+    @property
+    def confounder_types(self) -> list[OledConfounderType]:
+        return sorted({tag.confounder_type for tag in self.confounder_tags}, key=lambda item: item.value)
+
 
 class OledLayeredRecord(BaseModel):
     molecule: OledMolecularLayer | None = None
     interaction: OledInteractionLayer | None = None
     device: OledDeviceLayer | None = None
     measurement: OledMeasurementLayer | None = None
+    confounder_tags: list[OledConfounderTag] = Field(default_factory=list)
+    confounder_flags: OledConfounderFlags = Field(default_factory=OledConfounderFlags)
 
     def validate_schema(
         self,
@@ -216,6 +254,7 @@ class OledLayeredRecord(BaseModel):
         contract: RepresentationContract = DEFAULT_OLED_REPRESENTATION_CONTRACT,
     ) -> OledLayeredSchemaReport:
         present_layers = self._present_layers()
+        effective_confounder_tags = _effective_confounder_tags(self.confounder_tags, self.confounder_flags)
         observations: list[OledLayeredCanonicalObservation] = []
         findings: list[OledLayeredSchemaFinding] = []
         for layer, property_observation in self._property_observations():
@@ -249,6 +288,14 @@ class OledLayeredRecord(BaseModel):
                     ),
                     evidence_sources=property_observation.evidence_sources,
                     confidence=property_observation.confidence,
+                )
+            )
+            findings.extend(
+                _confounder_findings(
+                    layer=layer,
+                    property_id=taxonomy_match.canonical_property_id,
+                    property_label=property_observation.property_label,
+                    confounder_tags=effective_confounder_tags,
                 )
             )
             findings.extend(
@@ -300,7 +347,12 @@ class OledLayeredRecord(BaseModel):
                         property_label=property_observation.property_label,
                     )
                 )
-        return OledLayeredSchemaReport(observations=observations, findings=_dedup_schema_findings(findings))
+        return OledLayeredSchemaReport(
+            observations=observations,
+            findings=_dedup_schema_findings(findings),
+            confounder_tags=effective_confounder_tags,
+            confounder_flags=self.confounder_flags,
+        )
 
     def _present_layers(self) -> set[OledCausalLayer]:
         layers: set[OledCausalLayer] = set()
@@ -341,6 +393,29 @@ def _schema_findings_from_ontology_report(
             property_label=property_label,
         )
         for finding in report.findings
+    ]
+
+
+def _confounder_findings(
+    *,
+    layer: OledCausalLayer,
+    property_id: str,
+    property_label: str,
+    confounder_tags: list[OledConfounderTag],
+) -> list[OledLayeredSchemaFinding]:
+    if layer != OledCausalLayer.MEASUREMENT or property_id not in _MEASUREMENT_PERFORMANCE_PROPERTIES:
+        return []
+    if confounder_tags:
+        return []
+    return [
+        OledLayeredSchemaFinding(
+            code="missing_confounder_tags",
+            severity="warning",
+            message=f"measurement property `{property_id}` has no explicit confounder tags",
+            layer=layer,
+            property_id=property_id,
+            property_label=property_label,
+        )
     ]
 
 
@@ -411,6 +486,57 @@ def _provenance_confidence_findings(
     return findings
 
 
+def _effective_confounder_tags(
+    explicit_tags: list[OledConfounderTag],
+    flags: OledConfounderFlags,
+) -> list[OledConfounderTag]:
+    tags = list(explicit_tags)
+    if flags.is_outcoupling_modified:
+        tags.append(
+            OledConfounderTag(
+                confounder_type=OledConfounderType.OUTCOUPLING_STRUCTURE,
+                affected_layers={OledCausalLayer.DEVICE, OledCausalLayer.MEASUREMENT},
+                source_field="confounder_flags.is_outcoupling_modified",
+                rationale="outcoupling modification changes optical extraction independent of molecular emission",
+            )
+        )
+    if flags.is_device_optimized:
+        tags.append(
+            OledConfounderTag(
+                confounder_type=OledConfounderType.DEVICE_OPTIMIZATION,
+                affected_layers={OledCausalLayer.DEVICE, OledCausalLayer.MEASUREMENT},
+                source_field="confounder_flags.is_device_optimized",
+                rationale="device optimization can shift reported performance independent of intrinsic material quality",
+            )
+        )
+    if flags.is_best_reported:
+        tags.append(
+            OledConfounderTag(
+                confounder_type=OledConfounderType.BEST_REPORTED,
+                affected_layers={OledCausalLayer.MEASUREMENT},
+                source_field="confounder_flags.is_best_reported",
+                rationale="best-reported values are biased summaries rather than condition-balanced observations",
+            )
+        )
+    return sorted(_dedup_confounder_tags(tags), key=lambda tag: (tag.confounder_type.value, tag.source_field or ""))
+
+
+def _dedup_confounder_tags(tags: list[OledConfounderTag]) -> list[OledConfounderTag]:
+    seen: set[tuple[str, str, str]] = set()
+    deduped: list[OledConfounderTag] = []
+    for tag in tags:
+        key = (
+            tag.confounder_type.value,
+            ",".join(sorted(layer.value for layer in tag.affected_layers)),
+            tag.source_field or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(tag)
+    return deduped
+
+
 def _dependency_layers_for(
     target_layer: OledCausalLayer,
     present_layers: set[OledCausalLayer],
@@ -445,8 +571,14 @@ def _dedup_schema_findings(findings: list[OledLayeredSchemaFinding]) -> list[Ole
     return deduped
 
 
+_MEASUREMENT_PERFORMANCE_PROPERTIES = {"eqe_percent"}
+
+
 __all__ = [
     "OledConfidenceAssessment",
+    "OledConfounderFlags",
+    "OledConfounderTag",
+    "OledConfounderType",
     "OledDeviceLayer",
     "OledEvidenceSource",
     "OledEvidenceType",
