@@ -106,6 +106,24 @@ Status:
 
 ---
 
+## 1.3 Property Taxonomy Layer（命名归一化）
+
+### [x] Task: 定义 taxonomy normalization API
+- canonical naming
+- alias resolution
+- unit hint
+- raw label cleanup for extracted property headers
+
+Scope:
+- taxonomy does not define causal layers or value constraints
+- semantic constraints remain in the Property Ontology Layer
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_property_taxonomy.py`
+- tested by `tests/test_oled_property_taxonomy.py`
+
+---
+
 # 2. MinerU 抽取层改造
 
 ## 2.1 Entity Linking（关键问题）

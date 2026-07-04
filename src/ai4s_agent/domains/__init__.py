@@ -17,9 +17,15 @@ from ai4s_agent.domains.oled_property_ontology import (
     OledPropertyOntologyReport,
     OledPropertyValueConstraint,
 )
+from ai4s_agent.domains.oled_property_taxonomy import (
+    DEFAULT_OLED_PROPERTY_TAXONOMY,
+    OledPropertyTaxonomy,
+    OledPropertyTaxonomyMatch,
+)
 
 __all__ = [
     "DEFAULT_OLED_PROPERTY_ONTOLOGY",
+    "DEFAULT_OLED_PROPERTY_TAXONOMY",
     "DEFAULT_OLED_REPRESENTATION_CONTRACT",
     "DomainModelRegistry",
     "OledCausalLayer",
@@ -27,6 +33,8 @@ __all__ = [
     "OledPropertyOntology",
     "OledPropertyOntologyFinding",
     "OledPropertyOntologyReport",
+    "OledPropertyTaxonomy",
+    "OledPropertyTaxonomyMatch",
     "OledPropertyValueConstraint",
     "RepresentationClaim",
     "RepresentationContract",
