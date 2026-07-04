@@ -19,6 +19,13 @@ from ai4s_agent.domains.oled_contracts import (
     RepresentationContractFinding,
     RepresentationContractReport,
 )
+from ai4s_agent.domains.oled_feature_materialization import (
+    OledFeatureMaterializationRow,
+    OledFeatureMaterializationTable,
+    materialize_oled_baseline_feature_table,
+    materialize_oled_baseline_feature_tables,
+    write_oled_feature_table_jsonl,
+)
 from ai4s_agent.domains.oled_gold_validation import (
     OledGoldDatasetRecord,
     OledGoldValidationFinding,
@@ -76,6 +83,8 @@ __all__ = [
     "OledDeviceLayer",
     "OledEvidenceSource",
     "OledEvidenceType",
+    "OledFeatureMaterializationRow",
+    "OledFeatureMaterializationTable",
     "OledGoldDatasetRecord",
     "OledGoldValidationFinding",
     "OledGoldValidationReport",
@@ -101,5 +110,8 @@ __all__ = [
     "RepresentationContractReport",
     "build_oled_baseline_experiment_spec",
     "initialize_oled_ablation_report",
+    "materialize_oled_baseline_feature_table",
+    "materialize_oled_baseline_feature_tables",
     "validate_oled_gold_dataset",
+    "write_oled_feature_table_jsonl",
 ]

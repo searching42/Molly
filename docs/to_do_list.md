@@ -380,6 +380,25 @@ Status:
 
 ---
 
+## 7.0.1 Baseline feature materialization MVP（轻依赖）
+
+### [x] Task:
+- materialize `molecule_only`, `molecule_interaction`, and `full_context` baseline feature views
+- emit stable flat table rows for model input contracts
+- include target value / unit / condition hash / confidence / evidence refs
+- write deterministic JSONL, one record per line
+
+Scope:
+- this is dataset writer and feature materialization support, not model backend execution
+- no GNN / D-MPNN / FT-Transformer / heavy backend dependency is introduced
+- unit normalization and physical range checks remain later work
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_feature_materialization.py`
+- tested by `tests/test_oled_feature_materialization.py`
+
+---
+
 ## 7.1 minimal baselines
 
 ### [ ] Task:
