@@ -162,6 +162,25 @@ Status:
 
 ---
 
+## 1.6 Condition-aware Measurement MVP
+
+### [x] Task: 给 measurement observation 增加 condition-aware 表示
+- measurement condition vector
+- luminance / current density / voltage / temperature / atmosphere fields
+- stable condition hash for downstream dedup/view keys
+- measurement properties must bind condition context
+- dependency layer calculation now uses the provided representation contract
+
+Scope:
+- this is domain schema support, not unit normalization or curated dataset writer integration
+- condition-aware deduplication remains a later PR
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_layered_schema.py`
+- tested by `tests/test_oled_measurement_conditions.py`
+
+---
+
 # 2. MinerU 抽取层改造
 
 ## 2.1 Entity Linking（关键问题）
@@ -425,7 +444,7 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 # 13. 非阻塞待处理项
 
 1. taxonomy 当前能处理 max EQE (%)、ΔE ST 这类常见表头，但后续 MinerU 表格接入前，建议补一批真实 OLED 表头 fixture，例如 EQEmax, EQE @ 100 cd m-2, Von, λEL, CIE(x,y), FWHM, CE, PE，避免进入抽取流程后再发现 alias 覆盖不足。
-2. validate_schema() 虽然支持传入自定义 contract，但 _dependency_layers_for() 当前内部使用默认 contract 的 layer_order。目前默认路径没有问题；如果后续要支持可插拔 contract，建议在后续 PR 中把 contract 传入 dependency layer 计算函数，避免自定义 contract 时出现不一致。
+2. 目前 missing_provenance / missing_confidence 是 warning，不影响 is_valid；这是合理的。等后续进入 curated dataset writer 时，可以按 dataset view 类型把这些 warning 升级为 hard gate，例如 gold set 或 curated training set 必须要求 provenance/confidence 完整。
 
 ---
 
