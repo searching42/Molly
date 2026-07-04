@@ -9,6 +9,12 @@ from ai4s_agent.domains.oled_contracts import (
     RepresentationContractFinding,
     RepresentationContractReport,
 )
+from ai4s_agent.domains.oled_gold_validation import (
+    OledGoldDatasetRecord,
+    OledGoldValidationFinding,
+    OledGoldValidationReport,
+    validate_oled_gold_dataset,
+)
 from ai4s_agent.domains.oled_layered_schema import (
     OledConfidenceAssessment,
     OledConfounderFlags,
@@ -54,6 +60,9 @@ __all__ = [
     "OledDeviceLayer",
     "OledEvidenceSource",
     "OledEvidenceType",
+    "OledGoldDatasetRecord",
+    "OledGoldValidationFinding",
+    "OledGoldValidationReport",
     "OledInteractionLayer",
     "OledLayeredCanonicalObservation",
     "OledLayeredRecord",
@@ -74,4 +83,5 @@ __all__ = [
     "RepresentationContract",
     "RepresentationContractFinding",
     "RepresentationContractReport",
+    "validate_oled_gold_dataset",
 ]

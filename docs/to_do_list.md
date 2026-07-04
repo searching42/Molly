@@ -405,6 +405,24 @@ same molecule + same condition must not have conflicting labels
 
 ---
 
+## 8.3 Gold validation harness MVP
+
+### [x] Task:
+- define a gold dataset record wrapper around layered OLED records
+- validate gold records against the contract-bound layered schema
+- hard-gate missing provenance / confidence for gold records
+- reject duplicate gold record ids and missing top-level evidence refs
+
+Scope:
+- this is the validation harness MVP, not the 200–500 manually curated OLED device set
+- curated dataset writer integration remains a later PR
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_gold_validation.py`
+- tested by `tests/test_oled_gold_validation.py`
+
+---
+
 # 9. Scientific evaluation layer（缺失）
 
 ## 9.1 beyond ML metrics
@@ -469,8 +487,9 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 # 13. 非阻塞待处理项
 
 1. taxonomy 当前能处理 max EQE (%)、ΔE ST 这类常见表头，但后续 MinerU 表格接入前，建议补一批真实 OLED 表头 fixture，例如 EQEmax, EQE @ 100 cd m-2, Von, λEL, CIE(x,y), FWHM, CE, PE，避免进入抽取流程后再发现 alias 覆盖不足。
-2. 目前 missing_provenance / missing_confidence 是 warning，不影响 is_valid；这是合理的。等后续进入 curated dataset writer 时，可以按 dataset view 类型把这些 warning 升级为 hard gate，例如 gold set 或 curated training set 必须要求 provenance/confidence 完整。
+2. gold validation harness 已将 missing_provenance / missing_confidence 升级为 gold set hard gate；后续进入 curated dataset writer 时，还应按 dataset view 类型把这些 warning 升级为 curated training set hard gate。
 3. OledMeasurementCondition 当前已有 luminance/current density/voltage/temperature/atmosphere 等字段，但还没有做物理范围校验或单位标准化。后续 PR 做 oled_units.py 时，可以把这些条件字段和 property units 一起纳入 layer-scoped unit normalization。
+4. 目前 _MEASUREMENT_PERFORMANCE_PROPERTIES 只包含 eqe_percent。后续 taxonomy 扩展 CE、PE、lifetime、turn-on voltage、roll-off 等器件性能指标时，应同步把需要 confounder tagging 的 property id 纳入这个集合，或者改成由 ontology metadata 标记 requires_confounder_context=true。
 
 ---
 
