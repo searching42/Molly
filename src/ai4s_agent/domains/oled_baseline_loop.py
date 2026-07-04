@@ -63,6 +63,11 @@ class OledAblationReportEntry(BaseModel):
     record_count: int
     metrics: dict[str, float] = Field(default_factory=dict)
     delta_metrics: dict[str, float] = Field(default_factory=dict)
+    split_metrics: dict[str, dict[str, float]] = Field(default_factory=dict)
+    train_record_count: int = 0
+    validation_record_count: int = 0
+    test_record_count: int = 0
+    leakage_checked: bool = False
     skip_reason: str | None = "model_backend_not_attached"
     notes: list[str] = Field(default_factory=list)
 
@@ -73,6 +78,7 @@ class OledAblationReport(BaseModel):
     model_backend: str = "deferred"
     status: Literal["backend_skipped", "pending", "completed"] = "backend_skipped"
     entries: list[OledAblationReportEntry] = Field(default_factory=list)
+    leakage_checked: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -23,6 +23,11 @@ from ai4s_agent.domains.oled_layered_schema import (
     OledMolecularLayer,
     OledPropertyObservation,
 )
+from ai4s_agent.domains.oled_split_leakage import (
+    OledLeakageGroupKind,
+    OledLeakageGuardSplitPlan,
+    OledSplitAssignment,
+)
 
 
 def test_dummy_mean_backend_completes_metrics_for_all_ablation_arms() -> None:
@@ -89,6 +94,135 @@ def test_baseline_backend_runner_is_exported_from_domain_package() -> None:
     assert report.model_backend == "dummy_mean"
 
 
+def test_dummy_mean_backend_uses_train_split_mean_for_split_metrics() -> None:
+    records = [
+        _gold_record("gold-oled-split-001", 10.0),
+        _gold_record("gold-oled-split-002", 20.0),
+        _gold_record("gold-oled-split-003", 30.0),
+        _gold_record("gold-oled-split-004", 50.0),
+    ]
+    split_plan = _split_plan(
+        {
+            "gold-oled-split-001": "train",
+            "gold-oled-split-002": "train",
+            "gold-oled-split-003": "validation",
+            "gold-oled-split-004": "test",
+        }
+    )
+
+    report = run_oled_baseline_backend(
+        records,
+        backend=OledBaselineBackendKind.DUMMY_MEAN,
+        split_plan=split_plan,
+    )
+
+    assert report.status == "completed"
+    assert report.leakage_checked is True
+    full_context = next(entry for entry in report.entries if entry.arm_id == "eqe_percent:full_context")
+    assert full_context.leakage_checked is True
+    assert full_context.train_record_count == 2
+    assert full_context.validation_record_count == 1
+    assert full_context.test_record_count == 1
+    assert full_context.split_metrics["train"]["prediction_mean"] == pytest.approx(15.0)
+    assert full_context.split_metrics["train"]["mae"] == pytest.approx(5.0)
+    assert full_context.split_metrics["validation"]["prediction_mean"] == pytest.approx(15.0)
+    assert full_context.split_metrics["validation"]["mae"] == pytest.approx(15.0)
+    assert full_context.split_metrics["test"]["prediction_mean"] == pytest.approx(15.0)
+    assert full_context.split_metrics["test"]["mae"] == pytest.approx(35.0)
+
+
+def test_split_aware_backend_rejects_leaky_split_plan() -> None:
+    records = [
+        _gold_record("gold-oled-leak-001", 10.0),
+        _gold_record("gold-oled-leak-002", 20.0),
+    ]
+    split_plan = OledLeakageGuardSplitPlan(
+        assignments=[
+            OledSplitAssignment(
+                record_id="gold-oled-leak-001",
+                split="train",
+                group_keys={OledLeakageGroupKind.MOLECULE_INCHIKEY: ["molecule.inchikey:shared"]},
+            ),
+            OledSplitAssignment(
+                record_id="gold-oled-leak-002",
+                split="test",
+                group_keys={OledLeakageGroupKind.MOLECULE_INCHIKEY: ["molecule.inchikey:shared"]},
+            ),
+        ],
+        group_kinds=[OledLeakageGroupKind.MOLECULE_INCHIKEY],
+        split_names=["train", "test"],
+    )
+
+    with pytest.raises(ValueError, match="molecule_group_leakage"):
+        run_oled_baseline_backend(records, split_plan=split_plan)
+
+
+def test_optional_ridge_like_backend_with_split_plan_skips_when_sklearn_is_unavailable(monkeypatch) -> None:
+    import ai4s_agent.domains.oled_baseline_backend as backend_module
+
+    monkeypatch.setattr(backend_module, "_load_sklearn_ridge", lambda: None)
+    records = [_gold_record("gold-oled-ridge-001", 18.0), _gold_record("gold-oled-ridge-002", 21.0)]
+    split_plan = _split_plan({"gold-oled-ridge-001": "train", "gold-oled-ridge-002": "test"})
+
+    report = run_oled_baseline_backend(
+        records,
+        backend=OledBaselineBackendKind.RIDGE_LIKE_SKLEARN,
+        split_plan=split_plan,
+    )
+
+    assert report.status == "backend_skipped"
+    assert report.leakage_checked is True
+    assert {entry.status for entry in report.entries} == {"skipped"}
+    assert {entry.leakage_checked for entry in report.entries} == {True}
+    assert {entry.skip_reason for entry in report.entries} == {"optional_dependency_unavailable:sklearn"}
+
+
+def test_optional_ridge_like_backend_trains_on_train_split_when_available(monkeypatch) -> None:
+    import ai4s_agent.domains.oled_baseline_backend as backend_module
+
+    fit_calls: list[tuple[list[list[float]], list[float]]] = []
+
+    class FakeRidge:
+        def __init__(self, alpha: float) -> None:
+            self.alpha = alpha
+            self.train_mean = 0.0
+
+        def fit(self, x_values: list[list[float]], y_values: list[float]) -> None:
+            fit_calls.append((x_values, y_values))
+            self.train_mean = sum(y_values) / len(y_values)
+
+        def predict(self, x_values: list[list[float]]) -> list[float]:
+            return [self.train_mean for _ in x_values]
+
+    monkeypatch.setattr(backend_module, "_load_sklearn_ridge", lambda: FakeRidge)
+    records = [
+        _gold_record("gold-oled-ridge-003", 10.0),
+        _gold_record("gold-oled-ridge-004", 20.0),
+        _gold_record("gold-oled-ridge-005", 40.0),
+    ]
+    split_plan = _split_plan(
+        {
+            "gold-oled-ridge-003": "train",
+            "gold-oled-ridge-004": "train",
+            "gold-oled-ridge-005": "test",
+        }
+    )
+
+    report = run_oled_baseline_backend(
+        records,
+        backend=OledBaselineBackendKind.RIDGE_LIKE_SKLEARN,
+        split_plan=split_plan,
+    )
+
+    assert report.status == "completed"
+    assert report.model_backend == "ridge_like_sklearn"
+    assert fit_calls
+    assert all(y_values == [10.0, 20.0] for _, y_values in fit_calls)
+    full_context = next(entry for entry in report.entries if entry.arm_id == "eqe_percent:full_context")
+    assert full_context.split_metrics["test"]["prediction_mean"] == pytest.approx(15.0)
+    assert full_context.split_metrics["test"]["mae"] == pytest.approx(25.0)
+
+
 def _gold_record(
     record_id: str,
     eqe_value: float,
@@ -136,4 +270,19 @@ def _gold_record(
             confounder_flags=OledConfounderFlags(is_device_optimized=True),
         ),
         evidence_refs=[f"{record_id}:table-2:row-4"],
+    )
+
+
+def _split_plan(split_by_record_id: dict[str, str]) -> OledLeakageGuardSplitPlan:
+    return OledLeakageGuardSplitPlan(
+        assignments=[
+            OledSplitAssignment(
+                record_id=record_id,
+                split=split,
+                group_keys={OledLeakageGroupKind.MOLECULE_INCHIKEY: [f"molecule.inchikey:{record_id}"]},
+            )
+            for record_id, split in split_by_record_id.items()
+        ],
+        group_kinds=[OledLeakageGroupKind.MOLECULE_INCHIKEY],
+        split_names=sorted(set(split_by_record_id.values())),
     )
