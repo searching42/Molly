@@ -9,11 +9,25 @@ from ai4s_agent.domains.oled_contracts import (
     RepresentationContractFinding,
     RepresentationContractReport,
 )
+from ai4s_agent.domains.oled_property_ontology import (
+    DEFAULT_OLED_PROPERTY_ONTOLOGY,
+    OledPropertyDefinition,
+    OledPropertyOntology,
+    OledPropertyOntologyFinding,
+    OledPropertyOntologyReport,
+    OledPropertyValueConstraint,
+)
 
 __all__ = [
+    "DEFAULT_OLED_PROPERTY_ONTOLOGY",
     "DEFAULT_OLED_REPRESENTATION_CONTRACT",
     "DomainModelRegistry",
     "OledCausalLayer",
+    "OledPropertyDefinition",
+    "OledPropertyOntology",
+    "OledPropertyOntologyFinding",
+    "OledPropertyOntologyReport",
+    "OledPropertyValueConstraint",
     "RepresentationClaim",
     "RepresentationContract",
     "RepresentationContractFinding",

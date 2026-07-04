@@ -20,7 +20,21 @@
 
 # 1. 数据结构重构（最优先）
 
-## 1.1 三层数据模型设计（必须重做 schema）
+## 1.0 Representation Contract Layer（已完成）
+
+### [x] Task: 定义 OLED Representation Contract Layer
+- causal layers: molecule / interaction / device / measurement
+- enforce dependency direction: molecule → interaction → device → measurement
+- reject downstream leakage into intrinsic molecular properties
+- require measurement claims to bind interaction + device context
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_contracts.py`
+- tested by `tests/test_oled_representation_contracts.py`
+
+---
+
+## 1.1 四层数据模型设计（必须重做 schema）
 
 ### [ ] Task: 定义 Molecular Layer
 - SMILES canonicalization（RDKit）
@@ -73,6 +87,22 @@ Fields:
 - max EQE
 - EQE@100 cd/m²
 - measurement temperature
+
+---
+
+## 1.2 Property Ontology Layer（taxonomy 与 schema 之间）
+
+### [x] Task: 定义 property semantic contract
+- canonical property id / name
+- alias set
+- allowed causal layers
+- layer-independent canonical unit
+- value constraints
+- physical interpretation
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_property_ontology.py`
+- tested by `tests/test_oled_property_ontology.py`
 
 ---
 
