@@ -5,6 +5,7 @@ from ai4s_agent.domains.oled_layered_schema import (
     OledDeviceLayer,
     OledInteractionLayer,
     OledLayeredRecord,
+    OledMeasurementCondition,
     OledMeasurementLayer,
     OledMolecularLayer,
     OledPropertyObservation,
@@ -31,7 +32,14 @@ def test_valid_layered_record_passes_with_measurement_context() -> None:
             htl_material="TAPC",
         ),
         measurement=OledMeasurementLayer(
-            measurements=[OledPropertyObservation(property_label="max EQE (%)", value=22.4, unit="%")]
+            measurements=[
+                OledPropertyObservation(
+                    property_label="max EQE (%)",
+                    value=22.4,
+                    unit="%",
+                    condition=OledMeasurementCondition(luminance_cd_m2=100),
+                )
+            ]
         ),
     )
 
@@ -80,7 +88,14 @@ def test_layered_record_canonicalizes_table_property_labels() -> None:
         interaction=OledInteractionLayer(emitter_smiles="N1C=CC=C1"),
         device=OledDeviceLayer(device_stack=["ITO", "EML", "Al"]),
         measurement=OledMeasurementLayer(
-            measurements=[OledPropertyObservation(property_label="EQE (%)", value=11.2, unit="%")]
+            measurements=[
+                OledPropertyObservation(
+                    property_label="EQE (%)",
+                    value=11.2,
+                    unit="%",
+                    condition=OledMeasurementCondition(luminance_cd_m2=100),
+                )
+            ]
         ),
     )
 

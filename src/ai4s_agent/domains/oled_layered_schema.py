@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from enum import Enum
 from typing import Any
 
@@ -76,10 +78,27 @@ class OledConfidenceAssessment(BaseModel):
         return clean
 
 
+class OledMeasurementCondition(BaseModel):
+    luminance_cd_m2: float | None = None
+    current_density_ma_cm2: float | None = None
+    voltage_v: float | None = None
+    temperature_k: float | None = None
+    atmosphere: str | None = None
+    condition_label: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def condition_hash(self) -> str:
+        payload = self.model_dump(mode="json", exclude_none=True)
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+
 class OledPropertyObservation(BaseModel):
     property_label: str
     value: float | int | str | None = None
     unit: str | None = None
+    condition: OledMeasurementCondition | None = None
     evidence_sources: list[OledEvidenceSource] = Field(default_factory=list)
     confidence: OledConfidenceAssessment | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -131,6 +150,8 @@ class OledLayeredCanonicalObservation(BaseModel):
     unit_hint: str
     value: float | int | str | None = None
     unit: str | None = None
+    condition: OledMeasurementCondition | None = None
+    condition_hash: str | None = None
     evidence_sources: list[OledEvidenceSource] = Field(default_factory=list)
     confidence: OledConfidenceAssessment | None = None
 
@@ -220,8 +241,22 @@ class OledLayeredRecord(BaseModel):
                     unit_hint=taxonomy_match.unit_hint,
                     value=property_observation.value,
                     unit=property_observation.unit,
+                    condition=property_observation.condition,
+                    condition_hash=(
+                        property_observation.condition.condition_hash
+                        if property_observation.condition is not None
+                        else None
+                    ),
                     evidence_sources=property_observation.evidence_sources,
                     confidence=property_observation.confidence,
+                )
+            )
+            findings.extend(
+                _measurement_condition_findings(
+                    layer=layer,
+                    property_id=taxonomy_match.canonical_property_id,
+                    property_label=property_observation.property_label,
+                    observation=property_observation,
                 )
             )
             findings.extend(
@@ -252,7 +287,7 @@ class OledLayeredRecord(BaseModel):
                 taxonomy_match.canonical_property_id,
                 target_layer=layer,
                 bound_layers=present_layers,
-                dependency_layers=_dependency_layers_for(layer, present_layers),
+                dependency_layers=_dependency_layers_for(layer, present_layers, contract),
                 metadata={"raw_property_label": property_observation.property_label},
             )
             for contract_report_finding in contract.validate_claim(claim).findings:
@@ -309,6 +344,26 @@ def _schema_findings_from_ontology_report(
     ]
 
 
+def _measurement_condition_findings(
+    *,
+    layer: OledCausalLayer,
+    property_id: str,
+    property_label: str,
+    observation: OledPropertyObservation,
+) -> list[OledLayeredSchemaFinding]:
+    if layer != OledCausalLayer.MEASUREMENT or observation.condition is not None:
+        return []
+    return [
+        OledLayeredSchemaFinding(
+            code="missing_measurement_condition",
+            message=f"measurement property `{property_id}` has no condition context",
+            layer=layer,
+            property_id=property_id,
+            property_label=property_label,
+        )
+    ]
+
+
 def _provenance_confidence_findings(
     *,
     layer: OledCausalLayer,
@@ -356,12 +411,16 @@ def _provenance_confidence_findings(
     return findings
 
 
-def _dependency_layers_for(target_layer: OledCausalLayer, present_layers: set[OledCausalLayer]) -> set[OledCausalLayer]:
-    target_rank = DEFAULT_OLED_REPRESENTATION_CONTRACT.layer_order[target_layer]
+def _dependency_layers_for(
+    target_layer: OledCausalLayer,
+    present_layers: set[OledCausalLayer],
+    contract: RepresentationContract,
+) -> set[OledCausalLayer]:
+    target_rank = contract.layer_order[target_layer]
     return {
         layer
         for layer in present_layers
-        if DEFAULT_OLED_REPRESENTATION_CONTRACT.layer_order[layer] <= target_rank
+        if contract.layer_order[layer] <= target_rank
     }
 
 
@@ -396,6 +455,7 @@ __all__ = [
     "OledLayeredRecord",
     "OledLayeredSchemaFinding",
     "OledLayeredSchemaReport",
+    "OledMeasurementCondition",
     "OledMeasurementLayer",
     "OledMolecularLayer",
     "OledPropertyObservation",
