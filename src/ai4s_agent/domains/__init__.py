@@ -10,7 +10,10 @@ from ai4s_agent.domains.oled_contracts import (
     RepresentationContractReport,
 )
 from ai4s_agent.domains.oled_layered_schema import (
+    OledConfidenceAssessment,
     OledDeviceLayer,
+    OledEvidenceSource,
+    OledEvidenceType,
     OledInteractionLayer,
     OledLayeredCanonicalObservation,
     OledLayeredRecord,
@@ -40,7 +43,10 @@ __all__ = [
     "DEFAULT_OLED_REPRESENTATION_CONTRACT",
     "DomainModelRegistry",
     "OledCausalLayer",
+    "OledConfidenceAssessment",
     "OledDeviceLayer",
+    "OledEvidenceSource",
+    "OledEvidenceType",
     "OledInteractionLayer",
     "OledLayeredCanonicalObservation",
     "OledLayeredRecord",
