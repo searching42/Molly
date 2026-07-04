@@ -124,6 +124,25 @@ Status:
 
 ---
 
+## 1.4 Layered Schema MVP（contract-bound）
+
+### [x] Task: 定义四层 schema 的最小可验证数据对象
+- Molecular Layer / Interaction Layer / Device Layer / Measurement Layer containers
+- per-layer property observations
+- taxonomy-backed canonical property ids
+- ontology-backed layer and value validation
+- representation-contract-backed dependency validation
+
+Scope:
+- this is the schema contract MVP, not the full RDKit/InChIKey/device extraction implementation
+- condition-aware measurement details remain a later PR
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_layered_schema.py`
+- tested by `tests/test_oled_layered_schema.py`
+
+---
+
 # 2. MinerU 抽取层改造
 
 ## 2.1 Entity Linking（关键问题）
