@@ -399,6 +399,25 @@ Status:
 
 ---
 
+## 7.0.2 Lightweight baseline backend MVP
+
+### [x] Task:
+- attach a `dummy_mean` backend to the baseline experiment spec
+- produce completed ablation reports with MAE / RMSE / R² / bias metrics
+- compute deltas against the full-context arm
+- expose an optional `ridge_like_sklearn` adapter that skips cleanly when sklearn is unavailable
+
+Scope:
+- this validates the end-to-end experiment chain and report population
+- this is not a scientific model baseline claim
+- no GNN / D-MPNN / FT-Transformer / heavy backend dependency is introduced
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_baseline_backend.py`
+- tested by `tests/test_oled_baseline_backend.py`
+
+---
+
 ## 7.1 minimal baselines
 
 ### [ ] Task:
