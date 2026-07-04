@@ -438,6 +438,26 @@ Status:
 
 ---
 
+## 7.0.3 Split-aware baseline evaluation MVP
+
+### [x] Task:
+- allow `run_oled_baseline_backend(..., split_plan=...)`
+- reject execution when split leakage is detected
+- train `dummy_mean` only on train split targets
+- report train / validation / test metrics separately
+- preserve optional `ridge_like_sklearn` clean-skip behavior
+- add split counts and `leakage_checked` flags to ablation reports
+
+Scope:
+- this is split-aware baseline evaluation, not a heavy model backend
+- no GNN / D-MPNN / FT-Transformer dependency is introduced
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_baseline_backend.py`
+- tested by `tests/test_oled_baseline_backend.py`
+
+---
+
 ## 7.1 minimal baselines
 
 ### [ ] Task:
