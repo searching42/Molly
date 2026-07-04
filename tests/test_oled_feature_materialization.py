@@ -90,6 +90,36 @@ def test_full_context_condition_features_are_bound_to_each_target_row() -> None:
     assert records[1]["feature.condition.condition_hash"] == records[1]["condition_hash"]
 
 
+def test_feature_materialization_uses_normalized_targets_and_condition_features() -> None:
+    table = materialize_oled_baseline_feature_table(
+        [
+            _gold_record(
+                "gold-oled-normalized-units",
+                measurement_observation=_measurement_observation(
+                    "gold-oled-normalized-units",
+                    100,
+                    value=0.195,
+                    unit="fraction",
+                    current_density_ma_cm2=42,
+                    temperature_k=25,
+                    condition_metadata={
+                        "current_density_unit": "A/m²",
+                        "temperature_unit": "°C",
+                    },
+                ),
+            )
+        ],
+        feature_view=OledBaselineFeatureView.FULL_CONTEXT,
+    )
+
+    record = table.to_records()[0]
+
+    assert record["target_value"] == pytest.approx(19.5)
+    assert record["target_unit"] == "%"
+    assert record["feature.condition.current_density_ma_cm2"] == pytest.approx(4.2)
+    assert record["feature.condition.temperature_k"] == pytest.approx(298.15)
+
+
 def test_feature_table_jsonl_writer_uses_one_line_per_record(tmp_path) -> None:
     table = materialize_oled_baseline_feature_table(
         [_gold_record("gold-oled-003"), _gold_record("gold-oled-004")],
@@ -166,15 +196,25 @@ def _gold_record(
     )
 
 
-def _measurement_observation(record_id: str, luminance_cd_m2: float) -> OledPropertyObservation:
+def _measurement_observation(
+    record_id: str,
+    luminance_cd_m2: float,
+    *,
+    value: float = 19.5,
+    unit: str = "%",
+    current_density_ma_cm2: float = 4.2,
+    temperature_k: float = 298.15,
+    condition_metadata: dict[str, str] | None = None,
+) -> OledPropertyObservation:
     return OledPropertyObservation(
         property_label="EQE (%)",
-        value=19.5,
-        unit="%",
+        value=value,
+        unit=unit,
         condition=OledMeasurementCondition(
             luminance_cd_m2=luminance_cd_m2,
-            current_density_ma_cm2=4.2,
-            temperature_k=298.15,
+            current_density_ma_cm2=current_density_ma_cm2,
+            temperature_k=temperature_k,
+            metadata=condition_metadata or {},
         ),
         evidence_sources=[
             OledEvidenceSource(
