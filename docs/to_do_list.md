@@ -384,4 +384,10 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 
 ---
 
+# 13. 非阻塞待处理项
+
+1. taxonomy 当前能处理 max EQE (%)、ΔE ST 这类常见表头，但后续 MinerU 表格接入前，建议补一批真实 OLED 表头 fixture，例如 EQEmax, EQE @ 100 cd m-2, Von, λEL, CIE(x,y), FWHM, CE, PE，避免进入抽取流程后再发现 alias 覆盖不足。
+
+---
+
 # End
