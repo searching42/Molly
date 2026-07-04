@@ -181,6 +181,25 @@ Status:
 
 ---
 
+## 1.7 Confounder Tags MVP
+
+### [x] Task: 给 OLED layered record 增加显式 confounder tags
+- host material / doping concentration / outcoupling structure / device stack variation tags
+- `is_outcoupling_modified`
+- `is_device_optimized`
+- `is_best_reported`
+- missing confounder warning for performance measurements without tags
+
+Scope:
+- this is explicit schema tagging, not causal disentanglement or dataset view filtering
+- downstream curated views still need to decide how to consume these tags
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_layered_schema.py`
+- tested by `tests/test_oled_confounder_tags.py`
+
+---
+
 # 2. MinerU 抽取层改造
 
 ## 2.1 Entity Linking（关键问题）
@@ -278,21 +297,27 @@ Only deduplicate when:
 
 ## 5.1 identify major confounders
 
-### [ ] Task:
+### [x] Task:
 - host material
 - doping concentration
 - outcoupling structures
 - device stack variation
 
+Status:
+- represented by `OledConfounderType`
+
 ---
 
 ## 5.2 explicit tagging
 
-### [ ] Task:
+### [x] Task:
 Add fields:
 - is_outcoupling_modified
 - is_device_optimized
 - is_best_reported
+
+Status:
+- represented by `OledConfounderFlags`
 
 ---
 
@@ -445,6 +470,7 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 
 1. taxonomy 当前能处理 max EQE (%)、ΔE ST 这类常见表头，但后续 MinerU 表格接入前，建议补一批真实 OLED 表头 fixture，例如 EQEmax, EQE @ 100 cd m-2, Von, λEL, CIE(x,y), FWHM, CE, PE，避免进入抽取流程后再发现 alias 覆盖不足。
 2. 目前 missing_provenance / missing_confidence 是 warning，不影响 is_valid；这是合理的。等后续进入 curated dataset writer 时，可以按 dataset view 类型把这些 warning 升级为 hard gate，例如 gold set 或 curated training set 必须要求 provenance/confidence 完整。
+3. OledMeasurementCondition 当前已有 luminance/current density/voltage/temperature/atmosphere 等字段，但还没有做物理范围校验或单位标准化。后续 PR 做 oled_units.py 时，可以把这些条件字段和 property units 一起纳入 layer-scoped unit normalization。
 
 ---
 

@@ -11,6 +11,9 @@ from ai4s_agent.domains.oled_contracts import (
 )
 from ai4s_agent.domains.oled_layered_schema import (
     OledConfidenceAssessment,
+    OledConfounderFlags,
+    OledConfounderTag,
+    OledConfounderType,
     OledDeviceLayer,
     OledEvidenceSource,
     OledEvidenceType,
@@ -45,6 +48,9 @@ __all__ = [
     "DomainModelRegistry",
     "OledCausalLayer",
     "OledConfidenceAssessment",
+    "OledConfounderFlags",
+    "OledConfounderTag",
+    "OledConfounderType",
     "OledDeviceLayer",
     "OledEvidenceSource",
     "OledEvidenceType",
