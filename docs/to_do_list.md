@@ -351,6 +351,26 @@ Separate:
 
 ---
 
+## 6.2.1 Split strategy / leakage guard MVP
+
+### [x] Task:
+- build group-aware split plans for gold-valid OLED records
+- group by `molecule.inchikey`
+- group by paper id / evidence refs
+- group by normalized device stack
+- validate arbitrary split assignments for cross-split group leakage
+
+Scope:
+- this is a split contract and leakage guard, not a model-training split runner
+- no GNN / D-MPNN / FT-Transformer / heavy backend dependency is introduced
+- backend integration remains a later PR
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_split_leakage.py`
+- tested by `tests/test_oled_split_leakage_guard.py`
+
+---
+
 ## 6.3 consistency check
 
 ### [ ] Task:
