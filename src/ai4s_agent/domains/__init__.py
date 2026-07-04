@@ -1,6 +1,10 @@
 """Domain-specific catalogs and selection helpers."""
 
 from ai4s_agent.domains.model_registry import DomainModelRegistry
+from ai4s_agent.domains.oled_baseline_backend import (
+    OledBaselineBackendKind,
+    run_oled_baseline_backend,
+)
 from ai4s_agent.domains.oled_baseline_loop import (
     OledAblationReport,
     OledAblationReportEntry,
@@ -72,6 +76,7 @@ __all__ = [
     "OledAblationReport",
     "OledAblationReportEntry",
     "OledBaselineAblationKind",
+    "OledBaselineBackendKind",
     "OledBaselineExperimentArm",
     "OledBaselineExperimentSpec",
     "OledBaselineFeatureView",
@@ -112,6 +117,7 @@ __all__ = [
     "initialize_oled_ablation_report",
     "materialize_oled_baseline_feature_table",
     "materialize_oled_baseline_feature_tables",
+    "run_oled_baseline_backend",
     "validate_oled_gold_dataset",
     "write_oled_feature_table_jsonl",
 ]

@@ -70,7 +70,7 @@ class OledAblationReportEntry(BaseModel):
 class OledAblationReport(BaseModel):
     spec_id: str
     target_property_id: str
-    model_backend: Literal["deferred"] = "deferred"
+    model_backend: str = "deferred"
     status: Literal["backend_skipped", "pending", "completed"] = "backend_skipped"
     entries: list[OledAblationReportEntry] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
