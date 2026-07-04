@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
@@ -20,10 +21,67 @@ from ai4s_agent.domains.oled_property_taxonomy import (
 )
 
 
+class OledEvidenceType(str, Enum):
+    TABLE = "table"
+    FIGURE = "figure"
+    TEXT = "text"
+    SUPPLEMENTARY = "supplementary"
+    DATABASE = "database"
+    MANUAL_REVIEW = "manual_review"
+
+
+class OledEvidenceSource(BaseModel):
+    source_id: str
+    source_type: OledEvidenceType
+    layer: OledCausalLayer
+    locator: str | None = None
+    citation: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("source_id")
+    @classmethod
+    def validate_source_id(cls, value: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            raise ValueError("source_id is required")
+        return clean
+
+
+class OledConfidenceAssessment(BaseModel):
+    score: float
+    factors: dict[str, float] = Field(default_factory=dict)
+    rationale: list[str] = Field(default_factory=list)
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def validate_score(cls, value: Any) -> float:
+        if isinstance(value, bool):
+            raise ValueError("confidence score must be a number, got bool")
+        score = float(value)
+        if score < 0.0 or score > 1.0:
+            raise ValueError("confidence score must be between 0.0 and 1.0")
+        return score
+
+    @field_validator("factors")
+    @classmethod
+    def validate_factors(cls, value: dict[str, float]) -> dict[str, float]:
+        clean: dict[str, float] = {}
+        for key, raw_score in value.items():
+            if isinstance(raw_score, bool):
+                raise ValueError("confidence factors must be numeric")
+            factor_score = float(raw_score)
+            if factor_score < 0.0 or factor_score > 1.0:
+                raise ValueError("confidence factors must be between 0.0 and 1.0")
+            clean[str(key)] = factor_score
+        return clean
+
+
 class OledPropertyObservation(BaseModel):
     property_label: str
     value: float | int | str | None = None
     unit: str | None = None
+    evidence_sources: list[OledEvidenceSource] = Field(default_factory=list)
+    confidence: OledConfidenceAssessment | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("property_label")
@@ -73,6 +131,8 @@ class OledLayeredCanonicalObservation(BaseModel):
     unit_hint: str
     value: float | int | str | None = None
     unit: str | None = None
+    evidence_sources: list[OledEvidenceSource] = Field(default_factory=list)
+    confidence: OledConfidenceAssessment | None = None
 
 
 class OledLayeredSchemaFinding(BaseModel):
@@ -97,8 +157,25 @@ class OledLayeredSchemaReport(BaseModel):
         return [finding.code for finding in self.findings if finding.severity == "error"]
 
     @property
+    def warning_codes(self) -> list[str]:
+        return [finding.code for finding in self.findings if finding.severity == "warning"]
+
+    @property
     def canonical_property_ids(self) -> list[str]:
         return [observation.property_id for observation in self.observations]
+
+    @property
+    def confidence_by_layer(self) -> dict[OledCausalLayer, float]:
+        scores: dict[OledCausalLayer, list[float]] = {}
+        for observation in self.observations:
+            if observation.confidence is None:
+                continue
+            scores.setdefault(observation.layer, []).append(observation.confidence.score)
+        return {
+            layer: round(sum(layer_scores) / len(layer_scores), 6)
+            for layer, layer_scores in scores.items()
+            if layer_scores
+        }
 
     def finding_codes_for_property(self, property_id: str) -> list[str]:
         return [finding.code for finding in self.findings if finding.property_id == property_id]
@@ -143,6 +220,16 @@ class OledLayeredRecord(BaseModel):
                     unit_hint=taxonomy_match.unit_hint,
                     value=property_observation.value,
                     unit=property_observation.unit,
+                    evidence_sources=property_observation.evidence_sources,
+                    confidence=property_observation.confidence,
+                )
+            )
+            findings.extend(
+                _provenance_confidence_findings(
+                    layer=layer,
+                    property_id=taxonomy_match.canonical_property_id,
+                    property_label=property_observation.property_label,
+                    observation=property_observation,
                 )
             )
             layer_findings = _schema_findings_from_ontology_report(
@@ -222,6 +309,53 @@ def _schema_findings_from_ontology_report(
     ]
 
 
+def _provenance_confidence_findings(
+    *,
+    layer: OledCausalLayer,
+    property_id: str,
+    property_label: str,
+    observation: OledPropertyObservation,
+) -> list[OledLayeredSchemaFinding]:
+    findings: list[OledLayeredSchemaFinding] = []
+    if not observation.evidence_sources:
+        findings.append(
+            OledLayeredSchemaFinding(
+                code="missing_provenance",
+                severity="warning",
+                message=f"property `{property_id}` has no evidence source",
+                layer=layer,
+                property_id=property_id,
+                property_label=property_label,
+            )
+        )
+    if observation.confidence is None:
+        findings.append(
+            OledLayeredSchemaFinding(
+                code="missing_confidence",
+                severity="warning",
+                message=f"property `{property_id}` has no confidence assessment",
+                layer=layer,
+                property_id=property_id,
+                property_label=property_label,
+            )
+        )
+    for evidence_source in observation.evidence_sources:
+        if evidence_source.layer != layer:
+            findings.append(
+                OledLayeredSchemaFinding(
+                    code="evidence_layer_mismatch",
+                    message=(
+                        f"evidence `{evidence_source.source_id}` is bound to layer "
+                        f"`{evidence_source.layer.value}`, not `{layer.value}`"
+                    ),
+                    layer=layer,
+                    property_id=property_id,
+                    property_label=property_label,
+                )
+            )
+    return findings
+
+
 def _dependency_layers_for(target_layer: OledCausalLayer, present_layers: set[OledCausalLayer]) -> set[OledCausalLayer]:
     target_rank = DEFAULT_OLED_REPRESENTATION_CONTRACT.layer_order[target_layer]
     return {
@@ -253,7 +387,10 @@ def _dedup_schema_findings(findings: list[OledLayeredSchemaFinding]) -> list[Ole
 
 
 __all__ = [
+    "OledConfidenceAssessment",
     "OledDeviceLayer",
+    "OledEvidenceSource",
+    "OledEvidenceType",
     "OledInteractionLayer",
     "OledLayeredCanonicalObservation",
     "OledLayeredRecord",

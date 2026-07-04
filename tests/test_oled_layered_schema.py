@@ -87,4 +87,5 @@ def test_layered_record_canonicalizes_table_property_labels() -> None:
     report = record.validate_schema()
 
     assert report.canonical_property_ids == ["eqe_percent"]
-    assert report.finding_codes_for_property("eqe_percent") == []
+    assert report.error_codes == []
+    assert report.finding_codes_for_property("eqe_percent") == ["missing_provenance", "missing_confidence"]

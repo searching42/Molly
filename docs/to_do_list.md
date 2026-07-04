@@ -143,6 +143,25 @@ Status:
 
 ---
 
+## 1.5 Provenance and Confidence MVP
+
+### [x] Task: 给 OLED property observation 增加 provenance/confidence 表示
+- evidence source type / source id / locator / citation
+- evidence-to-layer binding
+- confidence score and factor decomposition
+- layer-level confidence summary in schema validation reports
+- missing provenance/confidence warnings
+
+Scope:
+- this is domain schema support, not MinerU extraction integration
+- execution-level provenance graph remains in the existing provenance package
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_layered_schema.py`
+- tested by `tests/test_oled_provenance_confidence.py`
+
+---
+
 # 2. MinerU 抽取层改造
 
 ## 2.1 Entity Linking（关键问题）
@@ -406,6 +425,7 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 # 13. 非阻塞待处理项
 
 1. taxonomy 当前能处理 max EQE (%)、ΔE ST 这类常见表头，但后续 MinerU 表格接入前，建议补一批真实 OLED 表头 fixture，例如 EQEmax, EQE @ 100 cd m-2, Von, λEL, CIE(x,y), FWHM, CE, PE，避免进入抽取流程后再发现 alias 覆盖不足。
+2. validate_schema() 虽然支持传入自定义 contract，但 _dependency_layers_for() 当前内部使用默认 contract 的 layer_order。目前默认路径没有问题；如果后续要支持可插拔 contract，建议在后续 PR 中把 contract 传入 dependency layer 计算函数，避免自定义 contract 时出现不一致。
 
 ---
 
