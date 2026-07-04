@@ -67,6 +67,15 @@ from ai4s_agent.domains.oled_property_taxonomy import (
     OledPropertyTaxonomy,
     OledPropertyTaxonomyMatch,
 )
+from ai4s_agent.domains.oled_split_leakage import (
+    OledLeakageGroupKind,
+    OledLeakageGuardSplitPlan,
+    OledSplitAssignment,
+    OledSplitLeakageFinding,
+    OledSplitLeakageReport,
+    build_oled_leakage_guard_split,
+    validate_oled_split_leakage,
+)
 
 __all__ = [
     "DEFAULT_OLED_PROPERTY_ONTOLOGY",
@@ -94,6 +103,8 @@ __all__ = [
     "OledGoldValidationFinding",
     "OledGoldValidationReport",
     "OledInteractionLayer",
+    "OledLeakageGroupKind",
+    "OledLeakageGuardSplitPlan",
     "OledLayeredCanonicalObservation",
     "OledLayeredRecord",
     "OledLayeredSchemaFinding",
@@ -109,15 +120,20 @@ __all__ = [
     "OledPropertyTaxonomy",
     "OledPropertyTaxonomyMatch",
     "OledPropertyValueConstraint",
+    "OledSplitAssignment",
+    "OledSplitLeakageFinding",
+    "OledSplitLeakageReport",
     "RepresentationClaim",
     "RepresentationContract",
     "RepresentationContractFinding",
     "RepresentationContractReport",
     "build_oled_baseline_experiment_spec",
+    "build_oled_leakage_guard_split",
     "initialize_oled_ablation_report",
     "materialize_oled_baseline_feature_table",
     "materialize_oled_baseline_feature_tables",
     "run_oled_baseline_backend",
     "validate_oled_gold_dataset",
+    "validate_oled_split_leakage",
     "write_oled_feature_table_jsonl",
 ]
