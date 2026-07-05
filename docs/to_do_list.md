@@ -565,9 +565,34 @@ Status:
 
 ---
 
-# 8. Gold dataset construction（关键）
+# 8. Real literature grounding
 
-## 8.1 manual verified set
+## 8.1 MinerU parsed-output candidate extraction MVP
+
+### [x] Task:
+- deterministic candidate extraction only
+- supports flat `content_list` and nested `content_list_v2`
+- optional md sidecar for nearby context only
+- no LLM mapping
+- no final OLED schema records
+- no PDF reading
+- no MinerU execution
+- no real corpus IO
+
+Scope:
+- this produces reusable OLED-relevant evidence candidates for a later semantic mapper
+- JSON provides stable evidence anchors; markdown only enriches local context
+- table parsing is stdlib-only and emits parse status instead of failing closed on unsupported structure
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_mineru_candidates.py`
+- tested by `tests/test_oled_mineru_candidates.py`
+
+---
+
+# 9. Gold dataset construction（关键）
+
+## 9.1 manual verified set
 
 ### [ ] Task:
 - 200–500 OLED devices
@@ -575,7 +600,7 @@ Status:
 
 ---
 
-## 8.2 use cases
+## 9.2 use cases
 
 - validation benchmark
 - extraction accuracy
@@ -583,7 +608,7 @@ Status:
 
 ---
 
-## 8.3 Gold validation harness MVP
+## 9.3 Gold validation harness MVP
 
 ### [x] Task:
 - define a gold dataset record wrapper around layered OLED records
@@ -601,9 +626,9 @@ Status:
 
 ---
 
-# 9. Scientific evaluation layer（缺失）
+# 10. Scientific evaluation layer（缺失）
 
-## 9.1 beyond ML metrics
+## 10.1 beyond ML metrics
 
 ### [ ] Task:
 Add evaluation beyond MAE/R²:
@@ -615,9 +640,9 @@ Add evaluation beyond MAE/R²:
 
 ---
 
-# 10. Pipeline architecture upgrade
+# 11. Pipeline architecture upgrade
 
-## 10.1 system redesign
+## 11.1 system redesign
 
 ### [ ] Task:
 Reframe system as:
@@ -626,7 +651,7 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 
 ---
 
-## 10.2 add feedback loop (optional future)
+## 11.2 add feedback loop (optional future)
 
 ### [ ] Task:
 - model suggests missing data
@@ -635,9 +660,9 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 
 ---
 
-# 11. Documentation (important for paper)
+# 12. Documentation (important for paper)
 
-## 11.1 dataset paper readiness
+## 12.1 dataset paper readiness
 
 ### [ ] Task:
 - define schema formally
@@ -646,7 +671,7 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 
 ---
 
-## 11.2 reproducibility
+## 12.2 reproducibility
 
 ### [ ] Task:
 - deterministic MinerU pipeline
@@ -655,14 +680,14 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 
 ---
 
-# 12. Key principle (must enforce)
+# 13. Key principle (must enforce)
 
 > Do not optimize extraction accuracy alone.
 > Optimize for learnable physical signal.
 
 ---
 
-# 13. 非阻塞待处理项
+# 14. 非阻塞待处理项
 
 1. taxonomy 当前能处理 max EQE (%)、ΔE ST 这类常见表头，但后续 MinerU 表格接入前，建议补一批真实 OLED 表头 fixture，例如 EQEmax, EQE @ 100 cd m-2, Von, λEL, CIE(x,y), FWHM, CE, PE，避免进入抽取流程后再发现 alias 覆盖不足。
 2. gold validation harness 已将 missing_provenance / missing_confidence 升级为 gold set hard gate；后续进入 curated dataset writer 时，还应按 dataset view 类型把这些 warning 升级为 curated training set hard gate。
