@@ -517,6 +517,27 @@ Status:
 
 ---
 
+## 7.0.4 Tabular baseline backend MVP（optional sklearn）
+
+### [x] Task:
+- add `tabular_ridge_sklearn` backend
+- add `tabular_random_forest_sklearn` backend
+- consume stable OLED dataset views rather than raw layered schema internals
+- require split-aware training/evaluation
+- train only on train split and report train / validation / test metrics separately
+- cleanly skip when sklearn is unavailable
+
+Scope:
+- this is the first lightweight tabular model backend
+- sklearn remains optional and is not added as a required dependency
+- no GNN / D-MPNN / FT-Transformer / PyTorch / RDKit / MinerU integration is introduced
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_tabular_backend.py`
+- tested by `tests/test_oled_tabular_backend.py`
+
+---
+
 ## 7.1 minimal baselines
 
 ### [ ] Task:
