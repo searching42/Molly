@@ -253,14 +253,23 @@ Status:
 
 ## 3.2 condition-aware deduplication
 
-### [ ] Task:
+### [x] Task:
 Do NOT deduplicate across:
 - different outcoupling conditions
 - different ETL/HTL
 - different luminance points
 
 Only deduplicate when:
-- identical molecule + identical device + identical measurement
+- identical molecule + identical interaction + identical device + identical measurement condition + identical target property
+
+Scope:
+- this PR defines the reusable condition-aware dedup key and conflict report
+- conflict detection compares normalized target values grouped by the dedup key
+- curated dataset writer hard gates remain a later integration step
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_condition_dedup.py`
+- tested by `tests/test_oled_condition_dedup_keys.py`
 
 ---
 
@@ -604,6 +613,7 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 2. gold validation harness 已将 missing_provenance / missing_confidence 升级为 gold set hard gate；后续进入 curated dataset writer 时，还应按 dataset view 类型把这些 warning 升级为 curated training set hard gate。
 3. OledMeasurementCondition 的 layer-scoped unit normalization 已完成；后续仍建议为 luminance/current density/voltage/temperature 等 condition 字段补物理范围 soft/hard gate，避免异常操作点进入 curated dataset。
 4. 目前 _MEASUREMENT_PERFORMANCE_PROPERTIES 只包含 eqe_percent。后续 taxonomy 扩展 CE、PE、lifetime、turn-on voltage、roll-off 等器件性能指标时，应同步把需要 confounder tagging 的 property id 纳入这个集合，或者改成由 ontology metadata 标记 requires_confounder_context=true。
+5. wt% / mol% 在当前实现中会保留为不同 normalized unit，这是合理的，因为二者通常不能无条件互相换算；后续 curated dataset view 需要决定是否允许二者共存，还是按任务只接受某一种 doping ratio unit。
 
 ---
 
