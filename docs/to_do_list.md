@@ -588,6 +588,25 @@ Status:
 - implemented in `src/ai4s_agent/domains/oled_mineru_candidates.py`
 - tested by `tests/test_oled_mineru_candidates.py`
 
+## 8.2 MinerU candidate semantic mapping MVP
+
+### [x] Task:
+- define intermediate OLED schema candidate contract
+- build LLM-ready semantic mapping packets from MinerU evidence candidates
+- add deterministic rule-based mapping for simple parsed tables/text device structures
+- preserve row/cell/field evidence refs
+- do not call LLMs
+- do not create final OledLayeredRecord objects
+- do not read PDFs or real corpus files
+
+Scope:
+- this PR maps evidence candidates to proposed schema candidates only
+- final schema compilation is a later step
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_mineru_semantic_mapping.py`
+- tested by `tests/test_oled_mineru_semantic_mapping.py`
+
 ---
 
 # 9. Gold dataset construction（关键）
