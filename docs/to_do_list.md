@@ -286,35 +286,69 @@ Status:
 
 ## 4.1 raw dataset
 
-### [ ] Task:
+### [x] Task:
 - keep all extracted records
 - no filtering
 - full provenance tracking
+
+Scope:
+- implemented as a gold-valid `raw_all_measurements` dataset view, not real corpus IO
+- rows preserve all target measurements with normalized target values and evidence refs
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_dataset_views.py`
+- tested by `tests/test_oled_dataset_views.py`
 
 ---
 
 ## 4.2 curated intrinsic dataset
 
-### [ ] Task:
+### [x] Task:
 - only molecular properties
 - exclude device influence
+
+Scope:
+- implemented as a molecular-layer `curated_intrinsic` dataset view over gold-valid records
+- this is a view contract, not RDKit/InChIKey enrichment
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_dataset_views.py`
+- tested by `tests/test_oled_dataset_views.py`
 
 ---
 
 ## 4.3 curated device baseline dataset
 
-### [ ] Task:
+### [x] Task:
 - remove outcoupling-enhanced records
 - normalize ETL/HTL variations
 - standardized luminance conditions
+
+Scope:
+- implemented as a `curated_device_baseline` view using normalized full-context feature materialization
+- excludes outcoupling-modified and best-reported records
+- uses condition-aware dedup keys to collapse consistent duplicates and reject conflicting duplicate measurements
+- ETL/HTL and luminance are carried as normalized view features; strict policy normalization remains future curated-writer work
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_dataset_views.py`
+- tested by `tests/test_oled_dataset_views.py`
 
 ---
 
 ## 4.4 best-reported dataset
 
-### [ ] Task:
+### [x] Task:
 - max performance per system
 - explicitly label as "biased dataset"
+
+Scope:
+- implemented as a lightweight `best_reported` view that selects the maximum numeric target and marks the view as biased
+- this is not a scientific model baseline claim
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_dataset_views.py`
+- tested by `tests/test_oled_dataset_views.py`
 
 ---
 
@@ -614,6 +648,7 @@ Literature → Extraction → Schema graph → Causal dataset → Models → Val
 3. OledMeasurementCondition 的 layer-scoped unit normalization 已完成；后续仍建议为 luminance/current density/voltage/temperature 等 condition 字段补物理范围 soft/hard gate，避免异常操作点进入 curated dataset。
 4. 目前 _MEASUREMENT_PERFORMANCE_PROPERTIES 只包含 eqe_percent。后续 taxonomy 扩展 CE、PE、lifetime、turn-on voltage、roll-off 等器件性能指标时，应同步把需要 confounder tagging 的 property id 纳入这个集合，或者改成由 ontology metadata 标记 requires_confounder_context=true。
 5. wt% / mol% 在当前实现中会保留为不同 normalized unit，这是合理的，因为二者通常不能无条件互相换算；后续 curated dataset view 需要决定是否允许二者共存，还是按任务只接受某一种 doping ratio unit。
+6. 当前 dedup key 中 interaction.doping_ratio 仍是原始数值字段，尚未携带 wt% / mol% / fraction 这类 ratio unit 语义。后续 curated dataset view 处理 doping ratio 时，最好把 ratio unit 纳入 interaction component，避免不同语义的 8 被误认为同一条件。
 
 ---
 
