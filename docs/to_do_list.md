@@ -607,6 +607,25 @@ Status:
 - implemented in `src/ai4s_agent/domains/oled_mineru_semantic_mapping.py`
 - tested by `tests/test_oled_mineru_semantic_mapping.py`
 
+## 8.3 Schema candidate to layered-record compilation MVP
+
+### [x] Task:
+- compile intermediate OLED schema candidates into proposed layered-record candidates
+- preserve evidence refs from MinerU candidates through schema candidates into layered observations
+- group table row candidates deterministically
+- run layered schema validation
+- do not create gold records
+- do not write curated datasets
+- do not call LLMs or MinerU
+
+Scope:
+- proposed records only
+- final gold validation and curated dataset writing remain later steps
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_schema_candidate_compiler.py`
+- tested by `tests/test_oled_schema_candidate_compiler.py`
+
 ---
 
 # 9. Gold dataset construction（关键）
