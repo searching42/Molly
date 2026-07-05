@@ -588,25 +588,20 @@ Status:
 - implemented in `src/ai4s_agent/domains/oled_mineru_candidates.py`
 - tested by `tests/test_oled_mineru_candidates.py`
 
-## 8.2 MinerU semantic mapping candidates MVP
+## 8.2 MinerU candidate semantic mapping MVP
 
 ### [x] Task:
-- define stable `OledSchemaCandidate` contract
-- preserve evidence cell refs back to `OledMineruCandidate`
-- build LLM-ready semantic mapping packets without calling an LLM
-- add deterministic rule-based mapper for parsed table candidates
-- add schema-candidate validation and summary utilities
+- define intermediate OLED schema candidate contract
+- build LLM-ready semantic mapping packets from MinerU evidence candidates
+- add deterministic rule-based mapping for simple parsed tables/text device structures
+- preserve row/cell/field evidence refs
+- do not call LLMs
+- do not create final OledLayeredRecord objects
+- do not read PDFs or real corpus files
 
 Scope:
-- `OledMineruCandidate` remains evidence; `OledSchemaCandidate` is a proposed semantic interpretation
-- every proposed value cites `source_candidate_hash` and `evidence_anchor`
-- deterministic/offline only
-- no LLM calls
-- no MinerU execution
-- no PDF reading or OCR
-- no real corpus IO
-- no final `OledLayeredRecord` objects
-- no curated dataset writing
+- this PR maps evidence candidates to proposed schema candidates only
+- final schema compilation is a later step
 
 Status:
 - implemented in `src/ai4s_agent/domains/oled_mineru_semantic_mapping.py`
