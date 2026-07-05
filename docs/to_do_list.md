@@ -626,6 +626,30 @@ Status:
 - implemented in `src/ai4s_agent/domains/oled_schema_candidate_compiler.py`
 - tested by `tests/test_oled_schema_candidate_compiler.py`
 
+## 8.4 MinerU parsed-output acceptance harness MVP
+
+### [x] Task:
+- add manifest-driven read-only acceptance harness for local MinerU parsed outputs
+- run parsed JSON/MD through candidate extraction, semantic mapping, and layered-record candidate compilation
+- aggregate candidate counts, compiled record statuses, and finding taxonomy
+- write redacted acceptance report JSON
+- no PDF reading
+- no image reading
+- no LLM calls
+- no MinerU execution
+- no gold records
+- no curated dataset writing
+
+Scope:
+- acceptance report only
+- proposed records only
+- real corpus execution remains user-confirmed and local
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_mineru_acceptance_harness.py`
+- tested by `tests/test_oled_mineru_acceptance_harness.py`
+- documented in `docs/oled-mineru-acceptance-harness.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
