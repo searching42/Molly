@@ -16,7 +16,7 @@ from ai4s_agent.domains.oled_condition_dedup import (
 from ai4s_agent.domains.oled_contracts import OledCausalLayer
 from ai4s_agent.domains.oled_feature_materialization import materialize_oled_baseline_feature_table
 from ai4s_agent.domains.oled_gold_validation import OledGoldDatasetRecord, validate_oled_gold_dataset
-from ai4s_agent.domains.oled_layered_schema import OledLayeredCanonicalObservation
+from ai4s_agent.domains.oled_layered_schema import OledConfounderType, OledLayeredCanonicalObservation
 
 
 class OledDatasetViewKind(str, Enum):
@@ -112,6 +112,12 @@ def build_oled_dataset_view(
             view_kind=kind,
             target_property_id=clean_target,
             rows=_device_level_rows(gold_records, kind, clean_target),
+            findings=_dedup_conflict_findings_as_view_findings(
+                gold_records,
+                kind,
+                clean_target,
+                severity="warning",
+            ),
             metadata={"policy": "no_filtering"},
         )
     if kind == OledDatasetViewKind.CURATED_DEVICE_BASELINE:
@@ -130,7 +136,7 @@ def _build_curated_device_baseline_view(
     findings: list[OledDatasetViewFinding] = []
     for record in records:
         flags = record.layered_record.confounder_flags
-        if flags.is_outcoupling_modified:
+        if flags.is_outcoupling_modified or _record_has_confounder_type(record, OledConfounderType.OUTCOUPLING_STRUCTURE):
             findings.append(
                 _finding(
                     "excluded_outcoupling_modified",
@@ -142,7 +148,7 @@ def _build_curated_device_baseline_view(
                 )
             )
             continue
-        if flags.is_best_reported:
+        if flags.is_best_reported or _record_has_confounder_type(record, OledConfounderType.BEST_REPORTED):
             findings.append(
                 _finding(
                     "excluded_best_reported",
@@ -164,34 +170,22 @@ def _build_curated_device_baseline_view(
             metadata={"policy": "exclude_outcoupling_and_best_reported"},
         )
 
-    dedup_report = detect_oled_condition_dedup_conflicts(kept_records, target_property_id=target_property_id)
-    conflict_key_hashes = {finding.dedup_key_hash for finding in dedup_report.findings}
     findings.extend(
-        _finding(
-            code=finding.code,
-            severity=finding.severity,
-            message=finding.message,
-            view_kind=view_kind,
-            record_ids=finding.record_ids,
-            dedup_key_hash=finding.dedup_key_hash,
-            target_property_id=finding.target_property_id,
+        _dedup_conflict_findings_as_view_findings(
+            kept_records,
+            view_kind,
+            target_property_id,
+            severity="error",
         )
-        for finding in dedup_report.findings
     )
+    conflict_key_hashes = {finding.dedup_key_hash for finding in findings if finding.code == "dedup_value_conflict"}
 
-    grouped_rows: dict[str, list[OledDatasetViewRow]] = defaultdict(list)
-    for row in _device_level_rows(kept_records, view_kind, target_property_id):
-        if row.dedup_key_hash in conflict_key_hashes:
-            continue
-        grouped_rows[row.dedup_key_hash or row.record_id].append(row)
-
-    rows: list[OledDatasetViewRow] = []
-    for dedup_key_hash, group in sorted(grouped_rows.items()):
-        if len(group) == 1:
-            rows.append(group[0].model_copy(update={"metadata": {"dedup_policy": "single_observation"}}))
-            continue
-        rows.append(_collapse_consistent_duplicate_group(dedup_key_hash, group))
-
+    rows = _collapse_device_rows_by_dedup_key(
+        _device_level_rows(kept_records, view_kind, target_property_id),
+        conflict_key_hashes=conflict_key_hashes,
+        duplicate_policy="collapsed_consistent_duplicate",
+        single_policy="single_observation",
+    )
     return OledDatasetViewReport(
         view_kind=view_kind,
         target_property_id=target_property_id,
@@ -206,47 +200,56 @@ def _build_best_reported_view(
     view_kind: OledDatasetViewKind,
     target_property_id: str,
 ) -> OledDatasetViewReport:
-    rows = _device_level_rows(records, view_kind, target_property_id)
-    numeric_rows = [
-        (float(row.target_value), row)
-        for row in rows
-        if _is_numeric(row.target_value)
+    best_records = [
+        record
+        for record in records
+        if record.layered_record.confounder_flags.is_best_reported
+        or _record_has_confounder_type(record, OledConfounderType.BEST_REPORTED)
     ]
-    findings = [
+    if not best_records:
+        return OledDatasetViewReport(
+            view_kind=view_kind,
+            target_property_id=target_property_id,
+            findings=[
+                _finding(
+                    "no_best_reported_rows",
+                    "warning",
+                    "best-reported view requires explicit best-reported flags or tags; none were found",
+                    view_kind,
+                    [record.record_id for record in records],
+                    target_property_id=target_property_id,
+                )
+            ],
+            metadata={"biased_dataset": True, "policy": "explicit_best_reported_only"},
+        )
+
+    findings = _dedup_conflict_findings_as_view_findings(
+        best_records,
+        view_kind,
+        target_property_id,
+        severity="error",
+    )
+    findings.append(
         _finding(
             "best_reported_view_is_biased",
             "warning",
-            "best-reported views intentionally select maximum observed performance and are biased datasets",
+            "best-reported views intentionally expose explicitly flagged best-reported observations as biased datasets",
             view_kind,
-            [row.record_id for row in rows],
+            [record.record_id for record in best_records],
             target_property_id=target_property_id,
         )
+    )
+    conflict_key_hashes = {finding.dedup_key_hash for finding in findings if finding.code == "dedup_value_conflict"}
+    selected_rows = _collapse_device_rows_by_dedup_key(
+        _device_level_rows(best_records, view_kind, target_property_id),
+        conflict_key_hashes=conflict_key_hashes,
+        duplicate_policy="collapsed_consistent_best_reported_duplicate",
+        single_policy="best_reported_observation",
+    )
+    selected_rows = [
+        row.model_copy(update={"metadata": {**row.metadata, "biased_dataset": True}})
+        for row in selected_rows
     ]
-    if not numeric_rows:
-        findings.append(
-            _finding(
-                "no_numeric_target_for_best_reported_view",
-                "error",
-                "best-reported view requires at least one numeric target",
-                view_kind,
-                [row.record_id for row in rows],
-                target_property_id=target_property_id,
-            )
-        )
-        selected_rows: list[OledDatasetViewRow] = []
-    else:
-        _, selected = max(numeric_rows, key=lambda item: (item[0], item[1].record_id))
-        selected_rows = [
-            selected.model_copy(
-                update={
-                    "metadata": {
-                        **selected.metadata,
-                        "biased_dataset": True,
-                        "selection_policy": "maximum_numeric_target",
-                    }
-                }
-            )
-        ]
     return OledDatasetViewReport(
         view_kind=view_kind,
         target_property_id=target_property_id,
@@ -280,6 +283,8 @@ def _build_curated_intrinsic_view(
                 target_property_id=target_property_id,
             )
         )
+    rows, intrinsic_findings = _dedup_intrinsic_rows(rows, view_kind, target_property_id)
+    findings.extend(intrinsic_findings)
     return OledDatasetViewReport(
         view_kind=view_kind,
         target_property_id=target_property_id,
@@ -324,6 +329,59 @@ def _device_level_rows(
     return rows
 
 
+def _dedup_conflict_findings_as_view_findings(
+    records: list[OledGoldDatasetRecord],
+    view_kind: OledDatasetViewKind,
+    target_property_id: str,
+    *,
+    severity: Literal["error", "warning"],
+) -> list[OledDatasetViewFinding]:
+    if not records:
+        return []
+    dedup_report = detect_oled_condition_dedup_conflicts(records, target_property_id=target_property_id)
+    return [
+        _finding(
+            code=finding.code,
+            severity=severity,
+            message=finding.message,
+            view_kind=view_kind,
+            record_ids=finding.record_ids,
+            dedup_key_hash=finding.dedup_key_hash,
+            target_property_id=finding.target_property_id,
+        )
+        for finding in dedup_report.findings
+    ]
+
+
+def _collapse_device_rows_by_dedup_key(
+    rows: list[OledDatasetViewRow],
+    *,
+    conflict_key_hashes: set[str | None],
+    duplicate_policy: str,
+    single_policy: str,
+) -> list[OledDatasetViewRow]:
+    grouped_rows: dict[str, list[OledDatasetViewRow]] = defaultdict(list)
+    for row in rows:
+        if row.dedup_key_hash in conflict_key_hashes:
+            continue
+        grouped_rows[row.dedup_key_hash or row.record_id].append(row)
+
+    collapsed_rows: list[OledDatasetViewRow] = []
+    for dedup_key_hash, group in sorted(grouped_rows.items()):
+        if len(group) == 1:
+            row = group[0]
+            collapsed_rows.append(row.model_copy(update={"metadata": {**row.metadata, "dedup_policy": single_policy}}))
+            continue
+        collapsed_rows.append(
+            _collapse_consistent_duplicate_group(
+                dedup_key_hash,
+                group,
+                duplicate_policy=duplicate_policy,
+            )
+        )
+    return collapsed_rows
+
+
 def _dedup_observations_by_record(
     records: list[OledGoldDatasetRecord],
     target_property_id: str,
@@ -337,6 +395,8 @@ def _dedup_observations_by_record(
 def _collapse_consistent_duplicate_group(
     dedup_key_hash: str,
     rows: list[OledDatasetViewRow],
+    *,
+    duplicate_policy: str,
 ) -> OledDatasetViewRow:
     sorted_rows = sorted(rows, key=lambda row: row.record_id)
     selected = sorted_rows[0]
@@ -349,7 +409,60 @@ def _collapse_consistent_duplicate_group(
             "metadata": {
                 **selected.metadata,
                 "dedup_key_hash": dedup_key_hash,
-                "dedup_policy": "collapsed_consistent_duplicate",
+                "dedup_policy": duplicate_policy,
+            },
+        }
+    )
+
+
+def _dedup_intrinsic_rows(
+    rows: list[OledDatasetViewRow],
+    view_kind: OledDatasetViewKind,
+    target_property_id: str,
+) -> tuple[list[OledDatasetViewRow], list[OledDatasetViewFinding]]:
+    grouped_rows: dict[str, list[OledDatasetViewRow]] = defaultdict(list)
+    for row in rows:
+        grouped_rows[_intrinsic_dedup_key(row)].append(row)
+
+    collapsed_rows: list[OledDatasetViewRow] = []
+    findings: list[OledDatasetViewFinding] = []
+    for key, group in sorted(grouped_rows.items()):
+        if len(group) == 1:
+            row = group[0]
+            collapsed_rows.append(row.model_copy(update={"metadata": {**row.metadata, "dedup_policy": "single_observation"}}))
+            continue
+        if not _row_values_are_consistent(group):
+            findings.append(
+                _finding(
+                    "intrinsic_value_conflict",
+                    "error",
+                    f"intrinsic dedup key `{key}` has conflicting values for `{target_property_id}`",
+                    view_kind,
+                    sorted({record_id for row in group for record_id in row.source_record_ids}),
+                    target_property_id=target_property_id,
+                )
+            )
+            continue
+        collapsed_rows.append(_collapse_consistent_intrinsic_group(key, group))
+    return collapsed_rows, findings
+
+
+def _collapse_consistent_intrinsic_group(
+    intrinsic_key: str,
+    rows: list[OledDatasetViewRow],
+) -> OledDatasetViewRow:
+    sorted_rows = sorted(rows, key=lambda row: row.record_id)
+    selected = sorted_rows[0]
+    source_record_ids = sorted({record_id for row in sorted_rows for record_id in row.source_record_ids})
+    evidence_refs = sorted({evidence_ref for row in sorted_rows for evidence_ref in row.evidence_refs})
+    return selected.model_copy(
+        update={
+            "source_record_ids": source_record_ids,
+            "evidence_refs": evidence_refs,
+            "metadata": {
+                **selected.metadata,
+                "dedup_key": intrinsic_key,
+                "dedup_policy": "collapsed_consistent_intrinsic_duplicate",
             },
         }
     )
@@ -383,6 +496,45 @@ def _intrinsic_row(
         confidence_score=observation.confidence.score if observation.confidence else None,
         metadata={"policy": "molecular_layer_only"},
     )
+
+
+def _intrinsic_dedup_key(row: OledDatasetViewRow) -> str:
+    inchikey = row.features.get("molecule.inchikey")
+    canonical_smiles = row.features.get("molecule.canonical_smiles")
+    if isinstance(inchikey, str) and inchikey.strip():
+        identity = f"inchikey:{inchikey.strip().lower()}"
+    elif isinstance(canonical_smiles, str) and canonical_smiles.strip():
+        identity = f"canonical_smiles:{canonical_smiles.strip()}"
+    else:
+        identity = f"record:{row.record_id}"
+    return f"{identity}|target:{row.target_property_id}"
+
+
+def _row_values_are_consistent(rows: list[OledDatasetViewRow]) -> bool:
+    if len(rows) <= 1:
+        return True
+    numeric_values = [_numeric_value(row.target_value) for row in rows]
+    if all(value is not None for value in numeric_values):
+        clean_values = [float(value) for value in numeric_values if value is not None]
+        return max(clean_values) - min(clean_values) <= 0.0
+    serialized_values = {repr(row.target_value) for row in rows}
+    return len(serialized_values) <= 1
+
+
+def _numeric_value(value: float | int | str | None) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _record_has_confounder_type(
+    record: OledGoldDatasetRecord,
+    confounder_type: OledConfounderType,
+) -> bool:
+    return any(tag.confounder_type == confounder_type for tag in record.layered_record.confounder_tags)
 
 
 def _coerce_view_kind(view_kind: OledDatasetViewKind | str) -> OledDatasetViewKind:
