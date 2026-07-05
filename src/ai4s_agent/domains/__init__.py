@@ -23,6 +23,14 @@ from ai4s_agent.domains.oled_contracts import (
     RepresentationContractFinding,
     RepresentationContractReport,
 )
+from ai4s_agent.domains.oled_condition_dedup import (
+    OledConditionAwareDedupKey,
+    OledConditionDedupFinding,
+    OledConditionDedupObservation,
+    OledConditionDedupReport,
+    build_oled_condition_dedup_observations,
+    detect_oled_condition_dedup_conflicts,
+)
 from ai4s_agent.domains.oled_feature_materialization import (
     OledFeatureMaterializationRow,
     OledFeatureMaterializationTable,
@@ -96,6 +104,10 @@ __all__ = [
     "OledBaselineExperimentSpec",
     "OledBaselineFeatureView",
     "OledCausalLayer",
+    "OledConditionAwareDedupKey",
+    "OledConditionDedupFinding",
+    "OledConditionDedupObservation",
+    "OledConditionDedupReport",
     "OledConfidenceAssessment",
     "OledConfounderFlags",
     "OledConfounderTag",
@@ -136,7 +148,9 @@ __all__ = [
     "RepresentationContractFinding",
     "RepresentationContractReport",
     "build_oled_baseline_experiment_spec",
+    "build_oled_condition_dedup_observations",
     "build_oled_leakage_guard_split",
+    "detect_oled_condition_dedup_conflicts",
     "initialize_oled_ablation_report",
     "materialize_oled_baseline_feature_table",
     "materialize_oled_baseline_feature_tables",
