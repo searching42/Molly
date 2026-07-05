@@ -152,6 +152,7 @@ class OledMolecularLayer(BaseModel):
     canonical_smiles: str | None = None
     inchikey: str | None = None
     properties: list[OledPropertyObservation] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class OledInteractionLayer(BaseModel):
@@ -162,6 +163,7 @@ class OledInteractionLayer(BaseModel):
     matrix_type: str | None = None
     aggregation_state: str | None = None
     properties: list[OledPropertyObservation] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class OledDeviceLayer(BaseModel):
@@ -172,10 +174,12 @@ class OledDeviceLayer(BaseModel):
     outcoupling_structure: str | None = None
     fabrication_method: str | None = None
     properties: list[OledPropertyObservation] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class OledMeasurementLayer(BaseModel):
     measurements: list[OledPropertyObservation] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class OledLayeredCanonicalObservation(BaseModel):
