@@ -31,6 +31,13 @@ from ai4s_agent.domains.oled_condition_dedup import (
     build_oled_condition_dedup_observations,
     detect_oled_condition_dedup_conflicts,
 )
+from ai4s_agent.domains.oled_dataset_views import (
+    OledDatasetViewFinding,
+    OledDatasetViewKind,
+    OledDatasetViewReport,
+    OledDatasetViewRow,
+    build_oled_dataset_view,
+)
 from ai4s_agent.domains.oled_feature_materialization import (
     OledFeatureMaterializationRow,
     OledFeatureMaterializationTable,
@@ -112,6 +119,10 @@ __all__ = [
     "OledConfounderFlags",
     "OledConfounderTag",
     "OledConfounderType",
+    "OledDatasetViewFinding",
+    "OledDatasetViewKind",
+    "OledDatasetViewReport",
+    "OledDatasetViewRow",
     "OledDeviceLayer",
     "OledEvidenceSource",
     "OledEvidenceType",
@@ -149,6 +160,7 @@ __all__ = [
     "RepresentationContractReport",
     "build_oled_baseline_experiment_spec",
     "build_oled_condition_dedup_observations",
+    "build_oled_dataset_view",
     "build_oled_leakage_guard_split",
     "detect_oled_condition_dedup_conflicts",
     "initialize_oled_ablation_report",
