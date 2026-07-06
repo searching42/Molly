@@ -717,6 +717,30 @@ Status:
 - tested by `tests/test_oled_reviewed_extraction_candidates.py`
 - documented in `docs/oled-reviewed-extraction-candidates.md`
 
+## 8.8 Reviewed extraction to gold-candidate conversion MVP
+
+### [x] Task:
+- convert accepted/corrected reviewed extraction candidates into gold dataset record candidates
+- preserve review provenance, evidence anchors, packet ids, and correction metadata
+- run existing gold validation
+- emit conversion status and validation finding taxonomy
+- write redacted gold-candidate JSONL and conversion reports
+- do not write curated datasets
+- do not write training data
+- do not run dataset views, splits, or model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- gold candidates only
+- not final accepted benchmark data
+- curated dataset writing remains a later explicit step
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_reviewed_gold_candidates.py`
+- tested by `tests/test_oled_reviewed_gold_candidates.py`
+- documented in `docs/oled-reviewed-gold-candidates.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
