@@ -650,6 +650,28 @@ Status:
 - tested by `tests/test_oled_mineru_acceptance_harness.py`
 - documented in `docs/oled-mineru-acceptance-harness.md`
 
+## 8.5 MinerU review packet writer MVP
+
+### [x] Task:
+- generate human-review packets from proposed layered-record candidates
+- preserve source anchors, material roles, properties, device stack, conditions, and finding codes
+- include review decision placeholders
+- write redacted JSONL and Markdown review packets
+- do not create gold records
+- do not write curated datasets
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- manual inspection only
+- output is not accepted data
+- gold conversion remains a later explicit step
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_mineru_review_packets.py`
+- tested by `tests/test_oled_mineru_review_packets.py`
+- documented in `docs/oled-mineru-review-packets.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
