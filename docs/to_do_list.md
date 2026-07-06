@@ -741,6 +741,29 @@ Status:
 - tested by `tests/test_oled_reviewed_gold_candidates.py`
 - documented in `docs/oled-reviewed-gold-candidates.md`
 
+## 8.9 Curated gold record writer gate MVP
+
+### [x] Task:
+- select validation-passing reviewed gold candidates for curated gold output
+- require explicit curated-gold-write confirmation
+- re-run gold validation before writing
+- write deterministic curated gold-record JSONL
+- write audit manifest with SHA256, policy, counts, and reason taxonomy
+- do not write training data
+- do not run dataset views, splits, feature materialization, or model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- curated gold records only
+- not ML-ready training data
+- dataset views and training dataset writing remain later explicit steps
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_gold_writer.py`
+- tested by `tests/test_oled_curated_gold_writer.py`
+- documented in `docs/oled-curated-gold-writer.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
