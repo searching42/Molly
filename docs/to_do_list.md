@@ -979,6 +979,32 @@ Status:
 - tested by `tests/test_oled_curated_training_package_backend_preflight.py`
 - documented in `docs/oled-curated-training-package-backend-preflight.md`
 
+## 8.19 Curated training package baseline runner gate MVP
+
+### [x] Task:
+- load ML-ready OLED training package manifest, schema, and row JSONL files
+- load backend preflight report
+- require explicit confirmation
+- run controlled baseline execution
+- write deterministic prediction JSONL and metrics JSON artifacts
+- write audit manifest with SHA256, policy, status, and reason taxonomy
+- support no-dependency mean baseline
+- optionally support sklearn Ridge / RandomForest when available
+- do not write benchmark-validated results
+- do not register benchmarks
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- baseline run artifacts only
+- not benchmark validation
+- benchmark report/registration remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_training_package_baseline_runner.py`
+- tested by `tests/test_oled_curated_training_package_baseline_runner.py`
+- documented in `docs/oled-curated-training-package-baseline-runner.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
