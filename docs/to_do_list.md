@@ -886,6 +886,29 @@ Status:
 - tested by `tests/test_oled_curated_split_feature_preflight.py`
 - documented in `docs/oled-curated-split-feature-preflight.md`
 
+## 8.15 Curated split feature table writer gate MVP
+
+### [x] Task:
+- load curated gold records, split dataset-view rows, and feature preflight reports
+- materialize aligned split feature rows into deterministic JSONL files
+- preserve split, target, feature view, features, missingness, evidence refs, and condition hash
+- write audit manifest with SHA256, row counts, rows by split, policy, and reason taxonomy
+- require explicit confirmation
+- do not write ML-ready training packages
+- do not run baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- split feature row artifacts only
+- not benchmark-ready training data
+- final training package writer remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_split_feature_writer.py`
+- tested by `tests/test_oled_curated_split_feature_writer.py`
+- documented in `docs/oled-curated-split-feature-writer.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
