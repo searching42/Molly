@@ -1118,6 +1118,34 @@ Status:
 
 ---
 
+## 8.24 Benchmark registry promotion-readiness preflight MVP
+
+### [x] Task:
+- load OLED benchmark registry writer manifest, registry entry JSON, and registry index JSONL
+- verify SHA256 integrity
+- check entry/index/manifest consistency
+- check source chain identifiers and candidate-only registry status
+- check benchmark_validated / scientific_claim_validated remain false
+- check required caveats, run-card count, and metric-card count
+- write redacted promotion-readiness preflight report
+- do not promote benchmark registry entries
+- do not mark benchmark validated
+- do not claim scientific performance validity
+- do not rerun baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- read-only promotion-readiness preflight
+- promotion/final validation remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_benchmark_registry_promotion_preflight.py`
+- tested by `tests/test_oled_curated_benchmark_registry_promotion_preflight.py`
+- documented in `docs/oled-curated-benchmark-registry-promotion-preflight.md`
+
+---
+
 # 9. Gold dataset construction（关键）
 
 ## 9.1 manual verified set
