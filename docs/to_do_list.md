@@ -812,6 +812,31 @@ Status:
 - tested by `tests/test_oled_curated_dataset_view_writer.py`
 - documented in `docs/oled-curated-dataset-view-writer.md`
 
+## 8.12 Curated dataset leakage-split preflight MVP
+
+### [x] Task:
+- load curated gold records and curated dataset-view row artifacts
+- build leakage-guard split plan using existing split logic
+- validate split leakage across molecule, paper/evidence, and device-stack groups
+- map dataset-view rows to proposed splits
+- report row counts by split and view
+- detect cross-split source rows and unknown source records
+- write redacted split preflight report
+- do not write split datasets
+- do not write training data
+- do not run feature materialization outputs or model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- split readiness preflight only
+- materialized train/validation/test dataset-view rows remain a later explicit writer gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_dataset_split_preflight.py`
+- tested by `tests/test_oled_curated_dataset_split_preflight.py`
+- documented in `docs/oled-curated-dataset-split-preflight.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
