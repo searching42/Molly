@@ -764,6 +764,29 @@ Status:
 - tested by `tests/test_oled_curated_gold_writer.py`
 - documented in `docs/oled-curated-gold-writer.md`
 
+## 8.10 Curated gold dataset-view preflight MVP
+
+### [x] Task:
+- load curated gold-record JSONL and optional writer manifest
+- verify manifest SHA256 integrity
+- rerun gold validation
+- build existing OLED dataset views in memory
+- report per-view row counts, status, and finding taxonomy
+- do not write dataset view rows
+- do not write training data
+- do not run splits, feature materialization, or model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- read-only dataset-view readiness preflight
+- dataset view materialization and training dataset writing remain later explicit steps
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_gold_view_preflight.py`
+- tested by `tests/test_oled_curated_gold_view_preflight.py`
+- documented in `docs/oled-curated-gold-view-preflight.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
