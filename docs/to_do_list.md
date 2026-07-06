@@ -787,6 +787,31 @@ Status:
 - tested by `tests/test_oled_curated_gold_view_preflight.py`
 - documented in `docs/oled-curated-gold-view-preflight.md`
 
+## 8.11 Curated dataset-view row writer gate MVP
+
+### [x] Task:
+- select dataset views from curated gold records under explicit confirmation
+- write deterministic dataset-view row JSONL artifacts
+- write audit manifest with SHA256, row counts, policy, and reason taxonomy
+- omit feature payloads by default
+- do not write training data
+- do not run leakage splits
+- do not write feature materialization outputs
+- do not run model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- dataset-view row artifacts only
+- not split datasets
+- not ML-ready training data
+- leakage split and training-data writers remain later explicit steps
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_dataset_view_writer.py`
+- tested by `tests/test_oled_curated_dataset_view_writer.py`
+- documented in `docs/oled-curated-dataset-view-writer.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
