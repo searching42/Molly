@@ -862,6 +862,30 @@ Status:
 - tested by `tests/test_oled_curated_split_dataset_view_writer.py`
 - documented in `docs/oled-curated-split-dataset-view-writer.md`
 
+## 8.14 Curated split feature-materialization preflight MVP
+
+### [x] Task:
+- load curated gold records and split dataset-view row artifacts
+- build OLED feature materialization tables in memory
+- align split dataset-view rows to feature rows by record, target, and condition hash
+- report matched/missing/ambiguous/target-mismatch rows
+- summarize feature column coverage and missing feature values
+- write redacted feature preflight report
+- do not write feature tables
+- do not write ML-ready training data
+- do not run model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- read-only feature-materialization readiness preflight
+- feature table writer and training-data writer remain later explicit gates
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_split_feature_preflight.py`
+- tested by `tests/test_oled_curated_split_feature_preflight.py`
+- documented in `docs/oled-curated-split-feature-preflight.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
