@@ -1007,6 +1007,32 @@ Status:
 
 ---
 
+## 8.20 Baseline run benchmark-readiness preflight MVP
+
+### [x] Task:
+- load OLED baseline run manifest, prediction JSONL, and metrics JSON artifacts
+- verify SHA256 integrity
+- check prediction coverage, split coverage, evidence refs, and duplicate prediction ids
+- recompute deterministic metrics and compare with reported metrics
+- reject benchmark-validated source claims
+- write redacted benchmark-readiness preflight report
+- do not register benchmark results
+- do not write benchmark-validated reports
+- do not run baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- read-only benchmark-readiness preflight
+- benchmark report writer / registration remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_baseline_benchmark_preflight.py`
+- tested by `tests/test_oled_curated_baseline_benchmark_preflight.py`
+- documented in `docs/oled-curated-baseline-benchmark-preflight.md`
+
+---
+
 # 9. Gold dataset construction（关键）
 
 ## 9.1 manual verified set
