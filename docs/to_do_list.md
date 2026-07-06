@@ -672,6 +672,29 @@ Status:
 - tested by `tests/test_oled_mineru_review_packets.py`
 - documented in `docs/oled-mineru-review-packets.md`
 
+## 8.6 Review adjudication gate MVP
+
+### [x] Task:
+- load reviewer-facing packet JSONL
+- load optional review decision manifest
+- validate accept/reject/needs-correction/source-check decisions
+- detect duplicate/unknown packet ids
+- prevent silent acceptance of schema-error packets
+- emit redacted adjudication report
+- do not create gold records
+- do not write curated datasets
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- adjudication and validation only
+- accepted packets are eligible for a later gold-candidate conversion step, but are not gold records here
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_mineru_review_adjudication.py`
+- tested by `tests/test_oled_mineru_review_adjudication.py`
+- documented in `docs/oled-mineru-review-adjudication.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
