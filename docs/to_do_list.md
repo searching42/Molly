@@ -695,6 +695,28 @@ Status:
 - tested by `tests/test_oled_mineru_review_adjudication.py`
 - documented in `docs/oled-mineru-review-adjudication.md`
 
+## 8.7 Reviewed extraction candidate staging MVP
+
+### [x] Task:
+- stage accepted adjudicated review packets as reviewed extraction candidates
+- deterministically apply supported correction proposals to packet-level fields
+- preserve original packet snapshots and corrected packet snapshots
+- emit correction application status and finding taxonomy
+- write redacted reviewed-candidate JSONL and staging reports
+- do not create gold records
+- do not write curated datasets
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- reviewed extraction candidates only
+- gold-candidate conversion remains a later explicit step
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_reviewed_extraction_candidates.py`
+- tested by `tests/test_oled_reviewed_extraction_candidates.py`
+- documented in `docs/oled-reviewed-extraction-candidates.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
