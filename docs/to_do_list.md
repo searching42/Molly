@@ -837,6 +837,31 @@ Status:
 - tested by `tests/test_oled_curated_dataset_split_preflight.py`
 - documented in `docs/oled-curated-dataset-split-preflight.md`
 
+## 8.13 Curated split dataset-view row writer gate MVP
+
+### [x] Task:
+- load curated dataset-view row artifacts and split preflight reports
+- materialize assigned dataset-view rows into split-specific JSONL files
+- preserve split assignment, evidence refs, source records, target values, and dedup metadata
+- write deterministic split dataset-view row JSONL artifacts
+- write audit manifest with SHA256, row counts, rows by split, policy, and reason taxonomy
+- omit feature payloads by default
+- do not write ML-ready training data
+- do not write feature materialization outputs
+- do not run model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- split dataset-view row artifacts only
+- not model-ready training data
+- feature materialization and training-data writers remain later explicit steps
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_split_dataset_view_writer.py`
+- tested by `tests/test_oled_curated_split_dataset_view_writer.py`
+- documented in `docs/oled-curated-split-dataset-view-writer.md`
+
 ---
 
 # 9. Gold dataset construction（关键）

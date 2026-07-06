@@ -746,6 +746,8 @@ def _sanitize_for_output(value: Any) -> Any:
 
 def _is_forbidden_payload_key(key: str) -> bool:
     normalized = key.lower()
+    if normalized == "input_gold_record_count":
+        return False
     return any(
         token in normalized
         for token in (
