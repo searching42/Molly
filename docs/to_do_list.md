@@ -955,6 +955,30 @@ Status:
 - tested by `tests/test_oled_curated_split_training_package_writer.py`
 - documented in `docs/oled-curated-split-training-package-writer.md`
 
+## 8.18 Curated training package backend preflight MVP
+
+### [x] Task:
+- load ML-ready OLED training package manifest, schema, and row JSONL files
+- verify SHA256 integrity
+- check split/target/feature-view readiness for tabular backend consumption
+- flatten feature dictionaries in memory for shape/coverage checks
+- report backend dependency availability and readiness
+- write redacted backend-readiness report
+- do not run baseline/model backends
+- do not train or evaluate models
+- do not write predictions or benchmark results
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- read-only backend readiness preflight
+- actual baseline/backend execution remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_training_package_backend_preflight.py`
+- tested by `tests/test_oled_curated_training_package_backend_preflight.py`
+- documented in `docs/oled-curated-training-package-backend-preflight.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
