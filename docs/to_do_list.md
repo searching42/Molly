@@ -1033,6 +1033,35 @@ Status:
 
 ---
 
+## 8.21 Baseline benchmark report writer gate MVP
+
+### [x] Task:
+- load OLED baseline run manifest, prediction JSONL, metrics JSON, and benchmark preflight report
+- require explicit confirmation
+- build deterministic benchmark candidate report object
+- write benchmark candidate report JSON
+- write benchmark candidate report Markdown
+- write audit manifest with SHA256, policy, status, and reason taxonomy
+- preserve caveats that outputs are not benchmark-validated
+- do not register benchmark results
+- do not write benchmark-validated registry entries
+- do not rerun baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- benchmark candidate report artifacts only
+- not benchmark registration
+- not scientific performance validation
+- benchmark registry gate remains a later explicit step
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_baseline_benchmark_report_writer.py`
+- tested by `tests/test_oled_curated_baseline_benchmark_report_writer.py`
+- documented in `docs/oled-curated-baseline-benchmark-report-writer.md`
+
+---
+
 # 9. Gold dataset construction（关键）
 
 ## 9.1 manual verified set
