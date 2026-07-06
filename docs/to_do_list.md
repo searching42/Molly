@@ -932,6 +932,29 @@ Status:
 - tested by `tests/test_oled_curated_split_training_package_preflight.py`
 - documented in `docs/oled-curated-split-training-package-preflight.md`
 
+## 8.17 Curated split training package writer gate MVP
+
+### [x] Task:
+- load split feature row artifacts and training-package preflight reports
+- select rows under explicit confirmation
+- write ML-ready training row JSONL artifacts grouped by split/target/feature view
+- write training package schema JSON
+- write audit manifest with SHA256, row counts, schema metadata, rows by split, policy, and reason taxonomy
+- do not run baseline/model backends
+- do not train or evaluate models
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- ML-ready training package artifacts only
+- not benchmark-validated results
+- baseline/backend evaluation remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_split_training_package_writer.py`
+- tested by `tests/test_oled_curated_split_training_package_writer.py`
+- documented in `docs/oled-curated-split-training-package-writer.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
