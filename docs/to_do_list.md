@@ -1062,6 +1062,33 @@ Status:
 
 ---
 
+## 8.22 Benchmark registry-readiness preflight MVP
+
+### [x] Task:
+- load OLED benchmark candidate report manifest, JSON report, and Markdown report
+- verify SHA256 integrity
+- check source chain consistency and required caveats
+- check benchmark_validated / benchmark_registered / scientific_claim_validated remain false
+- check run-card and metric-card readiness
+- check Markdown safety statement and report id consistency
+- write redacted registry-readiness preflight report
+- do not register benchmark results
+- do not write benchmark registry entries
+- do not rerun baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- read-only benchmark registry readiness
+- benchmark registry writer remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_benchmark_registry_preflight.py`
+- tested by `tests/test_oled_curated_benchmark_registry_preflight.py`
+- documented in `docs/oled-curated-benchmark-registry-preflight.md`
+
+---
+
 # 9. Gold dataset construction（关键）
 
 ## 9.1 manual verified set
