@@ -909,6 +909,29 @@ Status:
 - tested by `tests/test_oled_curated_split_feature_writer.py`
 - documented in `docs/oled-curated-split-feature-writer.md`
 
+## 8.16 Curated split training-package preflight MVP
+
+### [x] Task:
+- load split feature row artifacts and writer manifest
+- verify SHA256 integrity
+- check split/target/feature schema consistency
+- summarize target coverage, split balance, feature columns, and missingness
+- detect duplicate feature row ids, missing targets, missing evidence, and unknown splits
+- write redacted training-package readiness report
+- do not write ML-ready training package
+- do not run baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- read-only ML-ready training package preflight
+- final training package writer remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_split_training_package_preflight.py`
+- tested by `tests/test_oled_curated_split_training_package_preflight.py`
+- documented in `docs/oled-curated-split-training-package-preflight.md`
+
 ---
 
 # 9. Gold dataset construction（关键）
