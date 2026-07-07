@@ -1395,6 +1395,39 @@ Status:
 
 ---
 
+## 8.33 Global append release writer gate MVP
+
+### [x] Task:
+- load OLED global-append writer manifest, entry JSON, delta JSONL, new snapshot JSONL, and release preflight report
+- require explicit confirmation
+- build deterministic release-candidate entry
+- write standalone release entry JSON
+- write standalone release delta JSONL
+- write standalone release snapshot JSONL
+- write audit manifest with SHA256, policy, status, and reason taxonomy
+- preserve release-candidate status and safety boundary
+- do not mutate global registry files in place
+- do not publish externally
+- do not mark benchmark validated
+- do not claim scientific performance validity
+- do not rerun baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- local release-candidate artifacts only
+- not external publication
+- not benchmark validation
+- not scientific conclusion
+- external publication / release remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_global_append_release_writer.py`
+- tested by `tests/test_oled_curated_global_append_release_writer.py`
+- documented in `docs/oled-curated-global-append-release-writer.md`
+
+---
+
 # 9. Gold dataset construction（关键）
 
 ## 9.1 manual verified set
