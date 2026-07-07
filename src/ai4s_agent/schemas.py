@@ -2138,6 +2138,69 @@ class CriticReview(BaseModel):
         return self
 
 
+class OLEDDiscoveryLoopInputSummary(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    goal: str = ""
+    current_stage_hint: str = ""
+    available_artifacts: list[str] = Field(default_factory=list)
+    executable: bool = False
+
+    @field_validator("available_artifacts")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return _clean_unique_strings(value)
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> OLEDDiscoveryLoopInputSummary:
+        if self.executable:
+            raise ValueError("OLED discovery loop input summaries are review-only and must not be executable")
+        return self
+
+
+class OLEDDiscoveryLoopReview(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    goal: str = ""
+    run_card: OLEDDiscoveryRunCard
+    tool_recommendations: list[AgentToolRecommendation] = Field(default_factory=list)
+    critic_review: CriticReview
+    recommended_next_action: str = ""
+    ready_tool_ids: list[str] = Field(default_factory=list)
+    blocked_tool_ids: list[str] = Field(default_factory=list)
+    blocked_reasons: list[str] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
+    review_summary: str = ""
+    assumptions: list[str] = Field(default_factory=list)
+    executable: bool = False
+
+    @field_validator("ready_tool_ids", "blocked_tool_ids", "blocked_reasons", "risk_flags", "assumptions")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return _clean_unique_strings(value)
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> OLEDDiscoveryLoopReview:
+        if self.executable:
+            raise ValueError("OLED discovery loop reviews are review-only and must not be executable")
+        if self.run_card.executable or self.critic_review.executable:
+            raise ValueError("nested OLED discovery loop review artifacts must be review-only")
+        if any(recommendation.executable for recommendation in self.tool_recommendations):
+            raise ValueError("nested tool recommendations must be review-only")
+        return self
+
+
+def _clean_unique_strings(value: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        normalized = str(item).strip()
+        if normalized and normalized not in seen:
+            cleaned.append(normalized)
+            seen.add(normalized)
+    return cleaned
+
+
 ProjectMemoryCategory = Literal[
     "user_preference",
     "backend_choice",
@@ -2688,6 +2751,8 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "critic_finding": CriticFinding,
     "critic_decision": CriticDecision,
     "critic_review": CriticReview,
+    "oled_discovery_loop_input_summary": OLEDDiscoveryLoopInputSummary,
+    "oled_discovery_loop_review": OLEDDiscoveryLoopReview,
     "project_memory_record": ProjectMemoryRecord,
     "project_memory_use": ProjectMemoryUse,
     "agent_plan_proposal": AgentPlanProposal,
