@@ -55,6 +55,8 @@ When `RunPlanExecutor` completes baseline training with model package manifests,
 
 `OLEDDiscoveryReviewLoopAgent` connects the run-card state machine, AgentToolRegistry recommendations, and CriticAgent decisions into a single review-only loop artifact. It summarizes current stage, ready/blocked tools, critic findings, and the recommended next action without executing adapters or mutating artifacts.
 
+`OLEDDiscoveryActionHandoffAgent` converts an integrated review-loop recommendation into a review-only action handoff. It maps the recommended next action to a selected tool/task, required inputs, gates, permissions, blocked reasons, and a placeholder payload template without executing adapters or mutating artifacts.
+
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.
 
 `PromotedModelAsset` is the reuse contract for that exception: it records the approved model id, backend, runtime directory, required inputs, metrics, applicability notes, source run, and rollback asset. `PredictionPreparationAgent` will build a draft prediction payload only for a confirmed promoted asset, or for historical reuse that the user explicitly approves for a controlled run.

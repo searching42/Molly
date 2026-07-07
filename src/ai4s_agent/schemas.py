@@ -2190,6 +2190,85 @@ class OLEDDiscoveryLoopReview(BaseModel):
         return self
 
 
+class OLEDDiscoveryActionHandoffRequest(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    action: str = ""
+    risk_budget: str = "medium"
+    allow_gated: bool = True
+    executable: bool = False
+
+    @field_validator("risk_budget")
+    @classmethod
+    def validate_risk_budget(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"low", "medium", "high"}:
+            raise ValueError("risk_budget must be low, medium, or high")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> OLEDDiscoveryActionHandoffRequest:
+        if self.executable:
+            raise ValueError("OLED discovery action handoff requests are review-only and must not be executable")
+        return self
+
+
+class OLEDDiscoveryActionHandoff(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    goal: str = ""
+    source_review_id: str = ""
+    recommended_next_action: str
+    critic_decision: str
+    selected_tool_id: str = ""
+    selected_task_id: str = ""
+    target_stage: str = ""
+    ready: bool = False
+    executable: bool = False
+    input_artifacts: list[str] = Field(default_factory=list)
+    missing_inputs: list[str] = Field(default_factory=list)
+    output_artifacts: list[str] = Field(default_factory=list)
+    required_gates: list[str] = Field(default_factory=list)
+    required_permissions: list[str] = Field(default_factory=list)
+    blocked_reasons: list[str] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
+    payload_template: dict[str, Any] = Field(default_factory=dict)
+    rationale: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "input_artifacts",
+        "missing_inputs",
+        "output_artifacts",
+        "required_gates",
+        "required_permissions",
+        "blocked_reasons",
+        "risk_flags",
+        "rationale",
+        "assumptions",
+    )
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return _clean_unique_strings(value)
+
+    @field_validator("payload_template")
+    @classmethod
+    def validate_json_safe_payload(cls, value: dict[str, Any]) -> dict[str, Any]:
+        try:
+            json.dumps(value, sort_keys=True)
+        except TypeError as exc:
+            raise ValueError("payload_template must be JSON-safe") from exc
+        return value
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> OLEDDiscoveryActionHandoff:
+        if self.executable:
+            raise ValueError("OLED discovery action handoffs are review-only and must not be executable")
+        if self.ready and (self.missing_inputs or self.blocked_reasons):
+            raise ValueError("ready handoffs must not have missing inputs or blocked reasons")
+        return self
+
+
 def _clean_unique_strings(value: list[str]) -> list[str]:
     cleaned: list[str] = []
     seen: set[str] = set()
@@ -2753,6 +2832,8 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "critic_review": CriticReview,
     "oled_discovery_loop_input_summary": OLEDDiscoveryLoopInputSummary,
     "oled_discovery_loop_review": OLEDDiscoveryLoopReview,
+    "oled_discovery_action_handoff_request": OLEDDiscoveryActionHandoffRequest,
+    "oled_discovery_action_handoff": OLEDDiscoveryActionHandoff,
     "project_memory_record": ProjectMemoryRecord,
     "project_memory_use": ProjectMemoryUse,
     "agent_plan_proposal": AgentPlanProposal,
