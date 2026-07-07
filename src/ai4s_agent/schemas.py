@@ -2370,6 +2370,115 @@ class OLEDDiscoveryExecutionPreview(BaseModel):
         return self
 
 
+class OLEDDiscoveryDryRunPacketRequest(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    allow_auto_eligible: bool = True
+    allow_gated: bool = True
+    executable: bool = False
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> OLEDDiscoveryDryRunPacketRequest:
+        if self.executable:
+            raise ValueError("OLED discovery dry-run packet requests are review-only and must not be executable")
+        return self
+
+
+class OLEDDiscoveryDryRunPacket(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    goal: str = ""
+    source_preview_id: str = ""
+    recommended_next_action: str
+    selected_tool_id: str = ""
+    resolved_atomic_task_id: str = ""
+    resolved_adapter_name: str = ""
+    approval_mode: str = "blocked"
+    dry_run_mode: str = "blocked"
+    ready_for_dry_run_review: bool = False
+    executable: bool = False
+    would_execute: bool = False
+    risk_level: str = "low"
+    input_artifacts: list[str] = Field(default_factory=list)
+    missing_inputs: list[str] = Field(default_factory=list)
+    output_artifacts: list[str] = Field(default_factory=list)
+    required_gates: list[str] = Field(default_factory=list)
+    required_permissions: list[str] = Field(default_factory=list)
+    blocked_reasons: list[str] = Field(default_factory=list)
+    execution_preconditions: list[str] = Field(default_factory=list)
+    payload_template: dict[str, Any] = Field(default_factory=dict)
+    dry_run_snapshot_material: dict[str, Any] = Field(default_factory=dict)
+    review_checklist: list[str] = Field(default_factory=list)
+    policy_notes: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+
+    @field_validator("risk_level")
+    @classmethod
+    def validate_risk_level(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"low", "medium", "high"}:
+            raise ValueError("risk_level must be low, medium, or high")
+        return normalized
+
+    @field_validator("approval_mode")
+    @classmethod
+    def validate_approval_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        allowed = {"auto_eligible", "gated_review_required", "manual_review_required", "blocked"}
+        if normalized not in allowed:
+            raise ValueError("approval_mode must be auto_eligible, gated_review_required, manual_review_required, or blocked")
+        return normalized
+
+    @field_validator("dry_run_mode")
+    @classmethod
+    def validate_dry_run_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        allowed = {"auto_eligible_preview", "gated_review_packet", "manual_review_packet", "blocked"}
+        if normalized not in allowed:
+            raise ValueError("dry_run_mode must be auto_eligible_preview, gated_review_packet, manual_review_packet, or blocked")
+        return normalized
+
+    @field_validator(
+        "input_artifacts",
+        "missing_inputs",
+        "output_artifacts",
+        "required_gates",
+        "required_permissions",
+        "blocked_reasons",
+        "execution_preconditions",
+        "review_checklist",
+        "policy_notes",
+        "assumptions",
+    )
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return _clean_unique_strings(value)
+
+    @field_validator("payload_template", "dry_run_snapshot_material")
+    @classmethod
+    def validate_json_safe_payloads(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_json_safe(value, "dry_run_packet_payload")
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> OLEDDiscoveryDryRunPacket:
+        if self.executable:
+            raise ValueError("OLED discovery dry-run packets are review-only and must not be executable")
+        if self.would_execute:
+            raise ValueError("OLED discovery dry-run packets must not execute in this PR")
+        if self.ready_for_dry_run_review and self.missing_inputs:
+            raise ValueError("ready dry-run packets must not have missing inputs")
+        if self.dry_run_mode == "auto_eligible_preview":
+            if self.approval_mode != "auto_eligible":
+                raise ValueError("auto-eligible dry-run packets require auto-eligible preview approval")
+            if self.risk_level != "low":
+                raise ValueError("auto-eligible dry-run packets must be low risk")
+            if self.required_gates:
+                raise ValueError("auto-eligible dry-run packets must not require gates")
+        if self.required_gates and self.dry_run_mode not in {"gated_review_packet", "blocked"}:
+            raise ValueError("dry-run packets with gates require gated review or must be blocked")
+        return self
+
+
 def _clean_unique_strings(value: list[str]) -> list[str]:
     cleaned: list[str] = []
     seen: set[str] = set()
@@ -2937,6 +3046,8 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "oled_discovery_action_handoff": OLEDDiscoveryActionHandoff,
     "oled_discovery_execution_preview_request": OLEDDiscoveryExecutionPreviewRequest,
     "oled_discovery_execution_preview": OLEDDiscoveryExecutionPreview,
+    "oled_discovery_dry_run_packet_request": OLEDDiscoveryDryRunPacketRequest,
+    "oled_discovery_dry_run_packet": OLEDDiscoveryDryRunPacket,
     "project_memory_record": ProjectMemoryRecord,
     "project_memory_use": ProjectMemoryUse,
     "agent_plan_proposal": AgentPlanProposal,
