@@ -63,6 +63,8 @@ When `RunPlanExecutor` completes baseline training with model package manifests,
 
 `OLEDDiscoveryDryRunBridgeRequestAgent` converts a dry-run packet into a conservative, review-only bridge request. It records placeholder adapter invocation intent, bridge mode, reviewer confirmation requirements, snapshot-binding requirements, and blocking reasons without executing adapters, approving gates, or mutating run state.
 
+`OLEDAgentMVPDemoRunner` provides a compact end-to-end review-only OLED Agent demo. It runs the existing run-card, tool-registry, critic, review-loop, action-handoff, execution-preview, dry-run-packet, and bridge-request components over synthetic scenarios and writes a consolidated report without executing adapters or mutating artifacts.
+
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.
 
 `PromotedModelAsset` is the reuse contract for that exception: it records the approved model id, backend, runtime directory, required inputs, metrics, applicability notes, source run, and rollback asset. `PredictionPreparationAgent` will build a draft prediction payload only for a confirmed promoted asset, or for historical reuse that the user explicitly approves for a controlled run.
