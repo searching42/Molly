@@ -1,0 +1,165 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "goal": {
+      "default": "",
+      "title": "Goal",
+      "type": "string"
+    },
+    "source_preview_id": {
+      "default": "",
+      "title": "Source Preview Id",
+      "type": "string"
+    },
+    "recommended_next_action": {
+      "title": "Recommended Next Action",
+      "type": "string"
+    },
+    "selected_tool_id": {
+      "default": "",
+      "title": "Selected Tool Id",
+      "type": "string"
+    },
+    "resolved_atomic_task_id": {
+      "default": "",
+      "title": "Resolved Atomic Task Id",
+      "type": "string"
+    },
+    "resolved_adapter_name": {
+      "default": "",
+      "title": "Resolved Adapter Name",
+      "type": "string"
+    },
+    "approval_mode": {
+      "default": "blocked",
+      "title": "Approval Mode",
+      "type": "string"
+    },
+    "dry_run_mode": {
+      "default": "blocked",
+      "title": "Dry Run Mode",
+      "type": "string"
+    },
+    "ready_for_dry_run_review": {
+      "default": false,
+      "title": "Ready For Dry Run Review",
+      "type": "boolean"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "would_execute": {
+      "default": false,
+      "title": "Would Execute",
+      "type": "boolean"
+    },
+    "risk_level": {
+      "default": "low",
+      "title": "Risk Level",
+      "type": "string"
+    },
+    "input_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Artifacts",
+      "type": "array"
+    },
+    "missing_inputs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Inputs",
+      "type": "array"
+    },
+    "output_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Output Artifacts",
+      "type": "array"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
+      "type": "array"
+    },
+    "required_permissions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Permissions",
+      "type": "array"
+    },
+    "blocked_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocked Reasons",
+      "type": "array"
+    },
+    "execution_preconditions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Execution Preconditions",
+      "type": "array"
+    },
+    "payload_template": {
+      "additionalProperties": true,
+      "title": "Payload Template",
+      "type": "object"
+    },
+    "dry_run_snapshot_material": {
+      "additionalProperties": true,
+      "title": "Dry Run Snapshot Material",
+      "type": "object"
+    },
+    "review_checklist": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Review Checklist",
+      "type": "array"
+    },
+    "policy_notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Policy Notes",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "recommended_next_action"
+  ],
+  "title": "OLEDDiscoveryDryRunPacket",
+  "type": "object"
+}
