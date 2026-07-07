@@ -1298,6 +1298,37 @@ Status:
 
 ---
 
+## 8.30 Final registry global-append-readiness preflight MVP
+
+### [x] Task:
+- load OLED final-registry candidate writer manifest, entry JSON, and index JSONL
+- optionally load existing final/global registry snapshot JSONL for duplicate checks
+- verify SHA256 integrity
+- check final-registry candidate entry/index/manifest consistency
+- check source chain identifiers and final-registry-candidate status
+- reject benchmark_validated / scientific_claim_validated / publication / global registry claims
+- check duplicate entry ids and duplicate source chains against optional existing snapshot
+- check required caveats, run-card count, and metric-card count
+- write redacted global-append-readiness preflight report
+- do not write or mutate final/global registry files
+- do not publish benchmark registry entries
+- do not mark benchmark validated
+- do not claim scientific performance validity
+- do not rerun baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- read-only global-append-readiness preflight
+- actual global registry writer remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_final_registry_global_append_preflight.py`
+- tested by `tests/test_oled_curated_final_registry_global_append_preflight.py`
+- documented in `docs/oled-curated-final-registry-global-append-preflight.md`
+
+---
+
 # 9. Gold dataset construction（关键）
 
 ## 9.1 manual verified set
