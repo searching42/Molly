@@ -4,6 +4,7 @@ from ai4s_agent.agents.evaluation import compute_autonomy_metrics
 from ai4s_agent.agents.generation import GenerationAgent
 from ai4s_agent.agents.conversation import ConversationAgent
 from ai4s_agent.agents.modeling import ModelingAgent
+from ai4s_agent.agents.oled_discovery import OLEDDiscoveryLoopAgent
 from ai4s_agent.agents.observer import ObserverAgent
 from ai4s_agent.agents.planner import PlannerAgent
 from ai4s_agent.agents.prediction import PredictionPreparationAgent
@@ -16,6 +17,7 @@ __all__ = [
     "GenerationAgent",
     "ConversationAgent",
     "ModelingAgent",
+    "OLEDDiscoveryLoopAgent",
     "ObserverAgent",
     "PlannerAgent",
     "PredictionPreparationAgent",
