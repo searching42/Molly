@@ -1,0 +1,47 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "goal": {
+      "default": "",
+      "title": "Goal",
+      "type": "string"
+    },
+    "current_stage_hint": {
+      "default": "",
+      "title": "Current Stage Hint",
+      "type": "string"
+    },
+    "available_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Available Artifacts",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "run_id"
+  ],
+  "title": "OLEDDiscoveryLoopInputSummary",
+  "type": "object"
+}

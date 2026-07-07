@@ -53,6 +53,8 @@ When `RunPlanExecutor` completes baseline training with model package manifests,
 
 `CriticAgent` provides a review-only critique layer for OLED discovery runs. It inspects run-card state, tool recommendations, dataset/model/candidate summaries, diagnostics, and provenance signals to recommend whether to continue, revise data/model assumptions, rerun baselines, request more evidence, block overclaims, or proceed to candidate review. It never executes tools or mutates artifacts.
 
+`OLEDDiscoveryReviewLoopAgent` connects the run-card state machine, AgentToolRegistry recommendations, and CriticAgent decisions into a single review-only loop artifact. It summarizes current stage, ready/blocked tools, critic findings, and the recommended next action without executing adapters or mutating artifacts.
+
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.
 
 `PromotedModelAsset` is the reuse contract for that exception: it records the approved model id, backend, runtime directory, required inputs, metrics, applicability notes, source run, and rollback asset. `PredictionPreparationAgent` will build a draft prediction payload only for a confirmed promoted asset, or for historical reuse that the user explicitly approves for a controlled run.
