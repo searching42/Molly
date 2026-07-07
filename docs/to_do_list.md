@@ -1428,6 +1428,40 @@ Status:
 
 ---
 
+## 8.34 Release candidate external-publication-readiness preflight MVP
+
+### [x] Task:
+- load OLED release writer manifest, release entry JSON, release delta JSONL, and release snapshot JSONL
+- optionally load prior final/global registry snapshot JSONL
+- verify SHA256 integrity
+- check release entry/delta/snapshot/manifest consistency
+- check source chain identifiers and release-candidate status
+- check that release delta records are included in the release snapshot
+- check prior snapshot preservation when prior snapshot is supplied
+- reject benchmark_validated / scientific_claim_validated / external publication / GitHub release / tag / upload / global mutation claims
+- check required caveats, run-card count, and metric-card count
+- write redacted external-publication-readiness preflight report
+- do not write or mutate final/global registry files
+- do not publish benchmark registry entries
+- do not create GitHub releases or tags
+- do not upload artifacts externally
+- do not mark benchmark validated
+- do not claim scientific performance validity
+- do not rerun baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- read-only external-publication-readiness preflight
+- actual external publication / release writer remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_release_candidate_external_publication_preflight.py`
+- tested by `tests/test_oled_curated_release_candidate_external_publication_preflight.py`
+- documented in `docs/oled-curated-release-candidate-external-publication-preflight.md`
+
+---
+
 # 9. Gold dataset construction（关键）
 
 ## 9.1 manual verified set
