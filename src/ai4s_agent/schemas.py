@@ -1883,6 +1883,77 @@ class ReportSynthesisProposal(BaseModel):
         return [str(item).strip() for item in value if str(item).strip()]
 
 
+class OLEDDiscoveryStage(str, Enum):
+    INTENT_CAPTURED = "intent_captured"
+    RESEARCH_PLAN_PROPOSED = "research_plan_proposed"
+    ACQUISITION_PREPARED = "acquisition_prepared"
+    DATASET_READY = "dataset_ready"
+    TRAINING_PACKAGE_READY = "training_package_ready"
+    BASELINE_READY = "baseline_ready"
+    DIAGNOSTICS_READY = "diagnostics_ready"
+    CANDIDATES_READY = "candidates_ready"
+    CRITIC_REVIEWED = "critic_reviewed"
+    NEXT_ACTION_PROPOSED = "next_action_proposed"
+    BLOCKED = "blocked"
+
+
+class OLEDDiscoveryStageStatus(BaseModel):
+    stage: str
+    status: str
+    evidence: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+    summary: str
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        allowed = {"missing", "ready", "blocked", "complete", "needs_review"}
+        if normalized not in allowed:
+            raise ValueError(f"status must be one of {sorted(allowed)}")
+        return normalized
+
+    @field_validator("evidence", "missing")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return [str(item).strip() for item in value if str(item).strip()]
+
+
+class OLEDDiscoveryNextAction(BaseModel):
+    action_id: str
+    label: str
+    reason: str
+    target_stage: str
+    requires_gate: bool
+    suggested_task: str | None = None
+
+
+class OLEDDiscoveryRunCard(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    goal: str = ""
+    current_stage: str
+    stage_statuses: list[OLEDDiscoveryStageStatus] = Field(default_factory=list)
+    available_artifacts: list[str] = Field(default_factory=list)
+    missing_artifacts: list[str] = Field(default_factory=list)
+    blocked_reasons: list[str] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
+    recommended_next_actions: list[OLEDDiscoveryNextAction] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    executable: bool = False
+
+    @field_validator("available_artifacts", "missing_artifacts", "blocked_reasons", "risk_flags", "assumptions")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> OLEDDiscoveryRunCard:
+        if self.executable:
+            raise ValueError("OLED discovery run cards are review-only and must not be executable")
+        return self
+
+
 ProjectMemoryCategory = Literal[
     "user_preference",
     "backend_choice",
@@ -2424,6 +2495,9 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "report_section": ReportSection,
     "report_next_step": ReportNextStep,
     "report_synthesis_proposal": ReportSynthesisProposal,
+    "oled_discovery_stage_status": OLEDDiscoveryStageStatus,
+    "oled_discovery_next_action": OLEDDiscoveryNextAction,
+    "oled_discovery_run_card": OLEDDiscoveryRunCard,
     "project_memory_record": ProjectMemoryRecord,
     "project_memory_use": ProjectMemoryUse,
     "agent_plan_proposal": AgentPlanProposal,

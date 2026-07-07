@@ -1,0 +1,45 @@
+{
+  "properties": {
+    "action_id": {
+      "title": "Action Id",
+      "type": "string"
+    },
+    "label": {
+      "title": "Label",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "target_stage": {
+      "title": "Target Stage",
+      "type": "string"
+    },
+    "requires_gate": {
+      "title": "Requires Gate",
+      "type": "boolean"
+    },
+    "suggested_task": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Suggested Task"
+    }
+  },
+  "required": [
+    "action_id",
+    "label",
+    "reason",
+    "target_stage",
+    "requires_gate"
+  ],
+  "title": "OLEDDiscoveryNextAction",
+  "type": "object"
+}
