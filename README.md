@@ -49,6 +49,8 @@ When `RunPlanExecutor` completes baseline training with model package manifests,
 
 `OLEDDiscoveryLoopAgent` adds a review-only OLED discovery loop run card that summarizes Agent progress from intent capture through research planning, data readiness, training-package readiness, baseline diagnostics, candidate screening, critic review, and next-action proposal. The card records available and missing artifacts, blockers, risks, and recommended next actions, but it is always `executable=false` and does not run acquisition, modeling, prediction, registry mutation, LLMs, MinerU, or external network access.
 
+`AgentToolRegistry` provides a review-only capability map for OLED discovery planning. It maps discovery stages to available tools/tasks, required inputs, outputs, gates, risk levels, and failure modes so later Agent components can recommend the next safe action without executing tools.
+
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.
 
 `PromotedModelAsset` is the reuse contract for that exception: it records the approved model id, backend, runtime directory, required inputs, metrics, applicability notes, source run, and rollback asset. `PredictionPreparationAgent` will build a draft prediction payload only for a confirmed promoted asset, or for historical reuse that the user explicitly approves for a controlled run.

@@ -1954,6 +1954,91 @@ class OLEDDiscoveryRunCard(BaseModel):
         return self
 
 
+class AgentToolSpec(BaseModel):
+    tool_id: str
+    label: str
+    description: str = ""
+    discovery_stages: list[str] = Field(default_factory=list)
+    suggested_tasks: list[str] = Field(default_factory=list)
+    input_artifacts: list[str] = Field(default_factory=list)
+    output_artifacts: list[str] = Field(default_factory=list)
+    risk_level: str = "low"
+    required_gates: list[str] = Field(default_factory=list)
+    required_permissions: list[str] = Field(default_factory=list)
+    failure_modes: list[str] = Field(default_factory=list)
+    safety_boundary: list[str] = Field(default_factory=list)
+    executable: bool = False
+
+    @field_validator(
+        "discovery_stages",
+        "suggested_tasks",
+        "input_artifacts",
+        "output_artifacts",
+        "required_gates",
+        "required_permissions",
+        "failure_modes",
+        "safety_boundary",
+    )
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @field_validator("risk_level")
+    @classmethod
+    def validate_risk_level(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"low", "medium", "high"}:
+            raise ValueError("risk_level must be low, medium, or high")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> AgentToolSpec:
+        if self.executable:
+            raise ValueError("agent tool specs are review-only and must not be executable")
+        return self
+
+
+class AgentToolRecommendation(BaseModel):
+    tool_id: str
+    reason: str
+    target_stage: str
+    ready: bool
+    missing_inputs: list[str] = Field(default_factory=list)
+    blocked_reasons: list[str] = Field(default_factory=list)
+    required_gates: list[str] = Field(default_factory=list)
+    executable: bool = False
+
+    @field_validator("missing_inputs", "blocked_reasons", "required_gates")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> AgentToolRecommendation:
+        if self.executable:
+            raise ValueError("agent tool recommendations are review-only and must not be executable")
+        return self
+
+
+class AgentToolRegistrySnapshot(BaseModel):
+    registry_id: str
+    tool_count: int
+    tools: list[AgentToolSpec]
+    assumptions: list[str] = Field(default_factory=list)
+    executable: bool = False
+
+    @field_validator("assumptions")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> AgentToolRegistrySnapshot:
+        if self.executable:
+            raise ValueError("agent tool registry snapshots are review-only and must not be executable")
+        return self
+
+
 ProjectMemoryCategory = Literal[
     "user_preference",
     "backend_choice",
@@ -2498,6 +2583,9 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "oled_discovery_stage_status": OLEDDiscoveryStageStatus,
     "oled_discovery_next_action": OLEDDiscoveryNextAction,
     "oled_discovery_run_card": OLEDDiscoveryRunCard,
+    "agent_tool_spec": AgentToolSpec,
+    "agent_tool_recommendation": AgentToolRecommendation,
+    "agent_tool_registry_snapshot": AgentToolRegistrySnapshot,
     "project_memory_record": ProjectMemoryRecord,
     "project_memory_use": ProjectMemoryUse,
     "agent_plan_proposal": AgentPlanProposal,

@@ -1,0 +1,54 @@
+{
+  "properties": {
+    "tool_id": {
+      "title": "Tool Id",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "target_stage": {
+      "title": "Target Stage",
+      "type": "string"
+    },
+    "ready": {
+      "title": "Ready",
+      "type": "boolean"
+    },
+    "missing_inputs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Inputs",
+      "type": "array"
+    },
+    "blocked_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocked Reasons",
+      "type": "array"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "tool_id",
+    "reason",
+    "target_stage",
+    "ready"
+  ],
+  "title": "AgentToolRecommendation",
+  "type": "object"
+}
