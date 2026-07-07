@@ -1,5 +1,6 @@
 """Expert agent contracts for AI4S orchestration."""
 
+from ai4s_agent.agents.action_handoff import OLEDDiscoveryActionHandoffAgent
 from ai4s_agent.agents.critic import CriticAgent
 from ai4s_agent.agents.evaluation import compute_autonomy_metrics
 from ai4s_agent.agents.generation import GenerationAgent
@@ -18,6 +19,7 @@ from ai4s_agent.agents.verifier import VerifierAgent
 
 __all__ = [
     "CriticAgent",
+    "OLEDDiscoveryActionHandoffAgent",
     "GenerationAgent",
     "ConversationAgent",
     "ModelingAgent",

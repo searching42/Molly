@@ -1,0 +1,138 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "goal": {
+      "default": "",
+      "title": "Goal",
+      "type": "string"
+    },
+    "source_review_id": {
+      "default": "",
+      "title": "Source Review Id",
+      "type": "string"
+    },
+    "recommended_next_action": {
+      "title": "Recommended Next Action",
+      "type": "string"
+    },
+    "critic_decision": {
+      "title": "Critic Decision",
+      "type": "string"
+    },
+    "selected_tool_id": {
+      "default": "",
+      "title": "Selected Tool Id",
+      "type": "string"
+    },
+    "selected_task_id": {
+      "default": "",
+      "title": "Selected Task Id",
+      "type": "string"
+    },
+    "target_stage": {
+      "default": "",
+      "title": "Target Stage",
+      "type": "string"
+    },
+    "ready": {
+      "default": false,
+      "title": "Ready",
+      "type": "boolean"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "input_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Artifacts",
+      "type": "array"
+    },
+    "missing_inputs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Inputs",
+      "type": "array"
+    },
+    "output_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Output Artifacts",
+      "type": "array"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
+      "type": "array"
+    },
+    "required_permissions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Permissions",
+      "type": "array"
+    },
+    "blocked_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocked Reasons",
+      "type": "array"
+    },
+    "risk_flags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Risk Flags",
+      "type": "array"
+    },
+    "payload_template": {
+      "additionalProperties": true,
+      "title": "Payload Template",
+      "type": "object"
+    },
+    "rationale": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Rationale",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "recommended_next_action",
+    "critic_decision"
+  ],
+  "title": "OLEDDiscoveryActionHandoff",
+  "type": "object"
+}
