@@ -1146,6 +1146,36 @@ Status:
 
 ---
 
+## 8.25 Benchmark registry promotion writer gate MVP
+
+### [x] Task:
+- load OLED benchmark registry writer manifest, registry entry JSON, registry index JSONL, and promotion preflight report
+- require explicit confirmation
+- build deterministic promoted candidate registry entry
+- write standalone promoted registry entry JSON
+- write standalone promoted registry index JSONL
+- write audit manifest with SHA256, policy, status, and reason taxonomy
+- preserve promoted-candidate status and benchmark validation boundary
+- do not mark benchmark validated
+- do not claim scientific performance validity
+- do not mutate global registry files
+- do not rerun baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- local promoted candidate registry artifacts only
+- not benchmark validation
+- not scientific conclusion
+- final validated/public registry remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_benchmark_registry_promotion_writer.py`
+- tested by `tests/test_oled_curated_benchmark_registry_promotion_writer.py`
+- documented in `docs/oled-curated-benchmark-registry-promotion-writer.md`
+
+---
+
 # 9. Gold dataset construction（关键）
 
 ## 9.1 manual verified set
