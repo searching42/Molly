@@ -47,7 +47,7 @@ The runner returns a compact dictionary with:
 - `oled_agent_mvp_demo.json`
 - `oled_agent_mvp_demo.md`
 
-## CLI Example
+## One-Scenario CLI
 
 ```bash
 PYTHONPATH=src python -m ai4s_agent.agents.oled_mvp_demo \
@@ -58,6 +58,39 @@ PYTHONPATH=src python -m ai4s_agent.agents.oled_mvp_demo \
 ```
 
 The CLI prints compact JSON only. If `--output-dir` is supplied, it also writes the JSON and Markdown demo report to that directory.
+
+## All-Scenarios CLI
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.agents.oled_mvp_demo \
+  --run-id demo \
+  --goal "Find OLED emitters with high PLQY and red-shifted emission" \
+  --all-scenarios \
+  --output-dir /tmp/oled-agent-demo
+```
+
+With `--all-scenarios`, the runner executes every built-in synthetic scenario and writes:
+
+- `oled_agent_mvp_demo_matrix.json`
+- `oled_agent_mvp_demo_matrix.md`
+
+The CLI still prints compact JSON only, including the run id, scenario count, critic-decision counts, and `executable=false`.
+
+## Scenario Matrix
+
+The scenario matrix compares each built-in path across:
+
+- current stage
+- critic decision
+- recommended next action
+- selected tool
+- resolved atomic task
+- approval mode
+- dry-run mode
+- bridge mode
+- risk flags and blockers
+
+The summary includes deterministic critic-decision counts, bridge-mode counts, and the scenarios that still have review blockers. This improves demoability and inspection of the integrated Agent loop; it is not a governance expansion and does not add any admission, receipt, readiness, preflight, writer, registry, promotion, or publication layer.
 
 ## What This Proves
 

@@ -214,3 +214,157 @@ def test_no_admission_receipt_preflight_or_writer_modules_added() -> None:
     assert "receipt" not in oled_mvp_demo.__name__
     assert "preflight" not in oled_mvp_demo.__name__
     assert "writer" not in oled_mvp_demo.__name__
+
+
+def test_run_scenario_matrix_runs_all_default_scenarios() -> None:
+    matrix = OLEDAgentMVPDemoRunner().run_scenario_matrix(
+        run_id="matrix",
+        goal="Find OLED emitters",
+    )
+
+    assert matrix["scenario_count"] == 4
+    assert [row["scenario"] for row in matrix["scenarios"]] == [
+        "acceptable_diagnostics",
+        "weak_diagnostics",
+        "missing_provenance",
+        "candidate_review_needed",
+    ]
+    assert matrix["executable"] is False
+
+
+def test_matrix_contains_required_compact_keys_for_each_scenario() -> None:
+    matrix = OLEDAgentMVPDemoRunner().run_scenario_matrix(
+        run_id="matrix-keys",
+        goal="Find OLED emitters",
+    )
+
+    for row in matrix["scenarios"]:
+        assert REQUIRED_KEYS - {"run_id", "project_id", "goal"} <= set(row)
+        assert row["executable"] is False
+        json.dumps(row, sort_keys=True)
+
+
+def test_matrix_decision_counts_are_deterministic() -> None:
+    matrix = OLEDAgentMVPDemoRunner().run_scenario_matrix(
+        run_id="matrix-counts",
+        goal="Find OLED emitters",
+    )
+
+    assert matrix["summary"]["critic_decision_counts"] == {
+        "continue": 1,
+        "request_more_evidence": 1,
+        "rerun_baseline": 1,
+        "run_candidate_review": 1,
+    }
+
+
+def test_matrix_bridge_mode_counts_are_deterministic() -> None:
+    matrix = OLEDAgentMVPDemoRunner().run_scenario_matrix(
+        run_id="matrix-bridge",
+        goal="Find OLED emitters",
+    )
+
+    assert matrix["summary"]["bridge_mode_counts"] == {
+        "blocked": 2,
+        "gated_bridge_request": 2,
+    }
+
+
+def test_matrix_scenarios_with_blockers_are_deterministic() -> None:
+    matrix = OLEDAgentMVPDemoRunner().run_scenario_matrix(
+        run_id="matrix-blockers",
+        goal="Find OLED emitters",
+    )
+
+    assert matrix["summary"]["scenarios_with_blockers"] == [
+        "acceptable_diagnostics",
+        "weak_diagnostics",
+        "missing_provenance",
+        "candidate_review_needed",
+    ]
+
+
+def test_matrix_markdown_rendering_is_deterministic_and_includes_safety_boundary() -> None:
+    agent = OLEDAgentMVPDemoRunner()
+    matrix = agent.run_scenario_matrix(run_id="matrix-md", goal="Find OLED emitters")
+    first = agent.render_matrix_markdown(matrix)
+    second = agent.render_matrix_markdown(matrix)
+
+    assert first == second
+    assert "# OLED Agent MVP Demo Matrix" in first
+    assert "## Scenario Matrix" in first
+    assert "## Decision Counts" in first
+    assert "## Safety Boundary" in first
+    assert "Executable: false" in first
+
+
+def test_matrix_json_writing_is_deterministic(tmp_path: Path) -> None:
+    agent = OLEDAgentMVPDemoRunner()
+    matrix = agent.run_scenario_matrix(run_id="matrix-write", goal="Find OLED emitters")
+    storage = ProjectStorage(tmp_path)
+
+    json_path, md_path = agent.write_scenario_matrix_report(storage, "project", "matrix-write", matrix)
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+
+    assert json_path.name == "oled_agent_mvp_demo_matrix.json"
+    assert md_path.name == "oled_agent_mvp_demo_matrix.md"
+    assert payload["scenario_count"] == 4
+    assert payload["executable"] is False
+    assert json.loads(json_path.read_text(encoding="utf-8")) == payload
+
+
+def test_cli_all_scenarios_outputs_compact_json_without_internal_payload(capsys, tmp_path: Path) -> None:
+    from ai4s_agent.agents.oled_mvp_demo import main  # noqa: PLC0415
+
+    exit_code = main(
+        [
+            "--run-id",
+            "cli-matrix",
+            "--goal",
+            "Find OLED emitters",
+            "--all-scenarios",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload == {
+        "run_id": "cli-matrix",
+        "scenario_count": 4,
+        "critic_decision_counts": {
+            "continue": 1,
+            "request_more_evidence": 1,
+            "rerun_baseline": 1,
+            "run_candidate_review": 1,
+        },
+        "executable": False,
+    }
+    assert "payload_template" not in captured.out
+    assert (tmp_path / "oled_agent_mvp_demo_matrix.json").exists()
+    assert (tmp_path / "oled_agent_mvp_demo_matrix.md").exists()
+
+
+def test_cli_without_all_scenarios_keeps_single_scenario_behavior(capsys) -> None:
+    from ai4s_agent.agents.oled_mvp_demo import main  # noqa: PLC0415
+
+    exit_code = main(
+        [
+            "--run-id",
+            "cli-single",
+            "--goal",
+            "Find OLED emitters",
+            "--scenario",
+            "acceptable_diagnostics",
+        ]
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["run_id"] == "cli-single"
+    assert payload["scenario"] == "acceptable_diagnostics"
+    assert payload["recommended_next_action"] == "candidate_generation_or_prediction"
+    assert "scenario_count" not in payload
