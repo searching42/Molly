@@ -2269,6 +2269,107 @@ class OLEDDiscoveryActionHandoff(BaseModel):
         return self
 
 
+class OLEDDiscoveryExecutionPreviewRequest(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    risk_budget: str = "medium"
+    allow_auto_eligible: bool = True
+    allow_gated: bool = True
+    executable: bool = False
+
+    @field_validator("risk_budget")
+    @classmethod
+    def validate_risk_budget(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"low", "medium", "high"}:
+            raise ValueError("risk_budget must be low, medium, or high")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> OLEDDiscoveryExecutionPreviewRequest:
+        if self.executable:
+            raise ValueError("OLED discovery execution preview requests are review-only and must not be executable")
+        return self
+
+
+class OLEDDiscoveryExecutionPreview(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    goal: str = ""
+    source_handoff_id: str = ""
+    recommended_next_action: str
+    selected_tool_id: str = ""
+    selected_task_id: str = ""
+    resolved_atomic_task_id: str = ""
+    resolved_adapter_name: str = ""
+    risk_level: str = "low"
+    approval_mode: str = "blocked"
+    ready_for_controlled_planning: bool = False
+    executable: bool = False
+    input_artifacts: list[str] = Field(default_factory=list)
+    missing_inputs: list[str] = Field(default_factory=list)
+    output_artifacts: list[str] = Field(default_factory=list)
+    required_gates: list[str] = Field(default_factory=list)
+    required_permissions: list[str] = Field(default_factory=list)
+    blocked_reasons: list[str] = Field(default_factory=list)
+    execution_preconditions: list[str] = Field(default_factory=list)
+    payload_template: dict[str, Any] = Field(default_factory=dict)
+    policy_notes: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+
+    @field_validator("risk_level")
+    @classmethod
+    def validate_risk_level(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"low", "medium", "high"}:
+            raise ValueError("risk_level must be low, medium, or high")
+        return normalized
+
+    @field_validator("approval_mode")
+    @classmethod
+    def validate_approval_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        allowed = {"auto_eligible", "gated_review_required", "manual_review_required", "blocked"}
+        if normalized not in allowed:
+            raise ValueError("approval_mode must be auto_eligible, gated_review_required, manual_review_required, or blocked")
+        return normalized
+
+    @field_validator(
+        "input_artifacts",
+        "missing_inputs",
+        "output_artifacts",
+        "required_gates",
+        "required_permissions",
+        "blocked_reasons",
+        "execution_preconditions",
+        "policy_notes",
+        "assumptions",
+    )
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return _clean_unique_strings(value)
+
+    @field_validator("payload_template")
+    @classmethod
+    def validate_json_safe_payload(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_json_safe(value, "payload_template")
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> OLEDDiscoveryExecutionPreview:
+        if self.executable:
+            raise ValueError("OLED discovery execution previews are review-only and must not be executable")
+        if self.ready_for_controlled_planning and self.missing_inputs:
+            raise ValueError("ready execution previews must not have missing inputs")
+        if self.approval_mode == "auto_eligible":
+            if self.required_gates:
+                raise ValueError("auto-eligible execution previews must not require gates")
+            if self.risk_level != "low":
+                raise ValueError("auto-eligible execution previews must be low risk")
+        if self.required_gates and self.approval_mode not in {"gated_review_required", "blocked"}:
+            raise ValueError("execution previews with gates require gated review or must be blocked")
+        return self
+
+
 def _clean_unique_strings(value: list[str]) -> list[str]:
     cleaned: list[str] = []
     seen: set[str] = set()
@@ -2834,6 +2935,8 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "oled_discovery_loop_review": OLEDDiscoveryLoopReview,
     "oled_discovery_action_handoff_request": OLEDDiscoveryActionHandoffRequest,
     "oled_discovery_action_handoff": OLEDDiscoveryActionHandoff,
+    "oled_discovery_execution_preview_request": OLEDDiscoveryExecutionPreviewRequest,
+    "oled_discovery_execution_preview": OLEDDiscoveryExecutionPreview,
     "project_memory_record": ProjectMemoryRecord,
     "project_memory_use": ProjectMemoryUse,
     "agent_plan_proposal": AgentPlanProposal,
