@@ -179,6 +179,20 @@ def test_raw_value_structure_and_serialized_row_leaks_block(tmp_path: Path, leak
     assert error_code in summary["preflight_errors"]
 
 
+def test_timestamp_fraction_matching_property_value_marker_does_not_block(tmp_path: Path) -> None:
+    paths = _write_preflight_package(tmp_path)
+    _mutate_json(
+        paths["training_dataset_controlled_writer_execution_plan"],
+        lambda payload: payload.__setitem__("created_at", "2026-07-07T07:39:10.725758Z"),
+    )
+    _refresh_plan_sha(paths)
+
+    summary = preflight_property_training_dataset_controlled_writer_execution_plan(**_kwargs(paths))
+
+    assert summary["preflight_status"] == "passed"
+    assert "controlled_writer_execution_plan_contains_unsafe_value" not in summary["preflight_errors"]
+
+
 def test_summary_uses_safe_basenames_only(tmp_path: Path) -> None:
     paths = _write_preflight_package(tmp_path)
 
