@@ -57,6 +57,8 @@ When `RunPlanExecutor` completes baseline training with model package manifests,
 
 `OLEDDiscoveryActionHandoffAgent` converts an integrated review-loop recommendation into a review-only action handoff. It maps the recommended next action to a selected tool/task, required inputs, gates, permissions, blocked reasons, and a placeholder payload template without executing adapters or mutating artifacts.
 
+`OLEDDiscoveryExecutionPreviewAgent` turns a review-only action handoff into a review-only execution preview. It resolves selected tools to known atomic tasks where possible, summarizes adapter policy, risk level, gates, missing inputs, approval mode, and execution preconditions without calling `RunPlanExecutor` or executing adapters.
+
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.
 
 `PromotedModelAsset` is the reuse contract for that exception: it records the approved model id, backend, runtime directory, required inputs, metrics, applicability notes, source run, and rollback asset. `PredictionPreparationAgent` will build a draft prediction payload only for a confirmed promoted asset, or for historical reuse that the user explicitly approves for a controlled run.
