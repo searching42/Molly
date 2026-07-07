@@ -11,6 +11,7 @@ from ai4s_agent.agents.prediction import PredictionPreparationAgent
 from ai4s_agent.agents.recovery import RecoveryAgent
 from ai4s_agent.agents.report import ReportAgent
 from ai4s_agent.agents.research import ResearchAgent
+from ai4s_agent.agents.tool_registry import AgentToolRegistry
 from ai4s_agent.agents.verifier import VerifierAgent
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "RecoveryAgent",
     "ReportAgent",
     "ResearchAgent",
+    "AgentToolRegistry",
     "VerifierAgent",
     "compute_autonomy_metrics",
 ]
