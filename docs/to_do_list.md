@@ -1237,6 +1237,35 @@ Status:
 
 ---
 
+## 8.28 Publication candidate final-registry-readiness preflight MVP
+
+### [x] Task:
+- load OLED publication writer manifest, publication-candidate entry JSON, and publication-candidate index JSONL
+- verify SHA256 integrity
+- check publication entry/index/manifest consistency
+- check source chain identifiers and publication-candidate status
+- check benchmark_validated / scientific_claim_validated / final registry claims remain false
+- check required caveats, run-card count, and metric-card count
+- write redacted final-registry-readiness preflight report
+- do not write final/global registry files
+- do not publish benchmark registry entries
+- do not mark benchmark validated
+- do not claim scientific performance validity
+- do not rerun baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- read-only final-registry-readiness preflight
+- final/global registry writer remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_publication_candidate_final_registry_preflight.py`
+- tested by `tests/test_oled_curated_publication_candidate_final_registry_preflight.py`
+- documented in `docs/oled-curated-publication-candidate-final-registry-preflight.md`
+
+---
+
 # 9. Gold dataset construction（关键）
 
 ## 9.1 manual verified set
