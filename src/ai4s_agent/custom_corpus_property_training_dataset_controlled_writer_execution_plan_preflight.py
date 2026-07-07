@@ -859,6 +859,7 @@ def _plan_content_errors(payloads: dict[str, Any], hashes: dict[str, str]) -> li
         errors.append("allowed_value_field_names_mismatch")
     plan_without_boundary = dict(plan)
     plan_without_boundary.pop("boundary_statement", None)
+    plan_without_boundary.pop("created_at", None)
     if _value_contains_unsafe_material(plan_without_boundary):
         errors.append("controlled_writer_execution_plan_contains_unsafe_value")
     return _stable_unique(errors)

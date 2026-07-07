@@ -1363,6 +1363,38 @@ Status:
 
 ---
 
+## 8.32 Global append release-readiness preflight MVP
+
+### [x] Task:
+- load OLED global-append writer manifest, entry JSON, delta JSONL, and new snapshot JSONL
+- optionally load prior final/global registry snapshot JSONL
+- verify SHA256 integrity
+- check global-append entry/delta/snapshot/manifest consistency
+- check source chain identifiers and global-append-candidate status
+- check that delta records are included in the new snapshot
+- check prior snapshot preservation when prior snapshot is supplied
+- reject benchmark_validated / scientific_claim_validated / external publication / global mutation claims
+- check required caveats, run-card count, and metric-card count
+- write redacted release-readiness preflight report
+- do not write or mutate final/global registry files
+- do not publish benchmark registry entries
+- do not mark benchmark validated
+- do not claim scientific performance validity
+- do not rerun baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- read-only global-append release-readiness preflight
+- actual external publication / release writer remains a later explicit gate
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_global_append_release_preflight.py`
+- tested by `tests/test_oled_curated_global_append_release_preflight.py`
+- documented in `docs/oled-curated-global-append-release-preflight.md`
+
+---
+
 # 9. Gold dataset construction（关键）
 
 ## 9.1 manual verified set
