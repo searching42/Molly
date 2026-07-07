@@ -1329,6 +1329,40 @@ Status:
 
 ---
 
+## 8.31 Final registry global append writer gate MVP
+
+### [x] Task:
+- load OLED final-registry candidate writer manifest, entry JSON, index JSONL, and global-append-readiness preflight report
+- optionally load existing final/global registry snapshot JSONL
+- require explicit confirmation
+- build deterministic local global-append candidate entry
+- write standalone global-append candidate entry JSON
+- write standalone global-append delta JSONL
+- write a new global registry snapshot JSONL without mutating existing snapshot in place
+- write audit manifest with SHA256, policy, status, and reason taxonomy
+- preserve global-append-candidate status and validation boundary
+- do not publish externally
+- do not mutate existing global registry files in place
+- do not mark benchmark validated
+- do not claim scientific performance validity
+- do not mutate source artifacts
+- do not rerun baseline/model backends
+- do not call LLMs or MinerU
+- do not read PDFs or images
+
+Scope:
+- local global-append candidate artifacts only
+- not benchmark validation
+- not scientific conclusion
+- not external publication
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_curated_final_registry_global_append_writer.py`
+- tested by `tests/test_oled_curated_final_registry_global_append_writer.py`
+- documented in `docs/oled-curated-final-registry-global-append-writer.md`
+
+---
+
 # 9. Gold dataset construction（关键）
 
 ## 9.1 manual verified set
