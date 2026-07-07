@@ -51,6 +51,8 @@ When `RunPlanExecutor` completes baseline training with model package manifests,
 
 `AgentToolRegistry` provides a review-only capability map for OLED discovery planning. It maps discovery stages to available tools/tasks, required inputs, outputs, gates, risk levels, and failure modes so later Agent components can recommend the next safe action without executing tools.
 
+`CriticAgent` provides a review-only critique layer for OLED discovery runs. It inspects run-card state, tool recommendations, dataset/model/candidate summaries, diagnostics, and provenance signals to recommend whether to continue, revise data/model assumptions, rerun baselines, request more evidence, block overclaims, or proceed to candidate review. It never executes tools or mutates artifacts.
+
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.
 
 `PromotedModelAsset` is the reuse contract for that exception: it records the approved model id, backend, runtime directory, required inputs, metrics, applicability notes, source run, and rollback asset. `PredictionPreparationAgent` will build a draft prediction payload only for a confirmed promoted asset, or for historical reuse that the user explicitly approves for a controlled run.

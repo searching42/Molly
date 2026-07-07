@@ -2039,6 +2039,105 @@ class AgentToolRegistrySnapshot(BaseModel):
         return self
 
 
+class CriticFinding(BaseModel):
+    finding_id: str
+    severity: str
+    category: str
+    summary: str
+    evidence_refs: list[str] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+
+    @field_validator("severity")
+    @classmethod
+    def validate_severity(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"info", "warning", "critical"}:
+            raise ValueError("severity must be info, warning, or critical")
+        return normalized
+
+    @field_validator("evidence_refs", "recommended_actions")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            normalized = str(item).strip()
+            if normalized and normalized not in seen:
+                cleaned.append(normalized)
+                seen.add(normalized)
+        return cleaned
+
+
+class CriticDecision(BaseModel):
+    decision: str
+    reason: str
+    requires_user_approval: bool = True
+    target_stage: str = ""
+    suggested_tools: list[str] = Field(default_factory=list)
+
+    @field_validator("decision")
+    @classmethod
+    def validate_decision(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        allowed = {
+            "continue",
+            "revise_data",
+            "revise_model",
+            "rerun_baseline",
+            "request_more_evidence",
+            "run_candidate_review",
+            "block_promotion",
+            "stop",
+        }
+        if normalized not in allowed:
+            raise ValueError(f"decision must be one of {sorted(allowed)}")
+        return normalized
+
+    @field_validator("suggested_tools")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            normalized = str(item).strip()
+            if normalized and normalized not in seen:
+                cleaned.append(normalized)
+                seen.add(normalized)
+        return cleaned
+
+
+class CriticReview(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    goal: str = ""
+    current_stage: str
+    decision: CriticDecision
+    findings: list[CriticFinding] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
+    blocked_reasons: list[str] = Field(default_factory=list)
+    recommended_next_actions: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    executable: bool = False
+
+    @field_validator("risk_flags", "blocked_reasons", "recommended_next_actions", "assumptions")
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            normalized = str(item).strip()
+            if normalized and normalized not in seen:
+                cleaned.append(normalized)
+                seen.add(normalized)
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> CriticReview:
+        if self.executable:
+            raise ValueError("critic reviews are review-only and must not be executable")
+        return self
+
+
 ProjectMemoryCategory = Literal[
     "user_preference",
     "backend_choice",
@@ -2586,6 +2685,9 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_tool_spec": AgentToolSpec,
     "agent_tool_recommendation": AgentToolRecommendation,
     "agent_tool_registry_snapshot": AgentToolRegistrySnapshot,
+    "critic_finding": CriticFinding,
+    "critic_decision": CriticDecision,
+    "critic_review": CriticReview,
     "project_memory_record": ProjectMemoryRecord,
     "project_memory_use": ProjectMemoryUse,
     "agent_plan_proposal": AgentPlanProposal,

@@ -1,0 +1,35 @@
+{
+  "properties": {
+    "decision": {
+      "title": "Decision",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "requires_user_approval": {
+      "default": true,
+      "title": "Requires User Approval",
+      "type": "boolean"
+    },
+    "target_stage": {
+      "default": "",
+      "title": "Target Stage",
+      "type": "string"
+    },
+    "suggested_tools": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Suggested Tools",
+      "type": "array"
+    }
+  },
+  "required": [
+    "decision",
+    "reason"
+  ],
+  "title": "CriticDecision",
+  "type": "object"
+}

@@ -1,0 +1,42 @@
+{
+  "properties": {
+    "finding_id": {
+      "title": "Finding Id",
+      "type": "string"
+    },
+    "severity": {
+      "title": "Severity",
+      "type": "string"
+    },
+    "category": {
+      "title": "Category",
+      "type": "string"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "evidence_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Refs",
+      "type": "array"
+    },
+    "recommended_actions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Recommended Actions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "finding_id",
+    "severity",
+    "category",
+    "summary"
+  ],
+  "title": "CriticFinding",
+  "type": "object"
+}
