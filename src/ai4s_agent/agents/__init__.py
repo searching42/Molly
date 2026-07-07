@@ -2,6 +2,7 @@
 
 from ai4s_agent.agents.action_handoff import OLEDDiscoveryActionHandoffAgent
 from ai4s_agent.agents.critic import CriticAgent
+from ai4s_agent.agents.dry_run_bridge import OLEDDiscoveryDryRunBridgeRequestAgent
 from ai4s_agent.agents.dry_run_packet import OLEDDiscoveryDryRunPacketAgent
 from ai4s_agent.agents.evaluation import compute_autonomy_metrics
 from ai4s_agent.agents.execution_preview import OLEDDiscoveryExecutionPreviewAgent
@@ -22,6 +23,7 @@ from ai4s_agent.agents.verifier import VerifierAgent
 __all__ = [
     "CriticAgent",
     "OLEDDiscoveryActionHandoffAgent",
+    "OLEDDiscoveryDryRunBridgeRequestAgent",
     "OLEDDiscoveryDryRunPacketAgent",
     "OLEDDiscoveryExecutionPreviewAgent",
     "GenerationAgent",

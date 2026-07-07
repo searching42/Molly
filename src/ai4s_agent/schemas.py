@@ -2479,6 +2479,111 @@ class OLEDDiscoveryDryRunPacket(BaseModel):
         return self
 
 
+class OLEDDiscoveryDryRunBridgeRequestInput(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    allow_auto_eligible: bool = True
+    allow_gated: bool = True
+    require_confirmed_reviewer: bool = True
+    executable: bool = False
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> OLEDDiscoveryDryRunBridgeRequestInput:
+        if self.executable:
+            raise ValueError("OLED discovery dry-run bridge request inputs are review-only and must not be executable")
+        return self
+
+
+class OLEDDiscoveryDryRunBridgeRequest(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    goal: str = ""
+    source_packet_id: str = ""
+    selected_tool_id: str = ""
+    resolved_atomic_task_id: str = ""
+    resolved_adapter_name: str = ""
+    bridge_mode: str = "blocked"
+    dry_run_mode: str = "blocked"
+    approval_mode: str = "blocked"
+    eligible_for_bridge: bool = False
+    executable: bool = False
+    would_execute: bool = False
+    adapter_invocation: dict[str, Any] = Field(default_factory=dict)
+    payload_template: dict[str, Any] = Field(default_factory=dict)
+    required_gates: list[str] = Field(default_factory=list)
+    required_permissions: list[str] = Field(default_factory=list)
+    missing_inputs: list[str] = Field(default_factory=list)
+    blocked_reasons: list[str] = Field(default_factory=list)
+    snapshot_binding_requirements: list[str] = Field(default_factory=list)
+    reviewer_confirmations: list[str] = Field(default_factory=list)
+    dry_run_snapshot_material: dict[str, Any] = Field(default_factory=dict)
+    audit_notes: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+
+    @field_validator("bridge_mode")
+    @classmethod
+    def validate_bridge_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        allowed = {"auto_eligible_bridge_request", "gated_bridge_request", "manual_bridge_request", "blocked"}
+        if normalized not in allowed:
+            raise ValueError("bridge_mode must be auto_eligible_bridge_request, gated_bridge_request, manual_bridge_request, or blocked")
+        return normalized
+
+    @field_validator("dry_run_mode")
+    @classmethod
+    def validate_dry_run_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        allowed = {"auto_eligible_preview", "gated_review_packet", "manual_review_packet", "blocked"}
+        if normalized not in allowed:
+            raise ValueError("dry_run_mode must be auto_eligible_preview, gated_review_packet, manual_review_packet, or blocked")
+        return normalized
+
+    @field_validator("approval_mode")
+    @classmethod
+    def validate_approval_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        allowed = {"auto_eligible", "gated_review_required", "manual_review_required", "blocked"}
+        if normalized not in allowed:
+            raise ValueError("approval_mode must be auto_eligible, gated_review_required, manual_review_required, or blocked")
+        return normalized
+
+    @field_validator(
+        "required_gates",
+        "required_permissions",
+        "missing_inputs",
+        "blocked_reasons",
+        "snapshot_binding_requirements",
+        "reviewer_confirmations",
+        "audit_notes",
+        "assumptions",
+    )
+    @classmethod
+    def validate_string_lists(cls, value: list[str]) -> list[str]:
+        return _clean_unique_strings(value)
+
+    @field_validator("adapter_invocation", "payload_template", "dry_run_snapshot_material")
+    @classmethod
+    def validate_json_safe_payloads(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_json_safe(value, "dry_run_bridge_request_payload")
+
+    @model_validator(mode="after")
+    def validate_review_only(self) -> OLEDDiscoveryDryRunBridgeRequest:
+        if self.executable:
+            raise ValueError("OLED discovery dry-run bridge requests are review-only and must not be executable")
+        if self.would_execute:
+            raise ValueError("OLED discovery dry-run bridge requests must not execute in this PR")
+        if self.eligible_for_bridge and (self.missing_inputs or self.blocked_reasons):
+            raise ValueError("eligible dry-run bridge requests must not have missing inputs or blocked reasons")
+        if self.bridge_mode == "auto_eligible_bridge_request":
+            if self.dry_run_mode != "auto_eligible_preview":
+                raise ValueError("auto-eligible bridge requests require auto-eligible dry-run packets")
+            if self.required_gates:
+                raise ValueError("auto-eligible bridge requests must not require gates")
+        if self.required_gates and self.bridge_mode not in {"gated_bridge_request", "blocked"}:
+            raise ValueError("bridge requests with gates require gated bridge mode or must be blocked")
+        return self
+
+
 def _clean_unique_strings(value: list[str]) -> list[str]:
     cleaned: list[str] = []
     seen: set[str] = set()
@@ -3048,6 +3153,8 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "oled_discovery_execution_preview": OLEDDiscoveryExecutionPreview,
     "oled_discovery_dry_run_packet_request": OLEDDiscoveryDryRunPacketRequest,
     "oled_discovery_dry_run_packet": OLEDDiscoveryDryRunPacket,
+    "oled_discovery_dry_run_bridge_request_input": OLEDDiscoveryDryRunBridgeRequestInput,
+    "oled_discovery_dry_run_bridge_request": OLEDDiscoveryDryRunBridgeRequest,
     "project_memory_record": ProjectMemoryRecord,
     "project_memory_use": ProjectMemoryUse,
     "agent_plan_proposal": AgentPlanProposal,
