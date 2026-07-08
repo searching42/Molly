@@ -71,6 +71,8 @@ The demo runner can also load a local JSON input bundle of scenario summaries, a
 
 A template command can print or write a summary-only local input bundle so users can quickly try the MVP demo with editable local payloads.
 
+For a copy-pasteable walkthrough of one-scenario, matrix, template, and local-bundle runs, see `docs/oled-mvp-demo-quickstart.md`.
+
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.
 
 `PromotedModelAsset` is the reuse contract for that exception: it records the approved model id, backend, runtime directory, required inputs, metrics, applicability notes, source run, and rollback asset. `PredictionPreparationAgent` will build a draft prediction payload only for a confirmed promoted asset, or for historical reuse that the user explicitly approves for a controlled run.
