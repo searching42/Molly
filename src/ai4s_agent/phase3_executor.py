@@ -218,11 +218,14 @@ def _phase3_payload_for(
     }
 
     if task_id == "prepare_literature_corpus_sources":
-        raw_options = dict(options) if isinstance(options, dict) else {}
-        output_dir = str(raw_options.pop("output_dir", "") or "").strip()
-        if output_dir:
-            payload["output_dir"] = output_dir
-        task_options = executor._payload_options(raw_options)
+        task_options = _phase3_payload_options(executor, payload, options)
+        payload.update(task_options)
+        return payload
+
+    if task_id == "index_corpus":
+        task_options = _phase3_payload_options(executor, payload, options)
+        _add_optional_artifact(payload, artifact_paths, "parsed_document", "parsed_document_json")
+        _add_optional_artifact(payload, artifact_paths, "corpus_manifest", "corpus_manifest_json")
         payload.update(task_options)
         return payload
 
@@ -234,11 +237,6 @@ def _phase3_payload_for(
     if task_id in {"parse_document", "parse_document_pdfplumber", "parse_document_pymupdf", "parse_document_grobid"}:
         payload["input_pdf"] = _first_pdf(_require_artifact(artifact_paths, "pdf_corpus"))
         payload.setdefault("execute", False)
-        payload.update(task_options)
-        return payload
-    if task_id == "index_corpus":
-        _add_optional_artifact(payload, artifact_paths, "parsed_document", "parsed_document_json")
-        _add_optional_artifact(payload, artifact_paths, "corpus_manifest", "corpus_manifest_json")
         payload.update(task_options)
         return payload
     if task_id == "build_multi_index":
@@ -309,6 +307,14 @@ def _phase3_payload_for(
         return payload
     payload.update(task_options)
     return payload
+
+
+def _phase3_payload_options(executor: Any, payload: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    raw_options = dict(options) if isinstance(options, dict) else {}
+    output_dir = str(raw_options.pop("output_dir", "") or "").strip()
+    if output_dir:
+        payload["output_dir"] = output_dir
+    return executor._payload_options(raw_options)
 
 
 def _collect_phase3_artifacts(

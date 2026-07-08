@@ -1863,6 +1863,7 @@ def index_corpus_adapter(payload: dict[str, Any]) -> dict[str, Any]:
         "created_at": now_iso(),
     }
     corpus_index_json = write_json(output_dir / f"{run_id}_corpus_index.json", index_report)
+    index_report_json = write_json(output_dir / f"{run_id}_index_report.json", index_report)
     return {
         "status": "success",
         "adapter": "index_corpus",
@@ -1870,6 +1871,7 @@ def index_corpus_adapter(payload: dict[str, Any]) -> dict[str, Any]:
         "outputs": {
             "chunks_jsonl": str(chunks_jsonl),
             "corpus_index_json": str(corpus_index_json),
+            "index_report_json": str(index_report_json),
         },
     }
 
