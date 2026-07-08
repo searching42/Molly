@@ -21,7 +21,20 @@ It does not enqueue jobs, start a daemon, run an infinite loop, sleep by default
 
 ## Example
 
-Queue a job with Python:
+Queue a job with the enqueue-only CLI:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_enqueue \
+  --queue-root /tmp/molly-worker-queue \
+  --project-root /tmp/molly-projects \
+  --project-id demo-project \
+  --run-id oled-local-demo \
+  --input-bundle /tmp/oled_demo_bundle.json \
+  --output-dir /tmp/oled-agent-demo \
+  --overwrite
+```
+
+Or queue a job with Python:
 
 ```python
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
