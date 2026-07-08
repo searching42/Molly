@@ -31,6 +31,8 @@ The status output includes queue job metadata, matching lease metadata, status c
 
 Use `ai4s_agent.agents.oled_local_demo_generic_retry` to queue a retry child for failed allowlisted generic OLED local demo jobs after inspecting them here.
 
+Use `ai4s_agent.agents.oled_local_demo_generic_cancel` to cancel queued allowlisted generic OLED local demo jobs or request cancellation for running jobs.
+
 When `--project-root` is supplied, the command reads only metadata JSON files:
 
 - `projects/<project_id>/runs/<run_id>/stage.json`
