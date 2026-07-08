@@ -242,6 +242,17 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         risk_level=RiskLevel.LOW,
         default_adapter="check_public_dataset_leakage_adapter",
     ),
+    AtomicTaskSpec(
+        task_id="execute_oled_local_demo",
+        required_artifacts=[],
+        output_artifacts=[
+            "oled_demo_bundle_report",
+            "oled_demo_bundle_markdown",
+            "oled_local_demo_execution_manifest",
+        ],
+        risk_level=RiskLevel.LOW,
+        default_adapter="execute_oled_local_demo_adapter",
+    ),
 )
 
 

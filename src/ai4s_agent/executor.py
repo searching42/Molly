@@ -8,7 +8,7 @@ from typing import Any
 
 from ai4s_agent import adapters
 from ai4s_agent.agents.modeling import ModelingAgent
-from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, strict_smiles_cleaning_enabled, write_json
+from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, strict_bool, strict_smiles_cleaning_enabled, write_json
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import (
     ArtifactRef,
@@ -587,6 +587,20 @@ class RunPlanExecutor:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         approved = approved_gates or set()
+        if task_id == "execute_oled_local_demo":
+            raw_options = options if isinstance(options, dict) else {}
+            input_bundle = str(raw_options.get("input_bundle") or "").strip()
+            if not input_bundle:
+                raise ValueError("missing_input_bundle")
+            overwrite = strict_bool(raw_options.get("overwrite", False), key="overwrite")
+            return {
+                "run_id": run_id,
+                "input_bundle": input_bundle,
+                "output_dir": str(raw_options.get("output_dir") or run_dir / "oled_local_demo_execution"),
+                "goal": raw_options.get("goal"),
+                "project_id": raw_options.get("project_id"),
+                "overwrite": overwrite,
+            }
         task_options = self._payload_options(options)
         if task_id == "inspect_dataset":
             return {
@@ -835,13 +849,30 @@ class RunPlanExecutor:
                 self._register(project_id, run_id, "report_markdown", self._relative(run_dir, Path(str(outputs["markdown"]))))
             if outputs.get("html"):
                 self._register(project_id, run_id, "report_html", self._relative(run_dir, Path(str(outputs["html"]))))
+        if task_id == "execute_oled_local_demo":
+            outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+            for artifact_id in (
+                "oled_demo_bundle_report",
+                "oled_demo_bundle_markdown",
+                "oled_local_demo_execution_manifest",
+            ):
+                output = str(outputs.get(artifact_id) or "").strip()
+                if output:
+                    output_path = Path(output)
+                    self._register(project_id, run_id, artifact_id, self._registry_path(run_dir, output_path))
+                    artifact_paths[artifact_id] = str(output_path)
+            return
 
     def _artifact_paths_from_registry(self, project_id: str, run_id: str, run_dir: Path) -> dict[str, str]:
         resolved_run_dir = run_dir.resolve()
         paths: dict[str, str] = {}
         for artifact_id, relative_path in self.storage.read_artifact_registry(project_id, run_id).items():
-            path = (resolved_run_dir / relative_path).resolve()
-            path.relative_to(resolved_run_dir)
+            raw_path = Path(relative_path).expanduser()
+            if raw_path.is_absolute():
+                path = raw_path.resolve()
+            else:
+                path = (resolved_run_dir / raw_path).resolve()
+                path.relative_to(resolved_run_dir)
             paths[artifact_id] = str(path)
         return paths
 
@@ -1014,3 +1045,12 @@ class RunPlanExecutor:
         resolved_run_dir = run_dir.resolve()
         resolved_path = path.expanduser().resolve()
         return str(resolved_path.relative_to(resolved_run_dir))
+
+    @staticmethod
+    def _registry_path(run_dir: Path, path: Path) -> str:
+        resolved_run_dir = run_dir.resolve()
+        resolved_path = path.expanduser().resolve()
+        try:
+            return str(resolved_path.relative_to(resolved_run_dir))
+        except ValueError:
+            return str(resolved_path)

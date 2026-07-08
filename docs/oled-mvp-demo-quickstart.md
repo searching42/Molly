@@ -119,6 +119,8 @@ PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_execution \
 
 This controlled local runner reads one summary bundle and writes the bundle report plus `oled_local_demo_execution_manifest.json`. It still does not execute adapters or read referenced artifact labels.
 
+The local demo can also be executed through `RunPlanExecutor` with the low-risk `execute_oled_local_demo` task. See `docs/oled-local-demo-runplan-executor.md`.
+
 ## What This Proves
 
 This proves the current review-only Agent loop can compose run-card state, tool recommendations, critic branching, action handoff, execution preview, dry-run packet, and bridge request summaries.
