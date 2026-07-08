@@ -26,6 +26,8 @@ PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_generic_worker_loop \
   --max-iterations 3
 ```
 
+Use `ai4s_agent.agents.oled_local_demo_generic_status` to inspect queued, running, succeeded, failed, or cancelled generic OLED local demo jobs without executing or mutating them.
+
 ## Behavior
 
 The enqueued queue task uses:
