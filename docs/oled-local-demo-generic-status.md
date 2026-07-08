@@ -29,6 +29,8 @@ Optional filters:
 
 The status output includes queue job metadata, matching lease metadata, status counts, retry/cancel metadata, task options, and result `executed_tasks` when present.
 
+Use `ai4s_agent.agents.oled_local_demo_generic_retry` to queue a retry child for failed allowlisted generic OLED local demo jobs after inspecting them here.
+
 When `--project-root` is supplied, the command reads only metadata JSON files:
 
 - `projects/<project_id>/runs/<run_id>/stage.json`
