@@ -48,6 +48,8 @@ The CLI prints compact JSON only:
 
 `executable=true` means this CLI performed local RunPlanExecutor file IO. `adapters_executed=false` means no scientific adapters were executed by the local demo runner.
 
+For the local worker queue path around the same task, see `docs/oled-local-demo-worker-queue.md`.
+
 ## Outputs
 
 The requested output directory contains:

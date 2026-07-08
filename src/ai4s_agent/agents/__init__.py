@@ -12,6 +12,7 @@ from ai4s_agent.agents.modeling import ModelingAgent
 from ai4s_agent.agents.oled_discovery import OLEDDiscoveryLoopAgent
 from ai4s_agent.agents.oled_local_demo_execution import OLEDLocalDemoExecutionRunner
 from ai4s_agent.agents.oled_mvp_demo import OLEDAgentMVPDemoRunner
+from ai4s_agent.agents.oled_local_demo_worker import OLEDLocalDemoRunPlanWorkerTaskRunner
 from ai4s_agent.agents.oled_review_loop import OLEDDiscoveryReviewLoopAgent
 from ai4s_agent.agents.observer import ObserverAgent
 from ai4s_agent.agents.planner import PlannerAgent
@@ -33,6 +34,7 @@ __all__ = [
     "ModelingAgent",
     "OLEDAgentMVPDemoRunner",
     "OLEDLocalDemoExecutionRunner",
+    "OLEDLocalDemoRunPlanWorkerTaskRunner",
     "OLEDDiscoveryLoopAgent",
     "OLEDDiscoveryReviewLoopAgent",
     "ObserverAgent",
