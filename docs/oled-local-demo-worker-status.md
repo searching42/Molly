@@ -49,3 +49,5 @@ This command is status-only. It does not poll the queue, enqueue jobs, retry job
 Use `ai4s_agent.agents.oled_local_demo_enqueue` to submit jobs, `ai4s_agent.agents.oled_local_demo_worker_loop` to consume jobs, `ai4s_agent.agents.oled_local_demo_retry` to retry failed jobs, and `ai4s_agent.agents.oled_local_demo_cancel` to cancel queued or running jobs.
 
 Use `ai4s_agent.agents.oled_local_demo_health` to check local worker stack readiness before submitting or consuming jobs.
+
+Use `ai4s_agent.agents.oled_local_demo_generic_queue` to execute the OLED local demo through the generic `run_plan_execute` queue path and then inspect the resulting queue metadata.
