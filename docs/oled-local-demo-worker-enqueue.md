@@ -28,6 +28,8 @@ PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_worker_loop \
   --max-iterations 3
 ```
 
+If the worker loop marks the job failed, use `ai4s_agent.agents.oled_local_demo_retry` to enqueue a retry child after fixing the local cause.
+
 ## Job Payload
 
 The enqueued job has task id `execute_oled_local_demo_runplan` and stores:
