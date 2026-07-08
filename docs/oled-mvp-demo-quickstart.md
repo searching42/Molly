@@ -105,6 +105,20 @@ The command writes:
 - `oled_agent_mvp_demo_bundle.json`
 - `oled_agent_mvp_demo_bundle.md`
 
+## Controlled Local Demo Execution
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.agents.oled_mvp_demo \
+  --write-input-bundle-template /tmp/oled_demo_bundle.json
+
+PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_execution \
+  --run-id local-demo \
+  --input-bundle /tmp/oled_demo_bundle.json \
+  --output-dir /tmp/oled-agent-demo
+```
+
+This controlled local runner reads one summary bundle and writes the bundle report plus `oled_local_demo_execution_manifest.json`. It still does not execute adapters or read referenced artifact labels.
+
 ## What This Proves
 
 This proves the current review-only Agent loop can compose run-card state, tool recommendations, critic branching, action handoff, execution preview, dry-run packet, and bridge request summaries.
