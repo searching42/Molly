@@ -370,14 +370,32 @@ class OLEDAgentMVPDemoRunner:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a review-only OLED Agent MVP demo.")
-    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--run-id")
     parser.add_argument("--goal")
     parser.add_argument("--project-id")
     parser.add_argument("--scenario", default="acceptable_diagnostics", choices=sorted(_SUPPORTED_SCENARIOS))
     parser.add_argument("--all-scenarios", action="store_true")
     parser.add_argument("--input-bundle")
+    parser.add_argument("--print-input-bundle-template", action="store_true")
+    parser.add_argument("--write-input-bundle-template")
     parser.add_argument("--output-dir")
     args = parser.parse_args(argv)
+
+    if args.print_input_bundle_template:
+        print(json.dumps(local_input_bundle_template(), sort_keys=True, indent=2))
+        return 0
+    if args.write_input_bundle_template:
+        template_path = write_local_input_bundle_template(args.write_input_bundle_template)
+        summary = {
+            "template_path": template_path.name,
+            "scenario_count": len(local_input_bundle_template()["scenarios"]),
+            "executable": False,
+        }
+        print(json.dumps(summary, sort_keys=True, separators=(",", ":")))
+        return 0
+
+    if not args.run_id:
+        parser.error("--run-id is required unless printing or writing an input bundle template")
 
     runner = OLEDAgentMVPDemoRunner()
     if args.input_bundle:
@@ -455,6 +473,60 @@ def main(argv: Sequence[str] | None = None) -> int:
     summary = {key: result[key] for key in sorted(REQUIRED_COMPACT_KEYS) if key in result}
     print(json.dumps(summary, sort_keys=True, separators=(",", ":")))
     return 0
+
+
+def local_input_bundle_template() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "goal": "Find OLED emitters with high PLQY and red-shifted emission",
+        "project_id": "demo-project",
+        "notes": [
+            "Summary-only bundle for OLEDAgentMVPDemoRunner.",
+            "Artifact values are labels/placeholders; they are not opened or read.",
+        ],
+        "scenarios": [
+            {
+                "name": "local_acceptable",
+                "description": "Acceptable diagnostics with provenance present.",
+                "payload": {
+                    "dataset_artifacts": {"dataset_view_rows": "local_dataset_rows"},
+                    "training_package_artifacts": {"training_rows": "local_training_rows"},
+                    "baseline_artifacts": {"metrics": "local_metrics"},
+                    "diagnostics_report": {"status": "acceptable"},
+                    "provenance_summary": {"source_count": 2, "evidence_count": 8},
+                    "dataset_summary": {"row_count": 86, "property_count": 3},
+                },
+            },
+            {
+                "name": "local_weak_diagnostics",
+                "description": "Weak diagnostics example that should trigger baseline rerun.",
+                "payload": {
+                    "dataset_artifacts": {"dataset_view_rows": "local_dataset_rows"},
+                    "training_package_artifacts": {"training_rows": "local_training_rows"},
+                    "baseline_artifacts": {"metrics": "local_metrics"},
+                    "diagnostics_report": {"status": "weak", "summary": "rerun recommended"},
+                    "provenance_summary": {"source_count": 2, "evidence_count": 8},
+                },
+            },
+            {
+                "name": "local_missing_provenance",
+                "description": "Acceptable diagnostics but empty provenance.",
+                "payload": {
+                    "dataset_artifacts": {"dataset_view_rows": "local_dataset_rows"},
+                    "training_package_artifacts": {"training_rows": "local_training_rows"},
+                    "baseline_artifacts": {"metrics": "local_metrics"},
+                    "diagnostics_report": {"status": "acceptable"},
+                    "provenance_summary": {"source_count": 0, "evidence_count": 0},
+                },
+            },
+        ],
+    }
+
+
+def write_local_input_bundle_template(path: Path | str) -> Path:
+    template_path = Path(path)
+    template_path.write_text(json.dumps(local_input_bundle_template(), sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    return template_path
 
 
 def load_local_input_bundle(path: Path | str) -> dict[str, Any]:

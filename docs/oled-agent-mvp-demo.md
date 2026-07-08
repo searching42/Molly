@@ -143,6 +143,39 @@ Example bundle:
 
 The local bundle path is the only file read by this mode. Artifact values inside the JSON are treated as labels/placeholders only; the runner does not follow, open, hash, scan, or validate referenced artifact paths. This improves demoability with local summaries without adding governance layers or execution behavior.
 
+## Bundle Template Workflow
+
+Use the template command for a practical local demo flow:
+
+1. Print or write a local bundle template.
+2. Edit the summary fields in the JSON file.
+3. Run `--input-bundle` to produce a local bundle report.
+
+Print the template:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.agents.oled_mvp_demo \
+  --print-input-bundle-template
+```
+
+Write the template:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.agents.oled_mvp_demo \
+  --write-input-bundle-template /tmp/oled_demo_bundle.json
+```
+
+Then run the edited bundle:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.agents.oled_mvp_demo \
+  --run-id local-demo \
+  --input-bundle /tmp/oled_demo_bundle.json \
+  --output-dir /tmp/oled-agent-demo
+```
+
+The template is not a MinerU raw output reader, not a corpus parser, and not a scientific validator. It is a summary-only local demo input file. Artifact labels inside the template are placeholders and are not opened.
+
 ## What This Proves
 
 This demo proves the Agent loop is now composable enough to show a reviewer:
