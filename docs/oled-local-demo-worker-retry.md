@@ -45,3 +45,5 @@ This command is retry enqueue-only. It does not poll the queue, run a loop, exec
 Use `ai4s_agent.agents.oled_local_demo_enqueue` to submit new jobs and `ai4s_agent.agents.oled_local_demo_worker_loop` to consume queued jobs and retry children.
 
 Use `ai4s_agent.agents.oled_local_demo_cancel` when a queued OLED local demo job should be cancelled or a running job should be marked for cancellation instead of retried.
+
+Use `ai4s_agent.agents.oled_local_demo_status` to inspect failed source jobs, retry children, and their queue metadata without executing them.

@@ -68,6 +68,8 @@ If a queued OLED local demo job fails, create a retry child with `ai4s_agent.age
 
 If a queued or running OLED local demo job should be cancelled, use `ai4s_agent.agents.oled_local_demo_cancel`. Queued jobs are cancelled immediately; running jobs are marked `cancellation_requested` and this bounded worker loop handles the cancellation on a later poll.
 
+Use `ai4s_agent.agents.oled_local_demo_status` to inspect existing OLED local demo jobs, leases, and optional ProjectStorage metadata before or after running the bounded loop.
+
 ## Targeted Polling
 
 The bounded loop supports optional selectors:
