@@ -72,6 +72,8 @@ Use `ai4s_agent.agents.oled_local_demo_status` to inspect existing OLED local de
 
 Use `ai4s_agent.agents.oled_local_demo_health` to check queue readability and operation entrypoint consistency before running the bounded loop.
 
+Use `ai4s_agent.agents.oled_local_demo_generic_queue` when you want to run the same low-risk OLED local demo task through the generic `run_plan_execute` queue envelope instead of the OLED-specific worker task id.
+
 ## Targeted Polling
 
 The bounded loop supports optional selectors:

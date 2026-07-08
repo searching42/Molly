@@ -27,3 +27,5 @@ The health output includes:
 This command is health-only. It does not poll the queue, enqueue jobs, retry jobs, cancel jobs, run a worker loop, execute `RunPlanExecutor`, execute adapters, read input bundle files, open artifact paths, modify task payloads, create ProjectStorage stage state, write output reports, spawn subprocesses, start a daemon, approve gates, call MinerU, parse PDFs/images, scan corpora, call LLMs, use network access, train models, predict candidates, or mutate registry/promotion/publication/release/global append artifacts.
 
 Use this command before `ai4s_agent.agents.oled_local_demo_enqueue`, `ai4s_agent.agents.oled_local_demo_worker_loop`, `ai4s_agent.agents.oled_local_demo_status`, `ai4s_agent.agents.oled_local_demo_retry`, or `ai4s_agent.agents.oled_local_demo_cancel` when diagnosing local setup.
+
+Use `ai4s_agent.agents.oled_local_demo_generic_queue` to validate the same OLED local demo task through the generic `run_plan_execute` queue infrastructure.
