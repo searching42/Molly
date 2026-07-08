@@ -67,6 +67,8 @@ When `RunPlanExecutor` completes baseline training with model package manifests,
 
 The demo runner can also produce a scenario matrix across the built-in acceptable, weak-diagnostics, missing-provenance, and candidate-review paths for quick end-to-end inspection.
 
+The demo runner can also load a local JSON input bundle of scenario summaries, allowing low-risk local review of user-supplied OLED demo payloads without reading referenced artifacts or executing adapters.
+
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.
 
 `PromotedModelAsset` is the reuse contract for that exception: it records the approved model id, backend, runtime directory, required inputs, metrics, applicability notes, source run, and rollback asset. `PredictionPreparationAgent` will build a draft prediction payload only for a confirmed promoted asset, or for historical reuse that the user explicitly approves for a controlled run.
