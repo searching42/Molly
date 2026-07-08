@@ -5,7 +5,12 @@ import json
 import sys
 from pathlib import Path
 
-from ai4s_agent.agents.oled_mvp_demo import OLEDAgentMVPDemoRunner, load_local_input_bundle
+from ai4s_agent.agents.oled_mvp_demo import (
+    OLEDAgentMVPDemoRunner,
+    load_local_input_bundle,
+    local_input_bundle_template,
+    write_local_input_bundle_template,
+)
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -599,3 +604,126 @@ def test_local_bundle_artifact_labels_are_not_opened_read_or_hashed(monkeypatch,
 
     assert result["scenario_count"] == 2
     assert opened == [str(bundle_path)]
+
+
+def test_local_input_bundle_template_returns_deterministic_json_safe_object() -> None:
+    first = local_input_bundle_template()
+    second = local_input_bundle_template()
+
+    assert first == second
+    assert first["schema_version"] == 1
+    assert first["goal"] == "Find OLED emitters with high PLQY and red-shifted emission"
+    assert first["project_id"] == "demo-project"
+    assert first["notes"] == [
+        "Summary-only bundle for OLEDAgentMVPDemoRunner.",
+        "Artifact values are labels/placeholders; they are not opened or read.",
+    ]
+    json.dumps(first, sort_keys=True)
+
+
+def test_local_input_bundle_template_has_nonempty_scenarios() -> None:
+    template = local_input_bundle_template()
+
+    assert template["schema_version"] == 1
+    assert [scenario["name"] for scenario in template["scenarios"]] == [
+        "local_acceptable",
+        "local_weak_diagnostics",
+        "local_missing_provenance",
+    ]
+    assert all(isinstance(scenario["payload"], dict) for scenario in template["scenarios"])
+
+
+def test_local_input_bundle_template_is_accepted_after_writing_to_temp_file(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.json"
+    template_path.write_text(json.dumps(local_input_bundle_template(), sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+    loaded = load_local_input_bundle(template_path)
+
+    assert loaded["schema_version"] == 1
+    assert len(loaded["scenarios"]) == 3
+
+
+def test_run_local_bundle_can_run_generated_template(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.json"
+    write_local_input_bundle_template(template_path)
+
+    result = OLEDAgentMVPDemoRunner().run_local_bundle(run_id="template-run", bundle_path=template_path)
+
+    assert result["source"] == "local_input_bundle"
+    assert result["scenario_count"] == 3
+    assert result["summary"]["critic_decision_counts"] == {
+        "continue": 1,
+        "request_more_evidence": 1,
+        "rerun_baseline": 1,
+    }
+    assert result["executable"] is False
+
+
+def test_write_local_input_bundle_template_writes_exactly_one_specified_json_file(tmp_path: Path) -> None:
+    template_path = tmp_path / "oled_demo_bundle.json"
+
+    returned_path = write_local_input_bundle_template(template_path)
+    payload = json.loads(template_path.read_text(encoding="utf-8"))
+
+    assert returned_path == template_path
+    assert payload == local_input_bundle_template()
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["oled_demo_bundle.json"]
+
+
+def test_cli_print_input_bundle_template_prints_json_without_run_id(capsys) -> None:
+    from ai4s_agent.agents.oled_mvp_demo import main  # noqa: PLC0415
+
+    exit_code = main(["--print-input-bundle-template"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload == local_input_bundle_template()
+    assert "payload_template" not in captured.out
+
+
+def test_cli_write_input_bundle_template_writes_file_and_outputs_compact_json(capsys, tmp_path: Path) -> None:
+    from ai4s_agent.agents.oled_mvp_demo import main  # noqa: PLC0415
+
+    template_path = tmp_path / "oled_demo_bundle.json"
+
+    exit_code = main(["--write-input-bundle-template", str(template_path)])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload == {
+        "template_path": "oled_demo_bundle.json",
+        "scenario_count": 3,
+        "executable": False,
+    }
+    assert json.loads(template_path.read_text(encoding="utf-8")) == local_input_bundle_template()
+
+
+def test_cli_single_scenario_still_requires_run_id_and_goal(capsys) -> None:
+    from ai4s_agent.agents.oled_mvp_demo import main  # noqa: PLC0415
+
+    try:
+        main(["--scenario", "acceptable_diagnostics"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("expected single-scenario CLI without run id and goal to fail")
+    captured = capsys.readouterr()
+
+    assert "--run-id is required" in captured.err
+
+
+def test_template_generation_does_not_read_hash_or_open_referenced_artifact_labels(tmp_path: Path) -> None:
+    template = local_input_bundle_template()
+    artifact_labels = [
+        value
+        for scenario in template["scenarios"]
+        for artifact_map_name in ("dataset_artifacts", "training_package_artifacts", "baseline_artifacts")
+        for value in scenario["payload"].get(artifact_map_name, {}).values()
+    ]
+
+    write_local_input_bundle_template(tmp_path / "template.json")
+
+    assert artifact_labels
+    assert not any((tmp_path / label).exists() for label in artifact_labels)
