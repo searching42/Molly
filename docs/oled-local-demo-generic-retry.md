@@ -32,6 +32,7 @@ Pair this command with:
 - `ai4s_agent.agents.oled_local_demo_generic_enqueue` to submit generic OLED jobs
 - `ai4s_agent.agents.oled_local_demo_generic_worker_loop` to consume queued jobs and retry children
 - `ai4s_agent.agents.oled_local_demo_generic_status` to inspect failed jobs and retry metadata
+- `ai4s_agent.agents.oled_local_demo_generic_cancel` to cancel queued jobs or request cancellation for running jobs before deciding whether retry is appropriate
 
 Duplicate `retry_request_id` values are idempotent for the same source job if the underlying worker queue returns the existing retry child. Reusing a retry request id for a different source job is rejected.
 

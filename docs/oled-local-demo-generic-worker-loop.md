@@ -10,6 +10,8 @@ Use `ai4s_agent.agents.oled_local_demo_generic_status` to inspect existing gener
 
 Use `ai4s_agent.agents.oled_local_demo_generic_retry` to queue retry children for failed allowlisted generic OLED local demo jobs; this bounded loop can consume those queued retry children later.
 
+Use `ai4s_agent.agents.oled_local_demo_generic_cancel` to request cancellation for running allowlisted generic OLED local demo jobs; this bounded loop observes active cancellation requests.
+
 ## Example
 
 ```bash
