@@ -75,6 +75,24 @@ poller = WorkerQueuePoller(
 result = poller.poll_once()
 ```
 
+## One-Shot CLI
+
+Run one bounded local queue execution from the command line:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_worker \
+  --queue-root /tmp/molly-worker-queue \
+  --project-root /tmp/molly-projects \
+  --project-id demo-project \
+  --run-id oled-local-demo \
+  --input-bundle /tmp/oled_demo_bundle.json \
+  --output-dir /tmp/oled-agent-demo \
+  --worker-id local-worker-1 \
+  --overwrite
+```
+
+This command creates a local `WorkerQueue`, enqueues one `execute_oled_local_demo_runplan` job, polls once with `OLEDLocalDemoRunPlanWorkerTaskRunner`, and prints compact JSON. It is a one-shot local queue execution command; it does not start a daemon, background worker, shell command, or long-running loop.
+
 ## Direct CLI Comparison
 
 `ai4s_agent.agents.oled_local_demo_runplan` executes the same RunPlanExecutor path directly. `OLEDLocalDemoRunPlanWorkerTaskRunner` adds durable queue acquisition, lease completion, and queue result state around that same local task.

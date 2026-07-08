@@ -81,6 +81,8 @@ A CLI entrypoint, `ai4s_agent.agents.oled_local_demo_runplan`, runs the low-risk
 
 The OLED local demo RunPlan can also be executed by the local worker queue through `OLEDLocalDemoRunPlanWorkerTaskRunner`, providing a queue-backed execution path without scientific adapters.
 
+A one-shot CLI on `ai4s_agent.agents.oled_local_demo_worker` can enqueue and execute the OLED local demo through the local worker queue without scientific adapters.
+
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.
 
 `PromotedModelAsset` is the reuse contract for that exception: it records the approved model id, backend, runtime directory, required inputs, metrics, applicability notes, source run, and rollback asset. `PredictionPreparationAgent` will build a draft prediction payload only for a confirmed promoted asset, or for historical reuse that the user explicitly approves for a controlled run.
