@@ -66,6 +66,8 @@ The command prints compact JSON with actions, completed/failed/cancelled job ids
 
 If a queued OLED local demo job fails, create a retry child with `ai4s_agent.agents.oled_local_demo_retry`, then run this bounded worker loop again to consume the retry.
 
+If a queued or running OLED local demo job should be cancelled, use `ai4s_agent.agents.oled_local_demo_cancel`. Queued jobs are cancelled immediately; running jobs are marked `cancellation_requested` and this bounded worker loop handles the cancellation on a later poll.
+
 ## Targeted Polling
 
 The bounded loop supports optional selectors:
