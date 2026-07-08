@@ -92,6 +92,57 @@ The scenario matrix compares each built-in path across:
 
 The summary includes deterministic critic-decision counts, bridge-mode counts, and the scenarios that still have review blockers. This improves demoability and inspection of the integrated Agent loop; it is not a governance expansion and does not add any admission, receipt, readiness, preflight, writer, registry, promotion, or publication layer.
 
+## Local JSON Input Bundle
+
+The demo runner can also load one user-specified local JSON file containing scenario summaries:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.agents.oled_mvp_demo \
+  --run-id local-demo \
+  --input-bundle /tmp/oled_demo_bundle.json \
+  --output-dir /tmp/oled-agent-demo
+```
+
+The bundle may provide `goal` and `project_id`; explicit `--goal` and `--project-id` CLI values override the bundle values. When `--output-dir` is supplied, the runner writes:
+
+- `oled_agent_mvp_demo_bundle.json`
+- `oled_agent_mvp_demo_bundle.md`
+
+Example bundle:
+
+```json
+{
+  "schema_version": 1,
+  "goal": "Find OLED emitters with high PLQY and red-shifted emission",
+  "project_id": "demo-project",
+  "scenarios": [
+    {
+      "name": "local_acceptable",
+      "description": "Local acceptable diagnostics example.",
+      "payload": {
+        "dataset_artifacts": {"dataset_view_rows": "local_dataset_rows"},
+        "training_package_artifacts": {"training_rows": "local_training_rows"},
+        "baseline_artifacts": {"metrics": "local_metrics"},
+        "diagnostics_report": {"status": "acceptable"},
+        "provenance_summary": {"source_count": 2, "evidence_count": 8}
+      }
+    },
+    {
+      "name": "local_weak",
+      "payload": {
+        "dataset_artifacts": {"dataset_view_rows": "local_dataset_rows"},
+        "training_package_artifacts": {"training_rows": "local_training_rows"},
+        "baseline_artifacts": {"metrics": "local_metrics"},
+        "diagnostics_report": {"status": "weak", "summary": "rerun recommended"},
+        "provenance_summary": {"source_count": 2, "evidence_count": 8}
+      }
+    }
+  ]
+}
+```
+
+The local bundle path is the only file read by this mode. Artifact values inside the JSON are treated as labels/placeholders only; the runner does not follow, open, hash, scan, or validate referenced artifact paths. This improves demoability with local summaries without adding governance layers or execution behavior.
+
 ## What This Proves
 
 This demo proves the Agent loop is now composable enough to show a reviewer:
@@ -107,6 +158,6 @@ It is a usability pivot away from over-optimizing governance layers and toward d
 
 ## Safety Boundary
 
-The demo does not execute adapters, call or instantiate `RunPlanExecutor`, approve or resume gates, mutate `stage.json`, mutate `gate_decisions.json`, read or hash artifact paths, train models, run prediction, validate benchmarks, call LLMs, call MinerU, read PDFs/images, use external network access, or mutate registry/promotion/publication/release/global append artifacts.
+The demo reads at most one user-specified local JSON bundle when `--input-bundle` is used. It does not execute adapters, call or instantiate `RunPlanExecutor`, approve or resume gates, mutate `stage.json`, mutate `gate_decisions.json`, read or hash referenced artifact paths, scan directories, read corpus files, train models, run prediction, validate benchmarks, call LLMs, call MinerU, read PDFs/images, use external network access, or mutate registry/promotion/publication/release/global append artifacts.
 
 The report is review-only and always `executable=false`.

@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from ai4s_agent.agents.oled_mvp_demo import OLEDAgentMVPDemoRunner
+from ai4s_agent.agents.oled_mvp_demo import OLEDAgentMVPDemoRunner, load_local_input_bundle
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -368,3 +368,234 @@ def test_cli_without_all_scenarios_keeps_single_scenario_behavior(capsys) -> Non
     assert payload["scenario"] == "acceptable_diagnostics"
     assert payload["recommended_next_action"] == "candidate_generation_or_prediction"
     assert "scenario_count" not in payload
+
+
+def _write_bundle(path: Path, payload: dict) -> Path:
+    path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _valid_local_bundle() -> dict:
+    return {
+        "schema_version": 1,
+        "goal": "Find OLED emitters with local summaries",
+        "project_id": "local-project",
+        "scenarios": [
+            {
+                "name": "local_acceptable",
+                "description": "Local acceptable diagnostics example.",
+                "payload": {
+                    "dataset_artifacts": {"dataset_view_rows": "local_dataset_rows"},
+                    "training_package_artifacts": {"training_rows": "local_training_rows"},
+                    "baseline_artifacts": {"metrics": "local_metrics"},
+                    "diagnostics_report": {"status": "acceptable"},
+                    "provenance_summary": {"source_count": 2, "evidence_count": 8},
+                },
+            },
+            {
+                "name": "local_weak",
+                "payload": {
+                    "dataset_artifacts": {"dataset_view_rows": "local_dataset_rows"},
+                    "training_package_artifacts": {"training_rows": "local_training_rows"},
+                    "baseline_artifacts": {"metrics": "local_metrics"},
+                    "diagnostics_report": {"status": "weak", "summary": "rerun recommended"},
+                    "provenance_summary": {"source_count": 2, "evidence_count": 8},
+                },
+            },
+        ],
+    }
+
+
+def test_load_local_input_bundle_loads_valid_temp_json_bundle(tmp_path: Path) -> None:
+    bundle_path = _write_bundle(tmp_path / "bundle.json", _valid_local_bundle())
+
+    bundle = load_local_input_bundle(bundle_path)
+
+    assert bundle["schema_version"] == 1
+    assert bundle["goal"] == "Find OLED emitters with local summaries"
+    assert [scenario["name"] for scenario in bundle["scenarios"]] == ["local_acceptable", "local_weak"]
+
+
+def test_load_local_input_bundle_invalid_json_raises_value_error(tmp_path: Path) -> None:
+    bundle_path = tmp_path / "invalid.json"
+    bundle_path.write_text("{not json", encoding="utf-8")
+
+    try:
+        load_local_input_bundle(bundle_path)
+    except ValueError as exc:
+        assert "invalid_local_input_bundle_json:" in str(exc)
+    else:
+        raise AssertionError("expected invalid local input bundle JSON to raise ValueError")
+
+
+def test_load_local_input_bundle_missing_scenarios_raises_value_error(tmp_path: Path) -> None:
+    bundle_path = _write_bundle(tmp_path / "missing-scenarios.json", {"schema_version": 1})
+
+    try:
+        load_local_input_bundle(bundle_path)
+    except ValueError as exc:
+        assert "missing_local_input_bundle_scenarios" in str(exc)
+    else:
+        raise AssertionError("expected missing scenarios to raise ValueError")
+
+
+def test_load_local_input_bundle_empty_scenario_list_raises_value_error(tmp_path: Path) -> None:
+    bundle_path = _write_bundle(tmp_path / "empty-scenarios.json", {"schema_version": 1, "scenarios": []})
+
+    try:
+        load_local_input_bundle(bundle_path)
+    except ValueError as exc:
+        assert "empty_local_input_bundle_scenarios" in str(exc)
+    else:
+        raise AssertionError("expected empty scenario list to raise ValueError")
+
+
+def test_load_local_input_bundle_missing_scenario_name_raises_value_error(tmp_path: Path) -> None:
+    bundle = _valid_local_bundle()
+    bundle["scenarios"][0]["name"] = ""
+    bundle_path = _write_bundle(tmp_path / "missing-name.json", bundle)
+
+    try:
+        load_local_input_bundle(bundle_path)
+    except ValueError as exc:
+        assert "missing_local_input_bundle_scenario_name:0" in str(exc)
+    else:
+        raise AssertionError("expected missing scenario name to raise ValueError")
+
+
+def test_load_local_input_bundle_missing_scenario_payload_raises_value_error(tmp_path: Path) -> None:
+    bundle = _valid_local_bundle()
+    del bundle["scenarios"][0]["payload"]
+    bundle_path = _write_bundle(tmp_path / "missing-payload.json", bundle)
+
+    try:
+        load_local_input_bundle(bundle_path)
+    except ValueError as exc:
+        assert "missing_local_input_bundle_scenario_payload:local_acceptable" in str(exc)
+    else:
+        raise AssertionError("expected missing scenario payload to raise ValueError")
+
+
+def test_run_local_bundle_runs_all_scenarios_from_bundle(tmp_path: Path) -> None:
+    bundle_path = _write_bundle(tmp_path / "bundle.json", _valid_local_bundle())
+
+    result = OLEDAgentMVPDemoRunner().run_local_bundle(run_id="local", bundle_path=bundle_path)
+
+    assert result["source"] == "local_input_bundle"
+    assert result["bundle_path"] == "bundle.json"
+    assert result["goal"] == "Find OLED emitters with local summaries"
+    assert result["project_id"] == "local-project"
+    assert result["scenario_count"] == 2
+    assert [row["scenario"] for row in result["scenarios"]] == ["local_acceptable", "local_weak"]
+    assert result["summary"]["critic_decision_counts"] == {"continue": 1, "rerun_baseline": 1}
+    assert result["executable"] is False
+
+
+def test_cli_input_bundle_outputs_compact_json_and_writes_reports(capsys, tmp_path: Path) -> None:
+    from ai4s_agent.agents.oled_mvp_demo import main  # noqa: PLC0415
+
+    bundle_path = _write_bundle(tmp_path / "bundle.json", _valid_local_bundle())
+    output_dir = tmp_path / "out"
+
+    exit_code = main(["--run-id", "local-cli", "--input-bundle", str(bundle_path), "--output-dir", str(output_dir)])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload == {
+        "run_id": "local-cli",
+        "source": "local_input_bundle",
+        "scenario_count": 2,
+        "critic_decision_counts": {"continue": 1, "rerun_baseline": 1},
+        "executable": False,
+    }
+    assert "payload_template" not in captured.out
+    assert (output_dir / "oled_agent_mvp_demo_bundle.json").exists()
+    assert (output_dir / "oled_agent_mvp_demo_bundle.md").exists()
+
+
+def test_cli_input_bundle_goal_override(capsys, tmp_path: Path) -> None:
+    from ai4s_agent.agents.oled_mvp_demo import main  # noqa: PLC0415
+
+    bundle_path = _write_bundle(tmp_path / "bundle.json", _valid_local_bundle())
+
+    exit_code = main(["--run-id", "override-goal", "--input-bundle", str(bundle_path), "--goal", "Override goal"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["run_id"] == "override-goal"
+    assert payload["scenario_count"] == 2
+    result = OLEDAgentMVPDemoRunner().run_local_bundle(
+        run_id="override-goal",
+        bundle_path=bundle_path,
+        goal="Override goal",
+    )
+    assert result["goal"] == "Override goal"
+
+
+def test_cli_input_bundle_project_id_override(capsys, tmp_path: Path) -> None:
+    from ai4s_agent.agents.oled_mvp_demo import main  # noqa: PLC0415
+
+    bundle_path = _write_bundle(tmp_path / "bundle.json", _valid_local_bundle())
+
+    exit_code = main(
+        ["--run-id", "override-project", "--input-bundle", str(bundle_path), "--project-id", "override-project"]
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["run_id"] == "override-project"
+    result = OLEDAgentMVPDemoRunner().run_local_bundle(
+        run_id="override-project",
+        bundle_path=bundle_path,
+        project_id="override-project",
+    )
+    assert result["project_id"] == "override-project"
+
+
+def test_local_bundle_report_is_deterministic(tmp_path: Path) -> None:
+    agent = OLEDAgentMVPDemoRunner()
+    bundle_path = _write_bundle(tmp_path / "bundle.json", _valid_local_bundle())
+    result = agent.run_local_bundle(run_id="local-report", bundle_path=bundle_path)
+    storage = ProjectStorage(tmp_path / "storage")
+
+    first = agent.render_local_bundle_markdown(result)
+    second = agent.render_local_bundle_markdown(result)
+    json_path, md_path = agent.write_local_bundle_report(storage, "project", "local-report", result)
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+
+    assert first == second
+    assert "# OLED Agent MVP Demo Local Bundle" in first
+    assert "## Safety Boundary" in first
+    assert json_path.name == "oled_agent_mvp_demo_bundle.json"
+    assert md_path.name == "oled_agent_mvp_demo_bundle.md"
+    assert payload["scenario_count"] == 2
+    assert payload["executable"] is False
+
+
+def test_local_bundle_artifact_labels_are_not_opened_read_or_hashed(monkeypatch, tmp_path: Path) -> None:
+    import builtins
+
+    bundle = _valid_local_bundle()
+    bundle["scenarios"][0]["payload"]["dataset_artifacts"] = {
+        "dataset_view_rows": str(tmp_path / "do-not-open-dataset.jsonl")
+    }
+    bundle["scenarios"][0]["payload"]["training_package_artifacts"] = {
+        "training_rows": str(tmp_path / "do-not-open-training.jsonl")
+    }
+    bundle_path = _write_bundle(tmp_path / "bundle.json", bundle)
+    opened: list[str] = []
+    real_open = builtins.open
+
+    def tracking_open(file, *args, **kwargs):
+        opened.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", tracking_open)
+
+    result = OLEDAgentMVPDemoRunner().run_local_bundle(run_id="local-artifacts", bundle_path=bundle_path)
+
+    assert result["scenario_count"] == 2
+    assert opened == [str(bundle_path)]
