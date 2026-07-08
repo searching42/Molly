@@ -580,7 +580,11 @@ def build_multi_index_adapter(payload: dict[str, Any]) -> dict[str, Any]:
 
     try:
         chunks_path = _resolve_path(chunks_path_raw, base=WORKSPACE)
+        if not chunks_path.exists():
+            raise ValueError(f"chunks_jsonl not found: {chunks_path}")
         chunks = [CorpusChunk.model_validate(item) for item in _read_jsonl(chunks_path)]
+        if not chunks:
+            raise ValueError("chunks_jsonl did not contain any chunks")
     except Exception as exc:
         return {
             "status": "failed",

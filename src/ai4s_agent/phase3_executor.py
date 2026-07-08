@@ -229,6 +229,13 @@ def _phase3_payload_for(
         payload.update(task_options)
         return payload
 
+    if task_id == "build_multi_index":
+        task_options = _phase3_payload_options(executor, payload, options)
+        _add_optional_artifact(payload, artifact_paths, "evidence_chunks", "chunks_jsonl")
+        _add_optional_artifact(payload, artifact_paths, "corpus_index", "corpus_index_json")
+        payload.update(task_options)
+        return payload
+
     task_options = executor._payload_options(options)
     if task_id == "acquire_literature_sources":
         payload["corpus_source_manifest_json"] = _require_artifact(artifact_paths, "corpus_source_manifest")
@@ -237,11 +244,6 @@ def _phase3_payload_for(
     if task_id in {"parse_document", "parse_document_pdfplumber", "parse_document_pymupdf", "parse_document_grobid"}:
         payload["input_pdf"] = _first_pdf(_require_artifact(artifact_paths, "pdf_corpus"))
         payload.setdefault("execute", False)
-        payload.update(task_options)
-        return payload
-    if task_id == "build_multi_index":
-        _add_optional_artifact(payload, artifact_paths, "evidence_chunks", "chunks_jsonl")
-        _add_optional_artifact(payload, artifact_paths, "corpus_index", "corpus_index_json")
         payload.update(task_options)
         return payload
     if task_id == "build_dense_index":
