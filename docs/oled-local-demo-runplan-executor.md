@@ -46,6 +46,8 @@ result = RunPlanExecutor(storage=ProjectStorage("/tmp/molly-demo")).execute(
 
 The task has no gates because it is low-risk and local-only. It still requires explicit `task_options` for the input bundle and may use either an explicit output directory or the default under the executor run directory.
 
+For a direct command-line entrypoint around this one-task run plan, see `docs/oled-local-demo-runplan-cli.md`.
+
 ## Outputs
 
 The adapter returns:

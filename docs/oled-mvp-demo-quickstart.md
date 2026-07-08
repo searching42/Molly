@@ -121,6 +121,8 @@ This controlled local runner reads one summary bundle and writes the bundle repo
 
 The local demo can also be executed through `RunPlanExecutor` with the low-risk `execute_oled_local_demo` task. See `docs/oled-local-demo-runplan-executor.md`.
 
+To run that path directly from the command line, see `docs/oled-local-demo-runplan-cli.md`.
+
 ## What This Proves
 
 This proves the current review-only Agent loop can compose run-card state, tool recommendations, critic branching, action handoff, execution preview, dry-run packet, and bridge request summaries.
