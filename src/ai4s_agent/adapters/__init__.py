@@ -43,6 +43,7 @@ from ai4s_agent.adapters.phase3 import (
     retrieve_evidence_adapter,
     track_citation_provenance_adapter,
 )
+from ai4s_agent.adapters.oled_demo import execute_oled_local_demo_adapter
 from ai4s_agent.adapters.runtime import AdapterRuntimeError
 
 
@@ -112,4 +113,5 @@ __all__ = [
     "confirm_extracted_dataset_adapter",
     "literature_to_dataset_workflow_adapter",
     "normalize_extracted_units_adapter",
+    "execute_oled_local_demo_adapter",
 ]

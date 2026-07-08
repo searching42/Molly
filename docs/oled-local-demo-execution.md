@@ -57,3 +57,7 @@ Compact CLI output includes:
 ```
 
 Here `executable=true` means the local demo runner performed file IO and report generation. It does not mean adapters were executed.
+
+## RunPlanExecutor Task
+
+The same local demo path can run through `RunPlanExecutor` via the low-risk `execute_oled_local_demo` task and `execute_oled_local_demo_adapter`. See `docs/oled-local-demo-runplan-executor.md` for the task-options example and artifact registration behavior.
