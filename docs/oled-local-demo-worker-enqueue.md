@@ -30,6 +30,8 @@ PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_worker_loop \
 
 If the worker loop marks the job failed, use `ai4s_agent.agents.oled_local_demo_retry` to enqueue a retry child after fixing the local cause.
 
+If a queued job should not run, use `ai4s_agent.agents.oled_local_demo_cancel` to cancel it before the bounded worker loop consumes it.
+
 ## Job Payload
 
 The enqueued job has task id `execute_oled_local_demo_runplan` and stores:
