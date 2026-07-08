@@ -34,3 +34,5 @@ The command does not modify the job task payload. Fields such as `project_root`,
 This command is cancel-only. It does not poll the queue, run a loop, execute `RunPlanExecutor`, execute adapters, read the input bundle file, read artifact labels inside the bundle, modify the task payload, create ProjectStorage stage state, write output reports, spawn subprocesses, start a daemon, approve gates, call MinerU, parse PDFs/images, scan corpora, call LLMs, use network access, train models, predict candidates, or mutate registry/promotion/publication/release/global append artifacts.
 
 Use `ai4s_agent.agents.oled_local_demo_enqueue` to submit new jobs, `ai4s_agent.agents.oled_local_demo_worker_loop` to consume queued jobs, and `ai4s_agent.agents.oled_local_demo_retry` to retry failed jobs after fixing the local cause.
+
+Use `ai4s_agent.agents.oled_local_demo_status` to inspect cancellation state, active leases, and completed queue metadata without mutating jobs.
