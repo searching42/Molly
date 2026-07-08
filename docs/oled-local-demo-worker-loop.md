@@ -64,6 +64,8 @@ PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_worker_loop \
 
 The command prints compact JSON with actions, completed/failed/cancelled job ids, recovered jobs, executed task ids, and whether the loop reached idle.
 
+If a queued OLED local demo job fails, create a retry child with `ai4s_agent.agents.oled_local_demo_retry`, then run this bounded worker loop again to consume the retry.
+
 ## Targeted Polling
 
 The bounded loop supports optional selectors:
