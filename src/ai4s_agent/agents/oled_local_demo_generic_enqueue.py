@@ -6,12 +6,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from ai4s_agent.agents.oled_local_demo_generic_allowlist import LOCAL_DEMO_TASK_ID
 from ai4s_agent.planner import expand_run_plan
 from ai4s_agent.run_plan_queue import enqueue_run_plan_execute_job
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
-
-
-LOCAL_DEMO_TASK_ID = "execute_oled_local_demo"
 
 
 def enqueue_oled_local_demo_generic_run_plan_job(

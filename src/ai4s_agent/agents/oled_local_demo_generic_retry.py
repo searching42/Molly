@@ -6,12 +6,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from ai4s_agent.run_plan_queue import RUN_PLAN_EXECUTE_KIND, RUN_PLAN_EXECUTE_TASK_ID, validate_run_plan_execute_task
+from ai4s_agent.agents.oled_local_demo_generic_allowlist import (
+    validate_oled_local_demo_run_plan_execute_job,
+)
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
-
-
-LOCAL_DEMO_TASK_ID = "execute_oled_local_demo"
-ALLOWLISTED_RUN_PLAN_TASKS = (LOCAL_DEMO_TASK_ID,)
 
 
 def retry_failed_oled_local_demo_generic_run_plan_job(
@@ -31,21 +29,11 @@ def retry_failed_oled_local_demo_generic_run_plan_job(
     source_status = str(source.get("status") or "")
     if source_status != "failed":
         raise ValueError("source job status must be failed")
-    task_payload = source.get("task")
-    if not isinstance(task_payload, dict):
-        raise ValueError("source job task must be an object")
-    task_id = str(task_payload.get("task_id") or "").strip()
-    if task_id != RUN_PLAN_EXECUTE_TASK_ID:
-        raise ValueError("source job task_id must be run_plan_execute")
-    task_kind = str(task_payload.get("kind") or "").strip()
-    if task_kind != RUN_PLAN_EXECUTE_KIND:
-        raise ValueError("source job kind must be run_plan_execute")
-    task = validate_run_plan_execute_task(task_payload)
+    try:
+        task = validate_oled_local_demo_run_plan_execute_job(source)
+    except ValueError as exc:
+        raise _source_validation_error(exc) from exc
     run_plan_tasks = [planned.task_id for planned in task.run_plan.tasks]
-    if run_plan_tasks != list(ALLOWLISTED_RUN_PLAN_TASKS):
-        raise ValueError("generic_run_plan_not_allowlisted_for_oled_local_demo")
-    if task.run_plan.requested_tasks != list(ALLOWLISTED_RUN_PLAN_TASKS):
-        raise ValueError("generic_run_plan_not_allowlisted_for_oled_local_demo")
 
     retry = queue.enqueue_retry_of_failed_job(
         source_job_id,
@@ -96,6 +84,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0
+
+
+def _source_validation_error(exc: ValueError) -> ValueError:
+    message = str(exc)
+    if message == "job task must be an object":
+        return ValueError("source job task must be an object")
+    if message == "task_id must be run_plan_execute":
+        return ValueError("source job task_id must be run_plan_execute")
+    if message == "task kind must be run_plan_execute":
+        return ValueError("source job kind must be run_plan_execute")
+    return ValueError(message)
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised through main().
