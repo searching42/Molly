@@ -38,6 +38,8 @@ run_plan_execute queue job
 
 It writes local demo reports, a manifest, ProjectStorage stage state, artifact registry entries, and worker queue job/lease state.
 
+For a split submit/consume pattern, enqueue a generic `run_plan_execute` job first and use `ai4s_agent.agents.oled_local_demo_generic_worker_loop` to consume existing allowlisted OLED local demo jobs without enqueueing.
+
 ## Safety Boundary
 
 This command executes only the already-whitelisted local demo adapter. It reads exactly one user-specified local summary bundle during execution and does not read, open, hash, or validate referenced artifact labels inside the bundle.
