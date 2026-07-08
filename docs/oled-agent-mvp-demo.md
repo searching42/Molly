@@ -6,6 +6,8 @@
 
 The demo is intentionally synthetic. It accepts a goal and scenario, builds minimal dictionaries, runs the existing review-only components, and emits one consolidated report.
 
+For a copy-pasteable walkthrough of one-scenario, matrix, template, and local-bundle runs, see [OLED MVP Demo Quickstart](oled-mvp-demo-quickstart.md).
+
 ## Component Chain
 
 The runner uses the existing chain:
