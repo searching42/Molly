@@ -104,6 +104,8 @@ PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_worker_loop \
 
 The bounded loop command does not enqueue jobs. It stops at idle or at the requested iteration limit.
 
+For a two-step queue-submit flow, use `ai4s_agent.agents.oled_local_demo_enqueue` to enqueue without executing, then run the bounded worker-loop CLI.
+
 ## Direct CLI Comparison
 
 `ai4s_agent.agents.oled_local_demo_runplan` executes the same RunPlanExecutor path directly. `OLEDLocalDemoRunPlanWorkerTaskRunner` adds durable queue acquisition, lease completion, and queue result state around that same local task.
