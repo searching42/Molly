@@ -97,6 +97,8 @@ A bounded worker-loop CLI, `ai4s_agent.agents.oled_local_demo_worker_loop`, can 
 
 `ai4s_agent.agents.oled_local_demo_generic_queue` proves the OLED local demo can run through the generic `run_plan_execute` queue path rather than the OLED-specific worker task envelope.
 
+`ai4s_agent.agents.oled_local_demo_generic_enqueue` submits an OLED local demo job through the generic `run_plan_execute` queue envelope without executing it.
+
 `ai4s_agent.agents.oled_local_demo_generic_worker_loop` consumes existing generic `run_plan_execute` jobs for the allowlisted OLED local demo task without using the OLED-specific worker task envelope.
 
 Historical training results are modeling priors for future agent decisions, not default MVP prediction weights. A model can be reused for prediction only after it is explicitly promoted as an asset for a compatible request, with applicability limits and user approval; otherwise fresh target-specific training remains the default.

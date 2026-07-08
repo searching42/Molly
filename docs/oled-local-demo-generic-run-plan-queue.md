@@ -40,6 +40,8 @@ It writes local demo reports, a manifest, ProjectStorage stage state, artifact r
 
 For a split submit/consume pattern, enqueue a generic `run_plan_execute` job first and use `ai4s_agent.agents.oled_local_demo_generic_worker_loop` to consume existing allowlisted OLED local demo jobs without enqueueing.
 
+Use `ai4s_agent.agents.oled_local_demo_generic_enqueue` for the enqueue-only generic submit command.
+
 ## Safety Boundary
 
 This command executes only the already-whitelisted local demo adapter. It reads exactly one user-specified local summary bundle during execution and does not read, open, hash, or validate referenced artifact labels inside the bundle.

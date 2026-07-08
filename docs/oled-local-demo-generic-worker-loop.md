@@ -4,6 +4,8 @@
 
 This CLI does not enqueue jobs. It opens an existing worker queue, runs a bounded `LocalWorkerLoop`, and uses `RunPlanExecutorTaskRunner` only for generic RunPlan queue jobs whose embedded run plan contains exactly one task: `execute_oled_local_demo`.
 
+Use `ai4s_agent.agents.oled_local_demo_generic_enqueue` to submit an OLED local demo job through the generic `run_plan_execute` envelope without executing it, then run this bounded worker loop to consume the queued job.
+
 ## Example
 
 ```bash
