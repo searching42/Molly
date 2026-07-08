@@ -2,6 +2,8 @@
 
 This quickstart shows the review-only OLED Agent MVP demo paths that can be run in a few minutes from a local checkout.
 
+The quickstart paths are covered by lightweight smoke tests in `tests/test_oled_mvp_demo_quickstart_smoke.py`.
+
 ## Safety Boundary
 
 The demo is review-only. It does not execute adapters, call or instantiate `RunPlanExecutor`, approve gates, mutate run state, train models, predict, validate benchmarks, call LLMs, call MinerU, read PDFs/images, read corpus files, scan directories, hash artifact paths, use external network access, or mutate registry/promotion/publication/release/global append artifacts.
