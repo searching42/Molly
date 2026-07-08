@@ -8,6 +8,8 @@ Use `ai4s_agent.agents.oled_local_demo_generic_enqueue` to submit an OLED local 
 
 Use `ai4s_agent.agents.oled_local_demo_generic_status` to inspect existing generic OLED local demo jobs and leases before or after running the loop.
 
+Use `ai4s_agent.agents.oled_local_demo_generic_retry` to queue retry children for failed allowlisted generic OLED local demo jobs; this bounded loop can consume those queued retry children later.
+
 ## Example
 
 ```bash

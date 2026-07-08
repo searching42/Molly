@@ -28,6 +28,8 @@ PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_generic_worker_loop \
 
 Use `ai4s_agent.agents.oled_local_demo_generic_status` to inspect queued, running, succeeded, failed, or cancelled generic OLED local demo jobs without executing or mutating them.
 
+Use `ai4s_agent.agents.oled_local_demo_generic_retry` when a failed generic OLED local demo job needs an explicit retry child queued for later worker-loop consumption.
+
 ## Behavior
 
 The enqueued queue task uses:
