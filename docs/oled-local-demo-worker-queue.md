@@ -93,6 +93,17 @@ PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_worker \
 
 This command creates a local `WorkerQueue`, enqueues one `execute_oled_local_demo_runplan` job, polls once with `OLEDLocalDemoRunPlanWorkerTaskRunner`, and prints compact JSON. It is a one-shot local queue execution command; it does not start a daemon, background worker, shell command, or long-running loop.
 
+For consuming jobs that are already queued, use the bounded worker-loop CLI:
+
+```bash
+PYTHONPATH=src python -m ai4s_agent.agents.oled_local_demo_worker_loop \
+  --queue-root /tmp/molly-worker-queue \
+  --worker-id local-worker-1 \
+  --max-iterations 3
+```
+
+The bounded loop command does not enqueue jobs. It stops at idle or at the requested iteration limit.
+
 ## Direct CLI Comparison
 
 `ai4s_agent.agents.oled_local_demo_runplan` executes the same RunPlanExecutor path directly. `OLEDLocalDemoRunPlanWorkerTaskRunner` adds durable queue acquisition, lease completion, and queue result state around that same local task.
