@@ -42,6 +42,8 @@ For a split submit/consume pattern, enqueue a generic `run_plan_execute` job fir
 
 Use `ai4s_agent.agents.oled_local_demo_generic_enqueue` for the enqueue-only generic submit command.
 
+Use `ai4s_agent.agents.oled_local_demo_generic_status` for read-only inspection of generic OLED local demo queue jobs.
+
 ## Safety Boundary
 
 This command executes only the already-whitelisted local demo adapter. It reads exactly one user-specified local summary bundle during execution and does not read, open, hash, or validate referenced artifact labels inside the bundle.
