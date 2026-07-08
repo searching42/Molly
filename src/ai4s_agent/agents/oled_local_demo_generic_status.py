@@ -6,12 +6,12 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from ai4s_agent.run_plan_queue import RUN_PLAN_EXECUTE_KIND, RUN_PLAN_EXECUTE_TASK_ID, validate_run_plan_execute_task
+from ai4s_agent.agents.oled_local_demo_generic_allowlist import (
+    ALLOWLISTED_RUN_PLAN_TASKS,
+    oled_local_demo_task_options,
+    validate_oled_local_demo_run_plan_execute_job,
+)
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
-
-
-LOCAL_DEMO_TASK_ID = "execute_oled_local_demo"
-ALLOWLISTED_RUN_PLAN_TASKS = (LOCAL_DEMO_TASK_ID,)
 
 
 def inspect_oled_local_demo_generic_run_plan_jobs(
@@ -81,26 +81,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _allowlisted_task(job: dict[str, Any], *, selected_job_id: str):
-    task_payload = job.get("task")
-    if not isinstance(task_payload, dict):
-        return None
-    if str(task_payload.get("task_id") or "") != RUN_PLAN_EXECUTE_TASK_ID:
-        return None
-    if str(task_payload.get("kind") or "") != RUN_PLAN_EXECUTE_KIND:
-        return None
     try:
-        task = validate_run_plan_execute_task(task_payload)
+        return validate_oled_local_demo_run_plan_execute_job(job)
     except ValueError as exc:
-        if selected_job_id and selected_job_id == str(job.get("job_id") or ""):
+        if (
+            selected_job_id
+            and selected_job_id == str(job.get("job_id") or "")
+            and str(exc) == "malformed_run_plan_execute_task"
+        ):
             raise ValueError("malformed_run_plan_execute_job") from exc
         return None
-    task_ids = [planned.task_id for planned in task.run_plan.tasks]
-    requested = list(task.run_plan.requested_tasks)
-    if task_ids != list(ALLOWLISTED_RUN_PLAN_TASKS):
-        return None
-    if requested != list(ALLOWLISTED_RUN_PLAN_TASKS):
-        return None
-    return task
 
 
 def _matches_filters(job: dict[str, Any], filters: dict[str, str]) -> bool:
@@ -122,8 +112,7 @@ def _summarize_job(
     leases: list[dict[str, Any]],
     project_root: Path | str | None,
 ) -> dict[str, Any]:
-    task_options = parsed_task.task_options.get(LOCAL_DEMO_TASK_ID)
-    options = task_options if isinstance(task_options, dict) else {}
+    options = oled_local_demo_task_options(parsed_task)
     summary: dict[str, Any] = {
         "job_id": str(job.get("job_id") or ""),
         "project_id": str(job.get("project_id") or ""),

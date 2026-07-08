@@ -6,17 +6,17 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from ai4s_agent.agents.oled_local_demo_generic_allowlist import (
+    ALLOWLISTED_RUN_PLAN_TASKS,
+    validate_oled_local_demo_run_plan_execute_job,
+)
 from ai4s_agent.local_worker_loop import LocalWorkerLoop
-from ai4s_agent.run_plan_queue import RUN_PLAN_EXECUTE_KIND, RUN_PLAN_EXECUTE_TASK_ID, validate_run_plan_execute_task
+from ai4s_agent.run_plan_queue import RUN_PLAN_EXECUTE_TASK_ID
 from ai4s_agent.run_plan_task_runner import RunPlanExecutorTaskRunner
 from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.worker_queue import JsonWorkerQueueStore, WorkerQueue
 from ai4s_agent.worker_queue_poller import WorkerQueuePollResult, WorkerQueuePoller
 from ai4s_agent.worker_task_runner import TaskRunResult
-
-
-LOCAL_DEMO_TASK_ID = "execute_oled_local_demo"
-ALLOWLISTED_RUN_PLAN_TASKS = (LOCAL_DEMO_TASK_ID,)
 
 
 class AllowlistedOLEDRunPlanExecutorTaskRunner:
@@ -115,20 +115,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _validate_allowlisted_task(job: dict[str, Any]) -> object | None:
-    if not isinstance(job, dict):
-        raise ValueError("job must be an object")
-    task_envelope = job.get("task")
-    if not isinstance(task_envelope, dict):
-        raise ValueError("job task must be an object")
-    task = validate_run_plan_execute_task(task_envelope)
-    if task.task_id != RUN_PLAN_EXECUTE_TASK_ID or task.kind != RUN_PLAN_EXECUTE_KIND:
+    try:
+        return validate_oled_local_demo_run_plan_execute_job(job)
+    except ValueError:
         return None
-    task_ids = [planned.task_id for planned in task.run_plan.tasks]
-    if task_ids != list(ALLOWLISTED_RUN_PLAN_TASKS):
-        return None
-    if task.run_plan.requested_tasks != list(ALLOWLISTED_RUN_PLAN_TASKS):
-        return None
-    return task
 
 
 def _job_ids_for_actions(results: list[WorkerQueuePollResult], actions: set[str]) -> list[str]:
