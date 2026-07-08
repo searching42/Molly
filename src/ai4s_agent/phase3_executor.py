@@ -212,15 +212,21 @@ def _phase3_payload_for(
     approved_gates: set[str],
     options: dict[str, Any],
 ) -> dict[str, Any]:
-    task_options = executor._payload_options(options)
     payload: dict[str, Any] = {
         "run_id": run_id,
         "output_dir": str(run_dir / _PHASE3_OUTPUT_DIRS[task_id]),
     }
 
     if task_id == "prepare_literature_corpus_sources":
+        raw_options = dict(options) if isinstance(options, dict) else {}
+        output_dir = str(raw_options.pop("output_dir", "") or "").strip()
+        if output_dir:
+            payload["output_dir"] = output_dir
+        task_options = executor._payload_options(raw_options)
         payload.update(task_options)
         return payload
+
+    task_options = executor._payload_options(options)
     if task_id == "acquire_literature_sources":
         payload["corpus_source_manifest_json"] = _require_artifact(artifact_paths, "corpus_source_manifest")
         payload.update(task_options)
@@ -340,7 +346,7 @@ def _register_path(
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
         path = (run_dir / path).resolve()
-    rel = executor._relative(run_dir, path)
+    rel = executor._registry_path(run_dir, path)
     executor._register(project_id, run_id, artifact_id, rel)
     artifact_paths[artifact_id] = str(path)
 
