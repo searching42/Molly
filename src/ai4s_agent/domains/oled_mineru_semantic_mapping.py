@@ -265,6 +265,8 @@ def _map_parsed_table_candidate(
     schema_candidates: list[OledSchemaCandidate] = []
     findings: list[OledSemanticMappingFinding] = []
     for row_index, row in enumerate(source_candidate.table_rows):
+        if _looks_like_repeated_header_row(row, source_candidate.table_headers):
+            continue
         for column_name, raw_cell_value in row.items():
             cell_value = str(raw_cell_value or "").strip()
             if not cell_value:
@@ -330,6 +332,21 @@ def _map_parsed_table_candidate(
                     )
                 )
     return schema_candidates, findings
+
+
+def _looks_like_repeated_header_row(row: dict[str, str], headers: list[str]) -> bool:
+    if not row:
+        return False
+    header_tokens = {_normalize_header(header) for header in headers if _normalize_header(header)}
+    comparable_cells = [
+        _normalize_header(str(value or ""))
+        for value in row.values()
+        if str(value or "").strip()
+    ]
+    if len(comparable_cells) < 2:
+        return False
+    match_count = sum(1 for cell in comparable_cells if cell and cell in header_tokens)
+    return match_count >= 2 and match_count / len(comparable_cells) >= 0.5
 
 
 def _property_observation_candidate(

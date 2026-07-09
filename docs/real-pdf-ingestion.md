@@ -137,5 +137,9 @@ The runner preserves existing boundaries:
 - A live MinerU endpoint is not required for tests; unit tests use a mocked parse service.
 - Real MinerU use requires endpoint configuration and any required upload policy settings.
 - The runner handles one PDF per invocation.
-- The deterministic extractor depends on tables being normalized into the existing `ParsedDocument` schema with recognizable SMILES and property columns.
+- The molecule-level training dataset writer still depends on recognizable
+  SMILES and required property columns.
+- OLED-specific evidence and schema candidate artifacts are emitted separately
+  from tables, text, figure captions, and chart captions. These artifacts are
+  not silently promoted into training rows.
 - Scientific correctness, license review, conflict review, and dataset confirmation remain human responsibilities.
