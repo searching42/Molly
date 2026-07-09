@@ -3554,6 +3554,21 @@ def evaluate_extraction_benchmark_adapter(payload: dict[str, Any]) -> dict[str, 
             "error": {"code": "missing_required_fields", "message": "run_id/output_dir are required"},
         }
 
+    evidence_hits_raw = str(payload.get("evidence_hits_json") or "").strip()
+    if evidence_hits_raw and not _resolve_path(evidence_hits_raw, base=WORKSPACE).is_file():
+        return {
+            "status": "failed",
+            "adapter": "evaluate_extraction_benchmark",
+            "error": {"code": "missing_evidence_hits", "message": f"evidence_hits not found: {evidence_hits_raw}"},
+        }
+    conflict_report_raw = str(payload.get("conflict_report_json") or "").strip()
+    if conflict_report_raw and not _resolve_path(conflict_report_raw, base=WORKSPACE).is_file():
+        return {
+            "status": "failed",
+            "adapter": "evaluate_extraction_benchmark",
+            "error": {"code": "missing_conflict_report", "message": f"conflict_report not found: {conflict_report_raw}"},
+        }
+
     hits = _load_evidence_hits(payload) if (payload.get("evidence_hits_json") or payload.get("hits")) else []
     retrieved_refs = {
         ref

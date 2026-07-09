@@ -199,7 +199,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     ),
     AtomicTaskSpec(
         task_id="evaluate_extraction_benchmark",
-        required_artifacts=["evidence_hits", "extracted_records", "conflict_report"],
+        required_artifacts=["evidence_hits", "normalized_extracted_records", "conflict_report"],
         output_artifacts=["extraction_benchmark_report"],
         risk_level=RiskLevel.LOW,
         default_adapter="evaluate_extraction_benchmark_adapter",
