@@ -80,6 +80,7 @@ def test_corpus_to_phase1_workflow_surfaces_oled_schema_artifacts_without_confir
     )
 
     assert result.status == "awaiting_confirmation"
+    assert Path(result.oled_text_evidence_candidates_json).exists()
     assert Path(result.oled_schema_candidates_json).exists()
     assert Path(result.oled_compiled_records_json).exists()
 
@@ -87,9 +88,15 @@ def test_corpus_to_phase1_workflow_surfaces_oled_schema_artifacts_without_confir
     manifest = _read_json(Path(result.dataset_manifest_json))
     replay = _read_json(Path(result.corpus_replay_manifest_json))
 
+    assert workflow["summary"]["oled_text_evidence_candidate_count"] >= 1
     assert workflow["summary"]["oled_schema_candidate_count"] >= 4
+    assert workflow["summary"]["training_record_count"] == 0
+    assert workflow["artifacts"]["oled_text_evidence_candidates_json"] == result.oled_text_evidence_candidates_json
     assert workflow["artifacts"]["oled_schema_candidates_json"] == result.oled_schema_candidates_json
+    assert manifest["corpus"]["oled_text_evidence_candidate_count"] == workflow["summary"]["oled_text_evidence_candidate_count"]
+    assert manifest["artifacts"]["oled_text_evidence_candidates_json"] == result.oled_text_evidence_candidates_json
     assert manifest["corpus"]["oled_schema_candidate_count"] == workflow["summary"]["oled_schema_candidate_count"]
+    assert "oled_text_evidence_candidates_json" in replay["hashes"]
     assert "oled_schema_candidates_json" in replay["hashes"]
 
 
@@ -149,6 +156,14 @@ def _oled_parsed_document() -> ParsedDocument:
         source_path="/tmp/paper-oled-workflow.pdf",
         parser_backend="mineru_api:hybrid-engine",
         pages=[{"page": 1}],
+        elements=[
+            {
+                "element_id": "el_p2_0001",
+                "page": 2,
+                "type": "paragraph",
+                "text": "The device achieved a maximum EQE of 21.3% at 1000 cd m−2.",
+            }
+        ],
         tables=[
             {
                 "table_id": "table_oled_components",

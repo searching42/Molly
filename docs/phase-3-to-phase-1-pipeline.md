@@ -67,15 +67,23 @@ papers that do not expose molecule-level SMILES tables:
 
 - `oled_candidates.json` contains table, text, figure, and chart evidence
   candidates from `ParsedDocument.tables` and `ParsedDocument.elements`.
+- `oled_text_evidence_candidates.json` contains deterministic text-derived
+  review candidates from paragraphs, section text, figure captions, and chart
+  captions. Candidates preserve the evidence span, lightweight compound
+  mentions, property id, raw value, normalized numeric value, unit, nearby
+  condition text, confidence, and provenance.
 - `oled_schema_candidates.json` contains deterministic OLED layered-schema
   candidates for mapped table columns such as host, dopant, PLQY, EQE,
   `delta_e_st_ev`, doping ratio, voltage, luminance, and device context.
 - `oled_compiled_records.json` contains proposed layered record candidates
   compiled from those schema candidates.
 
-These OLED artifacts are review candidates only. They do not enter the
-RDKit/SMILES training dataset unless a later curated OLED pipeline confirms
-and materializes them.
+The table-first path remains the only deterministic route toward structured
+OLED schema and compiled candidates in this workflow. Text evidence candidates
+are separate, review-only recall aids for papers where MinerU extracts useful
+property statements but no structured tables. They are not compiled into
+layered records, do not enter the RDKit/SMILES training dataset, and do not
+bypass `DatasetConfirmation`.
 
 No extraction output is trusted automatically for training.
 

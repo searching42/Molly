@@ -81,6 +81,10 @@ runs/paper001/
 │   └── paper001_parsed_document.json
 ├── extraction/
 │   ├── corpus_records.json
+│   ├── oled_candidates.json
+│   ├── oled_text_evidence_candidates.json
+│   ├── oled_schema_candidates.json
+│   ├── oled_compiled_records.json
 │   ├── corpus_extraction_manifest.json
 │   └── extraction_manifest.json
 ├── conflicts/
@@ -111,6 +115,10 @@ runs/paper001/
 - `input/paper.pdf`: run-scoped copy of the input PDF.
 - `parsed_documents/<run_id>_parsed_document.json`: normalized `ParsedDocument` handoff from the parse service.
 - `extraction/corpus_records.json`: deterministic extracted corpus records.
+- `extraction/oled_candidates.json`: run-scoped OLED evidence candidates from tables, text, figures, and charts.
+- `extraction/oled_text_evidence_candidates.json`: review-only text evidence candidates with property, value, unit, condition, and provenance fields.
+- `extraction/oled_schema_candidates.json`: table-derived OLED schema candidate observations.
+- `extraction/oled_compiled_records.json`: proposed layered record candidates compiled from schema candidates.
 - `extraction/extraction_manifest.json`: extraction manifest alias for user-facing discovery.
 - `conflicts/conflict_report.json`: validation and conflict report alias.
 - `conflicts/conflict_summary.json`: aggregate validation/conflict counts.
@@ -130,6 +138,9 @@ The runner preserves existing boundaries:
 - The workflow report records source PDF hash, parser selection, parsed-document path, artifact paths, and confirmation metadata.
 - Candidate data is not silently promoted.
 - `DatasetConfirmation` remains the control point for confirmed training rows and any downstream confirmed behavior.
+- Text-derived OLED evidence is candidate-only. It improves review recall for
+  papers without structured tables, but it is not compiled into training rows
+  and does not weaken the table-first schema path.
 - Existing provenance fields from parsed documents, extraction records, conflict audit, dataset manifest, and reproducibility reports are preserved.
 
 ## Limitations
@@ -142,4 +153,8 @@ The runner preserves existing boundaries:
 - OLED-specific evidence and schema candidate artifacts are emitted separately
   from tables, text, figure captions, and chart captions. These artifacts are
   not silently promoted into training rows.
+- `oled_text_evidence_candidates.json` is intended for human review of text
+  statements such as PLQY, emission wavelength, EQE, energy levels, lifetimes,
+  and nearby measurement conditions. Scientific correctness still requires
+  reviewer confirmation against the paper.
 - Scientific correctness, license review, conflict review, and dataset confirmation remain human responsibilities.

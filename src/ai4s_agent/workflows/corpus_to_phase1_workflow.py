@@ -26,6 +26,7 @@ class CorpusToPhase1WorkflowResult:
     rejected_records_json: str
     dataset_manifest_json: str
     oled_candidates_json: str = ""
+    oled_text_evidence_candidates_json: str = ""
     oled_schema_candidates_json: str = ""
     oled_compiled_records_json: str = ""
     full_phase1_pipeline_json: str = ""
@@ -99,6 +100,7 @@ def run_corpus_to_phase1_workflow(
         candidate_record_count=dataset.candidate_record_count,
         training_record_count=dataset.training_record_count,
         oled_candidate_count=extraction.report.oled_candidate_count,
+        oled_text_evidence_candidate_count=extraction.report.oled_text_evidence_candidate_count,
         oled_schema_candidate_count=extraction.report.oled_schema_candidate_count,
         oled_compiled_record_count=extraction.report.oled_compiled_record_count,
     )
@@ -113,6 +115,7 @@ def run_corpus_to_phase1_workflow(
     artifact_paths: dict[str, str | Path] = {
         "corpus_records_json": extraction.corpus_records_json,
         "oled_candidates_json": extraction.oled_candidates_json,
+        "oled_text_evidence_candidates_json": extraction.oled_text_evidence_candidates_json,
         "oled_schema_candidates_json": extraction.oled_schema_candidates_json,
         "oled_compiled_records_json": extraction.oled_compiled_records_json,
         "corpus_extraction_manifest_json": extraction.corpus_extraction_manifest_json,
@@ -187,6 +190,7 @@ def run_corpus_to_phase1_workflow(
                 "conflict_count": conflict_audit.summary["conflict_count"],
                 "unresolved_conflict_count": conflict_audit.summary["unresolved_conflict_count"],
                 "oled_candidate_count": extraction.report.oled_candidate_count,
+                "oled_text_evidence_candidate_count": extraction.report.oled_text_evidence_candidate_count,
                 "oled_schema_candidate_count": extraction.report.oled_schema_candidate_count,
                 "oled_compiled_record_count": extraction.report.oled_compiled_record_count,
                 "candidate_record_count": dataset.candidate_record_count,
@@ -197,6 +201,7 @@ def run_corpus_to_phase1_workflow(
             "artifacts": {
                 "corpus_extraction_manifest_json": extraction.corpus_extraction_manifest_json,
                 "oled_candidates_json": extraction.oled_candidates_json,
+                "oled_text_evidence_candidates_json": extraction.oled_text_evidence_candidates_json,
                 "oled_schema_candidates_json": extraction.oled_schema_candidates_json,
                 "oled_compiled_records_json": extraction.oled_compiled_records_json,
                 "corpus_conflict_report_json": conflict_audit.conflict_report_json,
@@ -220,6 +225,7 @@ def run_corpus_to_phase1_workflow(
         corpus_extraction_manifest_json=extraction.corpus_extraction_manifest_json,
         corpus_conflict_report_json=conflict_audit.conflict_report_json,
         oled_candidates_json=extraction.oled_candidates_json,
+        oled_text_evidence_candidates_json=extraction.oled_text_evidence_candidates_json,
         oled_schema_candidates_json=extraction.oled_schema_candidates_json,
         oled_compiled_records_json=extraction.oled_compiled_records_json,
         candidate_dataset_csv=dataset.candidate_dataset_csv,
@@ -286,12 +292,14 @@ def _update_dataset_manifest(
         "unresolved_conflict_count": conflict_summary.get("unresolved_conflict_count", 0),
         "consistent_duplicate_count": conflict_summary.get("consistent_duplicate_count", 0),
         "oled_candidate_count": corpus_extraction.report.oled_candidate_count,
+        "oled_text_evidence_candidate_count": corpus_extraction.report.oled_text_evidence_candidate_count,
         "oled_schema_candidate_count": corpus_extraction.report.oled_schema_candidate_count,
         "oled_compiled_record_count": corpus_extraction.report.oled_compiled_record_count,
     }
     artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), dict) else {}
     artifacts["rejected_records_json"] = rejected_records_json
     artifacts["oled_candidates_json"] = corpus_extraction.oled_candidates_json
+    artifacts["oled_text_evidence_candidates_json"] = corpus_extraction.oled_text_evidence_candidates_json
     artifacts["oled_schema_candidates_json"] = corpus_extraction.oled_schema_candidates_json
     artifacts["oled_compiled_records_json"] = corpus_extraction.oled_compiled_records_json
     manifest["artifacts"] = artifacts
@@ -306,6 +314,7 @@ def _update_conflict_summary(
     candidate_record_count: int,
     training_record_count: int,
     oled_candidate_count: int,
+    oled_text_evidence_candidate_count: int,
     oled_schema_candidate_count: int,
     oled_compiled_record_count: int,
 ) -> None:
@@ -315,6 +324,7 @@ def _update_conflict_summary(
     summary["candidate_record_count"] = candidate_record_count
     summary["training_record_count"] = training_record_count
     summary["oled_candidate_count"] = oled_candidate_count
+    summary["oled_text_evidence_candidate_count"] = oled_text_evidence_candidate_count
     summary["oled_schema_candidate_count"] = oled_schema_candidate_count
     summary["oled_compiled_record_count"] = oled_compiled_record_count
     write_json(path, summary)

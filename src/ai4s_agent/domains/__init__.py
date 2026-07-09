@@ -545,6 +545,10 @@ from ai4s_agent.domains.oled_mineru_candidates import (
     extract_oled_mineru_candidates_from_document,
     summarize_oled_mineru_candidates,
 )
+from ai4s_agent.domains.oled_text_evidence_candidates import (
+    OledTextEvidenceCandidate,
+    extract_oled_text_evidence_candidates_from_document,
+)
 from ai4s_agent.domains.oled_mineru_acceptance_harness import (
     OledMineruAcceptanceManifest,
     OledMineruAcceptancePaperResult,
@@ -909,6 +913,7 @@ __all__ = [
     "OledMineruTableParseStatus",
     "OledMolecularLayer",
     "OledMineruParsedBundle",
+    "OledTextEvidenceCandidate",
     "OledPropertyDefinition",
     "OledPropertyOntology",
     "OledPropertyOntologyFinding",
@@ -1008,6 +1013,7 @@ __all__ = [
     "effective_reviewed_extraction_packet",
     "extract_oled_mineru_candidates",
     "extract_oled_mineru_candidates_from_document",
+    "extract_oled_text_evidence_candidates_from_document",
     "filter_adjudicated_oled_review_packets",
     "flatten_oled_training_features_for_preflight",
     "group_oled_schema_candidates_for_compilation",

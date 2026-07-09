@@ -56,6 +56,7 @@ def test_pdf_to_dataset_runner_parses_pdf_and_writes_deterministic_artifacts(tmp
     assert parsed_document_json.exists()
     assert (output_dir / "extraction" / "corpus_records.json").exists()
     assert (output_dir / "extraction" / "oled_candidates.json").exists()
+    assert (output_dir / "extraction" / "oled_text_evidence_candidates.json").exists()
     assert (output_dir / "extraction" / "oled_schema_candidates.json").exists()
     assert (output_dir / "extraction" / "oled_compiled_records.json").exists()
     assert (output_dir / "extraction" / "extraction_manifest.json").exists()
@@ -82,6 +83,8 @@ def test_pdf_to_dataset_runner_parses_pdf_and_writes_deterministic_artifacts(tmp
     assert workflow_report["input"]["copied_pdf"] == str(copied_pdf)
     assert workflow_report["parse"]["parsed_document_json"] == str(parsed_document_json)
     assert workflow_report["workflow"]["dataset_manifest_json"] == str(output_dir / "dataset" / "dataset_manifest.json")
+    assert result.oled_text_evidence_candidates_json == str(output_dir / "extraction" / "oled_text_evidence_candidates.json")
+    assert workflow_report["workflow"]["oled_text_evidence_candidates_json"] == result.oled_text_evidence_candidates_json
     assert result.oled_schema_candidates_json == str(output_dir / "extraction" / "oled_schema_candidates.json")
     assert workflow_report["workflow"]["oled_schema_candidates_json"] == result.oled_schema_candidates_json
     assert workflow_report["governance"]["confirmation"]["confirmed"] is False
@@ -110,6 +113,7 @@ def test_pdf_to_dataset_runner_hands_parsed_document_to_workflow(tmp_path: Path)
             training_dataset_csv=str(out / "dataset" / "training_dataset.csv"),
             rejected_records_json=str(out / "dataset" / "rejected_records.json"),
             dataset_manifest_json=str(out / "dataset" / "dataset_manifest.json"),
+            oled_text_evidence_candidates_json=str(out / "extraction" / "oled_text_evidence_candidates.json"),
             corpus_report_json=str(out / "report" / "corpus_report.json"),
             corpus_report_md=str(out / "report" / "corpus_report.md"),
             corpus_replay_manifest_json=str(out / "reproducibility" / "corpus_replay_manifest.json"),
@@ -266,7 +270,7 @@ def _parsed_document() -> ParsedDocument:
                 "element_id": "el_intro_001",
                 "page": 1,
                 "type": "text",
-                "text": "Table 1 reports OLED PLQY values and lambda emission maxima.",
+                "text": "4CzIPN showed a photoluminescence quantum yield of 94 ± 2% in toluene.",
                 "markdown": "",
                 "bbox": [72.0, 90.0, 520.0, 120.0],
                 "source_hash": "synthetic-el-intro-001",
@@ -312,6 +316,10 @@ def _write_minimal_workflow_outputs(output_dir: Path, run_id: str) -> None:
         (output_dir / child).mkdir(parents=True, exist_ok=True)
     _write_json(output_dir / "corpus_workflow_report.json", {"run_id": run_id, "status": "awaiting_confirmation"})
     _write_json(output_dir / "extraction" / "corpus_extraction_manifest.json", {"run_id": run_id})
+    _write_json(
+        output_dir / "extraction" / "oled_text_evidence_candidates.json",
+        {"run_id": run_id, "text_evidence_candidates": []},
+    )
     _write_json(output_dir / "conflicts" / "corpus_conflict_report.json", {"run_id": run_id})
     _write_json(output_dir / "conflicts" / "conflict_summary.json", {"run_id": run_id})
     _write_json(output_dir / "dataset" / "rejected_records.json", {"run_id": run_id, "records": []})
