@@ -277,7 +277,7 @@ def test_phase3_public_leakage_atomic_task_is_registered() -> None:
     registry = AtomicTaskRegistry()
     task = registry.get("check_public_dataset_leakage")
 
-    assert task.required_artifacts == ["confirmed_training_dataset"]
+    assert task.required_artifacts == ["candidate_training_dataset"]
     assert task.output_artifacts == ["benchmark_contamination_report"]
     assert task.default_adapter == "check_public_dataset_leakage_adapter"
     assert callable(getattr(adapters, task.default_adapter))

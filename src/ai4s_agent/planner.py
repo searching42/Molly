@@ -237,7 +237,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     ),
     AtomicTaskSpec(
         task_id="check_public_dataset_leakage",
-        required_artifacts=["confirmed_training_dataset"],
+        required_artifacts=["candidate_training_dataset"],
         output_artifacts=["benchmark_contamination_report"],
         risk_level=RiskLevel.LOW,
         default_adapter="check_public_dataset_leakage_adapter",
