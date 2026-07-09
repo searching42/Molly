@@ -296,6 +296,19 @@ def _phase3_payload_for(
         payload.update(task_options)
         return payload
 
+    if task_id == "check_public_dataset_leakage":
+        task_options = _phase3_payload_options(executor, payload, options)
+        candidate_path = str(
+            artifact_paths.get("candidate_training_dataset")
+            or artifact_paths.get("confirmed_training_dataset")
+            or ""
+        ).strip()
+        if not candidate_path:
+            raise ValueError("missing artifact path: candidate_training_dataset or confirmed_training_dataset")
+        payload["candidate_training_dataset_csv"] = candidate_path
+        payload.update(task_options)
+        return payload
+
     task_options = executor._payload_options(options)
     if task_id == "acquire_literature_sources":
         payload["corpus_source_manifest_json"] = _require_artifact(artifact_paths, "corpus_source_manifest")
@@ -318,10 +331,6 @@ def _phase3_payload_for(
         pdf_corpus = _require_artifact(artifact_paths, "pdf_corpus")
         path = Path(pdf_corpus).expanduser()
         payload["input_pdf_dir"] = str(path if path.is_dir() else path.parent)
-        payload.update(task_options)
-        return payload
-    if task_id == "check_public_dataset_leakage":
-        payload["candidate_training_dataset_csv"] = _require_artifact(artifact_paths, "confirmed_training_dataset")
         payload.update(task_options)
         return payload
     payload.update(task_options)
