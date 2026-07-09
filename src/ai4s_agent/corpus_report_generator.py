@@ -20,6 +20,7 @@ def generate_corpus_report(
     conflict_summary_json: str | Path,
     phase1_pipeline_json: str | Path,
     reproducibility_report_json: str | Path,
+    oled_review_summary_json: str | Path = "",
     ranked_candidates: list[dict[str, Any]],
     output_dir: str | Path,
     run_id: str,
@@ -31,6 +32,7 @@ def generate_corpus_report(
     conflict_summary = _load_json(conflict_summary_json)
     phase1_pipeline = _load_json(phase1_pipeline_json)
     reproducibility = _load_json(reproducibility_report_json)
+    review_summary = _load_json(oled_review_summary_json)
     top_candidates = ranked_candidates[:10]
 
     payload = {
@@ -47,6 +49,26 @@ def generate_corpus_report(
         "oled_text_evidence_candidate_count": int(conflict_summary.get("oled_text_evidence_candidate_count") or 0),
         "oled_schema_candidate_count": int(conflict_summary.get("oled_schema_candidate_count") or 0),
         "oled_compiled_record_count": int(conflict_summary.get("oled_compiled_record_count") or 0),
+        "oled_review_item_count": int(
+            review_summary.get("review_item_count") or conflict_summary.get("oled_review_item_count") or 0
+        ),
+        "oled_review_high_priority_count": int(
+            conflict_summary.get("oled_review_high_priority_count")
+            or review_summary.get("counts_by_priority", {}).get("high")
+            or 0
+        ),
+        "oled_review_medium_priority_count": int(
+            conflict_summary.get("oled_review_medium_priority_count")
+            or review_summary.get("counts_by_priority", {}).get("medium")
+            or 0
+        ),
+        "oled_review_low_priority_count": int(
+            conflict_summary.get("oled_review_low_priority_count")
+            or review_summary.get("counts_by_priority", {}).get("low")
+            or 0
+        ),
+        "oled_review_counts_by_candidate_type": review_summary.get("counts_by_candidate_type", {}),
+        "oled_review_counts_by_priority": review_summary.get("counts_by_priority", {}),
         "training_record_count": int(conflict_summary.get("training_record_count") or 0),
         "candidate_record_count": int(conflict_summary.get("candidate_record_count") or 0),
         "phase1_status": str(phase1_pipeline.get("status") or "not_run"),
@@ -69,6 +91,10 @@ def generate_corpus_report(
         "oled_text_evidence_candidate_count": payload["oled_text_evidence_candidate_count"],
         "oled_schema_candidate_count": payload["oled_schema_candidate_count"],
         "oled_compiled_record_count": payload["oled_compiled_record_count"],
+        "oled_review_item_count": payload["oled_review_item_count"],
+        "oled_review_high_priority_count": payload["oled_review_high_priority_count"],
+        "oled_review_medium_priority_count": payload["oled_review_medium_priority_count"],
+        "oled_review_low_priority_count": payload["oled_review_low_priority_count"],
         "training_record_count": payload["training_record_count"],
         "candidate_record_count": payload["candidate_record_count"],
         "phase1_status": payload["phase1_status"],
@@ -112,6 +138,10 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         f"- OLED text evidence candidates: {payload['oled_text_evidence_candidate_count']}",
         f"- OLED schema candidates: {payload['oled_schema_candidate_count']}",
         f"- OLED compiled records: {payload['oled_compiled_record_count']}",
+        f"- OLED review items: {payload['oled_review_item_count']}",
+        f"- High priority review items: {payload['oled_review_high_priority_count']}",
+        f"- Medium priority review items: {payload['oled_review_medium_priority_count']}",
+        f"- Low priority review items: {payload['oled_review_low_priority_count']}",
         f"- Phase 1 status: {payload['phase1_status']}",
         "",
         "## Top Ranked Candidates",

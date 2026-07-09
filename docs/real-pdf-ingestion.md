@@ -24,6 +24,7 @@ run_corpus_to_phase1_workflow
   +-- extract_corpus_records
   +-- audit_corpus_conflicts
   +-- build_scientific_dataset
+  +-- generate_oled_review_packet
   +-- audit_corpus_reproducibility
   +-- generate_corpus_report
   |
@@ -96,6 +97,11 @@ runs/paper001/
 │   ├── training_dataset.csv
 │   ├── rejected_records.json
 │   └── dataset_manifest.json
+├── review/
+│   ├── oled_review_packet.json
+│   ├── oled_review_packet.md
+│   ├── oled_reviewer_decision_template.json
+│   └── oled_review_summary.json
 ├── report/
 │   ├── corpus_report.json
 │   ├── corpus_report.md
@@ -125,9 +131,33 @@ runs/paper001/
 - `dataset/candidate_dataset.csv`: candidate dataset rows requiring review.
 - `dataset/training_dataset.csv`: training dataset artifact governed by `DatasetConfirmation`.
 - `dataset/dataset_manifest.json`: dataset status, confirmation, provenance fields, validation rules, and artifact paths.
+- `review/oled_review_packet.json`: deterministic, candidate-only OLED review items generated from raw OLED candidates, text evidence candidates, schema candidates, and compiled layered-record candidates.
+- `review/oled_review_packet.md`: human-readable review packet for inspection alongside the original PDF.
+- `review/oled_reviewer_decision_template.json`: empty pending decision template containing every review item id for later manual adjudication.
+- `review/oled_review_summary.json`: counts by candidate type, priority, paper, property id, source artifact paths, and governance notes.
 - `report/corpus_report.json` and `report/corpus_report.md`: corpus summary report.
 - `reproducibility/*`: lineage, replay, and artifact hash records.
 - `workflow_report.json`: top-level PDF ingestion report with input, parse, workflow, and governance metadata.
+
+## OLED Evidence Review Packets
+
+For OLED runs, inspect:
+
+```text
+runs/<run_id>/review/oled_review_packet.md
+runs/<run_id>/review/oled_reviewer_decision_template.json
+```
+
+The Markdown packet is intended for human adjudication. It groups compiled
+records, schema candidates, text evidence candidates, and raw OLED evidence
+into deterministic pending review items with source candidate ids, paper ids,
+property/value/unit fields, evidence text, page/location metadata, provenance,
+warnings, and suggested review questions.
+
+Reviewers should compare each item against the original PDF and fill decisions
+in `oled_reviewer_decision_template.json`. Empty decisions mean no adjudication
+has occurred. Accepted decisions do not create training data in this PR; a later
+adjudication/materialization step must consume reviewed decisions explicitly.
 
 ## Governance
 
@@ -141,6 +171,9 @@ The runner preserves existing boundaries:
 - Text-derived OLED evidence is candidate-only. It improves review recall for
   papers without structured tables, but it is not compiled into training rows
   and does not weaken the table-first schema path.
+- OLED review packets are also candidate-only. They organize existing candidate
+  artifacts for manual review, but they do not accept candidates, write a gold
+  dataset, create training rows, or bypass `DatasetConfirmation`.
 - Existing provenance fields from parsed documents, extraction records, conflict audit, dataset manifest, and reproducibility reports are preserved.
 
 ## Limitations

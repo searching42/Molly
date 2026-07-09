@@ -83,21 +83,40 @@ def test_corpus_to_phase1_workflow_surfaces_oled_schema_artifacts_without_confir
     assert Path(result.oled_text_evidence_candidates_json).exists()
     assert Path(result.oled_schema_candidates_json).exists()
     assert Path(result.oled_compiled_records_json).exists()
+    assert Path(result.oled_review_packet_json).exists()
+    assert Path(result.oled_review_packet_md).exists()
+    assert Path(result.oled_reviewer_decision_template_json).exists()
+    assert Path(result.oled_review_summary_json).exists()
 
     workflow = _read_json(Path(result.corpus_workflow_report_json))
     manifest = _read_json(Path(result.dataset_manifest_json))
     replay = _read_json(Path(result.corpus_replay_manifest_json))
+    corpus_report = _read_json(Path(result.corpus_report_json))
+    review_packet = _read_json(Path(result.oled_review_packet_json))
+    review_summary = _read_json(Path(result.oled_review_summary_json))
 
     assert workflow["summary"]["oled_text_evidence_candidate_count"] >= 1
     assert workflow["summary"]["oled_schema_candidate_count"] >= 4
+    assert workflow["summary"]["oled_review_item_count"] >= 1
+    assert workflow["summary"]["oled_review_high_priority_count"] >= 1
     assert workflow["summary"]["training_record_count"] == 0
     assert workflow["artifacts"]["oled_text_evidence_candidates_json"] == result.oled_text_evidence_candidates_json
     assert workflow["artifacts"]["oled_schema_candidates_json"] == result.oled_schema_candidates_json
+    assert workflow["artifacts"]["oled_review_packet_json"] == result.oled_review_packet_json
+    assert workflow["artifacts"]["oled_reviewer_decision_template_json"] == result.oled_reviewer_decision_template_json
     assert manifest["corpus"]["oled_text_evidence_candidate_count"] == workflow["summary"]["oled_text_evidence_candidate_count"]
     assert manifest["artifacts"]["oled_text_evidence_candidates_json"] == result.oled_text_evidence_candidates_json
     assert manifest["corpus"]["oled_schema_candidate_count"] == workflow["summary"]["oled_schema_candidate_count"]
+    assert manifest["corpus"]["oled_review_item_count"] == workflow["summary"]["oled_review_item_count"]
+    assert manifest["artifacts"]["oled_review_packet_md"] == result.oled_review_packet_md
     assert "oled_text_evidence_candidates_json" in replay["hashes"]
     assert "oled_schema_candidates_json" in replay["hashes"]
+    assert "oled_review_packet_json" in replay["hashes"]
+    assert "oled_reviewer_decision_template_json" in replay["hashes"]
+    assert corpus_report["oled_review_item_count"] == workflow["summary"]["oled_review_item_count"]
+    assert "OLED review items" in Path(result.corpus_report_md).read_text(encoding="utf-8")
+    assert review_packet["summary"]["review_item_count"] == workflow["summary"]["oled_review_item_count"]
+    assert review_summary["governance_notes"]
 
 
 def test_corpus_to_phase1_workflow_reproducibility_hashes_are_stable(tmp_path: Path) -> None:

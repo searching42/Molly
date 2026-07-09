@@ -19,6 +19,9 @@ ParsedDocument
 Phase 3 scientific extraction
         |
         v
+OLED review packet generation
+        |
+        v
 candidate scientific dataset
         |
         v
@@ -86,6 +89,50 @@ layered records, do not enter the RDKit/SMILES training dataset, and do not
 bypass `DatasetConfirmation`.
 
 No extraction output is trusted automatically for training.
+
+## OLED Review Packet Layer
+
+Module: `src/ai4s_agent/oled_review_packet_generator.py`
+
+After candidate extraction, the corpus workflow writes review artifacts under
+`review/`:
+
+- `oled_review_packet.json`
+- `oled_review_packet.md`
+- `oled_reviewer_decision_template.json`
+- `oled_review_summary.json`
+
+The review packet generator reads only run-scoped candidate artifacts:
+
+- `extraction/oled_candidates.json`
+- `extraction/oled_text_evidence_candidates.json`
+- `extraction/oled_schema_candidates.json`
+- `extraction/oled_compiled_records.json`
+- `extraction/corpus_extraction_manifest.json`
+
+It deterministically converts those artifacts into pending review items for
+human adjudication. Review items keep source candidate ids, paper ids,
+candidate type, priority, property/value/unit fields when available,
+compound/material mentions, condition/device context, evidence text, page or
+location fields, provenance, warnings, and suggested review questions.
+
+`oled_review_packet.md` is the reviewer-facing packet. Reviewers should compare
+each item against the original PDF and fill decisions in
+`oled_reviewer_decision_template.json`. The decision template intentionally
+starts with empty pending decisions.
+
+This layer does not create a gold dataset, does not confirm data, does not
+create training rows, and does not auto-accept any candidate. Accepted review
+decisions are for a later adjudication PR to consume explicitly. The
+`DatasetConfirmation` gate remains the only path to confirmed training rows.
+
+Review packet paths and counts are propagated through:
+
+- `corpus_workflow_report.json`
+- `dataset/dataset_manifest.json`
+- `report/corpus_report.json`
+- `report/corpus_report.md`
+- `reproducibility/corpus_replay_manifest.json`
 
 ## Dataset Builder
 
