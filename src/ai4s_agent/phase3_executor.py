@@ -267,6 +267,14 @@ def _phase3_payload_for(
         payload.update(task_options)
         return payload
 
+    if task_id == "track_citation_provenance":
+        task_options = _phase3_payload_options(executor, payload, options)
+        _add_optional_artifact(payload, artifact_paths, "parsed_document", "parsed_document_json")
+        payload["evidence_hits_json"] = _require_artifact(artifact_paths, "evidence_hits")
+        payload["extracted_records_jsonl"] = _require_artifact(artifact_paths, "extracted_records")
+        payload.update(task_options)
+        return payload
+
     task_options = executor._payload_options(options)
     if task_id == "acquire_literature_sources":
         payload["corpus_source_manifest_json"] = _require_artifact(artifact_paths, "corpus_source_manifest")
@@ -275,12 +283,6 @@ def _phase3_payload_for(
     if task_id in {"parse_document", "parse_document_pdfplumber", "parse_document_pymupdf", "parse_document_grobid"}:
         payload["input_pdf"] = _first_pdf(_require_artifact(artifact_paths, "pdf_corpus"))
         payload.setdefault("execute", False)
-        payload.update(task_options)
-        return payload
-    if task_id == "track_citation_provenance":
-        _add_optional_artifact(payload, artifact_paths, "parsed_document", "parsed_document_json")
-        payload["evidence_hits_json"] = _require_artifact(artifact_paths, "evidence_hits")
-        payload["extracted_records_jsonl"] = _require_artifact(artifact_paths, "extracted_records")
         payload.update(task_options)
         return payload
     if task_id == "merge_extracted_records":
