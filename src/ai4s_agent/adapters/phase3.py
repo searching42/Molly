@@ -2488,6 +2488,13 @@ def extract_records_adapter(payload: dict[str, Any]) -> dict[str, Any]:
             "adapter": "extract_records",
             "error": {"code": "missing_evidence_hits", "message": "evidence_hits_json or hits is required"},
         }
+    evidence_hits_raw = str(payload.get("evidence_hits_json") or "").strip()
+    if evidence_hits_raw and not _resolve_path(evidence_hits_raw, base=WORKSPACE).exists():
+        return {
+            "status": "failed",
+            "adapter": "extract_records",
+            "error": {"code": "missing_evidence_hits", "message": f"evidence_hits_json not found: {evidence_hits_raw}"},
+        }
 
     try:
         hits = _load_evidence_hits(payload)
