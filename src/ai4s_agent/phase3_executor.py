@@ -310,6 +310,16 @@ def _phase3_payload_for(
         payload.update(task_options)
         return payload
 
+    if task_id == "confirm_extracted_dataset":
+        task_options = _phase3_payload_options(executor, payload, options)
+        payload["candidate_training_dataset_csv"] = _require_artifact(artifact_paths, "candidate_training_dataset")
+        payload["conflict_report_json"] = _require_artifact(artifact_paths, "conflict_report")
+        payload["citation_provenance_report_json"] = _require_artifact(artifact_paths, "citation_provenance_report")
+        payload["actor"] = actor
+        payload["confirmed"] = "gate_2_data_mining" in approved_gates
+        payload.update(task_options)
+        return payload
+
     task_options = executor._payload_options(options)
     if task_id == "acquire_literature_sources":
         payload["corpus_source_manifest_json"] = _require_artifact(artifact_paths, "corpus_source_manifest")
@@ -318,14 +328,6 @@ def _phase3_payload_for(
     if task_id in {"parse_document", "parse_document_pdfplumber", "parse_document_pymupdf", "parse_document_grobid"}:
         payload["input_pdf"] = _first_pdf(_require_artifact(artifact_paths, "pdf_corpus"))
         payload.setdefault("execute", False)
-        payload.update(task_options)
-        return payload
-    if task_id == "confirm_extracted_dataset":
-        payload["candidate_training_dataset_csv"] = _require_artifact(artifact_paths, "candidate_training_dataset")
-        payload["conflict_report_json"] = _require_artifact(artifact_paths, "conflict_report")
-        payload["citation_provenance_report_json"] = _require_artifact(artifact_paths, "citation_provenance_report")
-        payload["actor"] = actor
-        payload["confirmed"] = "gate_2_data_mining" in approved_gates
         payload.update(task_options)
         return payload
     if task_id == "literature_to_dataset_workflow":
