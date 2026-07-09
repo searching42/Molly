@@ -230,7 +230,7 @@ def test_phase3_merge_conflict_atomic_task_is_registered() -> None:
     registry = AtomicTaskRegistry()
     task = registry.get("merge_extracted_records")
 
-    assert task.required_artifacts == ["extracted_records", "citation_provenance_report"]
+    assert task.required_artifacts == ["normalized_extracted_records", "citation_provenance_report"]
     assert task.output_artifacts == ["merged_records", "conflict_report", "candidate_training_dataset"]
     assert task.default_adapter == "merge_extracted_records_adapter"
     assert callable(getattr(adapters, task.default_adapter))

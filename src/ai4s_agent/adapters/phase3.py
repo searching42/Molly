@@ -2776,6 +2776,20 @@ def merge_extracted_records_adapter(payload: dict[str, Any]) -> dict[str, Any]:
             "adapter": "merge_extracted_records",
             "error": {"code": "missing_extracted_records", "message": "extracted_records_jsonl or extracted_records_jsonl_list is required"},
         }
+    records_paths_raw: list[str] = []
+    list_value = payload.get("extracted_records_jsonl_list")
+    if isinstance(list_value, list):
+        records_paths_raw.extend(str(item).strip() for item in list_value if str(item).strip())
+    single_value = str(payload.get("extracted_records_jsonl") or "").strip()
+    if single_value:
+        records_paths_raw.append(single_value)
+    for records_path_raw in records_paths_raw:
+        if not _resolve_path(records_path_raw, base=WORKSPACE).exists():
+            return {
+                "status": "failed",
+                "adapter": "merge_extracted_records",
+                "error": {"code": "missing_extracted_records", "message": f"extracted records not found: {records_path_raw}"},
+            }
 
     try:
         records = _load_extracted_records_from_payload(payload)
