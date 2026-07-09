@@ -37,6 +37,7 @@ class PdfToDatasetResult:
     conflict_report_json: str
     conflict_summary_json: str
     oled_candidates_json: str
+    oled_text_evidence_candidates_json: str
     oled_schema_candidates_json: str
     oled_compiled_records_json: str
     candidate_dataset_csv: str
@@ -182,6 +183,7 @@ def run_pdf_to_dataset(
         conflict_report_json=conflict_report_json,
         conflict_summary_json=conflict_summary_json,
         oled_candidates_json=workflow_result.oled_candidates_json,
+        oled_text_evidence_candidates_json=workflow_result.oled_text_evidence_candidates_json,
         oled_schema_candidates_json=workflow_result.oled_schema_candidates_json,
         oled_compiled_records_json=workflow_result.oled_compiled_records_json,
         candidate_dataset_csv=workflow_result.candidate_dataset_csv,
@@ -366,6 +368,7 @@ def _write_workflow_report(
             "corpus_workflow_report_json": workflow_result.corpus_workflow_report_json,
             "corpus_records_json": str(output_path / "extraction" / "corpus_records.json"),
             "oled_candidates_json": workflow_result.oled_candidates_json,
+            "oled_text_evidence_candidates_json": workflow_result.oled_text_evidence_candidates_json,
             "oled_schema_candidates_json": workflow_result.oled_schema_candidates_json,
             "oled_compiled_records_json": workflow_result.oled_compiled_records_json,
             "corpus_extraction_manifest_json": workflow_result.corpus_extraction_manifest_json,

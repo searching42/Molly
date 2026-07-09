@@ -63,6 +63,33 @@ def test_phase3_corpus_extractor_writes_oled_candidate_artifacts(tmp_path: Path)
     assert manifest["artifacts"]["oled_schema_candidates_json"] == result.oled_schema_candidates_json
 
 
+def test_phase3_corpus_extractor_writes_oled_text_evidence_artifact(tmp_path: Path) -> None:
+    result = extract_corpus_records(
+        parsed_documents=[_oled_text_parsed_document()],
+        output_dir=tmp_path,
+        run_id="corpus-oled-text-fixture",
+        generated_at=GENERATED_AT,
+    )
+
+    assert result.records == []
+    assert result.report.oled_text_evidence_candidate_count == 3
+    assert result.report.oled_text_evidence_candidate_counts_by_paper == {"paper-oled-text-corpus": 3}
+    assert Path(result.oled_text_evidence_candidates_json).exists()
+
+    payload = _read_json(Path(result.oled_text_evidence_candidates_json))
+    assert payload["run_id"] == "corpus-oled-text-fixture"
+    assert {item["property_id"] for item in payload["text_evidence_candidates"]} == {
+        "plqy",
+        "emission_wavelength_nm",
+        "eqe_percent",
+    }
+
+    manifest = _read_json(Path(result.corpus_extraction_manifest_json))
+    assert manifest["report"]["oled_text_evidence_candidate_count"] == 3
+    assert manifest["documents"][0]["oled_text_evidence_candidate_count"] == 3
+    assert manifest["artifacts"]["oled_text_evidence_candidates_json"] == result.oled_text_evidence_candidates_json
+
+
 def _document_paths() -> list[Path]:
     return [
         FIXTURE_DIR / "paper_a_parsed_document.json",
@@ -106,6 +133,33 @@ def _oled_parsed_document() -> ParsedDocument:
                 "page": 4,
             }
         ],
+    )
+
+
+def _oled_text_parsed_document() -> ParsedDocument:
+    return ParsedDocument(
+        paper_id="paper-oled-text-corpus",
+        source_path="/tmp/paper-oled-text-corpus.pdf",
+        parser_backend="mineru_api:hybrid-engine",
+        pages=[{"page": 1}],
+        elements=[
+            {
+                "element_id": "el_p1_0001",
+                "page": 1,
+                "type": "paragraph",
+                "text": (
+                    "4CzIPN showed a photoluminescence quantum yield of 94 ± 2% in toluene. "
+                    "The emission maximum was observed at 507 nm in doped film."
+                ),
+            },
+            {
+                "element_id": "el_p2_0001",
+                "page": 2,
+                "type": "paragraph",
+                "text": "The device achieved a maximum EQE of 21.3% at 1000 cd m−2.",
+            },
+        ],
+        tables=[],
     )
 
 

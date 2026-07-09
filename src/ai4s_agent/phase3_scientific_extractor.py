@@ -20,6 +20,10 @@ from ai4s_agent.domains.oled_schema_candidate_compiler import (
     OledCompiledLayeredRecordCandidate,
     compile_oled_schema_candidates_to_layered_records,
 )
+from ai4s_agent.domains.oled_text_evidence_candidates import (
+    OledTextEvidenceCandidate,
+    extract_oled_text_evidence_candidates_from_document,
+)
 from ai4s_agent.schemas import ConflictGroup, ConflictReport, ParsedDocument, ParsedTable
 
 
@@ -55,6 +59,7 @@ class ExtractionReport(BaseModel):
     input_table_count: int
     selected_table_count: int
     oled_candidate_count: int = 0
+    oled_text_evidence_candidate_count: int = 0
     oled_schema_candidate_count: int = 0
     oled_compiled_record_count: int = 0
     input_row_count: int
@@ -71,6 +76,7 @@ class ScientificExtractionResult(BaseModel):
     extraction_report: ExtractionReport
     conflict_report: ConflictReport
     oled_candidates: list[OledMineruCandidate] = Field(default_factory=list)
+    oled_text_evidence_candidates: list[OledTextEvidenceCandidate] = Field(default_factory=list)
     oled_schema_candidates: list[OledSchemaCandidate] = Field(default_factory=list)
     oled_compiled_records: list[OledCompiledLayeredRecordCandidate] = Field(default_factory=list)
 
@@ -183,6 +189,7 @@ def extract_scientific_records(
 
     duplicate_smiles_count = sum(1 for group in _records_by_smiles(records).values() if len(group) > 1)
     oled_candidates = _extract_oled_candidates(parsed_document)
+    oled_text_evidence_candidates = extract_oled_text_evidence_candidates_from_document(parsed_document)
     oled_mapping = map_oled_mineru_candidates_to_schema_candidates(oled_candidates)
     oled_compilation = compile_oled_schema_candidates_to_layered_records(
         oled_mapping.schema_candidates,
@@ -202,6 +209,7 @@ def extract_scientific_records(
         input_table_count=len(parsed_document.tables),
         selected_table_count=len(selected_tables),
         oled_candidate_count=len(oled_candidates),
+        oled_text_evidence_candidate_count=len(oled_text_evidence_candidates),
         oled_schema_candidate_count=len(oled_mapping.schema_candidates),
         oled_compiled_record_count=len(oled_compilation.compiled_records),
         input_row_count=input_row_count,
@@ -212,6 +220,7 @@ def extract_scientific_records(
         notes=[
             "deterministic_table_extraction",
             "deterministic_oled_evidence_schema_candidates",
+            "deterministic_oled_text_evidence_candidates",
             "no_llm_calls",
             "no_external_services",
         ],
@@ -222,6 +231,7 @@ def extract_scientific_records(
         extraction_report=report,
         conflict_report=conflict_report,
         oled_candidates=oled_candidates,
+        oled_text_evidence_candidates=oled_text_evidence_candidates,
         oled_schema_candidates=oled_mapping.schema_candidates,
         oled_compiled_records=oled_compilation.compiled_records,
     )

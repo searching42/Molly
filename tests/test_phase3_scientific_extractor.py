@@ -223,6 +223,11 @@ def test_extracts_oled_text_candidates_from_no_table_parsed_documents() -> None:
     assert result.records == []
     assert result.extraction_report.input_table_count == 0
     assert result.extraction_report.oled_candidate_count == 1
+    assert result.extraction_report.oled_text_evidence_candidate_count == 2
+    assert result.oled_text_evidence_candidates[0].property_id == "emission_wavelength_nm"
+    assert result.oled_text_evidence_candidates[1].property_id == "plqy"
+    assert result.extraction_report.oled_schema_candidate_count == 0
+    assert result.extraction_report.oled_compiled_record_count == 0
     assert result.oled_candidates[0].candidate_type.value == "text"
     assert "photoluminescence_quantum_yield" in result.oled_candidates[0].matched_terms
     assert "property_keyword" in {signal.value for signal in result.oled_candidates[0].relevance_signals}
