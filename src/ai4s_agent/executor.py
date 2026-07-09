@@ -603,8 +603,15 @@ class RunPlanExecutor:
             }
         task_options = self._payload_options(options)
         if task_id == "inspect_dataset":
+            input_csv = (
+                artifact_paths.get("uploaded_dataset")
+                or artifact_paths.get("confirmed_training_dataset")
+                or ""
+            )
+            if not input_csv:
+                raise ValueError("missing artifact path: uploaded_dataset or confirmed_training_dataset")
             return {
-                "input_csv": self._require_artifact(artifact_paths, "uploaded_dataset"),
+                "input_csv": input_csv,
                 "min_numeric_ratio": 0.5,
                 "min_nonempty": 1,
             }

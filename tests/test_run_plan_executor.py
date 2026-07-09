@@ -155,6 +155,30 @@ def test_run_plan_executor_runs_low_risk_baseline_chain_and_registers_artifacts(
     assert state.ended_at is not None
 
 
+def test_run_plan_executor_inspects_confirmed_training_dataset_artifact(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    dataset = tmp_path / "input" / "confirmed_training_dataset.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    run_plan = expand_run_plan(
+        run_id="r-confirmed-inspect",
+        requested_tasks=["inspect_dataset"],
+        available_artifacts=["confirmed_training_dataset"],
+    )
+
+    result = RunPlanExecutor(storage=storage).execute(
+        project_id="proj-exec",
+        run_plan=run_plan,
+        input_artifacts={"confirmed_training_dataset": str(dataset)},
+    )
+
+    assert result["status"] == RunStatus.SUCCEEDED.value
+    assert result["executed_tasks"] == ["inspect_dataset"]
+    registry = storage.read_artifact_registry("proj-exec", "r-confirmed-inspect")
+    assert "dataset_profile" in registry
+    assert "property_catalog" in registry
+
+
 def test_run_plan_executor_pauses_before_high_risk_task_without_gate(tmp_path: Path) -> None:
     storage = ProjectStorage(tmp_path)
     dataset = tmp_path / "input" / "train.csv"
