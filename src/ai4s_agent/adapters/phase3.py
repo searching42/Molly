@@ -2386,9 +2386,16 @@ def normalize_extracted_units_adapter(payload: dict[str, Any]) -> dict[str, Any]
                 "message": "run_id/extracted_records_jsonl/output_dir are required",
             },
         }
+    records_path = _resolve_path(records_raw, base=WORKSPACE)
+    if not records_path.exists():
+        return {
+            "status": "failed",
+            "adapter": "normalize_extracted_units",
+            "error": {"code": "missing_extracted_records", "message": f"extracted_records_jsonl not found: {records_raw}"},
+        }
 
     try:
-        records = _read_extracted_records(_resolve_path(records_raw, base=WORKSPACE))
+        records = _read_extracted_records(records_path)
     except Exception as exc:
         return {
             "status": "failed",
