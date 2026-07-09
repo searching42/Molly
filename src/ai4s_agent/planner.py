@@ -192,7 +192,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     ),
     AtomicTaskSpec(
         task_id="merge_extracted_records",
-        required_artifacts=["extracted_records", "citation_provenance_report"],
+        required_artifacts=["normalized_extracted_records", "citation_provenance_report"],
         output_artifacts=["merged_records", "conflict_report", "candidate_training_dataset"],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="merge_extracted_records_adapter",

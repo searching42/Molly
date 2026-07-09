@@ -275,6 +275,16 @@ def _phase3_payload_for(
         payload.update(task_options)
         return payload
 
+    if task_id == "merge_extracted_records":
+        task_options = _phase3_payload_options(executor, payload, options)
+        records_path = str(artifact_paths.get("normalized_extracted_records") or artifact_paths.get("extracted_records") or "").strip()
+        if not records_path:
+            raise ValueError("missing artifact path: normalized_extracted_records or extracted_records")
+        payload["extracted_records_jsonl_list"] = [records_path]
+        _add_optional_artifact(payload, artifact_paths, "citation_provenance_report", "citation_provenance_report_json")
+        payload.update(task_options)
+        return payload
+
     task_options = executor._payload_options(options)
     if task_id == "acquire_literature_sources":
         payload["corpus_source_manifest_json"] = _require_artifact(artifact_paths, "corpus_source_manifest")
@@ -283,14 +293,6 @@ def _phase3_payload_for(
     if task_id in {"parse_document", "parse_document_pdfplumber", "parse_document_pymupdf", "parse_document_grobid"}:
         payload["input_pdf"] = _first_pdf(_require_artifact(artifact_paths, "pdf_corpus"))
         payload.setdefault("execute", False)
-        payload.update(task_options)
-        return payload
-    if task_id == "merge_extracted_records":
-        records_path = str(artifact_paths.get("normalized_extracted_records") or artifact_paths.get("extracted_records") or "").strip()
-        if not records_path:
-            raise ValueError("missing artifact path: normalized_extracted_records or extracted_records")
-        payload["extracted_records_jsonl_list"] = [records_path]
-        _add_optional_artifact(payload, artifact_paths, "citation_provenance_report", "citation_provenance_report_json")
         payload.update(task_options)
         return payload
     if task_id == "evaluate_extraction_benchmark":
