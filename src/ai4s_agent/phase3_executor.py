@@ -293,6 +293,7 @@ def _phase3_payload_for(
             raise ValueError("missing artifact path: normalized_extracted_records or extracted_records")
         payload["extracted_records_jsonl"] = records_path
         payload["conflict_report_json"] = _require_artifact(artifact_paths, "conflict_report")
+        _add_optional_artifact(payload, artifact_paths, "candidate_training_dataset", "candidate_training_dataset_csv")
         payload.update(task_options)
         return payload
 
