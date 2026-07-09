@@ -236,6 +236,16 @@ def _phase3_payload_for(
         payload.update(task_options)
         return payload
 
+    if task_id == "retrieve_evidence":
+        task_options = _phase3_payload_options(executor, payload, options)
+        payload["query"] = str(task_options.pop("query", "SMILES PLQY OLED property table") or "SMILES PLQY OLED property table")
+        payload["topk"] = int(task_options.pop("topk", 20) or 20)
+        payload["corpus_index_json"] = _require_artifact(artifact_paths, "corpus_index")
+        _add_optional_artifact(payload, artifact_paths, "multi_index", "multi_index_json")
+        _add_optional_artifact(payload, artifact_paths, "dense_index", "dense_index_json")
+        payload.update(task_options)
+        return payload
+
     task_options = executor._payload_options(options)
     if task_id == "acquire_literature_sources":
         payload["corpus_source_manifest_json"] = _require_artifact(artifact_paths, "corpus_source_manifest")
@@ -249,14 +259,6 @@ def _phase3_payload_for(
     if task_id == "build_dense_index":
         _add_optional_artifact(payload, artifact_paths, "evidence_chunks", "chunks_jsonl")
         _add_optional_artifact(payload, artifact_paths, "corpus_index", "corpus_index_json")
-        payload.update(task_options)
-        return payload
-    if task_id == "retrieve_evidence":
-        payload["query"] = str(task_options.pop("query", "SMILES PLQY OLED property table") or "SMILES PLQY OLED property table")
-        payload["topk"] = int(task_options.pop("topk", 20) or 20)
-        payload["corpus_index_json"] = _require_artifact(artifact_paths, "corpus_index")
-        _add_optional_artifact(payload, artifact_paths, "multi_index", "multi_index_json")
-        _add_optional_artifact(payload, artifact_paths, "dense_index", "dense_index_json")
         payload.update(task_options)
         return payload
     if task_id == "extract_records":
