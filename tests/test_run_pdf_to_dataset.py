@@ -60,6 +60,10 @@ def test_pdf_to_dataset_runner_parses_pdf_and_writes_deterministic_artifacts(tmp
     assert (output_dir / "extraction" / "oled_schema_candidates.json").exists()
     assert (output_dir / "extraction" / "oled_compiled_records.json").exists()
     assert (output_dir / "extraction" / "extraction_manifest.json").exists()
+    assert (output_dir / "review" / "oled_review_packet.json").exists()
+    assert (output_dir / "review" / "oled_review_packet.md").exists()
+    assert (output_dir / "review" / "oled_reviewer_decision_template.json").exists()
+    assert (output_dir / "review" / "oled_review_summary.json").exists()
     assert (output_dir / "conflicts" / "conflict_report.json").exists()
     assert (output_dir / "conflicts" / "conflict_summary.json").exists()
     assert (output_dir / "dataset" / "candidate_dataset.csv").exists()
@@ -87,6 +91,14 @@ def test_pdf_to_dataset_runner_parses_pdf_and_writes_deterministic_artifacts(tmp
     assert workflow_report["workflow"]["oled_text_evidence_candidates_json"] == result.oled_text_evidence_candidates_json
     assert result.oled_schema_candidates_json == str(output_dir / "extraction" / "oled_schema_candidates.json")
     assert workflow_report["workflow"]["oled_schema_candidates_json"] == result.oled_schema_candidates_json
+    assert result.oled_review_packet_json == str(output_dir / "review" / "oled_review_packet.json")
+    assert result.oled_review_packet_md == str(output_dir / "review" / "oled_review_packet.md")
+    assert result.oled_reviewer_decision_template_json == str(
+        output_dir / "review" / "oled_reviewer_decision_template.json"
+    )
+    assert result.oled_review_summary_json == str(output_dir / "review" / "oled_review_summary.json")
+    assert workflow_report["workflow"]["oled_review_packet_json"] == result.oled_review_packet_json
+    assert workflow_report["workflow"]["oled_review_summary_json"] == result.oled_review_summary_json
     assert workflow_report["governance"]["confirmation"]["confirmed"] is False
     assert workflow_report["governance"]["no_silent_materialization"] is True
 
@@ -114,6 +126,10 @@ def test_pdf_to_dataset_runner_hands_parsed_document_to_workflow(tmp_path: Path)
             rejected_records_json=str(out / "dataset" / "rejected_records.json"),
             dataset_manifest_json=str(out / "dataset" / "dataset_manifest.json"),
             oled_text_evidence_candidates_json=str(out / "extraction" / "oled_text_evidence_candidates.json"),
+            oled_review_packet_json=str(out / "review" / "oled_review_packet.json"),
+            oled_review_packet_md=str(out / "review" / "oled_review_packet.md"),
+            oled_reviewer_decision_template_json=str(out / "review" / "oled_reviewer_decision_template.json"),
+            oled_review_summary_json=str(out / "review" / "oled_review_summary.json"),
             corpus_report_json=str(out / "report" / "corpus_report.json"),
             corpus_report_md=str(out / "report" / "corpus_report.md"),
             corpus_replay_manifest_json=str(out / "reproducibility" / "corpus_replay_manifest.json"),
@@ -312,7 +328,7 @@ def _phase1_ready_parsed_document() -> ParsedDocument:
 
 
 def _write_minimal_workflow_outputs(output_dir: Path, run_id: str) -> None:
-    for child in ("extraction", "conflicts", "dataset", "report", "reproducibility"):
+    for child in ("extraction", "conflicts", "dataset", "report", "reproducibility", "review"):
         (output_dir / child).mkdir(parents=True, exist_ok=True)
     _write_json(output_dir / "corpus_workflow_report.json", {"run_id": run_id, "status": "awaiting_confirmation"})
     _write_json(output_dir / "extraction" / "corpus_extraction_manifest.json", {"run_id": run_id})
@@ -320,6 +336,10 @@ def _write_minimal_workflow_outputs(output_dir: Path, run_id: str) -> None:
         output_dir / "extraction" / "oled_text_evidence_candidates.json",
         {"run_id": run_id, "text_evidence_candidates": []},
     )
+    _write_json(output_dir / "review" / "oled_review_packet.json", {"run_id": run_id, "review_items": []})
+    (output_dir / "review" / "oled_review_packet.md").write_text("# OLED Evidence Review Packet\n", encoding="utf-8")
+    _write_json(output_dir / "review" / "oled_reviewer_decision_template.json", {"run_id": run_id, "decisions": []})
+    _write_json(output_dir / "review" / "oled_review_summary.json", {"run_id": run_id, "review_item_count": 0})
     _write_json(output_dir / "conflicts" / "corpus_conflict_report.json", {"run_id": run_id})
     _write_json(output_dir / "conflicts" / "conflict_summary.json", {"run_id": run_id})
     _write_json(output_dir / "dataset" / "rejected_records.json", {"run_id": run_id, "records": []})

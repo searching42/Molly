@@ -13,6 +13,7 @@ DEFAULT_REPLAY_STEPS = [
     "extract_corpus_records",
     "audit_conflicts",
     "build_confirmed_dataset",
+    "generate_oled_review_packet",
     "run_phase1_full_pipeline",
     "generate_corpus_report",
 ]

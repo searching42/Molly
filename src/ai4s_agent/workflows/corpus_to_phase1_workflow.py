@@ -10,6 +10,7 @@ from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.corpus_conflict_auditor import audit_corpus_conflicts
 from ai4s_agent.corpus_report_generator import generate_corpus_report
 from ai4s_agent.corpus_reproducibility_auditor import audit_corpus_reproducibility
+from ai4s_agent.oled_review_packet_generator import generate_oled_review_packet
 from ai4s_agent.phase3_corpus_extractor import extract_corpus_records
 from ai4s_agent.scientific_dataset_builder import DatasetConfirmation, build_scientific_dataset
 from ai4s_agent.workflows.phase1_full_pipeline import run_phase1_full_pipeline
@@ -29,6 +30,14 @@ class CorpusToPhase1WorkflowResult:
     oled_text_evidence_candidates_json: str = ""
     oled_schema_candidates_json: str = ""
     oled_compiled_records_json: str = ""
+    oled_review_packet_json: str = ""
+    oled_review_packet_md: str = ""
+    oled_reviewer_decision_template_json: str = ""
+    oled_review_summary_json: str = ""
+    oled_review_item_count: int = 0
+    oled_review_high_priority_count: int = 0
+    oled_review_medium_priority_count: int = 0
+    oled_review_low_priority_count: int = 0
     full_phase1_pipeline_json: str = ""
     report_json: str = ""
     report_md: str = ""
@@ -87,12 +96,23 @@ def run_corpus_to_phase1_workflow(
         run_id=run_id,
         generated_at=generated,
     )
+    review_packet = generate_oled_review_packet(
+        run_id=run_id,
+        output_dir=output_path / "review",
+        oled_candidates_json=extraction.oled_candidates_json,
+        oled_text_evidence_candidates_json=extraction.oled_text_evidence_candidates_json,
+        oled_schema_candidates_json=extraction.oled_schema_candidates_json,
+        oled_compiled_records_json=extraction.oled_compiled_records_json,
+        corpus_extraction_manifest_json=extraction.corpus_extraction_manifest_json,
+        generated_at=generated,
+    )
     dataset_manifest_json = _update_dataset_manifest(
         dataset_manifest_json=dataset.dataset_manifest_json,
         corpus_extraction=extraction,
         conflict_summary=conflict_audit.summary,
         rejected_records_json=rejected_records_json,
         rejected_record_count=total_rejected_count,
+        review_packet=review_packet,
     )
     _update_conflict_summary(
         conflict_summary_json=conflict_audit.conflict_summary_json,
@@ -103,6 +123,10 @@ def run_corpus_to_phase1_workflow(
         oled_text_evidence_candidate_count=extraction.report.oled_text_evidence_candidate_count,
         oled_schema_candidate_count=extraction.report.oled_schema_candidate_count,
         oled_compiled_record_count=extraction.report.oled_compiled_record_count,
+        oled_review_item_count=review_packet.review_item_count,
+        oled_review_high_priority_count=review_packet.high_priority_count,
+        oled_review_medium_priority_count=review_packet.medium_priority_count,
+        oled_review_low_priority_count=review_packet.low_priority_count,
     )
 
     phase1_status = "not_run"
@@ -118,6 +142,10 @@ def run_corpus_to_phase1_workflow(
         "oled_text_evidence_candidates_json": extraction.oled_text_evidence_candidates_json,
         "oled_schema_candidates_json": extraction.oled_schema_candidates_json,
         "oled_compiled_records_json": extraction.oled_compiled_records_json,
+        "oled_review_packet_json": review_packet.review_packet_json,
+        "oled_review_packet_md": review_packet.review_packet_md,
+        "oled_reviewer_decision_template_json": review_packet.reviewer_decision_template_json,
+        "oled_review_summary_json": review_packet.review_summary_json,
         "corpus_extraction_manifest_json": extraction.corpus_extraction_manifest_json,
         "corpus_conflict_report_json": conflict_audit.conflict_report_json,
         "conflict_summary_json": conflict_audit.conflict_summary_json,
@@ -168,6 +196,7 @@ def run_corpus_to_phase1_workflow(
         conflict_summary_json=conflict_audit.conflict_summary_json,
         phase1_pipeline_json=full_phase1_pipeline_json,
         reproducibility_report_json=reproducibility.corpus_reproducibility_report_json,
+        oled_review_summary_json=review_packet.review_summary_json,
         ranked_candidates=ranked_candidates,
         output_dir=output_path / "report",
         run_id=run_id,
@@ -193,6 +222,10 @@ def run_corpus_to_phase1_workflow(
                 "oled_text_evidence_candidate_count": extraction.report.oled_text_evidence_candidate_count,
                 "oled_schema_candidate_count": extraction.report.oled_schema_candidate_count,
                 "oled_compiled_record_count": extraction.report.oled_compiled_record_count,
+                "oled_review_item_count": review_packet.review_item_count,
+                "oled_review_high_priority_count": review_packet.high_priority_count,
+                "oled_review_medium_priority_count": review_packet.medium_priority_count,
+                "oled_review_low_priority_count": review_packet.low_priority_count,
                 "candidate_record_count": dataset.candidate_record_count,
                 "training_record_count": dataset.training_record_count,
                 "phase1_status": phase1_status,
@@ -204,6 +237,10 @@ def run_corpus_to_phase1_workflow(
                 "oled_text_evidence_candidates_json": extraction.oled_text_evidence_candidates_json,
                 "oled_schema_candidates_json": extraction.oled_schema_candidates_json,
                 "oled_compiled_records_json": extraction.oled_compiled_records_json,
+                "oled_review_packet_json": review_packet.review_packet_json,
+                "oled_review_packet_md": review_packet.review_packet_md,
+                "oled_reviewer_decision_template_json": review_packet.reviewer_decision_template_json,
+                "oled_review_summary_json": review_packet.review_summary_json,
                 "corpus_conflict_report_json": conflict_audit.conflict_report_json,
                 "candidate_dataset_csv": dataset.candidate_dataset_csv,
                 "training_dataset_csv": dataset.training_dataset_csv,
@@ -228,6 +265,14 @@ def run_corpus_to_phase1_workflow(
         oled_text_evidence_candidates_json=extraction.oled_text_evidence_candidates_json,
         oled_schema_candidates_json=extraction.oled_schema_candidates_json,
         oled_compiled_records_json=extraction.oled_compiled_records_json,
+        oled_review_packet_json=review_packet.review_packet_json,
+        oled_review_packet_md=review_packet.review_packet_md,
+        oled_reviewer_decision_template_json=review_packet.reviewer_decision_template_json,
+        oled_review_summary_json=review_packet.review_summary_json,
+        oled_review_item_count=review_packet.review_item_count,
+        oled_review_high_priority_count=review_packet.high_priority_count,
+        oled_review_medium_priority_count=review_packet.medium_priority_count,
+        oled_review_low_priority_count=review_packet.low_priority_count,
         candidate_dataset_csv=dataset.candidate_dataset_csv,
         training_dataset_csv=dataset.training_dataset_csv,
         rejected_records_json=rejected_records_json,
@@ -281,6 +326,7 @@ def _update_dataset_manifest(
     conflict_summary: dict[str, Any],
     rejected_records_json: str,
     rejected_record_count: int,
+    review_packet: Any,
 ) -> str:
     path = Path(dataset_manifest_json).expanduser().resolve()
     manifest = _load_json(path)
@@ -295,6 +341,10 @@ def _update_dataset_manifest(
         "oled_text_evidence_candidate_count": corpus_extraction.report.oled_text_evidence_candidate_count,
         "oled_schema_candidate_count": corpus_extraction.report.oled_schema_candidate_count,
         "oled_compiled_record_count": corpus_extraction.report.oled_compiled_record_count,
+        "oled_review_item_count": review_packet.review_item_count,
+        "oled_review_high_priority_count": review_packet.high_priority_count,
+        "oled_review_medium_priority_count": review_packet.medium_priority_count,
+        "oled_review_low_priority_count": review_packet.low_priority_count,
     }
     artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), dict) else {}
     artifacts["rejected_records_json"] = rejected_records_json
@@ -302,6 +352,10 @@ def _update_dataset_manifest(
     artifacts["oled_text_evidence_candidates_json"] = corpus_extraction.oled_text_evidence_candidates_json
     artifacts["oled_schema_candidates_json"] = corpus_extraction.oled_schema_candidates_json
     artifacts["oled_compiled_records_json"] = corpus_extraction.oled_compiled_records_json
+    artifacts["oled_review_packet_json"] = review_packet.review_packet_json
+    artifacts["oled_review_packet_md"] = review_packet.review_packet_md
+    artifacts["oled_reviewer_decision_template_json"] = review_packet.reviewer_decision_template_json
+    artifacts["oled_review_summary_json"] = review_packet.review_summary_json
     manifest["artifacts"] = artifacts
     write_json(path, manifest)
     return str(path)
@@ -317,6 +371,10 @@ def _update_conflict_summary(
     oled_text_evidence_candidate_count: int,
     oled_schema_candidate_count: int,
     oled_compiled_record_count: int,
+    oled_review_item_count: int,
+    oled_review_high_priority_count: int,
+    oled_review_medium_priority_count: int,
+    oled_review_low_priority_count: int,
 ) -> None:
     path = Path(conflict_summary_json).expanduser().resolve()
     summary = _load_json(path)
@@ -327,6 +385,10 @@ def _update_conflict_summary(
     summary["oled_text_evidence_candidate_count"] = oled_text_evidence_candidate_count
     summary["oled_schema_candidate_count"] = oled_schema_candidate_count
     summary["oled_compiled_record_count"] = oled_compiled_record_count
+    summary["oled_review_item_count"] = oled_review_item_count
+    summary["oled_review_high_priority_count"] = oled_review_high_priority_count
+    summary["oled_review_medium_priority_count"] = oled_review_medium_priority_count
+    summary["oled_review_low_priority_count"] = oled_review_low_priority_count
     write_json(path, summary)
 
 
