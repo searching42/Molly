@@ -301,7 +301,7 @@ def test_phase3_extraction_benchmark_atomic_task_is_registered() -> None:
     registry = AtomicTaskRegistry()
     task = registry.get("evaluate_extraction_benchmark")
 
-    assert task.required_artifacts == ["evidence_hits", "extracted_records", "conflict_report"]
+    assert task.required_artifacts == ["evidence_hits", "normalized_extracted_records", "conflict_report"]
     assert task.output_artifacts == ["extraction_benchmark_report"]
     assert task.default_adapter == "evaluate_extraction_benchmark_adapter"
     assert callable(getattr(adapters, task.default_adapter))
