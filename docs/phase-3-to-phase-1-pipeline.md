@@ -37,8 +37,9 @@ access external services, or use an LLM.
 Module: `src/ai4s_agent/phase3_scientific_extractor.py`
 
 The extractor converts a `ParsedDocument` into deterministic
-`StructuredScientificRecord` items. It currently targets structured table
-evidence with columns that identify:
+`StructuredScientificRecord` items for the legacy molecule-level training
+path. That path still targets structured table evidence with columns that
+identify:
 
 - `SMILES`
 - `PLQY`
@@ -60,6 +61,21 @@ Responsibilities:
   properties
 - detect duplicate SMILES conflicts using deterministic tolerances
 - produce an extraction report and conflict report
+
+The same extractor also emits OLED evidence/schema candidates for real OLED
+papers that do not expose molecule-level SMILES tables:
+
+- `oled_candidates.json` contains table, text, figure, and chart evidence
+  candidates from `ParsedDocument.tables` and `ParsedDocument.elements`.
+- `oled_schema_candidates.json` contains deterministic OLED layered-schema
+  candidates for mapped table columns such as host, dopant, PLQY, EQE,
+  `delta_e_st_ev`, doping ratio, voltage, luminance, and device context.
+- `oled_compiled_records.json` contains proposed layered record candidates
+  compiled from those schema candidates.
+
+These OLED artifacts are review candidates only. They do not enter the
+RDKit/SMILES training dataset unless a later curated OLED pipeline confirms
+and materializes them.
 
 No extraction output is trusted automatically for training.
 

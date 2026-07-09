@@ -23,6 +23,9 @@ def test_corpus_report_generator_summarizes_corpus_phase1_and_reproducibility(tm
                 "consistent_duplicate_count": 1,
                 "conflict_count": 1,
                 "unresolved_conflict_count": 1,
+                "oled_candidate_count": 6,
+                "oled_schema_candidate_count": 24,
+                "oled_compiled_record_count": 5,
                 "candidate_record_count": 5,
                 "training_record_count": 5,
             }
@@ -58,10 +61,13 @@ def test_corpus_report_generator_summarizes_corpus_phase1_and_reproducibility(tm
     markdown = Path(report.corpus_report_md).read_text(encoding="utf-8")
 
     assert payload["document_count"] == 3
+    assert payload["oled_schema_candidate_count"] == 24
     assert payload["phase1_status"] == "success"
     assert payload["top_ranked_candidates"][0]["SMILES"] == "CCO"
     assert summary["conflict_count"] == 1
+    assert summary["oled_compiled_record_count"] == 5
     assert "Corpus Evaluation And Reproducibility Audit" in markdown
+    assert "OLED schema candidates: 24" in markdown
 
 
 def _read_json(path: Path) -> dict:
