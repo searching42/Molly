@@ -55,6 +55,9 @@ def test_pdf_to_dataset_runner_parses_pdf_and_writes_deterministic_artifacts(tmp
     assert copied_pdf.exists()
     assert parsed_document_json.exists()
     assert (output_dir / "extraction" / "corpus_records.json").exists()
+    assert (output_dir / "extraction" / "oled_candidates.json").exists()
+    assert (output_dir / "extraction" / "oled_schema_candidates.json").exists()
+    assert (output_dir / "extraction" / "oled_compiled_records.json").exists()
     assert (output_dir / "extraction" / "extraction_manifest.json").exists()
     assert (output_dir / "conflicts" / "conflict_report.json").exists()
     assert (output_dir / "conflicts" / "conflict_summary.json").exists()
@@ -79,6 +82,8 @@ def test_pdf_to_dataset_runner_parses_pdf_and_writes_deterministic_artifacts(tmp
     assert workflow_report["input"]["copied_pdf"] == str(copied_pdf)
     assert workflow_report["parse"]["parsed_document_json"] == str(parsed_document_json)
     assert workflow_report["workflow"]["dataset_manifest_json"] == str(output_dir / "dataset" / "dataset_manifest.json")
+    assert result.oled_schema_candidates_json == str(output_dir / "extraction" / "oled_schema_candidates.json")
+    assert workflow_report["workflow"]["oled_schema_candidates_json"] == result.oled_schema_candidates_json
     assert workflow_report["governance"]["confirmation"]["confirmed"] is False
     assert workflow_report["governance"]["no_silent_materialization"] is True
 

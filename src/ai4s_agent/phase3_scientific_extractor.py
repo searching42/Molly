@@ -8,6 +8,18 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 from ai4s_agent._utils import now_iso
+from ai4s_agent.domains.oled_mineru_candidates import (
+    OledMineruCandidate,
+    extract_oled_mineru_candidates_from_document,
+)
+from ai4s_agent.domains.oled_mineru_semantic_mapping import (
+    OledSchemaCandidate,
+    map_oled_mineru_candidates_to_schema_candidates,
+)
+from ai4s_agent.domains.oled_schema_candidate_compiler import (
+    OledCompiledLayeredRecordCandidate,
+    compile_oled_schema_candidates_to_layered_records,
+)
 from ai4s_agent.schemas import ConflictGroup, ConflictReport, ParsedDocument, ParsedTable
 
 
@@ -42,6 +54,9 @@ class ExtractionReport(BaseModel):
     paper_id: str
     input_table_count: int
     selected_table_count: int
+    oled_candidate_count: int = 0
+    oled_schema_candidate_count: int = 0
+    oled_compiled_record_count: int = 0
     input_row_count: int
     extracted_record_count: int
     rejected_record_count: int
@@ -55,6 +70,9 @@ class ScientificExtractionResult(BaseModel):
     rejected_records: list[dict[str, Any]]
     extraction_report: ExtractionReport
     conflict_report: ConflictReport
+    oled_candidates: list[OledMineruCandidate] = Field(default_factory=list)
+    oled_schema_candidates: list[OledSchemaCandidate] = Field(default_factory=list)
+    oled_compiled_records: list[OledCompiledLayeredRecordCandidate] = Field(default_factory=list)
 
 
 _NUMBER_PATTERN = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
@@ -164,6 +182,13 @@ def extract_scientific_records(
             )
 
     duplicate_smiles_count = sum(1 for group in _records_by_smiles(records).values() if len(group) > 1)
+    oled_candidates = _extract_oled_candidates(parsed_document)
+    oled_mapping = map_oled_mineru_candidates_to_schema_candidates(oled_candidates)
+    oled_compilation = compile_oled_schema_candidates_to_layered_records(
+        oled_mapping.schema_candidates,
+        require_measurement_condition=False,
+        require_device_context_for_measurement=False,
+    )
     conflict_report = _build_conflict_report(
         records,
         run_id=run_id,
@@ -176,6 +201,9 @@ def extract_scientific_records(
         paper_id=parsed_document.paper_id,
         input_table_count=len(parsed_document.tables),
         selected_table_count=len(selected_tables),
+        oled_candidate_count=len(oled_candidates),
+        oled_schema_candidate_count=len(oled_mapping.schema_candidates),
+        oled_compiled_record_count=len(oled_compilation.compiled_records),
         input_row_count=input_row_count,
         extracted_record_count=len(records),
         rejected_record_count=len(rejected),
@@ -183,6 +211,7 @@ def extract_scientific_records(
         generated_at=generated,
         notes=[
             "deterministic_table_extraction",
+            "deterministic_oled_evidence_schema_candidates",
             "no_llm_calls",
             "no_external_services",
         ],
@@ -192,7 +221,103 @@ def extract_scientific_records(
         rejected_records=rejected,
         extraction_report=report,
         conflict_report=conflict_report,
+        oled_candidates=oled_candidates,
+        oled_schema_candidates=oled_mapping.schema_candidates,
+        oled_compiled_records=oled_compilation.compiled_records,
     )
+
+
+def _extract_oled_candidates(parsed_document: ParsedDocument) -> list[OledMineruCandidate]:
+    table_blocks = [_table_to_mineru_block(table) for table in parsed_document.tables]
+    element_blocks = [_element_to_mineru_block(element) for element in parsed_document.elements]
+    return extract_oled_mineru_candidates_from_document(
+        [*table_blocks, *element_blocks],
+        paper_id=parsed_document.paper_id,
+        source_path=parsed_document.source_path,
+    )
+
+
+def _table_to_mineru_block(table: ParsedTable) -> dict[str, Any]:
+    return {
+        "type": "table",
+        "table_caption": table.caption,
+        "table_body": table.markdown or _markdown_from_table(table),
+        "table_footnote": "\n".join(table.footnotes),
+        "bbox": _bbox_list(table.source_bbox),
+        "page_idx": table.page,
+    }
+
+
+def _element_to_mineru_block(element: Any) -> dict[str, Any]:
+    element_type = _mineru_element_type(element)
+    text = str(getattr(element, "markdown", "") or getattr(element, "text", "") or "")
+    block: dict[str, Any] = {
+        "type": element_type,
+        "page_idx": getattr(element, "page", None),
+        "bbox": getattr(element, "bbox", None),
+    }
+    if element_type == "image":
+        block["image_caption"] = text
+        image_path = _element_image_path(element)
+        if image_path:
+            block["img_path"] = image_path
+    elif element_type == "chart":
+        block["chart_caption"] = text
+        image_path = _element_image_path(element)
+        if image_path:
+            block["img_path"] = image_path
+    else:
+        block["text"] = text
+    return block
+
+
+def _mineru_element_type(element: Any) -> str:
+    raw_type = str(getattr(element, "metadata", {}).get("raw_type") or getattr(element, "type", "") or "").lower()
+    if "chart" in raw_type:
+        return "chart"
+    if "image" in raw_type or "figure" in raw_type:
+        return "image"
+    if str(getattr(element, "metadata", {}).get("text_level") or "").strip():
+        return "title"
+    return "text"
+
+
+def _element_image_path(element: Any) -> str:
+    metadata = getattr(element, "metadata", {})
+    if not isinstance(metadata, dict):
+        return ""
+    return str(metadata.get("image_path") or "").strip()
+
+
+def _markdown_from_table(table: ParsedTable) -> str:
+    headers = list(table.headers)
+    if not headers and table.rows:
+        headers = list(table.rows[0].keys())
+    if not headers:
+        return ""
+    lines = [
+        "| " + " | ".join(_markdown_cell(header) for header in headers) + " |",
+        "| " + " | ".join("---" for _ in headers) + " |",
+    ]
+    for row in table.rows:
+        lines.append("| " + " | ".join(_markdown_cell(str(row.get(header) or "")) for header in headers) + " |")
+    return "\n".join(lines)
+
+
+def _markdown_cell(value: str) -> str:
+    return str(value or "").replace("\n", " ").replace("|", "/").strip()
+
+
+def _bbox_list(source_bbox: dict[str, float] | None) -> list[float] | None:
+    if not isinstance(source_bbox, dict):
+        return None
+    keys = ("x0", "y0", "x1", "y1")
+    if all(key in source_bbox for key in keys):
+        return [float(source_bbox[key]) for key in keys]
+    alternate_keys = ("x0", "top", "x1", "bottom")
+    if all(key in source_bbox for key in alternate_keys):
+        return [float(source_bbox[key]) for key in alternate_keys]
+    return None
 
 
 def _table_columns(table: ParsedTable) -> dict[str, Any]:

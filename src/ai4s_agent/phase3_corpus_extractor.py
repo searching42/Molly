@@ -13,6 +13,9 @@ from ai4s_agent.phase3_scientific_extractor import (
     StructuredScientificRecord,
     extract_scientific_records,
 )
+from ai4s_agent.domains.oled_mineru_candidates import OledMineruCandidate
+from ai4s_agent.domains.oled_mineru_semantic_mapping import OledSchemaCandidate
+from ai4s_agent.domains.oled_schema_candidate_compiler import OledCompiledLayeredRecordCandidate
 from ai4s_agent.schemas import ParsedDocument
 
 
@@ -21,10 +24,16 @@ class CorpusExtractionReport(BaseModel):
     document_count: int
     extracted_record_count: int
     rejected_record_count: int
+    oled_candidate_count: int = 0
+    oled_schema_candidate_count: int = 0
+    oled_compiled_record_count: int = 0
     paper_ids: list[str] = Field(default_factory=list)
     source_document_ids: list[str] = Field(default_factory=list)
     record_counts_by_paper: dict[str, int] = Field(default_factory=dict)
     extraction_rejection_counts_by_paper: dict[str, int] = Field(default_factory=dict)
+    oled_candidate_counts_by_paper: dict[str, int] = Field(default_factory=dict)
+    oled_schema_candidate_counts_by_paper: dict[str, int] = Field(default_factory=dict)
+    oled_compiled_record_counts_by_paper: dict[str, int] = Field(default_factory=dict)
     generated_at: str
     notes: list[str] = Field(default_factory=list)
 
@@ -33,9 +42,15 @@ class CorpusExtractionReport(BaseModel):
 class CorpusExtractionResult:
     records: list[StructuredScientificRecord]
     rejected_records: list[dict[str, Any]]
+    oled_candidates: list[OledMineruCandidate]
+    oled_schema_candidates: list[OledSchemaCandidate]
+    oled_compiled_records: list[OledCompiledLayeredRecordCandidate]
     report: CorpusExtractionReport
     per_document_reports: list[ExtractionReport] = field(default_factory=list)
     corpus_records_json: str = ""
+    oled_candidates_json: str = ""
+    oled_schema_candidates_json: str = ""
+    oled_compiled_records_json: str = ""
     per_document_extraction_reports_json: str = ""
     corpus_extraction_manifest_json: str = ""
 
@@ -53,10 +68,16 @@ def extract_corpus_records(
 
     records: list[StructuredScientificRecord] = []
     rejected_records: list[dict[str, Any]] = []
+    oled_candidates: list[OledMineruCandidate] = []
+    oled_schema_candidates: list[OledSchemaCandidate] = []
+    oled_compiled_records: list[OledCompiledLayeredRecordCandidate] = []
     per_document_reports: list[ExtractionReport] = []
     document_refs: list[dict[str, Any]] = []
     record_counts_by_paper: dict[str, int] = {}
     rejection_counts_by_paper: dict[str, int] = {}
+    oled_candidate_counts_by_paper: dict[str, int] = {}
+    oled_schema_candidate_counts_by_paper: dict[str, int] = {}
+    oled_compiled_record_counts_by_paper: dict[str, int] = {}
     paper_ids: list[str] = []
     source_document_ids: list[str] = []
 
@@ -76,6 +97,9 @@ def extract_corpus_records(
         )
         per_document_reports.append(extraction.extraction_report)
         record_counts_by_paper[paper_id] = len(extraction.records)
+        oled_candidate_counts_by_paper[paper_id] = len(extraction.oled_candidates)
+        oled_schema_candidate_counts_by_paper[paper_id] = len(extraction.oled_schema_candidates)
+        oled_compiled_record_counts_by_paper[paper_id] = len(extraction.oled_compiled_records)
         if extraction.rejected_records:
             rejection_counts_by_paper[paper_id] = len(extraction.rejected_records)
 
@@ -122,6 +146,10 @@ def extract_corpus_records(
                 }
             )
 
+        oled_candidates.extend(extraction.oled_candidates)
+        oled_schema_candidates.extend(extraction.oled_schema_candidates)
+        oled_compiled_records.extend(extraction.oled_compiled_records)
+
         document_refs.append(
             {
                 "paper_id": paper_id,
@@ -131,6 +159,9 @@ def extract_corpus_records(
                 "parser_backend": parser_backend,
                 "extracted_record_count": len(extraction.records),
                 "rejected_record_count": len(extraction.rejected_records),
+                "oled_candidate_count": len(extraction.oled_candidates),
+                "oled_schema_candidate_count": len(extraction.oled_schema_candidates),
+                "oled_compiled_record_count": len(extraction.oled_compiled_records),
             }
         )
 
@@ -139,20 +170,30 @@ def extract_corpus_records(
         document_count=len(document_refs),
         extracted_record_count=len(records),
         rejected_record_count=len(rejected_records),
+        oled_candidate_count=len(oled_candidates),
+        oled_schema_candidate_count=len(oled_schema_candidates),
+        oled_compiled_record_count=len(oled_compiled_records),
         paper_ids=paper_ids,
         source_document_ids=source_document_ids,
         record_counts_by_paper=record_counts_by_paper,
         extraction_rejection_counts_by_paper=rejection_counts_by_paper,
+        oled_candidate_counts_by_paper=oled_candidate_counts_by_paper,
+        oled_schema_candidate_counts_by_paper=oled_schema_candidate_counts_by_paper,
+        oled_compiled_record_counts_by_paper=oled_compiled_record_counts_by_paper,
         generated_at=generated,
         notes=[
             "deterministic_multi_document_extraction",
             "reuses_phase3_scientific_extractor",
+            "includes_oled_table_schema_candidates",
             "no_llm_calls",
             "no_external_services",
         ],
     )
 
     corpus_records_json = output_path / "corpus_records.json"
+    oled_candidates_json = output_path / "oled_candidates.json"
+    oled_schema_candidates_json = output_path / "oled_schema_candidates.json"
+    oled_compiled_records_json = output_path / "oled_compiled_records.json"
     per_document_reports_json = output_path / "per_document_extraction_reports.json"
     manifest_json = output_path / "corpus_extraction_manifest.json"
     write_json(
@@ -161,6 +202,30 @@ def extract_corpus_records(
             "run_id": run_id,
             "generated_at": generated,
             "records": [record.model_dump(mode="json") for record in records],
+        },
+    )
+    write_json(
+        oled_candidates_json,
+        {
+            "run_id": run_id,
+            "generated_at": generated,
+            "candidates": [candidate.model_dump(mode="json") for candidate in oled_candidates],
+        },
+    )
+    write_json(
+        oled_schema_candidates_json,
+        {
+            "run_id": run_id,
+            "generated_at": generated,
+            "schema_candidates": [candidate.model_dump(mode="json") for candidate in oled_schema_candidates],
+        },
+    )
+    write_json(
+        oled_compiled_records_json,
+        {
+            "run_id": run_id,
+            "generated_at": generated,
+            "compiled_records": [record.model_dump(mode="json") for record in oled_compiled_records],
         },
     )
     write_json(
@@ -181,6 +246,9 @@ def extract_corpus_records(
             "documents": document_refs,
             "artifacts": {
                 "corpus_records_json": str(corpus_records_json),
+                "oled_candidates_json": str(oled_candidates_json),
+                "oled_schema_candidates_json": str(oled_schema_candidates_json),
+                "oled_compiled_records_json": str(oled_compiled_records_json),
                 "per_document_extraction_reports_json": str(per_document_reports_json),
             },
         },
@@ -188,9 +256,15 @@ def extract_corpus_records(
     return CorpusExtractionResult(
         records=records,
         rejected_records=rejected_records,
+        oled_candidates=oled_candidates,
+        oled_schema_candidates=oled_schema_candidates,
+        oled_compiled_records=oled_compiled_records,
         report=report,
         per_document_reports=per_document_reports,
         corpus_records_json=str(corpus_records_json),
+        oled_candidates_json=str(oled_candidates_json),
+        oled_schema_candidates_json=str(oled_schema_candidates_json),
+        oled_compiled_records_json=str(oled_compiled_records_json),
         per_document_extraction_reports_json=str(per_document_reports_json),
         corpus_extraction_manifest_json=str(manifest_json),
     )
