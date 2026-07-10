@@ -46,6 +46,10 @@ def test_generates_review_packet_from_all_candidate_artifacts(tmp_path: Path) ->
         "oled_raw_candidate",
     ]
     assert all(item_id.startswith("review:review-run:") for item_id in item_ids)
+    assert all(
+        item["provenance"]["source_payload_digest"].startswith("sha256:")
+        for item in packet["review_items"]
+    )
 
     text_item = next(item for item in packet["review_items"] if item["candidate_type"] == "oled_text_evidence")
     assert text_item["priority"] == "high"
@@ -80,6 +84,7 @@ def test_generates_review_packet_from_all_candidate_artifacts(tmp_path: Path) ->
     assert raw_item["evidence_text"] == "OLED device performance was measured."
 
     decision_template = _read_json(Path(result.reviewer_decision_template_json))
+    assert decision_template["source_packet_digest"].startswith("sha256:")
     assert [decision["review_item_id"] for decision in decision_template["decisions"]] == item_ids
     assert {decision["decision"] for decision in decision_template["decisions"]} == {""}
     assert {decision["review_status"] for decision in decision_template["decisions"]} == {"pending"}
@@ -173,6 +178,7 @@ def test_handles_missing_candidate_artifacts_as_empty_packet_with_warnings(tmp_p
     assert packet["summary"]["warnings"]
     assert summary["review_item_count"] == 0
     assert summary["warnings"]
+    assert decisions["source_packet_digest"].startswith("sha256:")
     assert decisions["decisions"] == []
     assert "No review items generated" in Path(result.review_packet_md).read_text(encoding="utf-8")
 

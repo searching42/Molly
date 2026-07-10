@@ -22,6 +22,11 @@ For a prepared run, use these files together:
 
 Do not edit the packet or readiness files. Edit only the reviewer decision JSON.
 
+When a regenerated run includes `oled_reviewer_decisions_for_review.json` and
+`oled_delta_review_packet.md`, use those files instead. The migrated decision
+file contains prior decisions only for items whose review content is unchanged;
+the delta packet contains the items reset for fresh review.
+
 ## Recommended Order
 
 Review in three passes:
@@ -31,6 +36,37 @@ Review in three passes:
 3. `low`: raw recall candidates used mainly to measure false positives and missed structure.
 
 Finish all items before requesting downstream adjudication. A partial review can be saved and revalidated, but it remains `awaiting_human_review`.
+
+## Regenerated Packet Review
+
+Do not copy every decision blindly after an extractor fix. Use
+`migrate_unchanged_oled_review_decisions()` to compare the old and new packets.
+It requires the source decision file's `source_packet_digest` to match the
+source packet, matches stable candidate identities, compares both the review
+item and its complete source candidate/record payload, and carries forward only
+unchanged completed decisions. Changed, new, missing, invalid, or previously
+pending decisions are recreated as blank `pending` entries.
+
+Each generated review item also stores a `source_payload_digest` for the full
+candidate or compiled record, including all merged text-candidate payloads.
+Readiness validation checks that digest against the current source artifact,
+and the post-review bridge rechecks the actual compiled record passed to
+adjudication. Replacing or regenerating an artifact after review therefore
+fails closed even when its record ID is unchanged.
+
+The migration report must record:
+
+- source and target run IDs;
+- source and target packet digests;
+- the full-source-payload content-binding policy;
+- migrated item and reviewed counts;
+- reset pending count;
+- every reset item, candidate type, source candidate ID, and reset reason.
+
+Validate the migrated decision file without `--require-all-reviewed` before
+handing the delta packet to a reviewer. The expected state is
+`awaiting_human_review`, with `invalid_count` equal to zero and `pending_count`
+equal to the delta packet item count.
 
 ## Per-Item Checklist
 
@@ -99,6 +135,8 @@ For every completed item:
 - add `comment` for rejects, context requests, and accepted corrections.
 
 Leave unused correction fields as empty strings. Do not delete review entries or change `review_item_id`.
+Do not change `run_id`, `generated_at`, or `source_packet_digest`; they bind the
+decision file to the exact packet under review.
 
 ## Validate A Partial Review
 

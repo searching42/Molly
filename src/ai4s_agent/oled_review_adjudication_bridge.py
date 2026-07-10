@@ -32,6 +32,8 @@ from ai4s_agent.domains.oled_review_packets import (
     OledReviewPacket,
     OledReviewerDecision,
     OledReviewerDecisionTemplate,
+    oled_review_packet_digest,
+    oled_review_payload_digest,
 )
 from ai4s_agent.domains.oled_schema_candidate_compiler import OledCompiledLayeredRecordCandidate
 
@@ -102,6 +104,21 @@ class OledLegacyAdjudicationBundle(BaseModel):
     adjudication_report: OledReviewAdjudicationReport
 
 
+class OledReviewDecisionMigrationReport(BaseModel):
+    schema_version: str = "oled_reviewer_decision_migration.v1"
+    source_run_id: str
+    target_run_id: str
+    source_packet_digest: str
+    target_packet_digest: str
+    content_binding_policy: str = "review_item_and_full_source_payload_sha256"
+    source_item_count: int
+    target_item_count: int
+    migrated_item_count: int
+    migrated_reviewed_count: int
+    reset_pending_count: int
+    reset_items: list[dict[str, str]] = Field(default_factory=list)
+
+
 def load_oled_review_packet_json(path: str | Path) -> OledReviewPacket:
     payload = _read_json(path, "review packet")
     try:
@@ -138,6 +155,31 @@ def evaluate_oled_review_decisions(
     findings: list[OledReviewBridgeFinding] = []
     if packet.run_id != decisions.run_id:
         findings.append(_finding("run_id_mismatch", "packet and decision run ids do not match", severity="error"))
+    if packet.generated_at != decisions.generated_at:
+        findings.append(
+            _finding(
+                "generated_at_mismatch",
+                "packet and decision generation timestamps do not match",
+                severity="error",
+            )
+        )
+    expected_packet_digest = oled_review_packet_digest(packet)
+    if not decisions.source_packet_digest:
+        findings.append(
+            _finding(
+                "missing_source_packet_digest",
+                "decision file is not bound to a source review packet",
+                severity="error",
+            )
+        )
+    elif decisions.source_packet_digest != expected_packet_digest:
+        findings.append(
+            _finding(
+                "source_packet_digest_mismatch",
+                "decision file is bound to different review packet content",
+                severity="error",
+            )
+        )
 
     packet_items_by_id: dict[str, OledReviewItem] = {}
     for item in packet.review_items:
@@ -178,6 +220,20 @@ def evaluate_oled_review_decisions(
     for item in packet.review_items:
         decision = decisions_by_id.get(item.review_item_id)
         item_findings: list[OledReviewBridgeFinding] = []
+        _, source_payload_error = _validated_review_item_source_payload_digest(item)
+        if source_payload_error:
+            item_findings.append(
+                _finding(
+                    source_payload_error,
+                    "review item is not bound to its current complete source payload",
+                    item.review_item_id,
+                    severity=(
+                        "warning"
+                        if source_payload_error == "source_payload_digest_missing"
+                        else "error"
+                    ),
+                )
+            )
         if decision is None:
             item_findings.append(
                 _finding(
@@ -247,8 +303,119 @@ def evaluate_oled_review_decisions(
             "only_compiled_records_are_downstream_eligible": True,
             "raw_schema_and_text_items_are_quality_review_evidence_only": True,
             "require_all_reviewed": require_all_reviewed,
+            "source_packet_digest": expected_packet_digest,
+            "source_payload_digest_verification": "current_complete_source_artifacts",
         },
     )
+
+
+def migrate_unchanged_oled_review_decisions(
+    source_packet: OledReviewPacket,
+    source_decisions: OledReviewerDecisionTemplate,
+    target_packet: OledReviewPacket,
+) -> tuple[OledReviewerDecisionTemplate, OledReviewDecisionMigrationReport]:
+    if source_packet.run_id != source_decisions.run_id:
+        raise ValueError("source_packet_decision_run_id_mismatch")
+    if source_packet.generated_at != source_decisions.generated_at:
+        raise ValueError("source_packet_decision_generated_at_mismatch")
+    if not source_decisions.source_packet_digest:
+        raise ValueError("source_decisions_missing_packet_digest")
+    if source_decisions.source_packet_digest != oled_review_packet_digest(source_packet):
+        raise ValueError("source_packet_digest_mismatch")
+
+    source_items = _unique_items_by_stable_key(source_packet.review_items, label="source")
+    _unique_items_by_stable_key(target_packet.review_items, label="target")
+    source_decisions_by_id = _unique_decisions_by_id(source_decisions.decisions)
+    migrated: list[OledReviewerDecision] = []
+    reset_items: list[dict[str, str]] = []
+    migrated_reviewed_count = 0
+
+    for target_item in target_packet.review_items:
+        stable_key = _review_item_stable_key(target_item)
+        source_item = source_items.get(stable_key)
+        reset_reason = ""
+        source_decision: OledReviewerDecision | None = None
+        if source_item is None:
+            reset_reason = "new_review_item"
+        elif source_item.review_item_id not in source_decisions_by_id:
+            reset_reason = "source_decision_missing"
+        else:
+            source_decision = source_decisions_by_id[source_item.review_item_id]
+            if not source_decision.decision:
+                reset_reason = "source_decision_pending"
+            elif any(
+                finding.severity == "error"
+                for finding in _decision_findings(source_decision, require_all_reviewed=False)
+            ):
+                reset_reason = "source_decision_invalid"
+
+        if not reset_reason and source_item is not None:
+            if _review_item_fingerprint(source_item) != _review_item_fingerprint(target_item):
+                reset_reason = "review_content_changed"
+            else:
+                source_payload_digest, source_payload_error = _validated_review_item_source_payload_digest(
+                    source_item
+                )
+                target_payload_digest, target_payload_error = _validated_review_item_source_payload_digest(
+                    target_item
+                )
+                if source_payload_error:
+                    reset_reason = f"source_{source_payload_error}"
+                elif target_payload_error:
+                    reset_reason = f"target_{target_payload_error}"
+                elif source_payload_digest != target_payload_digest:
+                    reset_reason = "source_payload_changed"
+
+        if reset_reason:
+            migrated.append(OledReviewerDecision(review_item_id=target_item.review_item_id))
+            reset_items.append(
+                {
+                    "review_item_id": target_item.review_item_id,
+                    "candidate_type": target_item.candidate_type,
+                    "source_candidate_id": target_item.source_candidate_id,
+                    "reason": reset_reason,
+                }
+            )
+            continue
+
+        assert source_decision is not None
+        migrated.append(source_decision.model_copy(update={"review_item_id": target_item.review_item_id}))
+        migrated_reviewed_count += 1
+
+    migrated_template = OledReviewerDecisionTemplate(
+        schema_version=source_decisions.schema_version,
+        run_id=target_packet.run_id,
+        generated_at=target_packet.generated_at,
+        source_packet_digest=oled_review_packet_digest(target_packet),
+        decisions=migrated,
+    )
+    return migrated_template, OledReviewDecisionMigrationReport(
+        source_run_id=source_packet.run_id,
+        target_run_id=target_packet.run_id,
+        source_packet_digest=oled_review_packet_digest(source_packet),
+        target_packet_digest=oled_review_packet_digest(target_packet),
+        source_item_count=len(source_packet.review_items),
+        target_item_count=len(target_packet.review_items),
+        migrated_item_count=len(migrated) - len(reset_items),
+        migrated_reviewed_count=migrated_reviewed_count,
+        reset_pending_count=len(reset_items),
+        reset_items=reset_items,
+    )
+
+
+def bind_oled_review_packet_source_payloads(packet: OledReviewPacket) -> OledReviewPacket:
+    bound_items: list[OledReviewItem] = []
+    for item in packet.review_items:
+        payload_digest, payload_error = _review_item_source_payload_fingerprint(item)
+        if payload_error:
+            raise ValueError(f"cannot_bind_review_source_payload:{item.review_item_id}:{payload_error}")
+        provenance = {
+            **item.provenance,
+            "source_payload_ids": sorted(_review_item_source_payload_ids(item)),
+            "source_payload_digest": payload_digest,
+        }
+        bound_items.append(item.model_copy(update={"provenance": provenance}))
+    return packet.model_copy(update={"review_items": bound_items})
 
 
 def build_legacy_adjudication_bundle(
@@ -270,6 +437,15 @@ def build_legacy_adjudication_bundle(
     missing_records = sorted(set(compiled_items) - set(records_by_id))
     if missing_records:
         raise ValueError("compiled_review_items_missing_source_records:" + ",".join(missing_records))
+    for record_id, item in compiled_items.items():
+        expected_digest = str(item.provenance.get("source_payload_digest") or "").strip()
+        if not expected_digest:
+            raise ValueError(f"compiled_review_item_missing_source_payload_digest:{record_id}")
+        actual_digest = oled_review_payload_digest(
+            [(record_id, records_by_id[record_id].model_dump(mode="json"))]
+        )
+        if actual_digest != expected_digest:
+            raise ValueError(f"compiled_record_payload_digest_mismatch:{record_id}")
 
     legacy_packets: list[OledMineruReviewPacket] = []
     legacy_decisions: list[OledReviewDecisionEntry] = []
@@ -395,6 +571,22 @@ def _decision_findings(
     if not decision.decision:
         if decision.review_status != "pending":
             findings.append(_finding("pending_decision_marked_reviewed", "blank decision must stay pending", item_id, severity="error"))
+        if _has_corrections(decision) or any(
+            value.strip()
+            for value in (
+                decision.reviewer,
+                decision.reviewed_at,
+                decision.comment,
+            )
+        ):
+            findings.append(
+                _finding(
+                    "pending_decision_contains_review_data",
+                    "pending decision must not retain corrections or audit fields",
+                    item_id,
+                    severity="error",
+                )
+            )
         if require_all_reviewed:
             findings.append(_finding("pending_decision", "review item is still pending", item_id, severity="error"))
         return findings
@@ -577,6 +769,102 @@ def _read_json(path: str | Path, label: str) -> dict[str, Any]:
     return payload
 
 
+def _unique_items_by_stable_key(
+    items: Sequence[OledReviewItem],
+    *,
+    label: str,
+) -> dict[tuple[str, str, str], OledReviewItem]:
+    output: dict[tuple[str, str, str], OledReviewItem] = {}
+    for item in items:
+        key = _review_item_stable_key(item)
+        if key in output:
+            raise ValueError(f"duplicate_{label}_review_item_stable_key:{key[0]}:{key[1]}:{key[2]}")
+        output[key] = item
+    return output
+
+
+def _unique_decisions_by_id(decisions: Sequence[OledReviewerDecision]) -> dict[str, OledReviewerDecision]:
+    output: dict[str, OledReviewerDecision] = {}
+    for decision in decisions:
+        if decision.review_item_id in output:
+            raise ValueError(f"duplicate_source_decision_id:{decision.review_item_id}")
+        output[decision.review_item_id] = decision
+    return output
+
+
+def _review_item_stable_key(item: OledReviewItem) -> tuple[str, str, str]:
+    return item.candidate_type, item.paper_id, item.source_candidate_id
+
+
+def _review_item_fingerprint(item: OledReviewItem) -> str:
+    payload = item.model_dump(mode="json")
+    for field_name in ("review_item_id", "review_status", "source_artifact"):
+        payload.pop(field_name, None)
+    provenance = payload.get("provenance")
+    if isinstance(provenance, dict):
+        provenance.pop("source_payload_ids", None)
+        provenance.pop("source_payload_digest", None)
+    return oled_review_payload_digest(payload)
+
+
+def _review_item_source_payload_fingerprint(item: OledReviewItem) -> tuple[str, str]:
+    artifact_specs = {
+        "oled_compiled_record": ("compiled_records", ("record_id",)),
+        "oled_schema_candidate": ("schema_candidates", ("candidate_id",)),
+        "oled_text_evidence": ("text_evidence_candidates", ("candidate_id",)),
+        "oled_raw_candidate": ("candidates", ("candidate_hash", "block_id")),
+    }
+    list_key, identity_fields = artifact_specs[item.candidate_type]
+    source_path = Path(item.source_artifact).expanduser()
+    if not source_path.exists() or not source_path.is_file():
+        return "", "source_artifact_missing"
+    try:
+        artifact = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "", "source_artifact_invalid"
+    if not isinstance(artifact, dict) or not isinstance(artifact.get(list_key), list):
+        return "", "source_payload_list_missing"
+
+    expected_ids = _review_item_source_payload_ids(item)
+
+    matched_payloads: list[tuple[str, dict[str, Any]]] = []
+    for expected_id in sorted(expected_ids):
+        matches: list[dict[str, Any]] = []
+        for payload in artifact[list_key]:
+            if not isinstance(payload, dict):
+                continue
+            identities = [str(payload.get(field) or "").strip() for field in identity_fields]
+            if expected_id in identities:
+                matches.append(payload)
+        if not matches:
+            return "", "source_payload_not_found"
+        if len(matches) != 1:
+            return "", "source_payload_ambiguous"
+        matched_payloads.append((expected_id, matches[0]))
+    return oled_review_payload_digest(matched_payloads), ""
+
+
+def _validated_review_item_source_payload_digest(item: OledReviewItem) -> tuple[str, str]:
+    declared_digest = str(item.provenance.get("source_payload_digest") or "").strip()
+    if not declared_digest:
+        return "", "source_payload_digest_missing"
+    actual_digest, payload_error = _review_item_source_payload_fingerprint(item)
+    if payload_error:
+        return "", payload_error
+    if actual_digest != declared_digest:
+        return "", "source_payload_digest_mismatch"
+    return actual_digest, ""
+
+
+def _review_item_source_payload_ids(item: OledReviewItem) -> set[str]:
+    source_ids = {item.source_candidate_id}
+    if item.candidate_type == "oled_text_evidence":
+        merged_ids = item.provenance.get("merged_source_candidate_ids")
+        if isinstance(merged_ids, list):
+            source_ids.update(str(value).strip() for value in merged_ids if str(value).strip())
+    return source_ids
+
+
 def _finding(
     code: str,
     message: str,
@@ -612,6 +900,7 @@ def _bridge_markdown(report: OledReviewBridgeReport) -> str:
         "4. Fill `reviewer` and ISO-8601 `reviewed_at` for every completed item.",
         "5. Add a comment for rejects, context requests, and accepted corrections.",
         "6. Do not infer missing values or silently repair evidence.",
+        "7. Do not change run_id, generated_at, or source_packet_digest in the decision file.",
         "",
         "Only accepted compiled-record items are eligible for the legacy adjudication/gold-candidate chain. Text, schema, and raw items remain extraction-quality evidence.",
         "",
@@ -641,11 +930,14 @@ __all__ = [
     "OledReviewBridgeItem",
     "OledReviewBridgeReport",
     "OledReviewBridgeStatus",
+    "OledReviewDecisionMigrationReport",
+    "bind_oled_review_packet_source_payloads",
     "build_legacy_adjudication_bundle",
     "evaluate_oled_review_decisions",
     "load_oled_compiled_records_json",
     "load_oled_review_packet_json",
     "load_oled_reviewer_decisions_json",
+    "migrate_unchanged_oled_review_decisions",
     "write_oled_review_bridge_report_json",
     "write_oled_review_bridge_report_markdown",
 ]

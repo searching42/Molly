@@ -525,6 +525,23 @@ def _validate_candidate(candidate: OledSchemaCandidate) -> list[OledSemanticMapp
                     severity="warning",
                 )
             )
+    if candidate.candidate_type == OledSchemaCandidateType.DEVICE_STRUCTURE:
+        if len(candidate.device_stack) < 3:
+            findings.append(
+                _candidate_finding(
+                    candidate,
+                    "missing_device_stack",
+                    "device structure candidate requires at least three layers",
+                )
+            )
+        if any(_device_stack_layer_contains_prose(layer) for layer in candidate.device_stack):
+            findings.append(
+                _candidate_finding(
+                    candidate,
+                    "device_stack_contains_non_layer_text",
+                    "device stack contains an introductory or result clause",
+                )
+            )
     return findings
 
 
@@ -676,16 +693,38 @@ def _concentration_reason_codes(unit: str | None) -> list[str]:
 
 def _device_stack_from_text(text: str) -> list[str]:
     match = re.search(
-        r"\bstructure\s+(?P<stack>.+?)(?:\s+(?:were|was)\s+fabricated|[.;])",
+        r"\bstructure\b\s*(?::|=)?\s*(?P<stack>.+?)"
+        r"(?="
+        r"\s+(?:were|was)\s+fabricated\b"
+        r"|\s+(?:we|it|this|the\s+(?:device|OLEDs?|structure))\s+"
+        r"(?:reached|achieved|showed|exhibited|yielded|gave|produced)\b"
+        r"|;|\.(?!\d)|$"
+        r")",
         str(text or ""),
         flags=re.IGNORECASE,
     )
     if match is None:
         return []
-    stack_text = match.group("stack").strip()
+    stack_text = re.sub(
+        r"^(?:(?:which\s+)?consists?\s+of|consisting\s+of)\s+",
+        "",
+        match.group("stack").strip(),
+        flags=re.IGNORECASE,
+    )
     if stack_text.count("/") < 2:
         return []
     return [part.strip() for part in stack_text.split("/") if part.strip()]
+
+
+def _device_stack_layer_contains_prose(layer: str) -> bool:
+    return re.search(
+        r"^\s*(?:which\s+)?consists?\s+of\b"
+        r"|\b(?:EQE|PLQY|external\s+quantum\s+efficienc(?:y|ies))\b"
+        r"|\b(?:we|it|which|that|this|the\s+(?:device|OLEDs?|structure))\s+"
+        r"(?:reached|achieved|showed|exhibited|yielded|gave|produced)\b",
+        str(layer or ""),
+        flags=re.IGNORECASE,
+    ) is not None
 
 
 def _unit_from_header(header: str) -> str | None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -103,6 +105,7 @@ class OledReviewerDecisionTemplate(BaseModel):
     schema_version: str = "oled_reviewer_decision_template.v1"
     run_id: str
     generated_at: str
+    source_packet_digest: str = ""
     decisions: list[OledReviewerDecision] = Field(default_factory=list)
 
     @field_validator("run_id", "generated_at")
@@ -112,6 +115,15 @@ class OledReviewerDecisionTemplate(BaseModel):
         if not clean:
             raise ValueError("value is required")
         return clean
+
+
+def oled_review_packet_digest(packet: OledReviewPacket) -> str:
+    return oled_review_payload_digest(packet.model_dump(mode="json"))
+
+
+def oled_review_payload_digest(payload: Any) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _stable_unique(values: list[str]) -> list[str]:
@@ -135,4 +147,6 @@ __all__ = [
     "OledReviewerDecisionStatus",
     "OledReviewerDecisionTemplate",
     "OledReviewerDecisionValue",
+    "oled_review_packet_digest",
+    "oled_review_payload_digest",
 ]
