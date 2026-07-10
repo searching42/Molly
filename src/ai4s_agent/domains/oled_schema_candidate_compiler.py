@@ -200,23 +200,48 @@ def compile_oled_schema_candidates_to_layered_records(
 def group_oled_schema_candidates_for_compilation(
     schema_candidates: Iterable[OledSchemaCandidate],
 ) -> list[tuple[OledSchemaCompilationGroupKey, list[OledSchemaCandidate]]]:
+    candidates_list = list(schema_candidates)
+    labels_by_source_row: dict[tuple[str, str, int | None], set[str]] = defaultdict(set)
+    for candidate in candidates_list:
+        device_label = str(candidate.metadata.get("device_label") or "").strip()
+        if not device_label:
+            continue
+        labels_by_source_row[
+            (candidate.source_paper_id, candidate.source_candidate_hash, _candidate_row_index(candidate))
+        ].add(device_label)
+
     grouped: dict[tuple[str, str, int | None], list[OledSchemaCandidate]] = {}
-    for candidate in schema_candidates:
+    for candidate in candidates_list:
         row_index = _candidate_row_index(candidate)
+        device_label = str(candidate.metadata.get("device_label") or "").strip()
+        if not device_label:
+            inherited_labels = labels_by_source_row.get(
+                (candidate.source_paper_id, candidate.source_candidate_hash, row_index),
+                set(),
+            )
+            if len(inherited_labels) == 1:
+                device_label = next(iter(inherited_labels))
+        grouping_token = (
+            f"device-label:{_device_label_group_token(device_label)}"
+            if device_label
+            else candidate.source_candidate_hash
+        )
         key = (
             candidate.source_paper_id,
-            candidate.source_candidate_hash,
-            row_index,
+            grouping_token,
+            None if device_label else row_index,
         )
         grouped.setdefault(key, []).append(candidate)
 
     output: list[tuple[OledSchemaCompilationGroupKey, list[OledSchemaCandidate]]] = []
     for key, candidates in grouped.items():
-        source_paper_id, source_candidate_hash, row_index = key
+        source_paper_id, _, grouped_row_index = key
+        row_indexes = [index for candidate in candidates if (index := _candidate_row_index(candidate)) is not None]
+        row_index = min(row_indexes) if row_indexes else grouped_row_index
         target_property_ids = [candidate.property_id for candidate in candidates if candidate.property_id]
         group_key = OledSchemaCompilationGroupKey(
             source_paper_id=source_paper_id,
-            source_candidate_hashes=[source_candidate_hash],
+            source_candidate_hashes=[candidate.source_candidate_hash for candidate in candidates],
             row_index=row_index,
             device_label=_first_device_label(candidates),
             system_label=_first_system_label(candidates),
@@ -233,6 +258,13 @@ def group_oled_schema_candidates_for_compilation(
             item[0].system_label or "",
         ),
     )
+
+
+def _device_label_group_token(value: str) -> str:
+    clean = str(value or "").strip().lower()
+    if clean.startswith("device"):
+        clean = clean[len("device") :].lstrip(" _-:#")
+    return "".join(character for character in clean if character.isalnum())
 
 
 def validate_compiled_oled_layered_record_candidates(
@@ -425,7 +457,12 @@ def _property_observation_from_candidate(
     row_condition: OledMeasurementCondition | None,
 ) -> OledPropertyObservation:
     target_layer = candidate.target_layer or OledCausalLayer.MEASUREMENT
-    condition = row_condition if target_layer == OledCausalLayer.MEASUREMENT else None
+    condition = None
+    if target_layer == OledCausalLayer.MEASUREMENT:
+        condition = _merge_measurement_conditions(
+            row_condition,
+            _measurement_condition_from_property_metadata(candidate),
+        )
     metadata = {
         **candidate.metadata,
         "source_schema_candidate_id": candidate.candidate_id,
@@ -434,8 +471,6 @@ def _property_observation_from_candidate(
         "compiled_from_schema_candidate": True,
         "evidence_refs": [evidence_ref.model_dump(mode="json") for evidence_ref in candidate.evidence_refs],
     }
-    if target_layer == OledCausalLayer.MEASUREMENT and condition is None:
-        condition = _measurement_condition_from_property_metadata(candidate)
     return OledPropertyObservation(
         property_label=candidate.property_label or candidate.property_id or "unknown",
         value=candidate.value,
@@ -445,6 +480,35 @@ def _property_observation_from_candidate(
         confidence=_confidence(candidate),
         metadata=metadata,
     )
+
+
+def _merge_measurement_conditions(
+    row_condition: OledMeasurementCondition | None,
+    property_condition: OledMeasurementCondition | None,
+) -> OledMeasurementCondition | None:
+    if row_condition is None:
+        return property_condition
+    if property_condition is None:
+        return row_condition
+    updates = row_condition.model_dump(mode="python")
+    for field_name, value in property_condition.model_dump(mode="python", exclude={"metadata"}).items():
+        if value is not None:
+            updates[field_name] = value
+    updates["metadata"] = _merge_condition_metadata(row_condition.metadata, property_condition.metadata)
+    return OledMeasurementCondition(**updates)
+
+
+def _merge_condition_metadata(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        existing = merged.get(key)
+        if isinstance(existing, list) and isinstance(value, list):
+            merged[key] = [*existing, *value]
+        elif isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = {**existing, **value}
+        else:
+            merged[key] = value
+    return merged
 
 
 def _measurement_condition_from_candidates(candidates: list[OledSchemaCandidate]) -> OledMeasurementCondition | None:
@@ -650,7 +714,7 @@ def _has_usable_layered_content(layered_record: OledLayeredRecord) -> bool:
                 or layered_record.interaction.emitter_smiles
             ),
             layered_record.device is not None and (layered_record.device.device_stack or layered_record.device.properties or layered_record.device.metadata),
-            layered_record.measurement is not None and (layered_record.measurement.measurements or layered_record.measurement.metadata),
+            layered_record.measurement is not None and bool(layered_record.measurement.measurements),
         ]
     )
 

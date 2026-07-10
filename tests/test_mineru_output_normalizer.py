@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from ai4s_agent.mineru_output_normalizer import (
+    _table_from_html,
     discover_mineru_output_bundle,
     normalize_mineru_output_bundle,
 )
@@ -61,6 +62,40 @@ def test_mineru_output_normalizer_falls_back_to_markdown_with_warning(tmp_path: 
 
     assert normalized.parsed_document.elements[0].type == "markdown"
     assert normalized.warnings == ["structured content_list JSON missing; falling back to Markdown-only normalization"]
+
+
+def test_grouped_html_headers_are_unique_and_preserve_each_subcolumn_value() -> None:
+    headers, rows, warning = _table_from_html(
+        "<table>"
+        '<tr><td rowspan="2">Device</td><td colspan="2">EQE (%)</td></tr>'
+        '<tr><td>Max.</td><td>1000 cd m^-2</td></tr>'
+        '<tr><td>D1</td><td>31.3</td><td>24.1</td></tr>'
+        "</table>"
+    )
+
+    assert headers == ["Device", "EQE (%) — Max.", "EQE (%) — 1000 cd m^-2"]
+    assert rows == [
+        {
+            "Device": "D1",
+            "EQE (%) — Max.": "31.3",
+            "EQE (%) — 1000 cd m^-2": "24.1",
+        }
+    ]
+    assert warning == ""
+
+
+def test_full_width_html_footnote_is_not_emitted_as_data_row() -> None:
+    headers, rows, warning = _table_from_html(
+        "<table>"
+        "<tr><td>Device</td><td>EQE (%)</td></tr>"
+        "<tr><td>D1</td><td>24.1</td></tr>"
+        '<tr><td colspan="2">EQE external quantum efficiency.</td></tr>'
+        "</table>"
+    )
+
+    assert headers == ["Device", "EQE (%)"]
+    assert rows == [{"Device": "D1", "EQE (%)": "24.1"}]
+    assert "excluded 1 full-width note/section row" in warning
 
 
 def test_mineru_output_normalizer_rejects_invalid_structured_output(tmp_path: Path) -> None:

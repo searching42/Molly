@@ -251,6 +251,35 @@ def test_compile_property_metadata_preserves_explicit_missing_condition_without_
     assert measurement.condition.metadata["missing_conditions"][0]["condition_value"] == "N/A"
 
 
+def test_property_specific_condition_merges_with_row_voltage_context() -> None:
+    candidates = [
+        _property_candidate(
+            "eqe_percent",
+            "External quantum efficiency",
+            24.1,
+            "%",
+            target_layer=OledCausalLayer.MEASUREMENT,
+            metadata={
+                "condition_field": "luminance",
+                "condition_value": 1000,
+                "condition_unit": "cd/m^2",
+            },
+        ),
+        _condition_candidate("turn_on_voltage", 3.02, "V"),
+    ]
+
+    report = compile_oled_schema_candidates_to_layered_records(candidates)
+    condition = report.compiled_records[0].layered_record.measurement.measurements[0].condition
+
+    assert condition is not None
+    assert condition.luminance_cd_m2 == 1000
+    assert condition.voltage_v == 3.02
+    assert condition.metadata["units"] == {
+        "luminance_cd_m2": "cd/m^2",
+        "voltage_v": "V",
+    }
+
+
 def test_compile_measurement_condition_preserves_unparsed_footnote_without_crashing() -> None:
     footnote = "CE current efficiency, PE power efficiency, PHOLED phosphorescence OLED."
     candidates = [
@@ -278,6 +307,17 @@ def test_compile_measurement_condition_preserves_unparsed_footnote_without_crash
         footnote,
         footnote,
     ]
+
+
+def test_condition_only_group_is_rejected_as_no_usable_layered_content() -> None:
+    report = compile_oled_schema_candidates_to_layered_records(
+        [_condition_candidate("voltage", 14, "V", column_name="Voltage (V)")]
+    )
+
+    compiled = report.compiled_records[0]
+    assert compiled.status == OledSchemaCompilationStatus.REJECTED
+    assert compiled.layered_record is None
+    assert compiled.schema_error_codes == ["no_usable_layered_content"]
 
 
 def test_compile_device_structure_text_preserves_raw_stack_and_source_anchor() -> None:
@@ -360,6 +400,45 @@ def test_grouping_keeps_table_rows_and_papers_separate() -> None:
     ]
     assert [group_key.row_index for group_key, _ in groups] == [0, 1, 0]
     assert [len(group_candidates) for _, group_candidates in groups] == [2, 1, 1]
+
+
+def test_grouping_joins_explicit_device_label_across_table_and_text_evidence() -> None:
+    measurement = _property_candidate(
+        "eqe_percent",
+        "External quantum efficiency",
+        7.2,
+        "%",
+        target_layer=OledCausalLayer.MEASUREMENT,
+        metadata={"device_label": "2"},
+    )
+    device = OledSchemaCandidate(
+        candidate_id="schema:device-two:text:device-structure",
+        candidate_type=OledSchemaCandidateType.DEVICE_STRUCTURE,
+        source_paper_id="paper-compiler",
+        source_candidate_hash="hash-device-text",
+        source_evidence_anchor="paper:p2:b4:text",
+        target_layer=OledCausalLayer.DEVICE,
+        device_stack=["ITO", "HTL", "EML", "LiF", "Al"],
+        evidence_refs=[
+            OledSchemaEvidenceRef(
+                source_candidate_hash="hash-device-text",
+                source_evidence_anchor="paper:p2:b4:text",
+                source_candidate_type="text",
+                field_name="raw_text",
+            )
+        ],
+        metadata={"device_label": "Device 2"},
+    )
+
+    groups = group_oled_schema_candidates_for_compilation([measurement, device])
+    report = compile_oled_schema_candidates_to_layered_records([measurement, device])
+
+    assert len(groups) == 1
+    assert groups[0][0].source_candidate_hashes == ["hash-device-text", "hash-table"]
+    assert groups[0][0].device_label in {"2", "Device 2"}
+    assert report.compiled_records[0].layered_record is not None
+    assert report.compiled_records[0].layered_record.device is not None
+    assert report.compiled_records[0].layered_record.device.device_stack == ["ITO", "HTL", "EML", "LiF", "Al"]
 
 
 def test_invalid_schema_candidates_are_rejected_without_crashing() -> None:

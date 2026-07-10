@@ -592,17 +592,64 @@ def _table_from_html(html: str) -> tuple[list[str], list[dict[str, str]], str]:
     expanded = _expand_cells(rows)
     if not expanded:
         raise ValueError("table HTML expansion produced no rows")
-    header_row = expanded[0]
-    headers = [cell or f"column_{index + 1}" for index, cell in enumerate(header_row)]
-    body_rows = expanded[1:]
-    warning = ""
+    header_depth = _table_header_depth(rows)
+    headers = _merged_table_headers(expanded[:header_depth])
+    body_rows = expanded[header_depth:]
+    raw_body_rows = rows[header_depth:]
+    warnings: list[str] = []
     if any(len(row) != len(headers) for row in body_rows):
-        warning = "table HTML required uneven row normalization"
+        warnings.append("table HTML required uneven row normalization")
     normalized_rows = []
-    for row in body_rows:
+    excluded_full_width_rows = 0
+    for raw_row, row in zip(raw_body_rows, body_rows, strict=True):
+        if _is_full_width_spanning_row(raw_row, column_count=len(headers)):
+            excluded_full_width_rows += 1
+            continue
         padded = list(row) + [""] * max(0, len(headers) - len(row))
         normalized_rows.append({header: str(padded[index] or "") for index, header in enumerate(headers)})
-    return headers, normalized_rows, warning
+    if excluded_full_width_rows:
+        warnings.append(f"table HTML excluded {excluded_full_width_rows} full-width note/section row(s)")
+    return headers, normalized_rows, "; ".join(warnings)
+
+
+def _table_header_depth(rows: list[list[dict[str, Any]]]) -> int:
+    if not rows:
+        return 0
+    first_row = rows[0]
+    rowspan_depth = max((_positive_int(cell.get("rowspan"), default=1) for cell in first_row), default=1)
+    grouped_depth = 2 if any(_positive_int(cell.get("colspan"), default=1) > 1 for cell in first_row) else 1
+    return min(len(rows), max(1, rowspan_depth, grouped_depth))
+
+
+def _merged_table_headers(header_rows: list[list[str]]) -> list[str]:
+    column_count = max((len(row) for row in header_rows), default=0)
+    merged: list[str] = []
+    for column_index in range(column_count):
+        parts: list[str] = []
+        for row in header_rows:
+            part = str(row[column_index] if column_index < len(row) else "").strip()
+            if part and part not in parts:
+                parts.append(part)
+        merged.append(" — ".join(parts) or f"column_{column_index + 1}")
+    return _unique_table_headers(merged)
+
+
+def _unique_table_headers(headers: list[str]) -> list[str]:
+    totals: dict[str, int] = {}
+    for header in headers:
+        totals[header] = totals.get(header, 0) + 1
+    seen: dict[str, int] = {}
+    output: list[str] = []
+    for header in headers:
+        seen[header] = seen.get(header, 0) + 1
+        output.append(header if totals[header] == 1 else f"{header} [{seen[header]}]")
+    return output
+
+
+def _is_full_width_spanning_row(row: list[dict[str, Any]], *, column_count: int) -> bool:
+    if len(row) != 1 or column_count < 2:
+        return False
+    return _positive_int(row[0].get("colspan"), default=1) >= column_count
 
 
 def _expand_cells(rows: list[list[dict[str, Any]]]) -> list[list[str]]:

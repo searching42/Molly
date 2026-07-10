@@ -177,6 +177,168 @@ def test_rule_mapper_handles_table_2_like_device_performance_conditions() -> Non
     assert not any(type(candidate).__name__ == "OledLayeredRecord" for candidate in report.schema_candidates)
 
 
+def test_rule_mapper_excludes_secondary_comparison_rows_but_keeps_this_work() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "table",
+                "table_caption": "Summary of peak EQE in this study and in previous works.",
+                "table_body": (
+                    "| column_1 | Peak EQE (%) | Dopant |\n"
+                    "| --- | --- | --- |\n"
+                    "| This work | 23.8 | Ir(ppy)3 |\n"
+                    "| 17 | 20.9 | Ir(ppy)2acac |"
+                ),
+            }
+        ],
+        paper_id="paper-comparison",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+
+    assert {item.value for item in report.schema_candidates if item.property_id == "eqe_percent"} == {23.8}
+    assert {
+        item.material_name
+        for item in report.schema_candidates
+        if item.candidate_type == OledSchemaCandidateType.MATERIAL_ROLE
+    } == {"Ir(ppy)3"}
+    assert all(item.metadata["source_record_scope"] == "primary_current_work" for item in report.schema_candidates)
+    assert "secondary_literature_row_excluded" in report.warning_codes
+
+
+def test_rule_mapper_maps_eml_pair_lmax_and_conditioned_eqe_to_row_context() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "table",
+                "table_caption": "EL performance according to host materials.",
+                "table_body": (
+                    "| EMLs | $L_{\\text{max}} (\\text{cd m}^{-2})$ | "
+                    "$EQE^c (\\%)$ — 1000 cd $m^{-2}$ |\n"
+                    "| --- | --- | --- |\n"
+                    "| TDBA-Ph: v-DABNA | 4400 | 10.3 |"
+                ),
+            }
+        ],
+        paper_id="paper-eml-context",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+    roles = {
+        (item.material_role, item.material_name)
+        for item in report.schema_candidates
+        if item.candidate_type == OledSchemaCandidateType.MATERIAL_ROLE
+    }
+    properties = {item.property_id: item for item in report.schema_candidates if item.property_id}
+
+    assert roles == {("host", "TDBA-Ph"), ("emitter_dopant", "v-DABNA")}
+    assert properties["luminance_cd_m2"].value == 4400
+    assert properties["luminance_cd_m2"].unit == "cd/m^2"
+    assert properties["eqe_percent"].value == 10.3
+    assert properties["eqe_percent"].unit == "%"
+    assert properties["eqe_percent"].metadata["condition_value"] == 1000.0
+    assert all(item.metadata["system_label"] == "TDBA-Ph: v-DABNA" for item in report.schema_candidates)
+
+
+def test_rule_mapper_does_not_misclassify_eta_l_efficiency_as_luminance() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "table",
+                "table_caption": "OLED electrical properties.",
+                "table_body": (
+                    "| $\\mathbf{L_{MAX}}$ (cd/m2) | $\\eta_{L,max}$ (cd/A) |\n"
+                    "| --- | --- |\n"
+                    "| 4924 | 32.7 |"
+                ),
+            }
+        ],
+        paper_id="paper-luminance-vs-efficiency",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+    luminance = [item for item in report.schema_candidates if item.property_id == "luminance_cd_m2"]
+
+    assert len(luminance) == 1
+    assert luminance[0].value == 4924
+
+
+def test_rule_mapper_does_not_use_parent_group_concentration_as_plqy_unit() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "table",
+                "table_caption": "Photophysical properties of doped films.",
+                "table_body": (
+                    "| Material | 2 wt% emitter-doped film — PLQY |\n"
+                    "| --- | --- |\n"
+                    "| Host-A | 0.82 |"
+                ),
+            }
+        ],
+        paper_id="paper-plqy-group-header",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+    plqy = next(item for item in report.schema_candidates if item.property_id == "plqy")
+
+    assert plqy.value == 0.82
+    assert plqy.unit == "fraction"
+
+
+def test_rule_mapper_extracts_supported_eqe_from_composite_metric() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "table",
+                "table_caption": "Summary of performances of the exciplex-based devices.",
+                "table_body": (
+                    "| Device | CE/PE/EQE [cd A^-1/lm W^-1/%] — @ 1,000 cd m^-2 |\n"
+                    "| --- | --- |\n"
+                    "| 1 | 4.2/2.4/1.9 |"
+                ),
+            }
+        ],
+        paper_id="paper-composite",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+    eqe = next(item for item in report.schema_candidates if item.property_id == "eqe_percent")
+
+    assert eqe.value == 1.9
+    assert eqe.unit == "%"
+    assert eqe.metadata["device_label"] == "1"
+    assert eqe.metadata["condition_value"] == 1000.0
+    assert eqe.metadata["composite_metric_components"] == {
+        "current_efficiency": 4.2,
+        "power_efficiency": 2.4,
+        "external_quantum_efficiency": 1.9,
+    }
+    assert eqe.evidence_refs[0].cell_value == "4.2/2.4/1.9"
+
+
+def test_rule_mapper_rejects_malformed_composite_metric() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "table",
+                "table_caption": "OLED device performance.",
+                "table_body": (
+                    "| Device | CE/PE/EQE [cd A^-1/lm W^-1/%] |\n"
+                    "| --- | --- |\n"
+                    "| 1 | 4.2/1.9 |"
+                ),
+            }
+        ],
+        paper_id="paper-composite-malformed",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+
+    assert not any(item.property_id == "eqe_percent" for item in report.schema_candidates)
+    assert "malformed_composite_property_cell" in report.warning_codes
+
+
 def test_text_derived_device_structure_candidate_splits_stack_conservatively() -> None:
     candidate = _first_candidate(
         [
@@ -209,6 +371,99 @@ def test_text_derived_device_structure_candidate_splits_stack_conservatively() -
         )
     ]
     assert "device_structure_pattern" in device_candidate.reason_codes
+
+
+def test_text_device_structure_strips_as_follows_and_structure_of_prefixes() -> None:
+    candidates = extract_oled_mineru_candidates_from_document(
+        [
+            {
+                "type": "text",
+                "text": "The device structure was as follows: ITO/NPD/EML/LiF/Al.",
+            },
+            {
+                "type": "text",
+                "text": "Device 1 was built with a structure of ITO/TAPC/EML/LiF/Al (Device 1).",
+            },
+            {
+                "type": "text",
+                "text": "The device con fi guration: ITO/NPB/host material: emitter/TmPyPB/LiF/Al.",
+            },
+        ],
+        paper_id="paper-device-intros",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates(candidates)
+    devices = [
+        item for item in report.schema_candidates if item.candidate_type == OledSchemaCandidateType.DEVICE_STRUCTURE
+    ]
+
+    assert devices[0].device_stack == ["ITO", "NPD", "EML", "LiF", "Al"]
+    assert devices[1].device_stack == ["ITO", "TAPC", "EML", "LiF", "Al"]
+    assert devices[1].metadata["device_label"] == "1"
+    assert devices[2].device_stack == ["ITO", "NPB", "host material: emitter", "TmPyPB", "LiF", "Al"]
+    assert all(validate_oled_schema_candidates([item]).is_valid for item in devices)
+
+
+def test_text_device_structure_restores_only_evidenced_formula_and_primary_thickness() -> None:
+    candidates = extract_oled_mineru_candidates_from_document(
+        [
+            {
+                "type": "text",
+                "text": (
+                    "OLEDs with the structure ITO/TCTA/Tris[2-phenylpyridinato-C2,N]iridium(III) "
+                    "(Ir(ppy) ) X nm/TmPyPB/LiF/Al were fabricated."
+                ),
+            },
+            {
+                "type": "table",
+                "table_caption": "Peak EQE in this study and in previous works.",
+                "table_body": (
+                    "| column_1 | Peak EQE (%) | Dopant | Note |\n"
+                    "| --- | --- | --- | --- |\n"
+                    "| This work | 23.8 | $Ir(ppy)_3$ | 0.075 nm thickness of dopant |\n"
+                    "| 17 | 20.9 | $Ir(ppy)_2acac$ | 0.1 nm thickness of dopant |"
+                ),
+            },
+        ],
+        paper_id="paper-device-formula",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates(candidates)
+    device = next(
+        item for item in report.schema_candidates if item.candidate_type == OledSchemaCandidateType.DEVICE_STRUCTURE
+    )
+
+    assert "Ir(ppy)3" in device.device_stack[2]
+    assert "0.075 nm" in device.device_stack[2]
+    operations = {step["operation"] for step in device.metadata["normalization_steps"]}
+    assert {"restore_formula_subscript", "resolve_thickness_placeholder"}.issubset(operations)
+    assert validate_oled_schema_candidates([device]).is_valid is True
+
+
+def test_text_device_structure_resolves_same_block_concentration_and_subscript() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "text",
+                "text": (
+                    "Device 4 was constructed with a structure of ITO/TAPC/13PXZB/"
+                    "PO-T2T:x wt% Ir(ppy) (30 nm)/LiF/Al. The optimized doping concentration "
+                    "is also 8 wt%, and the material is written elsewhere as Ir(ppy) 3."
+                ),
+            }
+        ],
+        paper_id="paper-device-concentration",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+    device = next(
+        item for item in report.schema_candidates if item.candidate_type == OledSchemaCandidateType.DEVICE_STRUCTURE
+    )
+
+    assert device.metadata["device_label"] == "4"
+    assert "PO-T2T:8 wt% Ir(ppy)3 (30 nm)" in device.device_stack
+    operations = {step["operation"] for step in device.metadata["normalization_steps"]}
+    assert {"resolve_concentration_placeholder", "restore_formula_subscript"}.issubset(operations)
 
 
 def test_text_derived_device_structure_strips_intro_and_stops_before_result_clause() -> None:
@@ -457,6 +712,31 @@ def test_validation_rejects_device_stack_layers_polluted_by_result_prose() -> No
     assert report.is_valid is False
     assert "device_stack_contains_non_layer_text" in report.error_codes
     assert valid_percent_stack.is_valid is True
+
+
+def test_validation_rejects_ambiguous_missing_coordination_subscript() -> None:
+    candidate = OledSchemaCandidate(
+        candidate_id="schema:ambiguous-formula:device-structure",
+        candidate_type=OledSchemaCandidateType.DEVICE_STRUCTURE,
+        source_paper_id="paper-validation",
+        source_candidate_hash="ambiguous-formula-source",
+        source_evidence_anchor="paper-validation:p2:b26:text",
+        target_layer=OledCausalLayer.DEVICE,
+        device_stack=["ITO", "PO-T2T:8 wt% Ir(ppy)", "LiF", "Al"],
+        evidence_refs=[
+            OledSchemaEvidenceRef(
+                source_candidate_hash="ambiguous-formula-source",
+                source_evidence_anchor="paper-validation:p2:b26:text",
+                source_candidate_type="text",
+                field_name="raw_text",
+            )
+        ],
+    )
+
+    report = validate_oled_schema_candidates([candidate])
+
+    assert report.is_valid is False
+    assert "device_stack_contains_ambiguous_formula" in report.error_codes
 
 
 def test_llm_packet_mode_returns_packets_without_schema_candidates_or_llm_calls() -> None:
