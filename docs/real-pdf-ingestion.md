@@ -156,8 +156,10 @@ warnings, and suggested review questions.
 
 Reviewers should compare each item against the original PDF and fill decisions
 in `oled_reviewer_decision_template.json`. Empty decisions mean no adjudication
-has occurred. Accepted decisions do not create training data in this PR; a later
-adjudication/materialization step must consume reviewed decisions explicitly.
+has occurred. `ai4s_agent.oled_review_adjudication_bridge` validates the
+completed file and maps compiled-record decisions into the existing
+adjudication contract. Accepted text, schema, and raw items remain
+extraction-quality evidence. No review decision creates training data.
 
 ## Governance
 

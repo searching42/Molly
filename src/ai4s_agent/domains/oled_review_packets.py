@@ -13,6 +13,7 @@ OledReviewCandidateType = Literal[
 ]
 OledReviewPriority = Literal["high", "medium", "low"]
 OledReviewStatus = Literal["pending"]
+OledReviewerDecisionStatus = Literal["pending", "reviewed"]
 OledReviewerDecisionValue = Literal["", "accept", "reject", "needs_more_context"]
 
 
@@ -78,7 +79,7 @@ class OledReviewPacket(BaseModel):
 
 class OledReviewerDecision(BaseModel):
     review_item_id: str
-    review_status: OledReviewStatus = "pending"
+    review_status: OledReviewerDecisionStatus = "pending"
     decision: OledReviewerDecisionValue = ""
     corrected_property_id: str = ""
     corrected_value: str = ""
@@ -131,6 +132,7 @@ __all__ = [
     "OledReviewPriority",
     "OledReviewStatus",
     "OledReviewerDecision",
+    "OledReviewerDecisionStatus",
     "OledReviewerDecisionTemplate",
     "OledReviewerDecisionValue",
 ]

@@ -127,6 +127,8 @@ def generate_oled_review_packet(
             source_artifact=source_artifacts.get("oled_candidates_json", "oled_candidates_json"),
         )
     )
+    review_items, duplicate_warnings = _deduplicate_text_review_items(review_items)
+    warnings.extend(duplicate_warnings)
     review_items = sorted(review_items, key=_review_item_sort_key)
     if max_items is not None:
         review_items = review_items[: max(0, int(max_items))]
@@ -468,7 +470,7 @@ def _build_summary(
             "candidate_only_review_packet",
             "no_training_rows_created",
             "dataset_confirmation_gate_preserved",
-            "accepted_decisions_require_later_adjudication_pr",
+            "accepted_compiled_decisions_require_explicit_adjudication_bridge",
         ],
         "warnings": _stable_unique(warnings),
     }
@@ -502,7 +504,8 @@ def _render_markdown(packet: OledReviewPacket) -> str:
             "- Accepting an item here does not automatically create training data.",
             "- Compare each item against the original PDF before making a decision.",
             "- Fill decisions manually in `oled_reviewer_decision_template.json`.",
-            "- Accepted decisions will be consumed by a later adjudication step.",
+            "- Accepted compiled-record decisions require the explicit adjudication bridge.",
+            "- Accepted text, schema, and raw items remain extraction-quality evidence only.",
             "",
             "## Review Items",
             "",
@@ -596,6 +599,73 @@ def _review_item_sort_key(item: OledReviewItem) -> tuple[Any, ...]:
         item.property_id or "",
         item.source_candidate_id,
     )
+
+
+def _deduplicate_text_review_items(
+    review_items: list[OledReviewItem],
+) -> tuple[list[OledReviewItem], list[str]]:
+    grouped: dict[str, list[OledReviewItem]] = {}
+    passthrough: list[OledReviewItem] = []
+    for item in review_items:
+        if item.candidate_type != "oled_text_evidence":
+            passthrough.append(item)
+            continue
+        grouped.setdefault(_text_review_dedup_key(item), []).append(item)
+
+    merged: list[OledReviewItem] = []
+    duplicate_group_count = 0
+    duplicate_item_count = 0
+    for items in grouped.values():
+        ordered = sorted(items, key=lambda item: (item.source_candidate_id, item.review_item_id))
+        canonical = ordered[0]
+        if len(ordered) == 1:
+            merged.append(canonical)
+            continue
+        duplicate_group_count += 1
+        duplicate_item_count += len(ordered) - 1
+        source_candidate_ids = sorted({item.source_candidate_id for item in ordered})
+        provenance = dict(canonical.provenance)
+        provenance["merged_source_candidate_ids"] = source_candidate_ids
+        provenance["merged_duplicate_count"] = len(ordered)
+        merged.append(
+            canonical.model_copy(
+                update={
+                    "provenance": provenance,
+                    "warnings": _stable_unique(
+                        [
+                            *canonical.warnings,
+                            f"merged_duplicate_text_candidates:{len(ordered)}",
+                        ]
+                    ),
+                }
+            )
+        )
+    warnings = []
+    if duplicate_group_count:
+        warnings.extend(
+            [
+                f"merged_duplicate_text_candidate_groups:{duplicate_group_count}",
+                f"merged_duplicate_text_candidates_removed:{duplicate_item_count}",
+            ]
+        )
+    return [*passthrough, *merged], warnings
+
+
+def _text_review_dedup_key(item: OledReviewItem) -> str:
+    payload = {
+        "paper_id": item.paper_id,
+        "property_id": item.property_id,
+        "property_label": item.property_label,
+        "raw_value": item.raw_value,
+        "numeric_value": item.numeric_value,
+        "unit": item.unit,
+        "compound_mentions": sorted(item.compound_mentions),
+        "condition_text": item.condition_text,
+        "evidence_text": item.evidence_text,
+        "evidence_page": item.evidence_page,
+        "evidence_location": item.evidence_location,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _schema_priority(

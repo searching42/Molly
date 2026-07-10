@@ -555,6 +555,7 @@ from ai4s_agent.domains.oled_review_packets import (
     OledReviewPriority,
     OledReviewStatus,
     OledReviewerDecision,
+    OledReviewerDecisionStatus,
     OledReviewerDecisionTemplate,
     OledReviewerDecisionValue,
 )
@@ -955,6 +956,7 @@ __all__ = [
     "OledReviewPriority",
     "OledReviewStatus",
     "OledReviewerDecision",
+    "OledReviewerDecisionStatus",
     "OledReviewerDecisionTemplate",
     "OledReviewerDecisionValue",
     "OledSchemaCandidate",

@@ -126,6 +126,32 @@ def test_review_packet_ids_and_order_are_stable(tmp_path: Path) -> None:
     assert first_packet["summary"] == second_packet["summary"]
 
 
+def test_duplicate_text_evidence_is_merged_with_source_ids_preserved(tmp_path: Path) -> None:
+    artifacts = _write_candidate_artifacts(tmp_path)
+    text_path = artifacts["oled_text_evidence_candidates_json"]
+    payload = _read_json(text_path)
+    duplicate = dict(payload["text_evidence_candidates"][0])
+    duplicate["candidate_id"] = "text-002"
+    payload["text_evidence_candidates"].append(duplicate)
+    _write_json(text_path, payload)
+
+    result = generate_oled_review_packet(
+        run_id="review-run",
+        output_dir=tmp_path / "review",
+        generated_at=GENERATED_AT,
+        **artifacts,
+    )
+
+    assert result.review_item_count == 4
+    packet = _read_json(Path(result.review_packet_json))
+    text_items = [item for item in packet["review_items"] if item["candidate_type"] == "oled_text_evidence"]
+    assert len(text_items) == 1
+    assert text_items[0]["source_candidate_id"] == "text-001"
+    assert text_items[0]["provenance"]["merged_source_candidate_ids"] == ["text-001", "text-002"]
+    assert "merged_duplicate_text_candidates:2" in text_items[0]["warnings"]
+    assert "merged_duplicate_text_candidates_removed:1" in packet["summary"]["warnings"]
+
+
 def test_handles_missing_candidate_artifacts_as_empty_packet_with_warnings(tmp_path: Path) -> None:
     result = generate_oled_review_packet(
         run_id="empty-run",
