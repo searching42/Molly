@@ -251,6 +251,35 @@ def test_compile_property_metadata_preserves_explicit_missing_condition_without_
     assert measurement.condition.metadata["missing_conditions"][0]["condition_value"] == "N/A"
 
 
+def test_compile_measurement_condition_preserves_unparsed_footnote_without_crashing() -> None:
+    footnote = "CE current efficiency, PE power efficiency, PHOLED phosphorescence OLED."
+    candidates = [
+        _property_candidate(
+            "eqe_percent",
+            "External quantum efficiency",
+            34.8,
+            "%",
+            target_layer=OledCausalLayer.MEASUREMENT,
+        ),
+        _condition_candidate("luminance", footnote, "cd/m^2"),
+        _condition_candidate("voltage", footnote, "V"),
+    ]
+
+    report = compile_oled_schema_candidates_to_layered_records(candidates)
+
+    record = report.compiled_records[0].layered_record
+    assert record is not None
+    assert record.measurement is not None
+    condition = record.measurement.measurements[0].condition
+    assert condition is not None
+    assert condition.luminance_cd_m2 is None
+    assert condition.voltage_v is None
+    assert [item["condition_value"] for item in condition.metadata["unparsed_conditions"]] == [
+        footnote,
+        footnote,
+    ]
+
+
 def test_compile_device_structure_text_preserves_raw_stack_and_source_anchor() -> None:
     candidate = OledSchemaCandidate(
         candidate_id="schema:hash-text:text:device-structure",

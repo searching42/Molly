@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections import defaultdict
 from collections.abc import Iterable
 from enum import Enum
@@ -461,6 +462,9 @@ def _measurement_condition_from_candidates(candidates: list[OledSchemaCandidate]
         if _is_explicit_missing_condition_value(candidate.condition_value):
             metadata.setdefault("missing_conditions", []).append(raw_condition)
             continue
+        if not _is_numeric_condition_value(candidate.condition_value):
+            metadata.setdefault("unparsed_conditions", []).append(raw_condition)
+            continue
         updates[field_name] = candidate.condition_value
         if candidate.condition_unit:
             metadata["units"][field_name] = candidate.condition_unit
@@ -489,6 +493,8 @@ def _measurement_condition_from_property_metadata(candidate: OledSchemaCandidate
     updates: dict[str, Any] = {"metadata": metadata}
     if _is_explicit_missing_condition_value(value):
         metadata["missing_conditions"] = [raw_condition]
+    elif not _is_numeric_condition_value(value):
+        metadata["unparsed_conditions"] = [raw_condition]
     else:
         updates[field] = value
     return OledMeasurementCondition(**updates)
@@ -573,6 +579,15 @@ def _condition_model_field(condition_field: str | None) -> str | None:
 
 def _is_explicit_missing_condition_value(value: Any) -> bool:
     return isinstance(value, str) and value.strip().lower() in _MISSING_CONDITION_VALUE_MARKERS
+
+
+def _is_numeric_condition_value(value: Any) -> bool:
+    if isinstance(value, bool) or value is None:
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def _condition_metadata(candidate: OledSchemaCandidate) -> dict[str, Any]:
