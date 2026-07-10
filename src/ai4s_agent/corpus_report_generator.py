@@ -52,6 +52,9 @@ def generate_corpus_report(
         "oled_review_item_count": int(
             review_summary.get("review_item_count") or conflict_summary.get("oled_review_item_count") or 0
         ),
+        "oled_compiled_admission_item_count": int(
+            conflict_summary.get("oled_compiled_admission_item_count") or 0
+        ),
         "oled_review_high_priority_count": int(
             conflict_summary.get("oled_review_high_priority_count")
             or review_summary.get("counts_by_priority", {}).get("high")
@@ -92,6 +95,7 @@ def generate_corpus_report(
         "oled_schema_candidate_count": payload["oled_schema_candidate_count"],
         "oled_compiled_record_count": payload["oled_compiled_record_count"],
         "oled_review_item_count": payload["oled_review_item_count"],
+        "oled_compiled_admission_item_count": payload["oled_compiled_admission_item_count"],
         "oled_review_high_priority_count": payload["oled_review_high_priority_count"],
         "oled_review_medium_priority_count": payload["oled_review_medium_priority_count"],
         "oled_review_low_priority_count": payload["oled_review_low_priority_count"],
@@ -139,6 +143,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         f"- OLED schema candidates: {payload['oled_schema_candidate_count']}",
         f"- OLED compiled records: {payload['oled_compiled_record_count']}",
         f"- OLED review items: {payload['oled_review_item_count']}",
+        f"- OLED compiled admission items: {payload['oled_compiled_admission_item_count']}",
         f"- High priority review items: {payload['oled_review_high_priority_count']}",
         f"- Medium priority review items: {payload['oled_review_medium_priority_count']}",
         f"- Low priority review items: {payload['oled_review_low_priority_count']}",

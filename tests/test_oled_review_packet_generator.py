@@ -31,6 +31,11 @@ def test_generates_review_packet_from_all_candidate_artifacts(tmp_path: Path) ->
     assert Path(result.review_packet_md).exists()
     assert Path(result.reviewer_decision_template_json).exists()
     assert Path(result.review_summary_json).exists()
+    assert Path(result.compiled_admission_packet_json).exists()
+    assert Path(result.compiled_admission_packet_md).exists()
+    assert Path(result.compiled_admission_decision_template_json).exists()
+    assert Path(result.compiled_admission_summary_json).exists()
+    assert result.compiled_admission_item_count == 1
     assert not (tmp_path / "review" / "candidate_dataset.csv").exists()
     assert not (tmp_path / "review" / "training_dataset.csv").exists()
 
@@ -107,6 +112,57 @@ def test_generates_review_packet_from_all_candidate_artifacts(tmp_path: Path) ->
     assert "oled_reviewer_decision_template.json" in markdown
     assert "4CzIPN showed a photoluminescence quantum yield" in markdown
 
+    admission_packet = _read_json(Path(result.compiled_admission_packet_json))
+    admission_summary = _read_json(Path(result.compiled_admission_summary_json))
+    admission_decisions = _read_json(Path(result.compiled_admission_decision_template_json))
+    admission_markdown = Path(result.compiled_admission_packet_md).read_text(encoding="utf-8")
+
+    assert admission_packet["schema_version"] == "oled_review_packet.v1"
+    assert admission_packet["summary"]["packet_purpose"] == "compiled_only_admission"
+    assert admission_packet["summary"]["full_qa_review_item_count"] == 4
+    assert admission_packet["summary"]["excluded_quality_review_item_count"] == 3
+    assert [item["candidate_type"] for item in admission_packet["review_items"]] == [
+        "oled_compiled_record"
+    ]
+    admission_item = admission_packet["review_items"][0]
+    record_summary = admission_item["provenance"]["admission_record_summary"]
+    assert record_summary["record_id"] == "compiled-001"
+    assert record_summary["device_stack"] == ["ITO", "TAPC", "emissive layer", "LiF/Al"]
+    assert record_summary["observations"] == [
+        {
+            "condition": {
+                "luminance_cd_m2": 100,
+                "metadata": {
+                    "raw_conditions": [
+                        {
+                            "condition_field": "turn_on_voltage",
+                            "condition_unit": "V",
+                            "condition_value": 2.5,
+                        }
+                    ]
+                },
+            },
+            "layer": "device",
+            "property_id": "eqe_percent",
+            "property_label": "external quantum efficiency",
+            "source_schema_candidate_id": "",
+            "unit": "%",
+            "value": 21.3,
+        }
+    ]
+    assert admission_decisions["source_packet_digest"].startswith("sha256:")
+    assert [item["review_item_id"] for item in admission_decisions["decisions"]] == [
+        admission_item["review_item_id"]
+    ]
+    assert admission_summary["review_item_count"] == 1
+    assert "compiled_only_admission_packet" in admission_summary["governance_notes"]
+    assert "# OLED Compiled-Record Admission Packet" in admission_markdown
+    assert "oled_compiled_admission_decision_template.json" in admission_markdown
+    assert (
+        "luminance_cd_m2=100 cd/m^2; turn_on_voltage=2.5 V"
+        in admission_markdown
+    )
+
 
 def test_review_packet_ids_and_order_are_stable(tmp_path: Path) -> None:
     artifacts = _write_candidate_artifacts(tmp_path)
@@ -126,9 +182,13 @@ def test_review_packet_ids_and_order_are_stable(tmp_path: Path) -> None:
 
     first_packet = _read_json(Path(first.review_packet_json))
     second_packet = _read_json(Path(second.review_packet_json))
+    first_admission = _read_json(Path(first.compiled_admission_packet_json))
+    second_admission = _read_json(Path(second.compiled_admission_packet_json))
 
     assert first_packet["review_items"] == second_packet["review_items"]
     assert first_packet["summary"] == second_packet["summary"]
+    assert first_admission["review_items"] == second_admission["review_items"]
+    assert first_admission["summary"] == second_admission["summary"]
 
 
 def test_duplicate_text_evidence_is_merged_with_source_ids_preserved(tmp_path: Path) -> None:
@@ -181,6 +241,14 @@ def test_handles_missing_candidate_artifacts_as_empty_packet_with_warnings(tmp_p
     assert decisions["source_packet_digest"].startswith("sha256:")
     assert decisions["decisions"] == []
     assert "No review items generated" in Path(result.review_packet_md).read_text(encoding="utf-8")
+    admission_packet = _read_json(Path(result.compiled_admission_packet_json))
+    admission_decisions = _read_json(Path(result.compiled_admission_decision_template_json))
+    assert result.compiled_admission_item_count == 0
+    assert admission_packet["review_items"] == []
+    assert admission_decisions["decisions"] == []
+    assert "No compiled records are eligible" in Path(result.compiled_admission_packet_md).read_text(
+        encoding="utf-8"
+    )
 
 
 def _write_candidate_artifacts(tmp_path: Path) -> dict[str, Path]:
@@ -303,6 +371,18 @@ def _write_candidate_artifacts(tmp_path: Path) -> dict[str, Path]:
                                     "property_label": "external quantum efficiency",
                                     "value": 21.3,
                                     "unit": "%",
+                                    "condition": {
+                                        "luminance_cd_m2": 100,
+                                        "metadata": {
+                                            "raw_conditions": [
+                                                {
+                                                    "condition_field": "turn_on_voltage",
+                                                    "condition_value": 2.5,
+                                                    "condition_unit": "V",
+                                                }
+                                            ]
+                                        },
+                                    },
                                     "metadata": {"property_id": "eqe_percent"},
                                 }
                             ],

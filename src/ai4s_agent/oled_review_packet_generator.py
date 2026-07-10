@@ -31,7 +31,12 @@ class OledReviewPacketResult:
     review_packet_md: str
     reviewer_decision_template_json: str
     review_summary_json: str
+    compiled_admission_packet_json: str
+    compiled_admission_packet_md: str
+    compiled_admission_decision_template_json: str
+    compiled_admission_summary_json: str
     review_item_count: int
+    compiled_admission_item_count: int
     high_priority_count: int
     medium_priority_count: int
     low_priority_count: int
@@ -169,11 +174,85 @@ def generate_oled_review_packet(
     review_packet_md = output_path / "oled_review_packet.md"
     reviewer_decision_template_json = output_path / "oled_reviewer_decision_template.json"
     review_summary_json = output_path / "oled_review_summary.json"
+    compiled_admission_packet_json = output_path / "oled_compiled_admission_packet.json"
+    compiled_admission_packet_md = output_path / "oled_compiled_admission_packet.md"
+    compiled_admission_decision_template_json = output_path / "oled_compiled_admission_decision_template.json"
+    compiled_admission_summary_json = output_path / "oled_compiled_admission_summary.json"
 
     write_json(review_packet_json, packet.model_dump(mode="json"))
     review_packet_md.write_text(_render_markdown(packet), encoding="utf-8")
     write_json(reviewer_decision_template_json, decision_template.model_dump(mode="json"))
     write_json(review_summary_json, summary)
+
+    compiled_records_by_id = {
+        _clean_text(record.get("record_id")): record
+        for record in compiled_records
+        if _clean_text(record.get("record_id"))
+    }
+    compiled_admission_items = _compiled_admission_review_items(
+        review_items,
+        compiled_records_by_id=compiled_records_by_id,
+    )
+    compiled_admission_source_artifacts = {
+        name: path
+        for name, path in source_artifacts.items()
+        if name in {"oled_compiled_records_json", "corpus_extraction_manifest_json"}
+    }
+    compiled_admission_summary = _build_summary(
+        run_id=run_id,
+        generated_at=generated,
+        review_items=compiled_admission_items,
+        source_artifacts=compiled_admission_source_artifacts,
+        warnings=[],
+    )
+    compiled_admission_summary.update(
+        {
+            "packet_purpose": "compiled_only_admission",
+            "full_qa_review_item_count": len(review_items),
+            "excluded_quality_review_item_count": len(review_items) - len(compiled_admission_items),
+            "full_qa_packet_digest": oled_review_packet_digest(packet),
+            "governance_notes": [
+                "compiled_only_admission_packet",
+                "only_compiled_records_are_downstream_eligible",
+                "all_admission_items_require_explicit_review",
+                "full_qa_packet_preserved_separately",
+                "no_training_rows_created",
+                "dataset_confirmation_gate_preserved",
+                "accepted_compiled_decisions_require_explicit_adjudication_bridge",
+            ],
+        }
+    )
+    compiled_admission_packet = OledReviewPacket(
+        schema_version=SCHEMA_VERSION,
+        run_id=run_id,
+        generated_at=generated,
+        source_artifacts=compiled_admission_source_artifacts,
+        summary=compiled_admission_summary,
+        review_items=compiled_admission_items,
+    )
+    compiled_admission_decisions = OledReviewerDecisionTemplate(
+        schema_version=DECISION_TEMPLATE_SCHEMA_VERSION,
+        run_id=run_id,
+        generated_at=generated,
+        source_packet_digest=oled_review_packet_digest(compiled_admission_packet),
+        decisions=[
+            OledReviewerDecision(review_item_id=item.review_item_id)
+            for item in compiled_admission_items
+        ],
+    )
+    write_json(
+        compiled_admission_packet_json,
+        compiled_admission_packet.model_dump(mode="json"),
+    )
+    compiled_admission_packet_md.write_text(
+        _render_compiled_admission_markdown(compiled_admission_packet),
+        encoding="utf-8",
+    )
+    write_json(
+        compiled_admission_decision_template_json,
+        compiled_admission_decisions.model_dump(mode="json"),
+    )
+    write_json(compiled_admission_summary_json, compiled_admission_summary)
 
     priority_counts = Counter(item.priority for item in review_items)
     return OledReviewPacketResult(
@@ -181,7 +260,12 @@ def generate_oled_review_packet(
         review_packet_md=str(review_packet_md),
         reviewer_decision_template_json=str(reviewer_decision_template_json),
         review_summary_json=str(review_summary_json),
+        compiled_admission_packet_json=str(compiled_admission_packet_json),
+        compiled_admission_packet_md=str(compiled_admission_packet_md),
+        compiled_admission_decision_template_json=str(compiled_admission_decision_template_json),
+        compiled_admission_summary_json=str(compiled_admission_summary_json),
         review_item_count=len(review_items),
+        compiled_admission_item_count=len(compiled_admission_items),
         high_priority_count=priority_counts.get("high", 0),
         medium_priority_count=priority_counts.get("medium", 0),
         low_priority_count=priority_counts.get("low", 0),
@@ -256,6 +340,86 @@ def _compiled_review_items(
         )
         items.append(item)
     return items
+
+
+def _compiled_admission_review_items(
+    review_items: list[OledReviewItem],
+    *,
+    compiled_records_by_id: dict[str, dict[str, Any]],
+) -> list[OledReviewItem]:
+    admission_items: list[OledReviewItem] = []
+    for item in review_items:
+        if item.candidate_type != "oled_compiled_record":
+            continue
+        record = compiled_records_by_id.get(item.source_candidate_id)
+        if record is None:
+            raise ValueError(
+                f"compiled_admission_source_record_missing:{item.source_candidate_id}"
+            )
+        provenance = {
+            **item.provenance,
+            "admission_record_summary": _compiled_admission_record_summary(record),
+        }
+        admission_items.append(item.model_copy(update={"provenance": provenance}))
+    return admission_items
+
+
+def _compiled_admission_record_summary(record: dict[str, Any]) -> dict[str, Any]:
+    layered_record = _dict(record.get("layered_record"))
+    group_key = _dict(record.get("group_key"))
+    device = _dict(layered_record.get("device"))
+    return {
+        "record_id": _clean_text(record.get("record_id")),
+        "status": _clean_text(record.get("status")),
+        "device_label": _clean_text(group_key.get("device_label")),
+        "system_label": _clean_text(group_key.get("system_label")),
+        "target_property_ids": _list_text(group_key.get("target_property_ids")),
+        "material_roles": _compiled_material_roles(layered_record),
+        "device_stack": _list_text(device.get("device_stack")),
+        "observations": _compiled_admission_observations(layered_record),
+        "source_evidence_anchors": _list_text(record.get("source_evidence_anchors")),
+        "schema_error_codes": _list_text(record.get("schema_error_codes")),
+        "schema_warning_codes": _list_text(record.get("schema_warning_codes")),
+        "reason_codes": _list_text(record.get("reason_codes")),
+        "confidence_score": record.get("confidence_score"),
+    }
+
+
+def _compiled_admission_observations(
+    layered_record: dict[str, Any],
+) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    for layer_name, field_name in (
+        ("molecule", "properties"),
+        ("interaction", "properties"),
+        ("device", "properties"),
+        ("measurement", "measurements"),
+    ):
+        layer = _dict(layered_record.get(layer_name))
+        values = layer.get(field_name)
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            metadata = _dict(value.get("metadata"))
+            property_id = _clean_text(value.get("property_id")) or _clean_text(
+                metadata.get("property_id") or metadata.get("source_property_id")
+            )
+            observations.append(
+                {
+                    "layer": layer_name,
+                    "property_id": property_id,
+                    "property_label": _clean_text(value.get("property_label")),
+                    "value": value.get("value"),
+                    "unit": _clean_text(value.get("unit")),
+                    "condition": value.get("condition"),
+                    "source_schema_candidate_id": _clean_text(
+                        metadata.get("source_schema_candidate_id")
+                    ),
+                }
+            )
+    return observations
 
 
 def _schema_review_items(
@@ -548,6 +712,159 @@ def _render_markdown(packet: OledReviewPacket) -> str:
             lines.append(f"  - {question}")
         lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def _render_compiled_admission_markdown(packet: OledReviewPacket) -> str:
+    summary = packet.summary
+    lines = [
+        "# OLED Compiled-Record Admission Packet",
+        "",
+        "## Summary",
+        "",
+        f"- Run ID: {packet.run_id}",
+        f"- Generated at: {packet.generated_at}",
+        f"- Compiled records requiring admission review: {summary.get('review_item_count', 0)}",
+        f"- Full QA review items retained separately: {summary.get('full_qa_review_item_count', 0)}",
+        f"- QA-only items excluded from this admission packet: {summary.get('excluded_quality_review_item_count', 0)}",
+        "- Source artifacts:",
+    ]
+    for name, path in sorted(packet.source_artifacts.items()):
+        lines.append(f"  - {name}: `{path}`")
+    if not packet.source_artifacts:
+        lines.append("  - None")
+    lines.extend(
+        [
+            "",
+            "## Admission Review Instructions",
+            "",
+            "- Review every item in this packet against the original PDF before adjudication.",
+            "- Decide whether the complete compiled layered record is acceptable, not merely whether one number is present.",
+            "- Fill only `oled_compiled_admission_decision_template.json` for dataset-admission review.",
+            "- The full `oled_review_packet.md` remains a QA attachment; its raw, schema, and text items do not require admission decisions.",
+            "- Accepting a record does not create gold data or training rows; the explicit adjudication and curated-writer gates remain required.",
+            "- Source-payload digests bind each item to the complete compiled record and fail closed if that record changes.",
+            "",
+            "## Compiled Records",
+            "",
+        ]
+    )
+    if not packet.review_items:
+        lines.append("No compiled records are eligible for admission review.")
+        return "\n".join(lines) + "\n"
+    for index, item in enumerate(packet.review_items, start=1):
+        record = _dict(item.provenance.get("admission_record_summary"))
+        observations = record.get("observations")
+        if not isinstance(observations, list):
+            observations = []
+        lines.extend(
+            [
+                f"### {index}. {item.review_item_id}",
+                "",
+                f"- Record ID: {record.get('record_id') or item.source_candidate_id}",
+                f"- Compilation status: {record.get('status') or 'unknown'}",
+                f"- Paper ID: {item.paper_id}",
+                f"- Device label: {record.get('device_label') or 'not available'}",
+                f"- System label: {record.get('system_label') or 'not available'}",
+                f"- Material roles: {_display_roles(record.get('material_roles') or item.material_roles)}",
+                f"- Device stack: {_display_list(record.get('device_stack') or [])}",
+                f"- Evidence anchors: {_display_list(record.get('source_evidence_anchors') or [])}",
+                f"- Confidence score: {record.get('confidence_score') if record.get('confidence_score') is not None else 'not available'}",
+                f"- Schema errors: {_display_list(record.get('schema_error_codes') or [])}",
+                f"- Schema warnings: {_display_list(record.get('schema_warning_codes') or [])}",
+                f"- Source payload digest: `{item.provenance.get('source_payload_digest') or 'missing'}`",
+                "",
+                "#### Property observations",
+                "",
+                "| Layer | Property | Value / unit | Condition | Source schema candidate |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        if observations:
+            for observation in observations:
+                if not isinstance(observation, dict):
+                    continue
+                property_name = _clean_text(observation.get("property_id")) or _clean_text(
+                    observation.get("property_label")
+                )
+                value = _raw_value(observation.get("value")) or "not available"
+                unit = _clean_text(observation.get("unit"))
+                value_unit = f"{value} {unit}".strip()
+                condition = _admission_condition_text(observation.get("condition"))
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        _markdown_cell(value)
+                        for value in (
+                            observation.get("layer") or "unknown",
+                            property_name or "unknown",
+                            value_unit,
+                            condition or "not specified",
+                            observation.get("source_schema_candidate_id") or "not available",
+                        )
+                    )
+                    + " |"
+                )
+        else:
+            lines.append("| — | No property observations | — | — | — |")
+        lines.extend(
+            [
+                "",
+                "#### Required checks",
+                "",
+                "- Does every property/value/unit match the cited source evidence?",
+                "- Are material roles, device identity, device stack, and measurement conditions correctly associated?",
+                "- Is this complete record suitable to pass to explicit adjudication without inventing missing context?",
+                "",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _admission_condition_text(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        parts: list[str] = []
+        units = {
+            "luminance_cd_m2": "cd/m^2",
+            "current_density_ma_cm2": "mA/cm^2",
+            "voltage_v": "V",
+            "temperature_k": "K",
+        }
+        for field_name in (
+            "condition_label",
+            "luminance_cd_m2",
+            "current_density_ma_cm2",
+            "voltage_v",
+            "temperature_k",
+            "atmosphere",
+        ):
+            field_value = value.get(field_name)
+            if field_value is None or field_value == "":
+                continue
+            unit = units.get(field_name, "")
+            parts.append(f"{field_name}={field_value}{(' ' + unit) if unit else ''}")
+        metadata = _dict(value.get("metadata"))
+        raw_conditions = metadata.get("raw_conditions")
+        if isinstance(raw_conditions, list):
+            for raw_condition in raw_conditions:
+                if not isinstance(raw_condition, dict):
+                    continue
+                field_name = _clean_text(raw_condition.get("condition_field")) or "condition"
+                field_value = raw_condition.get("condition_value")
+                if field_value is None or field_value == "":
+                    continue
+                unit = _clean_text(raw_condition.get("condition_unit"))
+                parts.append(f"{field_name}={field_value}{(' ' + unit) if unit else ''}")
+        if parts:
+            return "; ".join(_stable_unique(parts))
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _markdown_cell(value: Any) -> str:
+    return str(value or "").replace("|", "\\|").replace("\n", " ").strip()
 
 
 def _load_candidate_list(

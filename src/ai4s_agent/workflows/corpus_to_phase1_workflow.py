@@ -34,7 +34,12 @@ class CorpusToPhase1WorkflowResult:
     oled_review_packet_md: str = ""
     oled_reviewer_decision_template_json: str = ""
     oled_review_summary_json: str = ""
+    oled_compiled_admission_packet_json: str = ""
+    oled_compiled_admission_packet_md: str = ""
+    oled_compiled_admission_decision_template_json: str = ""
+    oled_compiled_admission_summary_json: str = ""
     oled_review_item_count: int = 0
+    oled_compiled_admission_item_count: int = 0
     oled_review_high_priority_count: int = 0
     oled_review_medium_priority_count: int = 0
     oled_review_low_priority_count: int = 0
@@ -124,6 +129,7 @@ def run_corpus_to_phase1_workflow(
         oled_schema_candidate_count=extraction.report.oled_schema_candidate_count,
         oled_compiled_record_count=extraction.report.oled_compiled_record_count,
         oled_review_item_count=review_packet.review_item_count,
+        oled_compiled_admission_item_count=review_packet.compiled_admission_item_count,
         oled_review_high_priority_count=review_packet.high_priority_count,
         oled_review_medium_priority_count=review_packet.medium_priority_count,
         oled_review_low_priority_count=review_packet.low_priority_count,
@@ -146,6 +152,10 @@ def run_corpus_to_phase1_workflow(
         "oled_review_packet_md": review_packet.review_packet_md,
         "oled_reviewer_decision_template_json": review_packet.reviewer_decision_template_json,
         "oled_review_summary_json": review_packet.review_summary_json,
+        "oled_compiled_admission_packet_json": review_packet.compiled_admission_packet_json,
+        "oled_compiled_admission_packet_md": review_packet.compiled_admission_packet_md,
+        "oled_compiled_admission_decision_template_json": review_packet.compiled_admission_decision_template_json,
+        "oled_compiled_admission_summary_json": review_packet.compiled_admission_summary_json,
         "corpus_extraction_manifest_json": extraction.corpus_extraction_manifest_json,
         "corpus_conflict_report_json": conflict_audit.conflict_report_json,
         "conflict_summary_json": conflict_audit.conflict_summary_json,
@@ -223,6 +233,7 @@ def run_corpus_to_phase1_workflow(
                 "oled_schema_candidate_count": extraction.report.oled_schema_candidate_count,
                 "oled_compiled_record_count": extraction.report.oled_compiled_record_count,
                 "oled_review_item_count": review_packet.review_item_count,
+                "oled_compiled_admission_item_count": review_packet.compiled_admission_item_count,
                 "oled_review_high_priority_count": review_packet.high_priority_count,
                 "oled_review_medium_priority_count": review_packet.medium_priority_count,
                 "oled_review_low_priority_count": review_packet.low_priority_count,
@@ -241,6 +252,10 @@ def run_corpus_to_phase1_workflow(
                 "oled_review_packet_md": review_packet.review_packet_md,
                 "oled_reviewer_decision_template_json": review_packet.reviewer_decision_template_json,
                 "oled_review_summary_json": review_packet.review_summary_json,
+                "oled_compiled_admission_packet_json": review_packet.compiled_admission_packet_json,
+                "oled_compiled_admission_packet_md": review_packet.compiled_admission_packet_md,
+                "oled_compiled_admission_decision_template_json": review_packet.compiled_admission_decision_template_json,
+                "oled_compiled_admission_summary_json": review_packet.compiled_admission_summary_json,
                 "corpus_conflict_report_json": conflict_audit.conflict_report_json,
                 "candidate_dataset_csv": dataset.candidate_dataset_csv,
                 "training_dataset_csv": dataset.training_dataset_csv,
@@ -269,7 +284,12 @@ def run_corpus_to_phase1_workflow(
         oled_review_packet_md=review_packet.review_packet_md,
         oled_reviewer_decision_template_json=review_packet.reviewer_decision_template_json,
         oled_review_summary_json=review_packet.review_summary_json,
+        oled_compiled_admission_packet_json=review_packet.compiled_admission_packet_json,
+        oled_compiled_admission_packet_md=review_packet.compiled_admission_packet_md,
+        oled_compiled_admission_decision_template_json=review_packet.compiled_admission_decision_template_json,
+        oled_compiled_admission_summary_json=review_packet.compiled_admission_summary_json,
         oled_review_item_count=review_packet.review_item_count,
+        oled_compiled_admission_item_count=review_packet.compiled_admission_item_count,
         oled_review_high_priority_count=review_packet.high_priority_count,
         oled_review_medium_priority_count=review_packet.medium_priority_count,
         oled_review_low_priority_count=review_packet.low_priority_count,
@@ -342,6 +362,7 @@ def _update_dataset_manifest(
         "oled_schema_candidate_count": corpus_extraction.report.oled_schema_candidate_count,
         "oled_compiled_record_count": corpus_extraction.report.oled_compiled_record_count,
         "oled_review_item_count": review_packet.review_item_count,
+        "oled_compiled_admission_item_count": review_packet.compiled_admission_item_count,
         "oled_review_high_priority_count": review_packet.high_priority_count,
         "oled_review_medium_priority_count": review_packet.medium_priority_count,
         "oled_review_low_priority_count": review_packet.low_priority_count,
@@ -356,6 +377,10 @@ def _update_dataset_manifest(
     artifacts["oled_review_packet_md"] = review_packet.review_packet_md
     artifacts["oled_reviewer_decision_template_json"] = review_packet.reviewer_decision_template_json
     artifacts["oled_review_summary_json"] = review_packet.review_summary_json
+    artifacts["oled_compiled_admission_packet_json"] = review_packet.compiled_admission_packet_json
+    artifacts["oled_compiled_admission_packet_md"] = review_packet.compiled_admission_packet_md
+    artifacts["oled_compiled_admission_decision_template_json"] = review_packet.compiled_admission_decision_template_json
+    artifacts["oled_compiled_admission_summary_json"] = review_packet.compiled_admission_summary_json
     manifest["artifacts"] = artifacts
     write_json(path, manifest)
     return str(path)
@@ -372,6 +397,7 @@ def _update_conflict_summary(
     oled_schema_candidate_count: int,
     oled_compiled_record_count: int,
     oled_review_item_count: int,
+    oled_compiled_admission_item_count: int,
     oled_review_high_priority_count: int,
     oled_review_medium_priority_count: int,
     oled_review_low_priority_count: int,
@@ -386,6 +412,7 @@ def _update_conflict_summary(
     summary["oled_schema_candidate_count"] = oled_schema_candidate_count
     summary["oled_compiled_record_count"] = oled_compiled_record_count
     summary["oled_review_item_count"] = oled_review_item_count
+    summary["oled_compiled_admission_item_count"] = oled_compiled_admission_item_count
     summary["oled_review_high_priority_count"] = oled_review_high_priority_count
     summary["oled_review_medium_priority_count"] = oled_review_medium_priority_count
     summary["oled_review_low_priority_count"] = oled_review_low_priority_count
