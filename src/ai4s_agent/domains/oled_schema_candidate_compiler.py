@@ -30,6 +30,24 @@ from ai4s_agent.domains.oled_mineru_semantic_mapping import (
 )
 
 
+_MISSING_CONDITION_VALUE_MARKERS = frozenset(
+    {
+        "",
+        "-",
+        "--",
+        "–",
+        "—",
+        "na",
+        "n/a",
+        "n.a.",
+        "none",
+        "null",
+        "not available",
+        "not reported",
+    }
+)
+
+
 class OledSchemaCompilationStatus(str, Enum):
     COMPILED = "compiled"
     PARTIAL = "partial"
@@ -440,6 +458,9 @@ def _measurement_condition_from_candidates(candidates: list[OledSchemaCandidate]
         if field_name is None:
             metadata.setdefault("unsupported_conditions", []).append(raw_condition)
             continue
+        if _is_explicit_missing_condition_value(candidate.condition_value):
+            metadata.setdefault("missing_conditions", []).append(raw_condition)
+            continue
         updates[field_name] = candidate.condition_value
         if candidate.condition_unit:
             metadata["units"][field_name] = candidate.condition_unit
@@ -455,22 +476,22 @@ def _measurement_condition_from_property_metadata(candidate: OledSchemaCandidate
     unit = candidate.metadata.get("condition_unit")
     if field is None or value is None:
         return None
-    return OledMeasurementCondition(
-        **{
-            field: value,
-            "metadata": {
-                "raw_conditions": [
-                    {
-                        "condition_field": candidate.metadata.get("condition_field"),
-                        "condition_value": value,
-                        "condition_unit": unit,
-                        "source_schema_candidate_id": candidate.candidate_id,
-                    }
-                ],
-                "units": {field: unit} if unit else {},
-            },
-        }
-    )
+    raw_condition = {
+        "condition_field": candidate.metadata.get("condition_field"),
+        "condition_value": value,
+        "condition_unit": unit,
+        "source_schema_candidate_id": candidate.candidate_id,
+    }
+    metadata = {
+        "raw_conditions": [raw_condition],
+        "units": {field: unit} if unit else {},
+    }
+    updates: dict[str, Any] = {"metadata": metadata}
+    if _is_explicit_missing_condition_value(value):
+        metadata["missing_conditions"] = [raw_condition]
+    else:
+        updates[field] = value
+    return OledMeasurementCondition(**updates)
 
 
 def _apply_material_role(interaction: OledInteractionLayer, candidate: OledSchemaCandidate) -> None:
@@ -548,6 +569,10 @@ def _condition_model_field(condition_field: str | None) -> str | None:
         "turn_on_voltage": "voltage_v",
         "temperature": "temperature_k",
     }.get(normalized)
+
+
+def _is_explicit_missing_condition_value(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().lower() in _MISSING_CONDITION_VALUE_MARKERS
 
 
 def _condition_metadata(candidate: OledSchemaCandidate) -> dict[str, Any]:

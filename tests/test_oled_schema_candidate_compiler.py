@@ -201,6 +201,56 @@ def test_compile_table_2_like_measurement_record_attaches_conditions_and_metadat
     assert compiled.metadata["schema_validation_ran"] is True
 
 
+def test_compile_measurement_condition_preserves_explicit_missing_voltage_without_crashing() -> None:
+    candidates = [
+        _property_candidate(
+            "eqe_percent",
+            "External quantum efficiency",
+            41.2,
+            "%",
+            target_layer=OledCausalLayer.MEASUREMENT,
+        ),
+        _condition_candidate("voltage", "—", "V", column_name="Voltage (V)"),
+    ]
+
+    report = compile_oled_schema_candidates_to_layered_records(candidates)
+
+    record = report.compiled_records[0].layered_record
+    assert record is not None
+    assert record.measurement is not None
+    measurement = record.measurement.measurements[0]
+    assert measurement.condition is not None
+    assert measurement.condition.voltage_v is None
+    assert measurement.condition.metadata["raw_conditions"][0]["condition_value"] == "—"
+    assert measurement.condition.metadata["missing_conditions"][0]["condition_value"] == "—"
+
+
+def test_compile_property_metadata_preserves_explicit_missing_condition_without_crashing() -> None:
+    candidate = _property_candidate(
+        "eqe_percent",
+        "External quantum efficiency",
+        34.8,
+        "%",
+        target_layer=OledCausalLayer.MEASUREMENT,
+        metadata={
+            "condition_field": "voltage",
+            "condition_value": "N/A",
+            "condition_unit": "V",
+        },
+    )
+
+    report = compile_oled_schema_candidates_to_layered_records([candidate])
+
+    record = report.compiled_records[0].layered_record
+    assert record is not None
+    assert record.measurement is not None
+    measurement = record.measurement.measurements[0]
+    assert measurement.condition is not None
+    assert measurement.condition.voltage_v is None
+    assert measurement.condition.metadata["raw_conditions"][0]["condition_value"] == "N/A"
+    assert measurement.condition.metadata["missing_conditions"][0]["condition_value"] == "N/A"
+
+
 def test_compile_device_structure_text_preserves_raw_stack_and_source_anchor() -> None:
     candidate = OledSchemaCandidate(
         candidate_id="schema:hash-text:text:device-structure",
