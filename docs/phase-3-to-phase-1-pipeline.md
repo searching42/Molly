@@ -122,9 +122,13 @@ each item against the original PDF and fill decisions in
 starts with empty pending decisions.
 
 This layer does not create a gold dataset, does not confirm data, does not
-create training rows, and does not auto-accept any candidate. Accepted review
-decisions are for a later adjudication PR to consume explicitly. The
-`DatasetConfirmation` gate remains the only path to confirmed training rows.
+create training rows, and does not auto-accept any candidate.
+`ai4s_agent.oled_review_adjudication_bridge` validates completed human
+decisions and can map accepted/rejected compiled-record items into the existing
+adjudication contract. Text, schema, and raw review items remain
+extraction-quality evidence. The bridge still does not write gold records or
+training rows, and the `DatasetConfirmation` gate remains the only path to
+confirmed training rows.
 
 Review packet paths and counts are propagated through:
 

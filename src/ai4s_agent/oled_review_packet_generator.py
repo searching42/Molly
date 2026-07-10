@@ -14,6 +14,8 @@ from ai4s_agent.domains.oled_review_packets import (
     OledReviewPacket,
     OledReviewerDecision,
     OledReviewerDecisionTemplate,
+    oled_review_packet_digest,
+    oled_review_payload_digest,
 )
 
 
@@ -127,6 +129,15 @@ def generate_oled_review_packet(
             source_artifact=source_artifacts.get("oled_candidates_json", "oled_candidates_json"),
         )
     )
+    review_items, duplicate_warnings = _deduplicate_text_review_items(review_items)
+    warnings.extend(duplicate_warnings)
+    review_items = _bind_review_items_to_source_payloads(
+        review_items,
+        raw_candidates=raw_candidates,
+        text_candidates=text_candidates,
+        schema_candidates=schema_candidates,
+        compiled_records=compiled_records,
+    )
     review_items = sorted(review_items, key=_review_item_sort_key)
     if max_items is not None:
         review_items = review_items[: max(0, int(max_items))]
@@ -150,6 +161,7 @@ def generate_oled_review_packet(
         schema_version=DECISION_TEMPLATE_SCHEMA_VERSION,
         run_id=run_id,
         generated_at=generated,
+        source_packet_digest=oled_review_packet_digest(packet),
         decisions=[OledReviewerDecision(review_item_id=item.review_item_id) for item in review_items],
     )
 
@@ -468,7 +480,7 @@ def _build_summary(
             "candidate_only_review_packet",
             "no_training_rows_created",
             "dataset_confirmation_gate_preserved",
-            "accepted_decisions_require_later_adjudication_pr",
+            "accepted_compiled_decisions_require_explicit_adjudication_bridge",
         ],
         "warnings": _stable_unique(warnings),
     }
@@ -502,7 +514,8 @@ def _render_markdown(packet: OledReviewPacket) -> str:
             "- Accepting an item here does not automatically create training data.",
             "- Compare each item against the original PDF before making a decision.",
             "- Fill decisions manually in `oled_reviewer_decision_template.json`.",
-            "- Accepted decisions will be consumed by a later adjudication step.",
+            "- Accepted compiled-record decisions require the explicit adjudication bridge.",
+            "- Accepted text, schema, and raw items remain extraction-quality evidence only.",
             "",
             "## Review Items",
             "",
@@ -596,6 +609,148 @@ def _review_item_sort_key(item: OledReviewItem) -> tuple[Any, ...]:
         item.property_id or "",
         item.source_candidate_id,
     )
+
+
+def _deduplicate_text_review_items(
+    review_items: list[OledReviewItem],
+) -> tuple[list[OledReviewItem], list[str]]:
+    grouped: dict[str, list[OledReviewItem]] = {}
+    passthrough: list[OledReviewItem] = []
+    for item in review_items:
+        if item.candidate_type != "oled_text_evidence":
+            passthrough.append(item)
+            continue
+        grouped.setdefault(_text_review_dedup_key(item), []).append(item)
+
+    merged: list[OledReviewItem] = []
+    duplicate_group_count = 0
+    duplicate_item_count = 0
+    for items in grouped.values():
+        ordered = sorted(items, key=lambda item: (item.source_candidate_id, item.review_item_id))
+        canonical = ordered[0]
+        if len(ordered) == 1:
+            merged.append(canonical)
+            continue
+        duplicate_group_count += 1
+        duplicate_item_count += len(ordered) - 1
+        source_candidate_ids = sorted({item.source_candidate_id for item in ordered})
+        provenance = dict(canonical.provenance)
+        provenance["merged_source_candidate_ids"] = source_candidate_ids
+        provenance["merged_duplicate_count"] = len(ordered)
+        merged.append(
+            canonical.model_copy(
+                update={
+                    "provenance": provenance,
+                    "warnings": _stable_unique(
+                        [
+                            *canonical.warnings,
+                            f"merged_duplicate_text_candidates:{len(ordered)}",
+                        ]
+                    ),
+                }
+            )
+        )
+    warnings = []
+    if duplicate_group_count:
+        warnings.extend(
+            [
+                f"merged_duplicate_text_candidate_groups:{duplicate_group_count}",
+                f"merged_duplicate_text_candidates_removed:{duplicate_item_count}",
+            ]
+        )
+    return [*passthrough, *merged], warnings
+
+
+def _bind_review_items_to_source_payloads(
+    review_items: list[OledReviewItem],
+    *,
+    raw_candidates: list[dict[str, Any]],
+    text_candidates: list[dict[str, Any]],
+    schema_candidates: list[dict[str, Any]],
+    compiled_records: list[dict[str, Any]],
+) -> list[OledReviewItem]:
+    payload_indexes = {
+        "oled_compiled_record": _source_payload_index(
+            compiled_records,
+            identity_fields=("record_id",),
+            fallback_prefix="compiled_record",
+        ),
+        "oled_schema_candidate": _source_payload_index(
+            schema_candidates,
+            identity_fields=("candidate_id",),
+            fallback_prefix="schema_candidate",
+        ),
+        "oled_text_evidence": _source_payload_index(
+            text_candidates,
+            identity_fields=("candidate_id",),
+            fallback_prefix="text_evidence",
+        ),
+        "oled_raw_candidate": _source_payload_index(
+            raw_candidates,
+            identity_fields=("candidate_hash", "block_id"),
+            fallback_prefix="raw_candidate",
+        ),
+    }
+    bound_items: list[OledReviewItem] = []
+    for item in review_items:
+        source_ids = {item.source_candidate_id}
+        if item.candidate_type == "oled_text_evidence":
+            merged_ids = item.provenance.get("merged_source_candidate_ids")
+            if isinstance(merged_ids, list):
+                source_ids.update(str(value).strip() for value in merged_ids if str(value).strip())
+        payload_index = payload_indexes[item.candidate_type]
+        missing_ids = sorted(source_ids - set(payload_index))
+        if missing_ids:
+            raise ValueError(
+                f"review_source_payload_missing:{item.candidate_type}:{','.join(missing_ids)}"
+            )
+        ordered_payloads = [(source_id, payload_index[source_id]) for source_id in sorted(source_ids)]
+        provenance = {
+            **item.provenance,
+            "source_payload_ids": sorted(source_ids),
+            "source_payload_digest": oled_review_payload_digest(ordered_payloads),
+        }
+        bound_items.append(item.model_copy(update={"provenance": provenance}))
+    return bound_items
+
+
+def _source_payload_index(
+    candidates: list[dict[str, Any]],
+    *,
+    identity_fields: tuple[str, ...],
+    fallback_prefix: str,
+) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for position, candidate in enumerate(candidates):
+        candidate_id = next(
+            (
+                clean
+                for field_name in identity_fields
+                if (clean := _clean_text(candidate.get(field_name)))
+            ),
+            f"{fallback_prefix}_{position}",
+        )
+        if candidate_id in index:
+            raise ValueError(f"duplicate_review_source_payload_id:{candidate_id}")
+        index[candidate_id] = candidate
+    return index
+
+
+def _text_review_dedup_key(item: OledReviewItem) -> str:
+    payload = {
+        "paper_id": item.paper_id,
+        "property_id": item.property_id,
+        "property_label": item.property_label,
+        "raw_value": item.raw_value,
+        "numeric_value": item.numeric_value,
+        "unit": item.unit,
+        "compound_mentions": sorted(item.compound_mentions),
+        "condition_text": item.condition_text,
+        "evidence_text": item.evidence_text,
+        "evidence_page": item.evidence_page,
+        "evidence_location": item.evidence_location,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _schema_priority(

@@ -211,6 +211,141 @@ def test_text_derived_device_structure_candidate_splits_stack_conservatively() -
     assert "device_structure_pattern" in device_candidate.reason_codes
 
 
+def test_text_derived_device_structure_strips_intro_and_stops_before_result_clause() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "text",
+                "text": (
+                    "With the optimized structure which consists of ITO/PEDOT:PSS/"
+                    "m-MTDATA(30 nm)/m-MTDATA:3TPYMB(70 nm, 1 : 1)/3TPYMB(30 nm)/"
+                    "LiF(5 nm)/Al(120 nm) we reached a maximum EQE of 6.3% at room temperature."
+                ),
+                "page_idx": 2,
+            }
+        ],
+        paper_id="paper-device-result-clause",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+    device_candidate = next(
+        candidate
+        for candidate in report.schema_candidates
+        if candidate.candidate_type == OledSchemaCandidateType.DEVICE_STRUCTURE
+    )
+
+    assert device_candidate.device_stack == [
+        "ITO",
+        "PEDOT:PSS",
+        "m-MTDATA(30 nm)",
+        "m-MTDATA:3TPYMB(70 nm, 1 : 1)",
+        "3TPYMB(30 nm)",
+        "LiF(5 nm)",
+        "Al(120 nm)",
+    ]
+
+
+def test_text_derived_device_structure_does_not_stop_at_decimal_layer_thickness() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "text",
+                "text": "The device structure ITO/PEDOT:PSS/EML(1.5 nm)/Al.",
+                "page_idx": 2,
+            }
+        ],
+        paper_id="paper-device-decimal-thickness",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+    device_candidate = next(
+        candidate
+        for candidate in report.schema_candidates
+        if candidate.candidate_type == OledSchemaCandidateType.DEVICE_STRUCTURE
+    )
+
+    assert device_candidate.device_stack == ["ITO", "PEDOT:PSS", "EML(1.5 nm)", "Al"]
+
+
+def test_text_derived_device_structure_keeps_layer_clause_when_more_layers_follow() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "text",
+                "text": (
+                    "The device structure ITO/HTL/EML which had 10 wt% dopant/ETL/Al "
+                    "was fabricated."
+                ),
+                "page_idx": 2,
+            }
+        ],
+        paper_id="paper-device-layer-clause",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+    device_candidate = next(
+        candidate
+        for candidate in report.schema_candidates
+        if candidate.candidate_type == OledSchemaCandidateType.DEVICE_STRUCTURE
+    )
+
+    assert device_candidate.device_stack == [
+        "ITO",
+        "HTL",
+        "EML which had 10 wt% dopant",
+        "ETL",
+        "Al",
+    ]
+    assert validate_oled_schema_candidates([device_candidate]).is_valid is True
+
+
+def test_text_derived_device_structure_excludes_period_after_numbered_material_name() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "text",
+                "text": "The device structure ITO/NPB/Alq3.",
+                "page_idx": 2,
+            }
+        ],
+        paper_id="paper-device-numbered-material",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+    device_candidate = next(
+        candidate
+        for candidate in report.schema_candidates
+        if candidate.candidate_type == OledSchemaCandidateType.DEVICE_STRUCTURE
+    )
+
+    assert device_candidate.device_stack == ["ITO", "NPB", "Alq3"]
+
+
+def test_text_derived_device_structure_stops_before_result_with_slash_unit() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "text",
+                "text": (
+                    "The device structure ITO/HTL/EML/Al we achieved an EQE of 20% "
+                    "at 10 mA/cm2."
+                ),
+                "page_idx": 2,
+            }
+        ],
+        paper_id="paper-device-result-unit",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+    device_candidate = next(
+        candidate
+        for candidate in report.schema_candidates
+        if candidate.candidate_type == OledSchemaCandidateType.DEVICE_STRUCTURE
+    )
+
+    assert device_candidate.device_stack == ["ITO", "HTL", "EML", "Al"]
+
+
 def test_unsupported_tables_emit_finding_and_packet_but_no_row_level_candidates() -> None:
     candidate = _first_candidate(
         [
@@ -282,6 +417,46 @@ def test_validation_checks_intermediate_candidate_requirements() -> None:
     assert valid_report.is_valid is True
     assert invalid_report.is_valid is False
     assert "missing_evidence_ref" in invalid_report.error_codes
+
+
+def test_validation_rejects_device_stack_layers_polluted_by_result_prose() -> None:
+    candidate = OledSchemaCandidate(
+        candidate_id="schema:polluted:device-structure",
+        candidate_type=OledSchemaCandidateType.DEVICE_STRUCTURE,
+        source_paper_id="paper-validation",
+        source_candidate_hash="polluted-source",
+        source_evidence_anchor="paper-validation:p2:b25:text",
+        target_layer=OledCausalLayer.DEVICE,
+        device_stack=[
+            "which consists of ITO",
+            "PEDOT:PSS",
+            "Al(120 nm) we reached a maximum EQE of 6",
+        ],
+        evidence_refs=[
+            OledSchemaEvidenceRef(
+                source_candidate_hash="polluted-source",
+                source_evidence_anchor="paper-validation:p2:b25:text",
+                source_candidate_type="text",
+                field_name="raw_text",
+            )
+        ],
+    )
+
+    report = validate_oled_schema_candidates([candidate])
+    valid_percent_stack = validate_oled_schema_candidates(
+        [
+            candidate.model_copy(
+                update={
+                    "candidate_id": "schema:valid:device-structure",
+                    "device_stack": ["ITO", "mCBP:Emitter (10 wt%)", "Al"],
+                }
+            )
+        ]
+    )
+
+    assert report.is_valid is False
+    assert "device_stack_contains_non_layer_text" in report.error_codes
+    assert valid_percent_stack.is_valid is True
 
 
 def test_llm_packet_mode_returns_packets_without_schema_candidates_or_llm_calls() -> None:
