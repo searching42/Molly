@@ -120,6 +120,92 @@ def test_completed_template_is_ready_for_adjudication() -> None:
     assert report.is_complete
 
 
+def test_compiled_only_admission_packet_preserves_require_all_semantics() -> None:
+    full_packet = _packet()
+    admission_packet = full_packet.model_copy(
+        update={
+            "summary": {
+                "packet_purpose": "compiled_only_admission",
+                "full_qa_review_item_count": 2,
+                "excluded_quality_review_item_count": 1,
+            },
+            "review_items": [full_packet.review_items[0]],
+        }
+    )
+    admission_decisions = OledReviewerDecisionTemplate(
+        run_id=admission_packet.run_id,
+        generated_at=admission_packet.generated_at,
+        source_packet_digest=oled_review_packet_digest(admission_packet),
+        decisions=[
+            OledReviewerDecision(
+                review_item_id="review:compiled",
+                review_status="reviewed",
+                decision="accept",
+                reviewer="benton",
+                reviewed_at="2026-07-10T12:00:00+08:00",
+            )
+        ],
+    )
+
+    admission_report = evaluate_oled_review_decisions(
+        admission_packet,
+        admission_decisions,
+        require_all_reviewed=True,
+    )
+
+    assert admission_report.status == OledReviewBridgeStatus.READY_FOR_ADJUDICATION
+    assert admission_report.item_count == 1
+    assert admission_report.reviewed_count == 1
+    assert admission_report.downstream_ready_count == 1
+
+    full_packet_decisions = admission_decisions.model_copy(
+        update={"source_packet_digest": oled_review_packet_digest(full_packet)}
+    )
+    full_report = evaluate_oled_review_decisions(
+        full_packet,
+        full_packet_decisions,
+        require_all_reviewed=True,
+    )
+    assert full_report.status == OledReviewBridgeStatus.BLOCKED
+    assert "missing_decision_entry" in {finding.code for finding in full_report.findings}
+
+
+def test_empty_compiled_admission_packet_has_no_eligible_items_status() -> None:
+    packet = OledReviewPacket(
+        run_id="empty-admission",
+        generated_at="2026-07-10T00:00:00Z",
+        summary={"packet_purpose": "compiled_only_admission"},
+        review_items=[],
+    )
+    decisions = OledReviewerDecisionTemplate(
+        run_id=packet.run_id,
+        generated_at=packet.generated_at,
+        source_packet_digest=oled_review_packet_digest(packet),
+        decisions=[],
+    )
+
+    report = evaluate_oled_review_decisions(packet, decisions, require_all_reviewed=True)
+
+    assert report.status == OledReviewBridgeStatus.NO_ELIGIBLE_ITEMS
+    assert report.is_valid
+    assert not report.is_complete
+    assert "no_compiled_admission_items" in {finding.code for finding in report.findings}
+
+
+def test_compiled_admission_packet_rejects_non_compiled_items() -> None:
+    packet = _packet().model_copy(
+        update={"summary": {"packet_purpose": "compiled_only_admission"}}
+    )
+    decisions = _pending_decisions(packet)
+
+    report = evaluate_oled_review_decisions(packet, decisions)
+
+    assert report.status == OledReviewBridgeStatus.BLOCKED
+    assert "compiled_admission_contains_non_compiled_item" in {
+        finding.code for finding in report.findings
+    }
+
+
 def test_decision_migration_compares_complete_source_payloads(tmp_path) -> None:
     source_compiled = tmp_path / "source_compiled.json"
     target_compiled = tmp_path / "target_compiled.json"

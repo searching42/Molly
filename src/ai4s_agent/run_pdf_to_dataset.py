@@ -44,6 +44,10 @@ class PdfToDatasetResult:
     oled_review_packet_md: str
     oled_reviewer_decision_template_json: str
     oled_review_summary_json: str
+    oled_compiled_admission_packet_json: str
+    oled_compiled_admission_packet_md: str
+    oled_compiled_admission_decision_template_json: str
+    oled_compiled_admission_summary_json: str
     candidate_dataset_csv: str
     training_dataset_csv: str
     dataset_manifest_json: str
@@ -194,6 +198,10 @@ def run_pdf_to_dataset(
         oled_review_packet_md=workflow_result.oled_review_packet_md,
         oled_reviewer_decision_template_json=workflow_result.oled_reviewer_decision_template_json,
         oled_review_summary_json=workflow_result.oled_review_summary_json,
+        oled_compiled_admission_packet_json=workflow_result.oled_compiled_admission_packet_json,
+        oled_compiled_admission_packet_md=workflow_result.oled_compiled_admission_packet_md,
+        oled_compiled_admission_decision_template_json=workflow_result.oled_compiled_admission_decision_template_json,
+        oled_compiled_admission_summary_json=workflow_result.oled_compiled_admission_summary_json,
         candidate_dataset_csv=workflow_result.candidate_dataset_csv,
         training_dataset_csv=workflow_result.training_dataset_csv,
         dataset_manifest_json=workflow_result.dataset_manifest_json,
@@ -383,6 +391,10 @@ def _write_workflow_report(
             "oled_review_packet_md": workflow_result.oled_review_packet_md,
             "oled_reviewer_decision_template_json": workflow_result.oled_reviewer_decision_template_json,
             "oled_review_summary_json": workflow_result.oled_review_summary_json,
+            "oled_compiled_admission_packet_json": workflow_result.oled_compiled_admission_packet_json,
+            "oled_compiled_admission_packet_md": workflow_result.oled_compiled_admission_packet_md,
+            "oled_compiled_admission_decision_template_json": workflow_result.oled_compiled_admission_decision_template_json,
+            "oled_compiled_admission_summary_json": workflow_result.oled_compiled_admission_summary_json,
             "corpus_extraction_manifest_json": workflow_result.corpus_extraction_manifest_json,
             "extraction_manifest_json": extraction_manifest_json,
             "corpus_conflict_report_json": workflow_result.corpus_conflict_report_json,

@@ -41,6 +41,7 @@ from ai4s_agent.domains.oled_schema_candidate_compiler import OledCompiledLayere
 class OledReviewBridgeStatus(str, Enum):
     AWAITING_HUMAN_REVIEW = "awaiting_human_review"
     READY_FOR_ADJUDICATION = "ready_for_adjudication"
+    NO_ELIGIBLE_ITEMS = "no_eligible_items"
     BLOCKED = "blocked"
 
 
@@ -95,7 +96,12 @@ class OledReviewBridgeReport(BaseModel):
 
     @property
     def is_complete(self) -> bool:
-        return self.is_valid and self.pending_count == 0 and self.invalid_count == 0
+        return (
+            self.status == OledReviewBridgeStatus.READY_FOR_ADJUDICATION
+            and self.is_valid
+            and self.pending_count == 0
+            and self.invalid_count == 0
+        )
 
 
 class OledLegacyAdjudicationBundle(BaseModel):
@@ -153,6 +159,27 @@ def evaluate_oled_review_decisions(
     require_all_reviewed: bool = False,
 ) -> OledReviewBridgeReport:
     findings: list[OledReviewBridgeFinding] = []
+    packet_purpose = str(packet.summary.get("packet_purpose") or "").strip()
+    is_compiled_admission = packet_purpose == "compiled_only_admission"
+    if is_compiled_admission and not packet.review_items:
+        findings.append(
+            _finding(
+                "no_compiled_admission_items",
+                "compiled-admission packet has no eligible compiled records",
+                severity="warning",
+            )
+        )
+    if is_compiled_admission:
+        for item in packet.review_items:
+            if item.candidate_type != "oled_compiled_record":
+                findings.append(
+                    _finding(
+                        "compiled_admission_contains_non_compiled_item",
+                        "compiled-admission packet may contain only compiled records",
+                        item.review_item_id,
+                        severity="error",
+                    )
+                )
     if packet.run_id != decisions.run_id:
         findings.append(_finding("run_id_mismatch", "packet and decision run ids do not match", severity="error"))
     if packet.generated_at != decisions.generated_at:
@@ -273,6 +300,8 @@ def evaluate_oled_review_decisions(
     invalid_count = sum(item.outcome == "invalid" for item in output_items)
     if any(finding.severity == "error" for finding in findings):
         status = OledReviewBridgeStatus.BLOCKED
+    elif is_compiled_admission and not output_items:
+        status = OledReviewBridgeStatus.NO_ELIGIBLE_ITEMS
     elif pending_count:
         status = OledReviewBridgeStatus.AWAITING_HUMAN_REVIEW
     else:
@@ -305,6 +334,7 @@ def evaluate_oled_review_decisions(
             "require_all_reviewed": require_all_reviewed,
             "source_packet_digest": expected_packet_digest,
             "source_payload_digest_verification": "current_complete_source_artifacts",
+            "packet_purpose": packet_purpose or "full_qa_review",
         },
     )
 

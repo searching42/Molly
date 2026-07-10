@@ -101,7 +101,11 @@ runs/paper001/
 │   ├── oled_review_packet.json
 │   ├── oled_review_packet.md
 │   ├── oled_reviewer_decision_template.json
-│   └── oled_review_summary.json
+│   ├── oled_review_summary.json
+│   ├── oled_compiled_admission_packet.json
+│   ├── oled_compiled_admission_packet.md
+│   ├── oled_compiled_admission_decision_template.json
+│   └── oled_compiled_admission_summary.json
 ├── report/
 │   ├── corpus_report.json
 │   ├── corpus_report.md
@@ -135,31 +139,34 @@ runs/paper001/
 - `review/oled_review_packet.md`: human-readable review packet for inspection alongside the original PDF.
 - `review/oled_reviewer_decision_template.json`: empty pending decision template containing every review item id for later manual adjudication.
 - `review/oled_review_summary.json`: counts by candidate type, priority, paper, property id, source artifact paths, and governance notes.
+- `review/oled_compiled_admission_packet.json` and `.md`: compiled-record-only dataset-admission packet with complete layered observation summaries and source-payload digest binding.
+- `review/oled_compiled_admission_decision_template.json`: pending decisions only for compiled records that can enter adjudication.
+- `review/oled_compiled_admission_summary.json`: admission count, excluded QA-only count, full-QA packet digest, and governance notes.
 - `report/corpus_report.json` and `report/corpus_report.md`: corpus summary report.
 - `reproducibility/*`: lineage, replay, and artifact hash records.
 - `workflow_report.json`: top-level PDF ingestion report with input, parse, workflow, and governance metadata.
 
 ## OLED Evidence Review Packets
 
-For OLED runs, inspect:
+For OLED dataset-admission review, inspect:
 
 ```text
-runs/<run_id>/review/oled_review_packet.md
-runs/<run_id>/review/oled_reviewer_decision_template.json
+runs/<run_id>/review/oled_compiled_admission_packet.md
+runs/<run_id>/review/oled_compiled_admission_decision_template.json
 ```
 
-The Markdown packet is intended for human adjudication. It groups compiled
-records, schema candidates, text evidence candidates, and raw OLED evidence
-into deterministic pending review items with source candidate ids, paper ids,
-property/value/unit fields, evidence text, page/location metadata, provenance,
-warnings, and suggested review questions.
+The compiled-admission Markdown is intended for human adjudication. It contains
+only compiled records and shows the complete layered observation summary,
+material roles, device context, conditions, evidence anchors, validation codes,
+and source-payload digest. The full `oled_review_packet.md` remains available as
+a separate extraction-quality QA packet containing schema, text, and raw items.
 
-Reviewers should compare each item against the original PDF and fill decisions
-in `oled_reviewer_decision_template.json`. Empty decisions mean no adjudication
-has occurred. `ai4s_agent.oled_review_adjudication_bridge` validates the
-completed file and maps compiled-record decisions into the existing
-adjudication contract. Accepted text, schema, and raw items remain
-extraction-quality evidence. No review decision creates training data.
+Reviewers should compare each compiled record against the original PDF and fill
+decisions in `oled_compiled_admission_decision_template.json`. Empty decisions
+mean no adjudication has occurred. `ai4s_agent.oled_review_adjudication_bridge`
+validates the completed admission file and maps decisions into the existing
+adjudication contract. Pending raw, schema, and text QA items do not block this
+compiled-only gate. No review decision creates training data.
 
 ## Governance
 

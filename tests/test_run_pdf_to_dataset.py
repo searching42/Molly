@@ -64,6 +64,10 @@ def test_pdf_to_dataset_runner_parses_pdf_and_writes_deterministic_artifacts(tmp
     assert (output_dir / "review" / "oled_review_packet.md").exists()
     assert (output_dir / "review" / "oled_reviewer_decision_template.json").exists()
     assert (output_dir / "review" / "oled_review_summary.json").exists()
+    assert (output_dir / "review" / "oled_compiled_admission_packet.json").exists()
+    assert (output_dir / "review" / "oled_compiled_admission_packet.md").exists()
+    assert (output_dir / "review" / "oled_compiled_admission_decision_template.json").exists()
+    assert (output_dir / "review" / "oled_compiled_admission_summary.json").exists()
     assert (output_dir / "conflicts" / "conflict_report.json").exists()
     assert (output_dir / "conflicts" / "conflict_summary.json").exists()
     assert (output_dir / "dataset" / "candidate_dataset.csv").exists()
@@ -97,8 +101,24 @@ def test_pdf_to_dataset_runner_parses_pdf_and_writes_deterministic_artifacts(tmp
         output_dir / "review" / "oled_reviewer_decision_template.json"
     )
     assert result.oled_review_summary_json == str(output_dir / "review" / "oled_review_summary.json")
+    assert result.oled_compiled_admission_packet_json == str(
+        output_dir / "review" / "oled_compiled_admission_packet.json"
+    )
+    assert result.oled_compiled_admission_packet_md == str(
+        output_dir / "review" / "oled_compiled_admission_packet.md"
+    )
+    assert result.oled_compiled_admission_decision_template_json == str(
+        output_dir / "review" / "oled_compiled_admission_decision_template.json"
+    )
+    assert result.oled_compiled_admission_summary_json == str(
+        output_dir / "review" / "oled_compiled_admission_summary.json"
+    )
     assert workflow_report["workflow"]["oled_review_packet_json"] == result.oled_review_packet_json
     assert workflow_report["workflow"]["oled_review_summary_json"] == result.oled_review_summary_json
+    assert (
+        workflow_report["workflow"]["oled_compiled_admission_packet_json"]
+        == result.oled_compiled_admission_packet_json
+    )
     assert workflow_report["governance"]["confirmation"]["confirmed"] is False
     assert workflow_report["governance"]["no_silent_materialization"] is True
 

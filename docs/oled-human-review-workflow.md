@@ -15,27 +15,35 @@ This workflow is the human gate between deterministic OLED evidence extraction a
 For a prepared run, use these files together:
 
 1. Original PDF: the run-scoped `input/<paper>.pdf` or the explicitly supplied source PDF.
-2. Human-readable packet: `review/oled_review_packet.md`.
-3. Machine-readable packet: `review/oled_review_packet.json`.
-4. Editable decisions: `review/oled_reviewer_decision_template.json`.
-5. Readiness report: `review/oled_review_readiness.md` and `.json`.
+2. Human-readable admission packet: `review/oled_compiled_admission_packet.md`.
+3. Machine-readable admission packet: `review/oled_compiled_admission_packet.json`.
+4. Editable admission decisions: `review/oled_compiled_admission_decision_template.json`.
+5. Admission readiness report: `review/oled_compiled_admission_readiness.md` and `.json`.
+6. Full QA packet when supporting extraction detail is needed: `review/oled_review_packet.md` and `.json`.
 
-Do not edit the packet or readiness files. Edit only the reviewer decision JSON.
+Do not edit packet or readiness files. For dataset admission, edit only the compiled-admission decision JSON.
+The full QA decision template is optional and does not gate compiled-record adjudication.
 
 When a regenerated run includes `oled_reviewer_decisions_for_review.json` and
 `oled_delta_review_packet.md`, use those files instead. The migrated decision
 file contains prior decisions only for items whose review content is unchanged;
 the delta packet contains the items reset for fresh review.
 
+Those legacy names apply to full QA packet migration. Dataset-admission decisions
+must be bound to `oled_compiled_admission_packet.json`; only a prior compiled-admission
+packet may be used as its decision-migration source.
+
 ## Recommended Order
 
-Review in three passes:
+Review admission records first:
 
-1. `high`: compiled records and high-risk structured candidates.
-2. `medium`: schema mappings and text evidence with normalized values.
-3. `low`: raw recall candidates used mainly to measure false positives and missed structure.
+1. Complete every item in `oled_compiled_admission_packet.md`.
+2. Consult the full QA packet, original PDF, schema candidates, and text evidence when a record needs source detail.
+3. Review medium/low QA items separately only when measuring extractor quality or investigating an error class.
 
-Finish all items before requesting downstream adjudication. A partial review can be saved and revalidated, but it remains `awaiting_human_review`.
+Finish all compiled-admission items before requesting downstream adjudication. A partial admission review can
+be saved and revalidated, but it remains `awaiting_human_review`. Pending items in the separate full QA packet
+do not block compiled-record admission.
 
 ## Regenerated Packet Review
 
