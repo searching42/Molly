@@ -33,6 +33,9 @@ class OledDatasetViewRow(BaseModel):
     target_property_id: str
     target_value: float | int | str | None = None
     target_unit: str | None = None
+    target_reported_value_text: str | None = None
+    target_reported_decimal_places: int | None = Field(default=None, ge=0)
+    target_reported_unit: str | None = None
     target_layer: OledCausalLayer
     condition_hash: str | None = None
     dedup_key_hash: str | None = None
@@ -316,6 +319,9 @@ def _device_level_rows(
                 target_property_id=target_property_id,
                 target_value=feature_row.target_value,
                 target_unit=feature_row.target_unit,
+                target_reported_value_text=feature_row.target_reported_value_text,
+                target_reported_decimal_places=feature_row.target_reported_decimal_places,
+                target_reported_unit=feature_row.target_reported_unit,
                 target_layer=OledCausalLayer.MEASUREMENT,
                 condition_hash=feature_row.condition_hash,
                 dedup_key_hash=dedup_observation.dedup_key.key_hash,
@@ -410,6 +416,7 @@ def _collapse_consistent_duplicate_group(
                 **selected.metadata,
                 "dedup_key_hash": dedup_key_hash,
                 "dedup_policy": duplicate_policy,
+                "source_reported_values": _source_reported_values(sorted_rows),
             },
         }
     )
@@ -463,9 +470,36 @@ def _collapse_consistent_intrinsic_group(
                 **selected.metadata,
                 "dedup_key": intrinsic_key,
                 "dedup_policy": "collapsed_consistent_intrinsic_duplicate",
+                "source_reported_values": _source_reported_values(sorted_rows),
             },
         }
     )
+
+
+def _source_reported_values(rows: list[OledDatasetViewRow]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, int | None, str | None], set[str]] = defaultdict(set)
+    for row in rows:
+        if row.target_reported_value_text is None:
+            continue
+        key = (
+            row.target_reported_value_text,
+            row.target_reported_decimal_places,
+            row.target_reported_unit,
+        )
+        grouped[key].update(row.source_record_ids)
+    return [
+        {
+            "reported_value_text": reported_value_text,
+            "reported_decimal_places": reported_decimal_places,
+            "reported_unit": reported_unit,
+            "source_record_ids": sorted(source_record_ids),
+        }
+        for (
+            reported_value_text,
+            reported_decimal_places,
+            reported_unit,
+        ), source_record_ids in sorted(grouped.items(), key=lambda item: item[0][0])
+    ]
 
 
 def _intrinsic_row(
@@ -484,6 +518,9 @@ def _intrinsic_row(
         target_property_id=target_property_id,
         target_value=observation.normalized_value,
         target_unit=observation.normalized_unit,
+        target_reported_value_text=observation.reported_value_text,
+        target_reported_decimal_places=observation.reported_decimal_places,
+        target_reported_unit=observation.unit,
         target_layer=OledCausalLayer.MOLECULE,
         condition_hash=None,
         dedup_key_hash=None,

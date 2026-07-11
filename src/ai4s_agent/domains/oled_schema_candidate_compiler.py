@@ -513,6 +513,8 @@ def _property_observation_from_candidate(
         property_label=candidate.property_label or candidate.property_id or "unknown",
         value=candidate.value,
         unit=candidate.unit,
+        reported_value_text=candidate.reported_value_text,
+        reported_decimal_places=candidate.reported_decimal_places,
         condition=condition,
         evidence_sources=[_evidence_source(evidence_ref, target_layer, candidate) for evidence_ref in candidate.evidence_refs],
         confidence=_confidence(candidate),

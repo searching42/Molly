@@ -105,6 +105,8 @@ def _valid_response() -> dict:
                         "property_label": "Photoluminescence quantum yield",
                         "value": 82,
                         "unit": "%",
+                        "reported_value_text": "82",
+                        "reported_decimal_places": 0,
                         "evidence_refs": [_packet_ref()],
                         "confidence_score": 0.93,
                         "rationale": "The table value and full-text film context identify a doped-film PLQY.",
@@ -166,6 +168,8 @@ def test_valid_llm_mapping_is_materialized_as_review_only_needs_llm_candidate() 
     assert candidate.status.value == "needs_llm"
     assert candidate.property_id == "plqy"
     assert candidate.target_layer == OledCausalLayer.INTERACTION
+    assert candidate.reported_value_text == "82"
+    assert candidate.reported_decimal_places == 0
     assert candidate.metadata["human_review_required"] is True
     assert candidate.metadata["automatic_merge"] is False
     assert result.metadata["device_only_admitted"] is False
@@ -186,6 +190,50 @@ def test_unknown_property_must_be_an_ontology_extension_not_a_schema_candidate()
     assert result.schema_candidates == []
     assert result.findings[0].code == "invalid_llm_mapping_response"
     assert "ontology_extension_proposals" in result.findings[0].message
+
+
+def test_v4_numeric_candidate_requires_reported_source_lexeme() -> None:
+    response = _valid_response()
+    proposal = response["packet_results"][0]["candidate_proposals"][0]
+    proposal.pop("reported_value_text")
+    proposal.pop("reported_decimal_places")
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "invalid_response"
+    assert "lacks required reported value fields" in result.findings[0].message
+
+
+def test_v4_numeric_string_candidate_requires_reported_source_lexeme() -> None:
+    response = _valid_response()
+    proposal = response["packet_results"][0]["candidate_proposals"][0]
+    proposal["value"] = "82.0"
+    proposal.pop("reported_value_text")
+    proposal.pop("reported_decimal_places")
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "invalid_response"
+    assert "lacks required reported value fields" in result.findings[0].message
+
+
+def test_legacy_request_without_reported_value_contract_remains_readable() -> None:
+    response = _valid_response()
+    proposal = response["packet_results"][0]["candidate_proposals"][0]
+    proposal.pop("reported_value_text")
+    proposal.pop("reported_decimal_places")
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+    legacy_metadata = dict(request.metadata)
+    legacy_metadata.pop("reported_value_contract_required")
+    legacy_metadata.pop("reported_value_contract_version")
+    request = request.model_copy(update={"metadata": legacy_metadata})
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "ready_for_human_review"
+    assert result.schema_candidates[0].reported_value_text is None
 
 
 def test_known_property_cannot_be_mapped_to_a_layer_outside_the_ontology() -> None:

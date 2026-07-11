@@ -295,7 +295,11 @@ def _compiled_review_items(
         layered_record = _dict(record.get("layered_record"))
         property_payload = _first_compiled_property(layered_record) or {}
         property_id = _clean_text(property_payload.get("property_id")) or _first_text(group_key.get("target_property_ids"))
-        raw_value = _raw_value(property_payload.get("value"))
+        raw_value = _raw_value(
+            property_payload.get("reported_value_text")
+            if property_payload.get("reported_value_text") is not None
+            else property_payload.get("value")
+        )
         numeric_value = _as_float(property_payload.get("value"))
         source_candidate_id = _clean_text(record.get("record_id")) or f"compiled_record_{index}"
         evidence_anchors = _list_text(record.get("source_evidence_anchors"))
@@ -430,19 +434,25 @@ def _compiled_admission_observations(
             property_id = _clean_text(value.get("property_id")) or _clean_text(
                 metadata.get("property_id") or metadata.get("source_property_id")
             )
-            observations.append(
-                {
-                    "layer": layer_name,
-                    "property_id": property_id,
-                    "property_label": _clean_text(value.get("property_label")),
-                    "value": value.get("value"),
-                    "unit": _clean_text(value.get("unit")),
-                    "condition": value.get("condition"),
-                    "source_schema_candidate_id": _clean_text(
-                        metadata.get("source_schema_candidate_id")
-                    ),
-                }
-            )
+            observation = {
+                "layer": layer_name,
+                "property_id": property_id,
+                "property_label": _clean_text(value.get("property_label")),
+                "value": value.get("value"),
+                "unit": _clean_text(value.get("unit")),
+                "condition": value.get("condition"),
+                "source_schema_candidate_id": _clean_text(
+                    metadata.get("source_schema_candidate_id")
+                ),
+            }
+            if value.get("reported_value_text") is not None:
+                observation["reported_value_text"] = _clean_text(
+                    value.get("reported_value_text")
+                )
+                observation["reported_decimal_places"] = value.get(
+                    "reported_decimal_places"
+                )
+            observations.append(observation)
     return observations
 
 
@@ -813,7 +823,11 @@ def _render_compiled_admission_markdown(packet: OledReviewPacket) -> str:
                 property_name = _clean_text(observation.get("property_id")) or _clean_text(
                     observation.get("property_label")
                 )
-                value = _raw_value(observation.get("value")) or "not available"
+                value = _raw_value(
+                    observation.get("reported_value_text")
+                    if observation.get("reported_value_text") is not None
+                    else observation.get("value")
+                ) or "not available"
                 unit = _clean_text(observation.get("unit"))
                 value_unit = f"{value} {unit}".strip()
                 condition = _admission_condition_text(observation.get("condition"))

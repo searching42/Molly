@@ -73,6 +73,9 @@ class OledCuratedTrainingPackageRow(BaseModel):
     target_property_id: str
     target_value: float | int | str
     target_unit: str | None = None
+    target_reported_value_text: str | None = None
+    target_reported_decimal_places: int | None = Field(default=None, ge=0)
+    target_reported_unit: str | None = None
 
     feature_view: str
     features: dict[str, Any] = Field(default_factory=dict)
@@ -266,7 +269,14 @@ def build_oled_curated_training_package_schema(
         target_property_ids=sorted({row.target_property_id for row in training_rows}),
         feature_views=sorted({row.feature_view for row in training_rows}),
         splits=sorted({row.split for row in training_rows}),
-        target_columns=["target_property_id", "target_value", "target_unit"],
+        target_columns=[
+            "target_property_id",
+            "target_value",
+            "target_unit",
+            "target_reported_value_text",
+            "target_reported_decimal_places",
+            "target_reported_unit",
+        ],
         feature_columns=feature_columns,
         metadata_columns=[
             "training_row_id",
@@ -549,6 +559,9 @@ def _training_row_from_feature_row(row: OledCuratedSplitFeatureRowArtifact) -> O
         target_property_id=row.target_property_id,
         target_value=row.target_value,
         target_unit=row.target_unit,
+        target_reported_value_text=row.target_reported_value_text,
+        target_reported_decimal_places=row.target_reported_decimal_places,
+        target_reported_unit=row.target_reported_unit,
         feature_view=row.feature_view,
         features=_sanitize_for_output(row.features),
         condition_hash=row.condition_hash,

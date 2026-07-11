@@ -580,6 +580,28 @@ def test_direct_property_condition_builds_measurement_condition() -> None:
     }
 
 
+def test_compiler_preserves_reported_numeric_lexeme() -> None:
+    candidate = _text_property_candidate(
+        candidate_id="schema:text:exciplex:delta",
+        material_name="PO-T2T:13PXZB",
+        property_id="delta_e_st_ev",
+        value=0.03,
+        target_layer=OledCausalLayer.INTERACTION,
+    ).model_copy(
+        update={
+            "reported_value_text": "0.030",
+            "reported_decimal_places": 3,
+        }
+    )
+
+    report = compile_oled_schema_candidates_to_layered_records([candidate])
+    observation = report.compiled_records[0].layered_record.interaction.properties[0]
+
+    assert observation.value == 0.03
+    assert observation.reported_value_text == "0.030"
+    assert observation.reported_decimal_places == 3
+
+
 def test_grouping_joins_explicit_device_label_across_table_and_text_evidence() -> None:
     measurement = _property_candidate(
         "eqe_percent",

@@ -5,7 +5,7 @@ import json
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ai4s_agent.domains.oled_contracts import (
     DEFAULT_OLED_REPRESENTATION_CONTRACT,
@@ -21,6 +21,7 @@ from ai4s_agent.domains.oled_property_taxonomy import (
     DEFAULT_OLED_PROPERTY_TAXONOMY,
     OledPropertyTaxonomy,
 )
+from ai4s_agent.domains.oled_reported_values import validate_reported_value_contract
 from ai4s_agent.domains.oled_units import (
     OledUnitNormalizationResult,
     OledUnitNormalizationStatus,
@@ -134,6 +135,8 @@ class OledPropertyObservation(BaseModel):
     property_label: str
     value: float | int | str | None = None
     unit: str | None = None
+    reported_value_text: str | None = None
+    reported_decimal_places: int | None = Field(default=None, ge=0)
     condition: OledMeasurementCondition | None = None
     evidence_sources: list[OledEvidenceSource] = Field(default_factory=list)
     confidence: OledConfidenceAssessment | None = None
@@ -146,6 +149,16 @@ class OledPropertyObservation(BaseModel):
         if not clean:
             raise ValueError("property_label is required")
         return clean
+
+    @model_validator(mode="after")
+    def validate_reported_value(self) -> OledPropertyObservation:
+        validate_reported_value_contract(
+            value=self.value,
+            reported_value_text=self.reported_value_text,
+            reported_decimal_places_value=self.reported_decimal_places,
+            label="property observation reported value",
+        )
+        return self
 
 
 class OledMolecularLayer(BaseModel):
@@ -190,6 +203,8 @@ class OledLayeredCanonicalObservation(BaseModel):
     unit_hint: str
     value: float | int | str | None = None
     unit: str | None = None
+    reported_value_text: str | None = None
+    reported_decimal_places: int | None = Field(default=None, ge=0)
     normalized_value: float | int | str | None = None
     normalized_unit: str | None = None
     unit_normalization_status: OledUnitNormalizationStatus = OledUnitNormalizationStatus.UNCHANGED
@@ -303,6 +318,8 @@ class OledLayeredRecord(BaseModel):
                     unit_hint=taxonomy_match.unit_hint,
                     value=property_observation.value,
                     unit=property_observation.unit,
+                    reported_value_text=property_observation.reported_value_text,
+                    reported_decimal_places=property_observation.reported_decimal_places,
                     normalized_value=unit_normalization.normalized_value,
                     normalized_unit=unit_normalization.normalized_unit,
                     unit_normalization_status=unit_normalization.status,

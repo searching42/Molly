@@ -22,7 +22,7 @@ from ai4s_agent.schemas import ParsedDocument
 
 
 class OledLLMContextRequestArtifact(BaseModel):
-    artifact_version: str = "oled_llm_context_request.v3"
+    artifact_version: str = "oled_llm_context_request.v4"
     run_id: str
     paper_id: str
     generated_at: str

@@ -73,6 +73,9 @@ class OledCuratedSplitFeatureRowArtifact(BaseModel):
 
     target_value: float | int | str | None = None
     target_unit: str | None = None
+    target_reported_value_text: str | None = None
+    target_reported_decimal_places: int | None = Field(default=None, ge=0)
+    target_reported_unit: str | None = None
     condition_hash: str | None = None
     confidence_score: float | None = None
 
@@ -582,6 +585,9 @@ def _feature_artifact(
         feature_view=alignment.feature_view,
         target_value=feature_row.target_value,
         target_unit=feature_row.target_unit,
+        target_reported_value_text=feature_row.target_reported_value_text,
+        target_reported_decimal_places=feature_row.target_reported_decimal_places,
+        target_reported_unit=feature_row.target_reported_unit,
         condition_hash=feature_row.condition_hash or row.condition_hash,
         confidence_score=feature_row.confidence_score,
         evidence_refs=feature_row.evidence_refs or row.evidence_refs,

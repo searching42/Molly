@@ -60,6 +60,8 @@ def _device_gold_record(
     *,
     property_label: str = "EQE (%)",
     value: float = 19.5,
+    reported_value_text: str | None = None,
+    reported_decimal_places: int | None = None,
     raw_metadata: bool = False,
 ) -> OledGoldDatasetRecord:
     evidence_ref = f"paper:{record_id}:table-1:row-1"
@@ -117,6 +119,8 @@ def _device_gold_record(
                         property_label=property_label,
                         value=value,
                         unit="%",
+                        reported_value_text=reported_value_text,
+                        reported_decimal_places=reported_decimal_places,
                         condition=OledMeasurementCondition(
                             luminance_cd_m2=100,
                             current_density_ma_cm2=4.2,
@@ -177,7 +181,13 @@ def test_confirmation_gate_requires_explicit_dataset_view_write() -> None:
 
 def test_build_row_artifacts_omit_features_by_default_and_are_deterministic() -> None:
     view_report = build_oled_dataset_view(
-        [_device_gold_record("gold-artifact")],
+        [
+            _device_gold_record(
+                "gold-artifact",
+                reported_value_text="19.50",
+                reported_decimal_places=2,
+            )
+        ],
         view_kind=OledDatasetViewKind.RAW_ALL_MEASUREMENTS,
         target_property_id="eqe_percent",
     )
@@ -189,6 +199,9 @@ def test_build_row_artifacts_omit_features_by_default_and_are_deterministic() ->
     assert first[0].row_id == second[0].row_id
     assert first[0].view_kind == "raw_all_measurements"
     assert first[0].target_property_id == "eqe_percent"
+    assert first[0].target_reported_value_text == "19.50"
+    assert first[0].target_reported_decimal_places == 2
+    assert first[0].target_reported_unit == "%"
     assert first[0].record_id == "gold-artifact"
     assert first[0].evidence_refs
     assert first[0].features == {}

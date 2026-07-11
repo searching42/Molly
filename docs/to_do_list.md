@@ -667,6 +667,8 @@ Status:
 - separate complete-evidence ontology review from missing-source review
 - allow one supplement to carry known-property candidates plus unsupported-property ontology proposals
 - require structured exclusion reasons when explicit HOMO/LUMO/S1/T1/Delta-EST eV evidence is omitted
+- preserve each numeric source lexeme and displayed decimal places separately from its machine-usable numeric value, from deterministic/LLM candidates through review, gold, curated views, features, and training packages
+- preserve all source numeric representations in dedup metadata when equivalent rows are collapsed
 - keep every LLM-derived schema candidate in `needs_llm` status for human review
 - keep ontology extensions as proposals only
 - exclude device-only results from the current dataset candidate scope

@@ -47,6 +47,8 @@ def _packet(
     property_id: str | None = "plqy",
     value: float | int | str | None = 82,
     unit: str | None = "%",
+    reported_value_text: str | None = "82",
+    reported_decimal_places: int | None = 0,
     layer: str = "interaction",
     anchors: list[str] | None = None,
 ) -> OledMineruReviewPacket:
@@ -94,6 +96,8 @@ def _packet(
                 property_label=property_label,
                 value=value,
                 unit=unit,
+                reported_value_text=reported_value_text,
+                reported_decimal_places=reported_decimal_places,
                 evidence_refs=[
                     OledReviewPacketSourceRef(
                         source_candidate_hash="hash-table",
@@ -170,7 +174,13 @@ def _write_candidates(path: Path, candidates: list[OledReviewedExtractionCandida
 
 def test_effective_packet_helper_prefers_corrected_snapshot() -> None:
     original = _packet("review:compiled-oled:effective", value=82, unit="%")
-    corrected = _packet("review:compiled-oled:effective", value=0.82, unit="fraction")
+    corrected = _packet(
+        "review:compiled-oled:effective",
+        value=0.82,
+        unit="fraction",
+        reported_value_text="0.82",
+        reported_decimal_places=2,
+    )
     candidate = _reviewed_candidate(
         "reviewed-extraction:effective",
         status=OledReviewedExtractionStatus.CORRECTED,
@@ -199,10 +209,19 @@ def test_accepted_candidate_converts_to_gold_candidate_with_provenance() -> None
     assert converted.metadata["curated_dataset_written"] is False
     assert converted.metadata["final_gold_dataset"] is False
     assert converted.gold_record.metadata["candidate_only"] is True
+    observation = converted.gold_record.layered_record.interaction.properties[0]
+    assert observation.reported_value_text == "82"
+    assert observation.reported_decimal_places == 0
 
 
 def test_corrected_candidate_uses_corrected_packet_values_and_preserves_corrections() -> None:
-    corrected = _packet("review:compiled-oled:corrected", value=0.82, unit="fraction")
+    corrected = _packet(
+        "review:compiled-oled:corrected",
+        value=0.82,
+        unit="fraction",
+        reported_value_text="0.82",
+        reported_decimal_places=2,
+    )
     correction = OledAppliedReviewCorrection(
         correction_type=OledReviewCorrectionType.PROPERTY_UNIT,
         field_path="properties[0].unit",
@@ -224,6 +243,7 @@ def test_corrected_candidate_uses_corrected_packet_values_and_preserves_correcti
     assert gold_record.layered_record.interaction is not None
     assert gold_record.layered_record.interaction.properties[0].value == 0.82
     assert gold_record.layered_record.interaction.properties[0].unit == "fraction"
+    assert gold_record.layered_record.interaction.properties[0].reported_value_text == "0.82"
     assert report.gold_candidates[0].gold_record is not None
     assert report.gold_candidates[0].gold_record.layered_record.interaction is not None
     assert report.gold_candidates[0].gold_record.metadata["applied_correction_statuses"] == ["applied"]

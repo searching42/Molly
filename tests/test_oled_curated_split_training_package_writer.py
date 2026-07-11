@@ -58,6 +58,9 @@ def _feature_row(
     split: str = "train",
     target_value: float | int | str | None = 21.0,
     target_unit: str | None = "%",
+    target_reported_value_text: str | None = None,
+    target_reported_decimal_places: int | None = None,
+    target_reported_unit: str | None = None,
     target_property_id: str = "eqe_percent",
     feature_view: str = "full_context",
     features: dict | None = None,
@@ -76,6 +79,9 @@ def _feature_row(
         feature_view=feature_view,
         target_value=target_value,
         target_unit=target_unit,
+        target_reported_value_text=target_reported_value_text,
+        target_reported_decimal_places=target_reported_decimal_places,
+        target_reported_unit=target_reported_unit,
         condition_hash=f"condition-{row_id}",
         confidence_score=0.9,
         evidence_refs=evidence_refs if evidence_refs is not None else [f"paper:test:{row_id}"],
@@ -103,9 +109,30 @@ def _feature_row(
 
 def _valid_feature_rows() -> list[OledCuratedSplitFeatureRowArtifact]:
     return [
-        _feature_row("train", split="train", target_value=21.0),
-        _feature_row("validation", split="validation", target_value=22.0),
-        _feature_row("test", split="test", target_value=23.0),
+        _feature_row(
+            "train",
+            split="train",
+            target_value=21.0,
+            target_reported_value_text="21.0",
+            target_reported_decimal_places=1,
+            target_reported_unit="%",
+        ),
+        _feature_row(
+            "validation",
+            split="validation",
+            target_value=22.0,
+            target_reported_value_text="22.0",
+            target_reported_decimal_places=1,
+            target_reported_unit="%",
+        ),
+        _feature_row(
+            "test",
+            split="test",
+            target_value=23.0,
+            target_reported_value_text="23.0",
+            target_reported_decimal_places=1,
+            target_reported_unit="%",
+        ),
     ]
 
 
@@ -173,6 +200,9 @@ def test_build_training_rows_preserves_values_and_deterministic_id() -> None:
     assert first[0].training_row_id == second[0].training_row_id
     assert first[0].split in {"train", "validation", "test"}
     assert first[0].target_property_id == "eqe_percent"
+    assert first[0].target_reported_value_text in {"21.0", "22.0", "23.0"}
+    assert first[0].target_reported_decimal_places == 1
+    assert first[0].target_reported_unit == "%"
     assert first[0].feature_view == "full_context"
     assert first[0].features["numeric_feature"] == 1.0
     assert first[0].metadata["ml_ready_training_row"] is True
@@ -248,7 +278,14 @@ def test_schema_builder_derives_columns_and_kinds() -> None:
 
     schema = build_oled_curated_training_package_schema(training_rows, preflight_report=_preflight())
 
-    assert schema.target_columns == ["target_property_id", "target_value", "target_unit"]
+    assert schema.target_columns == [
+        "target_property_id",
+        "target_value",
+        "target_unit",
+        "target_reported_value_text",
+        "target_reported_decimal_places",
+        "target_reported_unit",
+    ]
     assert "training_row_id" in schema.metadata_columns
     assert "evidence_refs" in schema.metadata_columns
     assert "numeric_feature" in schema.feature_columns

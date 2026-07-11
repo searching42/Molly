@@ -24,11 +24,15 @@ from ai4s_agent.domains.oled_property_ontology import (
     DEFAULT_OLED_PROPERTY_ONTOLOGY,
     OledPropertyDefinition,
 )
+from ai4s_agent.domains.oled_reported_values import (
+    is_numeric_reported_value,
+    validate_reported_value_contract,
+)
 from ai4s_agent.llm_provider import LLMProvider, LLMProviderError
 from ai4s_agent.schemas import LLMInvocationRecord
 
 
-PROMPT_VERSION = "oled.contextual_semantic_mapping.v3"
+PROMPT_VERSION = "oled.contextual_semantic_mapping.v4"
 
 OledLLMMappingAction = Literal[
     "keep_deterministic",
@@ -92,6 +96,8 @@ class OledLLMSchemaCandidateProposal(BaseModel):
     property_label: str | None = None
     value: float | int | str | None = None
     unit: str | None = None
+    reported_value_text: str | None = None
+    reported_decimal_places: int | None = Field(default=None, ge=0)
     material_role: str | None = None
     material_name: str | None = None
     condition_field: str | None = None
@@ -125,6 +131,12 @@ class OledLLMSchemaCandidateProposal(BaseModel):
                 raise ValueError("property observations require property_id")
             if self.value is None:
                 raise ValueError("property observations require value")
+        validate_reported_value_contract(
+            value=self.value,
+            reported_value_text=self.reported_value_text,
+            reported_decimal_places_value=self.reported_decimal_places,
+            label="LLM candidate reported value",
+        )
         return self
 
 
@@ -394,6 +406,8 @@ def build_oled_llm_paper_mapping_request(
             "document_context_element_count": len(context),
             "document_context_character_count": sum(len(element.text) for element in context),
             "full_context_supplied_without_automatic_truncation": True,
+            "reported_value_contract_required": True,
+            "reported_value_contract_version": "preserve_reported_numeric_lexeme.v1",
             "dataset_scope": "molecule_interaction_properties_only",
             "external_llm_called": False,
             "automatic_candidate_merge": False,
@@ -518,6 +532,18 @@ def _validate_response_binding(
             packet.source_candidate_type.value,
         )
         for index, proposal in enumerate(packet_result.candidate_proposals):
+            if (
+                request.metadata.get("reported_value_contract_required")
+                and proposal.candidate_type == OledSchemaCandidateType.PROPERTY_OBSERVATION
+                and is_numeric_reported_value(proposal.value)
+                and (
+                    proposal.reported_value_text is None
+                    or proposal.reported_decimal_places is None
+                )
+            ):
+                raise ValueError(
+                    f"packet {packet.packet_id} candidate {index} lacks required reported value fields"
+                )
             if proposal.property_id and (
                 proposal.property_id not in packet.allowed_property_ids
                 or proposal.property_id not in ontology_by_id
@@ -747,6 +773,8 @@ def _materialize_schema_candidates(
                     property_label=proposal.property_label,
                     value=proposal.value,
                     unit=proposal.unit,
+                    reported_value_text=proposal.reported_value_text,
+                    reported_decimal_places=proposal.reported_decimal_places,
                     material_role=proposal.material_role,
                     material_name=proposal.material_name,
                     condition_field=proposal.condition_field,
@@ -790,6 +818,8 @@ def _mapping_messages(request: OledLLMPaperMappingRequest) -> list[dict[str, str
                 "Use an ontology_extension_proposal for an unsupported property instead of forcing a known "
                 "property_id. "
                 "Use needs_ontology_review when evidence is complete but the ontology lacks the property. "
+                "For every numeric property proposal, preserve the exact source numeric lexeme in "
+                "reported_value_text and its decimal-place count in reported_decimal_places. "
                 "Every candidate must cite the source packet and may cite only supplied document context."
             ),
         },
@@ -896,6 +926,7 @@ _CONTEXT_MAPPING_INSTRUCTIONS = (
     "Use needs_ontology_review when evidence is complete but a molecule/interaction property is unsupported.",
     "A supplement may include both known-property candidates and ontology extension proposals.",
     "Explicit eV property signals require either mapping or a structured exclusion reason.",
+    "Numeric property proposals must preserve source formatting, including trailing zeros.",
     "Do not emit schema candidates for device-only or no-eligible-property packets.",
     "All emitted candidates remain needs_llm and require human review; they are never merged automatically.",
 )

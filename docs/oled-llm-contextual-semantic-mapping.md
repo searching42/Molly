@@ -38,6 +38,13 @@ Every source packet must receive exactly one result with:
 - optional ontology extension proposals;
 - evidence references and rationale.
 
+For every numeric candidate, prompt version `oled.contextual_semantic_mapping.v4`
+also requires a dual representation: `value` remains the machine-usable numeric
+value, while `reported_value_text` preserves the exact numeric lexeme in the
+source (for example `0.030`) and `reported_decimal_places` records its displayed
+precision. The unit is not included in `reported_value_text`. This keeps source
+fidelity without turning downstream numeric columns into strings.
+
 `replace` results must list the exact `superseded_deterministic_candidate_ids`; deterministic candidates not listed there remain preserved. Table-derived candidate proposals must bind an exact `row_index` and matching source cell.
 
 `needs_source_check` results must identify evidence that is genuinely absent from the supplied full text using one or more structured reasons: supplementary information, an unavailable figure/image, an external reference, unresolved identity/abbreviation, or a missing method definition. Generic requests to re-check the already supplied PDF are invalid.
@@ -67,6 +74,8 @@ Known properties may become `OledSchemaCandidate` proposals only when the proper
 - a source-check request merely asks to re-check supplied PDF text;
 - complete unsupported evidence is incorrectly routed through source-check instead of ontology review;
 - explicit eV property evidence is excluded without a structured exclusion reason;
+- a v4 numeric proposal omits its exact source lexeme or supplies a lexeme that
+  is numerically inconsistent with `value`;
 - materialized candidates fail existing semantic validation.
 
 Valid candidate proposals are always marked `needs_llm`, carry the request digest and source packet id, and require human review. Valid ontology extensions are preserved as proposals only; the ontology is not mutated.
@@ -90,6 +99,10 @@ PYTHONPATH=src python -m ai4s_agent.oled_llm_context_request \
 ```
 
 The artifact includes the request digest, full supplied document context, semantic packets, deterministic candidates/findings, ontology snapshot, and explicit `llm_called=false` metadata. It can be inspected before any approved provider call.
+
+Regenerating an existing v3 request changes its digest and therefore requires a
+new bound response and review. Historical v3 requests remain readable, but the
+reported-value requirement applies to newly generated v4 requests.
 
 ## Current Dataset Scope
 
