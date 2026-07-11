@@ -27,7 +27,7 @@ from ai4s_agent.llm_provider import LLMProvider, LLMProviderError
 from ai4s_agent.schemas import LLMInvocationRecord
 
 
-PROMPT_VERSION = "oled.contextual_semantic_mapping.v1"
+PROMPT_VERSION = "oled.contextual_semantic_mapping.v2"
 
 OledLLMMappingAction = Literal[
     "keep_deterministic",
@@ -37,12 +37,29 @@ OledLLMMappingAction = Literal[
     "needs_source_check",
 ]
 OledLLMScopeClassification = Literal["property_bearing", "device_only", "no_eligible_property"]
+OledLLMDatasetScope = Literal["molecule_interaction_properties_only"]
+OledLLMSourceCheckMissingEvidence = Literal[
+    "supplementary_information",
+    "figure_or_image",
+    "external_reference",
+    "unresolved_identity",
+    "unresolved_abbreviation",
+    "missing_method_definition",
+]
 OledLLMContextMappingStatus = Literal[
     "ready_for_human_review",
     "no_eligible_property",
     "invalid_response",
     "provider_error",
 ]
+
+_DATASET_PROPERTY_LAYERS = frozenset({OledCausalLayer.MOLECULE, OledCausalLayer.INTERACTION})
+_GENERIC_SOURCE_CHECK_MARKERS = (
+    "verify against pdf",
+    "verify against the pdf",
+    "verify against source at",
+    "deterministic extraction",
+)
 
 
 class OledPaperContextElement(BaseModel):
@@ -151,7 +168,9 @@ class OledLLMPacketMappingProposal(BaseModel):
     scope_classification: OledLLMScopeClassification
     candidate_proposals: list[OledLLMSchemaCandidateProposal] = Field(default_factory=list)
     ontology_extension_proposals: list[OledOntologyExtensionProposal] = Field(default_factory=list)
+    superseded_deterministic_candidate_ids: list[str] = Field(default_factory=list)
     source_check_questions: list[str] = Field(default_factory=list)
+    source_check_missing_evidence: list[OledLLMSourceCheckMissingEvidence] = Field(default_factory=list)
     rationale_summary: str
 
     @field_validator("packet_id", "rationale_summary")
@@ -167,18 +186,42 @@ class OledLLMPacketMappingProposal(BaseModel):
     def validate_questions(cls, value: list[str]) -> list[str]:
         return [str(item).strip() for item in value if str(item).strip()]
 
+    @field_validator("superseded_deterministic_candidate_ids")
+    @classmethod
+    def validate_superseded_candidate_ids(cls, value: list[str]) -> list[str]:
+        return sorted({str(item).strip() for item in value if str(item).strip()})
+
+    @field_validator("source_check_missing_evidence")
+    @classmethod
+    def validate_source_check_missing_evidence(
+        cls,
+        value: list[OledLLMSourceCheckMissingEvidence],
+    ) -> list[OledLLMSourceCheckMissingEvidence]:
+        return list(dict.fromkeys(value))
+
     @model_validator(mode="after")
     def validate_scope_and_action(self) -> OledLLMPacketMappingProposal:
         if self.scope_classification != "property_bearing" and self.candidate_proposals:
             raise ValueError("device-only and no-property packets cannot emit schema candidates")
         if self.scope_classification == "property_bearing" and self.action == "no_eligible_property":
             raise ValueError("property-bearing packets cannot use no_eligible_property action")
-        if self.action == "keep_deterministic" and self.candidate_proposals:
-            raise ValueError("keep_deterministic cannot emit replacement or supplemental candidates")
+        if self.action not in {"supplement", "replace"} and self.candidate_proposals:
+            raise ValueError("candidate_proposals are only allowed for supplement or replace")
         if self.action in {"supplement", "replace"} and not self.candidate_proposals:
             raise ValueError(f"{self.action} requires candidate_proposals")
-        if self.action == "needs_source_check" and not self.source_check_questions:
-            raise ValueError("needs_source_check requires source_check_questions")
+        if self.action == "replace" and not self.superseded_deterministic_candidate_ids:
+            raise ValueError("replace requires superseded_deterministic_candidate_ids")
+        if self.action != "replace" and self.superseded_deterministic_candidate_ids:
+            raise ValueError("only replace may supersede deterministic candidates")
+        if self.action == "needs_source_check":
+            if not self.source_check_questions:
+                raise ValueError("needs_source_check requires source_check_questions")
+            if not self.source_check_missing_evidence:
+                raise ValueError("needs_source_check requires source_check_missing_evidence")
+        elif self.source_check_questions or self.source_check_missing_evidence:
+            raise ValueError("source-check fields are only allowed for needs_source_check")
+        if self.ontology_extension_proposals and self.action != "needs_source_check":
+            raise ValueError("ontology extensions require needs_source_check action")
         return self
 
 
@@ -205,6 +248,7 @@ class OledLLMPaperMappingResponse(BaseModel):
 
 class OledLLMPaperMappingRequest(BaseModel):
     paper_id: str
+    dataset_scope: OledLLMDatasetScope = "molecule_interaction_properties_only"
     packets: list[OledSemanticMappingPacket]
     document_context: list[OledPaperContextElement]
     ontology: list[OledPropertyDefinition]
@@ -333,6 +377,7 @@ def build_oled_llm_paper_mapping_request(
             "document_context_element_count": len(context),
             "document_context_character_count": sum(len(element.text) for element in context),
             "full_context_supplied_without_automatic_truncation": True,
+            "dataset_scope": "molecule_interaction_properties_only",
             "external_llm_called": False,
             "automatic_candidate_merge": False,
             "gold_records_created": False,
@@ -431,8 +476,18 @@ def _validate_response_binding(
     }
     ontology_by_id = {definition.property_id: definition for definition in request.ontology}
     ontology_ids = set(ontology_by_id)
+    deterministic_by_source: dict[str, list[OledSchemaCandidate]] = {}
+    for candidate in request.deterministic_schema_candidates:
+        deterministic_by_source.setdefault(candidate.source_candidate_hash, []).append(candidate)
+    proposed_extension_ids: set[str] = set()
     for packet_result in response.packet_results:
         packet = packets_by_id[packet_result.packet_id]
+        deterministic_candidates = deterministic_by_source.get(packet.source_candidate_hash, [])
+        _validate_action_and_scope_binding(
+            packet_result,
+            packet=packet,
+            deterministic_candidates=deterministic_candidates,
+        )
         allowed_refs = context_refs | {
             (
                 packet.source_candidate_hash,
@@ -470,19 +525,133 @@ def _validate_response_binding(
                 raise ValueError(f"packet {packet.packet_id} candidate {index} lacks source packet evidence binding")
             if not evidence_keys.issubset(allowed_refs):
                 raise ValueError(f"packet {packet.packet_id} candidate {index} cites evidence outside request")
+            _validate_table_row_evidence(packet, proposal, candidate_index=index)
         for extension in packet_result.ontology_extension_proposals:
             if extension.source_packet_id != packet.packet_id:
                 raise ValueError("ontology extension source_packet_id does not match containing packet")
             if extension.proposed_property_id in ontology_ids:
                 raise ValueError("ontology extension duplicates an existing property_id")
+            if extension.proposed_property_id in proposed_extension_ids:
+                raise ValueError(
+                    f"duplicate ontology extension proposal for {extension.proposed_property_id}"
+                )
+            proposed_extension_ids.add(extension.proposed_property_id)
             if any(layer.value not in packet.allowed_layers for layer in extension.allowed_layers):
                 raise ValueError("ontology extension proposes a layer outside the request packet")
+            if not set(extension.allowed_layers).intersection(_DATASET_PROPERTY_LAYERS):
+                raise ValueError(
+                    "ontology extension is device/measurement-only and outside the current dataset scope"
+                )
             evidence_keys = {
                 (ref.source_candidate_hash, ref.source_evidence_anchor, ref.source_candidate_type)
                 for ref in extension.evidence_refs
             }
             if packet_ref not in evidence_keys or not evidence_keys.issubset(allowed_refs):
                 raise ValueError("ontology extension evidence is not bound to the request packet/context")
+
+
+def _validate_action_and_scope_binding(
+    packet_result: OledLLMPacketMappingProposal,
+    *,
+    packet: OledSemanticMappingPacket,
+    deterministic_candidates: list[OledSchemaCandidate],
+) -> None:
+    deterministic_by_id = {candidate.candidate_id: candidate for candidate in deterministic_candidates}
+    if packet_result.action == "keep_deterministic" and not deterministic_candidates:
+        raise ValueError(f"packet {packet.packet_id} cannot keep missing deterministic candidates")
+
+    superseded_ids = set(packet_result.superseded_deterministic_candidate_ids)
+    if packet_result.action == "replace":
+        unknown_ids = sorted(superseded_ids - set(deterministic_by_id))
+        if unknown_ids:
+            raise ValueError(
+                f"packet {packet.packet_id} replaces unknown deterministic candidate ids: {unknown_ids}"
+            )
+
+    preserved_deterministic = [
+        candidate
+        for candidate in deterministic_candidates
+        if candidate.candidate_id not in superseded_ids
+    ]
+    effective_candidates: list[OledSchemaCandidate | OledLLMSchemaCandidateProposal] = [
+        *preserved_deterministic,
+        *packet_result.candidate_proposals,
+    ]
+    has_eligible_property = any(_is_dataset_property_candidate(candidate) for candidate in effective_candidates)
+    if packet_result.scope_classification == "property_bearing":
+        if packet_result.action != "needs_source_check" and not has_eligible_property:
+            raise ValueError(
+                f"packet {packet.packet_id} is property_bearing without a molecule/interaction property"
+            )
+    elif has_eligible_property:
+        raise ValueError(
+            f"packet {packet.packet_id} contains a molecule/interaction property but is classified "
+            f"as {packet_result.scope_classification}"
+        )
+
+    if packet_result.action == "no_eligible_property" and any(
+        _is_dataset_property_candidate(candidate) for candidate in deterministic_candidates
+    ):
+        raise ValueError(
+            f"packet {packet.packet_id} cannot discard deterministic molecule/interaction properties as ineligible"
+        )
+
+    if packet_result.action == "needs_source_check":
+        combined_questions = " ".join(packet_result.source_check_questions).lower()
+        if any(marker in combined_questions for marker in _GENERIC_SOURCE_CHECK_MARKERS):
+            raise ValueError(
+                f"packet {packet.packet_id} uses a generic source-check request despite supplied full text"
+            )
+
+
+def _validate_table_row_evidence(
+    packet: OledSemanticMappingPacket,
+    proposal: OledLLMSchemaCandidateProposal,
+    *,
+    candidate_index: int,
+) -> None:
+    if packet.source_candidate_type.value != "table" or not packet.table_rows:
+        return
+    packet_refs = [
+        ref
+        for ref in proposal.evidence_refs
+        if ref.source_candidate_hash == packet.source_candidate_hash
+        and ref.source_evidence_anchor == packet.source_evidence_anchor
+        and ref.source_candidate_type == packet.source_candidate_type.value
+    ]
+    row_refs = [ref for ref in packet_refs if ref.row_index is not None]
+    if not row_refs:
+        raise ValueError(
+            f"packet {packet.packet_id} candidate {candidate_index} lacks row_index evidence"
+        )
+    for ref in row_refs:
+        row_index = int(ref.row_index)
+        if row_index < 0 or row_index >= len(packet.table_rows):
+            raise ValueError(
+                f"packet {packet.packet_id} candidate {candidate_index} has out-of-range row_index"
+            )
+        if not ref.column_name:
+            continue
+        row = packet.table_rows[row_index]
+        if ref.column_name not in row:
+            raise ValueError(
+                f"packet {packet.packet_id} candidate {candidate_index} cites an unknown table column"
+            )
+        expected_cell = str(row.get(ref.column_name) or "").strip()
+        actual_cell = str(ref.cell_value or "").strip()
+        if actual_cell != expected_cell:
+            raise ValueError(
+                f"packet {packet.packet_id} candidate {candidate_index} cell_value does not match row evidence"
+            )
+
+
+def _is_dataset_property_candidate(
+    candidate: OledSchemaCandidate | OledLLMSchemaCandidateProposal,
+) -> bool:
+    return (
+        candidate.candidate_type == OledSchemaCandidateType.PROPERTY_OBSERVATION
+        and candidate.target_layer in _DATASET_PROPERTY_LAYERS
+    )
 
 
 def _materialize_schema_candidates(
@@ -526,6 +695,9 @@ def _materialize_schema_candidates(
                         "request_digest": request.request_digest,
                         "mapping_action": packet_result.action,
                         "scope_classification": packet_result.scope_classification,
+                        "superseded_deterministic_candidate_ids": (
+                            packet_result.superseded_deterministic_candidate_ids
+                        ),
                         "llm_rationale": proposal.rationale,
                         "human_review_required": True,
                         "automatic_merge": False,
@@ -649,6 +821,11 @@ _CONTEXT_MAPPING_INSTRUCTIONS = (
     "Use captions, headers, rows, footnotes, and nearby/full-text explanations together.",
     "Do not invent compound identities, values, units, conditions, or source references.",
     "Do not force unsupported properties into the existing ontology; propose an ontology extension instead.",
+    "The current dataset admits molecule- and interaction-layer properties only.",
+    "Measurement/device-only properties and ontology extensions stay outside the current dataset.",
+    "Replace actions must name only the deterministic candidate ids they supersede and preserve all others.",
+    "Table candidate proposals must cite an exact row_index and matching source cell.",
+    "Use needs_source_check only for evidence absent from the supplied full text, such as SI or images.",
     "Do not emit schema candidates for device-only or no-eligible-property packets.",
     "All emitted candidates remain needs_llm and require human review; they are never merged automatically.",
 )

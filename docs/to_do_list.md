@@ -657,6 +657,11 @@ Status:
 - pass the current ontology plus deterministic candidates/findings to the existing LLM provider abstraction
 - require JSON-only packet classifications, evidence-bound candidate proposals, and ontology extension proposals
 - fail closed on unknown packets, missing packet results, hallucinated evidence refs, unsupported property ids, or invalid schema candidates
+- bind `replace` actions to exact superseded deterministic candidate ids so unrelated candidates are preserved
+- require row-level table evidence and matching source cells for LLM candidate proposals
+- reject measurement/device-only `property_bearing` classifications under the current dataset scope
+- reject duplicate or device/measurement-only ontology extensions
+- require structured missing-evidence reasons for source checks and reject generic PDF re-check requests
 - keep every LLM-derived schema candidate in `needs_llm` status for human review
 - keep ontology extensions as proposals only
 - exclude device-only results from the current dataset candidate scope

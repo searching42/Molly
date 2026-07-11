@@ -24,6 +24,8 @@ This avoids trying to enumerate every paper-specific header in advance without t
 
 The request contains the complete supplied document elements without automatic truncation, the table/text packets, the current ontology snapshot, deterministic candidates and findings, and a content digest. The builder does not read PDFs or files and does not call an LLM.
 
+The request also fixes the active dataset scope to `molecule_interaction_properties_only`. Measurement- or device-only observations remain QA context even when they are scientifically valid OLED metrics.
+
 One request covers one paper so the provider receives the full document context once rather than once per table cell.
 
 ## Structured Response
@@ -36,6 +38,10 @@ Every source packet must receive exactly one result with:
 - optional ontology extension proposals;
 - evidence references and rationale.
 
+`replace` results must list the exact `superseded_deterministic_candidate_ids`; deterministic candidates not listed there remain preserved. Table-derived candidate proposals must bind an exact `row_index` and matching source cell.
+
+`needs_source_check` results must identify evidence that is genuinely absent from the supplied full text using one or more structured reasons: supplementary information, an unavailable figure/image, an external reference, unresolved identity/abbreviation, or a missing method definition. Generic requests to re-check the already supplied PDF are invalid.
+
 Known properties may become `OledSchemaCandidate` proposals only when the property id and causal layer are allowed. Unknown properties must remain ontology extension proposals and cannot be materialized as schema candidates.
 
 ## Fail-Closed Validation
@@ -47,8 +53,14 @@ Known properties may become `OledSchemaCandidate` proposals only when the proper
 - a candidate uses a property outside the packet ontology;
 - a candidate cites evidence outside the packet or supplied ParsedDocument;
 - a candidate does not cite its source packet;
+- a table candidate does not cite an exact matching row and cell;
 - an ontology extension duplicates an existing property;
+- ontology extension proposals repeat a proposed property id;
+- an ontology extension is device/measurement-only under the current dataset scope;
 - device-only or no-property content emits schema candidates;
+- a measurement/device-only deterministic result is labelled `property_bearing`;
+- a `replace` result omits or invents superseded deterministic candidate ids;
+- a source-check request merely asks to re-check supplied PDF text;
 - materialized candidates fail existing semantic validation.
 
 Valid candidate proposals are always marked `needs_llm`, carry the request digest and source packet id, and require human review. Valid ontology extensions are preserved as proposals only; the ontology is not mutated.

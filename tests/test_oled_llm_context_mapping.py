@@ -14,7 +14,12 @@ from ai4s_agent.domains.oled_llm_context_mapping import (
     run_oled_llm_context_mapping,
 )
 from ai4s_agent.domains.oled_mineru_candidates import OledMineruCandidateType
-from ai4s_agent.domains.oled_mineru_semantic_mapping import OledSemanticMappingPacket
+from ai4s_agent.domains.oled_mineru_semantic_mapping import (
+    OledSchemaCandidate,
+    OledSchemaCandidateType,
+    OledSchemaEvidenceRef,
+    OledSemanticMappingPacket,
+)
 from ai4s_agent.llm_provider import LLMProviderError, StubLLMProvider
 
 
@@ -131,6 +136,7 @@ def test_build_context_request_preserves_full_document_elements_without_file_io(
     assert "10 wt% doped film" in elements[1].text
     assert elements[2].page == 3
     assert request.paper_id == "paper-context"
+    assert request.dataset_scope == "molecule_interaction_properties_only"
     assert request.metadata["full_context_supplied_without_automatic_truncation"] is True
     assert request.metadata["external_llm_called"] is False
     assert request.request_digest == request.request_digest
@@ -217,6 +223,7 @@ def test_ontology_extension_is_preserved_but_not_applied_or_materialized() -> No
                     }
                 ],
                 "source_check_questions": ["Confirm the metric definition in the supplementary methods."],
+                "source_check_missing_evidence": ["supplementary_information"],
                 "rationale_summary": "The quantity needs an ontology decision before mapping.",
             }
         ],
@@ -294,3 +301,188 @@ def test_context_mapping_api_is_exported_from_domain_package() -> None:
     )
 
     assert result.status == "ready_for_human_review"
+
+
+def test_property_bearing_keep_requires_molecule_or_interaction_property() -> None:
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+    request = request.model_copy(
+        update={
+            "deterministic_schema_candidates": [
+                _deterministic_property_candidate(
+                    candidate_id="det:measurement:eqe",
+                    target_layer=OledCausalLayer.MEASUREMENT,
+                    property_id="eqe_percent",
+                    value=12.5,
+                    unit="%",
+                )
+            ]
+        }
+    )
+    response = _valid_response()
+    packet_result = response["packet_results"][0]
+    packet_result["action"] = "keep_deterministic"
+    packet_result["candidate_proposals"] = []
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "invalid_response"
+    assert "without a molecule/interaction property" in result.findings[0].message
+
+
+def test_replace_binds_superseded_candidates_and_preserves_unrelated_candidates() -> None:
+    energy = _deterministic_property_candidate(
+        candidate_id="det:energy:s1",
+        target_layer=OledCausalLayer.INTERACTION,
+        property_id="s1_ev",
+        value=3.06,
+        unit="eV",
+    )
+    plqy = _deterministic_property_candidate(
+        candidate_id="det:plqy",
+        target_layer=OledCausalLayer.INTERACTION,
+        property_id="plqy",
+        value=82,
+        unit="%",
+    )
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document()).model_copy(
+        update={"deterministic_schema_candidates": [energy, plqy]}
+    )
+    response = _valid_response()
+    packet_result = response["packet_results"][0]
+    packet_result["action"] = "replace"
+    packet_result["superseded_deterministic_candidate_ids"] = ["det:energy:s1"]
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "ready_for_human_review"
+    assert result.schema_candidates[0].metadata["superseded_deterministic_candidate_ids"] == [
+        "det:energy:s1"
+    ]
+
+
+def test_replace_rejects_unknown_superseded_candidate_id() -> None:
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document()).model_copy(
+        update={
+            "deterministic_schema_candidates": [
+                _deterministic_property_candidate(
+                    candidate_id="det:plqy",
+                    target_layer=OledCausalLayer.INTERACTION,
+                    property_id="plqy",
+                    value=82,
+                    unit="%",
+                )
+            ]
+        }
+    )
+    response = _valid_response()
+    packet_result = response["packet_results"][0]
+    packet_result["action"] = "replace"
+    packet_result["superseded_deterministic_candidate_ids"] = ["det:missing"]
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "invalid_response"
+    assert "unknown deterministic candidate ids" in result.findings[0].message
+
+
+def test_table_candidate_requires_exact_row_evidence() -> None:
+    response = _valid_response()
+    response["packet_results"][0]["candidate_proposals"][0]["evidence_refs"][0]["row_index"] = None
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "invalid_response"
+    assert "lacks row_index evidence" in result.findings[0].message
+
+
+def test_device_only_ontology_extension_is_outside_current_dataset_scope() -> None:
+    response = _ontology_extension_response()
+    extension = response["packet_results"][0]["ontology_extension_proposals"][0]
+    extension["allowed_layers"] = ["device"]
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "invalid_response"
+    assert "device/measurement-only" in result.findings[0].message
+
+
+def test_duplicate_ontology_extension_property_ids_fail_closed() -> None:
+    response = _ontology_extension_response()
+    first = response["packet_results"][0]["ontology_extension_proposals"][0]
+    response["packet_results"][0]["ontology_extension_proposals"].append(dict(first))
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "invalid_response"
+    assert "duplicate ontology extension" in result.findings[0].message
+
+
+def test_generic_source_check_against_supplied_pdf_context_fails_closed() -> None:
+    response = _ontology_extension_response()
+    response["packet_results"][0]["source_check_questions"] = [
+        "Text mentions property-like values but deterministic extraction is needed. Verify against PDF source."
+    ]
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "invalid_response"
+    assert "generic source-check" in result.findings[0].message
+
+
+def _deterministic_property_candidate(
+    *,
+    candidate_id: str,
+    target_layer: OledCausalLayer,
+    property_id: str,
+    value: float,
+    unit: str,
+) -> OledSchemaCandidate:
+    return OledSchemaCandidate(
+        candidate_id=candidate_id,
+        candidate_type=OledSchemaCandidateType.PROPERTY_OBSERVATION,
+        source_paper_id="paper-context",
+        source_candidate_hash="source-table-hash",
+        source_evidence_anchor="paper-context:p3:table-1",
+        target_layer=target_layer,
+        property_id=property_id,
+        value=value,
+        unit=unit,
+        evidence_refs=[OledSchemaEvidenceRef.model_validate(_packet_ref())],
+    )
+
+
+def _ontology_extension_response() -> dict:
+    return {
+        "paper_id": "paper-context",
+        "packet_results": [
+            {
+                "packet_id": "packet:paper-context:table-1",
+                "action": "needs_source_check",
+                "scope_classification": "property_bearing",
+                "candidate_proposals": [],
+                "ontology_extension_proposals": [
+                    {
+                        "source_packet_id": "packet:paper-context:table-1",
+                        "proposed_property_id": "transient_new_metric",
+                        "name": "Transient new metric",
+                        "aliases": ["TNM"],
+                        "allowed_layers": ["interaction"],
+                        "canonical_unit": "ns",
+                        "physical_interpretation": "A paper-specific transient response metric.",
+                        "evidence_refs": [_packet_ref()],
+                        "confidence_score": 0.72,
+                        "rationale": "The method defines a quantity outside the current ontology.",
+                    }
+                ],
+                "source_check_questions": [
+                    "Confirm the metric definition in the unavailable supplementary methods."
+                ],
+                "source_check_missing_evidence": ["supplementary_information"],
+                "rationale_summary": "The quantity needs an ontology decision before mapping.",
+            }
+        ],
+    }
