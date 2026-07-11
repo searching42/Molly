@@ -625,6 +625,8 @@ Scope:
 Status:
 - implemented in `src/ai4s_agent/domains/oled_schema_candidate_compiler.py`
 - tested by `tests/test_oled_schema_candidate_compiler.py`
+- text property candidates from one packet are separated by explicit material/system identity
+- property-level calculation/measurement context is preserved through layered-record compilation
 
 ## 8.4 MinerU parsed-output acceptance harness MVP
 
