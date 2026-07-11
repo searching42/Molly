@@ -650,6 +650,30 @@ Status:
 - tested by `tests/test_oled_mineru_acceptance_harness.py`
 - documented in `docs/oled-mineru-acceptance-harness.md`
 
+## 8.4.1 Full-context LLM semantic proposal MVP
+
+### [x] Task:
+- build one content-bound request per paper from semantic mapping packets and the full supplied ParsedDocument context
+- pass the current ontology plus deterministic candidates/findings to the existing LLM provider abstraction
+- require JSON-only packet classifications, evidence-bound candidate proposals, and ontology extension proposals
+- fail closed on unknown packets, missing packet results, hallucinated evidence refs, unsupported property ids, or invalid schema candidates
+- keep every LLM-derived schema candidate in `needs_llm` status for human review
+- keep ontology extensions as proposals only
+- exclude device-only results from the current dataset candidate scope
+- do not execute model-generated scripts
+- do not merge proposals, compile records, mutate the ontology, create gold data, or write datasets
+
+Scope:
+- optional review-only proposal layer after deterministic mapping
+- no external provider is called unless explicitly supplied by the caller
+- the default literature workflow remains deterministic
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_llm_context_mapping.py`
+- offline request writer implemented in `src/ai4s_agent/oled_llm_context_request.py`
+- tested by `tests/test_oled_llm_context_mapping.py` and `tests/test_oled_llm_context_request.py`
+- documented in `docs/oled-llm-contextual-semantic-mapping.md`
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
