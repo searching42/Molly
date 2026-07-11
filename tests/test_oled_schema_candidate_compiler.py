@@ -164,6 +164,39 @@ def test_compile_table_1_like_interaction_record_preserves_roles_properties_and_
     assert compiled.source_evidence_anchors == ["paper:p1:b2:table"]
 
 
+def test_compile_energy_triplet_binds_row_material_context_without_inventing_smiles() -> None:
+    row_metadata = {
+        "row_material_name": "TDBA-Ph",
+        "row_material_source_column": "column_1",
+        "source_caption": "Photophysical properties of TDBA-based materials",
+    }
+    candidates = [
+        _property_candidate("s1_ev", "First singlet excited-state energy", 3.06, "eV", metadata=row_metadata),
+        _property_candidate("t1_ev", "First triplet excited-state energy", 2.82, "eV", metadata=row_metadata),
+        _property_candidate("delta_e_st_ev", "Singlet-triplet energy gap", 0.24, "eV", metadata=row_metadata),
+    ]
+
+    report = compile_oled_schema_candidates_to_layered_records(candidates)
+
+    compiled = report.compiled_records[0]
+    assert compiled.status == OledSchemaCompilationStatus.PARTIAL
+    assert compiled.schema_error_codes == []
+    assert "row_material_identity_compiled" in compiled.reason_codes
+    assert compiled.metadata["row_material_name"] == "TDBA-Ph"
+    record = compiled.layered_record
+    assert record is not None
+    assert record.molecule is not None
+    assert record.molecule.canonical_smiles is None
+    assert record.molecule.metadata["material_name"] == "TDBA-Ph"
+    assert record.molecule.metadata["identity_source"] == "table_row_label"
+    assert record.interaction is not None
+    assert {observation.property_id for observation in record.validate_schema().observations} == {
+        "s1_ev",
+        "t1_ev",
+        "delta_e_st_ev",
+    }
+
+
 def test_compile_table_2_like_measurement_record_attaches_conditions_and_metadata() -> None:
     candidates = [
         _property_candidate(

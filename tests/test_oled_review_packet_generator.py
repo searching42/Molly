@@ -191,6 +191,67 @@ def test_review_packet_ids_and_order_are_stable(tmp_path: Path) -> None:
     assert first_admission["summary"] == second_admission["summary"]
 
 
+def test_compiled_admission_excludes_device_only_records_from_current_dataset_scope(
+    tmp_path: Path,
+) -> None:
+    artifacts = _write_candidate_artifacts(tmp_path)
+    compiled_path = artifacts["oled_compiled_records_json"]
+    compiled_payload = _read_json(compiled_path)
+    compiled_payload["compiled_records"].append(
+        {
+            "record_id": "compiled-device-only",
+            "status": "compiled",
+            "group_key": {
+                "source_paper_id": "paper001",
+                "source_candidate_hashes": ["raw-hash-device"],
+                "row_index": 2,
+                "target_property_ids": [],
+            },
+            "layered_record": {
+                "device": {
+                    "device_stack": ["ITO", "HTL", "EML", "ETL", "LiF", "Al"],
+                    "metadata": {"source_text": "ITO/HTL/EML/ETL/LiF/Al"},
+                }
+            },
+            "source_schema_candidate_ids": ["schema-device-only"],
+            "source_candidate_hashes": ["raw-hash-device"],
+            "source_evidence_anchors": ["paper001:p4:device-structure"],
+            "confidence_score": 0.9,
+        }
+    )
+    _write_json(compiled_path, compiled_payload)
+
+    result = generate_oled_review_packet(
+        run_id="review-run",
+        output_dir=tmp_path / "review-device-policy",
+        generated_at=GENERATED_AT,
+        **artifacts,
+    )
+
+    full_packet = _read_json(Path(result.review_packet_json))
+    admission_packet = _read_json(Path(result.compiled_admission_packet_json))
+    admission_decisions = _read_json(Path(result.compiled_admission_decision_template_json))
+    summary = admission_packet["summary"]
+
+    assert len(
+        [item for item in full_packet["review_items"] if item["candidate_type"] == "oled_compiled_record"]
+    ) == 2
+    assert result.compiled_admission_item_count == 1
+    assert [item["source_candidate_id"] for item in admission_packet["review_items"]] == [
+        "compiled-001"
+    ]
+    assert summary["admission_scope"] == "property_bearing_compiled_records"
+    assert summary["excluded_non_property_compiled_record_count"] == 1
+    assert summary["excluded_non_property_compiled_record_ids"] == ["compiled-device-only"]
+    assert summary["excluded_device_only_record_count"] == 1
+    assert summary["excluded_device_only_record_ids"] == ["compiled-device-only"]
+    assert "device_only_records_retained_as_full_qa_context" in summary["governance_notes"]
+    assert len(admission_decisions["decisions"]) == 1
+    markdown = Path(result.compiled_admission_packet_md).read_text(encoding="utf-8")
+    assert "Device-only compiled records excluded from dataset admission: 1" in markdown
+    assert "Device-only and other non-property compiled records remain QA context" in markdown
+
+
 def test_duplicate_text_evidence_is_merged_with_source_ids_preserved(tmp_path: Path) -> None:
     artifacts = _write_candidate_artifacts(tmp_path)
     text_path = artifacts["oled_text_evidence_candidates_json"]
@@ -246,7 +307,9 @@ def test_handles_missing_candidate_artifacts_as_empty_packet_with_warnings(tmp_p
     assert result.compiled_admission_item_count == 0
     assert admission_packet["review_items"] == []
     assert admission_decisions["decisions"] == []
-    assert "No compiled records are eligible" in Path(result.compiled_admission_packet_md).read_text(
+    assert "No property-bearing compiled records are eligible" in Path(
+        result.compiled_admission_packet_md
+    ).read_text(
         encoding="utf-8"
     )
 

@@ -21,6 +21,11 @@ from ai4s_agent.domains.oled_property_ontology import DEFAULT_OLED_PROPERTY_ONTO
 from ai4s_agent.domains.oled_property_taxonomy import DEFAULT_OLED_PROPERTY_TAXONOMY
 
 
+_MISSING_TABLE_CELL_MARKERS = frozenset(
+    {"", "-", "--", "–", "—", "na", "n/a", "n.a.", "none", "null", "not available", "not reported"}
+)
+
+
 class OledSemanticMapperKind(str, Enum):
     RULE_BASED = "rule_based"
     LLM_PACKET = "llm_packet"
@@ -294,6 +299,16 @@ def _map_parsed_table_candidate(
             cell_value = str(raw_cell_value or "").strip()
             if not cell_value:
                 continue
+            if _is_missing_table_cell(cell_value):
+                if _property_id_from_header(column_name) is not None or _composite_property_kind(column_name):
+                    findings.append(
+                        _finding(
+                            "missing_property_cell_skipped",
+                            f"row {row_index} column `{column_name}` contains only a missing-value marker",
+                            source_candidate,
+                        )
+                    )
+                continue
             eml_roles = _eml_material_role_candidates(
                 source_candidate,
                 row_index,
@@ -338,10 +353,19 @@ def _map_parsed_table_candidate(
             composite = _composite_property_components(column_name, cell_value)
             if composite is not None:
                 if not composite:
+                    missing_components = _composite_cell_is_all_missing(cell_value)
                     findings.append(
                         _finding(
-                            "malformed_composite_property_cell",
-                            f"row {row_index} column `{column_name}` could not be split into CE/PE/EQE components",
+                            (
+                                "missing_composite_property_cell_skipped"
+                                if missing_components
+                                else "malformed_composite_property_cell"
+                            ),
+                            (
+                                f"row {row_index} column `{column_name}` contains only missing component values"
+                                if missing_components
+                                else f"row {row_index} column `{column_name}` could not be split into its declared components"
+                            ),
                             source_candidate,
                         )
                     )
@@ -517,6 +541,19 @@ def _row_semantic_metadata(
             metadata["device_label"] = _normalize_device_label(clean_value)
         if normalized in {"eml", "emls", "emissive_layer", "emissive_layers"}:
             metadata["system_label"] = clean_value
+    if source_candidate.table_headers and any(
+        _composite_property_kind(header) == "energy_triplet"
+        for header in source_candidate.table_headers
+    ):
+        first_column = source_candidate.table_headers[0]
+        row_material_name = str(row.get(first_column) or "").strip()
+        if (
+            _normalize_header(first_column).startswith("column_")
+            and row_material_name
+            and not _is_missing_table_cell(row_material_name)
+        ):
+            metadata["row_material_name"] = row_material_name
+            metadata["row_material_source_column"] = first_column
     if source_candidate.caption:
         metadata["source_caption"] = source_candidate.caption
     return metadata
@@ -559,8 +596,8 @@ def _eml_material_role_candidates(
 
 
 def _composite_property_components(header: str, cell_value: str) -> list[dict[str, Any]] | None:
-    normalized = _normalize_header(header)
-    if "ce_pe_eqe" not in normalized:
+    kind = _composite_property_kind(header)
+    if kind is None:
         return None
     raw_components = [part.strip() for part in str(cell_value or "").split("/")]
     if len(raw_components) != 3:
@@ -568,6 +605,22 @@ def _composite_property_components(header: str, cell_value: str) -> list[dict[st
     parsed_components = [_coerce_scalar(part) for part in raw_components]
     if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in parsed_components):
         return []
+    if kind == "energy_triplet":
+        component_values = {
+            "s1_ev": parsed_components[0],
+            "t1_ev": parsed_components[1],
+            "delta_e_st_ev": parsed_components[2],
+        }
+        return [
+            {
+                "property_id": property_id,
+                "value": value,
+                "unit": "eV",
+                "component_index": index,
+                "all_components": component_values,
+            }
+            for index, (property_id, value) in enumerate(component_values.items())
+        ]
     return [
         {
             "property_id": "eqe_percent",
@@ -581,6 +634,30 @@ def _composite_property_components(header: str, cell_value: str) -> list[dict[st
             },
         }
     ]
+
+
+def _composite_property_kind(header: str) -> str | None:
+    normalized = _normalize_header(header)
+    if "ce_pe_eqe" in normalized:
+        return "efficiency_triplet"
+    compact = normalized.replace("_", "")
+    if (
+        "e_s_e_t_delta_e_st" in normalized
+        or "esetdeltaest" in compact
+        or "s1_t1_delta_e_st" in normalized
+        or "s1t1deltaest" in compact
+    ):
+        return "energy_triplet"
+    return None
+
+
+def _composite_cell_is_all_missing(cell_value: str) -> bool:
+    components = [part.strip().lower() for part in str(cell_value or "").split("/")]
+    return bool(components) and all(component in _MISSING_TABLE_CELL_MARKERS for component in components)
+
+
+def _is_missing_table_cell(cell_value: str) -> bool:
+    return str(cell_value or "").strip().lower() in _MISSING_TABLE_CELL_MARKERS
 
 
 def _property_value_from_cell(
