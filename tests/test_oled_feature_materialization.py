@@ -90,6 +90,37 @@ def test_full_context_condition_features_are_bound_to_each_target_row() -> None:
     assert records[1]["feature.condition.condition_hash"] == records[1]["condition_hash"]
 
 
+def test_full_context_features_preserve_photophysical_comparison_fields() -> None:
+    observation = _measurement_observation("gold-oled-context", 100)
+    assert observation.condition is not None
+    observation.condition = observation.condition.model_copy(
+        update={
+            "measurement_temperature": 298.15,
+            "measurement_temperature_unit": "K",
+            "host_material": "mCBP",
+            "dopant_concentration": 8.0,
+            "dopant_concentration_unit": "wt%",
+            "sample_form": "doped film",
+            "excitation_wavelength": 300.0,
+            "excitation_wavelength_unit": "nm",
+            "lifetime_fit_method": "biexponential fit",
+        }
+    )
+    table = materialize_oled_baseline_feature_table(
+        [_gold_record("gold-oled-context", measurement_observation=observation)],
+        feature_view=OledBaselineFeatureView.FULL_CONTEXT,
+    )
+
+    record = table.to_records()[0]
+
+    assert record["feature.condition.host_material"] == "mCBP"
+    assert record["feature.condition.dopant_concentration"] == 8
+    assert record["feature.condition.sample_form"] == "doped film"
+    assert record["feature.condition.excitation_wavelength"] == 300
+    assert record["feature.condition.lifetime_fit_method"] == "biexponential fit"
+    assert record["feature.condition.comparison_context_status"] == "not_required"
+
+
 def test_feature_materialization_uses_normalized_targets_and_condition_features() -> None:
     table = materialize_oled_baseline_feature_table(
         [

@@ -106,6 +106,29 @@ Status:
 
 ---
 
+## 1.2.1 Photophysical property context contract
+
+### [x] Task: 纳入审核通过的 PL peak / prompt lifetime / delayed lifetime
+- add `photoluminescence_peak_nm`, `prompt_lifetime_ns`, and `delayed_lifetime_us`
+- retain only the narrow aliases accepted by human review
+- record measurement temperature, host material, dopant concentration, sample
+  form, excitation wavelength, and lifetime fit method with explicit missingness
+- normalize wavelength, lifetime, temperature, and concentration units
+- mark incomplete context without inventing values
+- allow direct comparison only for complete, matching comparison-context hashes
+- hard-gate incomplete context from comparable curated intrinsic views
+- keep different complete contexts separate during deduplication
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_property_ontology.py`,
+  `oled_layered_schema.py`, `oled_units.py`, and `oled_dataset_views.py`
+- context features propagated by `oled_feature_materialization.py`
+- documented in `docs/oled-photophysical-context-schema.md`
+- tested by ontology, taxonomy, unit, layered-schema, dataset-view, and feature
+  materialization regression tests
+
+---
+
 ## 1.3 Property Taxonomy Layer（命名归一化）
 
 ### [x] Task: 定义 taxonomy normalization API
@@ -236,6 +259,9 @@ Status:
 - normalize current density to mA/cm²
 - normalize doping ratio across wt% / mol% / %
 - normalize measurement temperature between K / °C
+- normalize photoluminescence peak wavelength to nm
+- normalize prompt lifetime to ns and delayed lifetime to us
+- normalize comparison-context excitation wavelength and dopant concentration
 - expose normalized value / unit / condition fields on schema reports
 - use normalized target and condition values in OLED feature materialization
 

@@ -8,6 +8,7 @@ from ai4s_agent.domains.oled_contracts import (
 )
 from ai4s_agent.domains.oled_property_ontology import (
     DEFAULT_OLED_PROPERTY_ONTOLOGY,
+    OLED_PHOTOPHYSICAL_COMPARISON_CONTEXT_FIELDS,
     OledPropertyDefinition,
     OledPropertyOntology,
     OledPropertyValueConstraint,
@@ -56,6 +57,34 @@ def test_excited_state_energies_allow_neat_film_interaction_context() -> None:
             property_id,
             OledCausalLayer.INTERACTION,
         ).is_valid
+
+
+def test_reviewed_photophysical_properties_use_narrow_aliases_and_context_policy() -> None:
+    peak = DEFAULT_OLED_PROPERTY_ONTOLOGY.get("photoluminescence_peak_nm")
+    prompt = DEFAULT_OLED_PROPERTY_ONTOLOGY.get("prompt_lifetime_ns")
+    delayed = DEFAULT_OLED_PROPERTY_ONTOLOGY.get("delayed_lifetime_us")
+
+    assert peak.aliases == {"PL maximum", "PL peak", "PL_max"}
+    assert peak.allowed_layers == {
+        OledCausalLayer.MOLECULE,
+        OledCausalLayer.INTERACTION,
+    }
+    assert peak.canonical_unit == "nm"
+    assert "measured PL spectrum reaches its maximum" in peak.physical_interpretation
+    assert prompt.aliases == {"prompt PL lifetime", "prompt fluorescence lifetime"}
+    assert delayed.aliases == {"delayed PL lifetime", "delayed fluorescence lifetime"}
+    assert prompt.allowed_layers == {OledCausalLayer.INTERACTION}
+    assert delayed.allowed_layers == {OledCausalLayer.INTERACTION}
+    assert prompt.canonical_unit == "ns"
+    assert delayed.canonical_unit == "us"
+    for definition in (peak, prompt, delayed):
+        assert definition.metadata["required_comparison_context_fields"] == list(
+            OLED_PHOTOPHYSICAL_COMPARISON_CONTEXT_FIELDS
+        )
+
+    for broad_alias in ("emission peak", "prompt lifetime", "delayed lifetime"):
+        with pytest.raises(KeyError):
+            DEFAULT_OLED_PROPERTY_ONTOLOGY.resolve(broad_alias)
 
 
 def test_ontology_builds_canonical_contract_claim() -> None:

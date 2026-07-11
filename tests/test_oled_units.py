@@ -42,6 +42,27 @@ def test_condition_field_normalization_handles_priority_oled_units() -> None:
     assert normalize_oled_condition_field("temperature_k", 298.15, "K").normalized_unit == "K"
 
 
+def test_photophysical_property_and_context_units_are_normalized() -> None:
+    assert normalize_oled_property_unit(
+        "photoluminescence_peak_nm", 0.49, "µm"
+    ).normalized_value == pytest.approx(490)
+    assert normalize_oled_property_unit(
+        "prompt_lifetime_ns", 0.0132, "µs"
+    ).normalized_value == pytest.approx(13.2)
+    assert normalize_oled_property_unit(
+        "delayed_lifetime_us", 0.0139, "ms"
+    ).normalized_value == pytest.approx(13.9)
+    assert normalize_oled_condition_field(
+        "measurement_temperature", 25, "°C"
+    ).normalized_value == pytest.approx(298.15)
+    assert normalize_oled_condition_field(
+        "excitation_wavelength", 0.3, "µm"
+    ).normalized_value == pytest.approx(300)
+    assert normalize_oled_condition_field(
+        "dopant_concentration", 0.08, "fraction"
+    ).normalized_value == pytest.approx(8)
+
+
 def test_layered_schema_reports_normalized_observation_values_and_conditions() -> None:
     condition = OledMeasurementCondition(
         luminance_cd_m2=100,

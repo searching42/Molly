@@ -33,6 +33,18 @@ def test_taxonomy_batch_canonicalization_preserves_order() -> None:
     assert [match.unit_hint for match in matches] == ["eV", "%", "fraction"]
 
 
+def test_taxonomy_canonicalizes_reviewed_photophysical_aliases_with_units() -> None:
+    assert DEFAULT_OLED_PROPERTY_TAXONOMY.canonicalize(
+        "PL peak (nm)"
+    ).canonical_property_id == "photoluminescence_peak_nm"
+    assert DEFAULT_OLED_PROPERTY_TAXONOMY.canonicalize(
+        "prompt PL lifetime ns"
+    ).canonical_property_id == "prompt_lifetime_ns"
+    assert DEFAULT_OLED_PROPERTY_TAXONOMY.canonicalize(
+        "delayed fluorescence lifetime µs"
+    ).canonical_property_id == "delayed_lifetime_us"
+
+
 def test_taxonomy_is_exported_from_domain_package() -> None:
     match = PACKAGE_OLED_PROPERTY_TAXONOMY.canonicalize("HOMO")
 

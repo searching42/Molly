@@ -515,6 +515,7 @@ from ai4s_agent.domains.oled_curated_release_candidate_external_publication_pref
     write_oled_release_candidate_external_publication_preflight_report_json,
 )
 from ai4s_agent.domains.oled_layered_schema import (
+    OledComparisonContextStatus,
     OledConfidenceAssessment,
     OledConfounderFlags,
     OledConfounderTag,
@@ -531,6 +532,7 @@ from ai4s_agent.domains.oled_layered_schema import (
     OledMeasurementLayer,
     OledMolecularLayer,
     OledPropertyObservation,
+    oled_observations_are_directly_comparable,
 )
 from ai4s_agent.domains.oled_mineru_candidates import (
     OledMineruCandidate,
@@ -636,6 +638,8 @@ from ai4s_agent.domains.oled_mineru_semantic_mapping import (
 )
 from ai4s_agent.domains.oled_property_ontology import (
     DEFAULT_OLED_PROPERTY_ONTOLOGY,
+    OLED_PHOTOPHYSICAL_COMPARISON_CONTEXT_FIELDS,
+    OLED_PHOTOPHYSICAL_CONTEXT_POLICY,
     OledPropertyDefinition,
     OledPropertyOntology,
     OledPropertyOntologyFinding,
@@ -885,6 +889,7 @@ __all__ = [
     "OledCuratedTrainingBaselineRunnerManifest",
     "OledCuratedTrainingBaselineRunnerPolicy",
     "OledCuratedTrainingBaselineRunnerReport",
+    "OledComparisonContextStatus",
     "OledDatasetViewFinding",
     "OledDatasetViewKind",
     "OledDatasetViewReport",
@@ -932,6 +937,8 @@ __all__ = [
     "OledPropertyTaxonomy",
     "OledPropertyTaxonomyMatch",
     "OledPropertyValueConstraint",
+    "OLED_PHOTOPHYSICAL_COMPARISON_CONTEXT_FIELDS",
+    "OLED_PHOTOPHYSICAL_CONTEXT_POLICY",
     "OledReviewedExtractionCandidate",
     "OledReviewedExtractionFinding",
     "OledReviewedExtractionStagingReport",
@@ -1108,6 +1115,7 @@ __all__ = [
     "materialize_oled_baseline_feature_tables",
     "normalize_oled_condition_field",
     "normalize_oled_property_unit",
+    "oled_observations_are_directly_comparable",
     "oled_dataset_view_output_filename",
     "oled_split_dataset_view_output_filename",
     "oled_split_feature_output_filename",

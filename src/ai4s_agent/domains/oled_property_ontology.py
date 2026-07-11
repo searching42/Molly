@@ -9,6 +9,22 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from ai4s_agent.domains.oled_contracts import OledCausalLayer, RepresentationClaim
 
 
+OLED_PHOTOPHYSICAL_COMPARISON_CONTEXT_FIELDS = (
+    "measurement_temperature",
+    "host_material",
+    "dopant_concentration",
+    "sample_form",
+    "excitation_wavelength",
+    "lifetime_fit_method",
+)
+
+OLED_PHOTOPHYSICAL_CONTEXT_POLICY = (
+    "Record every reported or applicable comparison-context field, preserve explicit "
+    "missingness, and do not treat observations with missing or incompatible context "
+    "as directly comparable."
+)
+
+
 class OledPropertyValueConstraint(BaseModel):
     minimum: float | None = None
     maximum: float | None = None
@@ -293,6 +309,65 @@ DEFAULT_OLED_PROPERTY_ONTOLOGY = OledPropertyOntology(
             physical_interpretation="radiative photon yield under a specified environment such as solution, film, or host matrix",
         ),
         OledPropertyDefinition(
+            property_id="photoluminescence_peak_nm",
+            name="Photoluminescence emission peak wavelength",
+            aliases={"PL maximum", "PL peak", "PL_max"},
+            allowed_layers={OledCausalLayer.MOLECULE, OledCausalLayer.INTERACTION},
+            canonical_unit="nm",
+            value_constraint=OledPropertyValueConstraint(minimum=100, maximum=2000),
+            physical_interpretation=(
+                "Photoluminescence emission peak wavelength, in nanometers, defined as "
+                "the wavelength at which the measured PL spectrum reaches its maximum "
+                "emission intensity under specified excitation and measurement conditions."
+            ),
+            metadata={
+                "required_comparison_context_fields": list(
+                    OLED_PHOTOPHYSICAL_COMPARISON_CONTEXT_FIELDS
+                ),
+                "context_policy": OLED_PHOTOPHYSICAL_CONTEXT_POLICY,
+            },
+        ),
+        OledPropertyDefinition(
+            property_id="prompt_lifetime_ns",
+            name="Prompt emission-decay lifetime",
+            aliases={"prompt PL lifetime", "prompt fluorescence lifetime"},
+            allowed_layers={OledCausalLayer.INTERACTION},
+            canonical_unit="ns",
+            value_constraint=OledPropertyValueConstraint(minimum=0),
+            physical_interpretation=(
+                "Fast emission-decay lifetime following pulsed excitation, typically "
+                "reported in nanoseconds. In TADF, exciplex, or doped-film systems, it "
+                "generally describes emission from initially populated singlet excited "
+                "states before substantial triplet-mediated repopulation occurs."
+            ),
+            metadata={
+                "required_comparison_context_fields": list(
+                    OLED_PHOTOPHYSICAL_COMPARISON_CONTEXT_FIELDS
+                ),
+                "context_policy": OLED_PHOTOPHYSICAL_CONTEXT_POLICY,
+            },
+        ),
+        OledPropertyDefinition(
+            property_id="delayed_lifetime_us",
+            name="Delayed emission-decay lifetime",
+            aliases={"delayed PL lifetime", "delayed fluorescence lifetime"},
+            allowed_layers={OledCausalLayer.INTERACTION},
+            canonical_unit="us",
+            value_constraint=OledPropertyValueConstraint(minimum=0),
+            physical_interpretation=(
+                "Slow emission-decay lifetime associated with delayed emission following "
+                "pulsed excitation, commonly reported in microseconds or milliseconds. "
+                "In TADF and exciplex systems, it generally reflects triplet-state-mediated "
+                "repopulation of emissive singlet states through reverse intersystem crossing."
+            ),
+            metadata={
+                "required_comparison_context_fields": list(
+                    OLED_PHOTOPHYSICAL_COMPARISON_CONTEXT_FIELDS
+                ),
+                "context_policy": OLED_PHOTOPHYSICAL_CONTEXT_POLICY,
+            },
+        ),
+        OledPropertyDefinition(
             property_id="eqe_percent",
             name="External quantum efficiency",
             aliases={"EQE", "external quantum efficiency", "max EQE", "maximum EQE"},
@@ -342,6 +417,8 @@ DEFAULT_OLED_PROPERTY_ONTOLOGY = OledPropertyOntology(
 
 __all__ = [
     "DEFAULT_OLED_PROPERTY_ONTOLOGY",
+    "OLED_PHOTOPHYSICAL_COMPARISON_CONTEXT_FIELDS",
+    "OLED_PHOTOPHYSICAL_CONTEXT_POLICY",
     "OledPropertyDefinition",
     "OledPropertyOntology",
     "OledPropertyOntologyFinding",
