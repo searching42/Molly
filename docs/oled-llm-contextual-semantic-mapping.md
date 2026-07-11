@@ -42,6 +42,10 @@ Every source packet must receive exactly one result with:
 
 `needs_source_check` results must identify evidence that is genuinely absent from the supplied full text using one or more structured reasons: supplementary information, an unavailable figure/image, an external reference, unresolved identity/abbreviation, or a missing method definition. Generic requests to re-check the already supplied PDF are invalid.
 
+`needs_ontology_review` is separate from missing-source review. Use it when the supplied evidence is complete but a molecule/interaction property is not represented in the current ontology. A `supplement` result may contain both candidates for known properties and extension proposals for additional unsupported properties from the same packet.
+
+When a text packet contains explicit eV property signals such as HOMO/LUMO or S1/T1/Delta-EST but is still marked `no_eligible_property`, the response must record one structured exclusion reason: external/background evidence, duplication of an existing candidate, or ambiguous identity/assignment.
+
 Known properties may become `OledSchemaCandidate` proposals only when the property id and causal layer are allowed. Unknown properties must remain ontology extension proposals and cannot be materialized as schema candidates.
 
 ## Fail-Closed Validation
@@ -61,6 +65,8 @@ Known properties may become `OledSchemaCandidate` proposals only when the proper
 - a measurement/device-only deterministic result is labelled `property_bearing`;
 - a `replace` result omits or invents superseded deterministic candidate ids;
 - a source-check request merely asks to re-check supplied PDF text;
+- complete unsupported evidence is incorrectly routed through source-check instead of ontology review;
+- explicit eV property evidence is excluded without a structured exclusion reason;
 - materialized candidates fail existing semantic validation.
 
 Valid candidate proposals are always marked `needs_llm`, carry the request digest and source packet id, and require human review. Valid ontology extensions are preserved as proposals only; the ontology is not mutated.

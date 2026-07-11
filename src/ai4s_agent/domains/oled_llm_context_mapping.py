@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from typing import Any, Literal
@@ -27,7 +28,7 @@ from ai4s_agent.llm_provider import LLMProvider, LLMProviderError
 from ai4s_agent.schemas import LLMInvocationRecord
 
 
-PROMPT_VERSION = "oled.contextual_semantic_mapping.v2"
+PROMPT_VERSION = "oled.contextual_semantic_mapping.v3"
 
 OledLLMMappingAction = Literal[
     "keep_deterministic",
@@ -35,6 +36,7 @@ OledLLMMappingAction = Literal[
     "replace",
     "no_eligible_property",
     "needs_source_check",
+    "needs_ontology_review",
 ]
 OledLLMScopeClassification = Literal["property_bearing", "device_only", "no_eligible_property"]
 OledLLMDatasetScope = Literal["molecule_interaction_properties_only"]
@@ -45,6 +47,11 @@ OledLLMSourceCheckMissingEvidence = Literal[
     "unresolved_identity",
     "unresolved_abbreviation",
     "missing_method_definition",
+]
+OledLLMExplicitPropertyExclusionReason = Literal[
+    "background_or_external_reference",
+    "duplicate_of_existing_candidate",
+    "ambiguous_identity_or_assignment",
 ]
 OledLLMContextMappingStatus = Literal[
     "ready_for_human_review",
@@ -171,6 +178,7 @@ class OledLLMPacketMappingProposal(BaseModel):
     superseded_deterministic_candidate_ids: list[str] = Field(default_factory=list)
     source_check_questions: list[str] = Field(default_factory=list)
     source_check_missing_evidence: list[OledLLMSourceCheckMissingEvidence] = Field(default_factory=list)
+    explicit_property_exclusion_reason: OledLLMExplicitPropertyExclusionReason | None = None
     rationale_summary: str
 
     @field_validator("packet_id", "rationale_summary")
@@ -220,8 +228,17 @@ class OledLLMPacketMappingProposal(BaseModel):
                 raise ValueError("needs_source_check requires source_check_missing_evidence")
         elif self.source_check_questions or self.source_check_missing_evidence:
             raise ValueError("source-check fields are only allowed for needs_source_check")
-        if self.ontology_extension_proposals and self.action != "needs_source_check":
-            raise ValueError("ontology extensions require needs_source_check action")
+        if self.ontology_extension_proposals and self.action not in {
+            "supplement",
+            "needs_ontology_review",
+        }:
+            raise ValueError("ontology extensions require supplement or needs_ontology_review action")
+        if self.action == "needs_ontology_review" and not self.ontology_extension_proposals:
+            raise ValueError("needs_ontology_review requires ontology_extension_proposals")
+        if self.action != "no_eligible_property" and self.explicit_property_exclusion_reason is not None:
+            raise ValueError(
+                "explicit_property_exclusion_reason is only allowed for no_eligible_property"
+            )
         return self
 
 
@@ -578,8 +595,18 @@ def _validate_action_and_scope_binding(
         *packet_result.candidate_proposals,
     ]
     has_eligible_property = any(_is_dataset_property_candidate(candidate) for candidate in effective_candidates)
+    has_eligible_extension = any(
+        set(extension.allowed_layers).intersection(_DATASET_PROPERTY_LAYERS)
+        for extension in packet_result.ontology_extension_proposals
+    )
     if packet_result.scope_classification == "property_bearing":
-        if packet_result.action != "needs_source_check" and not has_eligible_property:
+        unresolved_property_action = packet_result.action in {
+            "needs_source_check",
+            "needs_ontology_review",
+        }
+        if not has_eligible_property and not (
+            unresolved_property_action and has_eligible_extension
+        ) and packet_result.action != "needs_source_check":
             raise ValueError(
                 f"packet {packet.packet_id} is property_bearing without a molecule/interaction property"
             )
@@ -594,6 +621,17 @@ def _validate_action_and_scope_binding(
     ):
         raise ValueError(
             f"packet {packet.packet_id} cannot discard deterministic molecule/interaction properties as ineligible"
+        )
+
+    explicit_signals = _explicit_property_signal_labels(packet)
+    if (
+        packet_result.action == "no_eligible_property"
+        and explicit_signals
+        and packet_result.explicit_property_exclusion_reason is None
+    ):
+        raise ValueError(
+            f"packet {packet.packet_id} excludes explicit property signals {explicit_signals} "
+            "without explicit_property_exclusion_reason"
         )
 
     if packet_result.action == "needs_source_check":
@@ -652,6 +690,34 @@ def _is_dataset_property_candidate(
         candidate.candidate_type == OledSchemaCandidateType.PROPERTY_OBSERVATION
         and candidate.target_layer in _DATASET_PROPERTY_LAYERS
     )
+
+
+def _explicit_property_signal_labels(packet: OledSemanticMappingPacket) -> list[str]:
+    if packet.source_candidate_type.value != "text":
+        return []
+    text = str(packet.raw_text or "")
+    normalized = re.sub(r"[^a-z0-9]+", " ", text.lower())
+    if not re.search(r"\d+(?:\s+\d+)?\s+ev\b", normalized):
+        return []
+    signals: list[str] = []
+    has_energy_level_phrase = "energy level" in normalized or "energy levels" in normalized
+    if has_energy_level_phrase and "homo" in normalized:
+        signals.append("homo_ev")
+    if has_energy_level_phrase and "lumo" in normalized:
+        signals.append("lumo_ev")
+    if has_energy_level_phrase and (
+        re.search(r"\bs\s+1\b", normalized) or "singlet" in normalized
+    ):
+        signals.append("s1_ev")
+    if has_energy_level_phrase and (
+        re.search(r"\bt\s+1\b", normalized) or "triplet" in normalized
+    ):
+        signals.append("t1_ev")
+    if "delta" in normalized and (
+        re.search(r"\bs\s+t\b", normalized) or "est" in normalized
+    ):
+        signals.append("delta_e_st_ev")
+    return sorted(set(signals))
 
 
 def _materialize_schema_candidates(
@@ -723,6 +789,7 @@ def _mapping_messages(request: OledLLMPaperMappingRequest) -> list[dict[str, str
                 "and never admit device-only content into the molecular/property dataset. "
                 "Use an ontology_extension_proposal for an unsupported property instead of forcing a known "
                 "property_id. "
+                "Use needs_ontology_review when evidence is complete but the ontology lacks the property. "
                 "Every candidate must cite the source packet and may cite only supplied document context."
             ),
         },
@@ -822,10 +889,13 @@ _CONTEXT_MAPPING_INSTRUCTIONS = (
     "Do not invent compound identities, values, units, conditions, or source references.",
     "Do not force unsupported properties into the existing ontology; propose an ontology extension instead.",
     "The current dataset admits molecule- and interaction-layer properties only.",
-    "Measurement/device-only properties and ontology extensions stay outside the current dataset.",
+    "Measurement/device-only properties and device/measurement-only extensions stay outside the dataset.",
     "Replace actions must name only the deterministic candidate ids they supersede and preserve all others.",
     "Table candidate proposals must cite an exact row_index and matching source cell.",
     "Use needs_source_check only for evidence absent from the supplied full text, such as SI or images.",
+    "Use needs_ontology_review when evidence is complete but a molecule/interaction property is unsupported.",
+    "A supplement may include both known-property candidates and ontology extension proposals.",
+    "Explicit eV property signals require either mapping or a structured exclusion reason.",
     "Do not emit schema candidates for device-only or no-eligible-property packets.",
     "All emitted candidates remain needs_llm and require human review; they are never merged automatically.",
 )

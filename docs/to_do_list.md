@@ -662,6 +662,9 @@ Status:
 - reject measurement/device-only `property_bearing` classifications under the current dataset scope
 - reject duplicate or device/measurement-only ontology extensions
 - require structured missing-evidence reasons for source checks and reject generic PDF re-check requests
+- separate complete-evidence ontology review from missing-source review
+- allow one supplement to carry known-property candidates plus unsupported-property ontology proposals
+- require structured exclusion reasons when explicit HOMO/LUMO/S1/T1/Delta-EST eV evidence is omitted
 - keep every LLM-derived schema candidate in `needs_llm` status for human review
 - keep ontology extensions as proposals only
 - exclude device-only results from the current dataset candidate scope

@@ -205,7 +205,7 @@ def test_ontology_extension_is_preserved_but_not_applied_or_materialized() -> No
         "packet_results": [
             {
                 "packet_id": "packet:paper-context:table-1",
-                "action": "needs_source_check",
+                "action": "needs_ontology_review",
                 "scope_classification": "property_bearing",
                 "candidate_proposals": [],
                 "ontology_extension_proposals": [
@@ -222,8 +222,8 @@ def test_ontology_extension_is_preserved_but_not_applied_or_materialized() -> No
                         "rationale": "The header and method define a distinct quantity outside the current ontology.",
                     }
                 ],
-                "source_check_questions": ["Confirm the metric definition in the supplementary methods."],
-                "source_check_missing_evidence": ["supplementary_information"],
+                "source_check_questions": [],
+                "source_check_missing_evidence": [],
                 "rationale_summary": "The quantity needs an ontology decision before mapping.",
             }
         ],
@@ -405,7 +405,7 @@ def test_device_only_ontology_extension_is_outside_current_dataset_scope() -> No
     result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
 
     assert result.status == "invalid_response"
-    assert "device/measurement-only" in result.findings[0].message
+    assert "without a molecule/interaction property" in result.findings[0].message
 
 
 def test_duplicate_ontology_extension_property_ids_fail_closed() -> None:
@@ -421,7 +421,7 @@ def test_duplicate_ontology_extension_property_ids_fail_closed() -> None:
 
 
 def test_generic_source_check_against_supplied_pdf_context_fails_closed() -> None:
-    response = _ontology_extension_response()
+    response = _source_check_response()
     response["packet_results"][0]["source_check_questions"] = [
         "Text mentions property-like values but deterministic extraction is needed. Verify against PDF source."
     ]
@@ -431,6 +431,46 @@ def test_generic_source_check_against_supplied_pdf_context_fails_closed() -> Non
 
     assert result.status == "invalid_response"
     assert "generic source-check" in result.findings[0].message
+
+
+def test_supplement_can_include_known_candidates_and_ontology_extensions() -> None:
+    response = _valid_response()
+    extension = _ontology_extension_response()["packet_results"][0]["ontology_extension_proposals"][0]
+    response["packet_results"][0]["ontology_extension_proposals"] = [extension]
+    request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "ready_for_human_review"
+    assert len(result.schema_candidates) == 1
+    assert len(result.ontology_extension_proposals) == 1
+
+
+def test_explicit_ev_property_signals_require_structured_exclusion_reason() -> None:
+    packet = _explicit_property_text_packet()
+    request = build_oled_llm_paper_mapping_request([packet], parsed_document=_parsed_document())
+    response = _no_eligible_text_response(packet.packet_id)
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "invalid_response"
+    assert "explicit property signals" in result.findings[0].message
+    assert "homo_ev" in result.findings[0].message
+    assert "lumo_ev" in result.findings[0].message
+
+
+def test_explicit_ev_property_signals_can_be_audited_as_external_background() -> None:
+    packet = _explicit_property_text_packet()
+    request = build_oled_llm_paper_mapping_request([packet], parsed_document=_parsed_document())
+    response = _no_eligible_text_response(packet.packet_id)
+    response["packet_results"][0][
+        "explicit_property_exclusion_reason"
+    ] = "background_or_external_reference"
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "no_eligible_property"
+    assert result.is_valid is True
 
 
 def _deterministic_property_candidate(
@@ -461,7 +501,7 @@ def _ontology_extension_response() -> dict:
         "packet_results": [
             {
                 "packet_id": "packet:paper-context:table-1",
-                "action": "needs_source_check",
+                "action": "needs_ontology_review",
                 "scope_classification": "property_bearing",
                 "candidate_proposals": [],
                 "ontology_extension_proposals": [
@@ -478,11 +518,64 @@ def _ontology_extension_response() -> dict:
                         "rationale": "The method defines a quantity outside the current ontology.",
                     }
                 ],
+                "source_check_questions": [],
+                "source_check_missing_evidence": [],
+                "rationale_summary": "The quantity needs an ontology decision before mapping.",
+            }
+        ],
+    }
+
+
+def _source_check_response() -> dict:
+    return {
+        "paper_id": "paper-context",
+        "packet_results": [
+            {
+                "packet_id": "packet:paper-context:table-1",
+                "action": "needs_source_check",
+                "scope_classification": "property_bearing",
+                "candidate_proposals": [],
+                "ontology_extension_proposals": [],
                 "source_check_questions": [
-                    "Confirm the metric definition in the unavailable supplementary methods."
+                    "Inspect the unavailable supplementary table to resolve material assignments."
                 ],
                 "source_check_missing_evidence": ["supplementary_information"],
-                "rationale_summary": "The quantity needs an ontology decision before mapping.",
+                "rationale_summary": "The supplied full text points to an unavailable supplementary table.",
+            }
+        ],
+    }
+
+
+def _explicit_property_text_packet() -> OledSemanticMappingPacket:
+    return _packet().model_copy(
+        update={
+            "packet_id": "packet:paper-context:text-energy",
+            "source_candidate_hash": "source-text-energy-hash",
+            "source_evidence_anchor": "paper-context:p2:text-energy",
+            "source_candidate_type": OledMineruCandidateType.TEXT,
+            "caption": None,
+            "raw_text": (
+                "The HOMO energy level is -5.30 eV and the LUMO energy level is -2.76 eV."
+            ),
+            "table_headers": [],
+            "table_rows": [],
+        }
+    )
+
+
+def _no_eligible_text_response(packet_id: str) -> dict:
+    return {
+        "paper_id": "paper-context",
+        "packet_results": [
+            {
+                "packet_id": packet_id,
+                "action": "no_eligible_property",
+                "scope_classification": "no_eligible_property",
+                "candidate_proposals": [],
+                "ontology_extension_proposals": [],
+                "source_check_questions": [],
+                "source_check_missing_evidence": [],
+                "rationale_summary": "No eligible property.",
             }
         ],
     }
