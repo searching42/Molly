@@ -189,7 +189,11 @@ def generate_oled_review_packet(
         for record in compiled_records
         if _clean_text(record.get("record_id"))
     }
-    compiled_admission_items = _compiled_admission_review_items(
+    (
+        compiled_admission_items,
+        excluded_non_property_record_ids,
+        excluded_device_only_record_ids,
+    ) = _compiled_admission_review_items(
         review_items,
         compiled_records_by_id=compiled_records_by_id,
     )
@@ -208,11 +212,18 @@ def generate_oled_review_packet(
     compiled_admission_summary.update(
         {
             "packet_purpose": "compiled_only_admission",
+            "admission_scope": "property_bearing_compiled_records",
             "full_qa_review_item_count": len(review_items),
             "excluded_quality_review_item_count": len(review_items) - len(compiled_admission_items),
+            "excluded_non_property_compiled_record_count": len(excluded_non_property_record_ids),
+            "excluded_non_property_compiled_record_ids": excluded_non_property_record_ids,
+            "excluded_device_only_record_count": len(excluded_device_only_record_ids),
+            "excluded_device_only_record_ids": excluded_device_only_record_ids,
             "full_qa_packet_digest": oled_review_packet_digest(packet),
             "governance_notes": [
                 "compiled_only_admission_packet",
+                "property_bearing_records_only",
+                "device_only_records_retained_as_full_qa_context",
                 "only_compiled_records_are_downstream_eligible",
                 "all_admission_items_require_explicit_review",
                 "full_qa_packet_preserved_separately",
@@ -346,8 +357,10 @@ def _compiled_admission_review_items(
     review_items: list[OledReviewItem],
     *,
     compiled_records_by_id: dict[str, dict[str, Any]],
-) -> list[OledReviewItem]:
+) -> tuple[list[OledReviewItem], list[str], list[str]]:
     admission_items: list[OledReviewItem] = []
+    excluded_non_property_record_ids: list[str] = []
+    excluded_device_only_record_ids: list[str] = []
     for item in review_items:
         if item.candidate_type != "oled_compiled_record":
             continue
@@ -356,12 +369,23 @@ def _compiled_admission_review_items(
             raise ValueError(
                 f"compiled_admission_source_record_missing:{item.source_candidate_id}"
             )
+        record_summary = _compiled_admission_record_summary(record)
+        if not record_summary["observations"]:
+            excluded_non_property_record_ids.append(item.source_candidate_id)
+            layered_record = _dict(record.get("layered_record"))
+            if layered_record.get("device") is not None:
+                excluded_device_only_record_ids.append(item.source_candidate_id)
+            continue
         provenance = {
             **item.provenance,
-            "admission_record_summary": _compiled_admission_record_summary(record),
+            "admission_record_summary": record_summary,
         }
         admission_items.append(item.model_copy(update={"provenance": provenance}))
-    return admission_items
+    return (
+        admission_items,
+        excluded_non_property_record_ids,
+        excluded_device_only_record_ids,
+    )
 
 
 def _compiled_admission_record_summary(record: dict[str, Any]) -> dict[str, Any]:
@@ -726,6 +750,8 @@ def _render_compiled_admission_markdown(packet: OledReviewPacket) -> str:
         f"- Compiled records requiring admission review: {summary.get('review_item_count', 0)}",
         f"- Full QA review items retained separately: {summary.get('full_qa_review_item_count', 0)}",
         f"- QA-only items excluded from this admission packet: {summary.get('excluded_quality_review_item_count', 0)}",
+        f"- Non-property compiled records retained only in full QA: {summary.get('excluded_non_property_compiled_record_count', 0)}",
+        f"- Device-only compiled records excluded from dataset admission: {summary.get('excluded_device_only_record_count', 0)}",
         "- Source artifacts:",
     ]
     for name, path in sorted(packet.source_artifacts.items()):
@@ -741,6 +767,7 @@ def _render_compiled_admission_markdown(packet: OledReviewPacket) -> str:
             "- Decide whether the complete compiled layered record is acceptable, not merely whether one number is present.",
             "- Fill only `oled_compiled_admission_decision_template.json` for dataset-admission review.",
             "- The full `oled_review_packet.md` remains a QA attachment; its raw, schema, and text items do not require admission decisions.",
+            "- Device-only and other non-property compiled records remain QA context and have no dataset-admission decision entry.",
             "- Accepting a record does not create gold data or training rows; the explicit adjudication and curated-writer gates remain required.",
             "- Source-payload digests bind each item to the complete compiled record and fail closed if that record changes.",
             "",
@@ -749,7 +776,7 @@ def _render_compiled_admission_markdown(packet: OledReviewPacket) -> str:
         ]
     )
     if not packet.review_items:
-        lines.append("No compiled records are eligible for admission review.")
+        lines.append("No property-bearing compiled records are eligible for admission review.")
         return "\n".join(lines) + "\n"
     for index, item in enumerate(packet.review_items, start=1):
         record = _dict(item.provenance.get("admission_record_summary"))

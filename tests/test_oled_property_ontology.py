@@ -45,6 +45,19 @@ def test_default_ontology_enforces_value_constraints() -> None:
     assert invalid_report.definition.value_constraint.maximum == 1
 
 
+def test_excited_state_energies_allow_neat_film_interaction_context() -> None:
+    for property_id in ("s1_ev", "t1_ev", "delta_e_st_ev"):
+        definition = DEFAULT_OLED_PROPERTY_ONTOLOGY.get(property_id)
+        assert definition.allowed_layers == {
+            OledCausalLayer.MOLECULE,
+            OledCausalLayer.INTERACTION,
+        }
+        assert DEFAULT_OLED_PROPERTY_ONTOLOGY.validate_layer(
+            property_id,
+            OledCausalLayer.INTERACTION,
+        ).is_valid
+
+
 def test_ontology_builds_canonical_contract_claim() -> None:
     claim = DEFAULT_OLED_PROPERTY_ONTOLOGY.representation_claim(
         "EQE",

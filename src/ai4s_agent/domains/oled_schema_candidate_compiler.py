@@ -381,6 +381,12 @@ def _compile_group(
         for layer in (molecule, interaction, device, measurement):
             if layer is not None:
                 layer.metadata["system_label"] = system_label
+    row_material_name = _first_metadata_value(candidates, "row_material_name")
+    if row_material_name is not None:
+        molecule = molecule or OledMolecularLayer()
+        molecule.metadata["material_name"] = str(row_material_name).strip()
+        molecule.metadata["identity_source"] = "table_row_label"
+        reason_codes.add("row_material_identity_compiled")
 
     if molecule is not None:
         molecule.metadata.update(group_metadata)
@@ -738,6 +744,13 @@ def _group_metadata(
     caption = _first_metadata_value(candidates, "source_caption")
     if caption is not None:
         metadata["source_caption"] = caption
+    row_material_name = _first_metadata_value(candidates, "row_material_name")
+    if row_material_name is not None:
+        metadata["row_material_name"] = str(row_material_name).strip()
+        metadata["row_material_source_column"] = _first_metadata_value(
+            candidates,
+            "row_material_source_column",
+        )
     return metadata
 
 

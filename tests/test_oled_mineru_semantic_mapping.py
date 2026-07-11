@@ -263,6 +263,47 @@ def test_rule_mapper_does_not_misclassify_eta_l_efficiency_as_luminance() -> Non
     assert luminance[0].value == 4924
 
 
+def test_rule_mapper_splits_neat_film_energy_triplet_and_skips_missing_row() -> None:
+    candidate = _first_candidate(
+        [
+            {
+                "type": "table",
+                "table_caption": "Summary of the photophysical properties of TDBA-based materials.",
+                "table_body": (
+                    "| column_1 | Neat Film — PLQY (%) | "
+                    "$E_S / E_T / \\Delta E_{ST}$ (eV) |\n"
+                    "| --- | --- | --- |\n"
+                    "| TDBA | — | —/—/— |\n"
+                    "| TDBA-Ph | 62 | 3.06/2.82/0.24 |"
+                ),
+            }
+        ],
+        paper_id="paper-energy-triplet",
+    )
+
+    report = map_oled_mineru_candidates_to_schema_candidates([candidate])
+    properties = [
+        item
+        for item in report.schema_candidates
+        if item.candidate_type == OledSchemaCandidateType.PROPERTY_OBSERVATION
+    ]
+
+    assert {(item.property_id, item.value, item.unit) for item in properties} == {
+        ("plqy", 62, "%"),
+        ("s1_ev", 3.06, "eV"),
+        ("t1_ev", 2.82, "eV"),
+        ("delta_e_st_ev", 0.24, "eV"),
+    }
+    assert {item.evidence_refs[0].row_index for item in properties} == {1}
+    assert {item.metadata["row_material_name"] for item in properties} == {"TDBA-Ph"}
+    energy_properties = [item for item in properties if item.property_id != "plqy"]
+    assert all(item.target_layer == OledCausalLayer.INTERACTION for item in energy_properties)
+    assert all("composite_property_cell_split" in item.reason_codes for item in energy_properties)
+    assert {item.metadata["composite_metric_component_index"] for item in energy_properties} == {0, 1, 2}
+    assert "missing_property_cell_skipped" in report.warning_codes
+    assert "missing_composite_property_cell_skipped" in report.warning_codes
+
+
 def test_rule_mapper_does_not_use_parent_group_concentration_as_plqy_unit() -> None:
     candidate = _first_candidate(
         [
