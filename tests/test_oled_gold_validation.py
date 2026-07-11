@@ -101,6 +101,40 @@ def test_gold_validation_rejects_duplicate_ids_and_missing_evidence_refs() -> No
     assert report.valid_record_ids == []
 
 
+def test_gold_validation_preserves_incomplete_photophysical_context_as_warning() -> None:
+    evidence = OledEvidenceSource(
+        source_id="paper-1:table-3:row-2",
+        source_type=OledEvidenceType.TABLE,
+        layer=OledCausalLayer.MOLECULE,
+    )
+    record = OledGoldDatasetRecord(
+        record_id="gold-oled-photophysical-incomplete",
+        layered_record=OledLayeredRecord(
+            molecule=OledMolecularLayer(
+                canonical_smiles="N1C=CC=C1",
+                properties=[
+                    OledPropertyObservation(
+                        property_label="PL peak",
+                        value=490,
+                        unit="nm",
+                        condition=OledMeasurementCondition(sample_form="neat film"),
+                        evidence_sources=[evidence],
+                        confidence=OledConfidenceAssessment(score=0.9),
+                    )
+                ],
+            )
+        ),
+        evidence_refs=[evidence.source_id],
+    )
+
+    report = validate_oled_gold_dataset([record])
+
+    assert report.is_valid is True
+    assert report.error_codes == []
+    assert report.warning_codes == ["incomplete_photophysical_comparison_context"]
+    assert report.valid_record_ids == [record.record_id]
+
+
 def test_gold_dataset_record_is_exported_from_domain_package() -> None:
     gold_record = PackageOledGoldDatasetRecord(
         record_id="gold-oled-005",

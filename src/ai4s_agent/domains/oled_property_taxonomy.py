@@ -86,7 +86,9 @@ def _strip_bracket_suffix(term: str) -> str:
 
 
 def _strip_trailing_unit_token(term: str) -> str:
-    unit_pattern = r"\s+(?:%|ev|nm|fraction|cd/m(?:2|²)|ma/cm(?:2|²))\s*$"
+    unit_pattern = (
+        r"\s+(?:%|ev|nm|ns|us|µs|μs|fraction|cd/m(?:2|²)|ma/cm(?:2|²))\s*$"
+    )
     return re.sub(unit_pattern, "", term, flags=re.IGNORECASE).strip()
 
 
