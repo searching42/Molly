@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence, TextIO
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.domains.oled_llm_context_mapping import (
@@ -29,6 +29,12 @@ class OledLLMContextRequestArtifact(BaseModel):
     request_digest: str
     request: OledLLMPaperMappingRequest
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_request_digest(self) -> OledLLMContextRequestArtifact:
+        if self.request_digest != self.request.request_digest:
+            raise ValueError("request_digest does not match the canonical request content")
+        return self
 
 
 def prepare_oled_llm_context_request_artifact(

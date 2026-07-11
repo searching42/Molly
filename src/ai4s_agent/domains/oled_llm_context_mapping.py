@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
+from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -227,7 +228,7 @@ class OledLLMPaperMappingRequest(BaseModel):
 
     @property
     def request_digest(self) -> str:
-        return _stable_hash(self.model_dump(mode="json", exclude={"metadata"}))
+        return _stable_hash(self.model_dump(mode="python", exclude={"metadata"}))
 
 
 class OledLLMContextMappingFinding(BaseModel):
@@ -611,8 +612,36 @@ def _page_number(value: Mapping[str, Any], *, fallback: int | None = None) -> in
 
 
 def _stable_hash(value: Any) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    encoded = json.dumps(
+        _canonical_json_value(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_json_value(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return _canonical_json_value(value.model_dump(mode="python"))
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Mapping):
+        return {
+            str(key): _canonical_json_value(item)
+            for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (set, frozenset)):
+        items = [_canonical_json_value(item) for item in value]
+        return sorted(
+            items,
+            key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        )
+    if isinstance(value, (list, tuple)):
+        return [_canonical_json_value(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
 _CONTEXT_MAPPING_INSTRUCTIONS = (

@@ -103,6 +103,7 @@ def test_prepare_request_from_files_writes_content_bound_artifact(tmp_path) -> N
     written = json.loads(output_path.read_text(encoding="utf-8"))
 
     assert written["request_digest"] == artifact.request_digest
+    assert written["request_digest"] == artifact.request.request_digest
     assert written["metadata"]["external_service_called"] is False
     assert written["request"]["metadata"]["full_context_supplied_without_automatic_truncation"] is True
 

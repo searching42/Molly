@@ -134,6 +134,8 @@ def test_build_context_request_preserves_full_document_elements_without_file_io(
     assert request.metadata["full_context_supplied_without_automatic_truncation"] is True
     assert request.metadata["external_llm_called"] is False
     assert request.request_digest == request.request_digest
+    reloaded_request = type(request).model_validate_json(request.model_dump_json())
+    assert reloaded_request.request_digest == request.request_digest
     assert len(request.ontology) > 10
 
 
