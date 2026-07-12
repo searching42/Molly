@@ -39,6 +39,12 @@ class OledEvidenceType(str, Enum):
     MANUAL_REVIEW = "manual_review"
 
 
+class OledComparisonContextStatus(str, Enum):
+    NOT_REQUIRED = "not_required"
+    INCOMPLETE = "incomplete"
+    COMPLETE = "complete"
+
+
 class OledEvidenceSource(BaseModel):
     source_id: str
     source_type: OledEvidenceType
@@ -90,7 +96,16 @@ class OledMeasurementCondition(BaseModel):
     current_density_ma_cm2: float | None = None
     voltage_v: float | None = None
     temperature_k: float | None = None
+    measurement_temperature: float | str | None = None
+    measurement_temperature_unit: str | None = None
     atmosphere: str | None = None
+    host_material: str | None = None
+    dopant_concentration: float | str | None = None
+    dopant_concentration_unit: str | None = None
+    sample_form: str | None = None
+    excitation_wavelength: float | str | None = None
+    excitation_wavelength_unit: str | None = None
+    lifetime_fit_method: str | None = None
     condition_label: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -212,8 +227,21 @@ class OledLayeredCanonicalObservation(BaseModel):
     condition_hash: str | None = None
     normalized_condition: OledMeasurementCondition | None = None
     normalized_condition_hash: str | None = None
+    comparison_context_status: OledComparisonContextStatus = (
+        OledComparisonContextStatus.NOT_REQUIRED
+    )
+    comparison_context_required_fields: list[str] = Field(default_factory=list)
+    comparison_context_missing_fields: list[str] = Field(default_factory=list)
+    comparison_context_hash: str | None = None
     evidence_sources: list[OledEvidenceSource] = Field(default_factory=list)
     confidence: OledConfidenceAssessment | None = None
+
+    @property
+    def is_comparison_ready(self) -> bool:
+        return self.comparison_context_status in {
+            OledComparisonContextStatus.NOT_REQUIRED,
+            OledComparisonContextStatus.COMPLETE,
+        }
 
 
 class OledLayeredSchemaFinding(BaseModel):
@@ -309,6 +337,16 @@ class OledLayeredRecord(BaseModel):
             normalized_condition, condition_unit_normalizations = _normalized_measurement_condition(
                 property_observation.condition
             )
+            (
+                comparison_context_status,
+                comparison_context_required_fields,
+                comparison_context_missing_fields,
+                comparison_context_hash,
+            ) = _comparison_context_assessment(
+                property_id=taxonomy_match.canonical_property_id,
+                condition=normalized_condition or property_observation.condition,
+                ontology=ontology,
+            )
             observations.append(
                 OledLayeredCanonicalObservation(
                     layer=layer,
@@ -333,6 +371,10 @@ class OledLayeredRecord(BaseModel):
                     normalized_condition_hash=(
                         normalized_condition.condition_hash if normalized_condition is not None else None
                     ),
+                    comparison_context_status=comparison_context_status,
+                    comparison_context_required_fields=comparison_context_required_fields,
+                    comparison_context_missing_fields=comparison_context_missing_fields,
+                    comparison_context_hash=comparison_context_hash,
                     evidence_sources=property_observation.evidence_sources,
                     confidence=property_observation.confidence,
                 )
@@ -359,6 +401,15 @@ class OledLayeredRecord(BaseModel):
                     property_id=taxonomy_match.canonical_property_id,
                     property_label=property_observation.property_label,
                     observation=property_observation,
+                )
+            )
+            findings.extend(
+                _comparison_context_findings(
+                    layer=layer,
+                    property_id=taxonomy_match.canonical_property_id,
+                    property_label=property_observation.property_label,
+                    status=comparison_context_status,
+                    missing_fields=comparison_context_missing_fields,
                 )
             )
             findings.extend(
@@ -457,6 +508,9 @@ def _normalized_measurement_condition(
         updates[field_name] = result.normalized_value
         if result.normalized_unit:
             normalized_units[field_name] = result.normalized_unit
+            unit_field = f"{field_name}_unit"
+            if unit_field in OledMeasurementCondition.model_fields:
+                updates[unit_field] = result.normalized_unit
 
     if not updates:
         return condition, results
@@ -476,6 +530,11 @@ def _normalized_measurement_condition(
 
 
 def _condition_unit_for(condition: OledMeasurementCondition, field_name: str) -> str | None:
+    explicit_unit_field = f"{field_name}_unit"
+    if explicit_unit_field in OledMeasurementCondition.model_fields:
+        explicit_unit = getattr(condition, explicit_unit_field)
+        if explicit_unit is not None:
+            return str(explicit_unit)
     metadata = condition.metadata
     nested_units = metadata.get("units")
     if isinstance(nested_units, dict):
@@ -488,6 +547,138 @@ def _condition_unit_for(condition: OledMeasurementCondition, field_name: str) ->
         if unit is not None:
             return str(unit)
     return _CONDITION_DEFAULT_UNITS[field_name]
+
+
+def _comparison_context_assessment(
+    *,
+    property_id: str,
+    condition: OledMeasurementCondition | None,
+    ontology: OledPropertyOntology,
+) -> tuple[OledComparisonContextStatus, list[str], list[str], str | None]:
+    definition = ontology.get(property_id)
+    raw_required_fields = definition.metadata.get("required_comparison_context_fields")
+    if not isinstance(raw_required_fields, list):
+        return OledComparisonContextStatus.NOT_REQUIRED, [], [], None
+    required_fields = [str(field).strip() for field in raw_required_fields if str(field).strip()]
+    context_payload = {
+        field: _comparison_context_field_value(condition, field)
+        for field in required_fields
+    }
+    missing_fields = [
+        field for field, value in context_payload.items() if _context_value_is_missing(value)
+    ]
+    if missing_fields:
+        return (
+            OledComparisonContextStatus.INCOMPLETE,
+            required_fields,
+            missing_fields,
+            None,
+        )
+    encoded = json.dumps(
+        {
+            "property_id": property_id,
+            "context": context_payload,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return (
+        OledComparisonContextStatus.COMPLETE,
+        required_fields,
+        [],
+        hashlib.sha256(encoded).hexdigest(),
+    )
+
+
+def _comparison_context_field_value(
+    condition: OledMeasurementCondition | None,
+    field_name: str,
+) -> Any:
+    if condition is None:
+        return None
+    if field_name == "measurement_temperature":
+        value = (
+            condition.measurement_temperature
+            if condition.measurement_temperature is not None
+            else condition.temperature_k
+        )
+        unit = (
+            condition.measurement_temperature_unit
+            if condition.measurement_temperature is not None
+            else "K" if condition.temperature_k is not None else None
+        )
+        return _value_with_unit(value, unit)
+    if field_name == "dopant_concentration":
+        return _value_with_unit(
+            condition.dopant_concentration,
+            condition.dopant_concentration_unit,
+        )
+    if field_name == "excitation_wavelength":
+        return _value_with_unit(
+            condition.excitation_wavelength,
+            condition.excitation_wavelength_unit,
+        )
+    return _normalized_context_value(getattr(condition, field_name, None))
+
+
+def _value_with_unit(value: Any, unit: str | None) -> dict[str, Any] | None:
+    if _context_value_is_missing(value):
+        return None
+    if isinstance(value, str) and not _string_is_numeric(value):
+        return {"reported": _normalized_context_value(value)}
+    return {
+        "value": _normalized_context_value(value),
+        "unit": _normalized_context_value(unit),
+    }
+
+
+def _string_is_numeric(value: str) -> bool:
+    try:
+        float(value.strip())
+    except ValueError:
+        return False
+    return True
+
+
+def _normalized_context_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return " ".join(value.strip().lower().split())
+    return value
+
+
+def _context_value_is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, dict):
+        if "reported" in value:
+            return _context_value_is_missing(value.get("reported"))
+        return _context_value_is_missing(value.get("value")) or _context_value_is_missing(
+            value.get("unit")
+        )
+    return False
+
+
+def oled_observations_are_directly_comparable(
+    left: OledLayeredCanonicalObservation,
+    right: OledLayeredCanonicalObservation,
+) -> bool:
+    if left.property_id != right.property_id:
+        return False
+    if left.normalized_unit != right.normalized_unit:
+        return False
+    if (
+        left.comparison_context_status == OledComparisonContextStatus.NOT_REQUIRED
+        and right.comparison_context_status == OledComparisonContextStatus.NOT_REQUIRED
+    ):
+        return True
+    return (
+        left.comparison_context_status == OledComparisonContextStatus.COMPLETE
+        and right.comparison_context_status == OledComparisonContextStatus.COMPLETE
+        and left.comparison_context_hash == right.comparison_context_hash
+    )
 
 
 def _unit_normalization_findings(
@@ -572,6 +763,32 @@ def _measurement_condition_findings(
         OledLayeredSchemaFinding(
             code="missing_measurement_condition",
             message=f"measurement property `{property_id}` has no condition context",
+            layer=layer,
+            property_id=property_id,
+            property_label=property_label,
+        )
+    ]
+
+
+def _comparison_context_findings(
+    *,
+    layer: OledCausalLayer,
+    property_id: str,
+    property_label: str,
+    status: OledComparisonContextStatus,
+    missing_fields: list[str],
+) -> list[OledLayeredSchemaFinding]:
+    if status != OledComparisonContextStatus.INCOMPLETE:
+        return []
+    return [
+        OledLayeredSchemaFinding(
+            code="incomplete_photophysical_comparison_context",
+            severity="warning",
+            message=(
+                f"property `{property_id}` is preserved with explicit missing context but "
+                "must not be treated as directly comparable; missing fields: "
+                f"{', '.join(missing_fields)}"
+            ),
             layer=layer,
             property_id=property_id,
             property_label=property_label,
@@ -712,16 +929,38 @@ def _dedup_schema_findings(findings: list[OledLayeredSchemaFinding]) -> list[Ole
 
 
 _MEASUREMENT_PERFORMANCE_PROPERTIES = {"eqe_percent"}
-_CONDITION_UNIT_FIELDS = ("luminance_cd_m2", "current_density_ma_cm2", "temperature_k")
+_CONDITION_UNIT_FIELDS = (
+    "luminance_cd_m2",
+    "current_density_ma_cm2",
+    "temperature_k",
+    "measurement_temperature",
+    "dopant_concentration",
+    "excitation_wavelength",
+)
 _CONDITION_DEFAULT_UNITS = {
     "luminance_cd_m2": "cd/m^2",
     "current_density_ma_cm2": "mA/cm^2",
     "temperature_k": "K",
+    "measurement_temperature": None,
+    "dopant_concentration": None,
+    "excitation_wavelength": None,
 }
 _CONDITION_UNIT_METADATA_KEYS = {
     "luminance_cd_m2": ("luminance_unit", "luminance_cd_m2_unit"),
     "current_density_ma_cm2": ("current_density_unit", "current_density_ma_cm2_unit"),
     "temperature_k": ("temperature_unit", "temperature_k_unit"),
+    "measurement_temperature": (
+        "measurement_temperature_unit",
+        "temperature_unit",
+    ),
+    "dopant_concentration": (
+        "dopant_concentration_unit",
+        "doping_ratio_unit",
+    ),
+    "excitation_wavelength": (
+        "excitation_wavelength_unit",
+        "wavelength_unit",
+    ),
 }
 _UNIT_NORMALIZATION_WARNING_CODES = {
     OledUnitNormalizationStatus.MISSING_UNIT: "missing_unit",
@@ -731,6 +970,7 @@ _UNIT_NORMALIZATION_WARNING_CODES = {
 
 
 __all__ = [
+    "OledComparisonContextStatus",
     "OledConfidenceAssessment",
     "OledConfounderFlags",
     "OledConfounderTag",
@@ -747,4 +987,5 @@ __all__ = [
     "OledMeasurementLayer",
     "OledMolecularLayer",
     "OledPropertyObservation",
+    "oled_observations_are_directly_comparable",
 ]

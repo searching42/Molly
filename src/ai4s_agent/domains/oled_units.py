@@ -239,12 +239,117 @@ _EV_RULE = _UnitRule(
     canonical_status_units={"ev", "electronvolt", "electronvolts"},
 )
 
+_NM_RULE = _UnitRule(
+    canonical_unit="nm",
+    conversions={
+        "nm": 1.0,
+        "nanometer": 1.0,
+        "nanometers": 1.0,
+        "um": 1000.0,
+        "micrometer": 1000.0,
+        "micrometers": 1000.0,
+        "å": 0.1,
+        "angstrom": 0.1,
+        "angstroms": 0.1,
+    },
+    canonical_status_units={"nm", "nanometer", "nanometers"},
+)
+
+_NS_RULE = _UnitRule(
+    canonical_unit="ns",
+    conversions={
+        "ps": 0.001,
+        "picosecond": 0.001,
+        "picoseconds": 0.001,
+        "ns": 1.0,
+        "nanosecond": 1.0,
+        "nanoseconds": 1.0,
+        "us": 1000.0,
+        "microsecond": 1000.0,
+        "microseconds": 1000.0,
+        "ms": 1_000_000.0,
+        "millisecond": 1_000_000.0,
+        "milliseconds": 1_000_000.0,
+        "s": 1_000_000_000.0,
+        "second": 1_000_000_000.0,
+        "seconds": 1_000_000_000.0,
+    },
+    canonical_status_units={"ns", "nanosecond", "nanoseconds"},
+)
+
+_US_RULE = _UnitRule(
+    canonical_unit="us",
+    conversions={
+        "ps": 0.000001,
+        "picosecond": 0.000001,
+        "picoseconds": 0.000001,
+        "ns": 0.001,
+        "nanosecond": 0.001,
+        "nanoseconds": 0.001,
+        "us": 1.0,
+        "microsecond": 1.0,
+        "microseconds": 1.0,
+        "ms": 1000.0,
+        "millisecond": 1000.0,
+        "milliseconds": 1000.0,
+        "s": 1_000_000.0,
+        "second": 1_000_000.0,
+        "seconds": 1_000_000.0,
+    },
+    canonical_status_units={"us", "microsecond", "microseconds"},
+)
+
+_DOPING_RATIO_RULE = _UnitRule(
+    canonical_unit="%",
+    conversions={
+        "%": 1.0,
+        "percent": 1.0,
+        "percentage": 1.0,
+        "wt%": "wt%",
+        "wtpercent": "wt%",
+        "weight%": "wt%",
+        "weightpercent": "wt%",
+        "mol%": "mol%",
+        "molpercent": "mol%",
+        "mole%": "mol%",
+        "molepercent": "mol%",
+        "fraction": "fraction_to_percent",
+        "frac": "fraction_to_percent",
+        "unitless": "fraction_to_percent",
+        "1": "fraction_to_percent",
+    },
+    canonical_status_units={
+        "%",
+        "percent",
+        "percentage",
+        "wt%",
+        "wtpercent",
+        "mol%",
+        "molpercent",
+    },
+)
+
+_TEMPERATURE_RULE = _UnitRule(
+    canonical_unit="K",
+    conversions={
+        "k": 1.0,
+        "kelvin": 1.0,
+        "°c": "celsius_to_kelvin",
+        "c": "celsius_to_kelvin",
+        "celsius": "celsius_to_kelvin",
+    },
+    canonical_status_units={"k", "kelvin"},
+)
+
 _PROPERTY_UNIT_RULES: dict[str, _UnitRule] = {
     "homo_ev": _EV_RULE,
     "lumo_ev": _EV_RULE,
     "s1_ev": _EV_RULE,
     "t1_ev": _EV_RULE,
     "delta_e_st_ev": _EV_RULE,
+    "photoluminescence_peak_nm": _NM_RULE,
+    "prompt_lifetime_ns": _NS_RULE,
+    "delayed_lifetime_us": _US_RULE,
     "eqe_percent": _UnitRule(
         canonical_unit="%",
         conversions={
@@ -295,51 +400,16 @@ _PROPERTY_UNIT_RULES: dict[str, _UnitRule] = {
         },
         canonical_status_units={"ma/cm2", "macm-2", "ma/cm-2"},
     ),
-    "doping_ratio_percent": _UnitRule(
-        canonical_unit="%",
-        conversions={
-            "%": 1.0,
-            "percent": 1.0,
-            "percentage": 1.0,
-            "wt%": "wt%",
-            "wtpercent": "wt%",
-            "weight%": "wt%",
-            "weightpercent": "wt%",
-            "mol%": "mol%",
-            "molpercent": "mol%",
-            "mole%": "mol%",
-            "molepercent": "mol%",
-            "fraction": "fraction_to_percent",
-            "frac": "fraction_to_percent",
-            "unitless": "fraction_to_percent",
-            "1": "fraction_to_percent",
-        },
-        canonical_status_units={
-            "%",
-            "percent",
-            "percentage",
-            "wt%",
-            "wtpercent",
-            "mol%",
-            "molpercent",
-        },
-    ),
+    "doping_ratio_percent": _DOPING_RATIO_RULE,
 }
 
 _CONDITION_UNIT_RULES: dict[str, _UnitRule] = {
     "luminance_cd_m2": _PROPERTY_UNIT_RULES["luminance_cd_m2"],
     "current_density_ma_cm2": _PROPERTY_UNIT_RULES["current_density_ma_cm2"],
-    "temperature_k": _UnitRule(
-        canonical_unit="K",
-        conversions={
-            "k": 1.0,
-            "kelvin": 1.0,
-            "°c": "celsius_to_kelvin",
-            "c": "celsius_to_kelvin",
-            "celsius": "celsius_to_kelvin",
-        },
-        canonical_status_units={"k", "kelvin"},
-    ),
+    "temperature_k": _TEMPERATURE_RULE,
+    "measurement_temperature": _TEMPERATURE_RULE,
+    "dopant_concentration": _DOPING_RATIO_RULE,
+    "excitation_wavelength": _NM_RULE,
 }
 
 

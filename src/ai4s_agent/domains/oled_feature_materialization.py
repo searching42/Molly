@@ -225,7 +225,7 @@ def _device_features(gold_record: OledGoldDatasetRecord) -> dict[str, Any]:
 
 def _condition_features(observation: OledLayeredCanonicalObservation) -> dict[str, Any]:
     condition = observation.normalized_condition or observation.condition
-    return {
+    features = {
         "condition.atmosphere": condition.atmosphere if condition else None,
         "condition.condition_hash": condition.condition_hash if condition else None,
         "condition.condition_label": condition.condition_label if condition else None,
@@ -234,6 +234,46 @@ def _condition_features(observation: OledLayeredCanonicalObservation) -> dict[st
         "condition.temperature_k": condition.temperature_k if condition else None,
         "condition.voltage_v": condition.voltage_v if condition else None,
     }
+    if condition is None or not (
+        observation.comparison_context_required_fields
+        or _has_photophysical_context(condition)
+    ):
+        return features
+    features.update(
+        {
+            "condition.comparison_context_status": observation.comparison_context_status.value,
+            "condition.dopant_concentration": condition.dopant_concentration,
+            "condition.dopant_concentration_unit": condition.dopant_concentration_unit,
+            "condition.excitation_wavelength": condition.excitation_wavelength,
+            "condition.excitation_wavelength_unit": condition.excitation_wavelength_unit,
+            "condition.host_material": condition.host_material,
+            "condition.lifetime_fit_method": condition.lifetime_fit_method,
+            "condition.measurement_temperature": condition.measurement_temperature,
+            "condition.measurement_temperature_unit": condition.measurement_temperature_unit,
+            "condition.sample_form": condition.sample_form,
+        }
+    )
+    if observation.comparison_context_hash is not None:
+        features["condition.comparison_context_hash"] = observation.comparison_context_hash
+    if observation.comparison_context_missing_fields:
+        features["condition.comparison_context_missing_fields"] = list(
+            observation.comparison_context_missing_fields
+        )
+    return features
+
+
+def _has_photophysical_context(condition: Any) -> bool:
+    return any(
+        getattr(condition, field_name) is not None
+        for field_name in (
+            "measurement_temperature",
+            "host_material",
+            "dopant_concentration",
+            "sample_form",
+            "excitation_wavelength",
+            "lifetime_fit_method",
+        )
+    )
 
 
 def _evidence_refs(

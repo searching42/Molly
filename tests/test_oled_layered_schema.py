@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ai4s_agent.domains.oled_contracts import OledCausalLayer
 from ai4s_agent.domains.oled_layered_schema import (
+    OledComparisonContextStatus,
     OledDeviceLayer,
     OledInteractionLayer,
     OledLayeredRecord,
@@ -9,6 +10,7 @@ from ai4s_agent.domains.oled_layered_schema import (
     OledMeasurementLayer,
     OledMolecularLayer,
     OledPropertyObservation,
+    oled_observations_are_directly_comparable,
 )
 
 
@@ -133,3 +135,79 @@ def test_layered_record_canonicalizes_table_property_labels() -> None:
         "missing_confidence",
         "missing_provenance",
     }
+
+
+def test_photophysical_observation_preserves_missing_context_without_comparability() -> None:
+    record = _prompt_lifetime_record(
+        OledMeasurementCondition(sample_form="doped film")
+    )
+
+    report = record.validate_schema()
+    observation = report.observations[0]
+
+    assert report.is_valid is True
+    assert observation.property_id == "prompt_lifetime_ns"
+    assert observation.comparison_context_status == OledComparisonContextStatus.INCOMPLETE
+    assert observation.comparison_context_hash is None
+    assert observation.comparison_context_missing_fields == [
+        "measurement_temperature",
+        "host_material",
+        "dopant_concentration",
+        "excitation_wavelength",
+        "lifetime_fit_method",
+    ]
+    assert "incomplete_photophysical_comparison_context" in report.warning_codes
+
+
+def test_photophysical_comparison_requires_complete_matching_normalized_context() -> None:
+    condition = OledMeasurementCondition(
+        measurement_temperature=25,
+        measurement_temperature_unit="°C",
+        host_material="mCBP",
+        dopant_concentration=0.08,
+        dopant_concentration_unit="fraction",
+        sample_form="doped film",
+        excitation_wavelength=0.3,
+        excitation_wavelength_unit="µm",
+        lifetime_fit_method="biexponential fit",
+    )
+    first = _prompt_lifetime_record(condition).validate_schema().observations[0]
+    second = _prompt_lifetime_record(condition.model_copy()).validate_schema().observations[0]
+    different_host = _prompt_lifetime_record(
+        condition.model_copy(update={"host_material": "DPEPO"})
+    ).validate_schema().observations[0]
+    incomplete = _prompt_lifetime_record(
+        condition.model_copy(update={"lifetime_fit_method": None})
+    ).validate_schema().observations[0]
+
+    assert first.comparison_context_status == OledComparisonContextStatus.COMPLETE
+    assert first.comparison_context_missing_fields == []
+    assert first.comparison_context_hash
+    assert first.normalized_condition is not None
+    assert first.normalized_condition.measurement_temperature == 298.15
+    assert first.normalized_condition.measurement_temperature_unit == "K"
+    assert first.normalized_condition.dopant_concentration == 8
+    assert first.normalized_condition.dopant_concentration_unit == "%"
+    assert first.normalized_condition.excitation_wavelength == 300
+    assert first.normalized_condition.excitation_wavelength_unit == "nm"
+    assert oled_observations_are_directly_comparable(first, second) is True
+    assert oled_observations_are_directly_comparable(first, different_host) is False
+    assert oled_observations_are_directly_comparable(first, incomplete) is False
+
+
+def _prompt_lifetime_record(condition: OledMeasurementCondition) -> OledLayeredRecord:
+    return OledLayeredRecord(
+        molecule=OledMolecularLayer(canonical_smiles="N1C=CC=C1"),
+        interaction=OledInteractionLayer(
+            emitter_smiles="N1C=CC=C1",
+            host_smiles="c1ccccc1",
+            properties=[
+                OledPropertyObservation(
+                    property_label="prompt PL lifetime",
+                    value=13.2,
+                    unit="ns",
+                    condition=condition,
+                )
+            ],
+        ),
+    )

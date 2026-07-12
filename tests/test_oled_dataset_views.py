@@ -271,6 +271,49 @@ def test_curated_intrinsic_view_hard_gates_conflicting_molecule_duplicates() -> 
     assert report.findings[0].record_ids == ["gold-homo-conflict-a", "gold-homo-conflict-b"]
 
 
+def test_curated_intrinsic_view_rejects_incomplete_photophysical_context() -> None:
+    report = build_oled_dataset_view(
+        [
+            _photophysical_gold_record(
+                "gold-pl-peak-incomplete",
+                condition=OledMeasurementCondition(sample_form="neat film"),
+            )
+        ],
+        view_kind=OledDatasetViewKind.CURATED_INTRINSIC,
+        target_property_id="photoluminescence_peak_nm",
+    )
+
+    assert report.is_valid is False
+    assert "incomplete_photophysical_comparison_context" in report.error_codes
+    assert report.row_count == 0
+    assert report.metadata["policy"] == "molecular_layer_with_photophysical_context_gate"
+
+
+def test_curated_intrinsic_view_keeps_complete_different_contexts_separate() -> None:
+    first = _complete_photophysical_condition(host_material="mCBP")
+    second = _complete_photophysical_condition(host_material="DPEPO")
+    report = build_oled_dataset_view(
+        [
+            _photophysical_gold_record("gold-pl-peak-mcbp", condition=first),
+            _photophysical_gold_record("gold-pl-peak-dpepo", condition=second),
+        ],
+        view_kind=OledDatasetViewKind.CURATED_INTRINSIC,
+        target_property_id="photoluminescence_peak_nm",
+    )
+
+    assert report.is_valid is True
+    assert report.row_count == 2
+    assert len({row.condition_hash for row in report.rows}) == 2
+    assert {row.features["condition.host_material"] for row in report.rows} == {
+        "mCBP",
+        "DPEPO",
+    }
+    assert {row.feature_view for row in report.rows} == {
+        OledBaselineFeatureView.FULL_CONTEXT
+    }
+    assert report.metadata["policy"] == "molecular_layer_with_photophysical_context_gate"
+
+
 def test_dataset_view_builder_is_exported_from_domain_package() -> None:
     report = PackageBuildDatasetView(
         [_device_gold_record("gold-export")],
@@ -394,4 +437,53 @@ def _intrinsic_gold_record(
             ),
         ),
         evidence_refs=[evidence_ref],
+    )
+
+
+def _photophysical_gold_record(
+    record_id: str,
+    *,
+    condition: OledMeasurementCondition,
+    value: float = 490,
+) -> OledGoldDatasetRecord:
+    evidence_ref = f"paper:{record_id}:table-1:row-3"
+    return OledGoldDatasetRecord(
+        record_id=record_id,
+        layered_record=OledLayeredRecord(
+            molecule=OledMolecularLayer(
+                canonical_smiles="N1C=CC=C1",
+                inchikey="PHOTOPHYSICAL-INCHIKEY",
+                properties=[
+                    OledPropertyObservation(
+                        property_label="PL peak",
+                        value=value,
+                        unit="nm",
+                        condition=condition,
+                        evidence_sources=[
+                            OledEvidenceSource(
+                                source_id=evidence_ref,
+                                source_type=OledEvidenceType.TABLE,
+                                layer=OledCausalLayer.MOLECULE,
+                            )
+                        ],
+                        confidence=OledConfidenceAssessment(score=0.9),
+                    )
+                ],
+            ),
+        ),
+        evidence_refs=[evidence_ref],
+    )
+
+
+def _complete_photophysical_condition(*, host_material: str) -> OledMeasurementCondition:
+    return OledMeasurementCondition(
+        measurement_temperature=298.15,
+        measurement_temperature_unit="K",
+        host_material=host_material,
+        dopant_concentration=8,
+        dopant_concentration_unit="wt%",
+        sample_form="doped film",
+        excitation_wavelength=300,
+        excitation_wavelength_unit="nm",
+        lifetime_fit_method="not applicable to spectral peak",
     )

@@ -16,7 +16,11 @@ from ai4s_agent.domains.oled_condition_dedup import (
 from ai4s_agent.domains.oled_contracts import OledCausalLayer
 from ai4s_agent.domains.oled_feature_materialization import materialize_oled_baseline_feature_table
 from ai4s_agent.domains.oled_gold_validation import OledGoldDatasetRecord, validate_oled_gold_dataset
-from ai4s_agent.domains.oled_layered_schema import OledConfounderType, OledLayeredCanonicalObservation
+from ai4s_agent.domains.oled_layered_schema import (
+    OledComparisonContextStatus,
+    OledConfounderType,
+    OledLayeredCanonicalObservation,
+)
 
 
 class OledDatasetViewKind(str, Enum):
@@ -268,14 +272,30 @@ def _build_curated_intrinsic_view(
     target_property_id: str,
 ) -> OledDatasetViewReport:
     rows: list[OledDatasetViewRow] = []
+    findings: list[OledDatasetViewFinding] = []
     for record in records:
         schema_report = record.layered_record.validate_schema()
         for observation in schema_report.observations:
             if observation.layer != OledCausalLayer.MOLECULE or observation.property_id != target_property_id:
                 continue
+            if observation.comparison_context_status == OledComparisonContextStatus.INCOMPLETE:
+                findings.append(
+                    _finding(
+                        "incomplete_photophysical_comparison_context",
+                        "error",
+                        (
+                            f"record `{record.record_id}` cannot enter a comparable intrinsic view "
+                            f"for `{target_property_id}`; missing context fields: "
+                            f"{', '.join(observation.comparison_context_missing_fields)}"
+                        ),
+                        view_kind,
+                        [record.record_id],
+                        target_property_id=target_property_id,
+                    )
+                )
+                continue
             rows.append(_intrinsic_row(record, observation, view_kind, target_property_id))
-    findings: list[OledDatasetViewFinding] = []
-    if not rows:
+    if not rows and not findings:
         findings.append(
             _finding(
                 "no_intrinsic_target_rows",
@@ -288,12 +308,26 @@ def _build_curated_intrinsic_view(
         )
     rows, intrinsic_findings = _dedup_intrinsic_rows(rows, view_kind, target_property_id)
     findings.extend(intrinsic_findings)
+    context_gated = any(
+        row.metadata.get("comparison_context_status")
+        != OledComparisonContextStatus.NOT_REQUIRED.value
+        for row in rows
+    ) or any(
+        finding.code == "incomplete_photophysical_comparison_context"
+        for finding in findings
+    )
     return OledDatasetViewReport(
         view_kind=view_kind,
         target_property_id=target_property_id,
         rows=rows,
         findings=findings,
-        metadata={"policy": "molecular_layer_only"},
+        metadata={
+            "policy": (
+                "molecular_layer_with_photophysical_context_gate"
+                if context_gated
+                else "molecular_layer_only"
+            )
+        },
     )
 
 
@@ -511,6 +545,13 @@ def _intrinsic_row(
     molecule = record.layered_record.molecule
     evidence_refs = {source.source_id for source in observation.evidence_sources}
     evidence_refs.update(record.evidence_refs)
+    context_required = bool(observation.comparison_context_required_fields)
+    features = {
+        "molecule.canonical_smiles": molecule.canonical_smiles if molecule else None,
+        "molecule.inchikey": molecule.inchikey if molecule else None,
+    }
+    if context_required:
+        features.update(_intrinsic_comparison_context_features(observation))
     return OledDatasetViewRow(
         view_kind=view_kind,
         record_id=record.record_id,
@@ -522,17 +563,61 @@ def _intrinsic_row(
         target_reported_decimal_places=observation.reported_decimal_places,
         target_reported_unit=observation.unit,
         target_layer=OledCausalLayer.MOLECULE,
-        condition_hash=None,
+        condition_hash=observation.comparison_context_hash,
         dedup_key_hash=None,
-        feature_view=OledBaselineFeatureView.MOLECULE_ONLY,
-        features={
-            "molecule.canonical_smiles": molecule.canonical_smiles if molecule else None,
-            "molecule.inchikey": molecule.inchikey if molecule else None,
-        },
+        feature_view=(
+            OledBaselineFeatureView.FULL_CONTEXT
+            if context_required
+            else OledBaselineFeatureView.MOLECULE_ONLY
+        ),
+        features=features,
         evidence_refs=sorted(evidence_refs),
         confidence_score=observation.confidence.score if observation.confidence else None,
-        metadata={"policy": "molecular_layer_only"},
+        metadata={
+            "policy": (
+                "molecular_layer_with_complete_photophysical_context"
+                if context_required
+                else "molecular_layer_only"
+            ),
+            "comparison_context_status": observation.comparison_context_status.value,
+            "comparison_context_missing_fields": list(
+                observation.comparison_context_missing_fields
+            ),
+            "comparison_context_hash": observation.comparison_context_hash,
+        },
     )
+
+
+def _intrinsic_comparison_context_features(
+    observation: OledLayeredCanonicalObservation,
+) -> dict[str, Any]:
+    condition = observation.normalized_condition or observation.condition
+    return {
+        "condition.comparison_context_hash": observation.comparison_context_hash,
+        "condition.dopant_concentration": (
+            condition.dopant_concentration if condition else None
+        ),
+        "condition.dopant_concentration_unit": (
+            condition.dopant_concentration_unit if condition else None
+        ),
+        "condition.excitation_wavelength": (
+            condition.excitation_wavelength if condition else None
+        ),
+        "condition.excitation_wavelength_unit": (
+            condition.excitation_wavelength_unit if condition else None
+        ),
+        "condition.host_material": condition.host_material if condition else None,
+        "condition.lifetime_fit_method": (
+            condition.lifetime_fit_method if condition else None
+        ),
+        "condition.measurement_temperature": (
+            condition.measurement_temperature if condition else None
+        ),
+        "condition.measurement_temperature_unit": (
+            condition.measurement_temperature_unit if condition else None
+        ),
+        "condition.sample_form": condition.sample_form if condition else None,
+    }
 
 
 def _intrinsic_dedup_key(row: OledDatasetViewRow) -> str:
@@ -544,7 +629,8 @@ def _intrinsic_dedup_key(row: OledDatasetViewRow) -> str:
         identity = f"canonical_smiles:{canonical_smiles.strip()}"
     else:
         identity = f"record:{row.record_id}"
-    return f"{identity}|target:{row.target_property_id}"
+    context = f"|context:{row.condition_hash}" if row.condition_hash else ""
+    return f"{identity}|target:{row.target_property_id}{context}"
 
 
 def _row_values_are_consistent(rows: list[OledDatasetViewRow]) -> bool:
