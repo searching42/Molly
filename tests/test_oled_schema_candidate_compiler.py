@@ -71,6 +71,7 @@ def _property_candidate(
     row_index: int = 0,
     column_name: str | None = None,
     metadata: dict | None = None,
+    comparison_context: dict | None = None,
 ) -> OledSchemaCandidate:
     column = column_name or label
     return OledSchemaCandidate(
@@ -93,6 +94,7 @@ def _property_candidate(
         ],
         confidence_score=0.73,
         metadata=metadata or {},
+        comparison_context=comparison_context,
     )
 
 
@@ -230,6 +232,44 @@ def test_compile_energy_triplet_binds_row_material_context_without_inventing_smi
         "s1_ev",
         "t1_ev",
         "delta_e_st_ev",
+    }
+
+
+def test_compile_interaction_photophysical_property_preserves_comparison_context() -> None:
+    context = {
+        "measurement_temperature": None,
+        "host_material": "mCBP",
+        "dopant_concentration": "10",
+        "dopant_concentration_unit": "wt%",
+        "sample_form": "doped film",
+        "excitation_wavelength": 365,
+        "excitation_wavelength_unit": "nm",
+        "lifetime_fit_method": None,
+    }
+    candidate = _property_candidate(
+        "prompt_lifetime_ns",
+        "Prompt emission-decay lifetime",
+        13.2,
+        "ns",
+        comparison_context=context,
+    )
+
+    report = compile_oled_schema_candidates_to_layered_records([candidate])
+
+    record = report.compiled_records[0].layered_record
+    assert record is not None
+    assert record.interaction is not None
+    observation = record.interaction.properties[0]
+    assert observation.condition is not None
+    assert observation.condition.host_material == "mCBP"
+    assert observation.condition.dopant_concentration == "10"
+    assert observation.condition.excitation_wavelength == 365
+    assert observation.condition.model_dump(mode="json")["lifetime_fit_method"] is None
+    schema_observation = record.validate_schema().observations[0]
+    assert schema_observation.comparison_context_status.value == "incomplete"
+    assert set(schema_observation.comparison_context_missing_fields) == {
+        "measurement_temperature",
+        "lifetime_fit_method",
     }
 
 

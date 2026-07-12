@@ -12,6 +12,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ai4s_agent.domains.oled_contracts import OledCausalLayer
+from ai4s_agent.domains.oled_layered_schema import OledMeasurementCondition
 from ai4s_agent.domains.oled_mineru_candidates import (
     OledMineruCandidate,
     OledMineruCandidateType,
@@ -86,6 +87,7 @@ class OledSchemaCandidate(BaseModel):
     condition_field: str | None = None
     condition_value: float | int | str | None = None
     condition_unit: str | None = None
+    comparison_context: OledMeasurementCondition | None = None
 
     device_stack: list[str] = Field(default_factory=list)
 

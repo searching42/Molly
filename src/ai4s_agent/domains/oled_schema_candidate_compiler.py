@@ -492,12 +492,15 @@ def _property_observation_from_candidate(
     row_condition: OledMeasurementCondition | None,
 ) -> OledPropertyObservation:
     target_layer = candidate.target_layer or OledCausalLayer.MEASUREMENT
-    condition = None
+    condition = candidate.comparison_context
     if target_layer == OledCausalLayer.MEASUREMENT:
         condition = _merge_measurement_conditions(
             row_condition,
             _measurement_condition_from_property_metadata(candidate),
         )
+        condition = _merge_measurement_conditions(condition, candidate.comparison_context)
+    elif condition is not None:
+        condition = condition.model_copy(deep=True)
     metadata = {
         **candidate.metadata,
         "source_schema_candidate_id": candidate.candidate_id,

@@ -122,6 +122,65 @@ def _valid_response() -> dict:
     }
 
 
+def _photophysical_packet() -> OledSemanticMappingPacket:
+    return _packet().model_copy(
+        update={
+            "caption": "Prompt lifetime measured for a 10 wt% doped film.",
+            "table_headers": ["Emitter", "Prompt lifetime (ns)"],
+            "table_rows": [{"Emitter": "Molecule-A", "Prompt lifetime (ns)": "13.20"}],
+            "allowed_property_ids": ["prompt_lifetime_ns"],
+        }
+    )
+
+
+def _photophysical_response(*, include_context: bool = True) -> dict:
+    proposal = {
+        "candidate_type": "property_observation",
+        "target_layer": "interaction",
+        "property_id": "prompt_lifetime_ns",
+        "property_label": "Prompt emission-decay lifetime",
+        "value": 13.2,
+        "unit": "ns",
+        "reported_value_text": "13.20",
+        "reported_decimal_places": 2,
+        "material_name": "Molecule-A in Host-H",
+        "evidence_refs": [
+            {
+                **_packet_ref(),
+                "column_name": "Prompt lifetime (ns)",
+                "cell_value": "13.20",
+            }
+        ],
+        "confidence_score": 0.91,
+        "rationale": "The table and full context bind the prompt lifetime to the doped film.",
+    }
+    if include_context:
+        proposal["comparison_context"] = {
+            "measurement_temperature": None,
+            "host_material": "Host-H",
+            "dopant_concentration": 10,
+            "dopant_concentration_unit": "wt%",
+            "sample_form": "doped film",
+            "excitation_wavelength": None,
+            "lifetime_fit_method": None,
+        }
+    return {
+        "paper_id": "paper-context",
+        "packet_results": [
+            {
+                "packet_id": "packet:paper-context:table-1",
+                "action": "supplement",
+                "scope_classification": "property_bearing",
+                "candidate_proposals": [proposal],
+                "ontology_extension_proposals": [],
+                "source_check_questions": [],
+                "rationale_summary": "The property and comparison context are source-bound.",
+            }
+        ],
+        "response_notes": [],
+    }
+
+
 def test_build_context_request_preserves_full_document_elements_without_file_io() -> None:
     elements = build_oled_paper_context_elements(_parsed_document())
     request = build_oled_llm_paper_mapping_request(
@@ -177,6 +236,74 @@ def test_valid_llm_mapping_is_materialized_as_review_only_needs_llm_candidate() 
     assert result.llm_invocation.prompt_version == PROMPT_VERSION
     system_prompt = result.llm_invocation.raw_response["messages"][0]["content"]
     assert "never execute or propose executable code" in system_prompt
+
+
+def test_v5_required_photophysical_context_is_materialized_with_explicit_missingness() -> None:
+    request = build_oled_llm_paper_mapping_request(
+        [_photophysical_packet()], parsed_document=_parsed_document()
+    )
+
+    result = run_oled_llm_context_mapping(
+        request,
+        provider=StubLLMProvider(response=_photophysical_response()),
+    )
+
+    assert result.status == "ready_for_human_review"
+    context = result.schema_candidates[0].comparison_context
+    assert context is not None
+    assert context.host_material == "Host-H"
+    assert context.dopant_concentration == 10
+    assert context.dopant_concentration_unit == "wt%"
+    assert context.measurement_temperature is None
+    assert "measurement_temperature" in context.model_fields_set
+    assert "lifetime_fit_method" in context.model_fields_set
+
+
+def test_v5_required_photophysical_context_rejects_missing_context_object() -> None:
+    request = build_oled_llm_paper_mapping_request(
+        [_photophysical_packet()], parsed_document=_parsed_document()
+    )
+
+    result = run_oled_llm_context_mapping(
+        request,
+        provider=StubLLMProvider(response=_photophysical_response(include_context=False)),
+    )
+
+    assert result.status == "invalid_response"
+    assert "lacks required comparison_context" in result.findings[0].message
+
+
+def test_v5_required_photophysical_context_rejects_omitted_fields_instead_of_nulls() -> None:
+    response = _photophysical_response()
+    response["packet_results"][0]["candidate_proposals"][0]["comparison_context"].pop(
+        "lifetime_fit_method"
+    )
+    request = build_oled_llm_paper_mapping_request(
+        [_photophysical_packet()], parsed_document=_parsed_document()
+    )
+
+    result = run_oled_llm_context_mapping(request, provider=StubLLMProvider(response=response))
+
+    assert result.status == "invalid_response"
+    assert "use explicit null" in result.findings[0].message
+
+
+def test_legacy_request_without_comparison_context_contract_remains_readable() -> None:
+    request = build_oled_llm_paper_mapping_request(
+        [_photophysical_packet()], parsed_document=_parsed_document()
+    )
+    legacy_metadata = dict(request.metadata)
+    legacy_metadata.pop("comparison_context_contract_required")
+    legacy_metadata.pop("comparison_context_contract_version")
+    request = request.model_copy(update={"metadata": legacy_metadata})
+
+    result = run_oled_llm_context_mapping(
+        request,
+        provider=StubLLMProvider(response=_photophysical_response(include_context=False)),
+    )
+
+    assert result.status == "ready_for_human_review"
+    assert result.schema_candidates[0].comparison_context is None
 
 
 def test_unknown_property_must_be_an_ontology_extension_not_a_schema_candidate() -> None:

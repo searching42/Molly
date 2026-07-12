@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from ai4s_agent.domains.oled_contracts import OledCausalLayer
+from ai4s_agent.domains.oled_layered_schema import OledMeasurementCondition
 from ai4s_agent.domains.oled_mineru_semantic_mapping import (
     OledSchemaCandidate,
     OledSchemaCandidateStatus,
@@ -32,7 +33,7 @@ from ai4s_agent.llm_provider import LLMProvider, LLMProviderError
 from ai4s_agent.schemas import LLMInvocationRecord
 
 
-PROMPT_VERSION = "oled.contextual_semantic_mapping.v4"
+PROMPT_VERSION = "oled.contextual_semantic_mapping.v5"
 
 OledLLMMappingAction = Literal[
     "keep_deterministic",
@@ -103,6 +104,7 @@ class OledLLMSchemaCandidateProposal(BaseModel):
     condition_field: str | None = None
     condition_value: float | int | str | None = None
     condition_unit: str | None = None
+    comparison_context: OledMeasurementCondition | None = None
     device_stack: list[str] = Field(default_factory=list)
     evidence_refs: list[OledSchemaEvidenceRef]
     confidence_score: float = Field(ge=0.0, le=1.0)
@@ -408,6 +410,8 @@ def build_oled_llm_paper_mapping_request(
             "full_context_supplied_without_automatic_truncation": True,
             "reported_value_contract_required": True,
             "reported_value_contract_version": "preserve_reported_numeric_lexeme.v1",
+            "comparison_context_contract_required": True,
+            "comparison_context_contract_version": "photophysical_comparison_context.v1",
             "dataset_scope": "molecule_interaction_properties_only",
             "external_llm_called": False,
             "automatic_candidate_merge": False,
@@ -560,6 +564,24 @@ def _validate_response_binding(
                     raise ValueError(
                         f"packet {packet.packet_id} candidate {index} uses a layer outside the property ontology"
                     )
+                required_context_fields = _required_comparison_context_fields(definition)
+                if (
+                    request.metadata.get("comparison_context_contract_required")
+                    and required_context_fields
+                ):
+                    if proposal.comparison_context is None:
+                        raise ValueError(
+                            f"packet {packet.packet_id} candidate {index} lacks required comparison_context"
+                        )
+                    omitted_fields = sorted(
+                        set(required_context_fields)
+                        - proposal.comparison_context.model_fields_set
+                    )
+                    if omitted_fields:
+                        raise ValueError(
+                            f"packet {packet.packet_id} candidate {index} omits required comparison_context "
+                            f"fields: {omitted_fields}; use explicit null for unreported context"
+                        )
             evidence_keys = {
                 (ref.source_candidate_hash, ref.source_evidence_anchor, ref.source_candidate_type)
                 for ref in proposal.evidence_refs
@@ -780,6 +802,7 @@ def _materialize_schema_candidates(
                     condition_field=proposal.condition_field,
                     condition_value=proposal.condition_value,
                     condition_unit=proposal.condition_unit,
+                    comparison_context=proposal.comparison_context,
                     device_stack=proposal.device_stack,
                     evidence_refs=proposal.evidence_refs,
                     confidence_score=proposal.confidence_score,
@@ -795,6 +818,9 @@ def _materialize_schema_candidates(
                         "llm_rationale": proposal.rationale,
                         "human_review_required": True,
                         "automatic_merge": False,
+                        "comparison_context_contract_version": request.metadata.get(
+                            "comparison_context_contract_version"
+                        ),
                     },
                 )
             )
@@ -820,6 +846,8 @@ def _mapping_messages(request: OledLLMPaperMappingRequest) -> list[dict[str, str
                 "Use needs_ontology_review when evidence is complete but the ontology lacks the property. "
                 "For every numeric property proposal, preserve the exact source numeric lexeme in "
                 "reported_value_text and its decimal-place count in reported_decimal_places. "
+                "For properties with required_comparison_context_fields, include comparison_context "
+                "and explicitly provide every required field, using null when the source does not report it. "
                 "Every candidate must cite the source packet and may cite only supplied document context."
             ),
         },
@@ -927,9 +955,21 @@ _CONTEXT_MAPPING_INSTRUCTIONS = (
     "A supplement may include both known-property candidates and ontology extension proposals.",
     "Explicit eV property signals require either mapping or a structured exclusion reason.",
     "Numeric property proposals must preserve source formatting, including trailing zeros.",
+    (
+        "For ontology properties with required_comparison_context_fields, emit comparison_context "
+        "with every required field explicitly present; use null only when the supplied source does "
+        "not report it."
+    ),
     "Do not emit schema candidates for device-only or no-eligible-property packets.",
     "All emitted candidates remain needs_llm and require human review; they are never merged automatically.",
 )
+
+
+def _required_comparison_context_fields(definition: OledPropertyDefinition) -> list[str]:
+    raw_fields = definition.metadata.get("required_comparison_context_fields")
+    if not isinstance(raw_fields, list):
+        return []
+    return [str(field).strip() for field in raw_fields if str(field).strip()]
 
 
 __all__ = [
