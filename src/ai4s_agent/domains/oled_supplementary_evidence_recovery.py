@@ -221,23 +221,31 @@ class _ReferenceMatch:
     start: int
     end: int
     explicit_marker: bool
+    ambiguous_locator: bool = False
+
+
+_SERIES_SEPARATOR = r"(?:\band/or\b|[-–—/&;]|\b(?:to|and|or)\b|,)"
+_SERIES_TAIL = (
+    rf"(?:\s*{_SERIES_SEPARATOR}\s*(?:(?:and/or|and|or|&)\s+)?S?\d+[A-Za-z]?)+"
+)
+_SINGLETON_SERIES_GUARD = rf"(?!{_SERIES_TAIL})"
 
 
 _EXPLICIT_PATTERNS: tuple[tuple[OledSupplementaryTargetKind, re.Pattern[str]], ...] = (
     (
         OledSupplementaryTargetKind.TABLE,
         re.compile(
-            r"\b(?:supplementary|supporting)(?:\s+information)?\s+table\s+"
-            r"(?P<locator>S?\d+[A-Za-z]?)(?!\s*(?:[-–—]|to|and|,)\s*S?\d)\b",
+            rf"\b(?:supplementary|supporting)(?:\s+information)?\s+table\s+"
+            rf"(?P<locator>S?\d+[A-Za-z]?){_SINGLETON_SERIES_GUARD}\b",
             re.IGNORECASE,
         ),
     ),
     (
         OledSupplementaryTargetKind.FIGURE,
         re.compile(
-            r"\b(?:supplementary|supporting)(?:\s+information)?\s+"
-            r"(?:fig(?:ure)?\.?)\s*(?P<locator>S?\d+[A-Za-z]?)"
-            r"(?!\s*(?:[-–—]|to|and|,)\s*S?\d)\b",
+            rf"\b(?:supplementary|supporting)(?:\s+information)?\s+"
+            rf"(?:fig(?:ure)?\.?)\s*(?P<locator>S?\d+[A-Za-z]?)"
+            rf"{_SINGLETON_SERIES_GUARD}\b",
             re.IGNORECASE,
         ),
     ),
@@ -246,15 +254,49 @@ _BARE_NUMBERED_PATTERNS: tuple[tuple[OledSupplementaryTargetKind, re.Pattern[str
     (
         OledSupplementaryTargetKind.TABLE,
         re.compile(
-            r"\btable\s+(?P<locator>S\d+[A-Za-z]?)(?!\s*(?:[-–—]|to|and|,)\s*S?\d)\b",
+            rf"\btable\s+(?P<locator>S\d+[A-Za-z]?){_SINGLETON_SERIES_GUARD}\b",
             re.IGNORECASE,
         ),
     ),
     (
         OledSupplementaryTargetKind.FIGURE,
         re.compile(
-            r"\b(?:fig(?:ure)?\.?)\s*(?P<locator>S\d+[A-Za-z]?)"
-            r"(?!\s*(?:[-–—]|to|and|,)\s*S?\d)\b",
+            rf"\b(?:fig(?:ure)?\.?)\s*(?P<locator>S\d+[A-Za-z]?)"
+            rf"{_SINGLETON_SERIES_GUARD}\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
+_AMBIGUOUS_NUMBERED_PATTERNS: tuple[
+    tuple[OledSupplementaryTargetKind, re.Pattern[str]], ...
+] = (
+    (
+        OledSupplementaryTargetKind.TABLE,
+        re.compile(
+            rf"\b(?:supplementary|supporting)(?:\s+information)?\s+tables?\s+"
+            rf"S?\d+[A-Za-z]?{_SERIES_TAIL}\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        OledSupplementaryTargetKind.TABLE,
+        re.compile(
+            rf"\btables?\s+S\d+[A-Za-z]?{_SERIES_TAIL}\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        OledSupplementaryTargetKind.FIGURE,
+        re.compile(
+            rf"\b(?:supplementary|supporting)(?:\s+information)?\s+"
+            rf"(?:fig(?:ure)?s?\.?)\s*S?\d+[A-Za-z]?{_SERIES_TAIL}\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        OledSupplementaryTargetKind.FIGURE,
+        re.compile(
+            rf"\b(?:fig(?:ure)?s?\.?)\s*S\d+[A-Za-z]?{_SERIES_TAIL}\b",
             re.IGNORECASE,
         ),
     ),
@@ -373,19 +415,20 @@ def _build_items_for_packet(
         tuple[OledSupplementaryTargetKind, str],
         list[OledSupplementaryReferenceAnchor],
     ] = defaultdict(list)
-    manual_anchors: list[OledSupplementaryReferenceAnchor] = []
-    manual_kind = OledSupplementaryTargetKind.UNKNOWN
-    manual_label: str | None = None
+    manual_groups: dict[
+        tuple[OledSupplementaryTargetKind, str | None, str],
+        list[OledSupplementaryReferenceAnchor],
+    ] = defaultdict(list)
     for packet_match, context_match, context_element in bound_matches:
         anchor = _build_anchor(context_element, context_match)
         if _is_explicit_target(packet_match, context_match):
             assert context_match.locator is not None
             explicit_groups[(context_match.target_kind, context_match.locator)].append(anchor)
             continue
-        manual_anchors.append(anchor)
-        if manual_kind == OledSupplementaryTargetKind.UNKNOWN:
-            manual_kind = context_match.target_kind
-            manual_label = _reference_label(context_match)
+        manual_label = _manual_reference_label(context_match)
+        manual_groups[
+            (context_match.target_kind, context_match.locator, manual_label)
+        ].append(anchor)
 
     items: list[OledSupplementaryEvidenceRecoveryItem] = []
     for (target_kind, locator), anchors in sorted(
@@ -417,20 +460,36 @@ def _build_items_for_packet(
             )
         )
 
-    if not items:
-        unique_manual_anchors = _sorted_unique_anchors(manual_anchors)
-        warning = (
-            "No explicit supplementary table or figure locator is bound to the source packet; "
-            "do not infer a target label from the LLM source-check question."
-        )
-        if unique_manual_anchors:
-            warning = (
-                "The source packet is bound only to a generic or unqualified supplementary "
-                "reference; manually confirm the exact target before acquiring a source."
+    # Retain every unresolved citation even when this packet also names one or
+    # more explicit supplementary targets. Otherwise an explicit Table S1
+    # would silently hide a bare Fig. S2 or generic Supplementary Information
+    # reference from review. Groups keep distinct unresolved targets separate.
+    explicit_anchor_contexts = {
+        (target_kind, locator): {
+            (anchor.element_id, anchor.source_hash)
+            for anchor in anchors
+        }
+        for (target_kind, locator), anchors in explicit_groups.items()
+    }
+    for (target_kind, source_locator, manual_label), anchors in sorted(
+        manual_groups.items(),
+        key=lambda entry: (entry[0][0].value, entry[0][1] or "", entry[0][2]),
+    ):
+        unique_manual_anchors = _sorted_unique_anchors(anchors)
+        if source_locator is not None:
+            resolved_contexts = explicit_anchor_contexts.get(
+                (target_kind, source_locator), set()
             )
+            unique_manual_anchors = [
+                anchor
+                for anchor in unique_manual_anchors
+                if (anchor.element_id, anchor.source_hash) not in resolved_contexts
+            ]
+        if not unique_manual_anchors:
+            continue
         item_id = _recovery_item_id(
             packet=packet,
-            target_kind=manual_kind,
+            target_kind=target_kind,
             locator=None,
             anchors=unique_manual_anchors,
         )
@@ -438,7 +497,7 @@ def _build_items_for_packet(
             OledSupplementaryEvidenceRecoveryItem(
                 item_id=item_id,
                 status=OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED,
-                target_kind=manual_kind,
+                target_kind=target_kind,
                 target_locator=None,
                 reference_label=manual_label,
                 reference_anchors=unique_manual_anchors,
@@ -447,7 +506,38 @@ def _build_items_for_packet(
                 source_evidence_anchor=packet.source_evidence_anchor,
                 affected_deterministic_candidate_ids=affected_deterministic_candidate_ids,
                 source_check_questions=result.source_check_questions,
-                warnings=[warning],
+                warnings=[
+                    "The source packet contains a generic or unqualified supplementary "
+                    "reference; manually confirm the exact target before acquiring a source."
+                ],
+                recommended_next_action="manually_locate_supplementary_reference",
+            )
+        )
+
+    if not items:
+        item_id = _recovery_item_id(
+            packet=packet,
+            target_kind=OledSupplementaryTargetKind.UNKNOWN,
+            locator=None,
+            anchors=[],
+        )
+        items.append(
+            OledSupplementaryEvidenceRecoveryItem(
+                item_id=item_id,
+                status=OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED,
+                target_kind=OledSupplementaryTargetKind.UNKNOWN,
+                target_locator=None,
+                reference_label=None,
+                reference_anchors=[],
+                source_packet_id=packet.packet_id,
+                source_candidate_hash=packet.source_candidate_hash,
+                source_evidence_anchor=packet.source_evidence_anchor,
+                affected_deterministic_candidate_ids=affected_deterministic_candidate_ids,
+                source_check_questions=result.source_check_questions,
+                warnings=[
+                    "No explicit supplementary table or figure locator is bound to the source "
+                    "packet; do not infer a target label from the LLM source-check question."
+                ],
                 recommended_next_action="manually_locate_supplementary_reference",
             )
         )
@@ -511,9 +601,17 @@ def _find_bound_reference_matches(
         if not _packet_and_context_are_bound(packet, context_element):
             continue
         for context_match in _extract_reference_matches(context_element.text):
-            for packet_match in packet_mentions:
-                if _same_reference(packet_match, context_match):
-                    matches.append((packet_match, context_match, context_element))
+            compatible_packet_matches = [
+                packet_match
+                for packet_match in packet_mentions
+                if _same_reference(packet_match, context_match)
+            ]
+            if compatible_packet_matches:
+                packet_match = max(
+                    compatible_packet_matches,
+                    key=lambda candidate: _reference_match_priority(candidate, context_match),
+                )
+                matches.append((packet_match, context_match, context_element))
     return sorted(
         matches,
         key=lambda match: (
@@ -551,7 +649,28 @@ def _packet_and_context_are_bound(
 
 
 def _same_reference(left: _ReferenceMatch, right: _ReferenceMatch) -> bool:
-    return left.target_kind == right.target_kind and left.locator == right.locator
+    if left.target_kind != right.target_kind or left.locator != right.locator:
+        return False
+    if left.locator is None:
+        return _canonical_source_text(left.matched_text) == _canonical_source_text(
+            right.matched_text
+        )
+    return True
+
+
+def _reference_match_priority(
+    packet_match: _ReferenceMatch,
+    context_match: _ReferenceMatch,
+) -> tuple[bool, bool, bool, int, int]:
+    """Choose the most faithful packet spelling for one context citation."""
+    return (
+        _canonical_source_text(packet_match.matched_text)
+        == _canonical_source_text(context_match.matched_text),
+        packet_match.explicit_marker == context_match.explicit_marker,
+        packet_match.ambiguous_locator == context_match.ambiguous_locator,
+        len(packet_match.matched_text),
+        -packet_match.start,
+    )
 
 
 def _extract_reference_matches(text: str) -> list[_ReferenceMatch]:
@@ -580,6 +699,19 @@ def _extract_reference_matches(text: str) -> list[_ReferenceMatch]:
                     explicit_marker=False,
                 )
             )
+    for target_kind, pattern in _AMBIGUOUS_NUMBERED_PATTERNS:
+        for match in pattern.finditer(text):
+            matches.append(
+                _ReferenceMatch(
+                    target_kind=target_kind,
+                    locator=None,
+                    matched_text=match.group(0),
+                    start=match.start(),
+                    end=match.end(),
+                    explicit_marker=False,
+                    ambiguous_locator=True,
+                )
+            )
     for target_kind, pattern in _GENERIC_PATTERNS:
         for match in pattern.finditer(text):
             matches.append(
@@ -594,7 +726,9 @@ def _extract_reference_matches(text: str) -> list[_ReferenceMatch]:
             )
 
     selected: list[_ReferenceMatch] = []
-    seen: set[tuple[OledSupplementaryTargetKind, str | None]] = set()
+    seen: set[
+        tuple[OledSupplementaryTargetKind, str | None, int, int, bool, bool]
+    ] = set()
     for match in sorted(
         matches,
         key=lambda item: (
@@ -604,12 +738,45 @@ def _extract_reference_matches(text: str) -> list[_ReferenceMatch]:
             item.locator or "",
         ),
     ):
-        key = (match.target_kind, match.locator)
+        if _is_shadowed_reference_match(match, matches):
+            continue
+        key = (
+            match.target_kind,
+            match.locator,
+            match.start,
+            match.end,
+            match.explicit_marker,
+            match.ambiguous_locator,
+        )
         if key in seen:
             continue
         seen.add(key)
         selected.append(match)
     return selected
+
+
+def _is_shadowed_reference_match(
+    match: _ReferenceMatch,
+    candidates: Iterable[_ReferenceMatch],
+) -> bool:
+    """Discard weaker matches contained in a more specific citation span."""
+    for candidate in candidates:
+        if candidate is match:
+            continue
+        if candidate.start > match.start or candidate.end < match.end:
+            continue
+        if match.locator is None and (
+            candidate.locator is not None or candidate.ambiguous_locator
+        ):
+            return True
+        if (
+            candidate.target_kind == match.target_kind
+            and candidate.locator == match.locator
+            and candidate.explicit_marker
+            and not match.explicit_marker
+        ):
+            return True
+    return False
 
 
 def _is_explicit_target(
@@ -710,6 +877,12 @@ def _reference_label(match: _ReferenceMatch) -> str:
     return f"Supplementary {_kind_label(match.target_kind)}"
 
 
+def _manual_reference_label(match: _ReferenceMatch) -> str:
+    if match.ambiguous_locator:
+        return match.matched_text.strip()
+    return _reference_label(match)
+
+
 def _kind_label(kind: OledSupplementaryTargetKind) -> str:
     if kind == OledSupplementaryTargetKind.FIGURE:
         return "Figure"
@@ -730,7 +903,10 @@ def _canonical_source_text(value: str) -> str:
     cannot become a packet binding.
     """
     without_tags = re.sub(r"</?[A-Za-z][^>]*>", "", html.unescape(str(value or "")))
-    normalized = unicodedata.normalize("NFKC", without_tags).casefold()
+    normalized = unicodedata.normalize("NFKC", without_tags).translate(
+        str.maketrans({"–": "-", "—": "-", "−": "-"})
+    )
+    normalized = normalized.casefold()
     return re.sub(r"\s+", "", normalized)
 
 

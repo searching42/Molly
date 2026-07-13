@@ -62,6 +62,16 @@ or a bare Table S1 or Fig. S1 on either side of the packet/context binding,
 and source-check packets without a bound main-text reference. The planner never
 derives a table number from an LLM question.
 
+A range or list such as Supplementary Table S1-S3 or Supplementary Table S1,
+S2, and S3 is also manual-only. Its complete cited expression is retained as
+an evidence anchor, but the planner does not split it into inferred locators.
+
+Explicit and manual items are independent: if one packet cites Supplementary
+Table S1 and also a bare Fig. S2 or generic Supplementary Information, the S1
+item is explicit while the unresolved citation remains a separate manual item.
+An explicit citation never resolves or suppresses another citation in the same
+packet.
+
 ## Offline Artifact
 
 Create a file artifact only after the LLM request and mapping result already

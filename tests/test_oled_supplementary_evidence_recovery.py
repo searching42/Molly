@@ -205,20 +205,44 @@ def test_figure_reference_preserves_figure_kind_and_locator() -> None:
     assert item.reference_label == "Supplementary Figure S27"
 
 
-def test_supporting_information_table_reference_is_explicit_without_normalizing_locator() -> None:
-    text = "The raw data are available in Supporting Information Table 1."
+@pytest.mark.parametrize(
+    ("text", "target_kind", "locator"),
+    [
+        (
+            "The raw data are available in Supporting Information Table 1.",
+            OledSupplementaryTargetKind.TABLE,
+            "1",
+        ),
+        (
+            "The raw data are available in Supplementary Table 1.",
+            OledSupplementaryTargetKind.TABLE,
+            "1",
+        ),
+        (
+            "The raw data are available in Supporting Fig. S1.",
+            OledSupplementaryTargetKind.FIGURE,
+            "S1",
+        ),
+    ],
+)
+def test_numbered_explicit_reference_does_not_emit_a_nested_generic_manual_item(
+    text: str,
+    target_kind: OledSupplementaryTargetKind,
+    locator: str,
+) -> None:
     packet = _packet(text=text)
     request = _request(packet, context=[_context(text=text)])
 
-    item = build_oled_supplementary_evidence_recovery_plan(
+    plan = build_oled_supplementary_evidence_recovery_plan(
         request,
         _source_check_result(request),
-    ).items[0]
+    )
 
+    assert plan.item_count == 1
+    item = plan.items[0]
     assert item.status == OledSupplementaryRecoveryStatus.EXPLICIT_REFERENCE_FOUND
-    assert item.target_kind == OledSupplementaryTargetKind.TABLE
-    assert item.target_locator == "1"
-    assert item.reference_anchors[0].matched_text == "Supporting Information Table 1"
+    assert item.target_kind == target_kind
+    assert item.target_locator == locator
 
 
 def test_generic_supplementary_information_requires_manual_locator_without_guessing_s1() -> None:
@@ -267,9 +291,14 @@ def test_unqualified_table_s_number_stays_manual_even_when_packet_and_context_ma
             "The geometry is shown in Supplementary Fig. S27.",
             OledSupplementaryTargetKind.FIGURE,
         ),
+        (
+            "The complete values are listed in Supplementary Table S1.",
+            "The complete values are listed in Table S1.",
+            OledSupplementaryTargetKind.TABLE,
+        ),
     ],
 )
-def test_bare_packet_reference_is_not_promoted_by_explicit_bound_context(
+def test_asymmetric_packet_context_reference_is_not_promoted_to_an_explicit_target(
     packet_text: str,
     context_text: str,
     target_kind: OledSupplementaryTargetKind,
@@ -288,6 +317,151 @@ def test_bare_packet_reference_is_not_promoted_by_explicit_bound_context(
     assert item.status == OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED
     assert item.target_kind == target_kind
     assert item.target_locator is None
+
+
+def test_mixed_explicit_table_and_bare_figure_emit_separate_recovery_items() -> None:
+    text = "See Supplementary Table S1 and Fig. S2 for details."
+    packet = _packet(text=text)
+    request = _request(packet, context=[_context(text=text)])
+
+    plan = build_oled_supplementary_evidence_recovery_plan(
+        request,
+        _source_check_result(request),
+    )
+
+    assert plan.item_count == 2
+    explicit_item = next(
+        item
+        for item in plan.items
+        if item.status == OledSupplementaryRecoveryStatus.EXPLICIT_REFERENCE_FOUND
+    )
+    manual_item = next(
+        item
+        for item in plan.items
+        if item.status == OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED
+    )
+    assert explicit_item.target_kind == OledSupplementaryTargetKind.TABLE
+    assert explicit_item.target_locator == "S1"
+    assert manual_item.target_kind == OledSupplementaryTargetKind.FIGURE
+    assert manual_item.target_locator is None
+    assert [anchor.matched_text for anchor in manual_item.reference_anchors] == ["Fig. S2"]
+
+
+def test_mixed_explicit_table_and_bare_table_emit_separate_recovery_items() -> None:
+    text = "See Supplementary Table S1 and Table S2 for details."
+    packet = _packet(text=text)
+    request = _request(packet, context=[_context(text=text)])
+
+    plan = build_oled_supplementary_evidence_recovery_plan(
+        request,
+        _source_check_result(request),
+    )
+
+    assert plan.item_count == 2
+    explicit_item = next(
+        item
+        for item in plan.items
+        if item.status == OledSupplementaryRecoveryStatus.EXPLICIT_REFERENCE_FOUND
+    )
+    manual_item = next(
+        item
+        for item in plan.items
+        if item.status == OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED
+    )
+    assert explicit_item.target_locator == "S1"
+    assert manual_item.target_kind == OledSupplementaryTargetKind.TABLE
+    assert manual_item.target_locator is None
+    assert [anchor.matched_text for anchor in manual_item.reference_anchors] == ["Table S2"]
+
+
+def test_explicit_and_bare_aliases_for_one_locator_do_not_create_redundant_manual_item() -> None:
+    text = "See Supplementary Table S1 (Table S1) for the calculated values."
+    packet = _packet(text=text)
+    request = _request(packet, context=[_context(text=text)])
+
+    plan = build_oled_supplementary_evidence_recovery_plan(
+        request,
+        _source_check_result(request),
+    )
+
+    assert plan.item_count == 1
+    item = plan.items[0]
+    assert item.status == OledSupplementaryRecoveryStatus.EXPLICIT_REFERENCE_FOUND
+    assert item.target_kind == OledSupplementaryTargetKind.TABLE
+    assert item.target_locator == "S1"
+    assert [anchor.matched_text for anchor in item.reference_anchors] == [
+        "Supplementary Table S1"
+    ]
+
+
+def test_same_locator_bare_reference_in_a_distinct_context_remains_manual() -> None:
+    packet = _packet(
+        text="See Supplementary Table S1 for values and Table S1 for controls.",
+        source_hash="shared-source-hash",
+    )
+    request = _request(
+        packet,
+        context=[
+            _context(
+                text="See Supplementary Table S1 for values.",
+                element_id="explicit-context",
+                source_hash="shared-source-hash",
+            ),
+            _context(
+                text="See Table S1 for controls.",
+                element_id="bare-context",
+                source_hash="shared-source-hash",
+            ),
+        ],
+    )
+
+    plan = build_oled_supplementary_evidence_recovery_plan(
+        request,
+        _source_check_result(request),
+    )
+
+    assert plan.item_count == 2
+    manual_item = next(
+        item
+        for item in plan.items
+        if item.status == OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED
+    )
+    assert manual_item.target_locator is None
+    assert [anchor.element_id for anchor in manual_item.reference_anchors] == ["bare-context"]
+
+
+def test_mixed_explicit_table_and_generic_information_emit_separate_recovery_items() -> None:
+    text = (
+        "See Supplementary Table S1; additional data are provided in the "
+        "Supplementary Information."
+    )
+    packet = _packet(text=text)
+    request = _request(packet, context=[_context(text=text)])
+
+    plan = build_oled_supplementary_evidence_recovery_plan(
+        request,
+        _source_check_result(request),
+    )
+
+    assert plan.item_count == 2
+    explicit_item = next(
+        item
+        for item in plan.items
+        if item.status == OledSupplementaryRecoveryStatus.EXPLICIT_REFERENCE_FOUND
+    )
+    manual_item = next(
+        item
+        for item in plan.items
+        if item.status == OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED
+    )
+    assert explicit_item.target_kind == OledSupplementaryTargetKind.TABLE
+    assert explicit_item.target_locator == "S1"
+    assert manual_item.target_kind == OledSupplementaryTargetKind.INFORMATION
+    assert manual_item.target_locator is None
+    assert manual_item.reference_label == "Supplementary Information"
+    assert [anchor.matched_text for anchor in manual_item.reference_anchors] == [
+        "Supplementary Information"
+    ]
 
 
 def test_packet_fields_cannot_be_joined_to_fabricate_an_explicit_reference() -> None:
@@ -322,7 +496,167 @@ def test_supplementary_reference_range_never_collapses_to_the_first_locator() ->
 
     assert item.status == OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED
     assert item.target_locator is None
-    assert item.reference_anchors == []
+    assert item.reference_label == "Supplementary Table S1-S3"
+    assert [anchor.matched_text for anchor in item.reference_anchors] == [
+        "Supplementary Table S1-S3"
+    ]
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "Supplementary Table S1–S3",
+        "Supplementary Table S1 to S3",
+        "Supplementary Table S1, S2, and S3",
+        "Supplementary Table S1/S2",
+        "Supplementary Table S1 & S2",
+        "Supplementary Table S1 or S2",
+        "Supplementary Table S1, S2 & S3",
+        "Supplementary Table S1, S2 or S3",
+        "Supplementary Table S1, and S2",
+        "Supplementary Table S1, or S2",
+        "Supplementary Table S1 and/or S2",
+        "Supplementary Table S1; S2",
+        "Supplementary Table S1, and/or S2",
+        "Supplementary Table S1, S2, and/or S3",
+        "Supplementary Table S1, S2, & S3",
+    ],
+)
+def test_supplementary_reference_series_stays_a_single_manual_target(reference: str) -> None:
+    text = f"The calculations are summarized in {reference}."
+    packet = _packet(text=text)
+    request = _request(packet, context=[_context(text=text)])
+
+    plan = build_oled_supplementary_evidence_recovery_plan(
+        request,
+        _source_check_result(request),
+    )
+
+    assert plan.item_count == 1
+    item = plan.items[0]
+    assert item.status == OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED
+    assert item.target_locator is None
+    assert item.reference_label == reference
+    assert [anchor.matched_text for anchor in item.reference_anchors] == [reference]
+
+
+def test_manual_series_matches_a_dash_format_variant_in_bound_context() -> None:
+    packet_text = "The calculations are summarized in Supplementary Table S1–S3."
+    context_text = "The calculations are summarized in Supplementary Table S1-S3."
+    packet = _packet(text=packet_text, source_anchor="shared-source-anchor")
+    request = _request(
+        packet,
+        context=[_context(text=context_text, element_id="shared-source-anchor")],
+    )
+
+    plan = build_oled_supplementary_evidence_recovery_plan(
+        request,
+        _source_check_result(request),
+    )
+
+    assert plan.item_count == 1
+    item = plan.items[0]
+    assert item.status == OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED
+    assert item.target_locator is None
+    assert item.reference_label == "Supplementary Table S1-S3"
+    assert [anchor.matched_text for anchor in item.reference_anchors] == [
+        "Supplementary Table S1-S3"
+    ]
+
+
+@pytest.mark.parametrize(
+    "manual_reference",
+    [
+        "Supplementary Table S2-S3",
+        "Supplementary Table S2/S3",
+        "Supplementary Table S2, S3 or S4",
+    ],
+)
+def test_mixed_explicit_table_and_series_keep_the_series_as_a_manual_item(
+    manual_reference: str,
+) -> None:
+    text = f"See Supplementary Table S1 and {manual_reference}."
+    packet = _packet(text=text)
+    request = _request(packet, context=[_context(text=text)])
+
+    plan = build_oled_supplementary_evidence_recovery_plan(
+        request,
+        _source_check_result(request),
+    )
+
+    assert plan.item_count == 2
+    explicit_item = next(
+        item
+        for item in plan.items
+        if item.status == OledSupplementaryRecoveryStatus.EXPLICIT_REFERENCE_FOUND
+    )
+    manual_item = next(
+        item
+        for item in plan.items
+        if item.status == OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED
+    )
+    assert explicit_item.target_locator == "S1"
+    assert manual_item.target_locator is None
+    assert manual_item.reference_label == manual_reference
+    assert [anchor.matched_text for anchor in manual_item.reference_anchors] == [
+        manual_reference
+    ]
+
+
+def test_distinct_manual_targets_are_not_collapsed_into_the_first_target() -> None:
+    text = "See Supplementary Table S1, Table S2, and Fig. S3."
+    packet = _packet(text=text)
+    request = _request(packet, context=[_context(text=text)])
+
+    plan = build_oled_supplementary_evidence_recovery_plan(
+        request,
+        _source_check_result(request),
+    )
+
+    assert plan.item_count == 3
+    explicit_items = [
+        item
+        for item in plan.items
+        if item.status == OledSupplementaryRecoveryStatus.EXPLICIT_REFERENCE_FOUND
+    ]
+    manual_items = [
+        item
+        for item in plan.items
+        if item.status == OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED
+    ]
+    assert [item.target_locator for item in explicit_items] == ["S1"]
+    assert {(item.target_kind, item.reference_label) for item in manual_items} == {
+        (OledSupplementaryTargetKind.TABLE, "Table S2"),
+        (OledSupplementaryTargetKind.FIGURE, "Figure S3"),
+    }
+    assert all(item.target_locator is None for item in manual_items)
+
+
+def test_repeated_manual_reference_keeps_all_bound_anchors_in_one_item() -> None:
+    text = "See Fig. S2 for the control experiment."
+    packet = _packet(text=text)
+    request = _request(
+        packet,
+        context=[
+            _context(text=text, element_id="el_p3_0039", page=3),
+            _context(text=text, element_id="el_p4_0051", page=4),
+        ],
+    )
+
+    plan = build_oled_supplementary_evidence_recovery_plan(
+        request,
+        _source_check_result(request),
+    )
+
+    assert plan.item_count == 1
+    item = plan.items[0]
+    assert item.status == OledSupplementaryRecoveryStatus.MANUAL_LOCATOR_REQUIRED
+    assert item.target_kind == OledSupplementaryTargetKind.FIGURE
+    assert item.target_locator is None
+    assert [anchor.element_id for anchor in item.reference_anchors] == [
+        "el_p3_0039",
+        "el_p4_0051",
+    ]
 
 
 def test_textual_substring_without_shared_provenance_cannot_bind_a_recovery_reference() -> None:

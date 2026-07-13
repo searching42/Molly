@@ -732,6 +732,10 @@ Status:
 - emit manual_locator_required without inventing a table/figure number when
   only generic supplementary information is cited, either side of a bound
   reference is bare, or no context anchor is bound
+- preserve unresolved manual references as separate items even when the same
+  packet also contains an explicit supplementary table or figure locator
+- keep supplementary table/figure ranges and lists as one anchored manual
+  reference; never split them into inferred individual locators
 - write a local JSON artifact through an optional CLI
 - keep all plans review-only and offline: no URL/DOI discovery, network access,
   PDF download, MinerU call, LLM call, script execution, candidate merge,
