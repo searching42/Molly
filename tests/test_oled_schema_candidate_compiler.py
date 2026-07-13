@@ -71,6 +71,7 @@ def _property_candidate(
     row_index: int = 0,
     column_name: str | None = None,
     metadata: dict | None = None,
+    comparison_context: dict | None = None,
 ) -> OledSchemaCandidate:
     column = column_name or label
     return OledSchemaCandidate(
@@ -93,6 +94,7 @@ def _property_candidate(
         ],
         confidence_score=0.73,
         metadata=metadata or {},
+        comparison_context=comparison_context,
     )
 
 
@@ -123,6 +125,42 @@ def _condition_candidate(
             )
         ],
         confidence_score=0.66,
+    )
+
+
+def _text_property_candidate(
+    *,
+    candidate_id: str,
+    material_name: str,
+    property_id: str,
+    value: float,
+    target_layer: OledCausalLayer,
+    condition_field: str | None = None,
+    condition_value: str | None = None,
+) -> OledSchemaCandidate:
+    return OledSchemaCandidate(
+        candidate_id=candidate_id,
+        candidate_type=OledSchemaCandidateType.PROPERTY_OBSERVATION,
+        source_paper_id="paper-text",
+        source_candidate_hash="hash-text-properties",
+        source_evidence_anchor="paper-text:p3:b32:text",
+        target_layer=target_layer,
+        property_id=property_id,
+        property_label=property_id,
+        value=value,
+        unit="eV",
+        material_name=material_name,
+        condition_field=condition_field,
+        condition_value=condition_value,
+        evidence_refs=[
+            OledSchemaEvidenceRef(
+                source_candidate_hash="hash-text-properties",
+                source_evidence_anchor="paper-text:p3:b32:text",
+                source_candidate_type="text",
+                field_name="raw_text",
+            )
+        ],
+        confidence_score=0.9,
     )
 
 
@@ -194,6 +232,44 @@ def test_compile_energy_triplet_binds_row_material_context_without_inventing_smi
         "s1_ev",
         "t1_ev",
         "delta_e_st_ev",
+    }
+
+
+def test_compile_interaction_photophysical_property_preserves_comparison_context() -> None:
+    context = {
+        "measurement_temperature": None,
+        "host_material": "mCBP",
+        "dopant_concentration": "10",
+        "dopant_concentration_unit": "wt%",
+        "sample_form": "doped film",
+        "excitation_wavelength": 365,
+        "excitation_wavelength_unit": "nm",
+        "lifetime_fit_method": None,
+    }
+    candidate = _property_candidate(
+        "prompt_lifetime_ns",
+        "Prompt emission-decay lifetime",
+        13.2,
+        "ns",
+        comparison_context=context,
+    )
+
+    report = compile_oled_schema_candidates_to_layered_records([candidate])
+
+    record = report.compiled_records[0].layered_record
+    assert record is not None
+    assert record.interaction is not None
+    observation = record.interaction.properties[0]
+    assert observation.condition is not None
+    assert observation.condition.host_material == "mCBP"
+    assert observation.condition.dopant_concentration == "10"
+    assert observation.condition.excitation_wavelength == 365
+    assert observation.condition.model_dump(mode="json")["lifetime_fit_method"] is None
+    schema_observation = record.validate_schema().observations[0]
+    assert schema_observation.comparison_context_status.value == "incomplete"
+    assert set(schema_observation.comparison_context_missing_fields) == {
+        "measurement_temperature",
+        "lifetime_fit_method",
     }
 
 
@@ -433,6 +509,137 @@ def test_grouping_keeps_table_rows_and_papers_separate() -> None:
     ]
     assert [group_key.row_index for group_key, _ in groups] == [0, 1, 0]
     assert [len(group_candidates) for _, group_candidates in groups] == [2, 1, 1]
+
+
+def test_text_property_candidates_group_by_material_name_and_preserve_identity() -> None:
+    candidates = [
+        _text_property_candidate(
+            candidate_id=f"schema:text:{material}:{property_id}",
+            material_name=material,
+            property_id=property_id,
+            value=value,
+            target_layer=OledCausalLayer.MOLECULE,
+            condition_field="calculation_type",
+            condition_value="calculated",
+        )
+        for material, homo, lumo in (
+            ("TDBA", -5.49, -1.59),
+            ("TDBA-Ph", -5.49, -1.67),
+            ("mTDBA-Ph", -5.37, -1.61),
+        )
+        for property_id, value in (("homo_ev", homo), ("lumo_ev", lumo))
+    ]
+
+    groups = group_oled_schema_candidates_for_compilation(candidates)
+    report = compile_oled_schema_candidates_to_layered_records(candidates)
+
+    assert len(groups) == 3
+    assert len(report.compiled_records) == 3
+    records_by_material = {
+        record.layered_record.molecule.metadata["material_name"]: record.layered_record
+        for record in report.compiled_records
+    }
+    assert set(records_by_material) == {"TDBA", "TDBA-Ph", "mTDBA-Ph"}
+    for record in records_by_material.values():
+        assert record.molecule.metadata["identity_source"] == "property_candidate_material_name"
+        assert len(record.molecule.properties) == 2
+        assert all(
+            observation.metadata["property_context"]
+            == {
+                "condition_field": "calculation_type",
+                "condition_value": "calculated",
+                "condition_unit": None,
+            }
+            for observation in record.molecule.properties
+        )
+
+
+def test_text_interaction_properties_group_by_system_name() -> None:
+    candidates = [
+        _text_property_candidate(
+            candidate_id=f"schema:text:{system}:{property_id}",
+            material_name=system,
+            property_id=property_id,
+            value=value,
+            target_layer=OledCausalLayer.INTERACTION,
+        )
+        for system, s1, t1, delta in (
+            ("PO-T2T:Ir(ppy)", 2.162, 2.136, 0.026),
+            ("PO-T2T:13PXZB", 2.215, 2.188, 0.030),
+        )
+        for property_id, value in (
+            ("s1_ev", s1),
+            ("t1_ev", t1),
+            ("delta_e_st_ev", delta),
+        )
+    ]
+
+    report = compile_oled_schema_candidates_to_layered_records(candidates)
+
+    assert len(report.compiled_records) == 2
+    systems = {
+        record.layered_record.interaction.metadata["system_label"]
+        for record in report.compiled_records
+    }
+    assert systems == {"PO-T2T:Ir(ppy)", "PO-T2T:13PXZB"}
+    assert all(
+        record.layered_record.interaction.metadata["identity_source"]
+        == "property_candidate_material_name"
+        for record in report.compiled_records
+    )
+    assert all(
+        len(record.layered_record.interaction.properties) == 3
+        for record in report.compiled_records
+    )
+
+
+def test_direct_property_condition_builds_measurement_condition() -> None:
+    candidate = _property_candidate(
+        "eqe_percent",
+        "External quantum efficiency",
+        24.1,
+        "%",
+        target_layer=OledCausalLayer.MEASUREMENT,
+    ).model_copy(
+        update={
+            "condition_field": "luminance",
+            "condition_value": 1000,
+            "condition_unit": "cd/m^2",
+        }
+    )
+
+    report = compile_oled_schema_candidates_to_layered_records([candidate])
+
+    measurement = report.compiled_records[0].layered_record.measurement.measurements[0]
+    assert measurement.condition is not None
+    assert measurement.condition.luminance_cd_m2 == 1000
+    assert measurement.metadata["property_context"] == {
+        "condition_field": "luminance",
+        "condition_value": 1000,
+        "condition_unit": "cd/m^2",
+    }
+
+
+def test_compiler_preserves_reported_numeric_lexeme() -> None:
+    candidate = _text_property_candidate(
+        candidate_id="schema:text:exciplex:delta",
+        material_name="PO-T2T:13PXZB",
+        property_id="delta_e_st_ev",
+        value=0.03,
+        target_layer=OledCausalLayer.INTERACTION,
+    ).model_copy(
+        update={
+            "reported_value_text": "0.030",
+            "reported_decimal_places": 3,
+        }
+    )
+
+    report = compile_oled_schema_candidates_to_layered_records([candidate])
+    observation = report.compiled_records[0].layered_record.interaction.properties[0]
+
+    assert observation.value == 0.03
+    assert observation.reported_value_text == "0.030"
+    assert observation.reported_decimal_places == 3
 
 
 def test_grouping_joins_explicit_device_label_across_table_and_text_evidence() -> None:

@@ -91,6 +91,8 @@ def _property_candidate(
     *,
     row_index: int = 0,
     target_layer: OledCausalLayer = OledCausalLayer.INTERACTION,
+    reported_value_text: str | None = "82",
+    reported_decimal_places: int | None = 0,
 ) -> OledSchemaCandidate:
     return OledSchemaCandidate(
         candidate_id=f"schema:hash-table:row-{row_index}:{property_id}",
@@ -103,6 +105,8 @@ def _property_candidate(
         property_label=label,
         value=value,
         unit=unit,
+        reported_value_text=reported_value_text,
+        reported_decimal_places=reported_decimal_places,
         evidence_refs=[
             _evidence_ref(
                 row_index=row_index,
@@ -332,6 +336,8 @@ def test_public_review_packet_api_is_exported_from_domain_package(tmp_path: Path
     assert isinstance(packets[0], OledMineruReviewPacket)
     assert isinstance(packets[0].material_roles[0], OledReviewPacketMaterialRole)
     assert isinstance(packets[0].properties[0], OledReviewPacketProperty)
+    assert packets[0].properties[0].reported_value_text == "82"
+    assert packets[0].properties[0].reported_decimal_places == 0
     assert isinstance(packets[0].properties[0].evidence_refs[0], OledReviewPacketSourceRef)
     assert isinstance(report, OledMineruReviewPacketReport)
     assert OledReviewDecision.ACCEPT.value == "accept"

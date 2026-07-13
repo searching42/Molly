@@ -78,8 +78,20 @@ def test_raw_all_measurements_reports_dedup_conflicts_as_warnings() -> None:
 def test_curated_device_baseline_collapses_consistent_duplicates() -> None:
     report = build_oled_dataset_view(
         [
-            _device_gold_record("gold-dup-a", value=19.5, unit="%"),
-            _device_gold_record("gold-dup-b", value=0.195, unit="fraction"),
+            _device_gold_record(
+                "gold-dup-a",
+                value=19.5,
+                unit="%",
+                reported_value_text="19.50",
+                reported_decimal_places=2,
+            ),
+            _device_gold_record(
+                "gold-dup-b",
+                value=0.195,
+                unit="fraction",
+                reported_value_text="0.195",
+                reported_decimal_places=3,
+            ),
         ],
         view_kind="curated_device_baseline",
     )
@@ -92,6 +104,20 @@ def test_curated_device_baseline_collapses_consistent_duplicates() -> None:
     assert row.source_record_ids == ["gold-dup-a", "gold-dup-b"]
     assert row.target_value == pytest.approx(19.5)
     assert row.metadata["dedup_policy"] == "collapsed_consistent_duplicate"
+    assert row.metadata["source_reported_values"] == [
+        {
+            "reported_value_text": "0.195",
+            "reported_decimal_places": 3,
+            "reported_unit": "fraction",
+            "source_record_ids": ["gold-dup-b"],
+        },
+        {
+            "reported_value_text": "19.50",
+            "reported_decimal_places": 2,
+            "reported_unit": "%",
+            "source_record_ids": ["gold-dup-a"],
+        },
+    ]
 
 
 def test_curated_device_baseline_rejects_conflicting_duplicate_measurements() -> None:
@@ -202,8 +228,20 @@ def test_curated_intrinsic_view_reads_molecular_layer_targets() -> None:
 def test_curated_intrinsic_view_collapses_consistent_molecule_duplicates() -> None:
     report = build_oled_dataset_view(
         [
-            _intrinsic_gold_record("gold-homo-dup-a", value=-5400, unit="meV"),
-            _intrinsic_gold_record("gold-homo-dup-b", value=-5.4, unit="eV"),
+            _intrinsic_gold_record(
+                "gold-homo-dup-a",
+                value=-5400,
+                unit="meV",
+                reported_value_text="-5400",
+                reported_decimal_places=0,
+            ),
+            _intrinsic_gold_record(
+                "gold-homo-dup-b",
+                value=-5.4,
+                unit="eV",
+                reported_value_text="-5.40",
+                reported_decimal_places=2,
+            ),
         ],
         view_kind=OledDatasetViewKind.CURATED_INTRINSIC,
         target_property_id="homo_ev",
@@ -214,6 +252,7 @@ def test_curated_intrinsic_view_collapses_consistent_molecule_duplicates() -> No
     assert report.rows[0].source_record_ids == ["gold-homo-dup-a", "gold-homo-dup-b"]
     assert report.rows[0].target_value == pytest.approx(-5.4)
     assert report.rows[0].metadata["dedup_policy"] == "collapsed_consistent_intrinsic_duplicate"
+    assert len(report.rows[0].metadata["source_reported_values"]) == 2
 
 
 def test_curated_intrinsic_view_hard_gates_conflicting_molecule_duplicates() -> None:
@@ -296,6 +335,8 @@ def _device_gold_record(
     is_best_reported: bool = False,
     confounder_types: list[OledConfounderType] | None = None,
     inchikey: str = "DEVICE-INCHIKEY",
+    reported_value_text: str | None = None,
+    reported_decimal_places: int | None = None,
 ) -> OledGoldDatasetRecord:
     evidence_ref = f"paper:{record_id}:table-1:row-1"
     return OledGoldDatasetRecord(
@@ -323,6 +364,8 @@ def _device_gold_record(
                         property_label="EQE (%)",
                         value=value,
                         unit=unit,
+                        reported_value_text=reported_value_text,
+                        reported_decimal_places=reported_decimal_places,
                         condition=OledMeasurementCondition(
                             luminance_cd_m2=100,
                             current_density_ma_cm2=current_density_ma_cm2,
@@ -364,6 +407,8 @@ def _intrinsic_gold_record(
     value: float = -5400,
     unit: str = "meV",
     inchikey: str = "INTRINSIC-INCHIKEY",
+    reported_value_text: str | None = None,
+    reported_decimal_places: int | None = None,
 ) -> OledGoldDatasetRecord:
     evidence_ref = f"paper:{record_id}:table-1:row-2"
     return OledGoldDatasetRecord(
@@ -377,6 +422,8 @@ def _intrinsic_gold_record(
                         property_label="HOMO level",
                         value=value,
                         unit=unit,
+                        reported_value_text=reported_value_text,
+                        reported_decimal_places=reported_decimal_places,
                         evidence_sources=[
                             OledEvidenceSource(
                                 source_id=evidence_ref,

@@ -50,7 +50,17 @@ def test_materializes_three_baseline_feature_views_with_stable_columns() -> None
 
 def test_feature_table_records_and_jsonl_are_flat_and_deterministic() -> None:
     table = materialize_oled_baseline_feature_table(
-        [_gold_record("gold-oled-002")],
+        [
+            _gold_record(
+                "gold-oled-002",
+                measurement_observation=_measurement_observation(
+                    "gold-oled-002",
+                    100,
+                    reported_value_text="19.50",
+                    reported_decimal_places=2,
+                ),
+            )
+        ],
         feature_view=OledBaselineFeatureView.FULL_CONTEXT,
     )
 
@@ -61,6 +71,9 @@ def test_feature_table_records_and_jsonl_are_flat_and_deterministic() -> None:
     assert records[0]["record_id"] == "gold-oled-002"
     assert records[0]["target_property_id"] == "eqe_percent"
     assert records[0]["target_value"] == 19.5
+    assert records[0]["target_reported_value_text"] == "19.50"
+    assert records[0]["target_reported_decimal_places"] == 2
+    assert records[0]["target_reported_unit"] == "%"
     assert records[0]["feature.interaction.host_smiles"] == "c1ccccc1"
     assert records[0]["feature.device.device_stack"] == ["ITO", "HTL", "EML", "ETL", "Al"]
     assert records[0]["feature.condition.luminance_cd_m2"] == 100.0
@@ -236,11 +249,15 @@ def _measurement_observation(
     current_density_ma_cm2: float = 4.2,
     temperature_k: float = 298.15,
     condition_metadata: dict[str, str] | None = None,
+    reported_value_text: str | None = None,
+    reported_decimal_places: int | None = None,
 ) -> OledPropertyObservation:
     return OledPropertyObservation(
         property_label="EQE (%)",
         value=value,
         unit=unit,
+        reported_value_text=reported_value_text,
+        reported_decimal_places=reported_decimal_places,
         condition=OledMeasurementCondition(
             luminance_cd_m2=luminance_cd_m2,
             current_density_ma_cm2=current_density_ma_cm2,

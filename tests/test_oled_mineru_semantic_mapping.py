@@ -296,6 +296,15 @@ def test_rule_mapper_splits_neat_film_energy_triplet_and_skips_missing_row() -> 
     }
     assert {item.evidence_refs[0].row_index for item in properties} == {1}
     assert {item.metadata["row_material_name"] for item in properties} == {"TDBA-Ph"}
+    assert {
+        (item.property_id, item.reported_value_text, item.reported_decimal_places)
+        for item in properties
+    } == {
+        ("plqy", "62", 0),
+        ("s1_ev", "3.06", 2),
+        ("t1_ev", "2.82", 2),
+        ("delta_e_st_ev", "0.24", 2),
+    }
     energy_properties = [item for item in properties if item.property_id != "plqy"]
     assert all(item.target_layer == OledCausalLayer.INTERACTION for item in energy_properties)
     assert all("composite_property_cell_split" in item.reason_codes for item in energy_properties)

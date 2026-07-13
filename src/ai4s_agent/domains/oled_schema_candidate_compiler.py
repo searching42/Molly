@@ -202,30 +202,47 @@ def group_oled_schema_candidates_for_compilation(
 ) -> list[tuple[OledSchemaCompilationGroupKey, list[OledSchemaCandidate]]]:
     candidates_list = list(schema_candidates)
     labels_by_source_row: dict[tuple[str, str, int | None], set[str]] = defaultdict(set)
+    subjects_by_source_row: dict[tuple[str, str, int | None], set[str]] = defaultdict(set)
     for candidate in candidates_list:
+        source_row_key = (
+            candidate.source_paper_id,
+            candidate.source_candidate_hash,
+            _candidate_row_index(candidate),
+        )
         device_label = str(candidate.metadata.get("device_label") or "").strip()
-        if not device_label:
-            continue
-        labels_by_source_row[
-            (candidate.source_paper_id, candidate.source_candidate_hash, _candidate_row_index(candidate))
-        ].add(device_label)
+        if device_label:
+            labels_by_source_row[source_row_key].add(device_label)
+        property_subject = _property_subject_label(candidate)
+        if property_subject:
+            subjects_by_source_row[source_row_key].add(property_subject)
 
     grouped: dict[tuple[str, str, int | None], list[OledSchemaCandidate]] = {}
     for candidate in candidates_list:
         row_index = _candidate_row_index(candidate)
+        source_row_key = (
+            candidate.source_paper_id,
+            candidate.source_candidate_hash,
+            row_index,
+        )
         device_label = str(candidate.metadata.get("device_label") or "").strip()
         if not device_label:
-            inherited_labels = labels_by_source_row.get(
-                (candidate.source_paper_id, candidate.source_candidate_hash, row_index),
-                set(),
-            )
+            inherited_labels = labels_by_source_row.get(source_row_key, set())
             if len(inherited_labels) == 1:
                 device_label = next(iter(inherited_labels))
-        grouping_token = (
-            f"device-label:{_device_label_group_token(device_label)}"
-            if device_label
-            else candidate.source_candidate_hash
-        )
+        property_subject = _property_subject_label(candidate)
+        if not property_subject:
+            inherited_subjects = subjects_by_source_row.get(source_row_key, set())
+            if len(inherited_subjects) == 1:
+                property_subject = next(iter(inherited_subjects))
+        if device_label:
+            grouping_token = f"device-label:{_device_label_group_token(device_label)}"
+        elif row_index is None and property_subject:
+            grouping_token = (
+                f"source:{candidate.source_candidate_hash}:"
+                f"property-subject:{_property_subject_group_token(property_subject)}"
+            )
+        else:
+            grouping_token = candidate.source_candidate_hash
         key = (
             candidate.source_paper_id,
             grouping_token,
@@ -244,7 +261,10 @@ def group_oled_schema_candidates_for_compilation(
             source_candidate_hashes=[candidate.source_candidate_hash for candidate in candidates],
             row_index=row_index,
             device_label=_first_device_label(candidates),
-            system_label=_first_system_label(candidates),
+            system_label=(
+                _single_property_subject_label(candidates)
+                or _first_system_label(candidates)
+            ),
             target_property_ids=target_property_ids,
         )
         output.append((group_key, sorted(candidates, key=lambda candidate: candidate.candidate_id)))
@@ -376,11 +396,20 @@ def _compile_group(
     if device_label is not None:
         device = device or OledDeviceLayer()
         device.metadata["device_label"] = device_label
-    system_label = _first_metadata_value(candidates, "system_label")
+    system_label = group_key.system_label or _first_metadata_value(candidates, "system_label")
     if system_label is not None:
         for layer in (molecule, interaction, device, measurement):
             if layer is not None:
                 layer.metadata["system_label"] = system_label
+    property_subject = _single_property_subject_label(candidates)
+    if property_subject is not None:
+        if molecule is not None:
+            molecule.metadata["material_name"] = property_subject
+            molecule.metadata["identity_source"] = "property_candidate_material_name"
+        if interaction is not None:
+            interaction.metadata["system_label"] = property_subject
+            interaction.metadata["identity_source"] = "property_candidate_material_name"
+        reason_codes.add("property_subject_identity_compiled")
     row_material_name = _first_metadata_value(candidates, "row_material_name")
     if row_material_name is not None:
         molecule = molecule or OledMolecularLayer()
@@ -463,12 +492,15 @@ def _property_observation_from_candidate(
     row_condition: OledMeasurementCondition | None,
 ) -> OledPropertyObservation:
     target_layer = candidate.target_layer or OledCausalLayer.MEASUREMENT
-    condition = None
+    condition = candidate.comparison_context
     if target_layer == OledCausalLayer.MEASUREMENT:
         condition = _merge_measurement_conditions(
             row_condition,
             _measurement_condition_from_property_metadata(candidate),
         )
+        condition = _merge_measurement_conditions(condition, candidate.comparison_context)
+    elif condition is not None:
+        condition = condition.model_copy(deep=True)
     metadata = {
         **candidate.metadata,
         "source_schema_candidate_id": candidate.candidate_id,
@@ -477,10 +509,15 @@ def _property_observation_from_candidate(
         "compiled_from_schema_candidate": True,
         "evidence_refs": [evidence_ref.model_dump(mode="json") for evidence_ref in candidate.evidence_refs],
     }
+    property_context = _property_context(candidate)
+    if property_context:
+        metadata["property_context"] = property_context
     return OledPropertyObservation(
         property_label=candidate.property_label or candidate.property_id or "unknown",
         value=candidate.value,
         unit=candidate.unit,
+        reported_value_text=candidate.reported_value_text,
+        reported_decimal_places=candidate.reported_decimal_places,
         condition=condition,
         evidence_sources=[_evidence_source(evidence_ref, target_layer, candidate) for evidence_ref in candidate.evidence_refs],
         confidence=_confidence(candidate),
@@ -545,13 +582,18 @@ def _measurement_condition_from_candidates(candidates: list[OledSchemaCandidate]
 
 
 def _measurement_condition_from_property_metadata(candidate: OledSchemaCandidate) -> OledMeasurementCondition | None:
-    field = _condition_model_field(str(candidate.metadata.get("condition_field") or ""))
-    value = candidate.metadata.get("condition_value")
-    unit = candidate.metadata.get("condition_unit")
+    raw_field = candidate.condition_field or candidate.metadata.get("condition_field")
+    value = (
+        candidate.condition_value
+        if candidate.condition_value is not None
+        else candidate.metadata.get("condition_value")
+    )
+    unit = candidate.condition_unit or candidate.metadata.get("condition_unit")
+    field = _condition_model_field(str(raw_field or ""))
     if field is None or value is None:
         return None
     raw_condition = {
-        "condition_field": candidate.metadata.get("condition_field"),
+        "condition_field": raw_field,
         "condition_value": value,
         "condition_unit": unit,
         "source_schema_candidate_id": candidate.candidate_id,
@@ -667,6 +709,23 @@ def _condition_metadata(candidate: OledSchemaCandidate) -> dict[str, Any]:
         "condition_unit": candidate.condition_unit,
         "source_schema_candidate_id": candidate.candidate_id,
         "evidence_refs": [evidence_ref.model_dump(mode="json") for evidence_ref in candidate.evidence_refs],
+    }
+
+
+def _property_context(candidate: OledSchemaCandidate) -> dict[str, Any]:
+    field = candidate.condition_field or candidate.metadata.get("condition_field")
+    value = (
+        candidate.condition_value
+        if candidate.condition_value is not None
+        else candidate.metadata.get("condition_value")
+    )
+    unit = candidate.condition_unit or candidate.metadata.get("condition_unit")
+    if field is None and value is None and unit is None:
+        return {}
+    return {
+        "condition_field": field,
+        "condition_value": value,
+        "condition_unit": unit,
     }
 
 
@@ -819,7 +878,29 @@ def _first_system_label(candidates: list[OledSchemaCandidate]) -> str | None:
         value = candidate.metadata.get("system_label") or candidate.metadata.get("el_colour") or candidate.metadata.get("color")
         if value is not None and str(value).strip():
             return str(value).strip()
-    return None
+    return _single_property_subject_label(candidates)
+
+
+def _single_property_subject_label(candidates: list[OledSchemaCandidate]) -> str | None:
+    subjects_by_token: dict[str, set[str]] = defaultdict(set)
+    for candidate in candidates:
+        subject = _property_subject_label(candidate)
+        if subject:
+            subjects_by_token[_property_subject_group_token(subject)].add(subject)
+    if len(subjects_by_token) != 1:
+        return None
+    return sorted(next(iter(subjects_by_token.values())))[0]
+
+
+def _property_subject_label(candidate: OledSchemaCandidate) -> str | None:
+    if candidate.candidate_type != OledSchemaCandidateType.PROPERTY_OBSERVATION:
+        return None
+    clean = str(candidate.material_name or "").strip()
+    return clean or None
+
+
+def _property_subject_group_token(value: str) -> str:
+    return " ".join(str(value or "").strip().casefold().split())
 
 
 def _first_metadata_value(candidates: list[OledSchemaCandidate], key: str) -> Any:

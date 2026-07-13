@@ -559,6 +559,8 @@ def _property_observation(
         property_label=review_property.property_label,
         value=review_property.value,
         unit=review_property.unit,
+        reported_value_text=review_property.reported_value_text,
+        reported_decimal_places=review_property.reported_decimal_places,
         condition=_condition_from_summary(review_property.condition_summary),
         evidence_sources=_evidence_sources(review_property, layer, candidate),
         confidence=OledConfidenceAssessment(

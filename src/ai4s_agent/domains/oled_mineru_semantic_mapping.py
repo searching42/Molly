@@ -9,9 +9,10 @@ from collections.abc import Iterable
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ai4s_agent.domains.oled_contracts import OledCausalLayer
+from ai4s_agent.domains.oled_layered_schema import OledMeasurementCondition
 from ai4s_agent.domains.oled_mineru_candidates import (
     OledMineruCandidate,
     OledMineruCandidateType,
@@ -19,6 +20,10 @@ from ai4s_agent.domains.oled_mineru_candidates import (
 )
 from ai4s_agent.domains.oled_property_ontology import DEFAULT_OLED_PROPERTY_ONTOLOGY
 from ai4s_agent.domains.oled_property_taxonomy import DEFAULT_OLED_PROPERTY_TAXONOMY
+from ai4s_agent.domains.oled_reported_values import (
+    reported_value_fields,
+    validate_reported_value_contract,
+)
 
 
 _MISSING_TABLE_CELL_MARKERS = frozenset(
@@ -73,6 +78,8 @@ class OledSchemaCandidate(BaseModel):
 
     value: float | int | str | None = None
     unit: str | None = None
+    reported_value_text: str | None = None
+    reported_decimal_places: int | None = Field(default=None, ge=0)
 
     material_role: str | None = None
     material_name: str | None = None
@@ -80,6 +87,7 @@ class OledSchemaCandidate(BaseModel):
     condition_field: str | None = None
     condition_value: float | int | str | None = None
     condition_unit: str | None = None
+    comparison_context: OledMeasurementCondition | None = None
 
     device_stack: list[str] = Field(default_factory=list)
 
@@ -92,6 +100,16 @@ class OledSchemaCandidate(BaseModel):
     @classmethod
     def validate_reason_codes(cls, value: list[str]) -> list[str]:
         return sorted({str(item).strip() for item in value if str(item).strip()})
+
+    @model_validator(mode="after")
+    def validate_reported_value(self) -> OledSchemaCandidate:
+        validate_reported_value_contract(
+            value=self.value,
+            reported_value_text=self.reported_value_text,
+            reported_decimal_places_value=self.reported_decimal_places,
+            label="schema candidate reported value",
+        )
+        return self
 
 
 class OledSemanticMappingPacket(BaseModel):
@@ -696,6 +714,10 @@ def _property_observation_candidate(
     definition = DEFAULT_OLED_PROPERTY_ONTOLOGY.get(property_id)
     evidence_ref = _table_cell_ref(source_candidate, row_index, column_name, cell_value)
     candidate_metadata = dict(metadata or {})
+    reported_value_text, decimal_places = reported_value_fields(
+        cell_value,
+        _coerce_scalar(cell_value) if value is None else value,
+    )
     condition_context = _condition_context_from_header(column_name)
     if condition_context is not None:
         candidate_metadata.update(condition_context)
@@ -710,6 +732,8 @@ def _property_observation_candidate(
         property_label=definition.name,
         value=_coerce_scalar(cell_value) if value is None else value,
         unit=unit,
+        reported_value_text=reported_value_text,
+        reported_decimal_places=decimal_places,
         evidence_refs=[evidence_ref],
         confidence_score=0.72,
         reason_codes=reason_codes or ["header_property_match"],

@@ -60,6 +60,9 @@ class OledCuratedSplitDatasetViewRowArtifact(BaseModel):
 
     target_value: float | int | str | None = None
     target_unit: str | None = None
+    target_reported_value_text: str | None = None
+    target_reported_decimal_places: int | None = Field(default=None, ge=0)
+    target_reported_unit: str | None = None
     target_layer: str
 
     condition_hash: str | None = None
@@ -467,6 +470,9 @@ def _split_row_from_row(
         source_record_ids=row.source_record_ids,
         target_value=row.target_value,
         target_unit=row.target_unit,
+        target_reported_value_text=row.target_reported_value_text,
+        target_reported_decimal_places=row.target_reported_decimal_places,
+        target_reported_unit=row.target_reported_unit,
         target_layer=row.target_layer,
         condition_hash=row.condition_hash,
         dedup_key_hash=row.dedup_key_hash,

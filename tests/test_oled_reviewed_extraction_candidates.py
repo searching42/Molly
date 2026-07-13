@@ -36,6 +36,9 @@ from ai4s_agent.domains.oled_reviewed_extraction_candidates import (
     write_oled_reviewed_extraction_candidates_jsonl,
     write_oled_reviewed_extraction_staging_report_json,
 )
+from ai4s_agent.domains.oled_reviewed_gold_candidates import (
+    convert_reviewed_extractions_to_gold_candidates,
+)
 
 
 def _packet(
@@ -262,6 +265,122 @@ def test_apply_corrections_to_property_value_and_unit_without_mutating_original_
     assert packet.properties[0].value == 82
     assert packet.properties[0].unit == "%"
     assert findings == []
+
+
+def test_numeric_correction_requires_replacement_reported_lexeme_when_packet_has_precision() -> None:
+    packet = _packet("review:compiled-oled:reported-value-required")
+    packet.properties[0] = packet.properties[0].model_copy(
+        update={
+            "value": 0.03,
+            "unit": "fraction",
+            "reported_value_text": "0.030",
+            "reported_decimal_places": 3,
+        }
+    )
+
+    corrected_packet, applied, findings = apply_oled_review_corrections_to_packet(
+        packet,
+        [
+            OledReviewCorrection(
+                correction_type=OledReviewCorrectionType.PROPERTY_VALUE,
+                field_path="properties[0].value",
+                original_value=0.03,
+                proposed_value=0.04,
+            )
+        ],
+    )
+
+    assert corrected_packet.properties[0].value == 0.03
+    assert corrected_packet.properties[0].reported_value_text == "0.030"
+    assert corrected_packet.properties[0].reported_decimal_places == 3
+    assert applied[0].application_status == OledCorrectionApplicationStatus.FAILED
+    assert applied[0].finding_codes == ["numeric_correction_reported_value_fields_required"]
+    assert [finding.code for finding in findings] == ["numeric_correction_reported_value_fields_required"]
+
+
+def test_numeric_correction_rejects_inconsistent_replacement_reported_lexeme() -> None:
+    packet = _packet("review:compiled-oled:reported-value-inconsistent")
+    packet.properties[0] = packet.properties[0].model_copy(
+        update={
+            "value": 0.03,
+            "unit": "fraction",
+            "reported_value_text": "0.030",
+            "reported_decimal_places": 3,
+        }
+    )
+
+    corrected_packet, applied, findings = apply_oled_review_corrections_to_packet(
+        packet,
+        [
+            OledReviewCorrection(
+                correction_type=OledReviewCorrectionType.PROPERTY_VALUE,
+                field_path="properties[0].value",
+                original_value=0.03,
+                proposed_value=0.04,
+                proposed_reported_value_text="0.030",
+                proposed_reported_decimal_places=3,
+            )
+        ],
+    )
+
+    assert corrected_packet.properties[0].value == 0.03
+    assert corrected_packet.properties[0].reported_value_text == "0.030"
+    assert applied[0].application_status == OledCorrectionApplicationStatus.FAILED
+    assert applied[0].finding_codes == ["numeric_correction_reported_value_contract_invalid"]
+    assert [finding.code for finding in findings] == ["numeric_correction_reported_value_contract_invalid"]
+
+
+def test_trailing_zero_numeric_correction_survives_review_staging_and_gold_conversion() -> None:
+    adjudicated = _adjudicated(
+        "needs_correction",
+        "review:compiled-oled:trailing-zero",
+        decision=OledReviewDecision.NEEDS_CORRECTION,
+        notes="Corrected against the source table; preserve its trailing zero.",
+        corrections=[
+            OledReviewCorrection(
+                correction_type=OledReviewCorrectionType.PROPERTY_VALUE,
+                field_path="properties[0].value",
+                original_value=0.03,
+                proposed_value=0.04,
+                proposed_reported_value_text="0.040",
+                proposed_reported_decimal_places=3,
+                reason="The corrected source lexeme is 0.040.",
+            )
+        ],
+    )
+    adjudicated.packet.properties[0] = adjudicated.packet.properties[0].model_copy(
+        update={
+            "value": 0.03,
+            "unit": "fraction",
+            "reported_value_text": "0.030",
+            "reported_decimal_places": 3,
+        }
+    )
+    staging = stage_oled_reviewed_extraction_candidates(_adjudication_report([adjudicated]))
+
+    assert staging.is_valid is True
+    assert staging.staged_candidate_count == 1
+    reviewed = staging.reviewed_candidates[0]
+    assert reviewed.status == OledReviewedExtractionStatus.CORRECTED
+    assert reviewed.corrected_packet_snapshot is not None
+    corrected_property = reviewed.corrected_packet_snapshot.properties[0]
+    assert corrected_property.value == 0.04
+    assert corrected_property.reported_value_text == "0.040"
+    assert corrected_property.reported_decimal_places == 3
+    assert reviewed.applied_corrections[0].proposed_reported_value_text == "0.040"
+    assert reviewed.applied_corrections[0].proposed_reported_decimal_places == 3
+    assert adjudicated.packet.properties[0].reported_value_text == "0.030"
+
+    conversion = convert_reviewed_extractions_to_gold_candidates([reviewed])
+
+    assert conversion.converted_candidate_count == 1
+    gold_record = conversion.gold_candidates[0].gold_record
+    assert gold_record is not None
+    assert gold_record.layered_record.interaction is not None
+    observation = gold_record.layered_record.interaction.properties[0]
+    assert observation.value == 0.04
+    assert observation.reported_value_text == "0.040"
+    assert observation.reported_decimal_places == 3
 
 
 def test_original_value_mismatch_warns_but_still_applies_proposed_value() -> None:

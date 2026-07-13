@@ -55,6 +55,8 @@ class OledReviewPacketProperty(BaseModel):
     property_label: str
     value: float | int | str | None = None
     unit: str | None = None
+    reported_value_text: str | None = None
+    reported_decimal_places: int | None = Field(default=None, ge=0)
     condition_summary: dict[str, Any] = Field(default_factory=dict)
     evidence_refs: list[OledReviewPacketSourceRef] = Field(default_factory=list)
     confidence_score: float | None = None
@@ -482,6 +484,8 @@ def _review_properties_from_observations(
             property_label=observation.property_label,
             value=observation.value,
             unit=observation.unit,
+            reported_value_text=observation.reported_value_text,
+            reported_decimal_places=observation.reported_decimal_places,
             condition_summary=_condition_summary(observation.condition),
             evidence_refs=_evidence_refs_from_observation(observation),
             confidence_score=observation.confidence.score if observation.confidence is not None else None,

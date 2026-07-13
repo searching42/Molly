@@ -4,7 +4,12 @@ import json
 
 import pytest
 
-from ai4s_agent.domains.oled_layered_schema import OledDeviceLayer, OledLayeredRecord
+from ai4s_agent.domains.oled_layered_schema import (
+    OledDeviceLayer,
+    OledInteractionLayer,
+    OledLayeredRecord,
+    OledPropertyObservation,
+)
 from ai4s_agent.domains.oled_review_packets import (
     OledReviewItem,
     OledReviewPacket,
@@ -16,6 +21,12 @@ from ai4s_agent.domains.oled_schema_candidate_compiler import (
     OledCompiledLayeredRecordCandidate,
     OledSchemaCompilationGroupKey,
     OledSchemaCompilationStatus,
+)
+from ai4s_agent.domains.oled_reviewed_extraction_candidates import (
+    stage_oled_reviewed_extraction_candidates,
+)
+from ai4s_agent.domains.oled_reviewed_gold_candidates import (
+    convert_reviewed_extractions_to_gold_candidates,
 )
 from ai4s_agent.oled_review_adjudication_bridge import (
     OledReviewBridgeStatus,
@@ -330,6 +341,24 @@ def test_pending_decision_must_not_retain_corrections_or_audit_fields() -> None:
     assert "pending_decision_contains_review_data" in {finding.code for finding in report.findings}
 
 
+def test_corrected_reported_value_fields_must_be_complete_and_tied_to_numeric_correction() -> None:
+    decisions = _completed_decisions()
+    decisions.decisions[0] = decisions.decisions[0].model_copy(
+        update={
+            "corrected_reported_value_text": "0.040",
+            "comment": "Corrected source precision.",
+        }
+    )
+
+    report = evaluate_oled_review_decisions(_packet(), decisions)
+
+    assert report.status == OledReviewBridgeStatus.BLOCKED
+    assert {finding.code for finding in report.findings} >= {
+        "corrected_reported_value_fields_incomplete",
+        "corrected_reported_value_requires_corrected_value",
+    }
+
+
 def test_completed_decision_requires_reviewer_and_timestamp() -> None:
     decisions = _completed_decisions()
     decisions.decisions[0] = decisions.decisions[0].model_copy(update={"reviewer": "", "reviewed_at": ""})
@@ -404,3 +433,95 @@ def test_completed_compiled_decision_builds_legacy_adjudication_bundle(tmp_path)
     assert "source_payload_digest_mismatch" in {
         finding.code for finding in mutated_readiness.findings
     }
+
+
+def test_bridge_numeric_correction_preserves_trailing_zero_through_gold_conversion(tmp_path) -> None:
+    compiled_record = OledCompiledLayeredRecordCandidate(
+        record_id="compiled-numeric",
+        status=OledSchemaCompilationStatus.COMPILED,
+        group_key=OledSchemaCompilationGroupKey(
+            source_paper_id="paper-1",
+            source_candidate_hashes=["source-hash"],
+        ),
+        layered_record=OledLayeredRecord(
+            interaction=OledInteractionLayer(
+                properties=[
+                    OledPropertyObservation(
+                        property_label="Photoluminescence quantum yield",
+                        value=0.03,
+                        unit="fraction",
+                        reported_value_text="0.030",
+                        reported_decimal_places=3,
+                        metadata={"source_property_id": "plqy"},
+                    )
+                ]
+            )
+        ),
+        source_schema_candidate_ids=["schema-numeric"],
+        source_candidate_hashes=["source-hash"],
+        source_evidence_anchors=["paper-1:p2:b4"],
+    )
+    source_artifact = tmp_path / "compiled_numeric.json"
+    source_artifact.write_text(
+        json.dumps({"compiled_records": [compiled_record.model_dump(mode="json")]}),
+        encoding="utf-8",
+    )
+    packet = bind_oled_review_packet_source_payloads(
+        OledReviewPacket(
+            run_id="review-numeric",
+            generated_at="2026-07-13T00:00:00Z",
+            review_items=[
+                OledReviewItem(
+                    review_item_id="review:numeric",
+                    paper_id="paper-1",
+                    candidate_type="oled_compiled_record",
+                    priority="high",
+                    source_candidate_id="compiled-numeric",
+                    source_artifact=str(source_artifact),
+                    property_id="plqy",
+                    property_label="Photoluminescence quantum yield",
+                    raw_value="0.030",
+                    numeric_value=0.03,
+                    unit="fraction",
+                    evidence_location="paper-1:p2:b4",
+                )
+            ],
+        )
+    )
+    decisions = OledReviewerDecisionTemplate(
+        run_id=packet.run_id,
+        generated_at=packet.generated_at,
+        source_packet_digest=oled_review_packet_digest(packet),
+        decisions=[
+            OledReviewerDecision(
+                review_item_id="review:numeric",
+                review_status="reviewed",
+                decision="accept",
+                corrected_value="0.040",
+                corrected_reported_value_text="0.040",
+                corrected_reported_decimal_places="3",
+                reviewer="benton",
+                reviewed_at="2026-07-13T12:00:00+08:00",
+                comment="Corrected source value while retaining its reported precision.",
+            )
+        ],
+    )
+
+    bundle = build_legacy_adjudication_bundle(packet, decisions, [compiled_record])
+    correction = bundle.decision_manifest.decisions[0].corrections[0]
+    assert correction.proposed_value == 0.04
+    assert correction.proposed_reported_value_text == "0.040"
+    assert correction.proposed_reported_decimal_places == 3
+
+    staging = stage_oled_reviewed_extraction_candidates(bundle.adjudication_report)
+    conversion = convert_reviewed_extractions_to_gold_candidates(staging.reviewed_candidates)
+
+    assert staging.reviewed_candidates[0].status.value == "corrected"
+    assert conversion.converted_candidate_count == 1
+    gold_record = conversion.gold_candidates[0].gold_record
+    assert gold_record is not None
+    assert gold_record.layered_record.interaction is not None
+    observation = gold_record.layered_record.interaction.properties[0]
+    assert observation.value == 0.04
+    assert observation.reported_value_text == "0.040"
+    assert observation.reported_decimal_places == 3

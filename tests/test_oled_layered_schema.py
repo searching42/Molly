@@ -52,6 +52,31 @@ def test_valid_layered_record_passes_with_measurement_context() -> None:
     assert report.canonical_property_ids == ["homo_ev", "plqy", "eqe_percent"]
 
 
+def test_layered_schema_preserves_reported_numeric_lexeme() -> None:
+    record = OledLayeredRecord(
+        molecule=OledMolecularLayer(canonical_smiles="N1C=CC=C1"),
+        interaction=OledInteractionLayer(
+            emitter_smiles="N1C=CC=C1",
+            host_smiles="c1ccccc1",
+            properties=[
+                OledPropertyObservation(
+                    property_label="ΔE ST",
+                    value=0.03,
+                    unit="eV",
+                    reported_value_text="0.030",
+                    reported_decimal_places=3,
+                )
+            ],
+        )
+    )
+
+    observation = record.validate_schema().observations[0]
+
+    assert observation.value == 0.03
+    assert observation.reported_value_text == "0.030"
+    assert observation.reported_decimal_places == 3
+
+
 def test_layered_record_rejects_measurement_property_on_molecular_layer() -> None:
     record = OledLayeredRecord(
         molecule=OledMolecularLayer(

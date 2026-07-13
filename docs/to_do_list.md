@@ -651,6 +651,8 @@ Scope:
 Status:
 - implemented in `src/ai4s_agent/domains/oled_schema_candidate_compiler.py`
 - tested by `tests/test_oled_schema_candidate_compiler.py`
+- text property candidates from one packet are separated by explicit material/system identity
+- property-level calculation/measurement context is preserved through layered-record compilation
 
 ## 8.4 MinerU parsed-output acceptance harness MVP
 
@@ -675,6 +677,40 @@ Status:
 - implemented in `src/ai4s_agent/domains/oled_mineru_acceptance_harness.py`
 - tested by `tests/test_oled_mineru_acceptance_harness.py`
 - documented in `docs/oled-mineru-acceptance-harness.md`
+
+## 8.4.1 Full-context LLM semantic proposal MVP
+
+### [x] Task:
+- build one content-bound request per paper from semantic mapping packets and the full supplied ParsedDocument context
+- pass the current ontology plus deterministic candidates/findings to the existing LLM provider abstraction
+- require JSON-only packet classifications, evidence-bound candidate proposals, and ontology extension proposals
+- fail closed on unknown packets, missing packet results, hallucinated evidence refs, unsupported property ids, or invalid schema candidates
+- bind `replace` actions to exact superseded deterministic candidate ids so unrelated candidates are preserved
+- require row-level table evidence and matching source cells for LLM candidate proposals
+- reject measurement/device-only `property_bearing` classifications under the current dataset scope
+- reject duplicate or device/measurement-only ontology extensions
+- require structured missing-evidence reasons for source checks and reject generic PDF re-check requests
+- separate complete-evidence ontology review from missing-source review
+- allow one supplement to carry known-property candidates plus unsupported-property ontology proposals
+- require structured exclusion reasons when explicit HOMO/LUMO/S1/T1/Delta-EST eV evidence is omitted
+- preserve each numeric source lexeme and displayed decimal places separately from its machine-usable numeric value, from deterministic/LLM candidates through review, gold, curated views, features, and training packages
+- preserve all source numeric representations in dedup metadata when equivalent rows are collapsed
+- keep every LLM-derived schema candidate in `needs_llm` status for human review
+- keep ontology extensions as proposals only
+- exclude device-only results from the current dataset candidate scope
+- do not execute model-generated scripts
+- do not merge proposals, compile records, mutate the ontology, create gold data, or write datasets
+
+Scope:
+- optional review-only proposal layer after deterministic mapping
+- no external provider is called unless explicitly supplied by the caller
+- the default literature workflow remains deterministic
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_llm_context_mapping.py`
+- offline request writer implemented in `src/ai4s_agent/oled_llm_context_request.py`
+- tested by `tests/test_oled_llm_context_mapping.py` and `tests/test_oled_llm_context_request.py`
+- documented in `docs/oled-llm-contextual-semantic-mapping.md`
 
 ## 8.5 MinerU review packet writer MVP
 

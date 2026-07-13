@@ -9,7 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from ai4s_agent.domains.oled_mineru_acceptance_harness import redact_oled_mineru_acceptance_path
 from ai4s_agent.domains.oled_mineru_review_packets import (
@@ -35,6 +35,8 @@ class OledReviewCorrection(BaseModel):
     field_path: str
     original_value: float | int | str | list[str] | dict[str, Any] | None = None
     proposed_value: float | int | str | list[str] | dict[str, Any] | None = None
+    proposed_reported_value_text: str | None = None
+    proposed_reported_decimal_places: int | None = Field(default=None, ge=0)
     reason: str | None = None
     source_evidence_anchors: list[str] = Field(default_factory=list)
 
@@ -42,6 +44,21 @@ class OledReviewCorrection(BaseModel):
     @classmethod
     def validate_sorted_unique_anchors(cls, value: list[str]) -> list[str]:
         return sorted({str(item).strip() for item in value if str(item).strip()})
+
+    @model_validator(mode="after")
+    def validate_reported_value_correction_fields(self) -> OledReviewCorrection:
+        has_reported_text = self.proposed_reported_value_text is not None
+        has_decimal_places = self.proposed_reported_decimal_places is not None
+        if has_reported_text != has_decimal_places:
+            raise ValueError(
+                "numeric review corrections require both proposed_reported_value_text "
+                "and proposed_reported_decimal_places"
+            )
+        if (has_reported_text or has_decimal_places) and self.correction_type != OledReviewCorrectionType.PROPERTY_VALUE:
+            raise ValueError(
+                "proposed reported-value fields are only valid for property_value corrections"
+            )
+        return self
 
 
 class OledReviewDecisionEntry(BaseModel):

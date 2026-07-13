@@ -19,6 +19,9 @@ class OledFeatureMaterializationRow(BaseModel):
     target_property_id: str
     target_value: float | int | str | None
     target_unit: str | None = None
+    target_reported_value_text: str | None = None
+    target_reported_decimal_places: int | None = Field(default=None, ge=0)
+    target_reported_unit: str | None = None
     condition_hash: str | None = None
     confidence_score: float | None = None
     evidence_refs: list[str] = Field(default_factory=list)
@@ -34,6 +37,9 @@ class OledFeatureMaterializationRow(BaseModel):
             "target_property_id": self.target_property_id,
             "target_unit": self.target_unit,
             "target_value": self.target_value,
+            "target_reported_value_text": self.target_reported_value_text,
+            "target_reported_decimal_places": self.target_reported_decimal_places,
+            "target_reported_unit": self.target_reported_unit,
         }
         for key in sorted(self.features):
             record[f"feature.{key}"] = self.features[key]
@@ -53,6 +59,9 @@ class OledFeatureMaterializationTable(BaseModel):
             "target_property_id",
             "target_value",
             "target_unit",
+            "target_reported_value_text",
+            "target_reported_decimal_places",
+            "target_reported_unit",
             "condition_hash",
             "confidence_score",
             "evidence_refs",
@@ -128,6 +137,9 @@ def materialize_oled_baseline_feature_table(
                     target_property_id=clean_target,
                     target_value=observation.normalized_value,
                     target_unit=observation.normalized_unit,
+                    target_reported_value_text=observation.reported_value_text,
+                    target_reported_decimal_places=observation.reported_decimal_places,
+                    target_reported_unit=observation.unit,
                     condition_hash=observation.normalized_condition_hash,
                     confidence_score=observation.confidence.score if observation.confidence else None,
                     evidence_refs=_evidence_refs(gold_record, observation),
