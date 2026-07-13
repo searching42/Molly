@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from copy import deepcopy
@@ -40,6 +41,14 @@ _KNOWN_COLUMNS = {
     "$T_1$ (eV)": "t1_ev",
     "$\\Delta E_{ST}^a$ (eV)": "delta_e_st_ev",
 }
+
+
+def _reported_unit_from_test_header(column_name: str) -> str:
+    match = re.search(
+        r"\(([^()]*)\)\s*(?:\^\{?[A-Za-z0-9]+\}?)?\s*$",
+        column_name,
+    )
+    return match.group(1).strip() if match is not None else ""
 
 
 def _stable_hash(value: Any) -> str:
@@ -298,7 +307,7 @@ def _response_payload(request_path: Path, request: dict[str, Any]) -> dict[str, 
                         "disposition": "needs_ontology_review",
                         "property_label": column_name,
                         "proposed_target_layer": "molecule",
-                        "reported_unit": "" if column_name.startswith("$f(") else "eV",
+                        "reported_unit": _reported_unit_from_test_header(column_name),
                         "ontology_review_reason": "property_missing_from_pinned_ontology",
                     }
                 )
@@ -794,6 +803,47 @@ def test_rejects_reported_unit_that_disagrees_with_source_header(tmp_path: Path)
             response_manifest_json=response_path,
             output_json=output_path,
         )
+
+
+@pytest.mark.parametrize(
+    ("column_name", "source_unit", "fabricated_unit"),
+    [
+        (
+            "$\\Delta E_{\\text{HOMO} \\rightarrow \\text{LUMO}}$ (eV)",
+            "eV",
+            "nm",
+        ),
+        ("$f(S_0-S_1)^b$", "", "eV"),
+    ],
+)
+def test_ontology_review_unit_must_exactly_match_the_source_header(
+    tmp_path: Path,
+    column_name: str,
+    source_unit: str,
+    fabricated_unit: str,
+) -> None:
+    request_path, response_path, output_path, _, response = _build_chain(tmp_path)
+    item = next(
+        item
+        for item in response["scope_results"][0]["cell_dispositions"]
+        if item["column_name"] == column_name
+    )
+    assert item["disposition"] == "needs_ontology_review"
+    assert item["reported_unit"] == source_unit
+    item["reported_unit"] = fabricated_unit
+    write_json(response_path, response)
+
+    with pytest.raises(
+        ValueError,
+        match="ontology-review reported_unit does not match the source header",
+    ):
+        build_oled_supplementary_scoped_candidate_response_from_files(
+            request_artifact_json=request_path,
+            response_manifest_json=response_path,
+            output_json=output_path,
+        )
+
+    assert not output_path.exists()
 
 
 @pytest.mark.parametrize(

@@ -1159,6 +1159,11 @@ def _validate_cell_disposition_mapping(
             raise ValueError("ontology-review disposition must preserve the reported column label")
         if disposition.proposed_target_layer not in allowed_layers:
             raise ValueError("ontology-review disposition uses a layer outside the request scope")
+        expected_unit = _reported_unit_from_header(disposition.column_name) or ""
+        if disposition.reported_unit != expected_unit:
+            raise ValueError(
+                "ontology-review reported_unit does not match the source header"
+            )
 
 
 def _validate_response_authored_text(
