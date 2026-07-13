@@ -755,6 +755,42 @@ Status:
 - tested by tests/test_oled_supplementary_evidence_recovery.py
 - documented in docs/oled-supplementary-source-recovery.md
 
+## 8.4.3 Human-approved local supplementary-source intake MVP
+
+### [x] Task:
+- consume an already validated OLED supplementary recovery artifact and a
+  human-confirmed local-source intake manifest
+- require an explicit approved/deferred/rejected decision for every recovery
+  item, with strict paper and request/result/context/recovery-plan digest
+  binding
+- allow one local supplementary PDF to bind multiple items only through
+  explicit per-item decisions
+- validate approved local files as bounded regular non-symlink PDFs with
+  header/EOF envelope checks and SHA-256 binding
+- preserve provenance/access metadata without serializing local source paths or
+  PDF bytes into the output artifact
+- retain manual_locator_required items as manual; never invent a locator or
+  upgrade them to explicit references
+- mark approved explicit targets only as eligible for a later targeted parse,
+  and approved manual targets only as eligible for later manual source review
+- keep the result offline, review-only, and non-executable: no discovery,
+  download, redirect handling, MinerU/LLM call, PDF content parsing, candidate
+  regeneration, staging, gold creation, or dataset write
+
+Scope:
+- this is an operator-local source binding and envelope-validation gate
+- page-count verification and actual parsing/regeneration remain separate,
+  explicitly gated follow-up work
+- it does not change generic acquisition adapters, RunPlan task registry,
+  source-manifest semantics, or dataset admission policy
+
+Status:
+- implemented in src/ai4s_agent/domains/oled_supplementary_source_intake.py
+- offline artifact/CLI implemented in
+  src/ai4s_agent/oled_supplementary_source_intake.py
+- tested by tests/test_oled_supplementary_source_intake.py
+- documented in docs/oled-supplementary-source-intake.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
