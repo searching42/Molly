@@ -819,6 +819,46 @@ Status:
 - tested by tests/test_oled_supplementary_parser_preflight.py
 - documented in docs/oled-supplementary-parser-preflight.md
 
+## 8.4.5 Preflight-bound supplementary MinerU execution MVP
+
+### [x] Task:
+- consume a validated supplementary parser-preflight artifact plus a separately
+  confirmed, digest-bound execution manifest
+- require an exact passed endpoint-preflight report hash and an explicitly
+  named endpoint profile whose execution settings match that report
+- rebind every approved source, create a fresh run-scoped PDF snapshot through
+  `O_NOFOLLOW`, and verify its byte size, PDF envelope, and SHA-256 before any
+  network access
+- bind `DocumentParseRequest` to the expected source SHA-256 and record the
+  hash of the exact bytes uploaded to MinerU
+- use only the explicit `mineru_api` provider, with no `auto` selection or
+  parser fallback, and parse the complete approved source without inventing a
+  page range
+- validate source hash, protocol, backend, isolated output paths, and required
+  normalized outputs; retain hashes of known output files in a redacted audit
+- stop after the first source failure and never reuse a non-fresh run directory
+- keep locator resolution, candidate regeneration, evidence staging,
+  device-only admission, gold creation, and dataset writing disabled
+
+Scope:
+- controlled MinerU execution and audit only
+- endpoint service startup and credentials remain operator-managed
+- real paper canary validation on node45 is a separate manual follow-up after
+  merge; ordinary CI uses fake services and performs no network call
+- parsed locator resolution and human review packets remain separate follow-up
+  work
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_supplementary_mineru_execution.py
+- controlled runner/CLI implemented in
+  src/ai4s_agent/oled_supplementary_mineru_execution.py
+- exact-upload hash binding implemented in the generic MinerU provider request
+  and client path
+- tested by tests/test_oled_supplementary_mineru_execution.py and focused
+  document-parse provider/client tests
+- documented in docs/oled-supplementary-mineru-execution.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:

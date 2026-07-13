@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import os
 import stat
 import time
 import zipfile
@@ -38,6 +40,7 @@ class MinerUApiTaskSubmission(BaseModel):
     result_url: str = ""
     file_names: list[str] = Field(default_factory=list)
     queued_ahead: int | None = None
+    source_pdf_sha256: str = ""
 
 
 class MinerUApiTaskStatus(BaseModel):
@@ -68,6 +71,7 @@ class MinerUApiParseOutcome:
     mineru_version: str
     protocol_version: str
     backend: str
+    source_pdf_sha256: str
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -89,6 +93,19 @@ def _normalize_base_url(base_url: str) -> str:
     return clean
 
 
+def _normalize_health_path(health_path: str) -> str:
+    clean = str(health_path or "").strip()
+    if not clean.startswith("/"):
+        raise ValueError("MinerU API health_path must start with /")
+    parsed = urlparse(clean)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment or "@" in clean:
+        raise ValueError("MinerU API health_path must be a path without userinfo, query, or fragment")
+    lowered = clean.lower()
+    if any(marker in lowered for marker in ("token", "secret", "authorization", "password")):
+        raise ValueError("MinerU API health_path must not contain credential-like values")
+    return clean
+
+
 def _positive_float(value: Any, label: str) -> float:
     try:
         parsed = float(value)
@@ -107,6 +124,64 @@ def _positive_int(value: Any, label: str) -> int:
     if parsed <= 0:
         raise ValueError(f"{label} must be positive")
     return parsed
+
+
+def _read_source_pdf_for_upload(
+    input_pdf: Path,
+    *,
+    expected_source_pdf_sha256: str = "",
+) -> tuple[bytes, str]:
+    """Read exactly the bytes that will be uploaded and bind them to an expected hash."""
+
+    path = input_pdf.expanduser()
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if expected_source_pdf_sha256 and no_follow is None:
+        raise MinerUApiError(
+            code="source_binding_unavailable",
+            message="content-bound MinerU upload requires O_NOFOLLOW support",
+        )
+    flags = os.O_RDONLY | (no_follow or 0)
+    descriptor = -1
+    try:
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = -1
+            initial_stat = os.fstat(handle.fileno())
+            if not stat.S_ISREG(initial_stat.st_mode):
+                raise MinerUApiError(
+                    code="source_read_failed",
+                    message="MinerU upload source must be a regular file",
+                )
+            source_bytes = handle.read()
+            final_stat = os.fstat(handle.fileno())
+            if (
+                final_stat.st_size != initial_stat.st_size
+                or final_stat.st_mtime_ns != initial_stat.st_mtime_ns
+                or final_stat.st_ctime_ns != initial_stat.st_ctime_ns
+                or len(source_bytes) != initial_stat.st_size
+            ):
+                raise MinerUApiError(
+                    code="source_changed_during_read",
+                    message="MinerU upload source changed while its bytes were being read",
+                )
+    except MinerUApiError:
+        raise
+    except OSError as exc:
+        raise MinerUApiError(
+            code="source_read_failed",
+            message="MinerU upload source could not be read safely",
+        ) from exc
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
+
+    source_pdf_sha256 = f"sha256:{hashlib.sha256(source_bytes).hexdigest()}"
+    if expected_source_pdf_sha256 and source_pdf_sha256 != expected_source_pdf_sha256:
+        raise MinerUApiError(
+            code="source_hash_mismatch",
+            message="MinerU upload source does not match expected_source_pdf_sha256",
+        )
+    return source_bytes, source_pdf_sha256
 
 
 def _safe_member_path(name: str) -> Path:
@@ -226,6 +301,7 @@ class MinerUApiClient:
         self,
         *,
         base_url: str,
+        health_path: str = "/health",
         api_token: str = "",
         token_header: str = "Authorization",
         allow_insecure_remote_http: bool = False,
@@ -243,6 +319,7 @@ class MinerUApiClient:
         sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.base_url = _normalize_base_url(base_url)
+        self.health_path = _normalize_health_path(health_path)
         parsed = urlparse(self.base_url)
         self._scheme = parsed.scheme
         self._host = parsed.hostname or ""
@@ -267,7 +344,7 @@ class MinerUApiClient:
         return bool(self.base_url)
 
     def health(self) -> dict[str, Any]:
-        response = self._request("GET", self._url("/health"), error_code="api_unavailable")
+        response = self._request("GET", self._url(self.health_path), error_code="api_unavailable")
         if response.status_code != 200:
             raise MinerUApiError(
                 code="health_check_failure",
@@ -281,7 +358,11 @@ class MinerUApiClient:
 
     def submit_pdf(self, *, request: DocumentParseRequest, input_pdf: Path) -> MinerUApiTaskSubmission:
         self.validate_upload_policy(request)
-        files = [("files", (input_pdf.name, input_pdf.read_bytes(), "application/pdf"))]
+        source_bytes, source_pdf_sha256 = _read_source_pdf_for_upload(
+            input_pdf,
+            expected_source_pdf_sha256=request.expected_source_pdf_sha256,
+        )
+        files = [("files", (input_pdf.name, source_bytes, "application/pdf"))]
         response = self._request(
             "POST",
             self._url("/tasks"),
@@ -298,7 +379,9 @@ class MinerUApiClient:
         task_id = str(payload.get("task_id") or "").strip()
         if not task_id:
             raise MinerUApiError(code="invalid_submission_response", message="MinerU submission response missing task_id")
-        return MinerUApiTaskSubmission.model_validate(payload)
+        return MinerUApiTaskSubmission.model_validate(payload).model_copy(
+            update={"source_pdf_sha256": source_pdf_sha256}
+        )
 
     def get_task_status(self, task_id: str) -> MinerUApiTaskStatus:
         response = self._request("GET", self._url(f"/tasks/{task_id}"), error_code="api_unavailable")
@@ -425,6 +508,7 @@ class MinerUApiClient:
         except MinerUApiError as exc:
             details = dict(exc.details)
             details.setdefault("task_id", submission.task_id)
+            details.setdefault("source_pdf_sha256", submission.source_pdf_sha256)
             details.setdefault("task_status_history", history or list(details.get("task_status_history") or []))
             details.setdefault("queued_ahead_history", queued_history or list(details.get("queued_ahead_history") or []))
             raise MinerUApiError(code=exc.code, message=exc.message, details=details) from exc
@@ -437,6 +521,7 @@ class MinerUApiClient:
             mineru_version=status.mineru_version,
             protocol_version=status.protocol_version,
             backend=status.backend or request.backend,
+            source_pdf_sha256=submission.source_pdf_sha256,
         )
 
     def _submission_form_data(self, request: DocumentParseRequest) -> dict[str, Any]:

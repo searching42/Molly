@@ -75,7 +75,7 @@ class MinerUApiDocumentParseProvider(DocumentParseProvider):
                 normalized.parsed_document,
             )
             audit = DocumentParseAudit(
-                source_pdf_sha256=_sha256_file(resolved.input_pdf),
+                source_pdf_sha256=outcome.source_pdf_sha256,
                 request_provider=request.provider,
                 selected_provider=self.provider_name,
                 selection_reason="explicit_mineru_api_provider",
@@ -148,7 +148,10 @@ class MinerUApiDocumentParseProvider(DocumentParseProvider):
                 except ValueError:
                     bundle = discover_mineru_output_bundle_fallback(bundle_dir)
             audit = DocumentParseAudit(
-                source_pdf_sha256=_sha256_file(resolved.input_pdf) if resolved.input_pdf.exists() else "",
+                source_pdf_sha256=str(
+                    getattr(exc, "details", {}).get("source_pdf_sha256") or ""
+                ).strip()
+                or (_sha256_file(resolved.input_pdf) if resolved.input_pdf.exists() else ""),
                 request_provider=request.provider,
                 selected_provider=self.provider_name,
                 selection_reason="explicit_mineru_api_provider",

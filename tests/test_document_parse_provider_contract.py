@@ -36,6 +36,22 @@ def test_document_parse_request_is_json_safe_and_has_conservative_defaults(tmp_p
     assert request.table_enabled is True
     assert request.image_analysis_enabled is False
     assert request.allow_remote_upload is False
+    assert request.expected_source_pdf_sha256 == ""
+
+
+def test_document_parse_request_normalizes_expected_source_hash(tmp_path: Path) -> None:
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n% test\n")
+
+    request = DocumentParseRequest(
+        run_id="r-doc",
+        input_pdf=str(pdf),
+        output_dir=str(tmp_path / "out"),
+        provider="mineru_api",
+        expected_source_pdf_sha256="A" * 64,
+    )
+
+    assert request.expected_source_pdf_sha256 == "sha256:" + "a" * 64
 
 
 def test_document_parse_request_rejects_unknown_fields(tmp_path: Path) -> None:
