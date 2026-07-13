@@ -12,7 +12,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ai4s_agent.domains.oled_supplementary_evidence_recovery import OledSupplementaryTargetKind
+from ai4s_agent.domains.oled_supplementary_evidence_recovery import (
+    OledSupplementaryTargetKind,
+    supplementary_locator_has_series_tail,
+)
 from ai4s_agent.domains.oled_supplementary_mineru_execution import (
     OledSupplementaryMineruExecutionArtifact,
     OledSupplementaryMineruExecutionStatus,
@@ -625,7 +628,14 @@ def _canonical_table_locator(value: str) -> str:
 def _caption_matches_table_locator(caption: str, locator: str) -> bool:
     normalized = _normalize_caption(caption)
     prefix = r"(?:(?:supplementary|supporting\s+information)\s+)?table\s+"
-    return re.match(prefix + re.escape(locator) + r"(?=$|[^0-9A-Za-z])", normalized, re.I) is not None
+    match = re.match(
+        prefix + re.escape(locator) + r"(?=$|[^0-9A-Za-z])",
+        normalized,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return False
+    return not supplementary_locator_has_series_tail(normalized[match.end() :])
 
 
 def _normalize_caption(value: str) -> str:

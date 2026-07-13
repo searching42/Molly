@@ -221,6 +221,77 @@ def test_s1_locator_does_not_match_s10(tmp_path: Path) -> None:
     assert artifact.review_items[0].matched_table is None
 
 
+@pytest.mark.parametrize(
+    "caption",
+    [
+        "Supplementary Table S1-S3",
+        "Supplementary Table S1/S2",
+        "Supplementary Table S1, S2 and S3",
+        "Supplementary Table S1, S2, and S3",
+        "Table S1 and S2",
+        "Table S1 to S3",
+        "Supplementary Table S1–S3",
+        "Supplementary Table S1 & S2",
+        "Supplementary Table S1 or S2",
+    ],
+)
+def test_range_or_list_caption_never_resolves_as_single_table(
+    tmp_path: Path,
+    caption: str,
+) -> None:
+    paths = _write_fixture(
+        tmp_path,
+        tables=[
+            {
+                "table_id": "table-series",
+                "page": 2,
+                "caption": caption,
+                "headers": ["Value"],
+                "rows": [{"Value": "0.030"}],
+            }
+        ],
+    )
+
+    artifact = _generate(paths)
+
+    item = artifact.review_items[0]
+    assert item.match_status.value == "not_found"
+    assert item.matched_table is None
+    assert item.candidate_table_ids == []
+    assert artifact.locator_resolved is False
+    assert artifact.status == OledSupplementaryLocatorReviewStatus.MANUAL_LOCATOR_REVIEW_REQUIRED
+
+
+@pytest.mark.parametrize(
+    "caption",
+    [
+        "Supplementary Table S1. Photophysical properties",
+        "Table S1 (continued)",
+    ],
+)
+def test_single_table_caption_remains_an_exact_match(tmp_path: Path, caption: str) -> None:
+    paths = _write_fixture(
+        tmp_path,
+        tables=[
+            {
+                "table_id": "table-single",
+                "page": 2,
+                "caption": caption,
+                "headers": ["Value"],
+                "rows": [{"Value": "0.030"}],
+            }
+        ],
+    )
+
+    artifact = _generate(paths)
+
+    item = artifact.review_items[0]
+    assert item.match_status.value == "exact_match"
+    assert item.matched_table is not None
+    assert item.matched_table.table_id == "table-single"
+    assert artifact.locator_resolved is True
+
+
 def test_duplicate_exact_captions_fail_closed_as_ambiguous(tmp_path: Path) -> None:
     tables = _default_tables()
     tables.append(

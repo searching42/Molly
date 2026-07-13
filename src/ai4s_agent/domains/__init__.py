@@ -658,6 +658,7 @@ from ai4s_agent.domains.oled_supplementary_evidence_recovery import (
     build_oled_supplementary_evidence_recovery_plan,
     oled_document_context_digest,
     oled_mapping_result_digest,
+    supplementary_locator_has_series_tail,
 )
 from ai4s_agent.domains.oled_supplementary_source_intake import (
     DEFAULT_MAX_SUPPLEMENTARY_PDF_BYTES,
@@ -1321,6 +1322,7 @@ __all__ = [
     "run_oled_llm_context_mapping",
     "oled_document_context_digest",
     "oled_mapping_result_digest",
+    "supplementary_locator_has_series_tail",
     "inspect_oled_supplementary_source_pdf",
     "run_oled_mineru_acceptance_harness",
     "run_oled_mineru_review_packet_builder",

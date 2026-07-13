@@ -231,6 +231,12 @@ _SERIES_TAIL = (
 _SINGLETON_SERIES_GUARD = rf"(?!{_SERIES_TAIL})"
 
 
+def supplementary_locator_has_series_tail(value: str) -> bool:
+    """Return whether text after a locator begins a range or locator list."""
+
+    return re.match(_SERIES_TAIL, str(value or ""), re.IGNORECASE) is not None
+
+
 _EXPLICIT_PATTERNS: tuple[tuple[OledSupplementaryTargetKind, re.Pattern[str]], ...] = (
     (
         OledSupplementaryTargetKind.TABLE,
@@ -934,4 +940,5 @@ __all__ = [
     "build_oled_supplementary_evidence_recovery_plan",
     "oled_document_context_digest",
     "oled_mapping_result_digest",
+    "supplementary_locator_has_series_tail",
 ]

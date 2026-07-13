@@ -869,7 +869,8 @@ Status:
 - read inputs as stable regular files with `O_NOFOLLOW` and keep local paths out
   of all generated artifacts and CLI output
 - resolve table locators only through exact caption-prefix forms such as
-  `Supplementary Table S1`; do not match `S1` to `S10` or table-of-contents rows
+  `Supplementary Table S1`; do not match `S1` to `S10`, range/list captions,
+  or table-of-contents rows
 - fail closed for zero, duplicate, unsupported-kind, or unsupported-format
   matches, without selecting guessed table content
 - preserve matched captions, headers, string-valued rows, reported precision,

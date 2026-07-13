@@ -52,6 +52,10 @@ whitespace, then requires the caption to begin with one of these exact forms:
 The locator token has an exact alphanumeric boundary, so `S1` cannot match
 `S10`. A table-of-contents entry whose caption is `Table of Contents` cannot
 match merely because one of its rows mentions `Supplementary Table S1`.
+Captions that begin with a locator range or list, such as `Table S1-S3`,
+`Table S1/S2`, or `Table S1 and S2`, are not singleton matches and remain
+unresolved. Normal descriptive text and `Table S1 (continued)` remain valid
+singleton-caption forms.
 
 Resolution is fail closed:
 
