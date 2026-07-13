@@ -49,6 +49,12 @@ fidelity without turning downstream numeric columns into strings.
 
 `needs_source_check` results must identify evidence that is genuinely absent from the supplied full text using one or more structured reasons: supplementary information, an unavailable figure/image, an external reference, unresolved identity/abbreviation, or a missing method definition. Generic requests to re-check the already supplied PDF are invalid.
 
+For the supplementary_information reason, the offline
+[supplementary-source recovery planner](oled-supplementary-source-recovery.md)
+can turn an explicit, packet-bound main-text citation such as Supplementary
+Table S1 into a review-only locator plan. It does not discover URLs, download
+or parse files, rerun an LLM, or create candidates or dataset records.
+
 `needs_ontology_review` is separate from missing-source review. Use it when the supplied evidence is complete but a molecule/interaction property is not represented in the current ontology. A `supplement` result may contain both candidates for known properties and extension proposals for additional unsupported properties from the same packet.
 
 When a text packet contains explicit eV property signals such as HOMO/LUMO or S1/T1/Delta-EST but is still marked `no_eligible_property`, the response must record one structured exclusion reason: external/background evidence, duplication of an existing candidate, or ambiguous identity/assignment.
