@@ -30,15 +30,70 @@ _SHA256_RE = re.compile(r"^(?:sha256:)?([0-9a-fA-F]{64})$")
 _ABSOLUTE_PATH_RE = re.compile(
     r"(?<![0-9A-Za-z])(?:[/\\]{2}|/|~[/\\]|[A-Za-z]:[/\\])"
 )
-_CREDENTIAL_MARKERS = (
-    "authorization",
-    "password",
-    "bearer",
-    "cookie",
-    "x-api-key",
-    "api_key",
-    "apikey",
-    "private_key",
+_CREDENTIAL_ASSIGNMENT_RE = re.compile(
+    r"""
+    (?<![0-9A-Za-z])
+    [\"']?
+    (?:
+        x[\s_-]*api[\s_-]*key
+        | api[\s_-]*key
+        | access[\s_-]*token
+        | auth[\s_-]*token
+        | refresh[\s_-]*token
+        | session[\s_-]*token
+        | authorization
+        | bearer
+        | credentials?
+        | password
+        | client[\s_-]*secret
+        | private[\s_-]*key
+        | secret
+        | token
+        | cookie
+    )
+    [\"']?
+    \s*[:=]
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_BEARER_TOKEN_PATTERN = r"""
+    (?:
+        (?=[A-Za-z0-9._~+/=-]{6,}(?![A-Za-z0-9._~+/=-]))
+        (?=[A-Za-z0-9._~+/=-]*(?:[0-9]|[._~+/=][A-Za-z0-9]))
+        [A-Za-z0-9._~+/=-]{6,}
+        | [A-Za-z]{16,}(?![A-Za-z0-9_-])
+    )
+"""
+_BEARER_CREDENTIAL_RE = re.compile(
+    rf"""
+    \A
+    bearer[ \t]+
+    {_BEARER_TOKEN_PATTERN}
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_INLINE_BEARER_CREDENTIAL_RE = re.compile(
+    r"""
+    (?<![0-9A-Za-z])
+    (?:
+        use(?:d|s|ing)?
+        | credentials?
+        | auth(?:entication|orization)?
+        | http[ \t]+header
+        | authorization[ \t]+header
+        | http[ \t]+authorization
+    )
+    (?:
+        [ \t]+(?:is|as|the|a|an|value|scheme|token|with|uses?|using|set[ \t]+to)
+    ){0,3}
+    [ \t]*[:=,-]?[ \t]+
+    bearer[ \t]+
+    """
+    + _BEARER_TOKEN_PATTERN,
+    re.IGNORECASE | re.VERBOSE,
+)
+_SECRET_KEY_RE = re.compile(
+    r"(?<![0-9A-Za-z])sk-[A-Za-z0-9_-]{6,}(?![A-Za-z0-9_-])",
 )
 
 
@@ -648,9 +703,21 @@ def _validate_audit_text(
     lowered = clean.lower()
     if "://" in clean or "file:" in lowered or _ABSOLUTE_PATH_RE.search(clean):
         raise ValueError(f"{field_name} must not contain a URL or absolute path")
-    if any(marker in lowered for marker in _CREDENTIAL_MARKERS):
+    if _contains_credential_material(clean):
         raise ValueError(f"{field_name} contains forbidden credential-like text")
     return clean
+
+
+def _contains_credential_material(value: str) -> bool:
+    return any(
+        pattern.search(value) is not None
+        for pattern in (
+            _CREDENTIAL_ASSIGNMENT_RE,
+            _BEARER_CREDENTIAL_RE,
+            _INLINE_BEARER_CREDENTIAL_RE,
+            _SECRET_KEY_RE,
+        )
+    )
 
 
 def _stable_hash(value: dict[str, Any]) -> str:

@@ -87,6 +87,13 @@ still unresolved. The slash in `HOMO/LUMO` is normal scientific text; it is
 not a local path. Notes must not contain URLs, absolute paths, credentials, or
 control characters.
 
+Credential filtering is applied identically to `reviewed_by`, `review_note`,
+and `semantic_note`. It rejects bounded credential assignments such as
+`token=...`, `access_token: ...`, `api key=...`, and `private key: ...`, plus
+Bearer credentials and common `sk-...` key forms. Unassigned scientific or
+descriptive uses of words such as “token” and “secret” are not rejected merely
+for containing those words.
+
 Even when the locator is accepted:
 
 - `physical_semantics_validated` remains `false`;

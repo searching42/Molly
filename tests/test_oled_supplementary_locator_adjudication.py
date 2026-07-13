@@ -449,6 +449,114 @@ def test_semantic_note_allows_scientific_slashes_but_rejects_paths_and_urls() ->
         )
 
 
+_CREDENTIAL_TEXT_CASES = (
+    "token=abc123",
+    "secret=abc123",
+    "secret: abc123",
+    "access_token=abc123",
+    "Access-Token = abc123",
+    "auth_token=abc123",
+    "auth token: abc123",
+    "refreshToken=abc123",
+    "session-token=abc123",
+    "client_secret=abc123",
+    '"api_key": "abc123"',
+    "api key=abc123",
+    "private key=abc123",
+    "Authorization: Basic abc123",
+    "Cookie: session=abc123",
+    "X-API-Key: abc123",
+    "bearer=abc123",
+    "bearer: abc123",
+    "Bearer abc123",
+    "Bearer abcdefghijklmnop",
+    "BEARER    abc.123_-",
+    "Use Bearer abc123 for authentication.",
+    "HTTP header: Bearer abc123",
+    "Credential is Bearer abc123",
+    "use bearer abc123 for authentication.",
+    "Credential is bearer abcdefghijklmnop",
+    "sk-abcdef123456",
+    "sk-proj_abcdef123456",
+)
+
+
+@pytest.mark.parametrize("decision_field", ["reviewed_by", "review_note", "semantic_note"])
+@pytest.mark.parametrize("credential_text", _CREDENTIAL_TEXT_CASES)
+def test_file_entry_rejects_credentials_without_creating_output(
+    tmp_path: Path,
+    decision_field: str,
+    credential_text: str,
+) -> None:
+    paths = _write_inputs(tmp_path)
+    decision_payload = deepcopy(paths[4])
+    decision_payload["decisions"][0][decision_field] = credential_text
+    write_json(paths[1], decision_payload)
+
+    with pytest.raises(ValidationError, match="credential-like"):
+        _adjudicate(paths)
+
+    assert not paths[2].exists()
+
+
+@pytest.mark.parametrize(
+    "safe_text",
+    [
+        _SEMANTIC_NOTE,
+        "The token count describes text length; no credential value is assigned.",
+        "The secret state is a model label rather than an authentication field.",
+        "Private key terminology is mentioned without an assigned value.",
+        "API key terminology is mentioned without an assigned value.",
+        "Charge bearer mobility was measured for the emissive film.",
+        "The charge bearer CsPbBr3 was measured in the emissive film.",
+        "The charge Bearer CsPbBr3 was measured in the emissive film.",
+        "Use bearer mobility as the scientific phrase in this sentence.",
+        "Bearer species were discussed without any credential value.",
+        "SK-TADF01 is a material identifier.",
+        "tokenization=scientific is not a token assignment.",
+        "protoken=value is not a bounded token field.",
+    ],
+)
+def test_unassigned_scientific_or_descriptive_text_is_not_a_credential(
+    safe_text: str,
+) -> None:
+    decision = OledSupplementaryLocatorDecisionEntry(
+        review_item_id="supplementary-locator-review:item-001",
+        decision="accept_locator",
+        reviewed_by="Benton",
+        reviewed_at=_GENERATED_AT,
+        semantic_note=safe_text,
+    )
+
+    assert decision.semantic_note == safe_text
+
+
+def test_cli_credential_failure_does_not_leak_or_create_output(tmp_path: Path) -> None:
+    paths = _write_inputs(tmp_path)
+    decision_payload = deepcopy(paths[4])
+    credential_text = "access_token=super-secret-value"
+    decision_payload["decisions"][0]["review_note"] = credential_text
+    write_json(paths[1], decision_payload)
+    stdout = StringIO()
+
+    exit_code = main(
+        [
+            "--review-artifact",
+            str(paths[0]),
+            "--decision-manifest",
+            str(paths[1]),
+            "--output",
+            str(paths[2]),
+        ],
+        stdout=stdout,
+    )
+
+    assert exit_code == 2
+    assert credential_text not in stdout.getvalue()
+    assert "supplementary_locator_adjudication_failed" in stdout.getvalue()
+    assert not paths[2].exists()
+
+
 @pytest.mark.parametrize("input_index", [0, 1])
 def test_symlink_inputs_are_rejected(tmp_path: Path, input_index: int) -> None:
     paths = _write_inputs(tmp_path)
