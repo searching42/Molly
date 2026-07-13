@@ -20,6 +20,10 @@ from ai4s_agent.domains.oled_mineru_review_adjudication import (
     OledReviewCorrectionType,
 )
 from ai4s_agent.domains.oled_mineru_review_packets import OledMineruReviewPacket, OledReviewDecision
+from ai4s_agent.domains.oled_reported_values import (
+    is_numeric_reported_value,
+    validate_reported_value_contract,
+)
 
 
 class OledReviewedExtractionStatus(str, Enum):
@@ -44,6 +48,8 @@ class OledAppliedReviewCorrection(BaseModel):
     field_path: str
     original_value: float | int | str | list[str] | dict[str, Any] | None = None
     proposed_value: float | int | str | list[str] | dict[str, Any] | None = None
+    proposed_reported_value_text: str | None = None
+    proposed_reported_decimal_places: int | None = Field(default=None, ge=0)
     application_status: OledCorrectionApplicationStatus
     reason: str | None = None
     finding_codes: list[str] = Field(default_factory=list)
@@ -490,17 +496,27 @@ def _apply_single_correction(
         )
         finding_codes.append("correction_original_value_mismatch")
     try:
-        _set_supported_path_value(packet, path, correction.proposed_value)
+        property_value_index = _property_value_index(path)
+        if property_value_index is not None:
+            _apply_atomic_property_value_correction(packet, property_value_index, correction)
+        else:
+            _set_supported_path_value(packet, path, correction.proposed_value)
     except (TypeError, ValueError, IndexError) as exc:
+        error_message = str(exc)
+        error_code = (
+            error_message.split(":", 1)[0]
+            if error_message.startswith("numeric_correction_")
+            else "correction_application_failed"
+        )
         findings.append(
             _finding(
-                "correction_application_failed",
-                str(exc),
+                error_code,
+                error_message,
                 packet_id,
                 severity="error",
             )
         )
-        finding_codes.append("correction_application_failed")
+        finding_codes.append(error_code)
         return _applied_correction(correction, OledCorrectionApplicationStatus.FAILED, finding_codes), findings
     return _applied_correction(correction, OledCorrectionApplicationStatus.APPLIED, finding_codes), findings
 
@@ -573,6 +589,61 @@ def _set_supported_path_value(packet: OledMineruReviewPacket, path: str, propose
     raise ValueError("unsupported correction field_path")
 
 
+def _property_value_index(path: str) -> int | None:
+    property_match = _INDEXED_FIELD_RE.fullmatch(path)
+    if property_match is None:
+        return None
+    collection_name, raw_index, field_name = property_match.groups()
+    if collection_name != "properties" or field_name != "value":
+        return None
+    return int(raw_index)
+
+
+def _apply_atomic_property_value_correction(
+    packet: OledMineruReviewPacket,
+    index: int,
+    correction: OledReviewCorrection,
+) -> None:
+    review_property = packet.properties[index]
+    corrected_value = _coerce_property_field("value", correction.proposed_value)
+    property_has_reported_value = (
+        review_property.reported_value_text is not None
+        or review_property.reported_decimal_places is not None
+    )
+    correction_supplies_reported_value = (
+        correction.proposed_reported_value_text is not None
+        or correction.proposed_reported_decimal_places is not None
+    )
+    if property_has_reported_value or correction_supplies_reported_value:
+        if (
+            correction.proposed_reported_value_text is None
+            or correction.proposed_reported_decimal_places is None
+        ):
+            raise ValueError("numeric_correction_reported_value_fields_required")
+        if not is_numeric_reported_value(corrected_value):
+            raise ValueError("numeric_correction_requires_numeric_value")
+        try:
+            validate_reported_value_contract(
+                value=corrected_value,
+                reported_value_text=correction.proposed_reported_value_text,
+                reported_decimal_places_value=correction.proposed_reported_decimal_places,
+                label="numeric review correction reported value",
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"numeric_correction_reported_value_contract_invalid:{exc}"
+            ) from exc
+        packet.properties[index] = review_property.model_copy(
+            update={
+                "value": corrected_value,
+                "reported_value_text": correction.proposed_reported_value_text,
+                "reported_decimal_places": correction.proposed_reported_decimal_places,
+            }
+        )
+        return
+    packet.properties[index] = review_property.model_copy(update={"value": corrected_value})
+
+
 def _coerce_property_field(field_name: str, value: Any) -> Any:
     if field_name == "value":
         if isinstance(value, bool):
@@ -595,6 +666,8 @@ def _applied_correction(
         field_path=correction.field_path,
         original_value=correction.original_value,
         proposed_value=correction.proposed_value,
+        proposed_reported_value_text=correction.proposed_reported_value_text,
+        proposed_reported_decimal_places=correction.proposed_reported_decimal_places,
         application_status=status,
         reason=correction.reason,
         finding_codes=finding_codes or [],

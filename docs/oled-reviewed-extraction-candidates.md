@@ -57,6 +57,14 @@ Supported deterministic field paths are:
 
 Unsupported paths are not silently applied. They produce correction findings and failed application status.
 
+For `properties[N].value`, a packet that already carries
+`reported_value_text` / `reported_decimal_places` requires a correction to
+provide `proposed_reported_value_text` and
+`proposed_reported_decimal_places` together. The applicator validates that the
+corrected numeric value and lexeme agree, then updates all three fields
+atomically. Missing or inconsistent precision fields fail closed and leave the
+packet unchanged.
+
 If `original_value` is supplied and does not match the current packet value, staging emits `correction_original_value_mismatch` and still applies the proposed value. This keeps reviewer intent deterministic while preserving an auditable warning.
 
 ## Candidate Status Meanings

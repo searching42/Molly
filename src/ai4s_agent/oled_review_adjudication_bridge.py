@@ -635,6 +635,26 @@ def _decision_findings(
         findings.append(_finding("corrections_require_accept", "structured corrections may only accompany accept", item_id, severity="error"))
     if _has_corrections(decision) and not decision.comment.strip():
         findings.append(_finding("correction_comment_required", "accepted corrections require a comment", item_id, severity="error"))
+    has_reported_value_text = bool(decision.corrected_reported_value_text.strip())
+    has_reported_decimal_places = bool(decision.corrected_reported_decimal_places.strip())
+    if has_reported_value_text != has_reported_decimal_places:
+        findings.append(
+            _finding(
+                "corrected_reported_value_fields_incomplete",
+                "corrected reported value text and decimal places must be supplied together",
+                item_id,
+                severity="error",
+            )
+        )
+    if (has_reported_value_text or has_reported_decimal_places) and not decision.corrected_value.strip():
+        findings.append(
+            _finding(
+                "corrected_reported_value_requires_corrected_value",
+                "corrected reported-value fields require corrected_value",
+                item_id,
+                severity="error",
+            )
+        )
     return findings
 
 
@@ -722,6 +742,16 @@ def _legacy_corrections(
                     field_path=f"properties[{property_index}].{field_name}",
                     original_value=getattr(review_property, field_name),
                     proposed_value=_numeric_if_possible(proposed) if field_name == "value" else proposed,
+                    proposed_reported_value_text=(
+                        decision.corrected_reported_value_text.strip() or None
+                        if field_name == "value"
+                        else None
+                    ),
+                    proposed_reported_decimal_places=(
+                        _corrected_decimal_places(decision.corrected_reported_decimal_places)
+                        if field_name == "value"
+                        else None
+                    ),
                     reason=decision.comment.strip() or None,
                     source_evidence_anchors=packet.source_evidence_anchors,
                 )
@@ -763,6 +793,8 @@ def _has_corrections(decision: OledReviewerDecision) -> bool:
         for value in (
             decision.corrected_property_id,
             decision.corrected_value,
+            decision.corrected_reported_value_text,
+            decision.corrected_reported_decimal_places,
             decision.corrected_unit,
             decision.corrected_compound,
             decision.corrected_condition,
@@ -784,6 +816,19 @@ def _numeric_if_possible(value: str) -> float | int | str:
     except ValueError:
         return value
     return int(number) if number.is_integer() else number
+
+
+def _corrected_decimal_places(value: str) -> int | None:
+    clean = str(value or "").strip()
+    if not clean:
+        return None
+    try:
+        parsed = int(clean)
+    except ValueError as exc:
+        raise ValueError("corrected_reported_decimal_places_invalid") from exc
+    if parsed < 0:
+        raise ValueError("corrected_reported_decimal_places_invalid")
+    return parsed
 
 
 def _read_json(path: str | Path, label: str) -> dict[str, Any]:

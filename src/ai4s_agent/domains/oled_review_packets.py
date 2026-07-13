@@ -85,6 +85,8 @@ class OledReviewerDecision(BaseModel):
     decision: OledReviewerDecisionValue = ""
     corrected_property_id: str = ""
     corrected_value: str = ""
+    corrected_reported_value_text: str = ""
+    corrected_reported_decimal_places: str = ""
     corrected_unit: str = ""
     corrected_compound: str = ""
     corrected_condition: str = ""

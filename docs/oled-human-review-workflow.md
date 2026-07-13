@@ -118,15 +118,24 @@ Supported review fields are:
 
 - `corrected_property_id`
 - `corrected_value`
+- `corrected_reported_value_text`
+- `corrected_reported_decimal_places`
 - `corrected_unit`
 - `corrected_compound`
 - `corrected_condition`
 
 Corrections are preserved in the review report. Some corrections may still require explicit downstream materialization after review; the bridge fails closed when it cannot apply one deterministically.
 
-Do not normalize away source precision during a correction. Numeric computation
-uses the normalized value/unit fields, while audit and export artifacts retain
-the source lexeme. When equivalent duplicate rows use different source
+Do not normalize away source precision during a correction. When correcting a
+numeric property that already has source-precision fields, provide all three of
+`corrected_value`, `corrected_reported_value_text`, and
+`corrected_reported_decimal_places`. They are applied atomically and the bridge
+rejects a missing or inconsistent corrected lexeme. For example, correct
+`0.030` to `0.040` with `corrected_value: "0.040"`,
+`corrected_reported_value_text: "0.040"`, and
+`corrected_reported_decimal_places: "3"`. Numeric computation uses the
+normalized value/unit fields, while audit and export artifacts retain the
+source lexeme. When equivalent duplicate rows use different source
 representations, the collapsed dataset row records all representations and their
 source record ids in `metadata.source_reported_values`.
 
