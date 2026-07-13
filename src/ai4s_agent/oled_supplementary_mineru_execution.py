@@ -143,6 +143,7 @@ def execute_oled_supplementary_mineru_from_files(
     live_mineru_version, live_protocol_version = _validate_live_endpoint(
         parse_service,
         expected_protocol_version=resolved_profile.profile.expected_protocol_version,
+        expected_health_path=resolved_profile.profile.health_path,
     )
 
     source_results: list[OledSupplementaryMineruSourceExecutionResult] = []
@@ -260,6 +261,8 @@ def _load_and_validate_endpoint_binding(
         raise ValueError("MinerU endpoint preflight report health status is not acceptable")
     if report.health.protocol_version != resolved.profile.expected_protocol_version:
         raise ValueError("MinerU endpoint preflight protocol does not match endpoint profile")
+    if report.health.health_path != resolved.profile.health_path:
+        raise ValueError("MinerU endpoint preflight health evidence path does not match endpoint profile")
     if resolved.profile.api_url.rstrip("/") != expected.redacted_api_origin:
         raise ValueError("supplementary MinerU execution requires an origin-only endpoint api_url")
     compared_fields = (
@@ -296,6 +299,7 @@ def _build_service(
     token = os.environ.get("MINERU_API_TOKEN") or os.environ.get("AI4S_MINERU_API_TOKEN") or ""
     client = MinerUApiClient(
         base_url=profile.api_url,
+        health_path=profile.health_path,
         api_token=token,
         http_timeout_sec=profile.http_timeout_sec,
         task_timeout_sec=profile.task_timeout_sec,
@@ -308,11 +312,18 @@ def _build_service(
     )
 
 
-def _validate_live_endpoint(service: Any, *, expected_protocol_version: str) -> tuple[str, str]:
+def _validate_live_endpoint(
+    service: Any,
+    *,
+    expected_protocol_version: str,
+    expected_health_path: str,
+) -> tuple[str, str]:
     provider = getattr(service, "mineru_provider", None)
     client = getattr(provider, "client", None)
     if client is None or not callable(getattr(client, "health", None)):
         raise ValueError("supplementary MinerU execution requires a health-checkable MinerU provider")
+    if str(getattr(client, "health_path", "") or "").strip() != expected_health_path:
+        raise ValueError("live MinerU health path does not match the bound endpoint profile")
     payload = client.health()
     if not isinstance(payload, dict):
         raise ValueError("live MinerU health response must be a JSON object")
@@ -400,14 +411,19 @@ def _validate_successful_parse_result(
         raise ValueError("supplementary execution forbids parser provider fallback")
     if result.audit.request_provider != "mineru_api" or request.provider != "mineru_api":
         raise ValueError("supplementary execution requires explicit MinerU provider selection")
-    if not result.parser_backend.startswith("mineru_api:"):
-        raise ValueError("supplementary execution result is not from the MinerU API backend")
+    expected_parser_backend = f"mineru_api:{request.backend}"
+    if result.parser_backend != expected_parser_backend:
+        raise ValueError("MinerU result backend does not match the bound endpoint profile")
+    if result.audit.parser_backend != expected_parser_backend:
+        raise ValueError("MinerU audit backend does not match the bound endpoint profile")
     if result.audit.source_pdf_sha256 != source_pdf_sha256:
         raise ValueError("MinerU audit hash does not match the approved source hash")
     if str(result.audit.protocol_version or expected_protocol_version).strip() != expected_protocol_version:
         raise ValueError("MinerU result protocol does not match the bound endpoint profile")
     if result.parsed_document is None:
         raise ValueError("MinerU success result is missing ParsedDocument")
+    if result.parsed_document.parser_backend != expected_parser_backend:
+        raise ValueError("MinerU parsed document backend does not match the bound endpoint profile")
     if _resolve_local_path(result.input_pdf) != _resolve_local_path(request.input_pdf):
         raise ValueError("MinerU result input does not match the approved source snapshot")
     if _resolve_local_path(result.outputs.output_dir) != source_output_dir.resolve():

@@ -420,6 +420,13 @@ class OledSupplementaryMineruExecutionArtifact(BaseModel):
             raise ValueError("supplementary MinerU execution-side-effect flags do not match source results")
         if self.pdf_content_parsed != any_parsed:
             raise ValueError("supplementary MinerU parsed-content flag does not match source results")
+        expected_parser_backend = f"mineru_api:{self.backend}"
+        if any(
+            item.parser_backend != expected_parser_backend
+            for item in self.source_results
+            if item.status == OledSupplementaryMineruExecutionStatus.SUCCESS
+        ):
+            raise ValueError("successful supplementary source backend does not match artifact backend")
         if not self.audit_only or not self.full_source_parse or not self.formula_enabled or not self.table_enabled:
             raise ValueError("supplementary MinerU execution must retain its fixed audit and parse settings")
         fixed_false_flags = (

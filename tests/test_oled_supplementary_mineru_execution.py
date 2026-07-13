@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from reportlab.pdfgen.canvas import Canvas
 
@@ -38,6 +39,7 @@ from ai4s_agent.oled_supplementary_mineru_execution import (
 )
 from ai4s_agent.oled_supplementary_parser_preflight import OledSupplementaryParserPreflightArtifact
 from ai4s_agent.schemas import ParsedDocument
+from document_parse_test_helpers import build_zip_from_dir, fixture_mineru_output_dir
 
 
 _GENERATED_AT = "2026-07-13T10:00:00Z"
@@ -140,7 +142,12 @@ def _preflight_artifact(pdf_paths: list[Path]) -> OledSupplementaryParserPreflig
     )
 
 
-def _write_endpoint_inputs(tmp_path: Path) -> tuple[Path, Path, str]:
+def _write_endpoint_inputs(
+    tmp_path: Path,
+    *,
+    health_path: str = "/health",
+    health_evidence_path: str | None = None,
+) -> tuple[Path, Path, str]:
     profile_path = tmp_path / "mineru-profile.json"
     write_json(
         profile_path,
@@ -161,7 +168,7 @@ def _write_endpoint_inputs(tmp_path: Path) -> tuple[Path, Path, str]:
                     "poll_interval_sec": 1,
                     "max_poll_attempts": 600,
                     "expected_protocol_version": "2",
-                    "health_path": "/health",
+                    "health_path": health_path,
                     "notes": [],
                 }
             ],
@@ -187,7 +194,7 @@ def _write_endpoint_inputs(tmp_path: Path) -> tuple[Path, Path, str]:
             poll_interval_sec=1,
             max_poll_attempts=600,
             expected_protocol_version="2",
-            health_path="/health",
+            health_path=health_path,
             routing_fallback_profile_names=[],
         ),
         health=MinerUEndpointHealthSummary(
@@ -197,7 +204,7 @@ def _write_endpoint_inputs(tmp_path: Path) -> tuple[Path, Path, str]:
             mineru_version="mineru-2.7",
             protocol_version="2",
             response_schema_valid=True,
-            health_path="/health",
+            health_path=health_evidence_path or health_path,
         ),
         environment=MinerUEndpointEnvironmentDiagnostics(),
     )
@@ -212,9 +219,15 @@ def _write_execution_inputs(
     *,
     endpoint_report_sha256: str | None = None,
     run_id: str = "supp-mineru-run-001",
+    health_path: str = "/health",
+    health_evidence_path: str | None = None,
 ) -> tuple[Path, Path, Path, Path, OledSupplementaryParserPreflightArtifact]:
     preflight = _preflight_artifact(pdf_paths)
-    profile_path, endpoint_report_path, observed_report_sha256 = _write_endpoint_inputs(tmp_path)
+    profile_path, endpoint_report_path, observed_report_sha256 = _write_endpoint_inputs(
+        tmp_path,
+        health_path=health_path,
+        health_evidence_path=health_evidence_path,
+    )
     manifest = OledSupplementaryMineruExecutionManifest(
         run_id=run_id,
         paper_id=preflight.paper_id,
@@ -240,8 +253,9 @@ def _write_execution_inputs(
 
 
 class _FakeHealthClient:
-    def __init__(self, *, protocol_version: str = "2") -> None:
+    def __init__(self, *, protocol_version: str = "2", health_path: str = "/health") -> None:
         self.protocol_version = protocol_version
+        self.health_path = health_path
         self.calls = 0
 
     def health(self) -> dict[str, str]:
@@ -261,6 +275,7 @@ class _FakeMineruService:
         fail_call: int | None = None,
         observed_provider: str = "mineru_api",
         audit_hash_override: str = "",
+        observed_backend: str = "hybrid-engine",
         escape_output: bool = False,
         symlink_output: bool = False,
     ) -> None:
@@ -269,6 +284,7 @@ class _FakeMineruService:
         self.fail_call = fail_call
         self.observed_provider = observed_provider
         self.audit_hash_override = audit_hash_override
+        self.observed_backend = observed_backend
         self.escape_output = escape_output
         self.symlink_output = symlink_output
         self.requests: list[DocumentParseRequest] = []
@@ -280,7 +296,7 @@ class _FakeMineruService:
         parsed = ParsedDocument(
             paper_id="paper016",
             source_path=request.input_pdf,
-            parser_backend="mineru_api:hybrid-engine",
+            parser_backend=f"mineru_api:{self.observed_backend}",
             pages=[{"page": 1}, {"page": 2}],
             elements=[],
             tables=[],
@@ -306,7 +322,9 @@ class _FakeMineruService:
             status="failed" if should_fail else "success",
             provider=self.observed_provider,
             parser_backend=(
-                "pdfplumber_local" if self.observed_provider != "mineru_api" else "mineru_api:hybrid-engine"
+                "pdfplumber_local"
+                if self.observed_provider != "mineru_api"
+                else f"mineru_api:{self.observed_backend}"
             ),
             run_id=request.run_id,
             input_pdf=request.input_pdf,
@@ -331,7 +349,9 @@ class _FakeMineruService:
                 selected_provider=self.observed_provider,
                 selection_reason="explicit_mineru_api_provider",
                 parser_backend=(
-                    "pdfplumber_local" if self.observed_provider != "mineru_api" else "mineru_api:hybrid-engine"
+                    "pdfplumber_local"
+                    if self.observed_provider != "mineru_api"
+                    else f"mineru_api:{self.observed_backend}"
                 ),
                 task_status_history=["failed" if should_fail else "completed"],
                 queued_ahead_history=[],
@@ -471,6 +491,31 @@ def test_execution_rejects_endpoint_report_hash_mismatch_before_output_creation(
     assert service.requests == []
 
 
+def test_execution_rejects_health_evidence_path_mismatch_before_output_creation(tmp_path: Path) -> None:
+    pdf_path = _write_pdf(tmp_path / "paper016_si.pdf")
+    service = _FakeMineruService()
+    inputs = _write_execution_inputs(
+        tmp_path,
+        [pdf_path],
+        health_path="/api/health",
+        health_evidence_path="/health",
+    )
+
+    with pytest.raises(ValueError, match="health evidence path"):
+        execute_oled_supplementary_mineru_from_files(
+            preflight_artifact_json=inputs[0],
+            execution_manifest_json=inputs[1],
+            endpoint_profile_config_json=inputs[2],
+            endpoint_preflight_report_json=inputs[3],
+            output_root=tmp_path / "runs",
+            service=service,
+        )
+
+    assert not (tmp_path / "runs").exists()
+    assert service.client.calls == 0
+    assert service.requests == []
+
+
 def test_execution_manifest_must_exactly_cover_preflight_sources(tmp_path: Path) -> None:
     first_pdf = _write_pdf(tmp_path / "paper016_si_a.pdf", text="first")
     second_pdf = _write_pdf(tmp_path / "paper016_si_b.pdf", text="second")
@@ -513,6 +558,80 @@ def test_execution_requires_fresh_live_protocol_before_parse(tmp_path: Path) -> 
     assert service.requests == []
 
 
+def test_execution_rejects_live_client_health_path_mismatch_before_health_call(tmp_path: Path) -> None:
+    pdf_path = _write_pdf(tmp_path / "paper016_si.pdf")
+    service = _FakeMineruService()
+    service.client.health_path = "/different-health"
+    inputs = _write_execution_inputs(tmp_path, [pdf_path])
+
+    with pytest.raises(ValueError, match="live MinerU health path"):
+        execute_oled_supplementary_mineru_from_files(
+            preflight_artifact_json=inputs[0],
+            execution_manifest_json=inputs[1],
+            endpoint_profile_config_json=inputs[2],
+            endpoint_preflight_report_json=inputs[3],
+            output_root=tmp_path / "runs",
+            service=service,
+        )
+
+    assert service.client.calls == 0
+    assert service.requests == []
+
+
+def test_execution_live_health_uses_bound_custom_health_path(tmp_path: Path) -> None:
+    pdf_path = _write_pdf(tmp_path / "paper016_si.pdf")
+    inputs = _write_execution_inputs(tmp_path, [pdf_path], health_path="/api/health")
+    bundle = build_zip_from_dir(fixture_mineru_output_dir())
+    paths_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths_seen.append(request.url.path)
+        if request.method == "GET" and request.url.path == "/api/health":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "healthy",
+                    "protocol_version": "2",
+                    "version_name": "mineru-2.7",
+                },
+            )
+        if request.method == "POST" and request.url.path == "/tasks":
+            return httpx.Response(202, json={"task_id": "task-custom-health"})
+        if request.method == "GET" and request.url.path == "/tasks/task-custom-health":
+            return httpx.Response(
+                200,
+                json={
+                    "task_id": "task-custom-health",
+                    "state": "completed",
+                    "backend": "hybrid-engine",
+                    "protocol_version": "2",
+                    "version_name": "mineru-2.7",
+                },
+            )
+        if request.method == "GET" and request.url.path == "/tasks/task-custom-health/result":
+            return httpx.Response(
+                200,
+                stream=httpx.ByteStream(bundle),
+                headers={"content-type": "application/zip"},
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    artifact = execute_oled_supplementary_mineru_from_files(
+        preflight_artifact_json=inputs[0],
+        execution_manifest_json=inputs[1],
+        endpoint_profile_config_json=inputs[2],
+        endpoint_preflight_report_json=inputs[3],
+        output_root=tmp_path / "runs",
+        transport=httpx.MockTransport(handler),
+        generated_at=_GENERATED_AT,
+    )
+
+    assert artifact.status == OledSupplementaryMineruExecutionStatus.SUCCESS
+    assert paths_seen[0] == "/api/health"
+    assert paths_seen.count("/api/health") == 1
+    assert "/health" not in paths_seen
+
+
 @pytest.mark.parametrize(
     ("service", "expected_error_code"),
     [
@@ -537,6 +656,19 @@ def test_execution_fails_closed_on_provider_hash_or_output_binding_mismatch(
     assert artifact.locator_resolved is False
     assert artifact.candidate_regenerated is False
     assert artifact.dataset_written is False
+
+
+def test_execution_fails_closed_when_actual_backend_differs_from_bound_profile(tmp_path: Path) -> None:
+    pdf_path = _write_pdf(tmp_path / "paper016_si.pdf")
+    service = _FakeMineruService(observed_backend="pipeline")
+
+    artifact, _, _ = _execute(tmp_path, [pdf_path], service)
+
+    assert artifact.backend == "hybrid-engine"
+    assert artifact.status == OledSupplementaryMineruExecutionStatus.FAILED
+    assert artifact.failed_source_count == 1
+    assert artifact.source_results[0].parser_backend == "mineru_api:pipeline"
+    assert artifact.source_results[0].error_code == "parser_result_binding_failed"
 
 
 def test_execution_stops_after_first_source_failure(tmp_path: Path) -> None:
@@ -621,4 +753,14 @@ def test_execution_artifact_rejects_downstream_side_effect_tampering(tmp_path: P
     payload["candidate_regenerated"] = True
 
     with pytest.raises(ValueError, match="downstream admission boundary"):
+        OledSupplementaryMineruExecutionArtifact.model_validate(payload)
+
+
+def test_execution_artifact_rejects_success_backend_inconsistent_with_top_level(tmp_path: Path) -> None:
+    pdf_path = _write_pdf(tmp_path / "paper016_si.pdf")
+    artifact, _, _ = _execute(tmp_path, [pdf_path], _FakeMineruService())
+    payload = artifact.model_dump(mode="json")
+    payload["source_results"][0]["parser_backend"] = "mineru_api:pipeline"
+
+    with pytest.raises(ValueError, match="source backend does not match artifact backend"):
         OledSupplementaryMineruExecutionArtifact.model_validate(payload)

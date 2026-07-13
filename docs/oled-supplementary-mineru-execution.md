@@ -54,8 +54,8 @@ The endpoint preflight report must:
 The runner resolves the named profile directly. It does not use a routing
 fallback. The execution profile must use an origin-only API URL so the
 redacted endpoint identity fully binds the destination. Immediately before
-parsing the runner performs another live health check and requires the
-configured protocol version.
+parsing the runner performs another live health check at the exact configured
+health path and requires the configured protocol version.
 
 ## Source and Upload Binding
 
@@ -80,7 +80,8 @@ The supplementary runner always uses:
 - table parsing enabled; and
 - image analysis disabled.
 
-A provider fallback, changed source hash, protocol mismatch, output reference
+A provider fallback, changed source hash, actual-backend mismatch, protocol
+mismatch, output reference
 outside the isolated source directory, symlinked output, or missing required
 normalized outputs changes the execution result to `failed`.
 

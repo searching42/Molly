@@ -117,6 +117,23 @@ def test_mineru_api_client_rejects_source_hash_mismatch_before_upload(tmp_path: 
     assert requests_seen == []
 
 
+def test_mineru_api_client_health_uses_configured_path() -> None:
+    paths_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths_seen.append(request.url.path)
+        return httpx.Response(200, json={"status": "healthy", "protocol_version": "2"})
+
+    client = MinerUApiClient(
+        base_url="http://127.0.0.1:8000",
+        health_path="/api/health",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert client.health()["status"] == "healthy"
+    assert paths_seen == ["/api/health"]
+
+
 def test_mineru_api_client_downloads_result_zip_as_raw_bytes(tmp_path: Path) -> None:
     pdf = write_synthetic_pdf(tmp_path / "paper.pdf")
     zip_payload = build_zip_from_dir(fixture_mineru_output_dir())

@@ -93,6 +93,19 @@ def _normalize_base_url(base_url: str) -> str:
     return clean
 
 
+def _normalize_health_path(health_path: str) -> str:
+    clean = str(health_path or "").strip()
+    if not clean.startswith("/"):
+        raise ValueError("MinerU API health_path must start with /")
+    parsed = urlparse(clean)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment or "@" in clean:
+        raise ValueError("MinerU API health_path must be a path without userinfo, query, or fragment")
+    lowered = clean.lower()
+    if any(marker in lowered for marker in ("token", "secret", "authorization", "password")):
+        raise ValueError("MinerU API health_path must not contain credential-like values")
+    return clean
+
+
 def _positive_float(value: Any, label: str) -> float:
     try:
         parsed = float(value)
@@ -288,6 +301,7 @@ class MinerUApiClient:
         self,
         *,
         base_url: str,
+        health_path: str = "/health",
         api_token: str = "",
         token_header: str = "Authorization",
         allow_insecure_remote_http: bool = False,
@@ -305,6 +319,7 @@ class MinerUApiClient:
         sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.base_url = _normalize_base_url(base_url)
+        self.health_path = _normalize_health_path(health_path)
         parsed = urlparse(self.base_url)
         self._scheme = parsed.scheme
         self._host = parsed.hostname or ""
@@ -329,7 +344,7 @@ class MinerUApiClient:
         return bool(self.base_url)
 
     def health(self) -> dict[str, Any]:
-        response = self._request("GET", self._url("/health"), error_code="api_unavailable")
+        response = self._request("GET", self._url(self.health_path), error_code="api_unavailable")
         if response.status_code != 200:
             raise MinerUApiError(
                 code="health_check_failure",
