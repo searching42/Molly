@@ -712,6 +712,49 @@ Status:
 - tested by `tests/test_oled_llm_context_mapping.py` and `tests/test_oled_llm_context_request.py`
 - documented in `docs/oled-llm-contextual-semantic-mapping.md`
 
+## 8.4.2 Supplementary-information reference recovery-plan MVP
+
+### [x] Task:
+- consume an already content-bound OLED LLM mapping request/result pair
+- select only needs_source_check results whose missing evidence is
+  supplementary_information
+- recover an exact supplementary table/figure locator only when the same
+  reference is present in the source packet and in a directly bound supplied
+  document-context element
+- treat a context element as directly bound only through equal source anchor,
+  equal source hash, or canonical full-text equality with one full packet text
+  part after harmless parser-format normalization; never use a substring or
+  paper-level proximity as a binding
+- preserve the packet id, source candidate hash/anchor, context element id,
+  context source hash, page, exact matched text, and character offsets
+- retain matching deterministic candidate ids only when they share the source
+  candidate hash; never infer affected records from paper-level proximity
+- emit manual_locator_required without inventing a table/figure number when
+  only generic supplementary information is cited, either side of a bound
+  reference is bare, or no context anchor is bound
+- preserve unresolved manual references as separate items even when the same
+  packet also contains an explicit supplementary table or figure locator
+- keep supplementary table/figure ranges and lists as one anchored manual
+  reference; never split them into inferred individual locators
+- write a local JSON artifact through an optional CLI
+- keep all plans review-only and offline: no URL/DOI discovery, network access,
+  PDF download, MinerU call, LLM call, script execution, candidate merge,
+  staging, device-only admission, gold creation, or dataset write
+
+Scope:
+- this is an evidence-gap planner only
+- a human must later provide or approve a source before any separate parse and
+  regeneration workflow
+- it does not change the generic acquisition adapters, RunPlan task registry,
+  source-manifest semantics, or dataset admission policy
+
+Status:
+- implemented in src/ai4s_agent/domains/oled_supplementary_evidence_recovery.py
+- offline artifact/CLI implemented in
+  src/ai4s_agent/oled_supplementary_evidence_recovery.py
+- tested by tests/test_oled_supplementary_evidence_recovery.py
+- documented in docs/oled-supplementary-source-recovery.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
