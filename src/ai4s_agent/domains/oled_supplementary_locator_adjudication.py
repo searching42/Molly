@@ -708,6 +708,23 @@ def _validate_audit_text(
     return clean
 
 
+def validate_oled_supplementary_audit_text(
+    value: Any,
+    *,
+    field_name: str,
+    required: bool = False,
+    max_length: int = 2_000,
+) -> str:
+    """Apply the shared supplementary-review sensitive-text boundary."""
+
+    return _validate_audit_text(
+        value,
+        field_name=field_name,
+        required=required,
+        max_length=max_length,
+    )
+
+
 def _contains_credential_material(value: str) -> bool:
     return any(
         pattern.search(value) is not None
@@ -742,5 +759,6 @@ __all__ = [
     "OledSupplementaryLocatorDecisionManifest",
     "build_oled_supplementary_locator_adjudication_artifact",
     "oled_supplementary_review_item_digest",
+    "validate_oled_supplementary_audit_text",
     "validate_oled_supplementary_locator_decision_binding",
 ]
