@@ -1006,6 +1006,48 @@ Status:
   including complete 49-cell paper016-shaped coverage and reported precision
 - documented in docs/oled-supplementary-scoped-candidate-response.md
 
+## 8.4.10 Exact-bound supplementary semantic review MVP
+
+### [x] Task:
+- consume the complete PR-G request, original response manifest, and PR-H
+  validation artifact; replay their exact file-hash, canonical-digest, run,
+  paper, scope, table, and cell bindings
+- generate a compact human packet that shows each full source table once and
+  groups repeated dispositions only by exact column and proposal semantics
+- preserve a strict partition of the independently derived numeric-cell
+  roster, with every PR-H cell covered exactly once and no omitted, duplicate,
+  moved, or invented cell
+- retain every non-empty semantic note as an independent review item rather
+  than treating a mapping decision as semantic resolution
+- require one kind-compatible, exact-item-bound human decision for every
+  mapping group and semantic-note item, with no inline correction path
+- expand each compact mapping decision back to every exact bound cell in the
+  adjudication artifact
+- keep confirmed ontology reviews outside the ontology and retain source
+  checks and rejections as explicit unresolved or ineligible outcomes
+- preserve response authorship and human reviewer provenance while rejecting
+  stale bindings, unsafe text, unsafe files, collisions, and publication races
+- keep material identity, ontology mutation, schema-candidate creation,
+  inline correction, merge/staging, direct/device-only admission, gold
+  creation, and dataset writing disabled
+
+Scope:
+- offline compact human semantic review and exact-bound decision recording
+  only
+- no network, external service, LLM, MinerU, PDF, or ParsedDocument read
+- successful adjudication does not establish universal physical correctness,
+  cross-paper comparability, or downstream dataset eligibility
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_supplementary_semantic_review.py
+- controlled packet/render/adjudicate CLI implemented in
+  src/ai4s_agent/oled_supplementary_semantic_review.py
+- tested by tests/test_oled_supplementary_semantic_review.py, including the
+  paper016-shaped 49-cell partition rendered as seven mapping groups plus one
+  independent semantic-note decision
+- documented in docs/oled-supplementary-semantic-review.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
