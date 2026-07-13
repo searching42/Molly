@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import stat
 import zipfile
@@ -80,12 +81,40 @@ def test_mineru_api_client_parse_pdf_uses_task_api_and_downloads_zip(tmp_path: P
 
     assert health["_version_name"] == "mineru-live"
     assert outcome.remote_task_id == "task-123"
+    assert outcome.source_pdf_sha256 == f"sha256:{hashlib.sha256(pdf.read_bytes()).hexdigest()}"
     assert outcome.task_status_history == ["pending", "completed"]
     assert outcome.queued_ahead_history == [2, 0]
     assert "synthetic_content_list.json" in outcome.extracted_relative_paths
     assert (tmp_path / "bundle" / "synthetic.md").exists()
     assert any(method == "POST" and path == "/tasks" for method, path, _ in requests_seen)
     assert any(method == "GET" and path == "/tasks/task-123/result" for method, path, _ in requests_seen)
+
+
+def test_mineru_api_client_rejects_source_hash_mismatch_before_upload(tmp_path: Path) -> None:
+    pdf = write_synthetic_pdf(tmp_path / "paper.pdf")
+    requests_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request.url.path)
+        return httpx.Response(500)
+
+    client = MinerUApiClient(
+        base_url="http://127.0.0.1:8000",
+        transport=httpx.MockTransport(handler),
+    )
+    request = DocumentParseRequest(
+        run_id="mineru-api",
+        input_pdf=str(pdf),
+        output_dir=str(tmp_path / "out"),
+        provider="mineru_api",
+        expected_source_pdf_sha256="sha256:" + "0" * 64,
+    )
+
+    with pytest.raises(MinerUApiError) as exc_info:
+        client.submit_pdf(request=request, input_pdf=pdf)
+
+    assert exc_info.value.code == "source_hash_mismatch"
+    assert requests_seen == []
 
 
 def test_mineru_api_client_downloads_result_zip_as_raw_bytes(tmp_path: Path) -> None:

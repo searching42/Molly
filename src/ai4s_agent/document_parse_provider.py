@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -12,6 +13,8 @@ DocumentParseProviderName = Literal["auto", "mineru_api", "pdfplumber"]
 DocumentParseMethod = str
 DocumentParseBackend = str
 DocumentParseEffort = Literal["low", "medium", "high"]
+
+_SHA256_RE = re.compile(r"^(?:sha256:)?([0-9a-fA-F]{64})$")
 
 
 def _clean_string(value: Any, *, field_name: str) -> str:
@@ -43,6 +46,7 @@ class DocumentParseRequest(BaseModel):
     start_page: int | None = None
     end_page: int | None = None
     allow_remote_upload: bool = False
+    expected_source_pdf_sha256: str = ""
 
     @field_validator("run_id", "input_pdf", "output_dir", "parse_method", "backend", mode="before")
     @classmethod
@@ -73,6 +77,17 @@ class DocumentParseRequest(BaseModel):
         if value is not None and start_page is not None and value < start_page:
             raise ValueError("end_page must be greater than or equal to start_page")
         return value
+
+    @field_validator("expected_source_pdf_sha256")
+    @classmethod
+    def validate_expected_source_pdf_sha256(cls, value: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            return ""
+        match = _SHA256_RE.fullmatch(clean)
+        if not match:
+            raise ValueError("expected_source_pdf_sha256 must be a SHA-256 digest")
+        return f"sha256:{match.group(1).lower()}"
 
     def resolve_paths(self, *, base: Path | None = None) -> DocumentParseResolvedPaths:
         input_pdf = Path(self.input_pdf).expanduser()
