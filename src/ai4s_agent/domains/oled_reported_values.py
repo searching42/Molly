@@ -6,7 +6,7 @@ from typing import Any
 
 
 _NUMERIC_LEXEME_PATTERN = re.compile(
-    r"[+\-−]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?"
+    r"[+\-−]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-−]?\d+)?"
 )
 
 

@@ -177,7 +177,8 @@ def _numeric_value(value: float | int | str | None) -> float | None:
     if value is None or isinstance(value, bool):
         return None
     try:
-        return float(value)
+        numeric_value = value.replace("−", "-") if isinstance(value, str) else value
+        return float(numeric_value)
     except (TypeError, ValueError):
         return None
 

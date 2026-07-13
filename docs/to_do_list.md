@@ -965,6 +965,47 @@ Status:
   all 49 numeric cell strings and the unresolved HOMO/LUMO semantic note
 - documented in docs/oled-supplementary-scoped-candidate-request.md
 
+## 8.4.9 Exact-bound supplementary candidate response MVP
+
+### [x] Task:
+- consume one complete PR-G request plus a separately supplied response
+  manifest that binds the exact request bytes and canonical request digest
+- require every request scope exactly once and derive the complete numeric-cell
+  roster independently from each bound table
+- require exactly one exact row/column/cell/subject disposition for every
+  numeric-bearing cell, preserving literal values and decimal places
+- allow only known-property proposal, ontology review, source check, or explicit
+  dataset exclusion outcomes
+- validate known properties against the pinned ontology, molecule/interaction
+  scope, reported header unit, canonical unit, and required comparison context
+- preserve every semantic note as unresolved and record external response
+  authorship (immutable model snapshot, prompt contract/hash, and causal
+  timestamps) separately from the offline validator execution
+- require explicit, source-bound header units for known mappings and explicit
+  exclusion of recognized device-only columns
+- reject invented identity/SMILES/material-role/device fields, sensitive text,
+  high-confidence executable content, duplicate/non-finite JSON, unsafe files,
+  output/input collisions, and output-parent replacement races
+- keep transcription/scientific/physical validation, human adjudication,
+  ontology application, schema candidates, merge/staging, admission, gold, and
+  dataset writing disabled
+
+Scope:
+- offline external-response structure, completeness, and source-binding
+  validation only
+- no network, external-service, LLM, MinerU, PDF, or ParsedDocument read
+- no scientific correction, material identity resolution, schema-candidate
+  materialization, or downstream admission
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_supplementary_scoped_candidate_response.py
+- controlled runner/CLI implemented in
+  src/ai4s_agent/oled_supplementary_scoped_candidate_response.py
+- tested by tests/test_oled_supplementary_scoped_candidate_response.py,
+  including complete 49-cell paper016-shaped coverage and reported precision
+- documented in docs/oled-supplementary-scoped-candidate-response.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
