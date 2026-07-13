@@ -674,6 +674,17 @@ from ai4s_agent.domains.oled_supplementary_source_intake import (
     build_oled_supplementary_source_intake_plan,
     inspect_oled_supplementary_source_pdf,
 )
+from ai4s_agent.domains.oled_supplementary_parser_preflight import (
+    DEFAULT_MAX_SUPPLEMENTARY_PDF_PAGES,
+    SUPPLEMENTARY_PARSER_PREFLIGHT_MANIFEST_VERSION,
+    SUPPLEMENTARY_PARSER_PREFLIGHT_PLAN_VERSION,
+    OledSupplementaryParserPreflightItem,
+    OledSupplementaryParserPreflightManifest,
+    OledSupplementaryParserPreflightPlan,
+    OledSupplementaryParserPreflightSource,
+    OledSupplementaryParserPreflightSourceEnvelope,
+    build_oled_supplementary_parser_preflight_plan,
+)
 from ai4s_agent.domains.oled_property_ontology import (
     DEFAULT_OLED_PROPERTY_ONTOLOGY,
     OLED_PHOTOPHYSICAL_COMPARISON_CONTEXT_FIELDS,
@@ -721,6 +732,7 @@ from ai4s_agent.domains.oled_units import (
 
 __all__ = [
     "DEFAULT_MAX_SUPPLEMENTARY_PDF_BYTES",
+    "DEFAULT_MAX_SUPPLEMENTARY_PDF_PAGES",
     "DEFAULT_OLED_PROPERTY_ONTOLOGY",
     "DEFAULT_OLED_PROPERTY_TAXONOMY",
     "DEFAULT_OLED_REPRESENTATION_CONTRACT",
@@ -978,6 +990,11 @@ __all__ = [
     "OledSupplementaryEvidenceRecoveryItem",
     "OledSupplementaryEvidenceRecoveryPlan",
     "OledSupplementaryLocalSource",
+    "OledSupplementaryParserPreflightItem",
+    "OledSupplementaryParserPreflightManifest",
+    "OledSupplementaryParserPreflightPlan",
+    "OledSupplementaryParserPreflightSource",
+    "OledSupplementaryParserPreflightSourceEnvelope",
     "OledSupplementaryRecoveryStatus",
     "OledSupplementaryReferenceAnchor",
     "OledSupplementarySourceEnvelope",
@@ -1065,6 +1082,8 @@ __all__ = [
     "RepresentationContractReport",
     "SUPPLEMENTARY_SOURCE_INTAKE_MANIFEST_VERSION",
     "SUPPLEMENTARY_SOURCE_INTAKE_PLAN_VERSION",
+    "SUPPLEMENTARY_PARSER_PREFLIGHT_MANIFEST_VERSION",
+    "SUPPLEMENTARY_PARSER_PREFLIGHT_PLAN_VERSION",
     "adjudicate_oled_mineru_review_packets",
     "apply_oled_review_corrections_to_packet",
     "build_oled_baseline_experiment_spec",
@@ -1091,6 +1110,7 @@ __all__ = [
     "build_oled_leakage_guard_split",
     "build_oled_llm_paper_mapping_request",
     "build_oled_supplementary_evidence_recovery_plan",
+    "build_oled_supplementary_parser_preflight_plan",
     "build_oled_supplementary_source_intake_plan",
     "build_oled_mineru_review_packets_from_compiled_records",
     "build_oled_paper_context_elements",
