@@ -100,9 +100,11 @@ Every plan and artifact is fixed to:
   admission, gold creation, or dataset write
 
 The next permitted action is human review and provision or approval of a local
-supplementary source. A future acquisition feature must be separately gated and
-must validate official provenance, access policy, redirects, content type,
-PDF bytes, size, page count, and file hash.
+supplementary source through the
+[local-source intake gate](oled-supplementary-source-intake.md). A future
+acquisition feature must be separately gated and must validate official
+provenance, access policy, redirects, content type, PDF bytes, size, page
+count, and file hash.
 
 ## D01-Style Example
 
