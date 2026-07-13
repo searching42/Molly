@@ -926,6 +926,45 @@ Status:
 - tested by tests/test_oled_supplementary_locator_adjudication.py
 - documented in docs/oled-supplementary-locator-adjudication.md
 
+## 8.4.8 Scoped supplementary candidate-proposal request MVP
+
+### [x] Task:
+- consume the complete PR-E locator review artifact and PR-F adjudication
+  artifact, verifying the exact review bytes, canonical content, upstream
+  bindings, full item coverage, and every source/table binding
+- select only accepted exact locators marked eligible for later scoped
+  proposal; exclude rejected and source-check items and fail closed when none
+  are eligible
+- copy the approved table content literally, including captions, headers,
+  string-valued cells, signs, trailing zeros, footnotes, pages, and bounding
+  boxes, without assigning property IDs or interpreting physical semantics
+- carry each PR-F semantic note and semantic-review flag forward unchanged,
+  with explicit instructions not to swap, correct, or normalize HOMO/LUMO or
+  any other reported label/value
+- supply only the molecule/interaction dataset scope and a versioned, pinned
+  ontology snapshot; continue excluding device-only records
+- emit a request-only artifact with response validation, schema mapping,
+  candidate creation/merge, evidence staging, gold creation, and dataset
+  writing disabled
+
+Scope:
+- offline candidate-proposal request context only
+- no response ingestion or validation and no schema-candidate materialization
+- no parsed-output/PDF read, network access, external service, LLM, or MinerU
+  call
+- every later proposal still requires a separate exact-bound response stage
+  and human review
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_supplementary_scoped_candidate_request.py
+- controlled runner/CLI implemented in
+  src/ai4s_agent/oled_supplementary_scoped_candidate_request.py
+- tested by tests/test_oled_supplementary_scoped_candidate_request.py
+- exercised against the real paper016 Supplementary Table S1 chain, preserving
+  all 49 numeric cell strings and the unresolved HOMO/LUMO semantic note
+- documented in docs/oled-supplementary-scoped-candidate-request.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
