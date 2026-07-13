@@ -893,6 +893,39 @@ Status:
   table-of-contents S1 decoy and exact Supplementary Table S1 match
 - documented in docs/oled-supplementary-locator-review.md
 
+## 8.4.7 Exact-bound supplementary locator adjudication MVP
+
+### [x] Task:
+- consume a complete supplementary locator review artifact plus a separate
+  human decision manifest bound to its exact bytes and canonical digest
+- require full decision coverage exactly once with only `accept_locator`,
+  `reject_locator`, or `needs_source_check`; accept only `exact_match` items
+- preserve reviewer identity, timezone-aware timestamp, review note, and
+  semantic note without offering an inline locator or table correction path
+- set `semantic_review_required` when a semantic note is present, while keeping
+  table transcription, scientific content, physical-semantic validation, and
+  semantic correction explicitly false
+- emit a redacted JSON artifact with source, review-item, parsed-document, and
+  table-content digests plus locator bindings, without copying table content
+- make accepted locators eligible only for a later scoped candidate proposal;
+  keep candidate generation/merge, evidence staging, direct/device-only
+  admission, gold creation, and dataset writing disabled
+
+Scope:
+- offline human locator-decision recording only
+- locator acceptance confirms the exact source-table selection, not the
+  scientific interpretation of its labels or values
+- rejected and source-check items remain valid adjudication outcomes but are
+  ineligible for later candidate proposal
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_supplementary_locator_adjudication.py
+- controlled runner/CLI implemented in
+  src/ai4s_agent/oled_supplementary_locator_adjudication.py
+- tested by tests/test_oled_supplementary_locator_adjudication.py
+- documented in docs/oled-supplementary-locator-adjudication.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
