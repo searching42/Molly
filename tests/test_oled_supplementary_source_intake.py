@@ -44,6 +44,7 @@ from ai4s_agent.oled_supplementary_source_intake import (
     OledSupplementarySourceIntakeArtifact,
     main,
     prepare_oled_supplementary_source_intake_artifact,
+    prepare_oled_supplementary_source_intake_from_files,
 )
 
 
@@ -570,6 +571,73 @@ def test_artifact_and_cli_write_only_redacted_local_source_metadata(tmp_path: Pa
     stored = json.loads(output_path.read_text(encoding="utf-8"))
     assert str(pdf_path) not in json.dumps(stored, sort_keys=True)
     assert stored["intake_plan"]["items"][0]["parse_eligibility"] == "eligible_for_targeted_source_parse"
+
+
+@pytest.mark.parametrize("collision_target", ["local_pdf", "recovery_artifact", "intake_manifest"])
+def test_file_entrypoint_rejects_output_collisions_without_mutating_inputs(
+    tmp_path: Path,
+    collision_target: str,
+) -> None:
+    recovery_artifact = _recovery_artifact()
+    pdf_path = _write_pdf(tmp_path / "paper016_si.pdf")
+    manifest = _manifest(recovery_artifact.plan, pdf_path=pdf_path)
+    recovery_path = tmp_path / "recovery.json"
+    manifest_path = tmp_path / "intake-manifest.json"
+    write_json(recovery_path, recovery_artifact.model_dump(mode="json"))
+    write_json(manifest_path, manifest.model_dump(mode="json"))
+    protected_paths = {
+        "local_pdf": pdf_path,
+        "recovery_artifact": recovery_path,
+        "intake_manifest": manifest_path,
+    }
+    original_bytes = {path: path.read_bytes() for path in protected_paths.values()}
+    original_pdf_sha256 = hashlib.sha256(original_bytes[pdf_path]).hexdigest()
+
+    with pytest.raises(ValueError, match="must not overwrite an input artifact or local PDF"):
+        prepare_oled_supplementary_source_intake_from_files(
+            recovery_artifact_json=recovery_path,
+            intake_manifest_json=manifest_path,
+            output_json=protected_paths[collision_target],
+            generated_at=_REVIEWED_AT,
+        )
+
+    for path, expected_bytes in original_bytes.items():
+        assert path.read_bytes() == expected_bytes
+    assert hashlib.sha256(pdf_path.read_bytes()).hexdigest() == original_pdf_sha256
+
+
+def test_cli_rejects_pdf_output_collision_without_leaking_its_path(tmp_path: Path) -> None:
+    recovery_artifact = _recovery_artifact()
+    pdf_path = _write_pdf(tmp_path / "paper016_si.pdf")
+    manifest = _manifest(recovery_artifact.plan, pdf_path=pdf_path)
+    recovery_path = tmp_path / "recovery.json"
+    manifest_path = tmp_path / "intake-manifest.json"
+    write_json(recovery_path, recovery_artifact.model_dump(mode="json"))
+    write_json(manifest_path, manifest.model_dump(mode="json"))
+    original_pdf_bytes = pdf_path.read_bytes()
+    original_pdf_sha256 = hashlib.sha256(original_pdf_bytes).hexdigest()
+    stdout = StringIO()
+    stderr = StringIO()
+
+    code = main(
+        [
+            "--recovery-artifact",
+            str(recovery_path),
+            "--intake-manifest",
+            str(manifest_path),
+            "--output",
+            str(pdf_path),
+        ],
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert code == 1
+    assert stdout.getvalue() == ""
+    assert "must not overwrite an input artifact or local PDF" in stderr.getvalue()
+    assert str(pdf_path) not in stderr.getvalue()
+    assert pdf_path.read_bytes() == original_pdf_bytes
+    assert hashlib.sha256(pdf_path.read_bytes()).hexdigest() == original_pdf_sha256
 
 
 def test_artifact_side_effect_flags_and_cli_failures_do_not_leak_source_paths(tmp_path: Path) -> None:

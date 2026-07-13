@@ -716,7 +716,8 @@ def _validate_audit_text(value: Any, *, field_name: str, required: bool) -> str:
 
 def _stable_hash(value: dict[str, Any]) -> str:
     canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return f"sha256:{hashlib.sha256(canonical.encode("utf-8")).hexdigest()}"
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
 
 
 def _intake_plan_digest(plan: OledSupplementarySourceIntakePlan) -> str:

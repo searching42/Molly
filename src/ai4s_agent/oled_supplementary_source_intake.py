@@ -19,6 +19,11 @@ from ai4s_agent.oled_supplementary_evidence_recovery import (
 )
 
 
+_OUTPUT_COLLISION_ERROR = (
+    "supplementary source intake output must not overwrite an input artifact or local PDF"
+)
+
+
 class OledSupplementarySourceIntakeArtifact(BaseModel):
     """Redacted, offline artifact binding a recovery plan to approved local PDFs."""
 
@@ -141,14 +146,27 @@ def prepare_oled_supplementary_source_intake_from_files(
     output_json: str | Path,
     generated_at: str | None = None,
 ) -> OledSupplementarySourceIntakeArtifact:
-    recovery_payload = _load_json(recovery_artifact_json, "supplementary recovery artifact")
-    intake_payload = _load_json(intake_manifest_json, "supplementary source intake manifest")
+    recovery_path = _resolve_local_path(recovery_artifact_json)
+    manifest_path = _resolve_local_path(intake_manifest_json)
+    output_path = _resolve_local_path(output_json)
+    recovery_payload = _load_json(recovery_path, "supplementary recovery artifact")
+    intake_payload = _load_json(manifest_path, "supplementary source intake manifest")
+    recovery_artifact = OledSupplementaryEvidenceRecoveryArtifact.model_validate(recovery_payload)
+    intake_manifest = OledSupplementarySourceIntakeManifest.model_validate(intake_payload)
+    _validate_output_path_is_safe(
+        output_path=output_path,
+        protected_paths=[
+            recovery_path,
+            manifest_path,
+            *(_resolve_local_path(source.local_pdf_path) for source in intake_manifest.sources),
+        ],
+    )
     artifact = prepare_oled_supplementary_source_intake_artifact(
-        recovery_artifact=OledSupplementaryEvidenceRecoveryArtifact.model_validate(recovery_payload),
-        intake_manifest=OledSupplementarySourceIntakeManifest.model_validate(intake_payload),
+        recovery_artifact=recovery_artifact,
+        intake_manifest=intake_manifest,
         generated_at=generated_at,
     )
-    write_json(Path(output_json).expanduser().resolve(), artifact.model_dump(mode="json"))
+    write_json(output_path, artifact.model_dump(mode="json"))
     return artifact
 
 
@@ -203,7 +221,7 @@ def main(
 
 
 def _load_json(path_like: str | Path, label: str) -> dict[str, Any]:
-    path = Path(path_like).expanduser().resolve()
+    path = _resolve_local_path(path_like)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -213,6 +231,24 @@ def _load_json(path_like: str | Path, label: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"{label} JSON must be an object")
     return payload
+
+
+def _resolve_local_path(path_like: str | Path) -> Path:
+    try:
+        return Path(path_like).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("supplementary source intake path could not be resolved safely") from exc
+
+
+def _validate_output_path_is_safe(*, output_path: Path, protected_paths: Sequence[Path]) -> None:
+    for protected_path in protected_paths:
+        if output_path == protected_path:
+            raise ValueError(_OUTPUT_COLLISION_ERROR)
+        try:
+            if output_path.exists() and protected_path.exists() and output_path.samefile(protected_path):
+                raise ValueError(_OUTPUT_COLLISION_ERROR)
+        except OSError as exc:
+            raise ValueError("supplementary source intake output safety check failed") from exc
 
 
 def _safe_error_message(message: str) -> str:

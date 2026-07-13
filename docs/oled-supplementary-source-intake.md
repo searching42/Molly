@@ -106,7 +106,10 @@ dataset writing.
 This is an operator-run local CLI. Only run a human-reviewed manifest from a
 trusted local environment; it is not an API for arbitrary remote path access.
 CLI status output reports only the output basename, never an operator-local
-source path or output directory.
+source path or output directory. The output path must be distinct from the
+recovery artifact, intake manifest, and every declared local PDF path. The CLI
+fails before PDF inspection or writing if any of those paths resolve to the
+same file, so an input artifact or source PDF cannot be replaced by output.
 
 ## Boundary After Intake
 
