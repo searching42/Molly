@@ -791,6 +791,34 @@ Status:
 - tested by tests/test_oled_supplementary_source_intake.py
 - documented in docs/oled-supplementary-source-intake.md
 
+## 8.4.4 Human-confirmed supplementary parser preflight MVP
+
+### [x] Task:
+- consume bound supplementary recovery and source-intake artifacts plus an
+  explicit operator-local parse manifest
+- require `parse_confirmed=true`; select only approved explicit table/figure
+  targets and rebind only their source IDs
+- revalidate each local PDF hash and byte size against intake, then validate a
+  bounded page count without extracting scientific content
+- preserve the existing locator while recording full-source locator review;
+  never infer a PDF page range, table index, or manual target
+- write a redacted, review-only artifact without local paths, PDF bytes, raw
+  text, MinerU/LLM calls, candidate regeneration, staging, gold creation, or
+  dataset writing
+
+Scope:
+- parser readiness only; actual MinerU invocation, target resolution, candidate
+  regeneration, and review are separate follow-up work
+- manual targets remain outside targeted parser scope until a separate human
+  locator decision is available
+
+Status:
+- implemented in src/ai4s_agent/domains/oled_supplementary_parser_preflight.py
+- offline artifact/CLI implemented in
+  src/ai4s_agent/oled_supplementary_parser_preflight.py
+- tested by tests/test_oled_supplementary_parser_preflight.py
+- documented in docs/oled-supplementary-parser-preflight.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
