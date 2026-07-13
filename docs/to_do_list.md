@@ -859,6 +859,39 @@ Status:
   document-parse provider/client tests
 - documented in docs/oled-supplementary-mineru-execution.md
 
+## 8.4.6 Bound supplementary locator review packet MVP
+
+### [x] Task:
+- consume only a successful, content-bound supplementary MinerU execution
+  artifact and an exact local manifest for its normalized ParsedDocument files
+- verify execution bytes and canonical digest, exact source coverage, parsed
+  output byte size and SHA-256, page count, and parser backend
+- read inputs as stable regular files with `O_NOFOLLOW` and keep local paths out
+  of all generated artifacts and CLI output
+- resolve table locators only through exact caption-prefix forms such as
+  `Supplementary Table S1`; do not match `S1` to `S10` or table-of-contents rows
+- fail closed for zero, duplicate, unsupported-kind, or unsupported-format
+  matches, without selecting guessed table content
+- preserve matched captions, headers, string-valued rows, reported precision,
+  footnotes, pages, and source bounding boxes in bounded JSON and Markdown
+  packets for human review
+- keep all review decisions pending and keep candidate regeneration, evidence
+  staging, device-only admission, gold creation, and dataset writing disabled
+
+Scope:
+- offline locator resolution and human-review packet generation only
+- no PDF reads, network access, external service, LLM, or MinerU call
+- no automatic correction, candidate regeneration, or downstream admission
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_supplementary_locator_review.py
+- controlled runner/CLI implemented in
+  src/ai4s_agent/oled_supplementary_locator_review.py
+- tested by tests/test_oled_supplementary_locator_review.py, including a
+  table-of-contents S1 decoy and exact Supplementary Table S1 match
+- documented in docs/oled-supplementary-locator-review.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
