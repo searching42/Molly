@@ -107,8 +107,9 @@ semantic notes.
 
 ## Next boundary
 
-A later PR-H may define a separate, exact-byte-bound response contract and
-validate externally produced semantic proposals. That stage must keep every
-proposal pending human review, preserve source cell strings and semantic notes,
-and continue to prohibit automatic merge, evidence staging, device-only
-admission, gold creation, and dataset writing.
+PR-H implements the separate exact-byte-bound response contract documented in
+`docs/oled-supplementary-scoped-candidate-response.md`. It validates externally
+produced semantic proposals while keeping every proposal pending human review,
+preserving source cell strings and semantic notes, and prohibiting automatic
+merge, evidence staging, device-only admission, gold creation, and dataset
+writing.

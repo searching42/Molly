@@ -20,6 +20,7 @@ def test_reported_value_fields_preserve_trailing_zero() -> None:
 def test_reported_decimal_places_counts_source_mantissa() -> None:
     assert reported_decimal_places("0.030") == 3
     assert reported_decimal_places("-5.50") == 2
+    assert reported_decimal_places("1.20e−3") == 2
     assert reported_decimal_places("4") == 0
 
 

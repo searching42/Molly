@@ -35,6 +35,16 @@ def test_property_unit_normalization_handles_priority_oled_units() -> None:
     assert normalize_oled_property_unit("doping_ratio_percent", 0.08, "fraction").normalized_value == pytest.approx(8)
 
 
+def test_property_unit_normalization_accepts_unicode_minus_lexemes() -> None:
+    homo = normalize_oled_property_unit("homo_ev", "−1.59", "eV")
+    exponent = normalize_oled_property_unit("delta_e_st_ev", "1e−3", "eV")
+
+    assert homo.status == OledUnitNormalizationStatus.UNCHANGED
+    assert homo.normalized_value == pytest.approx(-1.59)
+    assert exponent.status == OledUnitNormalizationStatus.UNCHANGED
+    assert exponent.normalized_value == pytest.approx(0.001)
+
+
 def test_condition_field_normalization_handles_priority_oled_units() -> None:
     assert normalize_oled_condition_field("luminance_cd_m2", 100, "cd/m²").normalized_unit == "cd/m^2"
     assert normalize_oled_condition_field("current_density_ma_cm2", 42, "A/m²").normalized_value == pytest.approx(4.2)
