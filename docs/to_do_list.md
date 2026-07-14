@@ -1422,6 +1422,60 @@ Status:
   replacement, and redaction cases
 - contract documented in docs/oled-observation-staging-preflight.md
 
+## 8.4.18 Exact-chain observation materialization candidate MVP
+
+### [x] Task:
+- consume one exact PR-P observation-staging preflight plus the exact PR-K,
+  PR-I adjudication, PR-J review-packet, and PR-J adjudication files needed to
+  recover reviewed values, units, precision, mappings, and context
+- verify the downstream SHA-256 bridges from embedded PR-M to PR-K and from
+  PR-K to PR-I/PR-J, plus the corresponding semantic-digest bindings
+- jointly replay the causal order from PR-I adjudication through PR-J packet,
+  PR-J human review/adjudication, PR-K generation, and PR-M human review
+- rejoin every PR-P dependent cell to the exact PR-K identity group, accepted
+  PR-I known-property group/cell, and accepted PR-J bounded transcription
+- replay the exact source row, subject, property literal, reported decimal
+  places, reported unit, canonical unit, property ID, and causal layer
+- attach the PR-O-selected existing Registry material ID and entry to each
+  deterministic `OledPropertyObservation` candidate
+- canonicalize every candidate through the existing layered OLED schema and
+  preserve exact source-cell evidence
+- copy only PR-I-bound comparison context, assess required/complete/incomplete
+  context through the ontology, and keep incomplete candidates explicitly
+  non-comparison-ready without inventing missing conditions
+- keep PR-I ontology-review-pending cells and device-only records outside the
+  candidate roster with explicit counts
+- reject alternate-but-semantically-identical input bytes where an exact
+  downstream file hash exists, derived-value tamper, timestamp reversal,
+  input overwrite, symbolic paths, and output-parent replacement without
+  partial publication
+- keep reviewed-evidence staging, direct admission, Registry/alias mutation,
+  ontology extension, Gold/dataset/training writes, source-file reads, network,
+  LLM, MinerU, and external-service calls disabled
+
+Scope:
+- offline exact-chain observation-candidate construction only
+- `OledPropertyObservation` candidates are materialized and associated with a
+  stable existing Registry ID, but are not staged reviewed evidence or admitted
+  data
+- missing photophysical comparison context remains explicit and queryable;
+  it is not silently completed or treated as comparison-ready
+- automated acceptance remains paper016-shaped only: 1 mapped material row,
+  5 known-property observation candidates, 14 ontology-pending cells excluded,
+  and 0 device-only cells admitted
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_observation_materialization_candidate.py
+- controlled file/CLI entry implemented in
+  src/ai4s_agent/oled_observation_materialization_candidate.py
+- tested by tests/test_oled_observation_materialization_candidate.py,
+  including exact paper016-shaped materialization, trailing-zero preservation,
+  alternate-byte rejection, derived-value rehash tamper, fully rehashed
+  cross-artifact causal-time attacks, overwrite, incomplete context, redaction,
+  and output-parent replacement
+- contract documented in docs/oled-observation-materialization-candidate.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
