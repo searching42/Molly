@@ -1148,6 +1148,57 @@ Status:
 - documented in
   docs/oled-supplementary-material-identity-candidate-request.md
 
+## 8.4.13 Exact-bound supplementary material-identity evidence response MVP
+
+### [x] Task:
+- consume one exact PR-K material-identity candidate request, its bound PR-J
+  source-transcription packet, and a separately supplied external response
+  manifest
+- bind response production to the exact request/source bytes and digests while
+  recording execution client, actual model provider, immutable model snapshot,
+  prompt contract/hash, and causal timestamps as distinct provenance fields
+- require exactly one complete response for every paper-local identity group
+  and preserve every group, row, subject literal, and dependent-cell digest
+  without merge, split, normalization, omission, or invention
+- allow source-located structure-candidate proposals, anchor-only evidence,
+  source-check, ambiguous, and explicit exclusion outcomes without requiring a
+  fixed number of resolved candidates
+- accept evidence anchors only for the already-bound supplementary PDF, with
+  exact source ID/hash and one-based pages inside the PR-J page-count boundary;
+  do not admit URLs, paths, databases, or newly supplied sources
+- use deterministic RDKit validation only to parse/sanitize a proposed graph
+  and derive candidate canonical SMILES/InChIKey; never treat chemical
+  parseability as validation that the graph matches the source
+- reject malformed chemistry, claimed canonical identifiers that disagree with
+  deterministic results, unsafe text, credentials, executable content, stale
+  bindings, incomplete coverage, symlinks, and publication races; retain
+  within-response identifier collisions as explicit findings without merging
+- emit only a `ready_for_human_material_identity_review` validated-response
+  artifact with explicit proposal/outcome counts and findings
+- keep source-to-structure semantic validation, human adjudication, identity
+  resolution, alias/cross-paper merge, Registry/schema/staging/admission, Gold,
+  dataset, feature, training, and device-only output disabled
+
+Scope:
+- offline validation of an external material-identity evidence response only
+- no PDF rendering or semantic source inspection, network, external service,
+  LLM or MinerU call, Registry mutation, observation materialization, or
+  dataset/training write
+- PR-M remains a separate PDF-backed human review packet and adjudication stage
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_supplementary_material_identity_evidence_response.py
+- controlled validation CLI implemented in
+  src/ai4s_agent/oled_supplementary_material_identity_evidence_response.py
+- tested by
+  tests/test_oled_supplementary_material_identity_evidence_response.py,
+  including a paper016-shaped 7-group/35-cell partition, deterministic RDKit
+  replay, exact source/subject binding, unresolved outcomes, collision findings,
+  and fail-closed standalone/file-entry checks
+- contract documented in
+  docs/oled-supplementary-material-identity-evidence-response.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:

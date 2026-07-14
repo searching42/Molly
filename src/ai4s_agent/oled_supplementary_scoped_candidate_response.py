@@ -78,8 +78,13 @@ def _read_bound_json(
     label: str,
     *,
     max_bytes: int,
+    reject_symlink_components: bool = False,
 ) -> tuple[dict[str, Any], str]:
-    payload_bytes, sha256 = _read_regular_file_bound(path, max_bytes=max_bytes)
+    payload_bytes, sha256 = _read_regular_file_bound(
+        path,
+        max_bytes=max_bytes,
+        reject_symlink_components=reject_symlink_components,
+    )
     try:
         payload = json.loads(
             payload_bytes.decode("utf-8"),
@@ -106,16 +111,32 @@ def _reject_nonfinite_json_constant(value: str) -> None:
     raise ValueError(f"supplementary candidate response JSON contains {value}")
 
 
-def _read_regular_file_bound(path: Path, *, max_bytes: int) -> tuple[bytes, str]:
+def _read_regular_file_bound(
+    path: Path,
+    *,
+    max_bytes: int,
+    reject_symlink_components: bool = False,
+) -> tuple[bytes, str]:
     no_follow = getattr(os, "O_NOFOLLOW", None)
-    if no_follow is None:
-        raise ValueError("supplementary candidate response requires O_NOFOLLOW support")
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or (reject_symlink_components and directory_flag is None):
+        raise ValueError(
+            "supplementary candidate response requires safe dirfd support"
+        )
     descriptor = -1
     try:
-        descriptor = os.open(
-            path,
-            os.O_RDONLY | no_follow | getattr(os, "O_NONBLOCK", 0),
-        )
+        if reject_symlink_components:
+            assert directory_flag is not None
+            descriptor = _open_regular_file_without_symlink_components(
+                path,
+                no_follow=no_follow,
+                directory_flag=directory_flag,
+            )
+        else:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY | no_follow | getattr(os, "O_NONBLOCK", 0),
+            )
         with os.fdopen(descriptor, "rb", closefd=True) as handle:
             descriptor = -1
             initial_stat = os.fstat(handle.fileno())
@@ -144,6 +165,45 @@ def _read_regular_file_bound(path: Path, *, max_bytes: int) -> tuple[bytes, str]
     return payload, f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def _open_regular_file_without_symlink_components(
+    path: Path,
+    *,
+    no_follow: int,
+    directory_flag: int,
+) -> int:
+    """Open an absolute file path while pinning every directory component."""
+
+    if not path.is_absolute() or not path.name:
+        raise ValueError("supplementary candidate response input path is invalid")
+    directory_descriptor = -1
+    try:
+        directory_descriptor = os.open(
+            path.anchor,
+            os.O_RDONLY | directory_flag | no_follow,
+        )
+        for component in path.parts[1:-1]:
+            next_descriptor = os.open(
+                component,
+                os.O_RDONLY | directory_flag | no_follow,
+                dir_fd=directory_descriptor,
+            )
+            os.close(directory_descriptor)
+            directory_descriptor = next_descriptor
+        return os.open(
+            path.name,
+            os.O_RDONLY | no_follow | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=directory_descriptor,
+        )
+    except OSError as exc:
+        raise ValueError(
+            "supplementary candidate response input is unavailable because a path "
+            "component is missing or symbolic"
+        ) from exc
+    finally:
+        if directory_descriptor != -1:
+            os.close(directory_descriptor)
+
+
 def _validate_fresh_output(output: Path, *, protected_paths: set[Path]) -> None:
     protected = {_canonical_collision_path(path) for path in protected_paths}
     if _canonical_collision_path(output) in protected:
@@ -154,9 +214,12 @@ def _validate_fresh_output(output: Path, *, protected_paths: set[Path]) -> None:
         raise ValueError("supplementary candidate response output parent must be a directory")
 
 
-def _write_fresh_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    resolved_parent = path.parent.resolve(strict=True)
+def _write_fresh_text(
+    path: Path,
+    content: str,
+    *,
+    reject_symlink_components: bool = False,
+) -> None:
     no_follow = getattr(os, "O_NOFOLLOW", None)
     directory_flag = getattr(os, "O_DIRECTORY", None)
     if no_follow is None or directory_flag is None:
@@ -167,10 +230,19 @@ def _write_fresh_text(path: Path, content: str) -> None:
     output_link_created = False
     keep_output = False
     try:
-        parent_descriptor = os.open(
-            resolved_parent,
-            os.O_RDONLY | directory_flag | no_follow,
-        )
+        if reject_symlink_components:
+            parent_descriptor = _open_or_create_output_parent_without_symlinks(
+                path.parent,
+                no_follow=no_follow,
+                directory_flag=directory_flag,
+            )
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            resolved_parent = path.parent.resolve(strict=True)
+            parent_descriptor = os.open(
+                resolved_parent,
+                os.O_RDONLY | directory_flag | no_follow,
+            )
         parent_stat = os.fstat(parent_descriptor)
         try:
             os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
@@ -209,7 +281,10 @@ def _write_fresh_text(path: Path, content: str) -> None:
         except FileExistsError as exc:
             raise ValueError("supplementary candidate response output must be fresh") from exc
         os.fsync(parent_descriptor)
-        current_parent_stat = os.stat(path.parent)
+        current_parent_stat = os.stat(
+            path.parent,
+            follow_symlinks=not reject_symlink_components,
+        )
         if (
             not stat.S_ISDIR(current_parent_stat.st_mode)
             or current_parent_stat.st_dev != parent_stat.st_dev
@@ -239,6 +314,51 @@ def _write_fresh_text(path: Path, content: str) -> None:
                 except FileNotFoundError:
                     pass
             os.close(parent_descriptor)
+
+
+def _open_or_create_output_parent_without_symlinks(
+    parent: Path,
+    *,
+    no_follow: int,
+    directory_flag: int,
+) -> int:
+    """Pin/create an output directory chain without following symbolic links."""
+
+    if not parent.is_absolute():
+        raise ValueError("supplementary candidate response output path is invalid")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            parent.anchor,
+            os.O_RDONLY | directory_flag | no_follow,
+        )
+        for component in parent.parts[1:]:
+            try:
+                next_descriptor = os.open(
+                    component,
+                    os.O_RDONLY | directory_flag | no_follow,
+                    dir_fd=descriptor,
+                )
+            except FileNotFoundError:
+                os.mkdir(component, 0o700, dir_fd=descriptor)
+                next_descriptor = os.open(
+                    component,
+                    os.O_RDONLY | directory_flag | no_follow,
+                    dir_fd=descriptor,
+                )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        result = descriptor
+        descriptor = -1
+        return result
+    except OSError as exc:
+        raise ValueError(
+            "supplementary candidate response output is unavailable because a path "
+            "component is symbolic or unsafe"
+        ) from exc
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
 
 
 def _absolute_local_path(path_like: str | Path) -> Path:
