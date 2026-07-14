@@ -1266,6 +1266,59 @@ Status:
 - contract documented in
   docs/oled-supplementary-material-identity-review.md
 
+## 8.4.15 Exact-bound material Registry resolution request MVP
+
+### [x] Task:
+- consume one exact PR-M material-identity adjudication and one separately
+  supplied immutable material Registry snapshot
+- require every Registry entry's canonical isomeric SMILES, standard InChI,
+  and InChIKey to agree under the snapshot-pinned RDKit/InChI runtime
+- bind both complete input files by SHA-256 and semantic artifact digest and
+  embed their validated models in the self-contained output
+- derive the request roster exactly from PR-M groups accepted as paper-local
+  graph candidates and eligible for later Registry review
+- preserve each eligible group's human source/candidate decisions, source and
+  table binding, reported subject literal, graph candidate, and dependent cell
+  digests
+- perform deterministic exact canonical-SMILES and InChIKey lookup only, with
+  explicit no-hit, partial, consistent-singleton, duplicate-key, and
+  conflicting-key outcomes
+- record only request-relevant duplicate structural/name-literal conflicts and
+  prohibit every automatic merge
+- report only codepoint-exact reported-name/alias hits and mark them as hints,
+  never identity evidence
+- render an evidence-first Markdown request with no positive decision
+  preselected
+- keep unresolved/rejected/anchor-only/excluded groups, ontology-pending
+  cells, and device-only records outside the resolution roster
+- reject symbolic input/output paths, input overwrite, stale/tampered models,
+  runtime mismatch, unsafe Registry names, incomplete coverage, and output
+  boundary claims without publishing partial output
+- keep canonical material-ID assignment, human resolution, alias
+  normalization, Registry mutation, cross-paper merge, schema/observation
+  materialization, Gold, dataset, feature, training, network, LLM, MinerU, and
+  source-PDF work disabled
+
+Scope:
+- offline, read-only Registry lookup/request generation from exact PR-M bytes
+- does not replay the full PR-M upstream chain or reopen source PDFs
+- automated acceptance is paper016-shaped only: 7 PR-M review items, 1
+  Registry-eligible graph group, 5 dependent property cells, 14
+  ontology-pending cells excluded, and 0 device-only cells admitted
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_material_registry_resolution_request.py
+- controlled build/render CLI implemented in
+  src/ai4s_agent/oled_material_registry_resolution_request.py
+- tested by
+  tests/test_oled_material_registry_resolution_request.py, including no-hit,
+  exact, duplicate/conflict, unrelated-conflict bounding, alias non-evidence,
+  chemical/runtime replay, exact-byte binding, unsafe text/path, tamper, and
+  mid-build/mid-render parent replacement and publication-boundary checks
+- contract documented in
+  docs/oled-material-registry-resolution-request.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
