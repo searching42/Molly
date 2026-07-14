@@ -528,6 +528,10 @@ def _validate_joint_registry_chain(
     request: OledMaterialRegistryResolutionRequestArtifact,
     adjudication: OledMaterialRegistryAdjudicationArtifact,
 ) -> None:
+    if _parse_timestamp(adjudication.reviewed_at) < _parse_timestamp(
+        request.generated_at
+    ):
+        raise ValueError("PR-O human review predates the exact PR-N request")
     expected_bindings = {
         "run_id": request.run_id,
         "paper_id": request.paper_id,

@@ -44,6 +44,7 @@ external files, so
 PR-P requires:
 
 - identical run and paper IDs;
+- the causal order `PR-N generated_at <= PR-O reviewed_at <= PR-O generated_at`;
 - identical PR-M and Registry snapshot bindings;
 - PR-O's request digest to equal the supplied PR-N artifact digest;
 - the PR-O adjudicated-item roster to equal the complete PR-N resolution-item
@@ -52,6 +53,8 @@ PR-P requires:
   validated JSON-model level to the corresponding PR-N item.
 
 No PR-N item may be missing, added, substituted, or silently reordered.
+PR-P is the first stage that has both complete artifacts, so it also rejects a
+semantically rehashed PR-O whose human review predates the exact PR-N request.
 
 ## Staging-item eligibility
 

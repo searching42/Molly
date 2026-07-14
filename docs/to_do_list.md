@@ -1382,6 +1382,8 @@ Status:
   embed both validated models in the output
 - replay the complete PR-N/PR-O resolution-item join and reject any missing,
   added, substituted, or changed embedded request item
+- require PR-N generation to precede PR-O human review and PR-O artifact
+  generation, closing the cross-artifact causal timestamp chain
 - derive staging eligibility only from PR-O existing-entity mappings
 - replay the selected existing Registry entry and preserve the exact PR-M
   source/table/row identity group plus all dependent PR-I cell references
@@ -1416,7 +1418,8 @@ Status:
   src/ai4s_agent/oled_observation_staging_preflight.py
 - tested by tests/test_oled_observation_staging_preflight.py, including mapped,
   new-entity, unresolved, conflict-deferred, exact-byte mismatch, semantic
-  tamper, symlink, overwrite, output-parent replacement, and redaction cases
+  tamper, cross-artifact timestamp reversal, symlink, overwrite, output-parent
+  replacement, and redaction cases
 - contract documented in docs/oled-observation-staging-preflight.md
 
 ## 8.5 MinerU review packet writer MVP

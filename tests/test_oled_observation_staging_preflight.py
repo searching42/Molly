@@ -8,16 +8,20 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from ai4s_agent._utils import write_json
 from ai4s_agent import oled_observation_staging_preflight as preflight_runner
+from ai4s_agent.domains.oled_material_registry_adjudication import (
+    OledMaterialRegistryAdjudicationArtifact,
+    OledMaterialRegistryDecisionManifest,
+    _adjudicated_item_digest,
+    oled_material_registry_adjudication_artifact_digest,
+    oled_material_registry_decision_manifest_digest,
+)
 from ai4s_agent.domains.oled_observation_staging_preflight import (
     OledObservationStagingPreflightArtifact,
     _observation_staging_item_digest,
     build_oled_observation_staging_preflight_artifact,
     oled_observation_staging_preflight_artifact_digest,
-)
-from ai4s_agent.domains.oled_material_registry_adjudication import (
-    _adjudicated_item_digest,
-    oled_material_registry_adjudication_artifact_digest,
 )
 from ai4s_agent.domains.oled_material_registry_resolution_request import (
     build_oled_material_registry_entry,
@@ -191,6 +195,75 @@ def test_exact_request_file_bytes_must_match_pr_o_binding(
         build_oled_observation_staging_preflight_from_files(
             request_artifact_json=substituted_request,
             registry_adjudication_json=adjudication_path,
+            output_json=output_path,
+            generated_at=_PREFLIGHT_AT,
+        )
+    assert not output_path.exists()
+
+
+def test_pr_o_human_review_cannot_predate_exact_pr_n_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, request_path, adjudication, _ = _mapped_inputs(tmp_path, monkeypatch)
+    assert request.generated_at == "2026-07-14T00:10:00+08:00"
+    early_reviewed_at = "2026-07-14T00:05:00+08:00"
+    early_generated_at = "2026-07-14T00:06:00+08:00"
+    early = adjudication.model_copy(
+        update={
+            "reviewed_at": early_reviewed_at,
+            "generated_at": early_generated_at,
+        },
+        deep=True,
+    )
+    reconstructed_manifest = OledMaterialRegistryDecisionManifest(
+        run_id=early.run_id,
+        paper_id=early.paper_id,
+        request_artifact_sha256=early.request_artifact_sha256,
+        request_artifact_digest=early.request_artifact_digest,
+        source_adjudication_sha256=early.source_adjudication_sha256,
+        source_adjudication_digest=early.source_adjudication_digest,
+        registry_snapshot_sha256=early.registry_snapshot_sha256,
+        registry_snapshot_digest=early.registry_snapshot_digest,
+        reviewed_by=early.reviewed_by,
+        reviewed_at=early.reviewed_at,
+        adjudication_confirmed=True,
+        decisions=[item.decision_entry for item in early.adjudicated_items],
+    )
+    early = early.model_copy(
+        update={
+            "decision_manifest_digest": (
+                oled_material_registry_decision_manifest_digest(
+                    reconstructed_manifest
+                )
+            )
+        },
+        deep=True,
+    )
+    early = early.model_copy(
+        update={
+            "adjudication_artifact_digest": (
+                oled_material_registry_adjudication_artifact_digest(early)
+            )
+        },
+        deep=True,
+    )
+    validated_early = OledMaterialRegistryAdjudicationArtifact.model_validate(
+        early.model_dump(mode="json")
+    )
+    assert validated_early.reviewed_at < request.generated_at
+    assert validated_early.reviewed_at <= validated_early.generated_at
+    early_path = tmp_path / "causally-impossible-pr-o.json"
+    write_json(early_path, validated_early.model_dump(mode="json"))
+    output_path = tmp_path / "must-not-exist.json"
+
+    with pytest.raises(
+        ValueError,
+        match="PR-O human review predates the exact PR-N request",
+    ):
+        build_oled_observation_staging_preflight_from_files(
+            request_artifact_json=request_path,
+            registry_adjudication_json=early_path,
             output_json=output_path,
             generated_at=_PREFLIGHT_AT,
         )
