@@ -1373,6 +1373,52 @@ Status:
 - contract documented in
   docs/oled-material-registry-adjudication.md
 
+## 8.4.17 Exact-chain observation staging preflight MVP
+
+### [x] Task:
+- consume one exact PR-N Registry resolution request and its exact PR-O human
+  Registry adjudication
+- bind both complete input files by SHA-256 and semantic artifact digest and
+  embed both validated models in the output
+- replay the complete PR-N/PR-O resolution-item join and reject any missing,
+  added, substituted, or changed embedded request item
+- derive staging eligibility only from PR-O existing-entity mappings
+- replay the selected existing Registry entry and preserve the exact PR-M
+  source/table/row identity group plus all dependent PR-I cell references
+- keep new-entity proposals, unresolved items, deferred conflicts,
+  ontology-review-pending cells, and device-only records outside the staging
+  roster with explicit counts
+- record that source-value replay is required because PR-N/PR-O contain cell
+  coordinates and digests but not reported values, units, precision, or full
+  condition context
+- reject symbolic paths, input overwrite, stale/tampered bindings, redundant
+  literal rewrites, output-parent replacement, and boundary flag changes
+  without partial publication
+- keep material-ID attachment to observations, observation/schema
+  materialization, reviewed-evidence staging, Registry/alias mutation,
+  Gold/dataset/training writes, source-file reads, network, LLM, and MinerU
+  disabled
+
+Scope:
+- offline exact-chain preflight over PR-N and PR-O only
+- emits resolved-material plus exact cell-reference candidates, not property
+  values or `OledPropertyObservation` objects
+- later materialization must rejoin the exact PR-I/PR-J source-transcription
+  chain before using any value, unit, precision, or condition
+- automated acceptance remains paper016-shaped only: 1 mapped material group,
+  5 dependent cell references, 14 ontology-pending cells excluded, and 0
+  device-only cells admitted
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_observation_staging_preflight.py
+- controlled file/CLI entry implemented in
+  src/ai4s_agent/oled_observation_staging_preflight.py
+- tested by tests/test_oled_observation_staging_preflight.py, including mapped,
+  new-entity, unresolved, conflict-deferred, exact-byte mismatch, semantic
+  tamper, symlink, overwrite, output-parent replacement, and redaction cases
+- contract documented in docs/oled-observation-staging-preflight.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
