@@ -182,11 +182,17 @@ notes, credentials, or model identifiers.
 
 ## Next boundary
 
-PR-I should generate a compact human semantic-review packet and exact-bound
-adjudication artifact. It must consume and exact-bind both the original PR-G
-request and the PR-H artifact (and the response manifest when authorship details
-are shown), because PR-H output intentionally does not duplicate the full
-caption, footnotes, nonnumeric cells, source locator, or source identity needed
-for scientific review. It may group repeated cells by column/property mapping
-to reduce reviewer burden, but it must preserve cell-level coverage and keep
-unresolved source checks and ontology reviews outside schema materialization.
+PR-I now generates the compact human semantic-review packet and exact-bound
+adjudication artifact documented in
+`docs/oled-supplementary-semantic-review.md`. It requires the original PR-G
+request, original response manifest, and PR-H artifact, groups repeated
+column-level dispositions while preserving an exact cell partition, and keeps
+all materialization gates closed.
+
+The next boundary remains a separate material-identity review and
+schema-candidate materialization stage. It must define its own provenance,
+conflict, and eligibility rules, add an explicit source-transcription gate (or
+continue blocking transcription-dependent materialization), and exclude
+unresolved ontology reviews, source checks, rejected groups or scopes, and
+device-only outcomes. PR-I adjudication alone cannot write gold or curated
+data.

@@ -1190,6 +1190,23 @@ def _validate_response_authored_text(
     return clean
 
 
+def validate_oled_supplementary_safe_authored_text(
+    value: Any,
+    *,
+    field_name: str,
+    required: bool = False,
+    max_length: int = 2_000,
+) -> str:
+    """Apply the response-stage sensitive, path, URL, and executable-text boundary."""
+
+    return _validate_response_authored_text(
+        value,
+        field_name=field_name,
+        required=required,
+        max_length=max_length,
+    )
+
+
 def _contains_numeric_lexeme(value: str) -> bool:
     return _NUMERIC_LEXEME_RE.search(str(value)) is not None
 
@@ -1377,5 +1394,6 @@ __all__ = [
     "OledSupplementarySourceCheckDisposition",
     "OledSupplementarySourceCheckReason",
     "build_oled_supplementary_scoped_candidate_response_artifact",
+    "validate_oled_supplementary_safe_authored_text",
     "validate_oled_supplementary_scoped_candidate_response_binding",
 ]
