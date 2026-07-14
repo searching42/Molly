@@ -348,9 +348,15 @@ Packet generation or adjudication fails without publishing output when:
 
 ## Next boundary
 
-After PR-M, a separate material-identity/Registry stage may decide how an
-accepted paper-local candidate relates to existing canonical entities and
-aliases. That stage must define collision, conflict, versioning, and
-cross-paper merge rules explicitly. Only later observation-materialization and
+PR-N now implements the first part of this boundary as a read-only,
+exact-bound Registry resolution request. It compares accepted paper-local
+candidates with one versioned Registry snapshot and surfaces exact structural
+candidates, alias hints, and conflicts without assigning an identity or
+writing the Registry. See
+`docs/oled-material-registry-resolution-request.md`.
+
+A later human Registry adjudication stage must still decide whether a
+candidate maps to an existing entity, proposes a new entity, or remains
+unresolved. Only later Registry-write, observation-materialization, and
 Gold-admission gates may connect a resolved Registry identity to the already
 reviewed property cells.
