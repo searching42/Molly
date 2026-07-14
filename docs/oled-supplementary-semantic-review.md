@@ -216,11 +216,15 @@ credentials, or external model identifiers.
 
 ## Next boundary
 
-A later, separate stage may consume only fully eligible exact-bound results to
-perform material-identity review and schema-candidate materialization. That
-stage must define its own provenance and conflict rules. It must also add an
-explicit source-transcription gate, or keep transcription-dependent
-materialization disabled, because PR-I intentionally does not claim that the
-parsed table was checked against the authoritative PDF. Every unresolved
-ontology, source-check, rejected-group, rejected-scope, and device-only outcome
-must remain excluded. PR-I itself grants no dataset-admission authority.
+The separate PR-J stage in
+`docs/oled-supplementary-source-transcription-review.md` now supplies the
+explicit, exact-bound human source-transcription gate that PR-I intentionally
+does not claim. It consumes and replays this exact PR-I packet, decision
+manifest, and adjudication together with the authoritative PDF and pinned page
+rendering. PR-J acceptance still grants no dataset-admission authority.
+
+A later material-identity stage may consume only the intersection of cells
+that are eligible after PR-I and belong to a PR-J-accepted bounded table. That
+stage must define its own provenance and conflict rules. Every unresolved
+ontology, source-check, reparse-required, rejected-group, rejected-scope, and
+device-only outcome must remain excluded.
