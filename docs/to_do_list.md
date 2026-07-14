@@ -1102,6 +1102,52 @@ Status:
   cells and the PR-I 35-known/14-ontology partition
 - documented in docs/oled-supplementary-source-transcription-review.md
 
+## 8.4.12 Exact-bound supplementary material-identity candidate request MVP
+
+### [x] Task:
+- consume and replay the complete PR-G through PR-J JSON chain, including the
+  exact source-transcription packet, human decision manifest, and adjudication
+  artifact, rather than trusting copied readiness flags
+- require PR-J readiness for later identity review with no unresolved
+  transcription item and a non-empty exact eligible-cell roster
+- independently derive the accepted PR-I known-property roster and require it
+  to equal the accepted PR-J identity-review roster exactly
+- partition every eligible source cell exactly once by paper-local scope,
+  table, table digest, zero-based row, reported subject literal, and subject
+  header binding
+- preserve identical subject strings in different rows as separate groups;
+  perform no case, punctuation, alias, fuzzy, or cross-paper merge
+- bind every group to the exact source PDF identity, table/page provenance,
+  source-transcription review item, reported row literal, and member cell
+  digests
+- preserve blank source headers separately from positional parser keys such as
+  `column_1`
+- request later source-located material-identity evidence without creating or
+  accepting a structure candidate
+- retain ontology-pending cells only as an excluded aggregate count and keep
+  device-only cells outside every identity group
+- keep structure evidence, canonical SMILES/InChIKey, material identity,
+  Registry writes, scientific semantics, schema candidates, staging,
+  admission, Gold, and dataset output disabled
+
+Scope:
+- offline, exact-bound request construction for later paper-local identity
+  evidence proposals only
+- no PDF or ParsedDocument read, network, external service, LLM, MinerU,
+  structure inference, identity resolution, materialization, or dataset write
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_supplementary_material_identity_candidate_request.py
+- controlled build/render CLI implemented in
+  src/ai4s_agent/oled_supplementary_material_identity_candidate_request.py
+- tested by
+  tests/test_oled_supplementary_material_identity_candidate_request.py,
+  including the paper016 7-row/35-cell identity partition and fail-closed chain
+  binding
+- documented in
+  docs/oled-supplementary-material-identity-candidate-request.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:

@@ -384,3 +384,13 @@ All commands remain offline. Packet and adjudication call only the explicitly
 pinned Poppler toolchain; they must not call an LLM, MinerU, network service, or
 executable correction script. Publication retains the repository's safe-input,
 fresh-output, no-collision, redacted-CLI, and fail-closed conventions.
+
+## Next boundary: paper-local material identity requests
+
+An accepted PR-J table does not resolve the identity of any reported row
+subject. The following stage may intersect only PR-I eligible cells with PR-J
+accepted cells and partition them by exact paper-local table row. It must keep
+row labels as reported aliases, require later source-located structure evidence,
+and leave canonical identity, cross-paper merge, Registry, Schema, Gold, and
+dataset writes disabled. See
+`docs/oled-supplementary-material-identity-candidate-request.md`.
