@@ -1319,6 +1319,60 @@ Status:
 - contract documented in
   docs/oled-material-registry-resolution-request.md
 
+## 8.4.16 Exact-bound material Registry human adjudication MVP
+
+### [x] Task:
+- consume one exact PR-N Registry resolution request plus one separately
+  supplied human decision manifest
+- bind the manifest to the complete PR-N file SHA-256/digest and its carried
+  PR-M adjudication and Registry snapshot SHA-256/digest values
+- require one decision for every PR-N item and exact acknowledgement of every
+  structural candidate ID, alias-hit digest, and related Registry-conflict
+  digest
+- allow existing-entity mapping only to surfaced structural candidates and
+  prohibit direct mapping for no-hit, duplicate-key, or conflicting-key items
+- allow new-entity proposals only for no-hit items while assigning no stable
+  material ID, preferred name, alias, or Registry entry
+- preserve unresolved decisions without excluding source rows and preserve
+  deferred conflicts without automatic merge or Registry repair
+- copy and replay a human-selected existing Registry entry from the bound
+  snapshot and record the canonical-ID association as eligible for a later
+  observation-staging preflight only
+- derive new-entity proposal chemistry exactly from the PR-M-accepted graph
+  while keeping it ineligible for observation staging
+- render PR-N evidence before PR-O decision instructions and expose exact
+  immutable manifest binding/acknowledgement values
+- preserve separate group/cell counts for existing mappings, new proposals,
+  unresolved items, deferred conflicts, and later-staging eligibility
+- pin output parents across render/adjudicate work and reject input overwrite,
+  symbolic paths, parent replacement, stale/tampered bindings, unsafe reviewer
+  text, incomplete coverage, and invalid state transitions without publication
+- keep Registry mutation, Registry-entry creation, alias assignment/mutation,
+  observation/schema materialization, staging, Gold/dataset/training writes,
+  source-PDF work, network, LLM, and MinerU disabled
+
+Scope:
+- offline human Registry adjudication over the exact PR-N evidence surface
+- a mapping records association to an already existing snapshot material ID;
+  it is not a Registry write or observation write
+- automated acceptance remains paper016-shaped only: 7 PR-M review items, 1
+  PR-N resolution item, 5 dependent property cells, 14 ontology-pending cells
+  excluded, and 0 device-only cells admitted
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_material_registry_adjudication.py
+- controlled render/adjudicate CLI implemented in
+  src/ai4s_agent/oled_material_registry_adjudication.py
+- tested by
+  tests/test_oled_material_registry_adjudication.py, including all four
+  decision outcomes, exact acknowledgement coverage, invalid transitions,
+  selected-entry replay, derived new proposals, empty requests, timestamp/hash
+  tamper, sensitive text/path attacks, mid-operation parent replacement, and
+  write-boundary checks
+- contract documented in
+  docs/oled-material-registry-adjudication.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:

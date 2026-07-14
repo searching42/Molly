@@ -169,13 +169,13 @@ error record on CLI failure.
 
 ## Next boundary
 
-PR-O may define a separate exact-bound human Registry decision manifest and
-adjudication artifact. That stage must distinguish at least:
+PR-O now implements the separate exact-bound human Registry decision manifest
+and adjudication artifact described above. It records existing-entity mapping,
+new-entity proposal, unresolved, and conflict-deferred outcomes while keeping
+Registry and observation writes disabled. See
+`docs/oled-material-registry-adjudication.md`.
 
-- map to one existing Registry entity;
-- propose a new Registry entity without writing it;
-- keep unresolved; and
-- reject or defer because of a structural/semantic conflict.
-
-Registry writes, alias lifecycle/versioning, and observation materialization
-remain later gates after that human decision.
+Existing-entity mappings and new-entity proposals then follow separate later
+gates: exact-chain observation staging for the former, and Registry-entry
+proposal/validation for the latter. Registry writes and alias lifecycle remain
+explicitly later boundaries.
