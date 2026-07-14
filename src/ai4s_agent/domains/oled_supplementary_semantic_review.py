@@ -2377,7 +2377,10 @@ def _summary_details(
         return [
             ("reported property label", summary.property_label),
             ("proposed target layer", summary.proposed_target_layer.value),
-            ("reported unit", summary.reported_unit or "unitless"),
+            (
+                "reported unit",
+                summary.reported_unit or "no explicit unit in source header",
+            ),
             ("ontology-review reason", summary.ontology_review_reason.value),
             ("proposal note", proposal_note),
         ]

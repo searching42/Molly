@@ -75,7 +75,10 @@ missing, stale, or kind-incompatible decisions fail closed. Decision entries
 may follow the human-friendly order shown in the Markdown; canonical hashing
 sorts them by `review_item_id` internally. The rendered Markdown displays the
 exact packet-file SHA-256 plus every item ID, item kind, and item digest needed
-to construct this file.
+to construct this file. For ontology-review summaries, an empty
+`reported_unit` is displayed as `no explicit unit in source header`; this is a
+display explanation only, and the packet retains the exact empty string. An
+explicit source literal such as `unitless` remains displayed verbatim.
 
 The decision manifest has this exact shape (repeat `decisions` once for every
 rendered item and copy all bound values literally):

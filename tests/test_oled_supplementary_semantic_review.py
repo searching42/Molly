@@ -201,6 +201,13 @@ def _recompute_adjudication_digest(payload: dict[str, Any]) -> None:
     )
 
 
+def _markdown_group_block(markdown: str, column_name: str) -> str:
+    heading_marker = f": {semantic_domain._md_code(column_name)}"
+    start = markdown.index(heading_marker)
+    end = markdown.find("\n#### G", start + len(heading_marker))
+    return markdown[start:] if end == -1 else markdown[start:end]
+
+
 def test_paper016_packet_compacts_review_without_losing_any_cell(
     tmp_path: Path,
 ) -> None:
@@ -310,6 +317,113 @@ def test_markdown_shows_source_table_once_and_only_eight_review_items(
         )
     ]
     assert all(heading in markdown for heading in group_headings)
+
+
+def test_markdown_distinguishes_missing_source_unit_from_explicit_ev(
+    tmp_path: Path,
+) -> None:
+    *_, packet_path, packet = _build_packet(tmp_path)
+    markdown_path = tmp_path / "supplementary-semantic-review.md"
+    render_oled_supplementary_semantic_review_packet_from_files(
+        review_packet_json=packet_path,
+        output_markdown=markdown_path,
+    )
+
+    ontology_groups = {
+        item.column_name: item
+        for item in packet.review_items
+        if isinstance(item, OledSupplementaryColumnMappingReviewItem)
+        and item.disposition_summary.disposition.value == "needs_ontology_review"
+    }
+    missing_unit_group = ontology_groups["$f(S_0-S_1)^b$"]
+    explicit_ev_group = ontology_groups[
+        "$\\Delta E_{\\text{HOMO} \\rightarrow \\text{LUMO}}$ (eV)"
+    ]
+    assert missing_unit_group.disposition_summary.reported_unit == ""
+    assert explicit_ev_group.disposition_summary.reported_unit == "eV"
+
+    serialized_packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    serialized_missing_group = next(
+        item
+        for item in serialized_packet["review_items"]
+        if item["review_item_id"] == missing_unit_group.review_item_id
+    )
+    assert serialized_missing_group["disposition_summary"]["reported_unit"] == ""
+
+    markdown = markdown_path.read_text(encoding="utf-8")
+    missing_unit_block = _markdown_group_block(
+        markdown,
+        missing_unit_group.column_name,
+    )
+    explicit_ev_block = _markdown_group_block(
+        markdown,
+        explicit_ev_group.column_name,
+    )
+    assert (
+        "reported unit: <code>no explicit unit in source header</code>"
+        in missing_unit_block
+    )
+    assert "reported unit: <code>unitless</code>" not in missing_unit_block
+    assert "reported unit: <code>eV</code>" in explicit_ev_block
+    assert "no explicit unit in source header" not in explicit_ev_block
+
+
+def test_markdown_preserves_explicit_dimensionless_source_unit(
+    tmp_path: Path,
+) -> None:
+    request_path, response_path, response_artifact_path, request, _ = _build_chain(
+        tmp_path
+    )
+    table = request["scopes"][0]["matched_table"]
+    old_header = "$f(S_0-S_1)^b$"
+    new_header = "Oscillator strength (unitless)"
+    table["headers"][-1] = new_header
+    for row in table["rows"]:
+        row[new_header] = row.pop(old_header)
+    _recompute_request_after_table_change(request)
+    write_json(request_path, request)
+    write_json(response_path, _response_payload(request_path, request))
+    build_oled_supplementary_scoped_candidate_response_from_files(
+        request_artifact_json=request_path,
+        response_manifest_json=response_path,
+        output_json=response_artifact_path,
+        generated_at=_RESPONSE_GENERATED_AT,
+    )
+    packet_path = tmp_path / "dimensionless-packet.json"
+    packet = build_oled_supplementary_semantic_review_packet_from_files(
+        request_artifact_json=request_path,
+        response_manifest_json=response_path,
+        response_artifact_json=response_artifact_path,
+        output_json=packet_path,
+        generated_at=_PACKET_GENERATED_AT,
+    )
+    markdown_path = tmp_path / "dimensionless-packet.md"
+    render_oled_supplementary_semantic_review_packet_from_files(
+        review_packet_json=packet_path,
+        output_markdown=markdown_path,
+    )
+
+    dimensionless_group = next(
+        item
+        for item in packet.review_items
+        if isinstance(item, OledSupplementaryColumnMappingReviewItem)
+        and item.column_name == new_header
+    )
+    assert dimensionless_group.disposition_summary.reported_unit == "unitless"
+    serialized_packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    serialized_dimensionless_group = next(
+        item
+        for item in serialized_packet["review_items"]
+        if item["review_item_id"] == dimensionless_group.review_item_id
+    )
+    assert (
+        serialized_dimensionless_group["disposition_summary"]["reported_unit"]
+        == "unitless"
+    )
+    markdown = markdown_path.read_text(encoding="utf-8")
+    dimensionless_block = _markdown_group_block(markdown, new_header)
+    assert "reported unit: <code>unitless</code>" in dimensionless_block
+    assert "no explicit unit in source header" not in dimensionless_block
 
 
 def test_review_packet_cannot_predate_the_validated_pr_h_artifact(
