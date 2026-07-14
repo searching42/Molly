@@ -617,6 +617,25 @@ class OledMaterialRegistryAdjudicationArtifact(BaseModel):
             getattr(self, field_name) for field_name in fixed_false
         ):
             raise ValueError("Registry adjudication crossed its boundary")
+        reconstructed_manifest = OledMaterialRegistryDecisionManifest(
+            schema_version=OLED_MATERIAL_REGISTRY_DECISION_MANIFEST_VERSION,
+            run_id=self.run_id,
+            paper_id=self.paper_id,
+            request_artifact_sha256=self.request_artifact_sha256,
+            request_artifact_digest=self.request_artifact_digest,
+            source_adjudication_sha256=self.source_adjudication_sha256,
+            source_adjudication_digest=self.source_adjudication_digest,
+            registry_snapshot_sha256=self.registry_snapshot_sha256,
+            registry_snapshot_digest=self.registry_snapshot_digest,
+            reviewed_by=self.reviewed_by,
+            reviewed_at=self.reviewed_at,
+            adjudication_confirmed=True,
+            decisions=[item.decision_entry for item in self.adjudicated_items],
+        )
+        if oled_material_registry_decision_manifest_digest(
+            reconstructed_manifest
+        ) != self.decision_manifest_digest:
+            raise ValueError("Registry adjudication decision manifest digest mismatch")
         if oled_material_registry_adjudication_artifact_digest(self) != (
             self.adjudication_artifact_digest
         ):

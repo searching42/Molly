@@ -14,6 +14,7 @@ from ai4s_agent import oled_material_registry_adjudication as adjudication_runne
 from ai4s_agent.domains.oled_material_registry_adjudication import (
     OledMaterialRegistryAdjudicationArtifact,
     OledMaterialRegistryDecisionManifest,
+    oled_material_registry_adjudication_artifact_digest,
 )
 from ai4s_agent.domains.oled_material_registry_resolution_request import (
     OledMaterialRegistryEntry,
@@ -781,6 +782,80 @@ def test_adjudication_artifact_tamper_breaks_validation(
     ] = "changed-name"
     with pytest.raises(ValidationError, match="digest"):
         OledMaterialRegistryAdjudicationArtifact.model_validate(payload)
+
+
+def test_adjudication_artifact_rebinds_decision_manifest_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, request_path = _exact_match_request(tmp_path, monkeypatch)
+    artifact, _, _ = _adjudicate(
+        tmp_path,
+        request,
+        request_path,
+        decision="map_to_existing_entity",
+        selected_material_id="material-0001",
+    )
+    tampered = artifact.model_copy(
+        update={"decision_manifest_digest": "sha256:" + "f" * 64},
+        deep=True,
+    )
+    tampered = tampered.model_copy(
+        update={
+            "adjudication_artifact_digest": (
+                oled_material_registry_adjudication_artifact_digest(tampered)
+            )
+        },
+        deep=True,
+    )
+
+    with pytest.raises(ValidationError, match="decision manifest digest mismatch"):
+        OledMaterialRegistryAdjudicationArtifact.model_validate(
+            tampered.model_dump(mode="json")
+        )
+
+
+def test_adjudication_artifact_rebinds_embedded_decision_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, request_path = _exact_match_request(tmp_path, monkeypatch)
+    original, _, _ = _adjudicate(
+        tmp_path,
+        request,
+        request_path,
+        decision="map_to_existing_entity",
+        selected_material_id="material-0001",
+    )
+    alternate_dir = tmp_path / "alternate"
+    alternate_dir.mkdir()
+    alternate, _, _ = _adjudicate(
+        alternate_dir,
+        request,
+        request_path,
+        decision="keep_unresolved",
+    )
+    assert alternate.decision_manifest_digest != original.decision_manifest_digest
+    assert alternate.adjudicated_items[0].decision_entry.decision.value == (
+        "keep_unresolved"
+    )
+    tampered = alternate.model_copy(
+        update={"decision_manifest_digest": original.decision_manifest_digest},
+        deep=True,
+    )
+    tampered = tampered.model_copy(
+        update={
+            "adjudication_artifact_digest": (
+                oled_material_registry_adjudication_artifact_digest(tampered)
+            )
+        },
+        deep=True,
+    )
+
+    with pytest.raises(ValidationError, match="decision manifest digest mismatch"):
+        OledMaterialRegistryAdjudicationArtifact.model_validate(
+            tampered.model_dump(mode="json")
+        )
 
 
 @pytest.mark.parametrize("protected_kind", ("request", "decision"))
