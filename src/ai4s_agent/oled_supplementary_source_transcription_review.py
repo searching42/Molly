@@ -35,6 +35,8 @@ from ai4s_agent.domains.oled_supplementary_semantic_review import (
     OledSupplementarySemanticAdjudicationArtifact,
     OledSupplementarySemanticDecisionManifest,
     OledSupplementarySemanticReviewPacket,
+    _normalize_sha256,
+    _validate_path_segment,
 )
 from ai4s_agent.domains.oled_supplementary_source_transcription_review import (
     SUPPLEMENTARY_SOURCE_TRANSCRIPTION_RENDERER_ID,
@@ -52,6 +54,7 @@ from ai4s_agent.domains.oled_supplementary_source_transcription_review import (
 )
 from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _absolute_local_path,
+    _open_regular_file_without_symlink_components,
     _read_bound_json,
     _validate_fresh_output,
     _write_fresh_text,
@@ -740,6 +743,52 @@ def _render_bound_source_pdf(
         )
     source_id, expected_sha256 = next(iter(source_pairs))
     pages = sorted({scope.matched_table.page for scope in request_artifact.scopes})
+    return _render_exact_bound_source_pdf_pages(
+        source_pdf_path=source_pdf_path,
+        source_id=source_id,
+        expected_sha256=expected_sha256,
+        pages=pages,
+        poppler_bin_dir=poppler_bin_dir,
+    )
+
+
+def _render_exact_bound_source_pdf_pages(
+    *,
+    source_pdf_path: Path,
+    source_id: str,
+    expected_sha256: str,
+    pages: Sequence[int],
+    poppler_bin_dir: str | Path | None = None,
+    reject_symlink_components: bool = False,
+) -> tuple[OledSupplementarySourcePdfEvidence, dict[str, bytes]]:
+    """Render exact full pages from one source/hash-bound PDF."""
+
+    if not isinstance(source_id, str):
+        raise ValueError("supplementary source transcription source_id must be text")
+    source_id_clean = _validate_path_segment(source_id, field_name="source_id")
+    if source_id_clean != source_id:
+        raise ValueError("supplementary source transcription source_id must be exact")
+    expected_sha256_clean = _normalize_sha256(
+        expected_sha256,
+        field_name="expected_sha256",
+    )
+    page_numbers = list(pages)
+    if not page_numbers:
+        raise ValueError(
+            "supplementary source transcription requires a non-empty page roster"
+        )
+    if (
+        any(
+            not isinstance(page, int) or isinstance(page, bool) or page < 1
+            for page in page_numbers
+        )
+        or page_numbers != sorted(page_numbers)
+        or len(page_numbers) != len(set(page_numbers))
+    ):
+        raise ValueError(
+            "supplementary source transcription pages must be sorted unique "
+            "positive integers"
+        )
     with tempfile.TemporaryDirectory(prefix="molly-transcription-pdf-") as temp_dir, _pinned_poppler_toolchain(
         poppler_bin_dir,
         execution_root=Path(temp_dir),
@@ -749,9 +798,10 @@ def _render_bound_source_pdf(
         pdf_sha256, pdf_byte_size, pdf_descriptor = _copy_and_hash_pdf(
             source_pdf_path,
             pinned_pdf,
+            reject_symlink_components=reject_symlink_components,
         )
         try:
-            if pdf_sha256 != expected_sha256:
+            if pdf_sha256 != expected_sha256_clean:
                 raise ValueError(
                     "supplementary source transcription PDF does not match the bound hash"
                 )
@@ -778,13 +828,13 @@ def _render_bound_source_pdf(
                 toolchain=toolchain,
                 working_dir=temp_path,
             )
-            if any(page < 1 or page > page_count for page in pages):
+            if any(page > page_count for page in page_numbers):
                 raise ValueError(
                     "supplementary source transcription page is out of range"
                 )
             page_assets: list[OledSupplementarySourcePageAsset] = []
             rendered_assets: dict[str, bytes] = {}
-            for page in pages:
+            for page in page_numbers:
                 allowed_widths, allowed_heights = _pdf_page_pixel_dimensions(
                     pinned_pdf_reference,
                     pdf_descriptor=pdf_descriptor,
@@ -850,20 +900,34 @@ def _descriptor_reference(descriptor: int) -> str:
     return f"{prefix}/{descriptor}"
 
 
-def _copy_and_hash_pdf(source: Path, destination: Path) -> tuple[str, int, int]:
+def _copy_and_hash_pdf(
+    source: Path,
+    destination: Path,
+    *,
+    reject_symlink_components: bool = False,
+) -> tuple[str, int, int]:
     if source.suffix.lower() != ".pdf":
         raise ValueError("supplementary source transcription input must be a PDF")
     no_follow = getattr(os, "O_NOFOLLOW", None)
-    if no_follow is None:
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or (reject_symlink_components and directory_flag is None):
         raise ValueError("supplementary source transcription requires O_NOFOLLOW support")
     source_descriptor = -1
     destination_descriptor = -1
     read_only_descriptor = -1
     try:
-        source_descriptor = os.open(
-            source,
-            os.O_RDONLY | no_follow | getattr(os, "O_NONBLOCK", 0),
-        )
+        if reject_symlink_components:
+            assert directory_flag is not None
+            source_descriptor = _open_regular_file_without_symlink_components(
+                source,
+                no_follow=no_follow,
+                directory_flag=directory_flag,
+            )
+        else:
+            source_descriptor = os.open(
+                source,
+                os.O_RDONLY | no_follow | getattr(os, "O_NONBLOCK", 0),
+            )
         destination_descriptor = os.open(
             destination,
             os.O_RDWR | os.O_CREAT | os.O_EXCL | no_follow,
@@ -1405,19 +1469,57 @@ def _validate_packet_outputs(
         )
 
 
+def _validate_pinned_directory_path_without_symlinks(
+    path: Path,
+    pinned_descriptor: int,
+    *,
+    error_message: str,
+) -> None:
+    """Require every named path component to reach one pinned directory inode."""
+
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory_flag is None or not path.is_absolute():
+        raise ValueError(error_message)
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path.anchor,
+            os.O_RDONLY | directory_flag | no_follow,
+        )
+        for component in path.parts[1:]:
+            next_descriptor = os.open(
+                component,
+                os.O_RDONLY | directory_flag | no_follow,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        named_stat = os.fstat(descriptor)
+        pinned_stat = os.fstat(pinned_descriptor)
+        if (
+            not stat.S_ISDIR(named_stat.st_mode)
+            or not stat.S_ISDIR(pinned_stat.st_mode)
+            or named_stat.st_dev != pinned_stat.st_dev
+            or named_stat.st_ino != pinned_stat.st_ino
+        ):
+            raise ValueError(error_message)
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError(error_message) from exc
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
+
+
 def _publish_packet_text(
     path: Path,
     content: str,
     *,
     post_publish_validator: Callable[[], None],
+    pinned_parent_descriptor: int | None = None,
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        resolved_parent = path.parent.resolve(strict=True)
-    except OSError as exc:
-        raise ValueError(
-            "supplementary source transcription packet parent is unavailable"
-        ) from exc
     no_follow = getattr(os, "O_NOFOLLOW", None)
     directory_flag = getattr(os, "O_DIRECTORY", None)
     if no_follow is None or directory_flag is None:
@@ -1430,11 +1532,28 @@ def _publish_packet_text(
     output_link_created = False
     keep_output = False
     try:
-        parent_descriptor = os.open(
-            resolved_parent,
-            os.O_RDONLY | directory_flag | no_follow,
-        )
+        if pinned_parent_descriptor is None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            resolved_parent = path.parent.resolve(strict=True)
+            parent_descriptor = os.open(
+                resolved_parent,
+                os.O_RDONLY | directory_flag | no_follow,
+            )
+        else:
+            parent_descriptor = os.dup(pinned_parent_descriptor)
         parent_stat = os.fstat(parent_descriptor)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            raise ValueError(
+                "supplementary source transcription packet parent changed"
+            )
+        if pinned_parent_descriptor is not None:
+            _validate_pinned_directory_path_without_symlinks(
+                path.parent,
+                parent_descriptor,
+                error_message=(
+                    "supplementary source transcription packet parent changed"
+                ),
+            )
         try:
             os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
         except FileNotFoundError:
@@ -1487,7 +1606,17 @@ def _publish_packet_text(
             dir_fd=parent_descriptor,
             follow_symlinks=False,
         )
-        current_parent_stat = os.stat(path.parent)
+        if pinned_parent_descriptor is None:
+            current_parent_stat = os.stat(path.parent)
+        else:
+            _validate_pinned_directory_path_without_symlinks(
+                path.parent,
+                parent_descriptor,
+                error_message=(
+                    "supplementary source transcription packet parent changed"
+                ),
+            )
+            current_parent_stat = os.fstat(parent_descriptor)
         if (
             not stat.S_ISREG(current_output_stat.st_mode)
             or current_output_stat.st_dev != output_stat.st_dev
@@ -1516,7 +1645,17 @@ def _publish_packet_text(
             dir_fd=parent_descriptor,
             follow_symlinks=False,
         )
-        final_parent_stat = os.stat(path.parent)
+        if pinned_parent_descriptor is None:
+            final_parent_stat = os.stat(path.parent)
+        else:
+            _validate_pinned_directory_path_without_symlinks(
+                path.parent,
+                parent_descriptor,
+                error_message=(
+                    "supplementary source transcription packet parent changed"
+                ),
+            )
+            final_parent_stat = os.fstat(parent_descriptor)
         if (
             not stat.S_ISREG(final_output_stat.st_mode)
             or final_output_stat.st_dev != output_stat.st_dev
@@ -1611,6 +1750,8 @@ def _validate_published_packet_paths(
 
 def _create_private_asset_directory(
     asset_dir: Path,
+    *,
+    pinned_parent_descriptor: int | None = None,
 ) -> tuple[int, int, os.stat_result]:
     no_follow = getattr(os, "O_NOFOLLOW", None)
     directory_flag = getattr(os, "O_DIRECTORY", None)
@@ -1622,22 +1763,30 @@ def _create_private_asset_directory(
         raise ValueError(
             "supplementary source transcription asset directory name is invalid"
         )
-    try:
-        resolved_parent = asset_dir.parent.resolve(strict=True)
-    except OSError as exc:
-        raise ValueError(
-            "supplementary source transcription asset parent is unavailable"
-        ) from exc
     parent_descriptor = -1
     asset_descriptor = -1
     asset_directory_stat: os.stat_result | None = None
     try:
-        parent_descriptor = os.open(
-            resolved_parent,
-            os.O_RDONLY | directory_flag | no_follow,
-        )
+        if pinned_parent_descriptor is None:
+            resolved_parent = asset_dir.parent.resolve(strict=True)
+            parent_descriptor = os.open(
+                resolved_parent,
+                os.O_RDONLY | directory_flag | no_follow,
+            )
+        else:
+            parent_descriptor = os.dup(pinned_parent_descriptor)
         parent_stat = os.fstat(parent_descriptor)
-        current_parent_stat = os.stat(asset_dir.parent)
+        if pinned_parent_descriptor is None:
+            current_parent_stat = os.stat(asset_dir.parent)
+        else:
+            _validate_pinned_directory_path_without_symlinks(
+                asset_dir.parent,
+                parent_descriptor,
+                error_message=(
+                    "supplementary source transcription asset parent changed"
+                ),
+            )
+            current_parent_stat = os.fstat(parent_descriptor)
         if (
             not stat.S_ISDIR(parent_stat.st_mode)
             or not stat.S_ISDIR(current_parent_stat.st_mode)
@@ -1687,6 +1836,7 @@ def _create_private_asset_directory(
             parent_descriptor=parent_descriptor,
             asset_descriptor=asset_descriptor,
             asset_directory_stat=asset_directory_stat,
+            reject_symlink_components=pinned_parent_descriptor is not None,
         )
         return parent_descriptor, asset_descriptor, asset_directory_stat
     except ValueError:
@@ -1738,6 +1888,7 @@ def _validate_open_asset_directory_binding(
     parent_descriptor: int,
     asset_descriptor: int,
     asset_directory_stat: os.stat_result,
+    reject_symlink_components: bool = False,
 ) -> None:
     try:
         open_stat = os.fstat(asset_descriptor)
@@ -1747,7 +1898,17 @@ def _validate_open_asset_directory_binding(
             follow_symlinks=False,
         )
         parent_stat = os.fstat(parent_descriptor)
-        current_parent_stat = os.stat(asset_dir.parent)
+        if reject_symlink_components:
+            _validate_pinned_directory_path_without_symlinks(
+                asset_dir.parent,
+                parent_descriptor,
+                error_message=(
+                    "supplementary source transcription asset directory changed"
+                ),
+            )
+            current_parent_stat = os.fstat(parent_descriptor)
+        else:
+            current_parent_stat = os.stat(asset_dir.parent)
     except OSError as exc:
         raise ValueError(
             "supplementary source transcription asset directory binding is unavailable"

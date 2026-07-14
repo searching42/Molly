@@ -1199,6 +1199,73 @@ Status:
 - contract documented in
   docs/oled-supplementary-material-identity-evidence-response.md
 
+## 8.4.14 Exact-bound supplementary material-identity human review MVP
+
+### [x] Task:
+- consume and jointly replay one exact PR-K material-identity request, its
+  bound PR-J source-transcription packet, the original PR-L response manifest,
+  and the successful PR-L validated artifact
+- reopen an operator-local supplementary PDF without following symlinks and
+  require its complete SHA-256, byte size, and page count to match the exact
+  PR-J source evidence
+- derive the review page set as the deduplicated union of every identity
+  group's table-context page and every PR-L evidence-anchor page
+- label table-context pages explicitly as non-identity evidence and prevent
+  them from satisfying an anchor or candidate check unless PR-L independently
+  cited the page as an evidence anchor
+- render every derived page as an exact-bound 200 dpi RGB full-page PNG with no
+  inferred bbox, OCR locator, or crop; rerender and byte-compare the complete
+  asset bundle during adjudication
+- generate one exact-bound deterministic RDKit 2D PNG for every proposed
+  structure candidate, while labelling candidate depictions as reviewer aids
+  rather than source evidence
+- render an evidence-first Markdown packet: source-page gallery and anchor
+  claims before any untrusted candidate fields or depiction
+- preserve one human decision per paper-local group while requiring one
+  tri-state result for every exact anchor and a separate candidate-graph check
+  whenever a structure candidate exists
+- allow positive outcomes only for verified paper-local source evidence;
+  preserve anchor-only, ambiguous, source-check, exclusion-proposal, mismatch,
+  and not-checked outcomes without upgrading them silently
+- keep `reject_response_evidence` distinct from identity-group exclusion so a
+  bad external response cannot silently remove the source row from later work
+- retain candidate collisions and source conflicts as explicit findings and
+  prohibit automatic identity or alias merge
+- pin output and asset-parent directory descriptors across PDF/RDKit work so
+  path replacement cannot redirect packet, Markdown, or adjudication writes;
+  roll back only files and directories created by the current operation
+- emit a separately exact-bound decision manifest and adjudication artifact
+  while keeping Registry mutation, canonical material-ID assignment,
+  cross-paper merge, schema/observation materialization, Gold, dataset,
+  feature, training, and device-only output disabled
+
+Scope:
+- offline, PDF-backed human review of PR-L paper-local evidence only
+- no network, external service, LLM, MinerU, model-generated script execution,
+  Registry write, cross-paper resolution, observation materialization, or
+  dataset/training write
+- automated acceptance may claim a paper016-shaped 7-group/35-cell canary and
+  real paper016 PDF-render feasibility only; a real end-to-end paper016
+  identity adjudication remains unavailable until an exact PR-L response
+  manifest and validated artifact exist and a human reviews them
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_supplementary_material_identity_review.py
+- controlled packet/render/adjudicate CLI implemented in
+  src/ai4s_agent/oled_supplementary_material_identity_review.py
+- exact page rendering reuses the hardened PR-J renderer in
+  src/ai4s_agent/oled_supplementary_source_transcription_review.py
+- tested by
+  tests/test_oled_supplementary_material_identity_review.py and
+  tests/test_oled_supplementary_source_transcription_review.py, including the
+  paper016-shaped 7-group/35-cell partition, context-plus-anchor page union,
+  deterministic candidate depictions, all disposition/decision truths,
+  exact joint replay, asset/path attacks including mid-render parent
+  replacement, and fail-closed publication
+- contract documented in
+  docs/oled-supplementary-material-identity-review.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:

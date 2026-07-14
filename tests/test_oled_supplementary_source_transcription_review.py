@@ -751,6 +751,117 @@ def _adjudicate_from_files(
     )
 
 
+def test_request_bound_renderer_delegates_exact_source_hash_and_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_sha256 = "sha256:" + "a" * 64
+    source_path = Path("/operator/source.pdf")
+    poppler_path = Path("/operator/poppler/bin")
+    evidence = SimpleNamespace(marker="evidence")
+    rendered_assets = {"source-page.png": b"rendered"}
+    observed: dict[str, Any] = {}
+
+    def fake_render_exact_bound_source_pdf_pages(**kwargs: Any) -> tuple[Any, Any]:
+        observed.update(kwargs)
+        return evidence, rendered_assets
+
+    monkeypatch.setattr(
+        transcription_runner,
+        "_render_exact_bound_source_pdf_pages",
+        fake_render_exact_bound_source_pdf_pages,
+    )
+    request = SimpleNamespace(
+        scopes=[
+            SimpleNamespace(
+                source_id="paper016",
+                source_pdf_sha256=expected_sha256,
+                matched_table=SimpleNamespace(page=38),
+            ),
+            SimpleNamespace(
+                source_id="paper016",
+                source_pdf_sha256=expected_sha256,
+                matched_table=SimpleNamespace(page=12),
+            ),
+            SimpleNamespace(
+                source_id="paper016",
+                source_pdf_sha256=expected_sha256,
+                matched_table=SimpleNamespace(page=38),
+            ),
+        ]
+    )
+
+    actual_evidence, actual_assets = transcription_runner._render_bound_source_pdf(
+        source_pdf_path=source_path,
+        request_artifact=request,
+        poppler_bin_dir=poppler_path,
+    )
+
+    assert actual_evidence is evidence
+    assert actual_assets is rendered_assets
+    assert observed == {
+        "source_pdf_path": source_path,
+        "source_id": "paper016",
+        "expected_sha256": expected_sha256,
+        "pages": [12, 38],
+        "poppler_bin_dir": poppler_path,
+    }
+
+
+@pytest.mark.parametrize(
+    "pages",
+    (
+        [],
+        [0],
+        [-1],
+        [True],
+        [1.5],
+        [1, 1],
+        [2, 1],
+    ),
+    ids=(
+        "empty",
+        "zero",
+        "negative",
+        "boolean",
+        "non-integer",
+        "duplicate",
+        "unsorted",
+    ),
+)
+def test_exact_bound_source_pdf_renderer_rejects_invalid_page_roster(
+    pages: list[Any],
+) -> None:
+    with pytest.raises(ValueError, match="page roster|sorted unique positive"):
+        transcription_runner._render_exact_bound_source_pdf_pages(
+            source_pdf_path=Path("/must-not-be-opened.pdf"),
+            source_id="paper016",
+            expected_sha256="sha256:" + "a" * 64,
+            pages=pages,
+        )
+
+
+@pytest.mark.parametrize(
+    ("source_id", "expected_sha256", "message"),
+    (
+        ("../paper016", "sha256:" + "a" * 64, "safe path segment"),
+        (" paper016 ", "sha256:" + "a" * 64, "source_id must be exact"),
+        ("paper016", "sha256:bad", "SHA-256 digest"),
+    ),
+)
+def test_exact_bound_source_pdf_renderer_rejects_invalid_source_binding(
+    source_id: str,
+    expected_sha256: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        transcription_runner._render_exact_bound_source_pdf_pages(
+            source_pdf_path=Path("/must-not-be-opened.pdf"),
+            source_id=source_id,
+            expected_sha256=expected_sha256,
+            pages=[1],
+        )
+
+
 def test_paper016_packet_binds_one_complete_table_and_replays_pr_g_h_i(
     tmp_path: Path,
 ) -> None:
