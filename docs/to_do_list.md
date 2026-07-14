@@ -1430,6 +1430,8 @@ Status:
   recover reviewed values, units, precision, mappings, and context
 - verify the downstream SHA-256 bridges from embedded PR-M to PR-K and from
   PR-K to PR-I/PR-J, plus the corresponding semantic-digest bindings
+- jointly replay the causal order from PR-I adjudication through PR-J packet,
+  PR-J human review/adjudication, PR-K generation, and PR-M human review
 - rejoin every PR-P dependent cell to the exact PR-K identity group, accepted
   PR-I known-property group/cell, and accepted PR-J bounded transcription
 - replay the exact source row, subject, property literal, reported decimal
@@ -1469,8 +1471,9 @@ Status:
   src/ai4s_agent/oled_observation_materialization_candidate.py
 - tested by tests/test_oled_observation_materialization_candidate.py,
   including exact paper016-shaped materialization, trailing-zero preservation,
-  alternate-byte rejection, derived-value rehash tamper, causal time, overwrite,
-  incomplete context, redaction, and output-parent replacement
+  alternate-byte rejection, derived-value rehash tamper, fully rehashed
+  cross-artifact causal-time attacks, overwrite, incomplete context, redaction,
+  and output-parent replacement
 - contract documented in docs/oled-observation-materialization-candidate.md
 
 ## 8.5 MinerU review packet writer MVP

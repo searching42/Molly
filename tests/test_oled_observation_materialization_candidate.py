@@ -16,14 +16,47 @@ from ai4s_agent.domains.oled_layered_schema import (
     OledMeasurementCondition,
     OledPropertyObservation,
 )
+from ai4s_agent.domains.oled_material_registry_adjudication import (
+    OledMaterialRegistryAdjudicationArtifact,
+    OledMaterialRegistryDecisionManifest,
+    oled_material_registry_adjudication_artifact_digest,
+    oled_material_registry_decision_manifest_digest,
+)
 from ai4s_agent.domains.oled_material_registry_resolution_request import (
+    OledMaterialRegistryResolutionRequestArtifact,
     build_oled_material_registry_entry,
+    oled_material_registry_resolution_request_artifact_digest,
 )
 from ai4s_agent.domains.oled_observation_materialization_candidate import (
     OledObservationMaterializationCandidateArtifact,
     _canonicalize_observation,
     _observation_candidate_item_digest,
     oled_observation_materialization_candidate_artifact_digest,
+)
+from ai4s_agent.domains.oled_observation_staging_preflight import (
+    OledObservationStagingPreflightArtifact,
+    oled_observation_staging_preflight_artifact_digest,
+)
+from ai4s_agent.domains.oled_supplementary_material_identity_candidate_request import (
+    OledSupplementaryMaterialIdentityCandidateRequestArtifact,
+    _material_identity_request_digest,
+)
+from ai4s_agent.domains.oled_supplementary_material_identity_review import (
+    OledSupplementaryMaterialIdentityAdjudicationArtifact,
+    oled_supplementary_material_identity_adjudication_artifact_digest,
+)
+from ai4s_agent.domains.oled_supplementary_semantic_review import (
+    OledSupplementarySemanticAdjudicationArtifact,
+)
+from ai4s_agent.domains.oled_supplementary_source_transcription_review import (
+    OledSupplementarySourceTranscriptionAdjudicationArtifact,
+    OledSupplementarySourceTranscriptionDecisionEntry,
+    OledSupplementarySourceTranscriptionDecisionManifest,
+    OledSupplementarySourceTranscriptionReviewItemKind,
+    OledSupplementarySourceTranscriptionReviewPacket,
+    _source_transcription_adjudication_digest,
+    _source_transcription_decision_manifest_digest,
+    _source_transcription_review_packet_digest,
 )
 from ai4s_agent.oled_material_registry_resolution_request import (
     build_oled_material_registry_resolution_request_from_files,
@@ -169,6 +202,290 @@ def _file_kwargs(
         ],
         "output_json": output_path,
         "generated_at": generated_at,
+    }
+
+
+def _forge_jointly_causally_impossible_chain(
+    chain: dict[str, Any],
+    tmp_path: Path,
+    *,
+    packet_generated_at: str | None = None,
+    reviewed_at: str | None = None,
+) -> dict[str, Any]:
+    forged_dir = tmp_path / "forged-causal-chain"
+    forged_dir.mkdir()
+    staging = OledObservationStagingPreflightArtifact.model_validate_json(
+        chain["staging_path"].read_text(encoding="utf-8")
+    )
+    identity_request = (
+        OledSupplementaryMaterialIdentityCandidateRequestArtifact.model_validate_json(
+            chain["identity_request_path"].read_text(encoding="utf-8")
+        )
+    )
+    semantic = OledSupplementarySemanticAdjudicationArtifact.model_validate_json(
+        chain["semantic_adjudication_path"].read_text(encoding="utf-8")
+    )
+    packet = OledSupplementarySourceTranscriptionReviewPacket.model_validate_json(
+        chain["transcription_packet_path"].read_text(encoding="utf-8")
+    )
+    transcription = (
+        OledSupplementarySourceTranscriptionAdjudicationArtifact.model_validate_json(
+            chain["transcription_adjudication_path"].read_text(encoding="utf-8")
+        )
+    )
+
+    if packet_generated_at is not None:
+        packet = packet.model_copy(
+            update={"generated_at": packet_generated_at},
+            deep=True,
+        )
+    packet = packet.model_copy(
+        update={"review_packet_digest": _source_transcription_review_packet_digest(packet)},
+        deep=True,
+    )
+    packet = OledSupplementarySourceTranscriptionReviewPacket.model_validate(
+        packet.model_dump(mode="json")
+    )
+    packet_path = forged_dir / "source-transcription-review-packet.json"
+    write_json(packet_path, packet.model_dump(mode="json"))
+    packet_sha = _sha256_file(packet_path)
+
+    effective_reviewed_at = reviewed_at or transcription.reviewed_at
+    decision_manifest = OledSupplementarySourceTranscriptionDecisionManifest(
+        run_id=transcription.run_id,
+        paper_id=transcription.paper_id,
+        review_packet_sha256=packet_sha,
+        review_packet_digest=packet.review_packet_digest,
+        source_pdf_evidence_digest=transcription.source_pdf_evidence_digest,
+        reviewed_by=transcription.reviewed_by,
+        reviewed_at=effective_reviewed_at,
+        adjudication_confirmed=True,
+        decisions=[
+            OledSupplementarySourceTranscriptionDecisionEntry(
+                review_item_id=item.review_item_id,
+                review_item_digest=item.review_item_digest,
+                item_kind=(
+                    OledSupplementarySourceTranscriptionReviewItemKind
+                    .TABLE_TRANSCRIPTION_SCOPE
+                ),
+                decision=item.decision,
+                component_results=item.component_results,
+                review_note=item.review_note,
+            )
+            for item in transcription.adjudicated_tables
+        ],
+    )
+    decision_path = forged_dir / "source-transcription-decisions.json"
+    write_json(decision_path, decision_manifest.model_dump(mode="json"))
+    decision_sha = _sha256_file(decision_path)
+    decision_digest = _source_transcription_decision_manifest_digest(
+        decision_manifest
+    )
+    transcription = transcription.model_copy(
+        update={
+            "review_packet_sha256": packet_sha,
+            "review_packet_digest": packet.review_packet_digest,
+            "decision_manifest_sha256": decision_sha,
+            "decision_manifest_digest": decision_digest,
+            "reviewed_at": effective_reviewed_at,
+        },
+        deep=True,
+    )
+    transcription = transcription.model_copy(
+        update={
+            "adjudication_artifact_digest": (
+                _source_transcription_adjudication_digest(transcription)
+            )
+        },
+        deep=True,
+    )
+    transcription = (
+        OledSupplementarySourceTranscriptionAdjudicationArtifact.model_validate(
+            transcription.model_dump(mode="json")
+        )
+    )
+    transcription_path = forged_dir / "source-transcription-adjudication.json"
+    write_json(transcription_path, transcription.model_dump(mode="json"))
+    transcription_sha = _sha256_file(transcription_path)
+
+    identity_request = identity_request.model_copy(
+        update={
+            "transcription_review_packet_sha256": packet_sha,
+            "transcription_review_packet_digest": packet.review_packet_digest,
+            "transcription_decision_manifest_sha256": decision_sha,
+            "transcription_decision_manifest_digest": decision_digest,
+            "transcription_adjudication_artifact_sha256": transcription_sha,
+            "transcription_adjudication_artifact_digest": (
+                transcription.adjudication_artifact_digest
+            ),
+        },
+        deep=True,
+    )
+    identity_request = identity_request.model_copy(
+        update={
+            "material_identity_request_digest": (
+                _material_identity_request_digest(identity_request)
+            )
+        },
+        deep=True,
+    )
+    identity_request = (
+        OledSupplementaryMaterialIdentityCandidateRequestArtifact.model_validate(
+            identity_request.model_dump(mode="json")
+        )
+    )
+    identity_request_path = forged_dir / "material-identity-request.json"
+    write_json(identity_request_path, identity_request.model_dump(mode="json"))
+    identity_request_sha = _sha256_file(identity_request_path)
+
+    source_adjudication = staging.resolution_request.source_adjudication.model_copy(
+        update={
+            "request_artifact_sha256": identity_request_sha,
+            "material_identity_request_digest": (
+                identity_request.material_identity_request_digest
+            ),
+            "transcription_review_packet_sha256": packet_sha,
+            "transcription_review_packet_digest": packet.review_packet_digest,
+        },
+        deep=True,
+    )
+    source_adjudication = source_adjudication.model_copy(
+        update={
+            "adjudication_artifact_digest": (
+                oled_supplementary_material_identity_adjudication_artifact_digest(
+                    source_adjudication
+                )
+            )
+        },
+        deep=True,
+    )
+    source_adjudication = (
+        OledSupplementaryMaterialIdentityAdjudicationArtifact.model_validate(
+            source_adjudication.model_dump(mode="json")
+        )
+    )
+    source_adjudication_path = forged_dir / "material-identity-adjudication.json"
+    write_json(source_adjudication_path, source_adjudication.model_dump(mode="json"))
+    source_adjudication_sha = _sha256_file(source_adjudication_path)
+
+    request = staging.resolution_request.model_copy(
+        update={
+            "source_adjudication_sha256": source_adjudication_sha,
+            "source_adjudication_digest": source_adjudication.adjudication_artifact_digest,
+            "source_adjudication": source_adjudication,
+        },
+        deep=True,
+    )
+    request = request.model_copy(
+        update={
+            "request_artifact_digest": (
+                oled_material_registry_resolution_request_artifact_digest(request)
+            )
+        },
+        deep=True,
+    )
+    request = OledMaterialRegistryResolutionRequestArtifact.model_validate(
+        request.model_dump(mode="json")
+    )
+    request_path = forged_dir / "registry-resolution-request.json"
+    write_json(request_path, request.model_dump(mode="json"))
+    request_sha = _sha256_file(request_path)
+
+    registry_adjudication = staging.registry_adjudication.model_copy(
+        update={
+            "request_artifact_sha256": request_sha,
+            "request_artifact_digest": request.request_artifact_digest,
+            "source_adjudication_sha256": source_adjudication_sha,
+            "source_adjudication_digest": source_adjudication.adjudication_artifact_digest,
+        },
+        deep=True,
+    )
+    registry_decisions = OledMaterialRegistryDecisionManifest(
+        run_id=registry_adjudication.run_id,
+        paper_id=registry_adjudication.paper_id,
+        request_artifact_sha256=request_sha,
+        request_artifact_digest=request.request_artifact_digest,
+        source_adjudication_sha256=source_adjudication_sha,
+        source_adjudication_digest=source_adjudication.adjudication_artifact_digest,
+        registry_snapshot_sha256=registry_adjudication.registry_snapshot_sha256,
+        registry_snapshot_digest=registry_adjudication.registry_snapshot_digest,
+        reviewed_by=registry_adjudication.reviewed_by,
+        reviewed_at=registry_adjudication.reviewed_at,
+        adjudication_confirmed=True,
+        decisions=[
+            item.decision_entry for item in registry_adjudication.adjudicated_items
+        ],
+    )
+    registry_decision_path = forged_dir / "registry-decisions.json"
+    write_json(registry_decision_path, registry_decisions.model_dump(mode="json"))
+    registry_adjudication = registry_adjudication.model_copy(
+        update={
+            "decision_manifest_sha256": _sha256_file(registry_decision_path),
+            "decision_manifest_digest": (
+                oled_material_registry_decision_manifest_digest(registry_decisions)
+            ),
+        },
+        deep=True,
+    )
+    registry_adjudication = registry_adjudication.model_copy(
+        update={
+            "adjudication_artifact_digest": (
+                oled_material_registry_adjudication_artifact_digest(
+                    registry_adjudication
+                )
+            )
+        },
+        deep=True,
+    )
+    registry_adjudication = OledMaterialRegistryAdjudicationArtifact.model_validate(
+        registry_adjudication.model_dump(mode="json")
+    )
+    registry_adjudication_path = forged_dir / "registry-adjudication.json"
+    write_json(
+        registry_adjudication_path,
+        registry_adjudication.model_dump(mode="json"),
+    )
+
+    staging = staging.model_copy(
+        update={
+            "request_artifact_sha256": request_sha,
+            "request_artifact_digest": request.request_artifact_digest,
+            "registry_adjudication_sha256": _sha256_file(
+                registry_adjudication_path
+            ),
+            "registry_adjudication_digest": (
+                registry_adjudication.adjudication_artifact_digest
+            ),
+            "source_adjudication_sha256": source_adjudication_sha,
+            "source_adjudication_digest": source_adjudication.adjudication_artifact_digest,
+            "resolution_request": request,
+            "registry_adjudication": registry_adjudication,
+        },
+        deep=True,
+    )
+    staging = staging.model_copy(
+        update={
+            "preflight_artifact_digest": (
+                oled_observation_staging_preflight_artifact_digest(staging)
+            )
+        },
+        deep=True,
+    )
+    staging = OledObservationStagingPreflightArtifact.model_validate(
+        staging.model_dump(mode="json")
+    )
+    staging_path = forged_dir / "observation-staging-preflight.json"
+    write_json(staging_path, staging.model_dump(mode="json"))
+
+    return {
+        "staging_path": staging_path,
+        "identity_request_path": identity_request_path,
+        "semantic_adjudication_path": chain["semantic_adjudication_path"],
+        "transcription_packet_path": packet_path,
+        "transcription_adjudication_path": transcription_path,
+        "semantic": semantic,
+        "packet": packet,
+        "transcription": transcription,
     }
 
 
@@ -337,6 +654,55 @@ def test_materialization_cannot_predate_staging_preflight(
                 output_path,
                 generated_at="2026-07-14T00:29:59+08:00",
             )
+        )
+
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("packet_generated_at", "reviewed_at", "expected_error"),
+    (
+        (
+            "2026-07-13T22:29:59+08:00",
+            None,
+            "PR-J packet predates the exact PR-I adjudication",
+        ),
+        (
+            None,
+            "2026-07-13T22:39:59+08:00",
+            "PR-J human review predates the exact PR-J packet",
+        ),
+    ),
+)
+def test_joint_replay_rejects_causally_impossible_pr_i_pr_j_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    packet_generated_at: str | None,
+    reviewed_at: str | None,
+    expected_error: str,
+) -> None:
+    original = _build_exact_chain(tmp_path, monkeypatch)
+    forged = _forge_jointly_causally_impossible_chain(
+        original,
+        tmp_path,
+        packet_generated_at=packet_generated_at,
+        reviewed_at=reviewed_at,
+    )
+    if packet_generated_at is not None:
+        assert forged["packet"].generated_at < forged["semantic"].generated_at
+    else:
+        assert forged["semantic"].generated_at <= forged["packet"].generated_at
+    if reviewed_at is not None:
+        assert forged["transcription"].reviewed_at < forged["packet"].generated_at
+        assert (
+            forged["transcription"].reviewed_at
+            <= forged["transcription"].generated_at
+        )
+    output_path = tmp_path / "must-not-exist-causal-chain.json"
+
+    with pytest.raises(ValueError, match=expected_error):
+        build_oled_observation_materialization_candidate_from_files(
+            **_file_kwargs(forged, output_path)
         )
 
     assert not output_path.exists()

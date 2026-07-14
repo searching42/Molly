@@ -777,6 +777,14 @@ def _validate_exact_chain(
         == transcription_adjudication.source_pdf_evidence_digest
     ):
         raise ValueError("PR-K/PR-J source PDF evidence binding mismatch")
+    if _parse_timestamp(transcription_packet.generated_at) < _parse_timestamp(
+        semantic_adjudication.generated_at
+    ):
+        raise ValueError("PR-J packet predates the exact PR-I adjudication")
+    if _parse_timestamp(transcription_adjudication.reviewed_at) < _parse_timestamp(
+        transcription_packet.generated_at
+    ):
+        raise ValueError("PR-J human review predates the exact PR-J packet")
     if (
         _parse_timestamp(material_identity_request.generated_at)
         > _parse_timestamp(pr_m.reviewed_at)

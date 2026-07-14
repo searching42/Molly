@@ -37,6 +37,22 @@ The semantic digests are also replayed across the same chain. A semantically
 identical JSON file with different bytes is rejected when the downstream
 artifact bound the original file SHA-256.
 
+PR-Q also closes the cross-artifact causal chain that no individual artifact
+can establish alone:
+
+```text
+PR-I adjudication generated_at
+<= PR-J review packet generated_at
+<= PR-J human reviewed_at
+<= PR-J adjudication generated_at
+<= PR-K generated_at
+<= PR-M human reviewed_at
+```
+
+A fully rehashed chain whose artifacts remain standalone-valid is still
+rejected if the PR-J packet predates its exact PR-I semantic input or if human
+review predates the exact PR-J packet.
+
 PR-Q embeds all five validated models so standalone validation can rederive
 every candidate and its semantic bindings. Exact external input bytes cannot
 be recovered from embedded models, so
@@ -137,8 +153,9 @@ PYTHONPATH=src .venv/bin/python \
 The output must be fresh and distinct from every input. Output-parent
 descriptors are pinned through publication. Symlinked paths, duplicate input
 paths, input overwrite, stale hashes, changed literals, causal timestamp
-reversal, parent replacement, or invalid layered observations fail without a
-partial output. CLI failures expose only a stable redacted error object.
+reversal across PR-I/PR-J/PR-K/PR-M, parent replacement, or invalid layered
+observations fail without a partial output. CLI failures expose only a stable
+redacted error object.
 
 ## Explicitly false after PR-Q
 
