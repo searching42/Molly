@@ -166,8 +166,16 @@ output contains only a stable error code and exception type.
 
 ## Next boundary
 
-The next stage may validate an externally supplied, evidence-backed identity
-proposal. It must not accept an LLM-generated structure merely because it is
-chemically parseable. Canonical identity still requires exact source evidence,
-deterministic chemistry-tool validation, and a separate human adjudication
-before any registry or observation materialization.
+PR-L, documented in
+`docs/oled-supplementary-material-identity-evidence-response.md`, validates an
+externally supplied evidence response against this exact request and the bound
+PR-J source packet. It requires complete group/cell coverage, structured
+locators inside the already-bound supplementary PDF, explicit producer
+provenance, and deterministic chemistry-tool checks for any proposed graph.
+
+PR-L may retain anchor-only and unresolved outcomes. It must not accept an
+LLM-generated structure merely because it is chemically parseable: RDKit can
+validate a candidate graph but cannot establish that the graph matches the
+source. A separate PR-M PDF-backed human review and adjudication remains
+required before any identity resolution, Registry write, schema/observation
+materialization, Gold admission, or dataset/training use.
