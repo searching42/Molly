@@ -1048,6 +1048,60 @@ Status:
   independent semantic-note decision
 - documented in docs/oled-supplementary-semantic-review.md
 
+## 8.4.11 Exact-bound supplementary source-transcription review MVP
+
+### [x] Task:
+- consume and replay the complete PR-G, PR-H, and PR-I chain, including the
+  exact semantic decision manifest and adjudication artifact, rather than
+  trusting copied audit flags
+- verify one operator-local supplementary PDF through a stable non-symlink
+  file descriptor and require its exact SHA-256 to match every bound scope
+- render each bound one-based source page from the verified PDF with a pinned
+  full-page Poppler profile; execute private copies of two explicitly trusted
+  native binaries, pass the unlinked verified PDF by file descriptor, and bind
+  both executable hashes, version, page, PNG bytes, dimensions, and asset digest
+  without treating the rendered page as authoritative
+- generate one compact review item per selected table, preserving the complete
+  caption, ordered headers, rectangular row/cell grid, signs, decimal precision,
+  trailing zeros, footnotes, parser warnings, page anchor, and un-interpreted
+  source bounding box
+- keep positional parser placeholders such as `column_1` in an explicit
+  parser-key binding and render their source-visible header candidate as blank,
+  so an internal key cannot be mistaken for a reported source literal
+- record seven explicit component checks for page anchor, caption, headers,
+  row structure, cell literals, footnotes, and bounded table extent under a
+  versioned visual-equivalence contract
+- distinguish an accepted bounded transcription from a known reparse need, an
+  unresolved source check, and a rejected scope; forbid inline correction and
+  require mismatches to restart the locator -> PR-G -> PR-H -> PR-I chain
+- intersect accepted table scopes only with PR-I later-eligible cells for the
+  following material-identity review, while retaining ontology-pending cells
+  outside that path
+- report identity-review readiness only when that accepted intersection is
+  non-empty
+- keep document-wide exhaustiveness, scientific truth, physical semantics,
+  material identity, ontology mutation, schema candidates, staging, admission,
+  gold creation, and dataset writing disabled
+
+Scope:
+- offline, human-attested fidelity of one bounded parsed table against the
+  exact authoritative supplementary PDF and its exact rendered source page
+- visual equivalence permits non-semantic layout whitespace/line wrapping and
+  equivalent subscript/superscript markup, but never changes scientific tokens,
+  units, signs, digits, trailing zeros, order, or footnote associations
+- no network, LLM, MinerU, scientific correction, identity resolution, schema
+  materialization, gold creation, or dataset write
+
+Status:
+- implemented in
+  src/ai4s_agent/domains/oled_supplementary_source_transcription_review.py
+- controlled packet/render/adjudicate CLI implemented in
+  src/ai4s_agent/oled_supplementary_source_transcription_review.py
+- tested by tests/test_oled_supplementary_source_transcription_review.py,
+  including a paper016-shaped 8-column, 7-row, 56-cell table with 49 numeric
+  cells and the PR-I 35-known/14-ontology partition
+- documented in docs/oled-supplementary-source-transcription-review.md
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
