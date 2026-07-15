@@ -1476,6 +1476,56 @@ Status:
   and output-parent replacement
 - contract documented in docs/oled-observation-materialization-candidate.md
 
+## 8.4.19 Exact-chain reviewed-evidence staging preflight MVP
+
+### [x] Task:
+- consume one exact PR-Q observation-materialization artifact plus one immutable
+  reviewed-evidence ledger snapshot
+- record exact file SHA-256 and semantic artifact digests for both inputs
+- separate immutable source claims from versioned semantic projections and
+  derive global claim/projection/conflict identifiers without using the PR-Q
+  candidate ID as a cross-paper primary key
+- pin the property ontology, representation contract, property/condition unit
+  rules, and photophysical comparison-context policy in a hashed semantic
+  contract snapshot
+- group cell-level candidates by exact source row and Registry identity without
+  merging solely by alias or material ID
+- classify new claims, exact replay, consistent cross-source duplicates, value
+  conflicts, incomplete context, same-source semantic revisions, and
+  cross-contract migration requirements
+- keep exact replay idempotent, preserve consistent duplicate source claims,
+  quarantine conflicts and incomplete context, and require later human review
+  only for conflicts/revisions rather than every clean cell
+- retain structured verification facets while leaving confidence and scientific
+  consistency explicitly unassessed
+- reject device-layer candidates and ledger entries as a model invariant
+- keep reviewed-evidence/ledger writes, source-value correction, confidence
+  assignment, direct admission, Gold/dataset/training writes, Registry/alias
+  mutation, network, LLM, MinerU, and external-service calls disabled
+- reject timestamp reversal, semantic/count/group tamper, input overwrite,
+  symbolic paths, changed output parents, and partial publication
+
+Scope:
+- read-only reviewed-evidence staging classification only
+- incomplete or conflicting source claims remain preservable and queryable but
+  are not comparison-ready or Gold-eligible
+- automated acceptance remains paper016-shaped; real paper016 and multi-paper
+  operator validation remain later acceptance evidence
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_reviewed_evidence_staging_preflight.py`
+- controlled file/CLI entry implemented in
+  `src/ai4s_agent/oled_reviewed_evidence_staging_preflight.py`
+- tested by `tests/test_oled_reviewed_evidence_staging_preflight.py`, including
+  source-row grouping, trailing-zero preservation, exact replay, consistent
+  duplicates, conflicts, revisions, semantic-contract migration, candidate-ID
+  collision, incomplete comparison context, device exclusion, semantic tamper,
+  timestamps, overwrite, redaction, exact file hashes, and output-parent
+  replacement
+- contract documented in
+  `docs/oled-reviewed-evidence-staging-preflight.md`
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
