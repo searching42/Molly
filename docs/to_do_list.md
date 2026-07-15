@@ -1602,6 +1602,41 @@ Status:
 - contract documented in
   `docs/oled-reviewed-evidence-ledger-postwrite-verifier.md`
 
+## 8.4.22 Reviewed-evidence confidence/consistency review request MVP
+
+### [x] Task:
+- consume one exact PR-T post-write verification artifact and bind its exact
+  file SHA-256 and semantic digest
+- include only exact PR-R-scoped ledger entries that are active,
+  comparison-ready, non-device, and blocked only by missing confidence
+  assessment and scientific-consistency review
+- keep quarantined conflicts and incomplete-context evidence excluded while
+  reporting exclusion counts
+- keep active exact-replay entries eligible when the two facets remain
+  unfinished; replay must not imply review completion
+- group eligible observations by the exact source-row group and preserve
+  material/Registry, property/layer, reported precision/unit, normalized value,
+  comparison context, and PDF/table/cell provenance
+- request categorical confidence sufficiency and scientific consistency
+  dispositions without inventing a calibrated numeric score
+- keep human decisions, reviewed-evidence mutation, Gold/dataset/training
+  writes, Registry/alias mutation, network, LLM, and external calls disabled
+- reject timestamp reversal, group/count/roster tamper, input overwrite,
+  symbolic paths, changed output parents, and partial publication
+
+Scope:
+- bounded human-review request construction only
+- no human review has occurred and no Gold blocker is cleared
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_reviewed_evidence_facet_review_request.py`
+- controlled file/CLI entry implemented in
+  `src/ai4s_agent/oled_reviewed_evidence_facet_review_request.py`
+- tested by `tests/test_oled_reviewed_evidence_facet_review_request.py`
+- contract documented in
+  `docs/oled-reviewed-evidence-facet-review-request.md`
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
