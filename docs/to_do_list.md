@@ -1568,6 +1568,40 @@ Status:
 - tested by `tests/test_oled_reviewed_evidence_ledger_writer.py`
 - contract documented in `docs/oled-reviewed-evidence-ledger-writer.md`
 
+## 8.4.21 Exact-chain reviewed-evidence ledger post-write verifier MVP
+
+### [x] Task:
+- consume the exact PR-S write receipt and separately published successor
+  ledger snapshot, recording exact file SHA-256 bindings for both
+- require the published snapshot to equal PR-S's exact embedded successor
+- independently replay append-only prior-entry and semantic-contract
+  preservation instead of trusting PR-S verification flags
+- rebuild every added entry from its exact PR-R candidate, pinned semantic
+  contract, PR-S timestamp, and disposition-derived active/quarantined status
+- prove exact replay is a no-op, quarantine never becomes active, no unplanned
+  projection was added, and snapshot ID/time lineage is exact
+- emit one read-only verification artifact with derived counts and IDs
+- keep ledger writes, source correction, confidence/scientific-consistency
+  decisions, Gold/dataset/training writes, Registry/alias mutation, network,
+  LLM, MinerU, and external calls disabled
+- reject a different valid snapshot, timestamp reversal, derived count/status
+  tamper, input overwrite, symbolic paths, changed output parents, and partial
+  publication
+
+Scope:
+- post-write mechanical verification only
+- automated acceptance remains paper016-shaped; real paper016 PR-S output and
+  multi-paper append validation remain later evidence
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_reviewed_evidence_ledger_postwrite_verifier.py`
+- controlled file/CLI entry implemented in
+  `src/ai4s_agent/oled_reviewed_evidence_ledger_postwrite_verifier.py`
+- tested by `tests/test_oled_reviewed_evidence_ledger_postwrite_verifier.py`
+- contract documented in
+  `docs/oled-reviewed-evidence-ledger-postwrite-verifier.md`
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
