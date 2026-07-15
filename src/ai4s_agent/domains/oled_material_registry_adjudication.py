@@ -738,7 +738,10 @@ def build_oled_material_registry_adjudication_artifact(
             registry_entries_by_id=entries_by_id,
             registry_conflict_findings_by_digest=conflict_findings_by_digest,
         )
-        for item in resolution_request.resolution_items
+        for item in sorted(
+            resolution_request.resolution_items,
+            key=lambda request_item: request_item.resolution_item_id,
+        )
     ]
     counts = _adjudication_counts(adjudicated_items)
     payload: dict[str, Any] = {

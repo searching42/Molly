@@ -1302,9 +1302,10 @@ Status:
 Scope:
 - offline, read-only Registry lookup/request generation from exact PR-M bytes
 - does not replay the full PR-M upstream chain or reopen source PDFs
-- automated acceptance is paper016-shaped only: 7 PR-M review items, 1
-  Registry-eligible graph group, 5 dependent property cells, 14
-  ontology-pending cells excluded, and 0 device-only cells admitted
+- production logic is paper-agnostic and dynamically covers the exact eligible
+  roster; acceptance includes both the legacy paper016-shaped 1-group/5-cell
+  canary and a 7-group/35-cell multi-item path, with ontology-pending and
+  device-only cells excluded
 
 Status:
 - implemented in
@@ -1355,9 +1356,9 @@ Scope:
 - offline human Registry adjudication over the exact PR-N evidence surface
 - a mapping records association to an already existing snapshot material ID;
   it is not a Registry write or observation write
-- automated acceptance remains paper016-shaped only: 7 PR-M review items, 1
-  PR-N resolution item, 5 dependent property cells, 14 ontology-pending cells
-  excluded, and 0 device-only cells admitted
+- production logic is paper-agnostic and dynamically covers the complete PR-N
+  roster; acceptance includes the legacy 1-item/5-cell canary plus a 7-item,
+  35-cell path whose source order differs from stable adjudication-ID order
 
 Status:
 - implemented in

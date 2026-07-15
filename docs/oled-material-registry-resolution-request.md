@@ -105,7 +105,13 @@ identity_evidence = false
 Names and aliases reject active markup, URLs, local paths, control text, and
 credential-like content before they can enter JSON or Markdown artifacts.
 
-## Coverage boundary
+## Generality and coverage boundary
+
+The production contract is paper-agnostic. Each invocation consumes one exact
+PR-M artifact and one explicitly supplied Registry snapshot; paper IDs, table
+IDs, row counts, eligible-group counts, dependent-cell counts, and Registry
+entry counts are all derived from those inputs. No paper016 literal or fixed
+paper016 data shape exists in the production builder or runner.
 
 The resolution item roster must exactly equal the PR-M
 `eligible_for_later_registry_review` roster. Each item's complete adjudicated
@@ -122,8 +128,10 @@ The paper016-shaped automated canary therefore preserves:
 0 device-only cells admitted
 ```
 
-This remains synthetic paper016-shaped evidence. It does not claim a real
-paper016 Registry resolution.
+This remains one synthetic paper016-shaped canary, not a production limit and
+not a claim about a real paper016 Registry resolution. A separate multi-item
+regression exercises seven Registry-eligible groups and 35 dependent cells so
+single-item fixture ordering cannot mask production failures.
 
 ## Controlled workflow
 
