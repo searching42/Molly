@@ -1530,6 +1530,44 @@ Status:
 - contract documented in
   `docs/oled-reviewed-evidence-staging-preflight.md`
 
+## 8.4.20 Exact-chain reviewed-evidence ledger writer MVP
+
+### [x] Task:
+- consume one exact PR-R artifact plus the exact immutable prior ledger snapshot
+- require current ledger bytes and model content to match the snapshot pinned by
+  PR-R, then re-read both inputs immediately before publication
+- append clean and consistent claims as active entries while publishing value
+  conflicts and incomplete-context claims only as quarantined entries
+- make exact replay a true no-op that preserves the prior snapshot unchanged
+- refuse source-claim revisions and semantic-contract migrations without a
+  future roster-bound exception decision
+- rebuild every appended entry from the exact PR-R candidate and pinned semantic
+  contract, preserving the complete prior entry and contract sets
+- publish the write receipt and successor snapshot as one fresh, fsynced,
+  inode-bound directory using an atomic no-replace rename primitive, then
+  revalidate exact filenames and bytes through the still-open directory fd
+- keep source correction, confidence assignment, Gold/dataset/training writes,
+  Registry/alias mutation, network, LLM, MinerU, and external calls disabled
+- reject stale compare-and-swap state, timestamp reversal, artifact/count/status
+  tamper, existing outputs, temporary-directory name swaps, check-to-rename
+  target creation, symbolic output parents, partial publication, and unreviewed
+  revisions
+
+Scope:
+- append-only reviewed-evidence ledger publication only
+- quarantined evidence remains queryable but is not active for comparison or
+  eligible for Gold
+- automated acceptance remains paper016-shaped; real paper016 and multi-paper
+  operator validation remain later evidence
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_reviewed_evidence_ledger_writer.py`
+- controlled file/CLI entry implemented in
+  `src/ai4s_agent/oled_reviewed_evidence_ledger_writer.py`
+- tested by `tests/test_oled_reviewed_evidence_ledger_writer.py`
+- contract documented in `docs/oled-reviewed-evidence-ledger-writer.md`
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
