@@ -174,7 +174,13 @@ parent replacement during rendering or adjudication fails without publishing
 into either the displaced or redirected directory. CLI failures emit a stable,
 redacted error object.
 
-## paper016-shaped canary boundary
+## Generality and canary boundary
+
+The production adjudicator is paper-agnostic and handles the complete dynamic
+PR-N item roster. It contains no paper016 literal, table identifier, material
+name, or fixed item/cell count. One invocation adjudicates one exact PR-N
+request so every decision remains bound to a single paper-local evidence chain
+while the supplied Registry snapshot provides the cross-paper identity state.
 
 Automated tests preserve the existing synthetic paper016-shaped chain:
 
@@ -189,7 +195,10 @@ Automated tests preserve the existing synthetic paper016-shaped chain:
 The same candidate is exercised against an empty snapshot, one exact entry,
 and two duplicate structural entries to test new-entity proposal, existing-
 entity mapping, unresolved, and conflict-deferred outcomes. These fixtures do
-not establish the real Registry identity of any paper016 material.
+not establish the real Registry identity of any paper016 material. A separate
+seven-item regression deliberately uses a PR-N source order that differs from
+the stable adjudication-ID order and verifies seven new-entity proposals and
+35 dependent cells end to end.
 
 ## Explicitly false after PR-O
 

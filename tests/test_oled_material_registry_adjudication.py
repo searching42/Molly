@@ -38,6 +38,9 @@ from tests.test_oled_material_registry_resolution_request import (
     _snapshot,
     _write_snapshot,
 )
+from tests.test_oled_supplementary_material_identity_evidence_response import (
+    _candidate_result,
+)
 from tests.test_oled_supplementary_material_identity_review import (
     _adjudication_kwargs,
     _build_packet,
@@ -74,6 +77,53 @@ def _no_match_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Any, Path]:
     return _request_with_entries(tmp_path, monkeypatch, lambda _group, _candidate: [])
+
+
+def _multi_candidate_no_match_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Any, Path]:
+    _, context = _build_packet(
+        tmp_path,
+        monkeypatch,
+        result_factory=_candidate_result,
+    )
+
+    def accept_all_candidates(payload: dict[str, Any]) -> None:
+        for entry in payload["decisions"]:
+            entry["decision"] = "accept_structure_candidate"
+            entry["candidate_source_match"] = "matches_source"
+            for assessment in entry["anchor_assessments"]:
+                assessment["assessment"] = "supports_claim"
+                assessment["review_note"] = ""
+            entry["review_note"] = (
+                "Human accepted this synthetic multi-item structure candidate."
+            )
+
+    decision_path, _ = _write_decisions(
+        context,
+        mutate=accept_all_candidates,
+        filename="multi-item-material-identity-decisions.json",
+    )
+    source_path = context["review_dir"] / "multi-item-adjudication.json"
+    source = build_oled_supplementary_material_identity_adjudication_from_files(
+        **_adjudication_kwargs(
+            context,
+            decision_path=decision_path,
+            output_path=source_path,
+        )
+    )
+    assert source.later_registry_review_eligible_group_count == 7
+
+    snapshot_path = _write_snapshot(tmp_path, _snapshot([]))
+    request_path = tmp_path / "multi-item-registry-resolution-request.json"
+    request = build_oled_material_registry_resolution_request_from_files(
+        source_adjudication_json=source_path,
+        registry_snapshot_json=snapshot_path,
+        output_json=request_path,
+        generated_at=_REQUEST_AT,
+    )
+    return request, request_path
 
 
 def _exact_match_request(
@@ -285,6 +335,41 @@ def test_no_match_can_propose_new_entity_without_assigning_or_writing(
     assert OledMaterialRegistryAdjudicationArtifact.model_validate_json(
         output_path.read_text(encoding="utf-8")
     ) == artifact
+
+
+def test_multi_item_adjudication_is_published_in_stable_item_id_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, request_path = _multi_candidate_no_match_request(
+        tmp_path,
+        monkeypatch,
+    )
+    request_item_ids = [item.resolution_item_id for item in request.resolution_items]
+    assert len(request_item_ids) == 7
+    assert request_item_ids != sorted(request_item_ids)
+
+    decision_path, _ = _write_decision_manifest(
+        tmp_path,
+        request,
+        request_path,
+        decision="propose_new_entity",
+    )
+    output_path = tmp_path / "multi-item-material-registry-adjudication.json"
+    artifact = build_oled_material_registry_adjudication_from_files(
+        request_artifact_json=request_path,
+        decision_manifest_json=decision_path,
+        output_json=output_path,
+        generated_at=_ADJUDICATED_AT,
+    )
+
+    adjudicated_item_ids = [
+        item.request_item.resolution_item_id for item in artifact.adjudicated_items
+    ]
+    assert adjudicated_item_ids == sorted(request_item_ids)
+    assert artifact.new_entity_proposal_count == 7
+    assert artifact.new_entity_proposal_cell_count == 35
+    assert output_path.exists()
 
 
 def test_exact_match_can_map_existing_entity_for_later_staging_only(
