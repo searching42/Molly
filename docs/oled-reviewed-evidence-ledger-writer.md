@@ -19,8 +19,15 @@ Both inputs are read again immediately before publication; any byte or parsed
 payload change aborts the write.
 
 The output is a fresh directory. The receipt and next snapshot are written to
-a private temporary sibling directory, fsynced, and renamed into place as one
-directory commit. Existing outputs and symbolic output parents fail closed.
+a private temporary sibling directory. PR-S pins that directory's device/inode,
+fsyncs it, and publishes it with an atomic no-replace primitive: Linux
+`renameat2(RENAME_NOREPLACE)` or macOS `renameatx_np(RENAME_EXCL)`. Unsupported
+runtimes fail closed. Immediately before and after rename, the directory name
+must resolve to the pinned inode. The still-open directory descriptor then
+revalidates the exact two filenames and their exact bytes. Existing outputs,
+name-swapped temporary directories, and symbolic output parents fail closed.
+Failure cleanup only operates on names and files whose inodes still match those
+created by the current invocation.
 
 ## Disposition-to-ledger rules
 
@@ -68,7 +75,8 @@ Failures emit only a stable redacted error object.
 The paper016-shaped exact-chain fixture appends five active entries to the
 genesis snapshot. Tests also cover exact-replay no-op behavior, conflict
 quarantine, stale compare-and-swap inputs, refusal of unreviewed revisions,
-fresh-output protection, receipt tamper, atomic two-file publication, and CLI
+fresh-output protection, temporary-directory name swaps, targets created in the
+fresh-check/rename window, receipt tamper, atomic two-file publication, and CLI
 redaction.
 
 This remains fixture-level validation. A real paper016 operator run and a

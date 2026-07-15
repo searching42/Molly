@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import json
 import os
 import stat
@@ -26,6 +28,7 @@ from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _read_bound_json,
 )
 from ai4s_agent.oled_supplementary_source_transcription_review import (
+    _read_bound_binary_at,
     _write_fresh_bytes_at,
 )
 
@@ -132,8 +135,9 @@ def _publish_write_directory(
         raise ValueError("reviewed-evidence ledger writer requires safe dirfd support")
     temp_name = f".{output_path.name}.{uuid.uuid4().hex}.tmp"
     temp_descriptor = -1
-    created_files: list[str] = []
-    renamed = False
+    owned_stat: os.stat_result | None = None
+    created_files: dict[str, os.stat_result] = {}
+    committed = False
     try:
         os.mkdir(temp_name, mode=0o700, dir_fd=parent_descriptor)
         temp_descriptor = os.open(
@@ -141,6 +145,9 @@ def _publish_write_directory(
             os.O_RDONLY | directory_flag | no_follow,
             dir_fd=parent_descriptor,
         )
+        owned_stat = os.fstat(temp_descriptor)
+        if not stat.S_ISDIR(owned_stat.st_mode):
+            raise ValueError("reviewed-evidence temporary output is not a directory")
         payloads = {
             _WRITE_ARTIFACT_FILENAME: artifact.model_dump(mode="json"),
             _NEXT_SNAPSHOT_FILENAME: artifact.next_ledger_snapshot.model_dump(
@@ -151,25 +158,34 @@ def _publish_write_directory(
             content = (
                 json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
             ).encode("utf-8")
-            _write_fresh_bytes_at(temp_descriptor, filename, content)
-            created_files.append(filename)
+            created_files[filename] = _write_fresh_bytes_at(
+                temp_descriptor,
+                filename,
+                content,
+            )
         os.fsync(temp_descriptor)
         _require_fresh_output_directory(output_path, parent_descriptor)
-        os.rename(
-            temp_name,
-            output_path.name,
-            src_dir_fd=parent_descriptor,
-            dst_dir_fd=parent_descriptor,
+        _atomic_rename_owned_directory_noreplace(
+            parent_descriptor=parent_descriptor,
+            temp_name=temp_name,
+            output_name=output_path.name,
+            temp_descriptor=temp_descriptor,
+            owned_stat=owned_stat,
         )
-        renamed = True
         os.fsync(parent_descriptor)
-        published_stat = os.stat(
-            output_path.name,
-            dir_fd=parent_descriptor,
-            follow_symlinks=False,
+        _validate_published_owned_directory(
+            parent_descriptor=parent_descriptor,
+            output_name=output_path.name,
+            temp_descriptor=temp_descriptor,
+            owned_stat=owned_stat,
+            expected_payloads={
+                filename: (
+                    json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+                ).encode("utf-8")
+                for filename, payload in payloads.items()
+            },
         )
-        if not stat.S_ISDIR(published_stat.st_mode):
-            raise ValueError("reviewed-evidence ledger publication is not a directory")
+        committed = True
     except FileExistsError as exc:
         raise ValueError("reviewed-evidence ledger output directory must be fresh") from exc
     except OSError as exc:
@@ -177,30 +193,255 @@ def _publish_write_directory(
     finally:
         if temp_descriptor != -1:
             os.close(temp_descriptor)
-        if not renamed:
+        if not committed and owned_stat is not None:
+            _remove_owned_directory_if_still_named(
+                parent_descriptor=parent_descriptor,
+                directory_name=temp_name,
+                owned_stat=owned_stat,
+                created_files=created_files,
+            )
+            _remove_owned_directory_if_still_named(
+                parent_descriptor=parent_descriptor,
+                directory_name=output_path.name,
+                owned_stat=owned_stat,
+                created_files=created_files,
+            )
+
+
+def _same_inode(left: os.stat_result, right: os.stat_result) -> bool:
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _require_owned_directory_name(
+    *,
+    parent_descriptor: int,
+    directory_name: str,
+    owned_stat: os.stat_result,
+    error_message: str,
+) -> os.stat_result:
+    try:
+        named_stat = os.stat(
+            directory_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise ValueError(error_message) from exc
+    if not stat.S_ISDIR(named_stat.st_mode) or not _same_inode(named_stat, owned_stat):
+        raise ValueError(error_message)
+    return named_stat
+
+
+def _atomic_rename_owned_directory_noreplace(
+    *,
+    parent_descriptor: int,
+    temp_name: str,
+    output_name: str,
+    temp_descriptor: int,
+    owned_stat: os.stat_result,
+) -> None:
+    if not _same_inode(os.fstat(temp_descriptor), owned_stat):
+        raise ValueError("reviewed-evidence temporary directory descriptor changed")
+    _require_owned_directory_name(
+        parent_descriptor=parent_descriptor,
+        directory_name=temp_name,
+        owned_stat=owned_stat,
+        error_message="reviewed-evidence temporary directory name was replaced",
+    )
+    _rename_directory_noreplace_at(
+        parent_descriptor,
+        temp_name,
+        output_name,
+    )
+    try:
+        _require_owned_directory_name(
+            parent_descriptor=parent_descriptor,
+            directory_name=output_name,
+            owned_stat=owned_stat,
+            error_message="reviewed-evidence published directory inode mismatch",
+        )
+    except ValueError:
+        _restore_unowned_publication_name(
+            parent_descriptor=parent_descriptor,
+            output_name=output_name,
+            temp_name=temp_name,
+            owned_stat=owned_stat,
+        )
+        raise
+
+
+def _rename_directory_noreplace_at(
+    parent_descriptor: int,
+    source_name: str,
+    destination_name: str,
+) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    source = os.fsencode(source_name)
+    destination = os.fsencode(destination_name)
+    if sys.platform.startswith("linux"):
+        operation = getattr(libc, "renameat2", None)
+        flag = 1  # RENAME_NOREPLACE
+    elif sys.platform == "darwin":
+        operation = getattr(libc, "renameatx_np", None)
+        flag = 0x00000004  # RENAME_EXCL
+    else:
+        operation = None
+        flag = 0
+    if operation is None:
+        raise ValueError(
+            "atomic no-replace directory rename is unavailable on this runtime"
+        )
+    operation.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    operation.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    result = operation(
+        parent_descriptor,
+        source,
+        parent_descriptor,
+        destination,
+        flag,
+    )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise ValueError("reviewed-evidence ledger output directory must be fresh")
+    unavailable = {
+        errno.EINVAL,
+        errno.ENOSYS,
+        errno.ENOTSUP,
+        getattr(errno, "EOPNOTSUPP", errno.ENOTSUP),
+    }
+    if error_number in unavailable:
+        raise ValueError(
+            "atomic no-replace directory rename is unavailable on this runtime"
+        )
+    raise OSError(error_number, os.strerror(error_number))
+
+
+def _restore_unowned_publication_name(
+    *,
+    parent_descriptor: int,
+    output_name: str,
+    temp_name: str,
+    owned_stat: os.stat_result,
+) -> None:
+    try:
+        output_stat = os.stat(
+            output_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except OSError:
+        return
+    if _same_inode(output_stat, owned_stat):
+        return
+    try:
+        _rename_directory_noreplace_at(
+            parent_descriptor,
+            output_name,
+            temp_name,
+        )
+        os.fsync(parent_descriptor)
+    except (OSError, ValueError):
+        pass
+
+
+def _validate_published_owned_directory(
+    *,
+    parent_descriptor: int,
+    output_name: str,
+    temp_descriptor: int,
+    owned_stat: os.stat_result,
+    expected_payloads: dict[str, bytes],
+) -> None:
+    _require_owned_directory_name(
+        parent_descriptor=parent_descriptor,
+        directory_name=output_name,
+        owned_stat=owned_stat,
+        error_message="reviewed-evidence published directory inode mismatch",
+    )
+    if not _same_inode(os.fstat(temp_descriptor), owned_stat):
+        raise ValueError("reviewed-evidence published directory descriptor changed")
+    if set(os.listdir(temp_descriptor)) != set(expected_payloads):
+        raise ValueError("reviewed-evidence published directory file coverage mismatch")
+    for filename, expected in expected_payloads.items():
+        actual = _read_bound_binary_at(
+            temp_descriptor,
+            filename,
+            max_bytes=_MAX_INPUT_BYTES,
+        )
+        if actual != expected:
+            raise ValueError("reviewed-evidence published directory content mismatch")
+
+
+def _remove_owned_directory_if_still_named(
+    *,
+    parent_descriptor: int,
+    directory_name: str,
+    owned_stat: os.stat_result,
+    created_files: dict[str, os.stat_result],
+) -> None:
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        named_stat = os.stat(
+            directory_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if not stat.S_ISDIR(named_stat.st_mode) or not _same_inode(
+            named_stat,
+            owned_stat,
+        ):
+            return
+        descriptor = os.open(
+            directory_name,
+            os.O_RDONLY | directory_flag | no_follow,
+            dir_fd=parent_descriptor,
+        )
+    except OSError:
+        return
+    try:
+        if not _same_inode(os.fstat(descriptor), owned_stat):
+            return
+        for filename, created_stat in created_files.items():
             try:
-                cleanup_descriptor = os.open(
-                    temp_name,
-                    os.O_RDONLY | directory_flag | no_follow,
-                    dir_fd=parent_descriptor,
+                current_stat = os.stat(
+                    filename,
+                    dir_fd=descriptor,
+                    follow_symlinks=False,
                 )
-            except OSError:
-                cleanup_descriptor = -1
-            if cleanup_descriptor != -1:
-                try:
-                    for filename in created_files:
-                        try:
-                            os.unlink(filename, dir_fd=cleanup_descriptor)
-                        except OSError:
-                            pass
-                    os.fsync(cleanup_descriptor)
-                finally:
-                    os.close(cleanup_descriptor)
-            try:
-                os.rmdir(temp_name, dir_fd=parent_descriptor)
-                os.fsync(parent_descriptor)
+                if stat.S_ISREG(current_stat.st_mode) and _same_inode(
+                    current_stat,
+                    created_stat,
+                ):
+                    os.unlink(filename, dir_fd=descriptor)
             except OSError:
                 pass
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        current_stat = os.stat(
+            directory_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if stat.S_ISDIR(current_stat.st_mode) and _same_inode(
+            current_stat,
+            owned_stat,
+        ):
+            os.rmdir(directory_name, dir_fd=parent_descriptor)
+            os.fsync(parent_descriptor)
+    except OSError:
+        pass
 
 
 def build_parser() -> argparse.ArgumentParser:

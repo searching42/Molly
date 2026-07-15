@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from io import StringIO
 from pathlib import Path
 
@@ -326,6 +327,126 @@ def test_partial_directory_publication_is_cleaned_up(
         )
 
     assert not output_dir.exists()
+    assert not list(tmp_path.glob(".ledger-write.*.tmp"))
+
+
+def test_temp_directory_name_swap_cannot_publish_or_clean_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, preflight_path, ledger_path, output_dir = _preflight_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    real_rename = writer_runner._rename_directory_noreplace_at
+    displaced_name = "displaced-owned-directory"
+    replacement_marker = b"replacement must survive"
+    injected = False
+
+    def swap_at_rename(parent_descriptor: int, temp_name: str, output_name: str):
+        nonlocal injected
+        if injected:
+            return real_rename(parent_descriptor, temp_name, output_name)
+        injected = True
+        os.rename(
+            temp_name,
+            displaced_name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        os.mkdir(temp_name, mode=0o700, dir_fd=parent_descriptor)
+        replacement_descriptor = os.open(
+            temp_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            writer_runner._write_fresh_bytes_at(
+                replacement_descriptor,
+                "replacement.txt",
+                replacement_marker,
+            )
+            os.fsync(replacement_descriptor)
+        finally:
+            os.close(replacement_descriptor)
+        return real_rename(parent_descriptor, temp_name, output_name)
+
+    monkeypatch.setattr(
+        writer_runner,
+        "_rename_directory_noreplace_at",
+        swap_at_rename,
+    )
+
+    with pytest.raises(ValueError, match="published directory inode mismatch"):
+        build_oled_reviewed_evidence_ledger_write_from_files(
+            preflight_artifact_json=preflight_path,
+            current_ledger_snapshot_json=ledger_path,
+            output_dir=output_dir,
+            generated_at=_WRITE_AT,
+        )
+
+    assert not output_dir.exists()
+    displaced = tmp_path / displaced_name
+    assert displaced.is_dir()
+    assert {
+        path.name for path in displaced.iterdir()
+    } == {
+        "reviewed_evidence_ledger_snapshot.json",
+        "reviewed_evidence_ledger_write.json",
+    }
+    replacements = list(tmp_path.glob(".ledger-write.*.tmp"))
+    assert len(replacements) == 1
+    assert (replacements[0] / "replacement.txt").read_bytes() == replacement_marker
+
+
+def test_atomic_noreplace_preserves_target_created_after_fresh_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, preflight_path, ledger_path, output_dir = _preflight_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    real_commit = writer_runner._atomic_rename_owned_directory_noreplace
+    target_marker = b"concurrent target must survive"
+
+    def create_target_before_commit(**kwargs):
+        parent_descriptor = kwargs["parent_descriptor"]
+        output_name = kwargs["output_name"]
+        os.mkdir(output_name, mode=0o700, dir_fd=parent_descriptor)
+        target_descriptor = os.open(
+            output_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            writer_runner._write_fresh_bytes_at(
+                target_descriptor,
+                "target.txt",
+                target_marker,
+            )
+            os.fsync(target_descriptor)
+        finally:
+            os.close(target_descriptor)
+        return real_commit(**kwargs)
+
+    monkeypatch.setattr(
+        writer_runner,
+        "_atomic_rename_owned_directory_noreplace",
+        create_target_before_commit,
+    )
+
+    with pytest.raises(ValueError, match="must be fresh"):
+        build_oled_reviewed_evidence_ledger_write_from_files(
+            preflight_artifact_json=preflight_path,
+            current_ledger_snapshot_json=ledger_path,
+            output_dir=output_dir,
+            generated_at=_WRITE_AT,
+        )
+
+    assert output_dir.is_dir()
+    assert (output_dir / "target.txt").read_bytes() == target_marker
+    assert not (output_dir / "reviewed_evidence_ledger_write.json").exists()
     assert not list(tmp_path.glob(".ledger-write.*.tmp"))
 
 

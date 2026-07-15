@@ -1544,12 +1544,14 @@ Status:
 - rebuild every appended entry from the exact PR-R candidate and pinned semantic
   contract, preserving the complete prior entry and contract sets
 - publish the write receipt and successor snapshot as one fresh, fsynced,
-  atomically renamed directory
+  inode-bound directory using an atomic no-replace rename primitive, then
+  revalidate exact filenames and bytes through the still-open directory fd
 - keep source correction, confidence assignment, Gold/dataset/training writes,
   Registry/alias mutation, network, LLM, MinerU, and external calls disabled
 - reject stale compare-and-swap state, timestamp reversal, artifact/count/status
-  tamper, existing outputs, symbolic output parents, partial publication, and
-  unreviewed revisions
+  tamper, existing outputs, temporary-directory name swaps, check-to-rename
+  target creation, symbolic output parents, partial publication, and unreviewed
+  revisions
 
 Scope:
 - append-only reviewed-evidence ledger publication only
