@@ -50,6 +50,10 @@ PR-R derives separate identifiers:
 - `projection_id` additionally binds the PR-Q candidate digest, selected
   Registry entity, Registry entry digest, reviewed cell disposition, and
   semantic-contract digest; and
+- `projection_payload_digest` binds the ledger entry's complete immutable
+  candidate-derived projection payload, including source coordinates,
+  Registry/property bindings, reported and normalized values and units, and
+  comparison context; and
 - `conflict_key` binds material ID, property ID, causal layer, and normalized
   comparison context.
 
@@ -76,7 +80,9 @@ Each candidate receives one disposition:
 
 - `new_claim_ready`: no prior live matching claim or conflict key;
 - `exact_replay`: the exact projection already exists, so the future writer
-  must perform a no-op;
+  must perform a no-op. PR-R first replays the complete stored projection
+  payload against the exact PR-Q candidate and fails closed if any expanded
+  field differs, even when `projection_id` is unchanged;
 - `consistent_duplicate_ready`: another live source claim reports the same
   normalized value and unit under the same conflict key; both claims remain;
 - `value_conflict_quarantine`: a comparable live claim reports another value;
@@ -150,7 +156,8 @@ The existing exact-chain fixture produces:
 The tests also cover exact replay, consistent cross-source duplicates, value
 conflicts, source-claim revision, candidate-ID collision, incomplete context,
 semantic-contract migration, semantic tamper, timestamp reversal, input
-overwrite, redaction, and output-parent replacement.
+overwrite, redaction, output-parent replacement, and a rehashed ledger entry
+whose projection ID is retained while its expanded projection is altered.
 
 This remains fixture-level validation. A real paper016 operator artifact and a
 multi-paper canary are later acceptance requirements.

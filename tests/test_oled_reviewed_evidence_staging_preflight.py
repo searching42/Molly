@@ -25,7 +25,9 @@ from ai4s_agent.domains.oled_reviewed_evidence_staging_preflight import (
     _derive_preflight_item,
     _derive_preflight_items,
     _ledger_entry_digest,
+    _ledger_projection_payload,
     _projection_id_from_fields,
+    _projection_payload_digest,
     _semantic_contract_digest,
     _source_claim_id_from_fields,
     build_empty_oled_reviewed_evidence_ledger_snapshot,
@@ -162,6 +164,10 @@ def _alternate_source_entry(
         }
     )
     provisional = OledReviewedEvidenceLedgerEntry.model_construct(**payload)
+    payload["projection_payload_digest"] = _projection_payload_digest(
+        _ledger_projection_payload(provisional)
+    )
+    provisional = OledReviewedEvidenceLedgerEntry.model_construct(**payload)
     payload["entry_digest"] = _ledger_entry_digest(provisional)
     return OledReviewedEvidenceLedgerEntry.model_validate(payload)
 
@@ -239,6 +245,51 @@ def test_exact_replay_is_a_deterministic_noop(
     assert artifact.exact_replay_count == 5
     assert artifact.ledger_write_count == 0
     assert all(not item.ledger_write_required for item in artifact.preflight_items)
+
+
+def test_exact_replay_rejects_rehashed_ledger_projection_payload_tamper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materialization, materialization_path, _, ledger_path = _inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    candidate = materialization.observation_candidates[0]
+    entry = _entry_for_candidate(materialization, candidate)
+    payload = entry.model_dump(mode="python")
+    payload["reported_unit"] = "tampered-unit"
+    payload["projection_payload_digest"] = "sha256:" + "0" * 64
+    payload["entry_digest"] = "sha256:" + "0" * 64
+    provisional = OledReviewedEvidenceLedgerEntry.model_construct(**payload)
+    payload["projection_payload_digest"] = _projection_payload_digest(
+        _ledger_projection_payload(provisional)
+    )
+    provisional = OledReviewedEvidenceLedgerEntry.model_construct(**payload)
+    payload["entry_digest"] = _ledger_entry_digest(provisional)
+    tampered_entry = OledReviewedEvidenceLedgerEntry.model_validate(payload)
+    assert tampered_entry.projection_id == entry.projection_id
+
+    ledger = build_oled_reviewed_evidence_ledger_snapshot(
+        entries=[tampered_entry],
+        generated_at=_LEDGER_AT,
+        snapshot_id="reviewed-evidence-ledger:projection-payload-tamper",
+    )
+    write_json(ledger_path, ledger.model_dump(mode="json"))
+    output_path = tmp_path / "projection-payload-tamper-preflight.json"
+
+    with pytest.raises(
+        ValueError,
+        match="exact replay ledger projection payload does not match",
+    ):
+        build_oled_reviewed_evidence_staging_preflight_from_files(
+            materialization_artifact_json=materialization_path,
+            ledger_snapshot_json=ledger_path,
+            output_json=output_path,
+            generated_at=_PREFLIGHT_AT,
+        )
+
+    assert not output_path.exists()
 
 
 @pytest.mark.parametrize(
@@ -364,6 +415,10 @@ def test_same_source_changed_projection_requires_exception_review(
         semantic_contract_digest=entry.semantic_contract_digest,
     )
     payload["entry_id"] = f"reviewed-evidence:{payload['projection_id'].split(':', 1)[-1]}"
+    provisional = OledReviewedEvidenceLedgerEntry.model_construct(**payload)
+    payload["projection_payload_digest"] = _projection_payload_digest(
+        _ledger_projection_payload(provisional)
+    )
     payload["entry_digest"] = "sha256:" + "0" * 64
     provisional = OledReviewedEvidenceLedgerEntry.model_construct(**payload)
     payload["entry_digest"] = _ledger_entry_digest(provisional)

@@ -1496,6 +1496,9 @@ Status:
 - keep exact replay idempotent, preserve consistent duplicate source claims,
   quarantine conflicts and incomplete context, and require later human review
   only for conflicts/revisions rather than every clean cell
+- bind each ledger entry's complete candidate-derived projection payload with a
+  canonical digest and replay every immutable projection field against PR-Q
+  before classifying an unchanged projection ID as exact replay
 - retain structured verification facets while leaving confidence and scientific
   consistency explicitly unassessed
 - reject device-layer candidates and ledger entries as a model invariant
@@ -1521,8 +1524,9 @@ Status:
   source-row grouping, trailing-zero preservation, exact replay, consistent
   duplicates, conflicts, revisions, semantic-contract migration, candidate-ID
   collision, incomplete comparison context, device exclusion, semantic tamper,
-  timestamps, overwrite, redaction, exact file hashes, and output-parent
-  replacement
+  timestamps, overwrite, redaction, exact file hashes, output-parent
+  replacement, and rehashed expanded-projection tamper under a retained
+  projection ID
 - contract documented in
   `docs/oled-reviewed-evidence-staging-preflight.md`
 

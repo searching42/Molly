@@ -179,6 +179,7 @@ class OledReviewedEvidenceLedgerEntry(BaseModel):
     comparison_context_hash: str | None = None
     comparison_context_missing_fields: list[str] = Field(default_factory=list)
     semantic_contract_digest: str
+    projection_payload_digest: str
     status: OledReviewedEvidenceLedgerEntryStatus
     created_at: str
     supersedes_projection_id: str | None = None
@@ -221,6 +222,7 @@ class OledReviewedEvidenceLedgerEntry(BaseModel):
         "source_cell_digest",
         "registry_entry_digest",
         "semantic_contract_digest",
+        "projection_payload_digest",
         "entry_digest",
     )
     @classmethod
@@ -273,6 +275,11 @@ class OledReviewedEvidenceLedgerEntry(BaseModel):
         )
         if self.projection_id != expected_projection_id:
             raise ValueError("reviewed-evidence projection_id mismatch")
+        expected_projection_payload_digest = _projection_payload_digest(
+            _ledger_projection_payload(self)
+        )
+        if self.projection_payload_digest != expected_projection_payload_digest:
+            raise ValueError("reviewed-evidence projection payload digest mismatch")
         if self.conflict_key != _conflict_key_from_fields(
             selected_material_id=self.selected_material_id,
             property_id=self.property_id,
@@ -809,6 +816,11 @@ def build_oled_reviewed_evidence_ledger_entry_from_candidate(
         semantic_contract.contract_digest,
     )
     canonical = candidate.canonical_observation
+    projection_payload = _candidate_projection_payload(
+        candidate=candidate,
+        source_materialization_artifact_digest=source_materialization_artifact_digest,
+        semantic_contract_digest=semantic_contract.contract_digest,
+    )
     payload: dict[str, Any] = {
         "entry_id": f"reviewed-evidence:{projection_id.split(':', 1)[-1]}",
         "source_claim_id": source_claim_id,
@@ -846,6 +858,9 @@ def build_oled_reviewed_evidence_ledger_entry_from_candidate(
             canonical.comparison_context_missing_fields
         ),
         "semantic_contract_digest": semantic_contract.contract_digest,
+        "projection_payload_digest": _projection_payload_digest(
+            projection_payload
+        ),
         "status": status,
         "created_at": created_at,
         "supersedes_projection_id": supersedes_projection_id,
@@ -1026,6 +1041,17 @@ def _derive_preflight_item(
         }
     ]
     exact = [entry for entry in ledger.entries if entry.projection_id == projection_id]
+    expected_projection_payload = _candidate_projection_payload(
+        candidate=candidate,
+        source_materialization_artifact_digest=materialization.artifact_digest,
+        semantic_contract_digest=semantic_contract.contract_digest,
+    )
+    for entry in exact:
+        if _ledger_projection_payload(entry) != expected_projection_payload:
+            raise ValueError(
+                "exact replay ledger projection payload does not match "
+                "the exact PR-Q candidate"
+            )
     same_claim = [entry for entry in live_entries if entry.source_claim_id == source_claim_id]
     same_conflict_key = [entry for entry in live_entries if entry.conflict_key == conflict_key]
     same_contract_conflicts = [
@@ -1376,6 +1402,87 @@ def _entry_value_signature(entry: OledReviewedEvidenceLedgerEntry) -> str:
             "normalized_unit": entry.normalized_unit,
         }
     )
+
+
+def _candidate_projection_payload(
+    *,
+    candidate: OledObservationMaterializationCandidateItem,
+    source_materialization_artifact_digest: str,
+    semantic_contract_digest: str,
+) -> dict[str, Any]:
+    canonical = candidate.canonical_observation
+    return {
+        "source_materialization_artifact_digest": _normalize_sha256(
+            source_materialization_artifact_digest,
+            field_name="source_materialization_artifact_digest",
+        ),
+        "source_candidate_id": candidate.candidate_id,
+        "source_candidate_digest": candidate.candidate_digest,
+        "cell_disposition_digest": candidate.cell_disposition_digest,
+        "source_pdf_sha256": candidate.source_pdf_sha256,
+        "source_cell_digest": candidate.source_cell_digest,
+        "table_id": candidate.table_id,
+        "row_index": candidate.row_index,
+        "column_index": candidate.column_index,
+        "selected_material_id": candidate.selected_existing_material_id,
+        "registry_entry_digest": _stable_hash(
+            candidate.selected_registry_entry.model_dump(mode="json")
+        ),
+        "property_id": canonical.property_id,
+        "target_layer": canonical.layer.value,
+        "reported_value": candidate.property_observation.value,
+        "reported_value_text": candidate.property_observation.reported_value_text,
+        "reported_decimal_places": (
+            candidate.property_observation.reported_decimal_places
+        ),
+        "reported_unit": candidate.property_observation.unit or "",
+        "normalized_value": canonical.normalized_value,
+        "normalized_unit": canonical.normalized_unit,
+        "comparison_context_status": canonical.comparison_context_status.value,
+        "comparison_context_hash": canonical.comparison_context_hash,
+        "comparison_context_missing_fields": sorted(
+            canonical.comparison_context_missing_fields
+        ),
+        "semantic_contract_digest": semantic_contract_digest,
+    }
+
+
+def _ledger_projection_payload(
+    entry: OledReviewedEvidenceLedgerEntry,
+) -> dict[str, Any]:
+    return {
+        "source_materialization_artifact_digest": (
+            entry.source_materialization_artifact_digest
+        ),
+        "source_candidate_id": entry.source_candidate_id,
+        "source_candidate_digest": entry.source_candidate_digest,
+        "cell_disposition_digest": entry.cell_disposition_digest,
+        "source_pdf_sha256": entry.source_pdf_sha256,
+        "source_cell_digest": entry.source_cell_digest,
+        "table_id": entry.table_id,
+        "row_index": entry.row_index,
+        "column_index": entry.column_index,
+        "selected_material_id": entry.selected_material_id,
+        "registry_entry_digest": entry.registry_entry_digest,
+        "property_id": entry.property_id,
+        "target_layer": entry.target_layer.value,
+        "reported_value": entry.reported_value,
+        "reported_value_text": entry.reported_value_text,
+        "reported_decimal_places": entry.reported_decimal_places,
+        "reported_unit": entry.reported_unit,
+        "normalized_value": entry.normalized_value,
+        "normalized_unit": entry.normalized_unit,
+        "comparison_context_status": entry.comparison_context_status.value,
+        "comparison_context_hash": entry.comparison_context_hash,
+        "comparison_context_missing_fields": sorted(
+            entry.comparison_context_missing_fields
+        ),
+        "semantic_contract_digest": entry.semantic_contract_digest,
+    }
+
+
+def _projection_payload_digest(payload: dict[str, Any]) -> str:
+    return _stable_hash(payload)
 
 
 def _semantic_contract_digest(
