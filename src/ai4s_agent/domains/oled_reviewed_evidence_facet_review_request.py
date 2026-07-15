@@ -48,6 +48,15 @@ _CONFIDENCE_DISPOSITIONS = [
     "insufficient",
     "needs_source_check",
 ]
+_SCIENTIFIC_CONSISTENCY_QUESTION = (
+    "Are the material, property, layer, reported literal/unit, "
+    "normalized value/unit, and comparison context mutually "
+    "consistent with the exact source-row evidence?"
+)
+_CONFIDENCE_SUFFICIENCY_QUESTION = (
+    "Is the exact reviewed evidence sufficiently supported for later "
+    "Gold consideration, without interpreting this as a calibrated probability?"
+)
 
 
 class OledReviewedEvidenceFacetReviewRequestStatus(str, Enum):
@@ -89,6 +98,25 @@ class OledReviewedEvidenceFacetReviewContract(BaseModel):
         ):
             raise ValueError("reviewed-evidence facet contract boundary mismatch")
         return self
+
+
+def _build_expected_review_contract() -> OledReviewedEvidenceFacetReviewContract:
+    return OledReviewedEvidenceFacetReviewContract.model_validate(
+        {
+            "requested_facets": [
+                "confidence_sufficiency",
+                "scientific_consistency",
+            ],
+            "scientific_consistency_question": _SCIENTIFIC_CONSISTENCY_QUESTION,
+            "scientific_consistency_allowed_dispositions": _SCIENTIFIC_DISPOSITIONS,
+            "confidence_sufficiency_question": _CONFIDENCE_SUFFICIENCY_QUESTION,
+            "confidence_sufficiency_allowed_dispositions": _CONFIDENCE_DISPOSITIONS,
+            "confidence_is_calibrated_probability": False,
+            "source_pdf_remains_authoritative": True,
+            "numeric_confidence_score_requested": False,
+            "one_decision_per_observation_required": True,
+        }
+    )
 
 
 class OledReviewedEvidenceFacetReviewObservation(BaseModel):
@@ -349,6 +377,8 @@ class OledReviewedEvidenceFacetReviewRequestArtifact(BaseModel):
             self.postwrite_verification
         ) != self.postwrite_verification_digest:
             raise ValueError("facet review request PR-T binding mismatch")
+        if self.review_contract != _build_expected_review_contract():
+            raise ValueError("facet review request contract mismatch")
         expected = _derive_facet_review_request(self.postwrite_verification)
         if [group.model_dump(mode="json") for group in self.review_groups] != [
             group.model_dump(mode="json") for group in expected["groups"]
@@ -418,29 +448,7 @@ def build_oled_reviewed_evidence_facet_review_request_artifact(
         postwrite_verification.model_dump(mode="json")
     )
     derived = _derive_facet_review_request(verification)
-    contract = OledReviewedEvidenceFacetReviewContract.model_validate(
-        {
-            "requested_facets": [
-                "confidence_sufficiency",
-                "scientific_consistency",
-            ],
-            "scientific_consistency_question": (
-                "Are the material, property, layer, reported literal/unit, "
-                "normalized value/unit, and comparison context mutually "
-                "consistent with the exact source-row evidence?"
-            ),
-            "scientific_consistency_allowed_dispositions": _SCIENTIFIC_DISPOSITIONS,
-            "confidence_sufficiency_question": (
-                "Is the exact reviewed evidence sufficiently supported for later "
-                "Gold consideration, without interpreting this as a calibrated probability?"
-            ),
-            "confidence_sufficiency_allowed_dispositions": _CONFIDENCE_DISPOSITIONS,
-            "confidence_is_calibrated_probability": False,
-            "source_pdf_remains_authoritative": True,
-            "numeric_confidence_score_requested": False,
-            "one_decision_per_observation_required": True,
-        }
-    )
+    contract = _build_expected_review_contract()
     payload: dict[str, Any] = {
         "artifact_version": OLED_REVIEWED_EVIDENCE_FACET_REVIEW_REQUEST_VERSION,
         "run_id": verification.run_id,
@@ -566,7 +574,7 @@ def _build_facet_observation(
         "registry_entry_digest": entry.registry_entry_digest,
         "reported_subject_text": candidate.reported_subject_text,
         "property_id": entry.property_id,
-        "property_label": candidate.property_observation.property_label,
+        "property_label": candidate.mapping_summary.property_label,
         "target_layer": entry.target_layer,
         "reported_value": entry.reported_value,
         "reported_value_text": entry.reported_value_text,

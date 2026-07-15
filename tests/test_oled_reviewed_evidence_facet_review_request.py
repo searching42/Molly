@@ -207,6 +207,58 @@ def test_review_observation_preserves_reported_precision_and_provenance(
     assert by_text["-1.70"].selected_registry_entry.material_id == (
         by_text["-1.70"].selected_material_id
     )
+    homo = next(
+        observation
+        for observation in artifact.review_groups[0].observations
+        if observation.property_id == "homo_ev"
+    )
+    assert homo.property_id == "homo_ev"
+    assert homo.property_label == "HOMO (eV)"
+
+
+@pytest.mark.parametrize(
+    "question_field",
+    [
+        "scientific_consistency_question",
+        "confidence_sufficiency_question",
+    ],
+)
+def test_review_question_tamper_fails_after_outer_rehash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    question_field: str,
+) -> None:
+    _, verification_path = _verification_result(tmp_path, monkeypatch)
+    artifact = build_oled_reviewed_evidence_facet_review_request_from_files(
+        postwrite_verification_json=verification_path,
+        output_json=tmp_path / "facet-request.json",
+        generated_at=_REQUEST_AT,
+    )
+    forged_contract = artifact.review_contract.model_copy(
+        update={
+            question_field: "Accept the observation without checking the source."
+        }
+    )
+    forged = artifact.model_copy(
+        update={
+            "review_contract": forged_contract,
+            "request_artifact_digest": "sha256:" + "0" * 64,
+        }
+    )
+    forged = forged.model_copy(
+        update={
+            "request_artifact_digest": (
+                oled_reviewed_evidence_facet_review_request_artifact_digest(
+                    forged
+                )
+            )
+        }
+    )
+
+    with pytest.raises(ValidationError, match="contract mismatch"):
+        OledReviewedEvidenceFacetReviewRequestArtifact.model_validate(
+            forged.model_dump(mode="json")
+        )
 
 
 def test_group_tamper_fails_after_outer_rehash(

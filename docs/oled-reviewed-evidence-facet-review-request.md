@@ -32,6 +32,9 @@ consistent | inconsistent | needs_source_check
 ```
 
 The source PDF remains authoritative for both facets.
+Both question strings and their disposition rosters are fixed parts of the v1
+contract. Rewording a question and recomputing only the outer artifact digest
+does not produce a valid request.
 
 ## Exact input and eligibility
 
@@ -59,7 +62,7 @@ Eligible observations are grouped by the exact PR-R source-row group. Each
 observation preserves:
 
 - material ID and the exact Registry entry;
-- property ID/label and causal layer;
+- canonical property ID, reported source-header label, and causal layer;
 - reported value text, decimal places, and unit;
 - normalized value and unit;
 - comparison-context status, payload, and digest;
