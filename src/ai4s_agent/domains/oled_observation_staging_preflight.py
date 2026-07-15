@@ -19,6 +19,7 @@ from ai4s_agent.domains.oled_material_registry_adjudication import (
     OledMaterialRegistryAdjudicatedItem,
     OledMaterialRegistryAdjudicationArtifact,
     oled_material_registry_adjudication_artifact_digest,
+    validate_oled_material_registry_request_adjudication_chain,
 )
 from ai4s_agent.domains.oled_material_registry_resolution_request import (
     OledMaterialRegistryEntry,
@@ -318,7 +319,10 @@ class OledObservationStagingPreflightArtifact(BaseModel):
             != adjudication.adjudication_artifact_digest
         ):
             raise ValueError("observation staging embedded artifact digest mismatch")
-        _validate_joint_registry_chain(request, adjudication)
+        validate_oled_material_registry_request_adjudication_chain(
+            request,
+            adjudication,
+        )
         expected_items = [
             _build_observation_staging_item(item)
             for item in adjudication.adjudicated_items
@@ -431,7 +435,10 @@ def validate_oled_observation_staging_preflight_inputs(
     )
     if adjudication.request_artifact_sha256 != actual_request_sha:
         raise ValueError("PR-O is not bound to the exact supplied PR-N file")
-    _validate_joint_registry_chain(resolution_request, adjudication)
+    validate_oled_material_registry_request_adjudication_chain(
+        resolution_request,
+        adjudication,
+    )
 
 
 def build_oled_observation_staging_preflight_artifact(
@@ -522,53 +529,6 @@ def oled_observation_staging_preflight_artifact_digest(
     payload = artifact.model_dump(mode="json")
     payload.pop("preflight_artifact_digest", None)
     return _stable_hash(payload)
-
-
-def _validate_joint_registry_chain(
-    request: OledMaterialRegistryResolutionRequestArtifact,
-    adjudication: OledMaterialRegistryAdjudicationArtifact,
-) -> None:
-    if _parse_timestamp(adjudication.reviewed_at) < _parse_timestamp(
-        request.generated_at
-    ):
-        raise ValueError("PR-O human review predates the exact PR-N request")
-    expected_bindings = {
-        "run_id": request.run_id,
-        "paper_id": request.paper_id,
-        "request_artifact_digest": request.request_artifact_digest,
-        "source_adjudication_sha256": request.source_adjudication_sha256,
-        "source_adjudication_digest": request.source_adjudication_digest,
-        "registry_snapshot_sha256": request.registry_snapshot_sha256,
-        "registry_snapshot_digest": request.registry_snapshot_digest,
-    }
-    for field_name, expected in expected_bindings.items():
-        if getattr(adjudication, field_name) != expected:
-            raise ValueError(f"PR-N/PR-O {field_name} binding mismatch")
-    request_items = {
-        item.resolution_item_id: item for item in request.resolution_items
-    }
-    adjudicated_items = {
-        item.request_item.resolution_item_id: item
-        for item in adjudication.adjudicated_items
-    }
-    if request_items.keys() != adjudicated_items.keys():
-        raise ValueError("PR-N/PR-O resolution item coverage mismatch")
-    for item_id, request_item in request_items.items():
-        embedded = adjudicated_items[item_id].request_item
-        if embedded.model_dump(mode="json") != request_item.model_dump(mode="json"):
-            raise ValueError("PR-O embedded request item differs from PR-N")
-    snapshot_entries = {
-        entry.material_id: entry for entry in request.registry_snapshot.entries
-    }
-    for adjudicated_item in adjudication.adjudicated_items:
-        selected = adjudicated_item.selected_registry_entry
-        if selected is None:
-            continue
-        expected = snapshot_entries.get(selected.material_id)
-        if expected is None or expected.model_dump(mode="json") != selected.model_dump(
-            mode="json"
-        ):
-            raise ValueError("PR-O selected Registry entry differs from PR-N snapshot")
 
 
 def _build_observation_staging_item(

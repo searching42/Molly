@@ -1638,6 +1638,65 @@ Status:
 - contract documented in
   `docs/oled-reviewed-evidence-facet-review-request.md`
 
+## 8.4.23 Exact-bound local Material Registry entry proposal review request MVP
+
+### [x] Task:
+- consume one exact PR-N material Registry resolution request and its exact
+  PR-O human Registry adjudication
+- bind both complete input files by SHA-256 and semantic artifact digest and
+  embed their validated models in the self-contained output
+- jointly replay the complete PR-N -> PR-O item coverage, Registry snapshot
+  binding, selected-entry binding, and causal timestamp chain
+- derive the review roster exactly from all PR-O `propose_new_entity` items
+  while separately counting existing mappings, unresolved items, and deferred
+  conflicts excluded from this branch
+- require every new-entry item to replay a no-hit only in the exact bound local
+  Registry snapshot; never infer global novelty or external-database absence
+- preserve the PR-M-accepted graph, canonical SMILES/InChI/InChIKey, chemistry
+  findings, deterministic depiction, source/table/row binding, and dependent
+  property-cell count
+- derive an opaque deterministic material-ID proposal without reserving or
+  assigning it, and fail closed if that ID is already occupied in the exact
+  bound Registry snapshot
+- copy the paper-local reported subject only as an unapproved preferred-name
+  proposal, keep aliases empty, and require exact source support plus later
+  human approval for every name and alias
+- bind a fixed human-review contract for single-entity graph scope,
+  stereochemistry, charge/protonation, salt/mixture/complex/source scope,
+  preferred name, aliases, and local-snapshot-only meaning
+- detect within-batch duplicate proposed IDs, canonical SMILES, InChIKeys, and
+  preferred-name proposals without automatically merging any item
+- preserve the exact PR-N source order through the upstream
+  `(scope_id, table_id, row_index, identity_group_id)` key
+- render a reviewer-facing Markdown packet that displays source evidence and
+  automatic chemistry facts before unapproved Registry-entry proposals
+- keep device-only cells outside the roster and preserve upstream
+  ontology-review-pending counts
+- keep material-ID assignment, name/alias approval, Registry-entry creation,
+  Registry mutation, observation/Gold/dataset/training writes, source-PDF
+  reads, network, external services, LLM, and MinerU disabled
+
+Scope:
+- offline, request-only local Registry-entry review preparation over exact
+  PR-N/PR-O bytes
+- production logic is paper-agnostic and derives its complete roster and
+  conflicts dynamically; paper016 is only a bounded canary, not a fixed data
+  shape or a claim about any real paper016 material
+- a local Registry snapshot no-hit is not a global chemical-novelty,
+  literature-prior-art, patent, or external-database conclusion
+- later human Registry-entry adjudication and a separately authorized writer
+  remain explicit downstream gates
+
+Status:
+- contract, deterministic builder, and Markdown renderer implemented in
+  `src/ai4s_agent/domains/oled_material_registry_entry_proposal_request.py`
+- controlled build/render file and CLI entry implemented in
+  `src/ai4s_agent/oled_material_registry_entry_proposal_request.py`
+- tested by
+  `tests/test_oled_material_registry_entry_proposal_request.py`
+- contract documented in
+  `docs/oled-material-registry-entry-proposal-request.md`
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:

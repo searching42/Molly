@@ -134,8 +134,13 @@ registry_entry_created
 registry_written
 ```
 
-A later Registry-entry proposal/review stage must assign and validate those
-fields. New-entity proposals are not eligible for observation staging yet.
+PR-V builds a separate, exact-bound local Registry-entry proposal review
+request for those fields. It proposes only an unassigned opaque material-ID
+handle and an unapproved paper-local preferred-name candidate; aliases remain
+empty. A no-hit in the bound local snapshot is not a global novelty claim.
+See `docs/oled-material-registry-entry-proposal-request.md`. New-entity
+proposals remain ineligible for observation staging until later human
+Registry-entry adjudication and a separately authorized Registry write.
 
 ## Unresolved and conflict outcomes
 
@@ -218,9 +223,11 @@ PR-O intentionally creates two separate downstream branches:
 1. existing-entity mappings may enter a later exact-chain observation-staging
    preflight, which must replay PR-N and PR-O together before attaching the
    selected material ID to reviewed property cells;
-2. new-entity proposals require a separate Registry-entry proposal and human
-   validation stage before any stable material ID, preferred name, alias, or
-   Registry write exists.
+2. PR-V converts new-entity proposals into a request-only local Registry-entry
+   review packet. A later human adjudication must approve the single-entity
+   scope, opaque material ID, source-supported preferred name, and exact alias
+   list before a separately authorized writer may create Registry state. See
+   `docs/oled-material-registry-entry-proposal-request.md`.
 
 Unresolved and conflict-deferred items stop here until new evidence or Registry
 repair changes the decision basis.
