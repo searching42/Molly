@@ -1638,6 +1638,36 @@ Status:
 - contract documented in
   `docs/oled-reviewed-evidence-facet-review-request.md`
 
+## 8.4.22.1 Exact-roster reviewed-evidence facet adjudication MVP
+
+### [x] Task:
+- consume one exact PR-U request plus one complete human decision manifest
+- bind exact PR-U bytes/digest and its carried exact PR-T verification binding
+- require one decision for every exact review-group/observation/ledger-entry
+  tuple, rejecting missing, extra, duplicate, reordered, or stale decisions
+- record categorical scientific consistency and confidence sufficiency without
+  manufacturing a numeric confidence score
+- mark only `consistent + sufficient` observations eligible for a later Gold
+  admission preflight
+- retain explicit blockers for inconsistent, insufficient, or source-check
+  decisions, without deleting reviewed evidence
+- keep reviewed-evidence mutation, direct Gold admission, Gold/dataset/training
+  writes, Registry/alias mutation, network, LLM, and external calls disabled
+
+Scope:
+- exact-bound human facet adjudication only
+- paper016 remains a real 35-observation canary, not a hard-coded data shape
+- Gold admission and Gold publication remain separate downstream boundaries
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_reviewed_evidence_facet_adjudication.py`
+- controlled file/CLI entry implemented in
+  `src/ai4s_agent/oled_reviewed_evidence_facet_adjudication.py`
+- tested by `tests/test_oled_reviewed_evidence_facet_adjudication.py`
+- contract documented in
+  `docs/oled-reviewed-evidence-facet-adjudication.md`
+
 ## 8.4.23 Exact-bound local Material Registry entry proposal review request MVP
 
 ### [x] Task:
