@@ -1762,6 +1762,45 @@ Status:
 - contract documented in
   `docs/oled-gold-candidate-postwrite-verifier.md`
 
+## 8.4.22.5 Categorical Gold successor publication preflight MVP
+
+### [x] Task:
+- consume one exact PR-AD verification artifact, its separately published
+  candidate snapshot, and one explicit current categorical Gold snapshot
+- bind all three construction-time file SHA-256 values and semantic digests
+- independently replay the candidate publication against the embedded PR-AC
+  receipt rather than trusting PR-AD success booleans
+- define an explicit immutable categorical Gold snapshot contract without
+  constructing the legacy numeric-confidence `OledGoldDatasetRecord`
+- require a valid explicit empty genesis snapshot for initial Gold publication
+- replay the complete candidate roster and reject existing/batch collisions on
+  Gold entry ID, candidate ID/digest, observation digest, source-cell digest,
+  and semantic observation identity
+- independently rederive every deterministic Gold entry ID and reject current
+  snapshots with internal candidate/observation/source-cell/semantic duplicates
+- preserve `consistent + sufficient` as categorical facet decisions without
+  inventing a numeric confidence score
+- construct the complete deterministic append-only expected successor snapshot
+  with exact parent digest, PR-AD lineage, generation, counts, IDs, and digests
+- keep Gold publication/head activation, curated dataset/training writes,
+  reviewed-evidence/Registry mutation, network, LLM, MinerU, and external calls
+  disabled
+
+Scope:
+- read-only Gold successor publication preflight only
+- the current snapshot file SHA/digest is the later compare-and-swap parent
+- no Gold head/activation receipt contract exists yet, so its lineage cannot be
+  inferred
+- real paper016 publication remains blocked on genuine human facet decisions
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_gold_successor_preflight.py`
+- controlled file/CLI entry implemented in
+  `src/ai4s_agent/oled_gold_successor_preflight.py`
+- tested by `tests/test_oled_gold_successor_preflight.py`
+- contract documented in `docs/oled-gold-successor-preflight.md`
+
 ## 8.4.23 Exact-bound local Material Registry entry proposal review request MVP
 
 ### [x] Task:
