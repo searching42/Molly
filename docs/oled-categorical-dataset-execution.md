@@ -33,8 +33,12 @@ versioned_datasets/
 ```
 
 The snapshot ID binds the PR-AH digest, materialization policy version, and
-ordered row digests. Existing snapshot directories are never overwritten.
-Files are synced before the temporary directory is atomically renamed.
+ordered row digests. Before reading the input, the writer pins the output
+parent directory without following symbolic path components. It creates and
+tracks an invocation-owned temporary directory by dirfd/inode, syncs its
+files, revalidates the parent binding, and uses an atomic no-replace directory
+rename. A concurrently created target is never replaced. Cleanup removes only
+the temporary inode owned by the current invocation.
 
 ## Dataset rows
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from io import StringIO
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from ai4s_agent.oled_categorical_dataset_execution import (
     build_oled_categorical_dataset_execution_from_files,
     main,
 )
+from ai4s_agent import oled_categorical_dataset_execution as execution_runner
 from ai4s_agent.oled_categorical_gold_dataset_admission import (
     build_oled_categorical_gold_dataset_admission_from_files,
 )
@@ -192,6 +194,100 @@ def test_reformatted_admission_and_artifact_tamper_fail_closed(
         OledCategoricalDatasetExecutionArtifact.model_validate(
             forged.model_dump(mode="json")
         )
+
+
+def test_concurrent_target_created_before_commit_survives_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admission_path = _admission_path(tmp_path, monkeypatch)
+    output_root = tmp_path / "datasets"
+    original = execution_runner._atomic_rename_owned_directory_noreplace
+    concurrent_target: Path | None = None
+
+    def create_target_then_commit(**kwargs: object) -> None:
+        nonlocal concurrent_target
+        parent_descriptor = int(kwargs["parent_descriptor"])
+        output_name = str(kwargs["output_name"])
+        os.mkdir(output_name, dir_fd=parent_descriptor)
+        target_descriptor = os.open(
+            output_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            marker_descriptor = os.open(
+                "concurrent.marker",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=target_descriptor,
+            )
+            os.write(marker_descriptor, b"concurrent-owner\n")
+            os.fsync(marker_descriptor)
+            os.close(marker_descriptor)
+            os.fsync(target_descriptor)
+        finally:
+            os.close(target_descriptor)
+        concurrent_target = output_root / output_name
+        original(**kwargs)
+
+    monkeypatch.setattr(
+        execution_runner,
+        "_atomic_rename_owned_directory_noreplace",
+        create_target_then_commit,
+    )
+    with pytest.raises(ValueError, match="already exists"):
+        build_oled_categorical_dataset_execution_from_files(
+            admission_artifact_json=admission_path,
+            output_root=output_root,
+            generated_at=_EXECUTE_AT,
+        )
+
+    assert concurrent_target is not None
+    assert concurrent_target.is_dir()
+    assert (
+        concurrent_target / "concurrent.marker"
+    ).read_text(encoding="utf-8") == "concurrent-owner\n"
+    assert sorted(path.name for path in concurrent_target.iterdir()) == [
+        "concurrent.marker"
+    ]
+    assert not any(
+        path.name.startswith(".oled-categorical-dataset-snapshot")
+        for path in output_root.iterdir()
+    )
+
+
+def test_output_parent_replacement_or_symlink_redirect_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admission_path = _admission_path(tmp_path, monkeypatch)
+    output_root = tmp_path / "datasets"
+    moved_root = tmp_path / "datasets-original"
+    redirected_root = tmp_path / "datasets-redirected"
+    redirected_root.mkdir()
+    original = execution_runner._publish_versioned_dataset_directory
+
+    def replace_parent_then_publish(*args: object, **kwargs: object) -> None:
+        output_root.rename(moved_root)
+        output_root.symlink_to(redirected_root, target_is_directory=True)
+        original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        execution_runner,
+        "_publish_versioned_dataset_directory",
+        replace_parent_then_publish,
+    )
+    with pytest.raises(ValueError, match="output parent changed"):
+        build_oled_categorical_dataset_execution_from_files(
+            admission_artifact_json=admission_path,
+            output_root=output_root,
+            generated_at=_EXECUTE_AT,
+        )
+
+    assert output_root.is_symlink()
+    assert list(moved_root.iterdir()) == []
+    assert list(redirected_root.iterdir()) == []
 
 
 def test_cli_failure_is_stable_and_redacted(tmp_path: Path) -> None:
