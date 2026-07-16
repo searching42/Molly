@@ -1836,6 +1836,40 @@ Status:
 - tested by `tests/test_oled_gold_successor_writer.py`
 - contract documented in `docs/oled-gold-successor-writer.md`
 
+## 8.4.22.7 Categorical Gold successor post-write verifier MVP
+
+### [x] Task:
+- consume one exact PR-AF publication/activation receipt plus the separately
+  published categorical Gold successor snapshot
+- bind and independently reconstruct exact receipt/snapshot publication bytes
+  and SHA-256 values, rejecting semantically equivalent reformatting
+- replay receipt and snapshot semantic digests without trusting PR-AF safety or
+  activation booleans
+- independently replay PR-AE current-snapshot CAS binding, complete prior-entry
+  preservation, exact planned additions, deterministic entry identity,
+  snapshot internal uniqueness, ordering, and counts
+- verify generation, parent digest, PR-AD verification lineage, snapshot
+  ID/digest, timestamp lineage, and activated snapshot ID/digest
+- mark only the exact independently verified snapshot eligible for a later
+  explicit dataset-admission input
+- keep Gold writes/activation, mutable head pointers, numeric confidence,
+  legacy Gold records, dataset/training writes, reviewed-evidence/Registry
+  mutation, source reads, network, LLM, MinerU, and external calls disabled
+
+Scope:
+- independent read-only post-write and activation-receipt verification only
+- verification does not admit or materialize a dataset
+- real paper016 remains blocked on genuine human facet decisions
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_gold_successor_postwrite_verifier.py`
+- controlled file/CLI entry implemented in
+  `src/ai4s_agent/oled_gold_successor_postwrite_verifier.py`
+- tested by `tests/test_oled_gold_successor_postwrite_verifier.py`
+- contract documented in
+  `docs/oled-gold-successor-postwrite-verifier.md`
+
 ## 8.4.23 Exact-bound local Material Registry entry proposal review request MVP
 
 ### [x] Task:
