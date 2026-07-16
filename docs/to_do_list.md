@@ -1870,6 +1870,38 @@ Status:
 - contract documented in
   `docs/oled-gold-successor-postwrite-verifier.md`
 
+## 8.4.22.8 Exact-bound categorical Gold dataset admission MVP
+
+### [x] Task:
+- consume one exact PR-AG verification artifact and its separately published,
+  exact categorical Gold snapshot
+- reconstruct and bind both deterministic input byte sequences and SHA-256
+  values, rejecting semantically equivalent reformatting
+- independently replay PR-AG publication verification and the complete
+  activated-snapshot roster
+- publish one deterministic admission decision for every Gold entry
+- admit molecular entries only to `curated_intrinsic` and measurement entries
+  only to `raw_all_measurements`
+- fail closed for interaction entries and for legacy device/best-reported views
+  whose required semantics are not present in categorical Gold
+- preserve categorical confidence and comparison-context bindings
+- do not construct legacy numeric-confidence Gold records or materialize
+  dataset rows, splits, features, training packages, or model inputs
+
+Scope:
+- read-only dataset-view admission policy over one exact verified Gold snapshot
+- admission is not dataset materialization or training eligibility
+- real paper016 remains blocked on genuine human facet decisions
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_categorical_gold_dataset_admission.py`
+- controlled file/CLI entry implemented in
+  `src/ai4s_agent/oled_categorical_gold_dataset_admission.py`
+- tested by `tests/test_oled_categorical_gold_dataset_admission.py`
+- contract documented in
+  `docs/oled-categorical-gold-dataset-admission.md`
+
 ## 8.4.23 Exact-bound local Material Registry entry proposal review request MVP
 
 ### [x] Task:
