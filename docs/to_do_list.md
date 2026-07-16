@@ -1700,6 +1700,38 @@ Status:
 - contract documented in
   `docs/oled-material-registry-entry-proposal-request.md`
 
+## 8.4.24 Exact-bound local Material Registry entry adjudication MVP
+
+### [x] Task:
+- consume one exact PR-V request plus one complete human decision manifest
+- bind construction-time file SHA-256 values and replay the complete semantic
+  PR-V request, review-contract, item, Registry-snapshot, and decision chain
+- require exact approval of the proposed material ID, paper-reported preferred
+  name, and alias list, with explicit single-entity and contract acknowledgement
+- acknowledge all name hints and snapshot/batch conflicts by exact digest and
+  block approval when a PR-V within-batch conflict exists
+- deterministically rebuild approved Registry-entry candidates and verify their
+  accepted chemistry against the upstream proposal
+- expose approved candidates only to a later Registry write preflight
+- keep ID reservation/assignment, authoritative entry creation, Registry
+  mutation, observation/Gold/dataset/training writes, network, LLM, MinerU, and
+  external services disabled
+
+Scope:
+- generic, paper-agnostic offline adjudication; paper016 is only a bounded canary
+- standalone validation replays semantic inputs but cannot recover external
+  input bytes, so standalone byte revalidation is explicitly unsupported
+- a later writer must recheck the current Registry and commit with fresh-state
+  compare-and-swap protection
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_material_registry_entry_adjudication.py`
+- safe file/CLI entry implemented in
+  `src/ai4s_agent/oled_material_registry_entry_adjudication.py`
+- tested by `tests/test_oled_material_registry_entry_adjudication.py`
+- documented in `docs/oled-material-registry-entry-adjudication.md`
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
