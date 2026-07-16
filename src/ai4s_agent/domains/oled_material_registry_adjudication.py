@@ -801,6 +801,67 @@ def build_oled_material_registry_adjudication_artifact(
     return OledMaterialRegistryAdjudicationArtifact.model_validate(payload)
 
 
+def validate_oled_material_registry_request_adjudication_chain(
+    request: OledMaterialRegistryResolutionRequestArtifact,
+    adjudication: OledMaterialRegistryAdjudicationArtifact,
+) -> None:
+    """Replay the semantic PR-N -> PR-O chain shared by downstream branches."""
+
+    resolution_request = OledMaterialRegistryResolutionRequestArtifact.model_validate(
+        request.model_dump(mode="json")
+    )
+    registry_adjudication = OledMaterialRegistryAdjudicationArtifact.model_validate(
+        adjudication.model_dump(mode="json")
+    )
+    if _parse_timestamp(registry_adjudication.reviewed_at) < _parse_timestamp(
+        resolution_request.generated_at
+    ):
+        raise ValueError("PR-O human review predates the exact PR-N request")
+    expected_bindings = {
+        "run_id": resolution_request.run_id,
+        "paper_id": resolution_request.paper_id,
+        "request_artifact_digest": resolution_request.request_artifact_digest,
+        "source_adjudication_sha256": (
+            resolution_request.source_adjudication_sha256
+        ),
+        "source_adjudication_digest": (
+            resolution_request.source_adjudication_digest
+        ),
+        "registry_snapshot_sha256": resolution_request.registry_snapshot_sha256,
+        "registry_snapshot_digest": resolution_request.registry_snapshot_digest,
+    }
+    for field_name, expected in expected_bindings.items():
+        if getattr(registry_adjudication, field_name) != expected:
+            raise ValueError(f"PR-N/PR-O {field_name} binding mismatch")
+    request_items = {
+        item.resolution_item_id: item
+        for item in resolution_request.resolution_items
+    }
+    adjudicated_items = {
+        item.request_item.resolution_item_id: item
+        for item in registry_adjudication.adjudicated_items
+    }
+    if request_items.keys() != adjudicated_items.keys():
+        raise ValueError("PR-N/PR-O resolution item coverage mismatch")
+    for item_id, request_item in request_items.items():
+        embedded = adjudicated_items[item_id].request_item
+        if embedded.model_dump(mode="json") != request_item.model_dump(mode="json"):
+            raise ValueError("PR-O embedded request item differs from PR-N")
+    snapshot_entries = {
+        entry.material_id: entry
+        for entry in resolution_request.registry_snapshot.entries
+    }
+    for adjudicated_item in registry_adjudication.adjudicated_items:
+        selected = adjudicated_item.selected_registry_entry
+        if selected is None:
+            continue
+        expected = snapshot_entries.get(selected.material_id)
+        if expected is None or expected.model_dump(mode="json") != (
+            selected.model_dump(mode="json")
+        ):
+            raise ValueError("PR-O selected Registry entry differs from PR-N snapshot")
+
+
 def render_oled_material_registry_adjudication_review_markdown(
     request: OledMaterialRegistryResolutionRequestArtifact,
     *,
@@ -1264,5 +1325,6 @@ __all__ = [
     "oled_material_registry_adjudication_artifact_digest",
     "oled_material_registry_decision_manifest_digest",
     "render_oled_material_registry_adjudication_review_markdown",
+    "validate_oled_material_registry_request_adjudication_chain",
     "validate_oled_material_registry_decisions",
 ]
