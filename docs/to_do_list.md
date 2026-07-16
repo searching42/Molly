@@ -1796,6 +1796,39 @@ Status:
 - tested by `tests/test_oled_material_registry_successor_writer.py`
 - documented in `docs/oled-material-registry-successor-writer.md`
 
+## 8.4.27 Material Registry successor post-write verifier MVP
+
+### [x] Task:
+- consume one exact PR-Y publication receipt plus the separately published
+  successor Registry snapshot
+- bind and independently rebuild the canonical publication bytes and SHA-256 of
+  both files; reject semantically equivalent reformatting
+- independently replay prior-entry preservation and exact PR-X planned additions
+- verify every added material ID, name, alias list, graph, InChI, InChIKey,
+  entry digest, sorted order, and complete roster
+- replay prior/added/dependent-cell/final counts and Registry ID/version/digest/
+  timestamp lineage without trusting PR-Y verification booleans
+- mark only the exact verified snapshot eligible for explicit PR-N input
+- keep Registry/head writes, observation/reviewed-evidence/Gold, dataset/training,
+  device-only admission, network, LLM, MinerU, and external services disabled
+
+Scope:
+- generic, paper-agnostic offline verification; paper016 is a real seven-entry,
+  35-dependent-cell canary rather than a production special case
+- standalone semantic and canonical-output replay is supported, but arbitrary
+  external input bytes are not claimed recoverable
+- PR-Z verification does not replace the later PR-N/PR-O human identity gate
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_material_registry_successor_postwrite_verifier.py`
+- safe file/CLI entry implemented in
+  `src/ai4s_agent/oled_material_registry_successor_postwrite_verifier.py`
+- tested by
+  `tests/test_oled_material_registry_successor_postwrite_verifier.py`
+- documented in
+  `docs/oled-material-registry-successor-postwrite-verifier.md`
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
