@@ -1668,6 +1668,38 @@ Status:
 - contract documented in
   `docs/oled-reviewed-evidence-facet-adjudication.md`
 
+## 8.4.22.2 Exact-bound Gold admission preflight MVP
+
+### [x] Task:
+- consume one exact PR-AA facet adjudication and bind its file SHA-256 and
+  semantic artifact digest
+- independently replay the complete adjudicated observation roster and select
+  only exact `consistent + sufficient` pairs
+- count and exclude scientific inconsistency, scientific source-check,
+  confidence insufficiency, and confidence source-check outcomes
+- preserve exact reviewed-evidence, Registry, property/value/precision/unit,
+  comparison-context, PDF/table/cell, and human facet-review provenance
+- preserve both the Registry entry's internal digest and the ledger-bound full
+  Registry payload digest as distinct fields
+- derive deterministic candidate-only Gold admission records
+- refuse to invent a numeric confidence score or construct the legacy
+  numeric-confidence Gold record merely to satisfy the older schema
+- keep Gold publication, dataset/training writes, reviewed-evidence/Registry/
+  alias mutation, source reads, network, LLM, MinerU, and external calls disabled
+
+Scope:
+- Gold admission preflight only; no Gold record is created or published
+- categorical confidence sufficiency remains distinct from calibrated probability
+- real paper016 Gold eligibility still requires genuine human PR-AA decisions
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_gold_admission_preflight.py`
+- controlled file/CLI entry implemented in
+  `src/ai4s_agent/oled_gold_admission_preflight.py`
+- tested by `tests/test_oled_gold_admission_preflight.py`
+- contract documented in `docs/oled-gold-admission-preflight.md`
+
 ## 8.4.23 Exact-bound local Material Registry entry proposal review request MVP
 
 ### [x] Task:
