@@ -1902,6 +1902,36 @@ Status:
 - contract documented in
   `docs/oled-categorical-gold-dataset-admission.md`
 
+## 8.4.22.9 Categorical dataset execution vertical slice MVP
+
+### [x] Task:
+- consume one exact PR-AH dataset admission artifact
+- materialize only explicitly admitted Gold entries into deterministic
+  categorical dataset-view rows
+- preserve Registry structure, target value/unit/precision, comparison context,
+  and PDF/table/cell evidence lineage
+- generate deterministic Morgan/hashed molecular features
+- apply one material-group split consistently across properties
+- invoke the existing mean-baseline core and emit predictions/metrics
+- distinguish real holdout evaluation from one-material train-only smoke output
+- publish one non-overwriting versioned dataset directory with atomic rename
+- do not use the legacy numeric-confidence Gold schema
+- do not claim benchmark validation, model promotion, or training readiness
+
+Scope:
+- minimum useful dataset → split → baseline execution slice
+- governance is limited to exact PR-AH input binding, admitted-only routing,
+  material leakage prevention, and basic immutable publication
+- real multi-material scientific validation remains the next capability target
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_categorical_dataset_execution.py`
+- controlled CLI/versioned publisher implemented in
+  `src/ai4s_agent/oled_categorical_dataset_execution.py`
+- tested by `tests/test_oled_categorical_dataset_execution.py`
+- documented in `docs/oled-categorical-dataset-execution.md`
+
 ## 8.4.23 Exact-bound local Material Registry entry proposal review request MVP
 
 ### [x] Task:
