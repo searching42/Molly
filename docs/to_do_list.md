@@ -1932,6 +1932,38 @@ Status:
 - tested by `tests/test_oled_categorical_dataset_execution.py`
 - documented in `docs/oled-categorical-dataset-execution.md`
 
+## 8.4.22.10 Real-paper categorical vertical resume runner MVP
+
+### [x] Task:
+- inspect one exact PR-U facet review request and report the real human-decision
+  blocker without creating downstream artifacts
+- require a complete, exact-bound, human-confirmed PR-AA decision manifest
+  before any Gold or dataset stage runs
+- pin readiness-time request/manifest byte SHA-256 and semantic digests, then
+  recheck the facet artifact consumed the same pair before Gold preflight
+- derive final run identity and source counts from the verified facet artifact
+  rather than the earlier readiness read
+- resume the existing PR-AA through PR-AI implementations in one operator
+  command rather than duplicating their domain logic
+- support either an explicit deterministic categorical Gold genesis or one
+  existing current Gold snapshot
+- preserve the existing candidate/successor immutable publication,
+  post-write verification, dataset-admission, and versioned dataset no-replace
+  boundaries
+- write a final run summary only after dataset/baseline execution completes
+- require an existing empty output directory so separate invocations cannot be
+  blended accidentally
+- never synthesize scientific-consistency or confidence-sufficiency decisions
+- do not claim benchmark validation, model promotion, or training readiness
+
+Status:
+- implemented in `src/ai4s_agent/oled_real_paper_vertical_run.py`
+- tested by `tests/test_oled_real_paper_vertical_run.py`
+- documented in `docs/oled-real-paper-vertical-run.md`
+- read-only validation against the operator-local real paper016 request reports
+  seven review groups, 35 observations, and exactly 35 missing human facet
+  decisions; no downstream publication was attempted
+
 ## 8.4.23 Exact-bound local Material Registry entry proposal review request MVP
 
 ### [x] Task:
