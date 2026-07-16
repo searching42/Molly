@@ -63,4 +63,3 @@ PYTHONPATH=src .venv/bin/python \
 The output must be fresh and cannot overlap either input. Publication uses the
 repository's pinned-parent, atomic no-replace path. CLI errors expose only a
 stable error code and exception type.
-
