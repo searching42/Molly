@@ -1776,6 +1776,8 @@ Status:
 - replay the complete candidate roster and reject existing/batch collisions on
   Gold entry ID, candidate ID/digest, observation digest, source-cell digest,
   and semantic observation identity
+- independently rederive every deterministic Gold entry ID and reject current
+  snapshots with internal candidate/observation/source-cell/semantic duplicates
 - preserve `consistent + sufficient` as categorical facet decisions without
   inventing a numeric confidence score
 - construct the complete deterministic append-only expected successor snapshot

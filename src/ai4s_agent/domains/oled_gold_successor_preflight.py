@@ -98,6 +98,12 @@ class OledCategoricalGoldEntry(BaseModel):
     @model_validator(mode="after")
     def validate_entry(self) -> OledCategoricalGoldEntry:
         candidate = self.candidate
+        expected_gold_entry_id = _id_hash(
+            "oled-categorical-gold-entry",
+            {"candidate_digest": candidate.candidate_digest},
+        )
+        if self.gold_entry_id != expected_gold_entry_id:
+            raise ValueError("categorical Gold entry ID is not deterministic")
         expected = {
             "source_candidate_id": candidate.candidate_id,
             "source_candidate_digest": candidate.candidate_digest,
@@ -200,6 +206,7 @@ class OledCategoricalGoldSnapshot(BaseModel):
     def validate_snapshot(self) -> OledCategoricalGoldSnapshot:
         if self.entry_count != len(self.entries):
             raise ValueError("categorical Gold snapshot entry count mismatch")
+        _validate_snapshot_internal_uniqueness(self.entries)
         if self.generation == 0:
             if self.entries or self.parent_snapshot_digest is not None:
                 raise ValueError("categorical Gold genesis snapshot must be empty")
@@ -716,6 +723,27 @@ def _recheck_gold_conflicts(
         if semantic_key in batch_semantics:
             raise ValueError("Gold successor semantic observation repeats in candidate batch")
         batch_semantics[semantic_key] = entry.source_candidate_digest
+
+
+def _validate_snapshot_internal_uniqueness(
+    entries: Sequence[OledCategoricalGoldEntry],
+) -> None:
+    dimensions = {
+        "source candidate ID": [entry.source_candidate_id for entry in entries],
+        "source candidate digest": [
+            entry.source_candidate_digest for entry in entries
+        ],
+        "adjudicated observation digest": [
+            entry.source_adjudicated_observation_digest for entry in entries
+        ],
+        "source cell digest": [entry.source_cell_digest for entry in entries],
+        "semantic observation": [_semantic_key(entry.candidate) for entry in entries],
+    }
+    for label, values in dimensions.items():
+        if len(values) != len(set(values)):
+            raise ValueError(
+                f"categorical Gold snapshot contains duplicate {label}"
+            )
 
 
 def _semantic_key(candidate: OledGoldAdmissionCandidate) -> tuple[Any, ...]:

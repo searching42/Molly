@@ -73,6 +73,13 @@ the candidate batch involving:
 It never overwrites, merges, silently drops, or assigns a new confidence score
 to a conflicting observation.
 
+Every categorical Gold entry ID is independently re-derived from its exact
+candidate digest during validation; changing an ID and recomputing the entry
+digest is invalid. Every current snapshot also independently requires internal
+uniqueness for source candidate IDs/digests, adjudicated observation digests,
+source-cell digests, and semantic observation tuples. Successor construction
+therefore cannot preserve a pre-existing duplicate Gold state.
+
 ## Deterministic successor plan
 
 For a clean roster, the preflight constructs the complete expected successor:

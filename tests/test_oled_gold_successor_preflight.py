@@ -11,10 +11,12 @@ from pydantic import ValidationError
 from ai4s_agent import oled_gold_successor_preflight as preflight_runner
 from ai4s_agent._utils import write_json
 from ai4s_agent.domains.oled_gold_successor_preflight import (
+    OledCategoricalGoldEntry,
     OledCategoricalGoldSnapshot,
     OledGoldSuccessorPreflightArtifact,
     build_oled_categorical_gold_genesis_snapshot,
     build_oled_gold_successor_preflight_artifact,
+    oled_categorical_gold_entry_digest,
     oled_categorical_gold_snapshot_digest,
     oled_gold_successor_preflight_artifact_digest,
 )
@@ -157,6 +159,124 @@ def test_replaying_already_present_candidate_fails_closed(
             current_gold_snapshot_sha256="sha256:" + "e" * 64,
             generated_at="2026-07-14T01:10:00+08:00",
         )
+
+
+def test_resigned_duplicate_entry_with_alternate_id_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _build(tmp_path, monkeypatch)
+    assert artifact.expected_successor_snapshot is not None
+    current = artifact.expected_successor_snapshot
+    original = current.entries[0]
+    forged_entry = original.model_copy(
+        update={
+            "gold_entry_id": "gold-entry-forged-duplicate",
+            "entry_digest": "sha256:" + "0" * 64,
+        },
+        deep=True,
+    )
+    forged_entry = forged_entry.model_copy(
+        update={
+            "entry_digest": oled_categorical_gold_entry_digest(forged_entry)
+        }
+    )
+    forged_snapshot = current.model_copy(
+        update={
+            "entries": sorted(
+                [*current.entries, forged_entry],
+                key=lambda entry: entry.gold_entry_id,
+            ),
+            "entry_count": current.entry_count + 1,
+            "snapshot_digest": "sha256:" + "0" * 64,
+        },
+        deep=True,
+    )
+    forged_snapshot = forged_snapshot.model_copy(
+        update={
+            "snapshot_digest": oled_categorical_gold_snapshot_digest(
+                forged_snapshot
+            )
+        }
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="entry ID is not deterministic",
+    ):
+        OledCategoricalGoldSnapshot.model_validate(
+            forged_snapshot.model_dump(mode="json")
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "message"),
+    (
+        ("source_candidate_id", "duplicate source candidate ID"),
+        ("source_candidate_digest", "duplicate source candidate digest"),
+        (
+            "source_adjudicated_observation_digest",
+            "duplicate adjudicated observation digest",
+        ),
+        ("source_cell_digest", "duplicate source cell digest"),
+    ),
+)
+def test_current_snapshot_rejects_internal_identity_duplicates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field_name: str,
+    message: str,
+) -> None:
+    artifact = _build(tmp_path, monkeypatch)
+    assert artifact.expected_successor_snapshot is not None
+    current = artifact.expected_successor_snapshot
+    first, second, *remaining = current.entries
+    duplicate = OledCategoricalGoldEntry.model_construct(
+        **{
+            **second.__dict__,
+            field_name: getattr(first, field_name),
+        }
+    )
+    forged = current.model_copy(
+        update={
+            "entries": sorted(
+                [first, duplicate, *remaining],
+                key=lambda entry: entry.gold_entry_id,
+            ),
+            "snapshot_digest": "sha256:" + "0" * 64,
+        }
+    )
+
+    with pytest.raises(ValueError, match=message):
+        forged.validate_snapshot()
+
+
+def test_current_snapshot_rejects_internal_semantic_duplicate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _build(tmp_path, monkeypatch)
+    assert artifact.expected_successor_snapshot is not None
+    current = artifact.expected_successor_snapshot
+    first, second, *remaining = current.entries
+    duplicate = OledCategoricalGoldEntry.model_construct(
+        **{
+            **second.__dict__,
+            "candidate": first.candidate,
+        }
+    )
+    forged = current.model_copy(
+        update={
+            "entries": sorted(
+                [first, duplicate, *remaining],
+                key=lambda entry: entry.gold_entry_id,
+            ),
+            "snapshot_digest": "sha256:" + "0" * 64,
+        }
+    )
+
+    with pytest.raises(ValueError, match="duplicate semantic observation"):
+        forged.validate_snapshot()
 
 
 def test_non_genesis_snapshot_requires_parent_and_verification_lineage() -> None:
