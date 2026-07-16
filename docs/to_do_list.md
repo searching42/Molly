@@ -1732,6 +1732,38 @@ Status:
 - tested by `tests/test_oled_material_registry_entry_adjudication.py`
 - documented in `docs/oled-material-registry-entry-adjudication.md`
 
+## 8.4.25 Material Registry successor snapshot write preflight MVP
+
+### [x] Task:
+- consume one exact PR-W Registry-entry adjudication plus one separately
+  supplied current Material Registry snapshot
+- bind construction-time SHA-256 values and embed/replay both complete models
+- require the current snapshot to preserve the PR-W Registry identity and not
+  predate the snapshot previously reviewed
+- recheck approved material IDs, preferred names, aliases, canonical graphs,
+  standard InChI values, and InChIKeys against current state and within batch
+- fail the whole batch closed on any collision without overwrite, merge,
+  automatic aliasing, or partial candidate admission
+- deterministically derive the successor version, complete expected append-only
+  snapshot, planned-addition roster, and expected snapshot digest
+- keep Registry write/head activation, observation/reviewed-evidence/Gold,
+  dataset/training, device-only admission, network, LLM, MinerU, and external
+  services disabled
+
+Scope:
+- generic, paper-agnostic offline preflight; paper016 remains only a real canary
+- empty approved rosters produce an explicit no-op without inventing a snapshot
+- standalone semantic replay is supported, but external input-byte replay and
+  a nonexistent Registry lineage receipt are not claimed
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_material_registry_successor_preflight.py`
+- safe file/CLI entry implemented in
+  `src/ai4s_agent/oled_material_registry_successor_preflight.py`
+- tested by `tests/test_oled_material_registry_successor_preflight.py`
+- documented in `docs/oled-material-registry-successor-preflight.md`
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
