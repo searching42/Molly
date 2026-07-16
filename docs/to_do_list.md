@@ -1764,6 +1764,38 @@ Status:
 - tested by `tests/test_oled_material_registry_successor_preflight.py`
 - documented in `docs/oled-material-registry-successor-preflight.md`
 
+## 8.4.26 Material Registry successor snapshot writer MVP
+
+### [x] Task:
+- consume one exact PR-X successor preflight plus the exact current Registry
+  snapshot file bound by PR-X
+- require exact parent file SHA-256, semantic digest, and complete model equality
+- re-read both inputs immediately before publication and fail on any byte or
+  parsed-payload change
+- publish the exact PR-X expected successor snapshot plus a publication/write
+  receipt as one fresh, fsynced, inode-bound directory unit
+- use true atomic no-replace directory rename and fail closed when unavailable
+- independently replay append-only prior-entry preservation, exact planned
+  additions, IDs, entry digests, counts, version, and successor digest
+- publish no mutable Registry head and create no activation receipt
+- keep observation/reviewed-evidence/Gold, dataset/training, device-only
+  admission, network, LLM, MinerU, and external services disabled
+
+Scope:
+- generic, paper-agnostic offline publication; paper016 is a real seven-entry,
+  35-dependent-cell canary rather than a hard-coded production shape
+- publication is immutable-by-protocol and no-replace; no unsupported OS-level
+  immutable-file attribute is claimed
+- a separate PR-Z post-write verifier remains mandatory before PR-N reuse
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_material_registry_successor_writer.py`
+- atomic file/CLI entry implemented in
+  `src/ai4s_agent/oled_material_registry_successor_writer.py`
+- tested by `tests/test_oled_material_registry_successor_writer.py`
+- documented in `docs/oled-material-registry-successor-writer.md`
+
 ## 8.5 MinerU review packet writer MVP
 
 ### [x] Task:
