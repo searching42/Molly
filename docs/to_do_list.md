@@ -1801,6 +1801,41 @@ Status:
 - tested by `tests/test_oled_gold_successor_preflight.py`
 - contract documented in `docs/oled-gold-successor-preflight.md`
 
+## 8.4.22.6 Immutable categorical Gold successor writer MVP
+
+### [x] Task:
+- consume one exact PR-AE preflight plus the exact PR-AD verification,
+  candidate snapshot, and current categorical Gold snapshot files bound by it
+- require every external input file SHA and validated model to match PR-AE
+- re-read all four exact inputs immediately before publication and fail on any
+  byte or parsed-payload change
+- compare-and-swap against the exact current Gold snapshot file SHA/digest
+- independently replay prior-entry preservation, exact planned additions,
+  generation, lineage, counts, expected successor ID/digest, and categorical
+  confidence invariants
+- publish exactly the expected successor snapshot plus one combined
+  publication/snapshot-activation receipt in a fresh directory
+- use exclusive file creation, fsync, inode binding, atomic no-replace rename,
+  exact filename/byte revalidation, and ownership-safe cleanup
+- activate the immutable snapshot in the receipt without writing or claiming a
+  mutable Gold-head pointer
+- keep numeric confidence, legacy Gold records, prior snapshot mutation,
+  dataset/training writes, reviewed-evidence/Registry mutation, source reads,
+  network, LLM, MinerU, and external calls disabled
+
+Scope:
+- immutable categorical Gold successor publication and snapshot activation
+- no mutable Gold-head pointer exists or is written
+- writer success is not independent post-write verification
+- real paper016 publication remains blocked on genuine human facet decisions
+
+Status:
+- implemented in `src/ai4s_agent/domains/oled_gold_successor_writer.py`
+- atomic file/CLI entry implemented in
+  `src/ai4s_agent/oled_gold_successor_writer.py`
+- tested by `tests/test_oled_gold_successor_writer.py`
+- contract documented in `docs/oled-gold-successor-writer.md`
+
 ## 8.4.23 Exact-bound local Material Registry entry proposal review request MVP
 
 ### [x] Task:
