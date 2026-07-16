@@ -1700,6 +1700,37 @@ Status:
 - tested by `tests/test_oled_gold_admission_preflight.py`
 - contract documented in `docs/oled-gold-admission-preflight.md`
 
+## 8.4.22.3 Immutable Gold candidate snapshot writer MVP
+
+### [x] Task:
+- consume one exact PR-AB Gold admission preflight and record its exact file
+  SHA-256 and semantic digest
+- refuse publication when the eligible candidate roster is empty
+- reread and revalidate exact input bytes/payload immediately before publication
+- publish the exact sorted candidate-only roster as an immutable snapshot plus
+  a write receipt in one fresh directory
+- derive deterministic snapshot ID/digest and exact snapshot-file SHA-256
+- use fresh-file writes, fsync, inode binding, and true atomic no-replace
+  directory rename, then revalidate exact filenames and bytes
+- keep categorical confidence explicit and refuse numeric-confidence or legacy
+  Gold-record construction
+- keep Gold-head activation, curated dataset/training writes, reviewed-evidence/
+  Registry/alias mutation, source reads, network, LLM, MinerU, and external
+  calls disabled
+
+Scope:
+- immutable candidate-only Gold snapshot publication
+- writer success is not independent post-write verification
+- real paper016 publication remains blocked on genuine human PR-AA decisions
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_gold_candidate_writer.py`
+- atomic file/CLI entry implemented in
+  `src/ai4s_agent/oled_gold_candidate_writer.py`
+- tested by `tests/test_oled_gold_candidate_writer.py`
+- contract documented in `docs/oled-gold-candidate-writer.md`
+
 ## 8.4.23 Exact-bound local Material Registry entry proposal review request MVP
 
 ### [x] Task:
