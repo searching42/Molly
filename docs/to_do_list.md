@@ -1939,6 +1939,10 @@ Status:
   blocker without creating downstream artifacts
 - require a complete, exact-bound, human-confirmed PR-AA decision manifest
   before any Gold or dataset stage runs
+- pin readiness-time request/manifest byte SHA-256 and semantic digests, then
+  recheck the facet artifact consumed the same pair before Gold preflight
+- derive final run identity and source counts from the verified facet artifact
+  rather than the earlier readiness read
 - resume the existing PR-AA through PR-AI implementations in one operator
   command rather than duplicating their domain logic
 - support either an explicit deterministic categorical Gold genesis or one

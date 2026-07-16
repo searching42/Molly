@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from io import StringIO
 from pathlib import Path
@@ -18,6 +19,7 @@ from ai4s_agent.oled_real_paper_vertical_run import (
     main,
     run_oled_real_paper_vertical_from_files,
 )
+from ai4s_agent import oled_real_paper_vertical_run as vertical_runner
 from test_oled_reviewed_evidence_facet_adjudication import (
     _manifest,
     _request,
@@ -141,3 +143,52 @@ def test_execution_requires_fresh_empty_output_and_explicit_gold_head(
             output_root=output_root,
             generated_at=_RUN_AT,
         )
+
+
+def test_request_and_manifest_pair_replacement_after_readiness_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, request_path, decisions_path = _inputs(tmp_path, monkeypatch)
+    output_root = tmp_path / "vertical-run"
+    output_root.mkdir()
+    original_builder = (
+        vertical_runner
+        .build_oled_reviewed_evidence_facet_adjudication_from_files
+    )
+
+    def replace_pair_then_build(**kwargs):
+        request_payload = json.loads(request_path.read_text(encoding="utf-8"))
+        request_path.write_text(
+            json.dumps(request_payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        replacement_request_sha = "sha256:" + hashlib.sha256(
+            request_path.read_bytes()
+        ).hexdigest()
+        decision_payload = json.loads(
+            decisions_path.read_text(encoding="utf-8")
+        )
+        decision_payload["request_artifact_sha256"] = replacement_request_sha
+        write_json(decisions_path, decision_payload)
+        return original_builder(**kwargs)
+
+    monkeypatch.setattr(
+        vertical_runner,
+        "build_oled_reviewed_evidence_facet_adjudication_from_files",
+        replace_pair_then_build,
+    )
+
+    with pytest.raises(ValueError, match="does not match readiness inputs"):
+        run_oled_real_paper_vertical_from_files(
+            request_artifact_json=request_path,
+            decision_manifest_json=decisions_path,
+            output_root=output_root,
+            gold_registry_id="oled-categorical-gold:test",
+            generated_at=_RUN_AT,
+        )
+
+    assert (output_root / "facet_adjudication.json").exists()
+    assert not (output_root / "gold_admission_preflight.json").exists()
+    assert not (output_root / "gold_candidate_publication").exists()
+    assert not (output_root / "run_summary.json").exists()

@@ -49,6 +49,16 @@ immutable publication directories, the PR-AI dataset directory, and
 `run_summary.json`. The directory must be empty so an operator cannot
 accidentally blend evidence from separate invocations.
 
+Readiness pins the request and decision-manifest file SHA-256 values together
+with both semantic artifact digests. After facet adjudication re-reads and
+consumes those paths, the runner compares all four bindings plus run ID, paper
+ID, and observation count before Gold admission starts. Replacing even a
+jointly valid request/manifest pair between readiness and adjudication therefore
+leaves the facet evidence artifact for diagnosis but creates no Gold preflight,
+Gold candidate publication, or final run summary. Summary identity and source
+counts are derived from the verified facet artifact, not the earlier readiness
+object.
+
 ## Real paper016 status
 
 The operator-local paper016 artifact was inspected with this runner. Its request

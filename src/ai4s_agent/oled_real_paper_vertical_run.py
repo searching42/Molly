@@ -21,7 +21,9 @@ from ai4s_agent.domains.oled_gold_successor_writer import (
     GOLD_SUCCESSOR_WRITE_FILENAME,
 )
 from ai4s_agent.domains.oled_reviewed_evidence_facet_adjudication import (
+    OledReviewedEvidenceFacetAdjudicationArtifact,
     OledReviewedEvidenceFacetDecisionManifest,
+    oled_reviewed_evidence_facet_decision_manifest_digest,
 )
 from ai4s_agent.domains.oled_reviewed_evidence_facet_review_request import (
     OledReviewedEvidenceFacetReviewRequestArtifact,
@@ -77,6 +79,10 @@ class OledRealPaperVerticalReadiness(BaseModel):
     paper_id: str
     review_group_count: int
     observation_count: int
+    request_artifact_sha256: str
+    request_artifact_digest: str
+    decision_manifest_sha256: str | None
+    decision_manifest_digest: str | None
     supplied_decision_count: int
     missing_decision_count: int
     ready_to_execute: bool
@@ -127,9 +133,11 @@ def inspect_oled_real_paper_vertical_readiness(
     }
     expected_entry_ids = set(expected_bindings)
     supplied_entry_ids: set[str] = set()
+    decision_sha: str | None = None
+    decision_digest: str | None = None
     if decision_manifest_json is not None:
         decision_path = _absolute_local_path(decision_manifest_json)
-        decision_payload, _ = _read_bound_json(
+        decision_payload, decision_sha = _read_bound_json(
             decision_path,
             "reviewed-evidence facet decision manifest",
             max_bytes=_MAX_INPUT_BYTES,
@@ -137,6 +145,9 @@ def inspect_oled_real_paper_vertical_readiness(
         )
         manifest = OledReviewedEvidenceFacetDecisionManifest.model_validate(
             decision_payload
+        )
+        decision_digest = (
+            oled_reviewed_evidence_facet_decision_manifest_digest(manifest)
         )
         if (
             manifest.run_id != request.run_id
@@ -176,6 +187,10 @@ def inspect_oled_real_paper_vertical_readiness(
         paper_id=request.paper_id,
         review_group_count=request.review_group_count,
         observation_count=request.eligible_observation_count,
+        request_artifact_sha256=request_sha,
+        request_artifact_digest=request.request_artifact_digest,
+        decision_manifest_sha256=decision_sha,
+        decision_manifest_digest=decision_digest,
         supplied_decision_count=len(supplied_entry_ids),
         missing_decision_count=missing_count,
         ready_to_execute=ready,
@@ -218,6 +233,7 @@ def run_oled_real_paper_vertical_from_files(
         output_json=facet_path,
         generated_at=timestamp,
     )
+    _validate_facet_matches_readiness(facet=facet, readiness=readiness)
     preflight_path = root / "gold_admission_preflight.json"
     preflight = build_oled_gold_admission_preflight_from_files(
         facet_adjudication_json=facet_path,
@@ -294,9 +310,9 @@ def run_oled_real_paper_vertical_from_files(
     )
     result = OledRealPaperVerticalRunResult(
         status="real_paper_vertical_execution_complete",
-        run_id=readiness.run_id,
-        paper_id=readiness.paper_id,
-        source_observation_count=readiness.observation_count,
+        run_id=facet.run_id,
+        paper_id=facet.paper_id,
+        source_observation_count=facet.reviewed_observation_count,
         gold_eligible_count=preflight.eligible_candidate_count,
         blocked_observation_count=facet.blocked_observation_count,
         published_gold_entry_count=(
@@ -311,6 +327,32 @@ def run_oled_real_paper_vertical_from_files(
     )
     _write_fresh_json(root / "run_summary.json", result.model_dump(mode="json"))
     return result
+
+
+def _validate_facet_matches_readiness(
+    *,
+    facet: OledReviewedEvidenceFacetAdjudicationArtifact,
+    readiness: OledRealPaperVerticalReadiness,
+) -> None:
+    expected = {
+        "request_artifact_sha256": readiness.request_artifact_sha256,
+        "request_artifact_digest": readiness.request_artifact_digest,
+        "decision_manifest_sha256": readiness.decision_manifest_sha256,
+        "decision_manifest_digest": readiness.decision_manifest_digest,
+        "run_id": readiness.run_id,
+        "paper_id": readiness.paper_id,
+        "reviewed_observation_count": readiness.observation_count,
+    }
+    mismatches = [
+        field_name
+        for field_name, expected_value in expected.items()
+        if getattr(facet, field_name) != expected_value
+    ]
+    if mismatches:
+        raise ValueError(
+            "facet adjudication does not match readiness inputs: "
+            + ", ".join(sorted(mismatches))
+        )
 
 
 def _write_fresh_json(path: Path, payload: dict[str, Any]) -> None:
