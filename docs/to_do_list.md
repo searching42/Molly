@@ -1731,6 +1731,37 @@ Status:
 - tested by `tests/test_oled_gold_candidate_writer.py`
 - contract documented in `docs/oled-gold-candidate-writer.md`
 
+## 8.4.22.4 Gold candidate snapshot post-write verifier MVP
+
+### [x] Task:
+- consume one exact PR-AC receipt plus its separately published Gold candidate
+  snapshot, binding exact file SHA-256 values for both
+- rebuild deterministic receipt/snapshot publication bytes and reject
+  semantically equivalent reformatting
+- independently rebuild the expected snapshot from embedded exact PR-AB input
+  and PR-AC timestamp without trusting writer verification booleans
+- replay the complete sorted candidate roster, every candidate payload/digest,
+  counts, snapshot ID/digest, source-preflight lineage, and timestamps
+- mark only the exact verified immutable snapshot eligible for explicit later
+  Gold-publication input
+- keep categorical confidence explicit and numeric confidence, legacy Gold
+  records, Gold-head activation, datasets/training, reviewed-evidence/Registry
+  mutation, source reads, network, LLM, MinerU, and external calls disabled
+
+Scope:
+- independent read-only post-write verification only
+- verification does not publish final Gold or activate a mutable head
+- real paper016 remains blocked on genuine human facet decisions
+
+Status:
+- implemented in
+  `src/ai4s_agent/domains/oled_gold_candidate_postwrite_verifier.py`
+- controlled file/CLI entry implemented in
+  `src/ai4s_agent/oled_gold_candidate_postwrite_verifier.py`
+- tested by `tests/test_oled_gold_candidate_postwrite_verifier.py`
+- contract documented in
+  `docs/oled-gold-candidate-postwrite-verifier.md`
+
 ## 8.4.23 Exact-bound local Material Registry entry proposal review request MVP
 
 ### [x] Task:
