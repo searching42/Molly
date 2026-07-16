@@ -21,11 +21,29 @@ The request consumes exactly:
 1. one `oled_material_registry_resolution_request.v1` artifact from PR-N;
 2. its exact `oled_material_registry_adjudication.v1` artifact from PR-O.
 
-Both complete validated models are embedded in the output. The request binds
-the exact input bytes and semantic digests for PR-N and PR-O and preserves the
-Registry snapshot SHA-256/digest carried by PR-N. It jointly replays the
-PR-N -> PR-O item coverage, selected-entry bindings, and causal timestamp
-ordering before deriving any review item.
+Both complete validated models are embedded in the output. The controlled file
+entry computes and records the SHA-256 of the exact PR-N and PR-O files supplied
+at construction time, while the artifact also binds their semantic digests and
+preserves the Registry snapshot SHA-256/digest carried by PR-N. It jointly
+replays the PR-N -> PR-O item coverage, selected-entry bindings, and causal
+timestamp ordering before deriving any review item.
+
+The original PR-N and PR-O JSON byte sequences are not embedded. Standalone
+model validation therefore replays the embedded models, semantic digests, and
+all cross-artifact invariants, but it cannot independently recover or
+revalidate either original file byte sequence. This limitation is explicit:
+
+```text
+exact_resolution_request_bytes_bound = true
+exact_registry_adjudication_bytes_bound = true
+standalone_input_bytes_revalidation_supported = false
+```
+
+Here `exact_*_bytes_bound=true` means that the controlled file-entry builder
+recorded the hash of the actual supplied bytes. It does not claim that a
+standalone artifact can reconstruct those external bytes. Revalidating either
+file SHA requires supplying that original file again to a controlled joint
+consumer.
 
 PR-V does not reopen the source PDF or independently rerun PR-G through PR-M.
 Its source-evidence boundary is the exact graph, source anchors, chemistry
@@ -158,11 +176,12 @@ identity-group tie-breaker when multiple identities share one source row.
 The deterministic renderer presents:
 
 1. exact PR-N, PR-O, Registry snapshot, request, and contract bindings;
-2. the local-snapshot-only and request-only boundaries;
-3. derived item, cell, exclusion, and conflict counts;
-4. any batch conflicts before individual items;
-5. each accepted graph and automatic chemistry facts; and
-6. each unapproved material ID, preferred-name proposal, empty alias list,
+2. the construction-time byte-binding and standalone-revalidation limitation;
+3. the local-snapshot-only and request-only boundaries;
+4. derived item, cell, exclusion, and conflict counts;
+5. any batch conflicts before individual items;
+6. each accepted graph and automatic chemistry facts; and
+7. each unapproved material ID, preferred-name proposal, empty alias list,
    and required human questions.
 
 The renderer does not preselect a positive decision and does not present the

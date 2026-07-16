@@ -1643,8 +1643,11 @@ Status:
 ### [x] Task:
 - consume one exact PR-N material Registry resolution request and its exact
   PR-O human Registry adjudication
-- bind both complete input files by SHA-256 and semantic artifact digest and
-  embed their validated models in the self-contained output
+- record both supplied input files by construction-time SHA-256, bind their
+  semantic artifact digests, and embed their validated models in the output
+- explicitly declare `standalone_input_bytes_revalidation_supported=false`:
+  standalone validation replays semantic models and the joint chain but cannot
+  recover either original external JSON byte sequence
 - jointly replay the complete PR-N -> PR-O item coverage, Registry snapshot
   binding, selected-entry binding, and causal timestamp chain
 - derive the review roster exactly from all PR-O `propose_new_entity` items
@@ -1677,8 +1680,8 @@ Status:
   reads, network, external services, LLM, and MinerU disabled
 
 Scope:
-- offline, request-only local Registry-entry review preparation over exact
-  PR-N/PR-O bytes
+- offline, request-only local Registry-entry review preparation whose file
+  entry records the exact supplied PR-N/PR-O byte hashes
 - production logic is paper-agnostic and derives its complete roster and
   conflicts dynamically; paper016 is only a bounded canary, not a fixed data
   shape or a claim about any real paper016 material

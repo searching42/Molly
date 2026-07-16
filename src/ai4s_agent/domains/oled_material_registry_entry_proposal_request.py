@@ -406,6 +406,8 @@ class OledMaterialRegistryEntryProposalRequestArtifact(BaseModel):
     offline_only: StrictBool = True
     exact_resolution_request_bytes_bound: StrictBool = True
     exact_registry_adjudication_bytes_bound: StrictBool = True
+    # File entry records hashes; embedded models cannot recover original JSON bytes.
+    standalone_input_bytes_revalidation_supported: StrictBool = False
     embedded_models_revalidated: StrictBool = True
     joint_pr_n_pr_o_chain_revalidated: StrictBool = True
     complete_new_entity_proposal_coverage_validated: StrictBool = True
@@ -583,6 +585,7 @@ class OledMaterialRegistryEntryProposalRequestArtifact(BaseModel):
             "fixed_review_contract_bound",
         )
         fixed_false = (
+            "standalone_input_bytes_revalidation_supported",
             "source_pdf_read",
             "material_id_reserved",
             "material_id_assigned",
@@ -783,6 +786,11 @@ def render_oled_material_registry_entry_proposal_request_markdown(
         "",
         "## Scope boundary",
         "",
+        "- PR-N and PR-O file SHA-256 values were recorded from the files supplied",
+        "  to the controlled builder; the original JSON bytes are not embedded.",
+        "- Standalone validation replays embedded models and semantic digests, but",
+        "  cannot independently recover or revalidate either original input file.",
+        "- `standalone_input_bytes_revalidation_supported=false`.",
         f"- {_md(request.review_contract.local_snapshot_only_notice)}",
         "- The proposed material ID is opaque and deterministic for this exact PR-O proposal,",
         "  but it is not reserved or assigned until a later approved write.",

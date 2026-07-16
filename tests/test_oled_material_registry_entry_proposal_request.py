@@ -209,6 +209,7 @@ def test_single_new_entity_proposal_is_exact_bound_and_request_only(
     assert artifact.registry_adjudication_digest == (
         adjudication.adjudication_artifact_digest
     )
+    assert not artifact.standalone_input_bytes_revalidation_supported
     assert _SHA256_RE.fullmatch(artifact.proposal_request_artifact_digest)
 
     item = artifact.entry_review_items[0]
@@ -432,6 +433,34 @@ def test_rehashed_material_id_tamper_fails_closed(
         )
 
 
+def test_standalone_contract_does_not_claim_pr_o_file_byte_revalidation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact, _, _, _, _ = _proposal_artifact(tmp_path, monkeypatch)
+    alternate_sha = "sha256:" + "f" * 64
+    assert artifact.registry_adjudication_sha256 != alternate_sha
+
+    tampered = _rehash_artifact(
+        artifact,
+        registry_adjudication_sha256=alternate_sha,
+    )
+    validated = OledMaterialRegistryEntryProposalRequestArtifact.model_validate(
+        tampered.model_dump(mode="json")
+    )
+    assert validated.registry_adjudication_sha256 == alternate_sha
+    assert not validated.standalone_input_bytes_revalidation_supported
+
+    false_claim = _rehash_artifact(
+        artifact,
+        standalone_input_bytes_revalidation_supported=True,
+    )
+    with pytest.raises(ValidationError, match="crossed its boundary"):
+        OledMaterialRegistryEntryProposalRequestArtifact.model_validate(
+            false_claim.model_dump(mode="json")
+        )
+
+
 def test_rehashed_review_contract_question_tamper_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -550,6 +579,8 @@ def test_markdown_exposes_review_contract_and_local_only_boundary(
     assert artifact.review_contract.preferred_name_question in markdown
     assert artifact.review_contract.alias_question in markdown
     assert "approve_local_registry_entry_candidate" in markdown
+    assert "the original JSON bytes are not embedded" in markdown
+    assert "standalone_input_bytes_revalidation_supported=false" in markdown
     assert "## E01:" in markdown
     assert item.proposed_material_id in markdown
     assert item.proposed_canonical_name in markdown
