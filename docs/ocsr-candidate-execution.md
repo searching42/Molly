@@ -87,3 +87,8 @@ the exact structure.
 This stage does not crop figures, call MinerU, download model checkpoints,
 build material-identity evidence responses, or write Registry, Gold, or dataset
 artifacts. Those remain explicit downstream steps.
+
+Source-copy accuracy is evaluated separately by the exact-bound
+[OCSR real-corpus benchmark](ocsr-real-corpus-benchmark.md). A chemically valid
+candidate remains untrusted until that boundary compares it with independently
+reviewed source truth.
