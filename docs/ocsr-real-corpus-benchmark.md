@@ -137,3 +137,6 @@ boundaries as false:
 
 The initial paper018 run is documented in
 [`evidence/ocsr-paper018-real-corpus-canary-20260717.md`](evidence/ocsr-paper018-real-corpus-canary-20260717.md).
+Its deterministic-crop replay and negative model-accuracy result are documented
+in
+[`evidence/ocsr-paper018-crop-replay-20260717.md`](evidence/ocsr-paper018-crop-replay-20260717.md).

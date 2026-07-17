@@ -73,18 +73,24 @@ replacement is never deleted.
 
 ## Image preparation
 
-Use a tight, high-resolution crop containing one complete molecular diagram.
-Exclude reaction arrows, reagent text, compound numbers, aliases, atom-position
-callouts, crystal annotations, and neighboring structures where possible.
-These elements can produce a chemically parseable but source-incorrect graph.
-RDKit validation establishes only that the candidate is a valid graph; it does
-not establish that MolScribe copied the source diagram correctly.
+Use the deterministic
+[OCSR crop preprocessing boundary](ocsr-crop-preprocessing.md) to create the
+input request. It binds explicit operator-authored pixel boxes, removes only
+explicitly declared non-structure regions, applies replayable transforms, and
+withholds the OCSR request when its crop-quality gate fails. Reaction arrows,
+reagent text, compound aliases, atom-position callouts, crystal annotations,
+and neighboring structures can otherwise produce a chemically parseable but
+source-incorrect graph.
+
+The crop gate establishes pixel-input quality, not chemical correctness.
+RDKit validation establishes only that the candidate is a valid graph; neither
+boundary establishes that MolScribe copied the source diagram correctly.
 
 Low confidence, rejected graphs, and even high-confidence parseable graphs must
 remain candidate evidence until an independent source-to-graph review confirms
 the exact structure.
 
-This stage does not crop figures, call MinerU, download model checkpoints,
+This stage does not itself crop figures, call MinerU, download model checkpoints,
 build material-identity evidence responses, or write Registry, Gold, or dataset
 artifacts. Those remain explicit downstream steps.
 
