@@ -400,6 +400,29 @@ def _components(mask: list[list[bool]]) -> list[tuple[int, int, int, int, int]]:
     return found
 
 
+def _apply_exclusions(
+    grayscale: Image.Image,
+    *,
+    crop_bbox: OcsrPixelBox,
+    exclusions: list[OcsrCropExclusion],
+) -> tuple[Image.Image, int]:
+    exclusion_mask = Image.new("1", grayscale.size, 0)
+    mask_draw = ImageDraw.Draw(exclusion_mask)
+    for exclusion in exclusions:
+        box = exclusion.box
+        left = box.left - crop_bbox.left
+        top = box.top - crop_bbox.top
+        right = box.right - crop_bbox.left
+        bottom = box.bottom - crop_bbox.top
+        # OcsrPixelBox is half-open. ImageDraw.rectangle includes its endpoint,
+        # so subtract one from the exclusive right and bottom coordinates.
+        mask_draw.rectangle((left, top, right - 1, bottom - 1), fill=1)
+    exclusion_pixel_count = sum(exclusion_mask.get_flattened_data())
+    masked = grayscale.copy()
+    masked.paste(255, mask=exclusion_mask)
+    return masked, exclusion_pixel_count
+
+
 def _process_item(
     item: OcsrCropRequestItem, source_root: Path
 ) -> tuple[OcsrCropResult, bytes]:
@@ -426,19 +449,11 @@ def _process_item(
         )
 
     raw_crop_bytes = _png_bytes(grayscale)
-    masked = grayscale.copy()
-    draw = ImageDraw.Draw(masked)
-    exclusion_pixel_count = 0
-    for exclusion in item.exclusions:
-        box = exclusion.box
-        relative = (
-            box.left - crop_box.left,
-            box.top - crop_box.top,
-            box.right - crop_box.left,
-            box.bottom - crop_box.top,
-        )
-        draw.rectangle(relative, fill=255)
-        exclusion_pixel_count += (box.right - box.left) * (box.bottom - box.top)
+    masked, exclusion_pixel_count = _apply_exclusions(
+        grayscale,
+        crop_bbox=crop_box,
+        exclusions=item.exclusions,
+    )
 
     pixels = list(masked.get_flattened_data())
     width, height = masked.size

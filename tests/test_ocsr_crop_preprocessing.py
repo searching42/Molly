@@ -11,8 +11,11 @@ from PIL import Image, ImageDraw
 import ai4s_agent.ocsr_crop_preprocessing as crop_module
 from ai4s_agent.ocsr_candidate_execution import OcsrCandidateRequest
 from ai4s_agent.ocsr_crop_preprocessing import (
+    OcsrCropExclusion,
     OcsrCropPreprocessingArtifact,
     OcsrCropPreprocessingRequest,
+    OcsrPixelBox,
+    _apply_exclusions,
     build_ocsr_crop_preprocessing_from_files,
 )
 
@@ -66,6 +69,27 @@ def _write_request(path: Path, payload: dict[str, object]) -> None:
     path.write_text(
         json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8"
     )
+
+
+def test_exclusion_mask_applies_exact_half_open_pixel_box() -> None:
+    image = Image.new("L", (6, 6), 0)
+    crop_bbox = OcsrPixelBox(left=10, top=20, right=16, bottom=26)
+    exclusion = OcsrCropExclusion(
+        box=OcsrPixelBox(left=11, top=22, right=14, bottom=25),
+        reason="reported_alias",
+    )
+
+    masked, applied_count = _apply_exclusions(
+        image,
+        crop_bbox=crop_bbox,
+        exclusions=[exclusion],
+    )
+
+    assert applied_count == (14 - 11) * (25 - 22) == 9
+    assert masked.getpixel((3, 4)) == 255  # right - 1, bottom - 1
+    assert masked.getpixel((4, 4)) == 0  # right boundary is outside
+    assert masked.getpixel((3, 5)) == 0  # bottom boundary is outside
+    assert sum(pixel == 255 for pixel in masked.get_flattened_data()) == 9
 
 
 def test_deterministic_crop_publishes_exact_ocsr_request(tmp_path: Path) -> None:

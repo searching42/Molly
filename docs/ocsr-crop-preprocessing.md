@@ -14,6 +14,11 @@ An `ocsr_crop_preprocessing_request.v1` binds every candidate to:
 - zero or more explicit exclusion boxes with a reason such as
   `reported_alias`, `atom_number_annotation`, or `neighboring_fragment`.
 
+Every pixel box uses half-open coordinates: `[left, right) x [top, bottom)`.
+The exclusion transform builds an exact binary mask with that same convention,
+and `exclusion_pixel_count` is counted from the applied mask rather than
+inferred from authored dimensions.
+
 Request items are sorted by unique candidate ID. Repeated exact evidence
 bindings are rejected. Source paths must be one relative filename; symbolic
 links and symbolic path components are rejected.

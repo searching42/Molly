@@ -13,12 +13,12 @@ one-paper bounded canary, not a corpus-scale accuracy claim.
 | paper018 supporting information | `09f028ec956f63f94af9735be7532f41cc040901c44e16effc7ab2b4670c37dc` |
 | fixed page-2 raster | `f6bf65d6f8b805cf9a31ca471269d764652872515887cc462c8a4649691ae433` |
 | crop request | `194cc1925724c1af50d826dcbea32648a201508748a89f605c754c004602cce6` |
-| crop artifact | `44c1739d5109c40477dc700250d92b40ad0b0fb76885794fa142b68b10188bdb` |
-| OCSR request | `b8b311c3518fc1bad04e0c87880d6db3f23e7c3bf7f0bfaae08b3dc4834d96d2` |
-| OCSR candidate artifact | `ef4a20bb6606f9c95c71d822032d2e327f73e60eaca49490751ee8dc510b55a5` |
-| reviewed ground-truth manifest | `1def7693afd377bab96f3b0026f3295262df1efec1b101cda07de89235c11308` |
-| benchmark report | `548d645d284a6e972423fc484b05ac8d5c96c7e056c5ac183554b544faa73454` |
-| benchmark verification | `540e8ec50ca4e22e4f49707fe873d6dd5518fc75ded649298e7eb6da02b40fb1` |
+| crop artifact | `bf845e069a529f8aea6a1b88346a0f1f71b4906790c6714701e4b41051a4aca8` |
+| OCSR request | `ccf35fdea224214677d7f6cd98ced71aaa65a5a6560ddfde7ee9b651b9eb5378` |
+| OCSR candidate artifact | `9f057c9bce21be07571e9239f8ee0959fefca48cc6fef64bae3210a000cb9b93` |
+| reviewed ground-truth manifest | `0f6e5df028093b64667c30b66f67a0979e5b8801ba9045d4005a145e3e379b79` |
+| benchmark report | `f3007228ef33ecfdb51087db71b5773dc46394bb6e54b286c9bc6c76a5fb56ea` |
+| benchmark verification | `fe729241738145110ce5d5c76b16bfcb3a655060de9f71453f49e71172031d15` |
 
 The page raster was generated from the bound main article with Poppler:
 
@@ -31,16 +31,16 @@ Additional provenance:
 
 | Field | Value |
 | --- | --- |
-| crop artifact digest | `sha256:76ee199a33a21cc2b35f6bec4243f44b91ba89e37f170e93d9d99f9b2a7349aa` |
+| crop artifact digest | `sha256:ebe2fe9fea3482a2b2715dfb33a748b51a2764045f59d41ff097c3291f660096` |
 | crop request digest | `sha256:f8f7ca6d61ab42c73ad577486ab3ff5189984c73f7e8b3e94b4278fa20ed8cc9` |
 | crop-ready count | 4/4 |
-| candidate artifact digest | `sha256:5d3e30ae24b36540fc922e3d0ceb14f700410e1eecd3618d52362ed056d4b0d0` |
+| candidate artifact digest | `sha256:8c38614d9d02c6cebb46f25a48b5b956911e1667db9ee2e98bb2c59dd7605f07` |
 | MolScribe version | `1.1.1` |
 | checkpoint SHA-256 | `sha256:6f0df56fa32b5ffc21f8c7f311ef333da522f590bf5622e966c6bcb1f2d9ea1d` |
 | inference device | CPU on workstation2/node45 |
-| truth manifest digest | `sha256:74b6834883bffb8100af681216755497432d025626122da9be902a61786c857c` |
-| report digest | `sha256:f4449ce1323b796a69ef58bdfb2a611aaa66c3ca6b5b07692eca209bea80456f` |
-| verification digest | `sha256:eb6ee0e839024316524b09546bae3aa68d1e96b95c536dd839b8b884afb1df44` |
+| truth manifest digest | `sha256:271be2e413aad990d50b1f03399a33a99694d0111a93a2f3f9b5d15468971eeb` |
+| report digest | `sha256:4f1940aa631b3b480be8741fb49b384400c049c10fc711d316084a3a4c656b06` |
+| verification digest | `sha256:cbd40060189a1d2ec81babe81e1310fe5dfb6fb6cd89da32d87fc860c44701f2` |
 | exact-input replay | confirmed |
 
 The RTX 5090 could not execute this checkpoint because the installed PyTorch
@@ -61,12 +61,17 @@ full. CBP-1's source-authored C6/C27 position labels remain visible because
 generic text deletion could also erase genuine atom labels; the request makes
 that choice explicit rather than silently altering chemistry.
 
+The final replay applies every exclusion as the authored half-open box
+`[left, right) x [top, bottom)`. The recorded exclusion count is measured from
+the exact applied binary mask. This prevents Pillow's inclusive rectangle
+endpoint from erasing the adjacent right-hand column or bottom row.
+
 | Alias | Output image SHA-256 | Edge clearance (L/T/R/B px) | Final ink fraction |
 | --- | --- | --- | ---: |
-| CBP-1 | `d2e6a870dde40fb9ce47f5c0e0d214fed4e51af2fd62fc5de051ace62457065c` | 23/20/17/15 | 0.216646 |
-| CCO-1 | `7e49b2c4c59f252ce79e56efb1867c6428f0d87f727273da5fc4865e003a66ef` | 23/9/17/7 | 0.197144 |
+| CBP-1 | `56584b5888b022e13fdb6ec843fbda00866bbb46470cdc0a258a404fba0683b7` | 23/20/17/15 | 0.216833 |
+| CCO-1 | `d729d818b22be53612b93042bda59eee597313d9c7c6b30d43bcd8d863937437` | 23/9/17/7 | 0.197331 |
 | CCO-2 | `c2f6bb3390747f6f58fcc11010356c1ff9ca8eabfe3dd1aa84e091e834379e02` | 9/30/16/19 | 0.189868 |
-| CCO-3 | `c0214ccfcd3b0c35ada7a0be25dfcbba1c5a2068603902a10f0d453ed22979a1` | 13/24/14/7 | 0.190381 |
+| CCO-3 | `5deb6435e6a5f2b257917951552479df1211972ac6311bd833a4ddf482743e7c` | 13/24/14/7 | 0.190786 |
 
 ## Benchmark comparison
 
@@ -83,9 +88,9 @@ that choice explicit rather than silently altering chemistry.
 | Alias | PR-AM outcome | Detail |
 | --- | --- | --- |
 | CBP-1 | false rejection | MolScribe returned invalid SMILES |
-| CCO-1 | wrong graph | `GGRZFEUMKVLVAM-UHFFFAOYSA-N`, `C50H28N2O3`, confidence 0.571226; same wrong graph as PR-AL |
+| CCO-1 | wrong graph | `GGRZFEUMKVLVAM-UHFFFAOYSA-N`, `C50H28N2O3`, confidence 0.568372; same wrong graph as PR-AL |
 | CCO-2 | false rejection | MolScribe returned invalid SMILES |
-| CCO-3 | wrong graph | `NVOXPLOBAZZLLY-UHFFFAOYSA-N`, `C58H50N2O3`, confidence 0.071648; elemental/carbon count improved but exact graph remains wrong |
+| CCO-3 | wrong graph | `NVOXPLOBAZZLLY-UHFFFAOYSA-N`, `C58H50N2O3`, confidence 0.069470; elemental/carbon count improved but exact graph remains wrong |
 
 The independently replayed benchmark confirms that deterministic cropping
 fixed the known input defects but did not improve exact-graph accuracy on this
