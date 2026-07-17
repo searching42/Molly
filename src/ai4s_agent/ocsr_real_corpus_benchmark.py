@@ -53,6 +53,12 @@ OCSR_REAL_CORPUS_BENCHMARK_REPORT_VERSION = (
 OCSR_REAL_CORPUS_BENCHMARK_PROFILE = (
     "exact_inchikey_source_bound_ocsr_benchmark.v1"
 )
+OCSR_REAL_CORPUS_VERIFICATION_ARTIFACT_VERSION = (
+    "ocsr_real_corpus_benchmark_verification.v1"
+)
+OCSR_REAL_CORPUS_VERIFICATION_PROFILE = (
+    "exact_input_benchmark_replay_verification.v1"
+)
 MINIMUM_CORPUS_PAPER_COUNT = 3
 MINIMUM_CORPUS_SAMPLE_COUNT = 20
 _MAX_REPORT_BYTES = 100 * 1024 * 1024
@@ -487,6 +493,10 @@ class OcsrRealCorpusBenchmarkReport(BaseModel):
     candidate_artifacts: list[OcsrRealCorpusCandidateArtifactBinding]
     paper_count: StrictInt = Field(ge=1)
     sample_count: StrictInt = Field(ge=1)
+    distinct_source_document_sha_count: StrictInt = Field(ge=1)
+    distinct_crop_count: StrictInt = Field(ge=1)
+    distinct_source_locator_count: StrictInt = Field(ge=1)
+    distinct_source_evidence_count: StrictInt = Field(ge=1)
     candidate_ready_count: StrictInt = Field(ge=0)
     candidate_rejected_count: StrictInt = Field(ge=0)
     exact_match_count: StrictInt = Field(ge=0)
@@ -545,6 +555,73 @@ class OcsrRealCorpusBenchmarkReport(BaseModel):
             raise ValueError("OCSR benchmark paper count mismatch")
         if self.sample_count != len(self.results):
             raise ValueError("OCSR benchmark sample count mismatch")
+        source_document_by_id = {
+            item.document_id: item for item in self.source_documents
+        }
+        source_document_ids = [
+            item.document_id for item in self.source_documents
+        ]
+        if (
+            source_document_ids != sorted(source_document_ids)
+            or len(source_document_by_id) != len(self.source_documents)
+        ):
+            raise ValueError("OCSR benchmark source document bindings mismatch")
+        try:
+            source_bindings = [
+                source_document_by_id[item.source_document_id]
+                for item in self.results
+            ]
+        except KeyError as exc:
+            raise ValueError(
+                "OCSR benchmark source document roster mismatch"
+            ) from exc
+        source_sha_papers: dict[str, set[str]] = {}
+        for result, binding in zip(self.results, source_bindings, strict=True):
+            source_sha_papers.setdefault(
+                binding.source_document_sha256,
+                set(),
+            ).add(result.paper_id)
+        if any(len(bound_papers) != 1 for bound_papers in source_sha_papers.values()):
+            raise ValueError(
+                "OCSR benchmark source document SHA binds multiple papers"
+            )
+        distinct_source_document_sha_count = len(source_sha_papers)
+        distinct_crop_count = len({item.image_sha256 for item in self.results})
+        distinct_source_locator_count = len(
+            {
+                (binding.source_document_sha256, result.source_locator)
+                for result, binding in zip(
+                    self.results,
+                    source_bindings,
+                    strict=True,
+                )
+            }
+        )
+        distinct_source_evidence_count = len(
+            {
+                (
+                    binding.source_document_sha256,
+                    result.source_locator,
+                    result.image_sha256,
+                )
+                for result, binding in zip(
+                    self.results,
+                    source_bindings,
+                    strict=True,
+                )
+            }
+        )
+        expected_evidence_counts = {
+            "distinct_source_document_sha_count": (
+                distinct_source_document_sha_count
+            ),
+            "distinct_crop_count": distinct_crop_count,
+            "distinct_source_locator_count": distinct_source_locator_count,
+            "distinct_source_evidence_count": distinct_source_evidence_count,
+        }
+        for field_name, expected in expected_evidence_counts.items():
+            if getattr(self, field_name) != expected:
+                raise ValueError(f"OCSR benchmark {field_name} mismatch")
         expected_counts = {
             "candidate_ready_count": candidate_statuses.count("candidate_ready"),
             "candidate_rejected_count": candidate_statuses.count(
@@ -581,7 +658,13 @@ class OcsrRealCorpusBenchmarkReport(BaseModel):
                 raise ValueError(f"OCSR benchmark {field_name} mismatch")
         expected_scale = (
             self.paper_count >= MINIMUM_CORPUS_PAPER_COUNT
-            and self.sample_count >= MINIMUM_CORPUS_SAMPLE_COUNT
+            and distinct_source_document_sha_count
+            >= MINIMUM_CORPUS_PAPER_COUNT
+            and distinct_crop_count >= MINIMUM_CORPUS_SAMPLE_COUNT
+            and distinct_source_locator_count
+            >= MINIMUM_CORPUS_SAMPLE_COUNT
+            and distinct_source_evidence_count
+            >= MINIMUM_CORPUS_SAMPLE_COUNT
         )
         if self.corpus_scale_ready != expected_scale:
             raise ValueError("OCSR benchmark corpus scale readiness mismatch")
@@ -705,6 +788,161 @@ class OcsrRealCorpusBenchmarkReport(BaseModel):
         return self
 
 
+class OcsrRealCorpusBenchmarkVerificationArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    verification_version: Literal[
+        OCSR_REAL_CORPUS_VERIFICATION_ARTIFACT_VERSION
+    ] = OCSR_REAL_CORPUS_VERIFICATION_ARTIFACT_VERSION
+    verification_profile: Literal[OCSR_REAL_CORPUS_VERIFICATION_PROFILE] = (
+        OCSR_REAL_CORPUS_VERIFICATION_PROFILE
+    )
+    verified_at: str
+    benchmark_id: str
+    benchmark_report_sha256: str
+    benchmark_report_digest: str
+    ground_truth_manifest_sha256: str
+    ground_truth_manifest_digest: str
+    candidate_artifacts: list[OcsrRealCorpusCandidateArtifactBinding]
+    source_documents: list[OcsrRealCorpusSourceDocumentBinding]
+    paper_count: StrictInt = Field(ge=1)
+    sample_count: StrictInt = Field(ge=1)
+    distinct_source_document_sha_count: StrictInt = Field(ge=1)
+    distinct_crop_count: StrictInt = Field(ge=1)
+    distinct_source_locator_count: StrictInt = Field(ge=1)
+    distinct_source_evidence_count: StrictInt = Field(ge=1)
+    exact_match_count: StrictInt = Field(ge=0)
+    wrong_graph_count: StrictInt = Field(ge=0)
+    false_rejection_count: StrictInt = Field(ge=0)
+    report_exact_replay_confirmed: Literal[True] = True
+    upstream_files_replayed: Literal[True] = True
+    candidate_artifacts_mutated: Literal[False] = False
+    material_identity_resolved: Literal[False] = False
+    registry_mutated: Literal[False] = False
+    gold_written: Literal[False] = False
+    dataset_written: Literal[False] = False
+    verification_digest: str
+
+    @field_validator("benchmark_id")
+    @classmethod
+    def validate_benchmark_id(cls, value: str) -> str:
+        return _safe_id(value, field_name="benchmark_id")
+
+    @field_validator("verified_at")
+    @classmethod
+    def validate_verified_at(cls, value: str) -> str:
+        return _authored_text(
+            value,
+            field_name="verified_at",
+            required=True,
+            maximum=200,
+        )
+
+    @field_validator(
+        "benchmark_report_sha256",
+        "benchmark_report_digest",
+        "ground_truth_manifest_sha256",
+        "ground_truth_manifest_digest",
+        "verification_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _normalize_sha256(value, field_name=str(info.field_name))
+
+    @model_validator(mode="after")
+    def validate_verification_artifact(
+        self,
+    ) -> OcsrRealCorpusBenchmarkVerificationArtifact:
+        artifact_run_ids = [item.run_id for item in self.candidate_artifacts]
+        if (
+            artifact_run_ids != sorted(artifact_run_ids)
+            or len(artifact_run_ids) != len(set(artifact_run_ids))
+            or sum(item.result_count for item in self.candidate_artifacts)
+            != self.sample_count
+        ):
+            raise ValueError(
+                "OCSR benchmark verification candidate bindings mismatch"
+            )
+        document_ids = [item.document_id for item in self.source_documents]
+        if document_ids != sorted(document_ids) or len(document_ids) != len(
+            set(document_ids)
+        ):
+            raise ValueError(
+                "OCSR benchmark verification document bindings mismatch"
+            )
+        if (
+            self.exact_match_count
+            + self.wrong_graph_count
+            + self.false_rejection_count
+            != self.sample_count
+        ):
+            raise ValueError("OCSR benchmark verification outcome count mismatch")
+        expected_digest = _stable_hash(
+            self.model_dump(mode="json", exclude={"verification_digest"})
+        )
+        if self.verification_digest != expected_digest:
+            raise ValueError("OCSR benchmark verification digest mismatch")
+        return self
+
+
+def _build_ocsr_real_corpus_benchmark_verification_artifact(
+    report: OcsrRealCorpusBenchmarkReport,
+    *,
+    benchmark_report_sha256: str,
+    verified_at: str | None = None,
+) -> OcsrRealCorpusBenchmarkVerificationArtifact:
+    payload: dict[str, Any] = {
+        "verification_version": (
+            OCSR_REAL_CORPUS_VERIFICATION_ARTIFACT_VERSION
+        ),
+        "verification_profile": OCSR_REAL_CORPUS_VERIFICATION_PROFILE,
+        "verified_at": verified_at
+        or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "benchmark_id": report.benchmark_id,
+        "benchmark_report_sha256": _normalize_sha256(
+            benchmark_report_sha256,
+            field_name="benchmark_report_sha256",
+        ),
+        "benchmark_report_digest": report.report_digest,
+        "ground_truth_manifest_sha256": (
+            report.ground_truth_manifest_sha256
+        ),
+        "ground_truth_manifest_digest": (
+            report.ground_truth_manifest_digest
+        ),
+        "candidate_artifacts": [
+            item.model_dump(mode="json") for item in report.candidate_artifacts
+        ],
+        "source_documents": [
+            item.model_dump(mode="json") for item in report.source_documents
+        ],
+        "paper_count": report.paper_count,
+        "sample_count": report.sample_count,
+        "distinct_source_document_sha_count": (
+            report.distinct_source_document_sha_count
+        ),
+        "distinct_crop_count": report.distinct_crop_count,
+        "distinct_source_locator_count": (
+            report.distinct_source_locator_count
+        ),
+        "distinct_source_evidence_count": (
+            report.distinct_source_evidence_count
+        ),
+        "exact_match_count": report.exact_match_count,
+        "wrong_graph_count": report.wrong_graph_count,
+        "false_rejection_count": report.false_rejection_count,
+        "report_exact_replay_confirmed": True,
+        "upstream_files_replayed": True,
+        "candidate_artifacts_mutated": False,
+        "material_identity_resolved": False,
+        "registry_mutated": False,
+        "gold_written": False,
+        "dataset_written": False,
+    }
+    payload["verification_digest"] = _stable_hash(payload)
+    return OcsrRealCorpusBenchmarkVerificationArtifact.model_validate(payload)
+
+
 def build_ocsr_real_corpus_ground_truth_manifest(
     *,
     benchmark_id: str,
@@ -817,6 +1055,16 @@ def evaluate_ocsr_real_corpus_benchmark(
     }
     if set(document_by_id) != expected_document_ids:
         raise ValueError("OCSR benchmark source-document roster mismatch")
+    source_sha_papers: dict[str, set[str]] = {}
+    for sample in ground_truth.samples:
+        source_sha_papers.setdefault(
+            sample.source_document_sha256,
+            set(),
+        ).add(sample.paper_id)
+    if any(len(bound_papers) != 1 for bound_papers in source_sha_papers.values()):
+        raise ValueError(
+            "OCSR benchmark source document SHA binds multiple papers"
+        )
     for document_id, binding in document_by_id.items():
         used_as_source = any(
             sample.source_document_id == document_id
@@ -956,7 +1204,40 @@ def evaluate_ocsr_real_corpus_benchmark(
         for run_id, (artifact_sha, artifact) in sorted(artifact_by_run.items())
     ]
     source_bindings = sorted(source_documents, key=lambda item: item.document_id)
+    source_document_by_id = {
+        item.document_id: item for item in source_bindings
+    }
     sample_count = len(results)
+    distinct_source_document_sha_count = len(
+        {
+            source_document_by_id[item.source_document_id].source_document_sha256
+            for item in results
+        }
+    )
+    distinct_crop_count = len({item.image_sha256 for item in results})
+    distinct_source_locator_count = len(
+        {
+            (
+                source_document_by_id[
+                    item.source_document_id
+                ].source_document_sha256,
+                item.source_locator,
+            )
+            for item in results
+        }
+    )
+    distinct_source_evidence_count = len(
+        {
+            (
+                source_document_by_id[
+                    item.source_document_id
+                ].source_document_sha256,
+                item.source_locator,
+                item.image_sha256,
+            )
+            for item in results
+        }
+    )
     candidate_ready_count = sum(
         item.candidate_status == "candidate_ready" for item in results
     )
@@ -968,7 +1249,10 @@ def evaluate_ocsr_real_corpus_benchmark(
     )
     corpus_scale_ready = (
         len(paper_ids) >= MINIMUM_CORPUS_PAPER_COUNT
-        and sample_count >= MINIMUM_CORPUS_SAMPLE_COUNT
+        and distinct_source_document_sha_count >= MINIMUM_CORPUS_PAPER_COUNT
+        and distinct_crop_count >= MINIMUM_CORPUS_SAMPLE_COUNT
+        and distinct_source_locator_count >= MINIMUM_CORPUS_SAMPLE_COUNT
+        and distinct_source_evidence_count >= MINIMUM_CORPUS_SAMPLE_COUNT
     )
     timestamp = generated_at or datetime.now(timezone.utc).isoformat().replace(
         "+00:00", "Z"
@@ -989,6 +1273,12 @@ def evaluate_ocsr_real_corpus_benchmark(
         ],
         "paper_count": len(paper_ids),
         "sample_count": sample_count,
+        "distinct_source_document_sha_count": (
+            distinct_source_document_sha_count
+        ),
+        "distinct_crop_count": distinct_crop_count,
+        "distinct_source_locator_count": distinct_source_locator_count,
+        "distinct_source_evidence_count": distinct_source_evidence_count,
         "candidate_ready_count": candidate_ready_count,
         "candidate_rejected_count": candidate_rejected_count,
         "exact_match_count": exact_match_count,
@@ -1167,6 +1457,93 @@ def _publish_report(
             os.close(output_descriptor)
 
 
+def _read_exact_benchmark_inputs(
+    *,
+    ground_truth_manifest_json: Path,
+    candidate_artifact_jsons: list[Path],
+    source_document_paths: dict[str, Path],
+) -> tuple[
+    bytes,
+    OcsrRealCorpusGroundTruthManifest,
+    list[tuple[str, OcsrCandidateArtifact]],
+    list[OcsrRealCorpusSourceDocumentBinding],
+]:
+    if not candidate_artifact_jsons:
+        raise ValueError("OCSR benchmark requires candidate artifacts")
+    ground_truth_bytes = _read_exact_regular_file(
+        _absolute_path(ground_truth_manifest_json)
+    )
+    ground_truth = OcsrRealCorpusGroundTruthManifest.model_validate(
+        _load_json_without_duplicate_keys(ground_truth_bytes)
+    )
+    candidate_artifacts: list[tuple[str, OcsrCandidateArtifact]] = []
+    for artifact_path in candidate_artifact_jsons:
+        artifact_bytes = _read_exact_regular_file(_absolute_path(artifact_path))
+        candidate_artifacts.append(
+            (
+                _sha256_bytes(artifact_bytes),
+                OcsrCandidateArtifact.model_validate(
+                    _load_json_without_duplicate_keys(artifact_bytes)
+                ),
+            )
+        )
+    expected_document_ids = {
+        document_id
+        for sample in ground_truth.samples
+        for document_id in (
+            sample.source_document_id,
+            sample.reference_document_id,
+        )
+    }
+    if set(source_document_paths) != expected_document_ids:
+        raise ValueError("OCSR benchmark source-document path roster mismatch")
+    source_documents: list[OcsrRealCorpusSourceDocumentBinding] = []
+    for document_id, source_path in sorted(source_document_paths.items()):
+        source_bytes = _read_exact_regular_file(_absolute_path(source_path))
+        source_papers = {
+            sample.paper_id
+            for sample in ground_truth.samples
+            if document_id
+            in {sample.source_document_id, sample.reference_document_id}
+        }
+        if len(source_papers) != 1:
+            raise ValueError("OCSR benchmark document must bind one paper")
+        used_as_source = any(
+            sample.source_document_id == document_id
+            for sample in ground_truth.samples
+        )
+        used_as_reference = any(
+            sample.reference_document_id == document_id
+            for sample in ground_truth.samples
+        )
+        document_role: Literal[
+            "source_diagram",
+            "structure_reference",
+            "source_diagram_and_structure_reference",
+        ]
+        if used_as_source and used_as_reference:
+            document_role = "source_diagram_and_structure_reference"
+        elif used_as_source:
+            document_role = "source_diagram"
+        else:
+            document_role = "structure_reference"
+        source_documents.append(
+            OcsrRealCorpusSourceDocumentBinding(
+                document_id=document_id,
+                paper_id=next(iter(source_papers)),
+                document_role=document_role,
+                source_document_sha256=_sha256_bytes(source_bytes),
+                source_document_byte_size=len(source_bytes),
+            )
+        )
+    return (
+        ground_truth_bytes,
+        ground_truth,
+        candidate_artifacts,
+        source_documents,
+    )
+
+
 def evaluate_ocsr_real_corpus_benchmark_from_files(
     *,
     ground_truth_manifest_json: Path,
@@ -1175,80 +1552,22 @@ def evaluate_ocsr_real_corpus_benchmark_from_files(
     output_json: Path,
     generated_at: str | None = None,
 ) -> OcsrRealCorpusBenchmarkReport:
-    if not candidate_artifact_jsons:
-        raise ValueError("OCSR benchmark requires candidate artifacts")
     output_json = _absolute_path(output_json)
     with _pinned_output_parent(output_json.parent) as (
         parent_descriptor,
         parent_stat,
     ):
         _ensure_fresh_output_at(parent_descriptor, output_json.name)
-        ground_truth_bytes = _read_exact_regular_file(
-            _absolute_path(ground_truth_manifest_json)
+        (
+            ground_truth_bytes,
+            ground_truth,
+            candidate_artifacts,
+            source_documents,
+        ) = _read_exact_benchmark_inputs(
+            ground_truth_manifest_json=ground_truth_manifest_json,
+            candidate_artifact_jsons=candidate_artifact_jsons,
+            source_document_paths=source_document_paths,
         )
-        ground_truth = OcsrRealCorpusGroundTruthManifest.model_validate(
-            _load_json_without_duplicate_keys(ground_truth_bytes)
-        )
-        candidate_artifacts: list[tuple[str, OcsrCandidateArtifact]] = []
-        for artifact_path in candidate_artifact_jsons:
-            artifact_bytes = _read_exact_regular_file(_absolute_path(artifact_path))
-            candidate_artifacts.append(
-                (
-                    _sha256_bytes(artifact_bytes),
-                    OcsrCandidateArtifact.model_validate(
-                        _load_json_without_duplicate_keys(artifact_bytes)
-                    ),
-                )
-            )
-        expected_document_ids = {
-            document_id
-            for sample in ground_truth.samples
-            for document_id in (
-                sample.source_document_id,
-                sample.reference_document_id,
-            )
-        }
-        if set(source_document_paths) != expected_document_ids:
-            raise ValueError("OCSR benchmark source-document path roster mismatch")
-        source_documents: list[OcsrRealCorpusSourceDocumentBinding] = []
-        for document_id, source_path in sorted(source_document_paths.items()):
-            source_bytes = _read_exact_regular_file(_absolute_path(source_path))
-            source_papers = {
-                sample.paper_id
-                for sample in ground_truth.samples
-                if document_id
-                in {sample.source_document_id, sample.reference_document_id}
-            }
-            if len(source_papers) != 1:
-                raise ValueError("OCSR benchmark document must bind one paper")
-            used_as_source = any(
-                sample.source_document_id == document_id
-                for sample in ground_truth.samples
-            )
-            used_as_reference = any(
-                sample.reference_document_id == document_id
-                for sample in ground_truth.samples
-            )
-            document_role: Literal[
-                "source_diagram",
-                "structure_reference",
-                "source_diagram_and_structure_reference",
-            ]
-            if used_as_source and used_as_reference:
-                document_role = "source_diagram_and_structure_reference"
-            elif used_as_source:
-                document_role = "source_diagram"
-            else:
-                document_role = "structure_reference"
-            source_documents.append(
-                OcsrRealCorpusSourceDocumentBinding(
-                    document_id=document_id,
-                    paper_id=next(iter(source_papers)),
-                    document_role=document_role,
-                    source_document_sha256=_sha256_bytes(source_bytes),
-                    source_document_byte_size=len(source_bytes),
-                )
-            )
         report = evaluate_ocsr_real_corpus_benchmark(
             ground_truth,
             ground_truth_manifest_sha256=_sha256_bytes(ground_truth_bytes),
@@ -1272,6 +1591,228 @@ def evaluate_ocsr_real_corpus_benchmark_from_files(
             parent_stat=parent_stat,
             encoded=encoded,
             report=report,
+        )
+
+
+def _validate_published_verification_artifact(
+    *,
+    output_path: Path,
+    parent_descriptor: int,
+    parent_stat: os.stat_result,
+    output_descriptor: int,
+    created_stat: os.stat_result,
+    expected_bytes: bytes,
+    expected_artifact: OcsrRealCorpusBenchmarkVerificationArtifact,
+) -> OcsrRealCorpusBenchmarkVerificationArtifact:
+    current_parent = _validate_directory_path_binding(
+        output_path.parent,
+        parent_descriptor,
+        error_message="OCSR benchmark verification output parent changed",
+    )
+    named_stat = os.stat(
+        output_path.name,
+        dir_fd=parent_descriptor,
+        follow_symlinks=False,
+    )
+    open_stat = os.fstat(output_descriptor)
+    if (
+        current_parent.st_dev != parent_stat.st_dev
+        or current_parent.st_ino != parent_stat.st_ino
+        or not stat.S_ISREG(named_stat.st_mode)
+        or named_stat.st_dev != created_stat.st_dev
+        or named_stat.st_ino != created_stat.st_ino
+        or named_stat.st_size != len(expected_bytes)
+        or open_stat.st_dev != created_stat.st_dev
+        or open_stat.st_ino != created_stat.st_ino
+        or open_stat.st_size != len(expected_bytes)
+    ):
+        raise ValueError(
+            "OCSR benchmark verification output publication changed"
+        )
+    published_bytes = _read_open_descriptor(
+        output_descriptor,
+        max_bytes=_MAX_REPORT_BYTES,
+    )
+    if published_bytes != expected_bytes:
+        raise ValueError("OCSR benchmark verification output bytes changed")
+    validated = OcsrRealCorpusBenchmarkVerificationArtifact.model_validate(
+        _load_json_without_duplicate_keys(published_bytes)
+    )
+    if (
+        validated.model_dump(mode="json")
+        != expected_artifact.model_dump(mode="json")
+    ):
+        raise ValueError("OCSR benchmark verification artifact changed")
+    if (
+        _read_open_descriptor(output_descriptor, max_bytes=_MAX_REPORT_BYTES)
+        != expected_bytes
+    ):
+        raise ValueError(
+            "OCSR benchmark verification output changed during validation"
+        )
+    final_named = os.stat(
+        output_path.name,
+        dir_fd=parent_descriptor,
+        follow_symlinks=False,
+    )
+    final_parent = _validate_directory_path_binding(
+        output_path.parent,
+        parent_descriptor,
+        error_message="OCSR benchmark verification output parent changed",
+    )
+    if (
+        final_named.st_dev != created_stat.st_dev
+        or final_named.st_ino != created_stat.st_ino
+        or final_named.st_size != len(expected_bytes)
+        or final_parent.st_dev != parent_stat.st_dev
+        or final_parent.st_ino != parent_stat.st_ino
+    ):
+        raise ValueError(
+            "OCSR benchmark verification output changed after validation"
+        )
+    return validated
+
+
+def _publish_verification_artifact(
+    *,
+    output_path: Path,
+    parent_descriptor: int,
+    parent_stat: os.stat_result,
+    encoded: bytes,
+    artifact: OcsrRealCorpusBenchmarkVerificationArtifact,
+) -> OcsrRealCorpusBenchmarkVerificationArtifact:
+    no_follow, _ = _safe_dirfd_flags()
+    if not encoded or len(encoded) > _MAX_REPORT_BYTES:
+        raise ValueError(
+            "OCSR benchmark verification output has an unsupported size"
+        )
+    output_descriptor = -1
+    created_stat: os.stat_result | None = None
+    keep_output = False
+    try:
+        _validate_directory_path_binding(
+            output_path.parent,
+            parent_descriptor,
+            error_message="OCSR benchmark verification output parent changed",
+        )
+        _ensure_fresh_output_at(parent_descriptor, output_path.name)
+        output_descriptor = os.open(
+            output_path.name,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | no_follow,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        created_stat = os.fstat(output_descriptor)
+        if not stat.S_ISREG(created_stat.st_mode) or created_stat.st_size != 0:
+            raise ValueError(
+                "OCSR benchmark verification output inode is invalid"
+            )
+        _write_all(output_descriptor, encoded)
+        os.fsync(output_descriptor)
+        os.fsync(parent_descriptor)
+        validated = _validate_published_verification_artifact(
+            output_path=output_path,
+            parent_descriptor=parent_descriptor,
+            parent_stat=parent_stat,
+            output_descriptor=output_descriptor,
+            created_stat=created_stat,
+            expected_bytes=encoded,
+            expected_artifact=artifact,
+        )
+        os.fsync(parent_descriptor)
+        keep_output = True
+        return validated
+    except FileExistsError as exc:
+        raise ValueError(
+            "OCSR benchmark verification output already exists"
+        ) from exc
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError(
+            "OCSR benchmark verification output cannot be published"
+        ) from exc
+    finally:
+        if created_stat is not None and not keep_output:
+            try:
+                current_stat = os.stat(
+                    output_path.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    current_stat.st_dev == created_stat.st_dev
+                    and current_stat.st_ino == created_stat.st_ino
+                ):
+                    os.unlink(output_path.name, dir_fd=parent_descriptor)
+                    os.fsync(parent_descriptor)
+            except OSError:
+                pass
+        if output_descriptor != -1:
+            os.close(output_descriptor)
+
+
+def verify_ocsr_real_corpus_benchmark_from_files(
+    *,
+    benchmark_report_json: Path,
+    ground_truth_manifest_json: Path,
+    candidate_artifact_jsons: list[Path],
+    source_document_paths: dict[str, Path],
+    output_json: Path,
+    verified_at: str | None = None,
+) -> OcsrRealCorpusBenchmarkVerificationArtifact:
+    output_json = _absolute_path(output_json)
+    with _pinned_output_parent(output_json.parent) as (
+        parent_descriptor,
+        parent_stat,
+    ):
+        _ensure_fresh_output_at(parent_descriptor, output_json.name)
+        report_bytes = _read_exact_regular_file(
+            _absolute_path(benchmark_report_json)
+        )
+        report = OcsrRealCorpusBenchmarkReport.model_validate(
+            _load_json_without_duplicate_keys(report_bytes)
+        )
+        (
+            ground_truth_bytes,
+            ground_truth,
+            candidate_artifacts,
+            source_documents,
+        ) = _read_exact_benchmark_inputs(
+            ground_truth_manifest_json=ground_truth_manifest_json,
+            candidate_artifact_jsons=candidate_artifact_jsons,
+            source_document_paths=source_document_paths,
+        )
+        replayed = evaluate_ocsr_real_corpus_benchmark(
+            ground_truth,
+            ground_truth_manifest_sha256=_sha256_bytes(ground_truth_bytes),
+            candidate_artifacts=candidate_artifacts,
+            source_documents=source_documents,
+            generated_at=report.generated_at,
+        )
+        if replayed.model_dump(mode="json") != report.model_dump(mode="json"):
+            raise ValueError("OCSR benchmark report does not exactly replay")
+        artifact = _build_ocsr_real_corpus_benchmark_verification_artifact(
+            report,
+            benchmark_report_sha256=_sha256_bytes(report_bytes),
+            verified_at=verified_at,
+        )
+        encoded = (
+            json.dumps(
+                artifact.model_dump(mode="json"),
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n"
+        ).encode("utf-8")
+        return _publish_verification_artifact(
+            output_path=output_json,
+            parent_descriptor=parent_descriptor,
+            parent_stat=parent_stat,
+            encoded=encoded,
+            artifact=artifact,
         )
 
 
@@ -1305,14 +1846,51 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         type=_parse_source_document,
     )
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--verify-report", type=Path)
+    parser.add_argument("--verification-output", type=Path)
     args = parser.parse_args(argv)
+    if args.verify_report is None:
+        if args.output is None or args.verification_output is not None:
+            parser.error(
+                "evaluation requires --output and forbids --verification-output"
+            )
+    elif args.output is not None or args.verification_output is None:
+        parser.error(
+            "verification requires --verify-report and --verification-output "
+            "and forbids --output"
+        )
     source_documents: dict[str, Path] = {}
     for document_id, path in args.source_document:
         if document_id in source_documents:
             parser.error(f"duplicate source document for {document_id}")
         source_documents[document_id] = path
     try:
+        if args.verify_report is not None:
+            verification = verify_ocsr_real_corpus_benchmark_from_files(
+                benchmark_report_json=args.verify_report,
+                ground_truth_manifest_json=args.ground_truth,
+                candidate_artifact_jsons=args.candidate_artifact,
+                source_document_paths=source_documents,
+                output_json=args.verification_output,
+            )
+            print(
+                json.dumps(
+                    {
+                        "benchmark_id": verification.benchmark_id,
+                        "paper_count": verification.paper_count,
+                        "sample_count": verification.sample_count,
+                        "report_exact_replay_confirmed": (
+                            verification.report_exact_replay_confirmed
+                        ),
+                        "verification_digest": (
+                            verification.verification_digest
+                        ),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
         report = evaluate_ocsr_real_corpus_benchmark_from_files(
             ground_truth_manifest_json=args.ground_truth,
             candidate_artifact_jsons=args.candidate_artifact,

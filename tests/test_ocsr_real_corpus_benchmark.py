@@ -18,11 +18,13 @@ from ai4s_agent.ocsr_candidate_execution import (
 )
 from ai4s_agent.ocsr_real_corpus_benchmark import (
     OcsrRealCorpusBenchmarkReport,
+    OcsrRealCorpusBenchmarkVerificationArtifact,
     OcsrRealCorpusGroundTruthManifest,
     OcsrRealCorpusSourceDocumentBinding,
     build_ocsr_real_corpus_ground_truth_manifest,
     evaluate_ocsr_real_corpus_benchmark,
     evaluate_ocsr_real_corpus_benchmark_from_files,
+    verify_ocsr_real_corpus_benchmark_from_files,
 )
 
 
@@ -43,12 +45,20 @@ def _candidate_artifact(
     *,
     run_id: str = "benchmark-run-001",
     predictions: list[str] | None = None,
+    unique_image_bytes: bool = True,
 ) -> tuple[OcsrCandidateArtifact, OcsrCandidateRequest]:
     predictions = predictions or ["CCO", "CCC", "not-smiles"]
     items: list[dict[str, str]] = []
     for index in range(len(predictions)):
         image_path = tmp_path / f"{run_id}-candidate-{index:03d}.png"
-        Image.new("RGB", (32, 24), "white").save(image_path)
+        color: str | tuple[int, int, int] = "white"
+        if unique_image_bytes:
+            color = (
+                (index + 1) % 256,
+                (index * 17 + 3) % 256,
+                (index * 31 + 5) % 256,
+            )
+        Image.new("RGB", (32, 24), color).save(image_path)
         items.append(
             {
                 "candidate_id": f"candidate-{index:03d}",
@@ -394,9 +404,115 @@ def test_scale_claim_requires_three_papers_and_twenty_samples(
 
     assert report.paper_count == 3
     assert report.sample_count == 20
+    assert report.distinct_source_document_sha_count == 3
+    assert report.distinct_crop_count == 20
+    assert report.distinct_source_locator_count == 20
+    assert report.distinct_source_evidence_count == 20
     assert report.corpus_scale_ready
     assert report.benchmark_scope == "real_corpus_benchmark"
     assert report.exact_match_count == 20
+
+
+def test_scale_claim_rejects_one_source_pdf_bound_to_multiple_papers(
+    tmp_path: Path,
+) -> None:
+    artifact, request = _candidate_artifact(
+        tmp_path,
+        predictions=["CCO"] * 20,
+    )
+    shared_source = b"%PDF-1.4 shared-paper-bytes"
+    paper_ids = ["paper001"] * 7 + ["paper002"] * 7 + ["paper003"] * 6
+    ground_truth = _ground_truth_manifest(
+        request,
+        source_document_sha256=_sha256(shared_source),
+        paper_ids=paper_ids,
+    )
+
+    with pytest.raises(ValueError, match="SHA binds multiple papers"):
+        evaluate_ocsr_real_corpus_benchmark(
+            ground_truth,
+            ground_truth_manifest_sha256="sha256:" + "3" * 64,
+            candidate_artifacts=[("sha256:" + "4" * 64, artifact)],
+            source_documents=[
+                _source_binding(
+                    paper_id=paper_id,
+                    source_bytes=shared_source,
+                )
+                for paper_id in ("paper001", "paper002", "paper003")
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    (
+        "duplicate_crops",
+        "duplicate_locators",
+        "expected_crop_count",
+        "expected_locator_count",
+    ),
+    [
+        (True, False, 1, 20),
+        (False, True, 20, 3),
+    ],
+)
+def test_scale_claim_uses_distinct_source_diagram_evidence(
+    tmp_path: Path,
+    duplicate_crops: bool,
+    duplicate_locators: bool,
+    expected_crop_count: int,
+    expected_locator_count: int,
+) -> None:
+    artifact, request = _candidate_artifact(
+        tmp_path,
+        predictions=["CCO"] * 20,
+        unique_image_bytes=not duplicate_crops,
+    )
+    source_bytes = {
+        "paper001": b"%PDF-1.4 paper001",
+        "paper002": b"%PDF-1.4 paper002",
+        "paper003": b"%PDF-1.4 paper003",
+    }
+    paper_ids = ["paper001"] * 7 + ["paper002"] * 7 + ["paper003"] * 6
+    first_truth = _ground_truth_manifest(
+        request,
+        source_document_sha256=_sha256(source_bytes["paper001"]),
+        paper_ids=paper_ids,
+    )
+    samples: list[dict[str, object]] = []
+    for sample in first_truth.samples:
+        payload = sample.model_dump(mode="json", exclude={"sample_digest"})
+        payload["source_document_sha256"] = _sha256(
+            source_bytes[sample.paper_id]
+        )
+        payload["reference_document_sha256"] = _sha256(
+            source_bytes[sample.paper_id]
+        )
+        if duplicate_locators:
+            payload["source_locator"] = f"{sample.paper_id}:figure-1:shared"
+        samples.append(payload)
+    ground_truth = build_ocsr_real_corpus_ground_truth_manifest(
+        benchmark_id="duplicate-evidence-scale-test",
+        corpus_description="Duplicate source evidence scale test.",
+        samples=samples,
+        created_at="2026-07-17T00:02:00Z",
+    )
+
+    report = evaluate_ocsr_real_corpus_benchmark(
+        ground_truth,
+        ground_truth_manifest_sha256="sha256:" + "3" * 64,
+        candidate_artifacts=[("sha256:" + "4" * 64, artifact)],
+        source_documents=[
+            _source_binding(paper_id=paper_id, source_bytes=value)
+            for paper_id, value in source_bytes.items()
+        ],
+    )
+
+    assert report.paper_count == 3
+    assert report.sample_count == 20
+    assert report.distinct_crop_count == expected_crop_count
+    assert report.distinct_source_locator_count == expected_locator_count
+    assert not report.corpus_scale_ready
+    assert report.benchmark_scope == "bounded_real_paper_canary"
 
 
 def _file_fixture(
@@ -441,6 +557,137 @@ def test_file_runner_publishes_exact_validated_report(tmp_path: Path) -> None:
     assert published.source_documents[0].source_document_sha256 == _sha256(
         source_path.read_bytes()
     )
+
+
+def test_exact_input_verifier_replays_and_publishes_receipt(
+    tmp_path: Path,
+) -> None:
+    truth_path, artifact_path, source_path, report_path = _file_fixture(tmp_path)
+    report = evaluate_ocsr_real_corpus_benchmark_from_files(
+        ground_truth_manifest_json=truth_path,
+        candidate_artifact_jsons=[artifact_path],
+        source_document_paths={"paper001-main": source_path},
+        output_json=report_path,
+        generated_at="2026-07-17T00:03:00Z",
+    )
+    verification_output = tmp_path / "verification" / "verified.json"
+
+    verification = verify_ocsr_real_corpus_benchmark_from_files(
+        benchmark_report_json=report_path,
+        ground_truth_manifest_json=truth_path,
+        candidate_artifact_jsons=[artifact_path],
+        source_document_paths={"paper001-main": source_path},
+        output_json=verification_output,
+        verified_at="2026-07-17T00:04:00Z",
+    )
+
+    published = OcsrRealCorpusBenchmarkVerificationArtifact.model_validate_json(
+        verification_output.read_bytes()
+    )
+    assert published.model_dump(mode="json") == verification.model_dump(
+        mode="json"
+    )
+    assert verification.benchmark_report_sha256 == _sha256(
+        report_path.read_bytes()
+    )
+    assert verification.benchmark_report_digest == report.report_digest
+    assert verification.report_exact_replay_confirmed
+    assert verification.upstream_files_replayed
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "candidate_result_digest",
+        "ground_truth_sample_digest",
+        "ground_truth_manifest_sha256",
+        "ground_truth_manifest_digest",
+        "checkpoint_sha256",
+        "source_document_sha256",
+        "source_document_byte_size",
+    ],
+)
+def test_exact_input_verifier_rejects_fully_resigned_provenance_tamper(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    truth_path, artifact_path, source_path, report_path = _file_fixture(tmp_path)
+    evaluate_ocsr_real_corpus_benchmark_from_files(
+        ground_truth_manifest_json=truth_path,
+        candidate_artifact_jsons=[artifact_path],
+        source_document_paths={"paper001-main": source_path},
+        output_json=report_path,
+        generated_at="2026-07-17T00:03:00Z",
+    )
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    if tamper == "candidate_result_digest":
+        payload["results"][0]["candidate_result_digest"] = "sha256:" + "8" * 64
+    elif tamper == "ground_truth_sample_digest":
+        payload["results"][0]["ground_truth_sample_digest"] = (
+            "sha256:" + "8" * 64
+        )
+    elif tamper in {
+        "ground_truth_manifest_sha256",
+        "ground_truth_manifest_digest",
+    }:
+        payload[tamper] = "sha256:" + "8" * 64
+    elif tamper == "checkpoint_sha256":
+        payload["candidate_artifacts"][0]["checkpoint_sha256"] = (
+            "sha256:" + "8" * 64
+        )
+    elif tamper == "source_document_sha256":
+        payload["source_documents"][0]["source_document_sha256"] = (
+            "sha256:" + "8" * 64
+        )
+    else:
+        payload["source_documents"][0]["source_document_byte_size"] += 1
+    payload["report_digest"] = benchmark_module._stable_hash(
+        {key: value for key, value in payload.items() if key != "report_digest"}
+    )
+    OcsrRealCorpusBenchmarkReport.model_validate(payload)
+    tampered_report = tmp_path / f"tampered-{tamper}.json"
+    tampered_report.write_text(
+        json.dumps(payload, sort_keys=True),
+        encoding="utf-8",
+    )
+    verification_output = tmp_path / "verification" / "verified.json"
+
+    with pytest.raises(ValueError, match="does not exactly replay"):
+        verify_ocsr_real_corpus_benchmark_from_files(
+            benchmark_report_json=tampered_report,
+            ground_truth_manifest_json=truth_path,
+            candidate_artifact_jsons=[artifact_path],
+            source_document_paths={"paper001-main": source_path},
+            output_json=verification_output,
+        )
+
+    assert not verification_output.exists()
+
+
+def test_exact_input_verifier_never_overwrites_existing_receipt(
+    tmp_path: Path,
+) -> None:
+    truth_path, artifact_path, source_path, report_path = _file_fixture(tmp_path)
+    evaluate_ocsr_real_corpus_benchmark_from_files(
+        ground_truth_manifest_json=truth_path,
+        candidate_artifact_jsons=[artifact_path],
+        source_document_paths={"paper001-main": source_path},
+        output_json=report_path,
+    )
+    verification_output = tmp_path / "verification" / "verified.json"
+    verification_output.parent.mkdir()
+    verification_output.write_text("keep-me", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="output already exists"):
+        verify_ocsr_real_corpus_benchmark_from_files(
+            benchmark_report_json=report_path,
+            ground_truth_manifest_json=truth_path,
+            candidate_artifact_jsons=[artifact_path],
+            source_document_paths={"paper001-main": source_path},
+            output_json=verification_output,
+        )
+
+    assert verification_output.read_text(encoding="utf-8") == "keep-me"
 
 
 def test_file_runner_binds_separate_source_and_reference_documents(

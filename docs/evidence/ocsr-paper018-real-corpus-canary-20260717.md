@@ -12,7 +12,8 @@ not a corpus-scale accuracy claim.
 | paper018 supporting information | systematic names and characterization | `09f028ec956f63f94af9735be7532f41cc040901c44e16effc7ab2b4670c37dc` |
 | hardened OCSR candidate artifact | four MolScribe results | `7e2d3b50e592f596b3e2bc1dc2bccc8ccd0ede05a4f096dc470a81e3c73a8ec2` |
 | reviewed ground-truth manifest | four exact candidate bindings | `cbd13f55918790841d2cfd7f21de7844700cc1f21a2fa456812432e5e4032894` |
-| benchmark report | immutable report bytes | `4c902660d83ee29bc1e6ceb1b37074293bf5a50fa59a4abfb41df1deb6ac88ee` |
+| benchmark report | immutable report bytes | `e666114dfed1a690521f2cb9544cab97d531f8f8a7a9b008d32b85ba9ad4d7a0` |
+| verification artifact | exact-input replay receipt | `113ef1006ba383f8157493411d7ade8547f3469e968f7d44afec12cf03c42d93` |
 
 Additional provenance:
 
@@ -25,7 +26,9 @@ Additional provenance:
 | truth benchmark ID | `paper018-figure1-ocsr-canary-20260717` |
 | truth manifest digest | `sha256:06337e7f2284d3d7378d88a8365aa2ad689364f76eb7807c5d3743be94a89698` |
 | truth resolver | OPSIN web service `2.9.0` |
-| report digest | `sha256:0e7f77f617bfb6b321ed40f757c407b52fae82faeb8de2725cf9cd2f4bd39749` |
+| report digest | `sha256:5f846717f99f0dd66be460e348ebaad4cb6f164eda69d219d86f93600e498f3c` |
+| verification digest | `sha256:4732fec8f60d97bc4a02840075b0be5c1b198e708af410b4866b15e3c3ac4bb3` |
+| exact-input replay | confirmed |
 | benchmark scope | `bounded_real_paper_canary` |
 
 The source PDFs, image crops, truth JSON, candidate JSON, and report JSON remain
@@ -57,7 +60,11 @@ than silently discarded.
 | Metric | Value |
 | --- | ---: |
 | paper count | 1 |
-| sample count | 4 |
+| metadata sample count | 4 |
+| distinct source-document SHA count | 1 |
+| distinct crop count | 4 |
+| distinct source locator count | 4 |
+| distinct source evidence count | 4 |
 | candidate ready | 2 |
 | candidate rejected | 2 |
 | exact InChIKey matches | 0 |
@@ -77,6 +84,11 @@ than silently discarded.
 
 Neither ready candidate was correct, so confidence did not discriminate a
 usable graph in this canary.
+
+The post-write verifier independently re-read the report, truth manifest,
+candidate artifact, main article, and supporting information; rebuilt every
+result with the persisted report timestamp; and confirmed exact report model
+equality before publishing the verification artifact.
 
 ## Failure analysis and next decision
 
