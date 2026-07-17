@@ -17,7 +17,10 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The full scientific suite currently takes about 14-15 minutes on hosted
+    # runners. Leave enough time to write pytest evidence and enforce its exit
+    # status instead of cancelling the job before those fail-closed steps run.
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
