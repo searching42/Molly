@@ -28,7 +28,13 @@ _BENZENE = {
 
 
 def _resolver(name: str) -> OpsinExchange:
-    assert name in {"benzene", "2-phenylbenzen-1-amine"}
+    assert name in {
+        "benzene",
+        "2-phenylbenzen-1-amine",
+        "3-methyl-2-ethylbenzene",
+        "alpha-Beta",
+        "alpha-(Beta)",
+    }
     return OpsinExchange(
         endpoint_url=f"https://www.ebi.ac.uk/opsin/ws/{quote(name, safe='')}.json",
         http_status=200,
@@ -36,20 +42,41 @@ def _resolver(name: str) -> OpsinExchange:
     )
 
 
-def _request(text: str, *, alias: str = "Bz") -> ContextualAliasResolutionRequest:
+def _heading_sha(systematic_name: str, alias: str = "Bz") -> str:
+    return _sha256_bytes(f"{systematic_name} ({alias}):".encode())
+
+
+def _request(
+    text: str,
+    *,
+    alias: str = "Bz",
+    source_page: int = 1,
+    heading_start_line: int = 2,
+    heading_end_line: int = 2,
+    systematic_name: str = "benzene",
+) -> ContextualAliasResolutionRequest:
     return ContextualAliasResolutionRequest(
         run_id="run-an-test",
         paper_id="paper-test",
         source_document_id="paper-test-si",
         parsed_text_file="parsed.txt",
         parsed_text_sha256=_sha256_bytes(text.encode()),
-        items=[{"candidate_id": "candidate-001", "reported_alias": alias}],
+        items=[
+            {
+                "candidate_id": "candidate-001",
+                "reported_alias": alias,
+                "source_page": source_page,
+                "heading_start_line": heading_start_line,
+                "heading_end_line": heading_end_line,
+                "normalized_heading_sha256": _heading_sha(systematic_name, alias),
+            }
+        ],
     )
 
 
 def _file_inputs(tmp_path: Path, text: str = "=== PAGE 2 ===\nbenzene (Bz): 90%\n") -> tuple[Path, Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
-    request = _request(text)
+    request = _request(text, source_page=2)
     text_path = tmp_path / request.parsed_text_file
     request_path = tmp_path / "request.json"
     text_path.write_text(text, encoding="utf-8")
@@ -59,7 +86,13 @@ def _file_inputs(tmp_path: Path, text: str = "=== PAGE 2 ===\nbenzene (Bz): 90%\
 
 def test_wrapped_heading_resolves_and_persists_candidate_only_artifact(tmp_path: Path) -> None:
     text = "=== PAGE 7 ===\n2-phenylben-\nzen-1-amine (Bz): 81%\n"
-    request = _request(text)
+    request = _request(
+        text,
+        source_page=7,
+        heading_start_line=2,
+        heading_end_line=3,
+        systematic_name="2-phenylbenzen-1-amine",
+    )
     artifact = build_contextual_alias_resolution_artifact(
         request,
         request_sha256=_sha256_bytes(b"request"),
@@ -83,45 +116,110 @@ def test_wrapped_heading_resolves_and_persists_candidate_only_artifact(tmp_path:
 
 
 @pytest.mark.parametrize(
-    ("text", "status"),
+    ("first_line", "second_line", "systematic_name"),
     [
-        ("=== PAGE 1 ===\nno matching heading\n", "alias_not_found"),
-        ("benzene (Bz):\nbenzene (Bz):\n", "alias_ambiguous"),
+        ("3-methyl-", "2-ethylbenzene (Bz):", "3-methyl-2-ethylbenzene"),
+        ("alpha-", "Beta (Bz):", "alpha-Beta"),
+        ("alpha-", "(Beta) (Bz):", "alpha-(Beta)"),
     ],
 )
-def test_missing_or_ambiguous_alias_never_calls_resolver(text: str, status: str) -> None:
+def test_exact_span_preserves_digit_uppercase_and_parenthesized_continuations(
+    first_line: str, second_line: str, systematic_name: str
+) -> None:
+    text = f"=== PAGE 1 ===\n{first_line}\n{second_line}\n"
+    observed: list[str] = []
+
+    def capture(name: str) -> OpsinExchange:
+        observed.append(name)
+        return _resolver(name)
+
+    artifact = build_contextual_alias_resolution_artifact(
+        _request(
+            text,
+            heading_start_line=2,
+            heading_end_line=3,
+            systematic_name=systematic_name,
+        ),
+        request_sha256=_sha256_bytes(b"request"),
+        parsed_text=text,
+        resolver=capture,
+        generated_at=_GENERATED_AT,
+    )
+    assert observed == [systematic_name]
+    assert artifact.results[0].systematic_name == systematic_name
+
+
+def test_complete_lowercase_heading_does_not_absorb_previous_line() -> None:
+    text = "=== PAGE 1 ===\nYield was 80%.\nbenzene (Bz):\n"
+    observed: list[str] = []
+
+    def capture(name: str) -> OpsinExchange:
+        observed.append(name)
+        return _resolver(name)
+
+    artifact = build_contextual_alias_resolution_artifact(
+        _request(text, heading_start_line=3, heading_end_line=3),
+        request_sha256=_sha256_bytes(b"request"),
+        parsed_text=text,
+        resolver=capture,
+        generated_at=_GENERATED_AT,
+    )
+    assert observed == ["benzene"]
+    assert artifact.results[0].systematic_name == "benzene"
+
+
+def test_opsin_resolvable_partial_suffix_fails_before_resolver() -> None:
+    text = "=== PAGE 1 ===\n3-methyl-\n2-ethylbenzene (Bz):\n"
+
     def forbidden(_: str) -> OpsinExchange:
         raise AssertionError("resolver must not run")
 
-    artifact = build_contextual_alias_resolution_artifact(
-        _request(text),
-        request_sha256=_sha256_bytes(b"request"),
-        parsed_text=text,
-        resolver=forbidden,
-        generated_at=_GENERATED_AT,
-    )
-    assert artifact.results[0].status == status
-    assert artifact.results[0].systematic_name == ""
+    with pytest.raises(ValueError, match="normalized heading SHA-256 mismatch"):
+        build_contextual_alias_resolution_artifact(
+            _request(
+                text,
+                heading_start_line=3,
+                heading_end_line=3,
+                systematic_name="3-methyl-2-ethylbenzene",
+            ),
+            request_sha256=_sha256_bytes(b"request"),
+            parsed_text=text,
+            resolver=forbidden,
+            generated_at=_GENERATED_AT,
+        )
 
 
-def test_heading_join_never_crosses_a_page_marker() -> None:
-    text = "previous-page-name\n=== PAGE 2 ===\n(Bz): no heading on this page\n"
-
-    def forbidden(_: str) -> OpsinExchange:
-        raise AssertionError("resolver must not run")
-
-    artifact = build_contextual_alias_resolution_artifact(
-        _request(text),
-        request_sha256=_sha256_bytes(b"request"),
-        parsed_text=text,
-        resolver=forbidden,
-        generated_at=_GENERATED_AT,
-    )
-    assert artifact.results[0].status == "alias_not_found"
+@pytest.mark.parametrize(
+    ("text", "start_line", "end_line", "error"),
+    [
+        ("=== PAGE 1 ===\nbenzene\n\n(Bz):\n", 2, 4, "blank or page boundary"),
+        (
+            "=== PAGE 1 ===\nbenzene\n=== PAGE 2 ===\n(Bz):\n",
+            2,
+            4,
+            "blank or page boundary",
+        ),
+    ],
+)
+def test_blank_and_page_markers_are_hard_span_boundaries(
+    text: str, start_line: int, end_line: int, error: str
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        build_contextual_alias_resolution_artifact(
+            _request(
+                text,
+                heading_start_line=start_line,
+                heading_end_line=end_line,
+            ),
+            request_sha256=_sha256_bytes(b"request"),
+            parsed_text=text,
+            resolver=_resolver,
+            generated_at=_GENERATED_AT,
+        )
 
 
 def test_opsin_rejection_remains_a_rejected_candidate() -> None:
-    text = "benzene (Bz):\n"
+    text = "=== PAGE 1 ===\nbenzene (Bz):\n"
 
     def rejected(_: str) -> OpsinExchange:
         return OpsinExchange(
@@ -143,7 +241,7 @@ def test_opsin_rejection_remains_a_rejected_candidate() -> None:
 
 
 def test_opsin_and_rdkit_identifier_disagreement_fails_closed() -> None:
-    text = "benzene (Bz):\n"
+    text = "=== PAGE 1 ===\nbenzene (Bz):\n"
 
     def dishonest(_: str) -> OpsinExchange:
         payload = {**_BENZENE, "stdinchikey": "AAAAAAAAAAAAAA-BBBBBBBBBB-C"}
@@ -164,7 +262,7 @@ def test_opsin_and_rdkit_identifier_disagreement_fails_closed() -> None:
 
 
 def test_resigned_embedded_response_and_request_tampering_fail_validation() -> None:
-    text = "benzene (Bz):\n"
+    text = "=== PAGE 1 ===\nbenzene (Bz):\n"
     artifact = build_contextual_alias_resolution_artifact(
         _request(text),
         request_sha256=_sha256_bytes(b"request"),

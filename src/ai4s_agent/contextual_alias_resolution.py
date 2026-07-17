@@ -80,6 +80,10 @@ class ContextualAliasRequestItem(BaseModel):
 
     candidate_id: str
     reported_alias: str
+    source_page: int = Field(ge=1)
+    heading_start_line: int = Field(ge=1)
+    heading_end_line: int = Field(ge=1)
+    normalized_heading_sha256: str
 
     @field_validator("candidate_id")
     @classmethod
@@ -90,6 +94,19 @@ class ContextualAliasRequestItem(BaseModel):
     @classmethod
     def validate_reported_alias(cls, value: str) -> str:
         return _clean_authored_text(value, field_name="reported_alias", maximum=500)
+
+    @field_validator("normalized_heading_sha256")
+    @classmethod
+    def validate_heading_sha256(cls, value: str) -> str:
+        return _normalize_sha256(value, field_name="normalized_heading_sha256")
+
+    @model_validator(mode="after")
+    def validate_heading_span(self) -> ContextualAliasRequestItem:
+        if self.heading_end_line < self.heading_start_line:
+            raise ValueError("heading line span is reversed")
+        if self.heading_end_line - self.heading_start_line >= 10:
+            raise ValueError("heading line span exceeds ten lines")
+        return self
 
 
 class ContextualAliasResolutionRequest(BaseModel):
@@ -130,6 +147,13 @@ class ContextualAliasResolutionRequest(BaseModel):
         aliases = [item.reported_alias.casefold() for item in self.items]
         if len(aliases) != len(set(aliases)):
             raise ValueError("contextual alias request aliases must be unique")
+        spans = sorted(
+            (item.source_page, item.heading_start_line, item.heading_end_line)
+            for item in self.items
+        )
+        for previous, current in zip(spans, spans[1:]):
+            if previous[0] == current[0] and current[1] <= previous[2]:
+                raise ValueError("contextual alias heading spans must not overlap")
         return self
 
 
@@ -161,12 +185,7 @@ class ContextualAliasResolutionResult(BaseModel):
 
     candidate_id: str
     reported_alias: str
-    status: Literal[
-        "candidate_ready",
-        "alias_not_found",
-        "alias_ambiguous",
-        "name_resolution_rejected",
-    ]
+    status: Literal["candidate_ready", "name_resolution_rejected"]
     systematic_name: str = ""
     source_locator: str = ""
     source_heading_sha256: str = ""
@@ -271,14 +290,12 @@ class ContextualAliasResolutionResult(BaseModel):
                 or self.resolver_standard_inchikey != self.inchikey
             ):
                 raise ValueError("contextual alias chemistry binding mismatch")
-        elif self.status == "name_resolution_rejected":
+        else:
             if not all(resolved_fields) or any(chemistry_fields) or not self.rejection_reason:
                 raise ValueError("rejected contextual alias result has an invalid shape")
             if self.resolver_http_status < 100:
                 raise ValueError("rejected contextual alias result lacks an HTTP status")
             self._validate_resolver_replay()
-        elif any(resolved_fields) or any(chemistry_fields) or not self.rejection_reason:
-            raise ValueError("unlocated contextual alias result has an invalid shape")
         expected = _stable_hash(self.model_dump(mode="json", exclude={"result_digest"}))
         if self.result_digest != expected:
             raise ValueError("contextual alias result digest mismatch")
@@ -379,6 +396,17 @@ class ContextualAliasResolutionArtifact(BaseModel):
             != [(item.candidate_id, item.reported_alias) for item in self.request.items]
         ):
             raise ValueError("contextual alias request binding mismatch")
+        for request_item, result in zip(self.request.items, self.results):
+            expected_locator = (
+                f"page={request_item.source_page};"
+                f"lines={request_item.heading_start_line}-{request_item.heading_end_line};"
+                f"alias={request_item.reported_alias}"
+            )
+            if (
+                result.source_locator != expected_locator
+                or result.source_heading_sha256 != request_item.normalized_heading_sha256
+            ):
+                raise ValueError("contextual alias heading-span binding mismatch")
         if any(
             (
                 not self.candidate_only,
@@ -419,21 +447,31 @@ def _rdkit_observation(smiles: str) -> dict[str, str]:
     }
 
 
-def _join_wrapped_heading(left: str, right: str) -> str:
-    left = " ".join(left.split())
-    right = " ".join(right.split())
-    if left.endswith("-"):
-        return left[:-1] + right
-    return f"{left} {right}".strip()
+def _heading_name_candidates(parts: list[str]) -> set[str]:
+    candidates = {parts[0]}
+    for part in parts[1:]:
+        next_candidates: set[str] = set()
+        for candidate in candidates:
+            if candidate.endswith("-"):
+                # A PDF line-ending hyphen may be either a semantic IUPAC
+                # hyphen or a visual word-wrap hyphen. The request-bound
+                # normalized digest, not a character heuristic, selects the
+                # intended normalization.
+                next_candidates.add(candidate + part)
+                next_candidates.add(candidate[:-1] + part)
+            else:
+                next_candidates.add(f"{candidate} {part}")
+        candidates = next_candidates
+    return candidates
 
 
-def _looks_like_heading_start(value: str) -> bool:
-    return bool(value) and (value[0].isupper() or value[0].isdigit() or value[0] == "(")
-
-
-def _locate_systematic_names(parsed_text: str, alias: str) -> list[tuple[str, str, str]]:
+def _extract_bound_heading(
+    parsed_text: str,
+    item: ContextualAliasRequestItem,
+) -> tuple[str, str, str]:
     lines = parsed_text.splitlines()
-    marker = re.compile(rf"\(\s*{re.escape(alias)}\s*\)\s*:", re.IGNORECASE)
+    if item.heading_end_line > len(lines):
+        raise ValueError("contextual alias heading span exceeds the parsed text")
     page = 0
     pages: list[int] = []
     for raw_line in lines:
@@ -441,29 +479,42 @@ def _locate_systematic_names(parsed_text: str, alias: str) -> list[tuple[str, st
         if match is not None:
             page = int(match.group(1))
         pages.append(page)
-    found: list[tuple[str, str, str]] = []
-    for index, raw_line in enumerate(lines):
-        match = marker.search(raw_line)
-        if match is None:
-            continue
-        fragment = " ".join(raw_line[: match.start()].split())
-        start = index
-        while (not fragment or not _looks_like_heading_start(fragment)) and start > 0 and index - start < 4:
-            start -= 1
-            previous = " ".join(lines[start].split())
-            if _PAGE_MARKER_RE.fullmatch(previous):
-                break
-            if not previous:
-                continue
-            fragment = _join_wrapped_heading(previous, fragment)
-        name = " ".join(fragment.split())
-        if not name or len(name) > 2_000 or not any(char.isalpha() for char in name):
-            continue
-        heading = f"{name} ({alias}):"
-        locator = f"page={pages[index] or 'unknown'};lines={start + 1}-{index + 1};alias={alias}"
-        found.append((name, locator, _sha256_bytes(heading.encode("utf-8"))))
-    unique = sorted(set(found))
-    return unique
+    start_index = item.heading_start_line - 1
+    end_index = item.heading_end_line
+    span = lines[start_index:end_index]
+    if any(not raw_line.strip() or _PAGE_MARKER_RE.fullmatch(raw_line.strip()) for raw_line in span):
+        raise ValueError("contextual alias heading span crosses a blank or page boundary")
+    if any(pages[index] != item.source_page for index in range(start_index, end_index)):
+        raise ValueError("contextual alias heading span has an unexpected source page")
+
+    marker = f"({item.reported_alias}):"
+    if sum(raw_line.count(marker) for raw_line in span) != 1 or marker not in span[-1]:
+        raise ValueError("contextual alias heading span lacks one terminal alias marker")
+    marker_start = span[-1].index(marker)
+    name_parts = [" ".join(raw_line.split()) for raw_line in span[:-1]]
+    final_prefix = " ".join(span[-1][:marker_start].split())
+    if final_prefix:
+        name_parts.append(final_prefix)
+    if not name_parts:
+        raise ValueError("contextual alias heading span has no systematic name")
+    matching_names = [
+        name
+        for name in _heading_name_candidates(name_parts)
+        if _sha256_bytes(f"{name} {marker}".encode("utf-8"))
+        == item.normalized_heading_sha256
+    ]
+    if len(matching_names) != 1:
+        raise ValueError("contextual alias normalized heading SHA-256 mismatch")
+    systematic_name = matching_names[0]
+    if len(systematic_name) > 2_000 or not any(char.isalpha() for char in systematic_name):
+        raise ValueError("contextual alias heading span has no systematic name")
+    heading_sha = item.normalized_heading_sha256
+    locator = (
+        f"page={item.source_page};"
+        f"lines={item.heading_start_line}-{item.heading_end_line};"
+        f"alias={item.reported_alias}"
+    )
+    return systematic_name, locator, heading_sha
 
 
 def _opsin_exchange(systematic_name: str, *, transport: httpx.BaseTransport | None = None) -> OpsinExchange:
@@ -492,21 +543,19 @@ def _opsin_exchange(systematic_name: str, *, transport: httpx.BaseTransport | No
         raise ValueError("OPSIN service request failed") from exc
 
 
-def _result_payload(item: ContextualAliasRequestItem, parsed_text: str, resolver: Callable[[str], OpsinExchange]) -> dict[str, Any]:
-    occurrences = _locate_systematic_names(parsed_text, item.reported_alias)
+def _result_payload(
+    item: ContextualAliasRequestItem,
+    bound_heading: tuple[str, str, str],
+    resolver: Callable[[str], OpsinExchange],
+) -> dict[str, Any]:
+    systematic_name, locator, heading_sha = bound_heading
     base: dict[str, Any] = {
         "candidate_id": item.candidate_id,
         "reported_alias": item.reported_alias,
-        "status": "alias_not_found",
-        "rejection_reason": "alias has no systematic-name heading in the parsed text",
+        "status": "name_resolution_rejected",
+        "rejection_reason": "OPSIN did not resolve the systematic name",
         "result_digest": "sha256:" + "0" * 64,
     }
-    if len(occurrences) != 1:
-        if occurrences:
-            base["status"] = "alias_ambiguous"
-            base["rejection_reason"] = "alias has multiple systematic-name headings in the parsed text"
-        return base
-    systematic_name, locator, heading_sha = occurrences[0]
     exchange = resolver(systematic_name)
     response_sha = _sha256_bytes(exchange.response_bytes)
     response = _load_json_without_duplicate_keys(exchange.response_bytes, label="OPSIN response")
@@ -574,8 +623,11 @@ def build_contextual_alias_resolution_artifact(
 ) -> ContextualAliasResolutionArtifact:
     results: list[ContextualAliasResolutionResult] = []
     embedded_response_bytes = 0
-    for item in request.items:
-        payload = _result_payload(item, parsed_text, resolver)
+    # Validate the entire exact-span roster before the first external request;
+    # one bad binding cannot leave a partially resolved batch.
+    bound_headings = [_extract_bound_heading(parsed_text, item) for item in request.items]
+    for item, bound_heading in zip(request.items, bound_headings):
+        payload = _result_payload(item, bound_heading, resolver)
         embedded_response_bytes += len(str(payload.get("resolver_response_json", "")).encode("utf-8"))
         if embedded_response_bytes > _MAX_EMBEDDED_RESPONSE_BYTES:
             raise ValueError("contextual alias resolver evidence exceeds the artifact limit")

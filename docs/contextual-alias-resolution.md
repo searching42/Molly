@@ -17,7 +17,12 @@ The request uses `contextual_alias_resolution_request.v1` and binds:
 
 - `run_id`, `paper_id`, and `source_document_id`;
 - one safe relative parsed-text filename and its exact SHA-256;
-- a sorted, unique list of `(candidate_id, reported_alias)` items.
+- a sorted, unique list of `(candidate_id, reported_alias)` items;
+- for every item, an exact `source_page`, one-based inclusive
+  `heading_start_line`/`heading_end_line` span, and the SHA-256 of the expected
+  normalized `systematic-name (alias):` heading.
+
+Heading spans are limited to ten lines and must not overlap.
 
 The file runner rejects duplicate JSON keys, symbolic path components, changed
 files, digest mismatches, and any request/text replacement between the initial
@@ -25,11 +30,14 @@ read and publication.
 
 ## Resolution profile
 
-The `supplementary_heading_opsin_rdkit.v1` profile searches for the exact
-`(alias):` heading marker. It joins at most four preceding wrapped lines and
-removes only a line-ending hyphen at a join boundary. Zero matches produce
-`alias_not_found`; multiple matches produce `alias_ambiguous`. Neither outcome
-calls the resolver.
+The `supplementary_heading_opsin_rdkit.v1` profile extracts only the declared
+span; it never infers a start boundary from the first character. The span must
+remain on the declared page, contain no blank line or page marker, and contain
+exactly one `(alias):` marker on its final line. The normalized heading must
+match the request digest before resolution. At a line-ending hyphen, the runner
+considers both semantic-hyphen preservation and PDF-wrap removal, and accepts
+only the unique normalization selected by that digest. The entire roster is
+validated before the first resolver call.
 
 One match is submitted to the fixed official endpoint
 `https://www.ebi.ac.uk/opsin/ws/{encoded-name}.json`. Redirects are disabled.
