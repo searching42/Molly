@@ -8,9 +8,10 @@ import os
 import re
 import stat
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal, Protocol
+from typing import Any, Callable, Iterator, Literal, Protocol
 
 from PIL import Image
 from pydantic import (
@@ -37,6 +38,9 @@ OCSR_CHEMISTRY_PROFILE_VERSION = "rdkit_ocsr_candidate_validation.v1"
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
 _SHA256_RE = re.compile(r"^(?:sha256:)?([0-9a-fA-F]{64})$")
 _INCHIKEY_RE = re.compile(r"^[A-Z]{14}-[A-Z]{10}-[A-Z]$")
+_MAX_CHECKPOINT_BYTES = 16 * 1024 * 1024 * 1024
+_MAX_OUTPUT_BYTES = 100 * 1024 * 1024
+_COPY_CHUNK_BYTES = 1024 * 1024
 
 
 class OcsrPredictor(Protocol):
@@ -290,75 +294,248 @@ class OcsrCandidateArtifact(BaseModel):
         return self
 
 
-def _read_exact_regular_file(path: Path) -> bytes:
-    if path.is_symlink():
-        raise ValueError("OCSR input must not be a symlink")
-    flags = os.O_RDONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+def _absolute_path(path: Path) -> Path:
+    return path.expanduser().absolute()
+
+
+def _safe_dirfd_flags() -> tuple[int, int]:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory_flag is None:
+        raise ValueError("OCSR execution requires safe dirfd support")
+    return no_follow, directory_flag
+
+
+def _open_directory_chain_without_symlinks(
+    directory: Path,
+    *,
+    create: bool,
+) -> int:
+    no_follow, directory_flag = _safe_dirfd_flags()
+    directory = _absolute_path(directory)
+    descriptor = -1
     try:
-        descriptor = os.open(path, flags)
+        descriptor = os.open(
+            directory.anchor,
+            os.O_RDONLY | directory_flag | no_follow,
+        )
+        for component in directory.parts[1:]:
+            try:
+                next_descriptor = os.open(
+                    component,
+                    os.O_RDONLY | directory_flag | no_follow,
+                    dir_fd=descriptor,
+                )
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(component, 0o700, dir_fd=descriptor)
+                next_descriptor = os.open(
+                    component,
+                    os.O_RDONLY | directory_flag | no_follow,
+                    dir_fd=descriptor,
+                )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        result = descriptor
+        descriptor = -1
+        return result
     except OSError as exc:
-        raise ValueError("OCSR input is unavailable") from exc
-    try:
-        file_stat = os.fstat(descriptor)
-        if not stat.S_ISREG(file_stat.st_mode):
-            raise ValueError("OCSR input must be a regular file")
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        if file_stat.st_size != sum(len(chunk) for chunk in chunks):
-            raise ValueError("OCSR input changed while it was read")
-        return b"".join(chunks)
+        raise ValueError(
+            "OCSR path is unavailable because a component is symbolic or unsafe"
+        ) from exc
     finally:
-        os.close(descriptor)
+        if descriptor != -1:
+            os.close(descriptor)
+
+
+def _validate_directory_path_binding(
+    directory: Path,
+    descriptor: int,
+    *,
+    error_message: str,
+) -> os.stat_result:
+    directory = _absolute_path(directory)
+    check_descriptor = -1
+    try:
+        check_descriptor = _open_directory_chain_without_symlinks(
+            directory,
+            create=False,
+        )
+        pinned_stat = os.fstat(descriptor)
+        named_stat = os.fstat(check_descriptor)
+        if (
+            not stat.S_ISDIR(pinned_stat.st_mode)
+            or not stat.S_ISDIR(named_stat.st_mode)
+            or named_stat.st_dev != pinned_stat.st_dev
+            or named_stat.st_ino != pinned_stat.st_ino
+        ):
+            raise ValueError(error_message)
+        return pinned_stat
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError(error_message) from exc
+    finally:
+        if check_descriptor != -1:
+            os.close(check_descriptor)
+
+
+@contextmanager
+def _pinned_output_parent(parent: Path) -> Iterator[tuple[int, os.stat_result]]:
+    parent = _absolute_path(parent)
+    descriptor = -1
+    try:
+        descriptor = _open_directory_chain_without_symlinks(parent, create=True)
+        parent_stat = _validate_directory_path_binding(
+            parent,
+            descriptor,
+            error_message="OCSR output parent changed",
+        )
+        yield descriptor, parent_stat
+        final_stat = _validate_directory_path_binding(
+            parent,
+            descriptor,
+            error_message="OCSR output parent changed",
+        )
+        if (
+            final_stat.st_dev != parent_stat.st_dev
+            or final_stat.st_ino != parent_stat.st_ino
+        ):
+            raise ValueError("OCSR output parent changed")
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
+
+
+@contextmanager
+def _open_regular_file_without_symlink_components(
+    path: Path,
+) -> Iterator[tuple[int, int, os.stat_result]]:
+    no_follow, _ = _safe_dirfd_flags()
+    path = _absolute_path(path)
+    parent_descriptor = -1
+    descriptor = -1
+    try:
+        parent_descriptor = _open_directory_chain_without_symlinks(
+            path.parent,
+            create=False,
+        )
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | no_follow | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=parent_descriptor,
+        )
+        opened_stat = os.fstat(descriptor)
+        named_stat = os.stat(
+            path.name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(opened_stat.st_mode)
+            or not stat.S_ISREG(named_stat.st_mode)
+            or named_stat.st_dev != opened_stat.st_dev
+            or named_stat.st_ino != opened_stat.st_ino
+        ):
+            raise ValueError("OCSR input must be one bound regular file")
+        yield parent_descriptor, descriptor, opened_stat
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError("OCSR input is unavailable or symbolic") from exc
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
+        if parent_descriptor != -1:
+            os.close(parent_descriptor)
+
+
+def _read_open_descriptor(
+    descriptor: int,
+    *,
+    max_bytes: int,
+) -> bytes:
+    initial_stat = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(initial_stat.st_mode)
+        or initial_stat.st_size < 0
+        or initial_stat.st_size > max_bytes
+    ):
+        raise ValueError("OCSR file has an unsupported size")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    payload = bytearray()
+    while len(payload) <= max_bytes:
+        chunk = os.read(
+            descriptor,
+            min(_COPY_CHUNK_BYTES, max_bytes + 1 - len(payload)),
+        )
+        if not chunk:
+            break
+        payload.extend(chunk)
+    final_stat = os.fstat(descriptor)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if (
+        len(payload) != initial_stat.st_size
+        or final_stat.st_dev != initial_stat.st_dev
+        or final_stat.st_ino != initial_stat.st_ino
+        or final_stat.st_size != initial_stat.st_size
+        or final_stat.st_mtime_ns != initial_stat.st_mtime_ns
+        or final_stat.st_ctime_ns != initial_stat.st_ctime_ns
+    ):
+        raise ValueError("OCSR file changed while it was read")
+    return bytes(payload)
+
+
+def _read_exact_regular_file(path: Path) -> bytes:
+    with _open_regular_file_without_symlink_components(path) as (_, descriptor, _):
+        return _read_open_descriptor(descriptor, max_bytes=_MAX_OUTPUT_BYTES)
 
 
 def _sha256_bytes(value: bytes) -> str:
     return f"sha256:{hashlib.sha256(value).hexdigest()}"
 
 
-def _sha256_regular_file(path: Path) -> str:
-    if path.is_symlink():
-        raise ValueError("OCSR input must not be a symlink")
-    flags = os.O_RDONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        raise ValueError("OCSR input is unavailable") from exc
-    try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise ValueError("OCSR input must be a regular file")
-        digest = hashlib.sha256()
-        size = 0
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-            size += len(chunk)
-        after = os.fstat(descriptor)
-        if (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-        ) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-        ) or size != before.st_size:
-            raise ValueError("OCSR input changed while it was hashed")
-        return f"sha256:{digest.hexdigest()}"
-    finally:
-        os.close(descriptor)
+def _hash_open_descriptor(descriptor: int, *, max_bytes: int) -> str:
+    initial_stat = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(initial_stat.st_mode)
+        or initial_stat.st_size < 0
+        or initial_stat.st_size > max_bytes
+    ):
+        raise ValueError("OCSR file has an unsupported size")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    size = 0
+    while True:
+        chunk = os.read(descriptor, _COPY_CHUNK_BYTES)
+        if not chunk:
+            break
+        digest.update(chunk)
+        size += len(chunk)
+        if size > max_bytes:
+            raise ValueError("OCSR file has an unsupported size")
+    final_stat = os.fstat(descriptor)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if (
+        size != initial_stat.st_size
+        or final_stat.st_dev != initial_stat.st_dev
+        or final_stat.st_ino != initial_stat.st_ino
+        or final_stat.st_size != initial_stat.st_size
+        or final_stat.st_mtime_ns != initial_stat.st_mtime_ns
+        or final_stat.st_ctime_ns != initial_stat.st_ctime_ns
+    ):
+        raise ValueError("OCSR file changed while it was hashed")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _write_all(descriptor: int, payload: bytes | memoryview) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
 
 
 def _validate_candidate_smiles(raw_smiles: str) -> dict[str, str]:
@@ -494,15 +671,150 @@ def _load_molscribe_predictor(
     *,
     device: str,
 ) -> tuple[Callable[[str], dict[str, Any]], OcsrModelProvenance]:
-    checkpoint_sha256 = _sha256_regular_file(checkpoint_path)
-    try:
-        import torch
-        from molscribe import MolScribe
-    except ImportError as exc:
-        raise ValueError("MolScribe runtime is not installed") from exc
-    model = MolScribe(str(checkpoint_path), device=torch.device(device))
-    if _sha256_regular_file(checkpoint_path) != checkpoint_sha256:
-        raise ValueError("MolScribe checkpoint changed while it was loaded")
+    no_follow, directory_flag = _safe_dirfd_flags()
+    checkpoint_path = _absolute_path(checkpoint_path)
+    owned_directory_descriptor = -1
+    owned_descriptor = -1
+    with _open_regular_file_without_symlink_components(checkpoint_path) as (
+        source_parent_descriptor,
+        source_descriptor,
+        source_stat,
+    ), tempfile.TemporaryDirectory(prefix="molly-ocsr-checkpoint-") as temp_dir:
+        if source_stat.st_size <= 0 or source_stat.st_size > _MAX_CHECKPOINT_BYTES:
+            raise ValueError("MolScribe checkpoint has an unsupported size")
+        try:
+            owned_directory = Path(temp_dir)
+            owned_directory_descriptor = os.open(
+                owned_directory,
+                os.O_RDONLY | directory_flag | no_follow,
+            )
+            opened_directory_stat = os.fstat(owned_directory_descriptor)
+            named_directory_stat = os.stat(
+                owned_directory,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(opened_directory_stat.st_mode)
+                or opened_directory_stat.st_dev != named_directory_stat.st_dev
+                or opened_directory_stat.st_ino != named_directory_stat.st_ino
+            ):
+                raise ValueError("MolScribe private checkpoint directory changed")
+            owned_name = "checkpoint.pth"
+            owned_descriptor = os.open(
+                owned_name,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | no_follow,
+                0o400,
+                dir_fd=owned_directory_descriptor,
+            )
+            os.lseek(source_descriptor, 0, os.SEEK_SET)
+            digest = hashlib.sha256()
+            copied_size = 0
+            while True:
+                chunk = os.read(source_descriptor, _COPY_CHUNK_BYTES)
+                if not chunk:
+                    break
+                copied_size += len(chunk)
+                if copied_size > _MAX_CHECKPOINT_BYTES:
+                    raise ValueError("MolScribe checkpoint has an unsupported size")
+                digest.update(chunk)
+                _write_all(owned_descriptor, chunk)
+            os.lseek(source_descriptor, 0, os.SEEK_SET)
+            os.fsync(owned_descriptor)
+            checkpoint_sha256 = f"sha256:{digest.hexdigest()}"
+            final_source_stat = os.fstat(source_descriptor)
+            named_source_stat = os.stat(
+                checkpoint_path.name,
+                dir_fd=source_parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                copied_size != source_stat.st_size
+                or final_source_stat.st_dev != source_stat.st_dev
+                or final_source_stat.st_ino != source_stat.st_ino
+                or final_source_stat.st_size != source_stat.st_size
+                or final_source_stat.st_mtime_ns != source_stat.st_mtime_ns
+                or final_source_stat.st_ctime_ns != source_stat.st_ctime_ns
+                or named_source_stat.st_dev != source_stat.st_dev
+                or named_source_stat.st_ino != source_stat.st_ino
+            ):
+                raise ValueError("MolScribe checkpoint changed while it was copied")
+            owned_stat = os.fstat(owned_descriptor)
+            named_owned_stat = os.stat(
+                owned_name,
+                dir_fd=owned_directory_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(owned_stat.st_mode)
+                or owned_stat.st_dev != named_owned_stat.st_dev
+                or owned_stat.st_ino != named_owned_stat.st_ino
+                or owned_stat.st_size != copied_size
+                or _hash_open_descriptor(
+                    owned_descriptor,
+                    max_bytes=_MAX_CHECKPOINT_BYTES,
+                )
+                != checkpoint_sha256
+            ):
+                raise ValueError("MolScribe private checkpoint copy is invalid")
+            descriptor_root = (
+                Path("/proc/self/fd")
+                if Path("/proc/self/fd").is_dir()
+                else Path("/dev/fd")
+            )
+            descriptor_path = descriptor_root / str(owned_descriptor)
+            descriptor_probe = os.open(descriptor_path, os.O_RDONLY)
+            try:
+                descriptor_path_stat = os.fstat(descriptor_probe)
+                if (
+                    descriptor_path_stat.st_dev != owned_stat.st_dev
+                    or descriptor_path_stat.st_ino != owned_stat.st_ino
+                ):
+                    raise ValueError(
+                        "MolScribe checkpoint descriptor binding failed"
+                    )
+            finally:
+                os.close(descriptor_probe)
+            try:
+                import torch
+                from molscribe import MolScribe
+            except ImportError as exc:
+                raise ValueError("MolScribe runtime is not installed") from exc
+            model = MolScribe(str(descriptor_path), device=torch.device(device))
+            final_owned_stat = os.fstat(owned_descriptor)
+            final_named_owned_stat = os.stat(
+                owned_name,
+                dir_fd=owned_directory_descriptor,
+                follow_symlinks=False,
+            )
+            final_descriptor_probe = os.open(descriptor_path, os.O_RDONLY)
+            try:
+                final_descriptor_path_stat = os.fstat(final_descriptor_probe)
+            finally:
+                os.close(final_descriptor_probe)
+            if (
+                final_owned_stat.st_dev != owned_stat.st_dev
+                or final_owned_stat.st_ino != owned_stat.st_ino
+                or final_owned_stat.st_size != owned_stat.st_size
+                or final_owned_stat.st_mtime_ns != owned_stat.st_mtime_ns
+                or final_owned_stat.st_ctime_ns != owned_stat.st_ctime_ns
+                or final_named_owned_stat.st_dev != owned_stat.st_dev
+                or final_named_owned_stat.st_ino != owned_stat.st_ino
+                or final_descriptor_path_stat.st_dev != owned_stat.st_dev
+                or final_descriptor_path_stat.st_ino != owned_stat.st_ino
+                or _hash_open_descriptor(
+                    owned_descriptor,
+                    max_bytes=_MAX_CHECKPOINT_BYTES,
+                )
+                != checkpoint_sha256
+            ):
+                raise ValueError("MolScribe private checkpoint changed while loading")
+        finally:
+            if owned_descriptor != -1:
+                os.close(owned_descriptor)
+                owned_descriptor = -1
+            if owned_directory_descriptor != -1:
+                os.close(owned_directory_descriptor)
+                owned_directory_descriptor = -1
     try:
         engine_version = importlib.metadata.version("MolScribe")
     except importlib.metadata.PackageNotFoundError:
@@ -522,6 +834,159 @@ def _load_molscribe_predictor(
     )
 
 
+def _ensure_fresh_output_at(parent_descriptor: int, filename: str) -> None:
+    try:
+        os.stat(filename, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    raise ValueError("OCSR output already exists or is unavailable")
+
+
+def _validate_published_ocsr_output(
+    *,
+    output_path: Path,
+    parent_descriptor: int,
+    parent_stat: os.stat_result,
+    output_descriptor: int,
+    created_stat: os.stat_result,
+    expected_bytes: bytes,
+    expected_artifact: OcsrCandidateArtifact,
+) -> OcsrCandidateArtifact:
+    current_parent_stat = _validate_directory_path_binding(
+        output_path.parent,
+        parent_descriptor,
+        error_message="OCSR output parent changed",
+    )
+    named_stat = os.stat(
+        output_path.name,
+        dir_fd=parent_descriptor,
+        follow_symlinks=False,
+    )
+    open_stat = os.fstat(output_descriptor)
+    if (
+        not stat.S_ISDIR(current_parent_stat.st_mode)
+        or current_parent_stat.st_dev != parent_stat.st_dev
+        or current_parent_stat.st_ino != parent_stat.st_ino
+        or not stat.S_ISREG(named_stat.st_mode)
+        or named_stat.st_dev != created_stat.st_dev
+        or named_stat.st_ino != created_stat.st_ino
+        or named_stat.st_size != len(expected_bytes)
+        or open_stat.st_dev != created_stat.st_dev
+        or open_stat.st_ino != created_stat.st_ino
+        or open_stat.st_size != len(expected_bytes)
+    ):
+        raise ValueError("OCSR output publication changed")
+    published_bytes = _read_open_descriptor(
+        output_descriptor,
+        max_bytes=_MAX_OUTPUT_BYTES,
+    )
+    if published_bytes != expected_bytes:
+        raise ValueError("OCSR output bytes changed")
+    validated = OcsrCandidateArtifact.model_validate(
+        _load_json_without_duplicate_keys(published_bytes)
+    )
+    if validated.model_dump(mode="json") != expected_artifact.model_dump(mode="json"):
+        raise ValueError("OCSR output artifact changed")
+    final_named_stat = os.stat(
+        output_path.name,
+        dir_fd=parent_descriptor,
+        follow_symlinks=False,
+    )
+    final_open_stat = os.fstat(output_descriptor)
+    final_parent_stat = _validate_directory_path_binding(
+        output_path.parent,
+        parent_descriptor,
+        error_message="OCSR output parent changed",
+    )
+    if (
+        final_named_stat.st_dev != created_stat.st_dev
+        or final_named_stat.st_ino != created_stat.st_ino
+        or final_named_stat.st_size != len(expected_bytes)
+        or final_open_stat.st_dev != created_stat.st_dev
+        or final_open_stat.st_ino != created_stat.st_ino
+        or final_open_stat.st_size != len(expected_bytes)
+        or final_parent_stat.st_dev != parent_stat.st_dev
+        or final_parent_stat.st_ino != parent_stat.st_ino
+    ):
+        raise ValueError("OCSR output changed after validation")
+    return validated
+
+
+def _publish_ocsr_artifact(
+    *,
+    output_path: Path,
+    parent_descriptor: int,
+    parent_stat: os.stat_result,
+    encoded: bytes,
+    artifact: OcsrCandidateArtifact,
+) -> OcsrCandidateArtifact:
+    no_follow, _ = _safe_dirfd_flags()
+    if not encoded or len(encoded) > _MAX_OUTPUT_BYTES:
+        raise ValueError("OCSR output has an unsupported size")
+    output_descriptor = -1
+    created_stat: os.stat_result | None = None
+    keep_output = False
+    try:
+        _validate_directory_path_binding(
+            output_path.parent,
+            parent_descriptor,
+            error_message="OCSR output parent changed",
+        )
+        _ensure_fresh_output_at(parent_descriptor, output_path.name)
+        output_descriptor = os.open(
+            output_path.name,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | no_follow,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        created_stat = os.fstat(output_descriptor)
+        if not stat.S_ISREG(created_stat.st_mode) or created_stat.st_size != 0:
+            raise ValueError("OCSR output inode is invalid")
+        _write_all(output_descriptor, encoded)
+        os.fsync(output_descriptor)
+        os.fsync(parent_descriptor)
+        validated = _validate_published_ocsr_output(
+            output_path=output_path,
+            parent_descriptor=parent_descriptor,
+            parent_stat=parent_stat,
+            output_descriptor=output_descriptor,
+            created_stat=created_stat,
+            expected_bytes=encoded,
+            expected_artifact=artifact,
+        )
+        os.fsync(parent_descriptor)
+        keep_output = True
+        return validated
+    except FileExistsError as exc:
+        raise ValueError("OCSR output already exists or is unavailable") from exc
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError("OCSR output cannot be published") from exc
+    finally:
+        if (
+            parent_descriptor != -1
+            and created_stat is not None
+            and not keep_output
+        ):
+            try:
+                current_stat = os.stat(
+                    output_path.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    current_stat.st_dev == created_stat.st_dev
+                    and current_stat.st_ino == created_stat.st_ino
+                ):
+                    os.unlink(output_path.name, dir_fd=parent_descriptor)
+                    os.fsync(parent_descriptor)
+            except OSError:
+                pass
+        if output_descriptor != -1:
+            os.close(output_descriptor)
+
+
 def execute_ocsr_candidate_request_from_files(
     *,
     request_json: Path,
@@ -529,40 +994,46 @@ def execute_ocsr_candidate_request_from_files(
     output_json: Path,
     device: str,
 ) -> OcsrCandidateArtifact:
-    request_bytes = _read_exact_regular_file(request_json)
-    request = OcsrCandidateRequest.model_validate(
-        _load_json_without_duplicate_keys(request_bytes)
-    )
-    predictor, model = _load_molscribe_predictor(checkpoint_path, device=device)
-    artifact = execute_ocsr_candidate_request(
-        request,
-        request_sha256=_sha256_bytes(request_bytes),
-        image_base_dir=request_json.parent,
-        predictor=predictor,
-        model=model,
-    )
-    output_json.parent.mkdir(parents=True, exist_ok=True)
-    encoded = (
-        json.dumps(
-            artifact.model_dump(mode="json"),
-            ensure_ascii=False,
-            allow_nan=False,
-            sort_keys=True,
-            indent=2,
+    request_json = _absolute_path(request_json)
+    checkpoint_path = _absolute_path(checkpoint_path)
+    output_json = _absolute_path(output_json)
+    with _pinned_output_parent(output_json.parent) as (
+        parent_descriptor,
+        parent_stat,
+    ):
+        _ensure_fresh_output_at(parent_descriptor, output_json.name)
+        request_bytes = _read_exact_regular_file(request_json)
+        request = OcsrCandidateRequest.model_validate(
+            _load_json_without_duplicate_keys(request_bytes)
         )
-        + "\n"
-    ).encode("utf-8")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    try:
-        descriptor = os.open(output_json, flags, 0o600)
-    except OSError as exc:
-        raise ValueError("OCSR output already exists or is unavailable") from exc
-    try:
-        os.write(descriptor, encoded)
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    return artifact
+        predictor, model = _load_molscribe_predictor(
+            checkpoint_path,
+            device=device,
+        )
+        artifact = execute_ocsr_candidate_request(
+            request,
+            request_sha256=_sha256_bytes(request_bytes),
+            image_base_dir=request_json.parent,
+            predictor=predictor,
+            model=model,
+        )
+        encoded = (
+            json.dumps(
+                artifact.model_dump(mode="json"),
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n"
+        ).encode("utf-8")
+        return _publish_ocsr_artifact(
+            output_path=output_json,
+            parent_descriptor=parent_descriptor,
+            parent_stat=parent_stat,
+            encoded=encoded,
+            artifact=artifact,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

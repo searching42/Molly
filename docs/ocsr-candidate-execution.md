@@ -56,8 +56,20 @@ PYTHONPATH=src python -m ai4s_agent.ocsr_candidate_execution \
   --device cuda
 ```
 
-The checkpoint SHA-256 and installed MolScribe version are derived at runtime.
-The output file is created with no-replace semantics.
+The checkpoint is opened without following symlinks, streamed into an
+invocation-owned private regular file while its SHA-256 is computed, and
+fsynced. MolScribe loads that exact owned inode through a file-descriptor path;
+the inode, size, timestamps, and SHA-256 are rechecked after model loading.
+Checkpoint paths containing symlink components are rejected.
+
+Before any request or checkpoint input is read, the output parent is opened
+component-by-component without following symlinks and pinned by directory file
+descriptor. The output is created relative to that descriptor with
+`O_NOFOLLOW | O_CREAT | O_EXCL`, written to completion even across short
+writes, and fsynced together with its parent. Publication then rechecks the
+parent and output inode, exact bytes, length, and artifact model. Cleanup only
+removes an inode created by the current invocation, so a concurrent
+replacement is never deleted.
 
 ## Image preparation
 
