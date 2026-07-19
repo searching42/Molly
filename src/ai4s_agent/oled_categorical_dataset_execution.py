@@ -142,10 +142,29 @@ def _publish_versioned_dataset_directory(
     *,
     parent_descriptor: int,
 ) -> None:
+    payloads = _dataset_payloads(artifact)
+    payloads["report.md"] = _report_bytes(artifact, payloads)
+    _publish_payload_directory(
+        output_dir=output_dir,
+        parent_descriptor=parent_descriptor,
+        payloads=payloads,
+        artifact_label="categorical dataset",
+    )
+
+
+def _publish_payload_directory(
+    *,
+    output_dir: Path,
+    parent_descriptor: int,
+    payloads: dict[str, bytes],
+    artifact_label: str,
+) -> None:
+    """Publish a complete artifact directory without replacing any target."""
+
     directory_flag = getattr(os, "O_DIRECTORY", None)
     no_follow = getattr(os, "O_NOFOLLOW", None)
     if directory_flag is None or no_follow is None:
-        raise ValueError("categorical dataset publisher requires safe dirfd support")
+        raise ValueError(f"{artifact_label} publisher requires safe dirfd support")
     _validate_output_parent_binding(output_dir, parent_descriptor)
     _require_fresh_output_directory(output_dir, parent_descriptor)
     temp_name = f".{output_dir.name}.{uuid.uuid4().hex}.tmp"
@@ -165,8 +184,6 @@ def _publish_versioned_dataset_directory(
             raise ValueError(
                 "categorical dataset temporary output is not a directory"
             )
-        payloads = _dataset_payloads(artifact)
-        payloads["report.md"] = _report_bytes(artifact, payloads)
         for name, payload in payloads.items():
             created_files[name] = _write_fresh_bytes_at(
                 temp_descriptor,
@@ -198,11 +215,11 @@ def _publish_versioned_dataset_directory(
         committed = True
     except FileExistsError as exc:
         raise ValueError(
-            "versioned categorical dataset snapshot already exists"
+            f"versioned {artifact_label} output already exists"
         ) from exc
     except OSError as exc:
         raise ValueError(
-            "categorical dataset directory publication failed"
+            f"{artifact_label} directory publication failed"
         ) from exc
     finally:
         if temp_descriptor != -1:
