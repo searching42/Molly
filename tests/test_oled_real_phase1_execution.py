@@ -18,6 +18,7 @@ from ai4s_agent.domains.oled_categorical_dataset_execution import (
 from ai4s_agent.domains.oled_contracts import OledCausalLayer
 from ai4s_agent.domains.oled_dataset_views import OledDatasetViewKind
 from ai4s_agent.oled_real_phase1_execution import (
+    _validated_split_by_row,
     main,
     run_oled_real_phase1_execution_from_files,
 )
@@ -179,6 +180,76 @@ def test_real_execution_rejects_tampered_snapshot_before_output(
         )
     assert not (tmp_path / "executions").exists() or not any(
         (tmp_path / "executions").iterdir()
+    )
+
+
+def test_fully_resigned_row_material_split_leak_fails_before_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot_path = _snapshot_path(tmp_path, monkeypatch)
+    snapshot = OledCategoricalDatasetExecutionArtifact.model_validate_json(
+        snapshot_path.read_text(encoding="utf-8")
+    )
+    split_by_row = {
+        assignment.row_id: assignment.split
+        for assignment in snapshot.split_assignments
+    }
+    train_material = next(
+        row.selected_material_id
+        for row in snapshot.rows
+        if split_by_row[row.row_id] == "train"
+    )
+    holdout_index = next(
+        index
+        for index, row in enumerate(snapshot.rows)
+        if split_by_row[row.row_id] == "validation"
+    )
+    forged_row = snapshot.rows[holdout_index].model_copy(
+        update={
+            "selected_material_id": train_material,
+            "row_digest": "sha256:" + "0" * 64,
+        }
+    )
+    forged_row = forged_row.model_copy(
+        update={
+            "row_digest": oled_categorical_dataset_view_row_digest(forged_row)
+        }
+    )
+    forged_rows = list(snapshot.rows)
+    forged_rows[holdout_index] = forged_row
+    forged = snapshot.model_copy(
+        update={
+            "rows": forged_rows,
+            "execution_artifact_digest": "sha256:" + "0" * 64,
+        },
+        deep=True,
+    )
+    forged = forged.model_copy(
+        update={
+            "execution_artifact_digest": oled_categorical_dataset_execution_artifact_digest(
+                forged
+            )
+        }
+    )
+    snapshot_path.write_text(
+        json.dumps(forged.model_dump(mode="json"), indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="split material binding mismatch"):
+        OledCategoricalDatasetExecutionArtifact.model_validate(
+            forged.model_dump(mode="json")
+        )
+    with pytest.raises(ValueError, match="split material binding mismatch"):
+        _validated_split_by_row(forged)
+    with pytest.raises(ValueError, match="split material binding mismatch"):
+        run_oled_real_phase1_execution_from_files(
+            dataset_snapshot_json=snapshot_path,
+            output_root=tmp_path / "leaked-executions",
+        )
+    assert not (tmp_path / "leaked-executions").exists() or not any(
+        (tmp_path / "leaked-executions").iterdir()
     )
 
 

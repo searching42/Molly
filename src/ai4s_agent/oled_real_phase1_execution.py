@@ -66,6 +66,7 @@ def run_oled_real_phase1_execution_from_files(
             reject_symlink_components=True,
         )
         snapshot = OledCategoricalDatasetExecutionArtifact.model_validate(payload)
+        split_by_row = _validated_split_by_row(snapshot)
         selected = _select_numeric_properties(snapshot, property_ids)
         directions = {
             property_id: (
@@ -97,6 +98,7 @@ def run_oled_real_phase1_execution_from_files(
             execution_id=execution_id,
             config=config,
             generated_at=generated_at or now_iso(),
+            split_by_row=split_by_row,
         )
         _publish_payload_directory(
             output_dir=output_dir,
@@ -134,6 +136,31 @@ def _select_numeric_properties(
     return selected
 
 
+def _validated_split_by_row(
+    snapshot: OledCategoricalDatasetExecutionArtifact,
+) -> dict[str, str]:
+    """Recheck row/material/split isolation at the execution boundary."""
+
+    row_by_id = {row.row_id: row for row in snapshot.rows}
+    split_by_row: dict[str, str] = {}
+    split_by_material: dict[str, str] = {}
+    for assignment in snapshot.split_assignments:
+        row = row_by_id.get(assignment.row_id)
+        if row is None:
+            raise ValueError("real Phase 1 split assignment references an unknown row")
+        if assignment.selected_material_id != row.selected_material_id:
+            raise ValueError("real Phase 1 split material binding mismatch")
+        previous = split_by_material.setdefault(
+            row.selected_material_id, assignment.split
+        )
+        if previous != assignment.split:
+            raise ValueError("real Phase 1 material crosses execution splits")
+        split_by_row[row.row_id] = assignment.split
+    if set(split_by_row) != set(row_by_id):
+        raise ValueError("real Phase 1 split assignments do not cover every row")
+    return split_by_row
+
+
 def _build_execution_payloads(
     *,
     snapshot: OledCategoricalDatasetExecutionArtifact,
@@ -141,8 +168,8 @@ def _build_execution_payloads(
     execution_id: str,
     config: dict[str, Any],
     generated_at: str,
+    split_by_row: dict[str, str],
 ) -> tuple[dict[str, bytes], int]:
-    split_by_row = {item.row_id: item.split for item in snapshot.split_assignments}
     rows_by_property: dict[str, list[OledCategoricalDatasetViewRow]] = defaultdict(list)
     for row in snapshot.rows:
         if row.property_id in config["property_ids"]:

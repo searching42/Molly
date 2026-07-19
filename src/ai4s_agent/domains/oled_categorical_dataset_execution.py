@@ -326,13 +326,19 @@ class OledCategoricalDatasetExecutionArtifact(BaseModel):
             raise ValueError("categorical dataset row count mismatch")
         if len(self.split_assignments) != len(self.rows):
             raise ValueError("categorical dataset split coverage mismatch")
-        row_ids = {row.row_id for row in self.rows}
+        row_by_id = {row.row_id: row for row in self.rows}
+        row_ids = set(row_by_id)
         if {item.row_id for item in self.split_assignments} != row_ids:
             raise ValueError("categorical dataset split roster mismatch")
         material_split: dict[str, str] = {}
         for assignment in self.split_assignments:
+            row = row_by_id[assignment.row_id]
+            if assignment.selected_material_id != row.selected_material_id:
+                raise ValueError(
+                    "categorical dataset split material binding mismatch"
+                )
             previous = material_split.setdefault(
-                assignment.selected_material_id, assignment.split
+                row.selected_material_id, assignment.split
             )
             if previous != assignment.split:
                 raise ValueError("material group crosses categorical dataset splits")
