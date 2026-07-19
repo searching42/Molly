@@ -17,7 +17,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Keep the job alive after pytest's own hard limit so timeout evidence can
+    # still be uploaded and enforced instead of losing the step exit status.
+    timeout-minutes: 35
 
     steps:
       - name: Check out repository
@@ -51,7 +53,8 @@ jobs:
         shell: bash
         run: |
           set +e
-          python -m pytest -q --junitxml=pytest-results.xml > pytest.log 2>&1
+          timeout --signal=TERM --kill-after=30s 30m \
+            python -m pytest -q --junitxml=pytest-results.xml > pytest.log 2>&1
           status=$?
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           tail -n 80 pytest.log
