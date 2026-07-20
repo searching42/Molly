@@ -379,5 +379,105 @@ def test_exact_input_byte_tamper_fails_closed(
         )
 
 
+def test_resigned_direction_change_requires_matching_execution_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    receipt_path = inputs.execution_dir / "execution.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["config"]["directions"]["s1_ev"] = "minimize"
+    receipt_path.write_text(
+        json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="execution ID mismatch"):
+        _load_screening_inputs(
+            phase1_execution_dir=inputs.execution_dir,
+            dataset_snapshot_json=inputs.dataset_snapshot,
+            registry_snapshot_json=inputs.registry_snapshot,
+        )
+
+
+def test_resigned_model_change_fails_deterministic_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    model_path = inputs.execution_dir / "model__s1_ev.json"
+    model = json.loads(model_path.read_text(encoding="utf-8"))
+    model["target_mean"] += 1.0
+    model_path.write_text(
+        json.dumps(model, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    receipt_path = inputs.execution_dir / "execution.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["artifacts"][model_path.name] = _sha256(model_path)
+    receipt_path.write_text(
+        json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="deterministic replay mismatch"):
+        _load_screening_inputs(
+            phase1_execution_dir=inputs.execution_dir,
+            dataset_snapshot_json=inputs.dataset_snapshot,
+            registry_snapshot_json=inputs.registry_snapshot,
+        )
+
+
+def test_resigned_registry_duplicate_chemical_identity_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    registry = OledMaterialRegistrySnapshot.model_validate_json(
+        inputs.registry_snapshot.read_text(encoding="utf-8")
+    )
+    duplicate = registry.entries[0].model_copy(
+        update={
+            "material_id": "material:execution-duplicate",
+            "canonical_name": "duplicate chemical identity",
+            "entry_digest": "sha256:" + "0" * 64,
+        }
+    )
+    duplicate = duplicate.model_copy(
+        update={"entry_digest": oled_material_registry_entry_digest(duplicate)}
+    )
+    duplicate = OledMaterialRegistryEntry.model_validate(
+        duplicate.model_dump(mode="json")
+    )
+    forged_entries = sorted(
+        [*registry.entries, duplicate], key=lambda entry: entry.material_id
+    )
+    forged = registry.model_copy(
+        update={
+            "entry_count": len(forged_entries),
+            "entries": forged_entries,
+            "snapshot_digest": "sha256:" + "0" * 64,
+        },
+        deep=True,
+    )
+    forged = forged.model_copy(
+        update={"snapshot_digest": oled_material_registry_snapshot_digest(forged)}
+    )
+    forged = OledMaterialRegistrySnapshot.model_validate(
+        forged.model_dump(mode="json")
+    )
+    inputs.registry_snapshot.write_text(
+        json.dumps(forged.model_dump(mode="json"), indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Registry chemical identity is duplicated"):
+        _load_screening_inputs(
+            phase1_execution_dir=inputs.execution_dir,
+            dataset_snapshot_json=inputs.dataset_snapshot,
+            registry_snapshot_json=inputs.registry_snapshot,
+        )
+
+
 def _sha256(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()

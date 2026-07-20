@@ -24,6 +24,7 @@ from ai4s_agent.oled_real_phase1_execution import (
     _EXECUTION_VERSION,
     _MODEL_KIND,
     _feature_vector_for_model,
+    _fit_property_model,
     _json_bytes,
     _predict_feature_vector,
     _safe_token,
@@ -188,6 +189,12 @@ def _load_screening_inputs(
     ):
         raise ValueError("PR-AO objective directions are invalid")
     directions = {key: str(directions_raw[key]) for key in property_ids}
+    try:
+        alpha = float(config.get("alpha"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("PR-AO ridge alpha is invalid") from exc
+    if not math.isfinite(alpha) or alpha <= 0:
+        raise ValueError("PR-AO ridge alpha is invalid")
 
     dataset_payload, dataset_sha = _read_bound_json(
         dataset_path,
@@ -203,6 +210,15 @@ def _load_screening_inputs(
         or source.get("dataset_snapshot_sha256") != dataset_sha
     ):
         raise ValueError("PR-AO source dataset binding mismatch")
+    expected_execution_id = "oled-real-phase1-execution:" + _stable_hash(
+        {
+            "source_snapshot_digest": dataset.execution_artifact_digest,
+            "source_snapshot_sha256": dataset_sha,
+            "config": config,
+        }
+    )
+    if execution_id != expected_execution_id:
+        raise ValueError("PR-AO execution ID mismatch")
     split_by_row = _validated_split_by_row(dataset)
 
     artifacts = _required_dict(execution, "artifacts")
@@ -228,6 +244,7 @@ def _load_screening_inputs(
             dataset=dataset,
             dataset_sha=dataset_sha,
             split_by_row=split_by_row,
+            alpha=alpha,
         )
         models[property_id] = model_payload
         model_sha[property_id] = actual_sha
@@ -241,6 +258,7 @@ def _load_screening_inputs(
     registry = OledMaterialRegistrySnapshot.model_validate(registry_payload)
     if _sha256_bytes(_registry_publication_bytes(registry)) != registry_sha:
         raise ValueError("Registry snapshot is not in canonical form")
+    _validate_registry_identity_uniqueness(registry)
 
     selected_rows = [row for row in dataset.rows if row.property_id in property_ids]
     train_rows = [row for row in selected_rows if split_by_row[row.row_id] == "train"]
@@ -269,6 +287,7 @@ def _validate_model_binding(
     dataset: OledCategoricalDatasetExecutionArtifact,
     dataset_sha: str,
     split_by_row: dict[str, str],
+    alpha: float,
 ) -> None:
     if (
         model.get("model_kind") != _MODEL_KIND
@@ -303,6 +322,36 @@ def _validate_model_binding(
         or any(sorted(row.features) != feature_names for row in train_rows)
     ):
         raise ValueError("PR-AO model feature contract mismatch")
+    replayed = _fit_property_model(
+        [row for row in dataset.rows if row.property_id == property_id],
+        split_by_row=split_by_row,
+        property_id=property_id,
+        alpha=alpha,
+    )
+    replayed.update(
+        {
+            "execution_id": execution_id,
+            "source_dataset_snapshot_id": dataset.dataset_snapshot_id,
+            "source_dataset_snapshot_digest": dataset.execution_artifact_digest,
+            "source_dataset_snapshot_sha256": dataset_sha,
+        }
+    )
+    if model != replayed:
+        raise ValueError("PR-AO model deterministic replay mismatch")
+
+
+def _validate_registry_identity_uniqueness(
+    registry: OledMaterialRegistrySnapshot,
+) -> None:
+    identity_fields = (
+        "canonical_isomeric_smiles",
+        "standard_inchi",
+        "inchikey",
+    )
+    for field_name in identity_fields:
+        values = [getattr(entry, field_name) for entry in registry.entries]
+        if len(values) != len(set(values)):
+            raise ValueError("Registry chemical identity is duplicated")
 
 
 def _screen_registry_candidates(
