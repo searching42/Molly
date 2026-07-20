@@ -296,8 +296,9 @@ class PlannerAgent:
         spec = self.registry.get(task_id)
         reasons = {
             "execute_oled_experiment_batch_selection": (
-                "The goal asks for an experimental validation batch, so bind the exact PR-AP "
-                "screening receipt and shortlist before producing a gated, recommendation-only handoff."
+                "The goal asks for an experimental validation batch, so exact-replay the PR-AP "
+                "publication from its PR-AO execution, dataset snapshot, and Registry snapshot "
+                "before producing a gated, recommendation-only handoff."
             ),
             "execute_oled_registry_candidate_screening": (
                 "The goal asks to screen an existing material Registry, so require exact PR-AO "

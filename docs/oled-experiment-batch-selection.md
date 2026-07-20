@@ -13,10 +13,20 @@ The selector requires both artifacts from the same PR-AP publication:
 - `screening.json` (`oled_registry_screening_receipt`)
 - `ranked_shortlist.csv` (`oled_registry_screening_shortlist`)
 
+It also requires the exact replay anchor that produced that publication:
+
+- the PR-AO Phase-1 execution directory;
+- the PR-AI dataset snapshot; and
+- the immutable Registry snapshot.
+
 It verifies the receipt's recorded SHA-256 for the shortlist before using a
-row.  It also validates the screening identity, property roster, directions,
-candidate identities, ranks, predictions, and finite numeric values.  The
-runner never discovers a latest screening, model, dataset, or Registry.
+row. It then exact-replays PR-AP from the three anchored inputs and requires
+the reconstructed `screening.json` and `ranked_shortlist.csv` bytes to match.
+This prevents a self-consistent, re-signed receipt/shortlist pair from changing
+the recommended material identity, structure, name, or prediction. It also
+validates the screening identity, property roster, directions, candidate
+identities, ranks, predictions, and finite numeric values. The runner never
+discovers a latest screening, model, dataset, or Registry.
 
 For a monetary budget, the caller must additionally provide a local
 `oled_candidate_cost_manifest` JSON artifact.  The manifest has one currency
@@ -66,12 +76,14 @@ and model registration are false.
 ## Agent-managed execution
 
 `execute_oled_experiment_batch_selection` is a medium-risk RunPlan task
-protected by `gate_5_final_threshold`.  Before that gate it freezes the exact
-receipt, shortlist, and optional cost manifest inside the run directory.  On
+protected by `gate_5_final_threshold`. Before that gate it freezes the exact
+receipt, shortlist, PR-AO execution directory, PR-AI dataset snapshot,
+Registry snapshot, and optional cost manifest inside the run directory. On
 resume it rechecks the named sources and then sends only the frozen bytes to
-the adapter.  This prevents a source swap after approval from changing the
+the adapter. This prevents a source swap after approval from changing the
 selected batch.
 
 The Agent registers the receipt, CSV handoff, Markdown handoff, and immutable
-first-success execution record as run artifacts.  A later failed retry writes
-a separate attempt record and cannot overwrite the original recommendation.
+first-success execution record as run artifacts. A later retry is rejected
+before adapter dispatch, writes only a separate rejected-attempt record, and
+cannot create an unregistered batch or overwrite the original recommendation.

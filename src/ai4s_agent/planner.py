@@ -278,6 +278,9 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         required_artifacts=[
             "oled_registry_screening_receipt",
             "oled_registry_screening_shortlist",
+            "oled_phase1_execution_dir",
+            "oled_dataset_snapshot",
+            "oled_registry_snapshot",
         ],
         output_artifacts=[
             "oled_experiment_batch_receipt",

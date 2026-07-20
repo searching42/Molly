@@ -31,10 +31,26 @@ def execute_oled_experiment_batch_selection_adapter(payload: dict[str, Any]) -> 
     run_id = _required_string(payload, "run_id")
     screening_receipt_json = _required_string(payload, "screening_receipt_json")
     ranked_shortlist_csv = _required_string(payload, "ranked_shortlist_csv")
+    phase1_execution_dir = _required_string(payload, "phase1_execution_dir")
+    dataset_snapshot_json = _required_string(payload, "dataset_snapshot_json")
+    registry_snapshot_json = _required_string(payload, "registry_snapshot_json")
     output_root = _required_string(payload, "output_root")
     actor = str(payload.get("actor") or "").strip()
-    if not all((run_id, screening_receipt_json, ranked_shortlist_csv, output_root)):
-        return _failed("missing_required_fields", "Exact screening receipt and shortlist inputs are required.")
+    if not all(
+        (
+            run_id,
+            screening_receipt_json,
+            ranked_shortlist_csv,
+            phase1_execution_dir,
+            dataset_snapshot_json,
+            registry_snapshot_json,
+            output_root,
+        )
+    ):
+        return _failed(
+            "missing_required_fields",
+            "Exact screening publication and replay-anchor inputs are required.",
+        )
     if Path(output_root).expanduser().name != "oled_experiment_batch":
         return _failed("invalid_output_root", "Experiment batch output root is not executor-owned.")
     try:
@@ -73,6 +89,9 @@ def execute_oled_experiment_batch_selection_adapter(payload: dict[str, Any]) -> 
         result = run_oled_experiment_batch_selection_from_files(
             screening_receipt_json=screening_receipt_json,
             ranked_shortlist_csv=ranked_shortlist_csv,
+            phase1_execution_dir=phase1_execution_dir,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
             output_root=output_root,
             target_batch_size=target_batch_size,
             minimums=minimums,

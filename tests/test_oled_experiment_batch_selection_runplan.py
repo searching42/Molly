@@ -28,6 +28,9 @@ ADAPTER_NAME = "execute_oled_experiment_batch_selection_adapter"
 INPUT_ARTIFACT_IDS = (
     "oled_registry_screening_receipt",
     "oled_registry_screening_shortlist",
+    "oled_phase1_execution_dir",
+    "oled_dataset_snapshot",
+    "oled_registry_snapshot",
 )
 OUTPUT_FILENAMES = {
     "oled_experiment_batch_receipt": "batch_selection.json",
@@ -76,6 +79,9 @@ def _screening_artifacts(
     return {
         "oled_registry_screening_receipt": str(result.output_dir / "screening.json"),
         "oled_registry_screening_shortlist": str(result.output_dir / "ranked_shortlist.csv"),
+        "oled_phase1_execution_dir": str(inputs.execution_dir),
+        "oled_dataset_snapshot": str(inputs.dataset_snapshot),
+        "oled_registry_snapshot": str(inputs.registry_snapshot),
     }
 
 
@@ -332,6 +338,24 @@ def test_experiment_batch_executes_after_gate_and_surfaces_immutable_artifacts(
     frozen_receipt_path = Path(snapshot_payload["screening_receipt_json"])
     assert frozen_receipt_path.is_file()
     assert frozen_receipt_path.is_relative_to(run_dir / TASK_ID)
+    assert snapshot_payload["source_phase1_execution_dir"] == input_artifacts[
+        "oled_phase1_execution_dir"
+    ]
+    assert snapshot_payload["source_dataset_snapshot_json"] == input_artifacts[
+        "oled_dataset_snapshot"
+    ]
+    assert snapshot_payload["source_registry_snapshot_json"] == input_artifacts[
+        "oled_registry_snapshot"
+    ]
+    assert Path(str(snapshot_payload["phase1_execution_dir"])).is_relative_to(
+        run_dir / "execute_oled_registry_candidate_screening"
+    )
+    assert Path(str(snapshot_payload["dataset_snapshot_json"])).is_relative_to(
+        run_dir / "execute_oled_registry_candidate_screening"
+    )
+    assert Path(str(snapshot_payload["registry_snapshot_json"])).is_relative_to(
+        run_dir / "execute_oled_registry_candidate_screening"
+    )
 
     adapter_payloads: list[dict[str, object]] = []
     real_adapter = getattr(adapters, ADAPTER_NAME)
@@ -361,6 +385,15 @@ def test_experiment_batch_executes_after_gate_and_surfaces_immutable_artifacts(
     )
     assert Path(str(adapter_payloads[0]["ranked_shortlist_csv"])).is_relative_to(
         run_dir / TASK_ID
+    )
+    assert Path(str(adapter_payloads[0]["phase1_execution_dir"])).is_relative_to(
+        run_dir / "execute_oled_registry_candidate_screening"
+    )
+    assert Path(str(adapter_payloads[0]["dataset_snapshot_json"])).is_relative_to(
+        run_dir / "execute_oled_registry_candidate_screening"
+    )
+    assert Path(str(adapter_payloads[0]["registry_snapshot_json"])).is_relative_to(
+        run_dir / "execute_oled_registry_candidate_screening"
     )
     registry = storage.read_artifact_registry("experiment-batch-project", run_id)
     assert set(registry) == {*OUTPUT_FILENAMES, EXECUTION_RECORD_ARTIFACT_ID}
@@ -555,7 +588,9 @@ def test_experiment_batch_retry_preserves_first_execution_record(
 
     assert failed["status"] == RunStatus.FAILED.value
     assert failed["failed_task"] == TASK_ID
-    assert failed["result"]["error"]["code"] == "experiment_batch_selection_failed"
+    assert failed["result"]["error"]["code"] == (
+        "experiment_batch_execution_record_already_exists"
+    )
     assert first_receipt_path.read_bytes() == first_receipt_bytes
     assert first_record_path.read_bytes() == first_record_bytes
     assert storage.read_artifact_registry("experiment-batch-project", run_id) == first_registry
@@ -571,6 +606,99 @@ def test_experiment_batch_retry_preserves_first_execution_record(
     assert attempt_records == sorted([first_record_path, failed_record_path])
 
 
+def test_experiment_batch_different_options_retry_rejects_before_adapter_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    input_artifacts = _screening_artifacts(tmp_path, monkeypatch)
+    storage = ProjectStorage(tmp_path / "workspace")
+    run_id = "experiment-batch-pre-dispatch-retry"
+    run_plan = _run_plan(run_id)
+    executor = RunPlanExecutor(storage=storage)
+    project_id = "experiment-batch-project"
+
+    assert executor.execute(
+        project_id=project_id,
+        run_plan=run_plan,
+        input_artifacts=input_artifacts,
+        task_options=_selection_options(),
+    )["status"] == RunStatus.WAITING_USER.value
+    assert executor.resume_after_gate(
+        project_id=project_id,
+        run_plan=run_plan,
+        approved_gates=[GateName.FINAL_THRESHOLD.value],
+        actor="reviewer",
+        input_artifacts=input_artifacts,
+        task_options=_selection_options(),
+    )["status"] == RunStatus.SUCCEEDED.value
+
+    run_dir = storage.run_dir(project_id, run_id)
+    registry = storage.read_artifact_registry(project_id, run_id)
+    first_registry = dict(registry)
+    first_record_path = run_dir / registry[EXECUTION_RECORD_ARTIFACT_ID]
+    first_record_bytes = first_record_path.read_bytes()
+    first_batch_directories = sorted(
+        path.name
+        for path in (run_dir / "oled_experiment_batch").iterdir()
+        if path.is_dir()
+    )
+    assert len(first_batch_directories) == 1
+
+    adapter_calls: list[dict[str, object]] = []
+    real_adapter = getattr(adapters, ADAPTER_NAME)
+
+    def tracking_adapter(payload: dict[str, object]) -> dict[str, object]:
+        adapter_calls.append(payload)
+        return real_adapter(payload)
+
+    monkeypatch.setattr(adapters, ADAPTER_NAME, tracking_adapter)
+    retry_options = _selection_options(target_batch_size=2)
+    assert executor.execute(
+        project_id=project_id,
+        run_plan=run_plan,
+        input_artifacts=input_artifacts,
+        task_options=retry_options,
+    )["status"] == RunStatus.WAITING_USER.value
+    failed = executor.resume_after_gate(
+        project_id=project_id,
+        run_plan=run_plan,
+        approved_gates=[GateName.FINAL_THRESHOLD.value],
+        actor="reviewer",
+        input_artifacts=input_artifacts,
+        task_options=retry_options,
+    )
+
+    assert failed["status"] == RunStatus.FAILED.value
+    assert failed["failed_task"] == TASK_ID
+    assert failed["result"]["error"]["code"] == (
+        "experiment_batch_execution_record_already_exists"
+    )
+    assert adapter_calls == []
+    assert storage.read_artifact_registry(project_id, run_id) == first_registry
+    assert first_record_path.read_bytes() == first_record_bytes
+    assert sorted(
+        path.name
+        for path in (run_dir / "oled_experiment_batch").iterdir()
+        if path.is_dir()
+    ) == first_batch_directories
+
+    state = storage.read_stage_state(project_id, run_id)
+    assert state is not None
+    assert state.status == RunStatus.FAILED
+    assert state.details["rejected_before_adapter_dispatch"] is True
+    assert len(state.artifacts) == 1
+    rejected_record_path = run_dir / state.artifacts[0].relative_path
+    assert rejected_record_path != first_record_path
+    rejected_record = json.loads(rejected_record_path.read_text(encoding="utf-8"))
+    assert rejected_record["status"] == "failed"
+    assert rejected_record["error"]["code"] == (
+        "experiment_batch_execution_record_already_exists"
+    )
+    assert sorted((run_dir / TASK_ID).glob("adapter_result_*.json")) == sorted(
+        [first_record_path, rejected_record_path]
+    )
+
+
 def test_experiment_batch_adapter_requires_diversity_or_cost_inputs_when_needed(
     tmp_path: Path,
 ) -> None:
@@ -579,6 +707,9 @@ def test_experiment_batch_adapter_requires_diversity_or_cost_inputs_when_needed(
         "output_root": str(tmp_path / "run" / "oled_experiment_batch"),
         "screening_receipt_json": str(tmp_path / "private-screening.json"),
         "ranked_shortlist_csv": str(tmp_path / "private-shortlist.csv"),
+        "phase1_execution_dir": str(tmp_path / "private-phase1-execution"),
+        "dataset_snapshot_json": str(tmp_path / "private-dataset.json"),
+        "registry_snapshot_json": str(tmp_path / "private-registry.json"),
         "target_batch_size": 2,
         "confirmed": True,
         "actor": "reviewer",

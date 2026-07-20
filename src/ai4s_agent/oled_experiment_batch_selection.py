@@ -31,6 +31,12 @@ except Exception:  # pragma: no cover - exercised by a controlled monkeypatch.
 
 from ai4s_agent._utils import now_iso
 from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_directory
+from ai4s_agent.oled_registry_candidate_screening import (
+    _load_screening_inputs as _load_pr_ap_screening_inputs,
+    _rank_candidates as _rank_pr_ap_candidates,
+    _screen_registry_candidates as _screen_pr_ap_registry_candidates,
+    _screening_payloads as _pr_ap_screening_payloads,
+)
 from ai4s_agent.oled_supplementary_material_identity_review import (
     _pinned_output_parents_without_symlink_components,
 )
@@ -120,25 +126,35 @@ def load_oled_experiment_batch_selection_inputs(
     *,
     screening_receipt_json: str | Path,
     ranked_shortlist_csv: str | Path,
+    phase1_execution_dir: str | Path,
+    dataset_snapshot_json: str | Path,
+    registry_snapshot_json: str | Path,
     candidate_cost_manifest_json: str | Path | None = None,
 ) -> OledExperimentBatchSelectionInputs:
-    """Read and bind a completed PR-AP receipt with its exact shortlist bytes.
+    """Read a completed PR-AP publication and replay it from exact inputs.
 
     The loader rejects symbolic input components, duplicate JSON keys,
     non-canonical PR-AP receipts, receipt/CSV SHA mismatches, malformed source
     bindings, and cost manifests that are not exactly scoped to this shortlist.
-    It performs no output publication.
+    It also requires the exact PR-AO execution directory, PR-AI dataset
+    snapshot, and Registry snapshot used by PR-AP.  Those inputs are replayed
+    through the PR-AP implementation and the reconstructed receipt and
+    shortlist must match the supplied bytes exactly.  It performs no output
+    publication.
     """
 
     screening_path = _absolute_local_path(screening_receipt_json)
     shortlist_path = _absolute_local_path(ranked_shortlist_csv)
     if screening_path == shortlist_path:
         raise ValueError("screening receipt and shortlist must be distinct files")
-    receipt, screening_sha256 = _read_bound_json(
+    screening_bytes, screening_sha256 = _read_regular_file_bound(
         screening_path,
-        "PR-AP screening receipt",
         max_bytes=_MAX_INPUT_BYTES,
         reject_symlink_components=True,
+    )
+    receipt = _parse_bound_json_object(
+        screening_bytes,
+        label="PR-AP screening receipt",
     )
     if _sha256_bytes(_json_bytes(receipt)) != screening_sha256:
         raise ValueError("PR-AP screening receipt is not in canonical form")
@@ -162,6 +178,14 @@ def load_oled_experiment_batch_selection_inputs(
         shortlist_candidates
     ):
         raise ValueError("PR-AP shortlist count mismatch")
+    _validate_exact_pr_ap_screening_replay(
+        receipt=receipt,
+        receipt_bytes=screening_bytes,
+        shortlist_bytes=shortlist_bytes,
+        phase1_execution_dir=phase1_execution_dir,
+        dataset_snapshot_json=dataset_snapshot_json,
+        registry_snapshot_json=registry_snapshot_json,
+    )
 
     cost_manifest: dict[str, Any] | None = None
     cost_manifest_sha256: str | None = None
@@ -205,6 +229,9 @@ def run_oled_experiment_batch_selection_from_files(
     *,
     screening_receipt_json: str | Path,
     ranked_shortlist_csv: str | Path,
+    phase1_execution_dir: str | Path,
+    dataset_snapshot_json: str | Path,
+    registry_snapshot_json: str | Path,
     output_root: str | Path,
     target_batch_size: int,
     minimums: Sequence[str] | None = None,
@@ -237,6 +264,9 @@ def run_oled_experiment_batch_selection_from_files(
         inputs = load_oled_experiment_batch_selection_inputs(
             screening_receipt_json=screening_receipt_json,
             ranked_shortlist_csv=ranked_shortlist_csv,
+            phase1_execution_dir=phase1_execution_dir,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
             candidate_cost_manifest_json=candidate_cost_manifest_json,
         )
         constraints = _parse_constraints(
@@ -403,6 +433,134 @@ def _validate_screening_receipt(
     if any(claims.get(key) is not expected for key, expected in expected_claims.items()):
         raise ValueError("PR-AP boundary claims are invalid")
     return property_ids, directions, dict(sources), dict(config), screening_id
+
+
+def _validate_exact_pr_ap_screening_replay(
+    *,
+    receipt: dict[str, Any],
+    receipt_bytes: bytes,
+    shortlist_bytes: bytes,
+    phase1_execution_dir: str | Path,
+    dataset_snapshot_json: str | Path,
+    registry_snapshot_json: str | Path,
+) -> None:
+    """Rebuild the PR-AP publication from trusted inputs before PR-AR consumes it.
+
+    A screening ID deliberately identifies the PR-AP source/configuration, not
+    an individual output file.  Consequently, a receipt/shortlist pair that
+    has been internally re-signed is not a trustworthy replay anchor on its
+    own.  Reconstructing the complete PR-AP payload set from the exact PR-AO,
+    PR-AI, and Registry inputs binds the batch handoff to the original model
+    execution rather than to attacker-controlled receipt fields.
+    """
+
+    prepared = _load_pr_ap_screening_inputs(
+        phase1_execution_dir=phase1_execution_dir,
+        dataset_snapshot_json=dataset_snapshot_json,
+        registry_snapshot_json=registry_snapshot_json,
+    )
+    receipt_config = _required_dict(receipt, "config")
+    constraints = _normalized_pr_ap_constraints(
+        receipt_config.get("constraints"),
+        property_ids=prepared.property_ids,
+    )
+    expected_config = {
+        "property_ids": list(prepared.property_ids),
+        "directions": prepared.directions,
+        "constraints": constraints,
+        "feature_policy": "exact_pr_ao_model_feature_contract",
+        "feature_generator_profile": prepared.feature_generator_profile,
+        "scoring_policy": "pareto_then_mean_rank_percentile.v1",
+    }
+    if receipt_config != expected_config:
+        raise ValueError("PR-AP screening exact replay mismatch")
+    expected_screening_id = "oled-registry-screening:" + _stable_hash(
+        {
+            "phase1_execution_id": prepared.execution["execution_id"],
+            "phase1_execution_sha256": prepared.execution_sha256,
+            "dataset_snapshot_digest": prepared.dataset.execution_artifact_digest,
+            "dataset_snapshot_sha256": prepared.dataset_sha256,
+            "registry_snapshot_digest": prepared.registry.snapshot_digest,
+            "registry_snapshot_sha256": prepared.registry_sha256,
+            "config": expected_config,
+        }
+    )
+    if receipt.get("screening_id") != expected_screening_id:
+        raise ValueError("PR-AP screening exact replay mismatch")
+    generated_at = _required_string(receipt, "generated_at")
+    eligible, excluded, raw_predictions = _screen_pr_ap_registry_candidates(prepared)
+    if not eligible or not raw_predictions:
+        raise ValueError("PR-AP screening exact replay mismatch")
+    predictions, shortlist = _rank_pr_ap_candidates(
+        raw_predictions,
+        property_ids=prepared.property_ids,
+        directions=prepared.directions,
+        constraints=constraints,
+    )
+    expected_payloads = _pr_ap_screening_payloads(
+        prepared=prepared,
+        screening_id=expected_screening_id,
+        config=expected_config,
+        eligible=eligible,
+        excluded=excluded,
+        predictions=predictions,
+        shortlist=shortlist,
+        generated_at=generated_at,
+    )
+    if (
+        receipt_bytes != expected_payloads["screening.json"]
+        or shortlist_bytes != expected_payloads["ranked_shortlist.csv"]
+    ):
+        raise ValueError("PR-AP screening exact replay mismatch")
+
+
+def _normalized_pr_ap_constraints(
+    value: Any,
+    *,
+    property_ids: tuple[str, ...],
+) -> dict[str, dict[str, float]]:
+    """Normalize the canonical constraints emitted by PR-AP's parser."""
+
+    _validate_constraint_object(value, property_ids=property_ids)
+    assert isinstance(value, dict)
+    return {
+        property_id: {
+            kind: _finite_float(bounds[kind], "PR-AP constraint value")
+            for kind in sorted(bounds)
+        }
+        for property_id, bounds in sorted(value.items())
+    }
+
+
+def _parse_bound_json_object(payload: bytes, *, label: str) -> dict[str, Any]:
+    """Parse bytes already pinned by ``_read_regular_file_bound`` exactly once."""
+
+    try:
+        value = json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_object_keys,
+            parse_constant=_reject_nonfinite_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid {label} JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} JSON must be an object")
+    return value
+
+
+def _reject_duplicate_json_object_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError("PR-AR input JSON contains duplicate keys")
+        payload[key] = value
+    return payload
+
+
+def _reject_nonfinite_json_constant(value: str) -> None:
+    raise ValueError(f"PR-AR input JSON contains {value}")
 
 
 def _parse_ranked_shortlist(
@@ -1171,6 +1329,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--screening-receipt", required=True)
     parser.add_argument("--ranked-shortlist", required=True)
+    parser.add_argument("--phase1-execution-dir", required=True)
+    parser.add_argument("--dataset-snapshot", required=True)
+    parser.add_argument("--registry-snapshot", required=True)
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--target-batch-size", required=True, type=int)
     parser.add_argument("--min", dest="minimums", action="append", default=[])
@@ -1188,6 +1349,9 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         result = run_oled_experiment_batch_selection_from_files(
             screening_receipt_json=args.screening_receipt,
             ranked_shortlist_csv=args.ranked_shortlist,
+            phase1_execution_dir=args.phase1_execution_dir,
+            dataset_snapshot_json=args.dataset_snapshot,
+            registry_snapshot_json=args.registry_snapshot,
             output_root=args.output_root,
             target_batch_size=args.target_batch_size,
             minimums=args.minimums,

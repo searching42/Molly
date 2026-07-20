@@ -241,6 +241,65 @@ class RunPlanExecutor:
 
             options = task_options.get(task.task_id, {})
             adapter_name = self._adapter_name_for(task.task_id, spec.default_adapter, options)
+            attempt_id = (
+                uuid.uuid4().hex
+                if task.task_id in _IMMUTABLE_EXECUTION_RECORD_TASK_IDS
+                else None
+            )
+            if task.task_id == _EXPERIMENT_BATCH_TASK_ID and (
+                "oled_experiment_batch_execution_record"
+                in self.storage.read_artifact_registry(project_id, run_id)
+            ):
+                # A registered execution record is written only after a
+                # successful batch publication.  Reject a later retry before
+                # constructing adapter payloads or invoking the adapter: a
+                # different selection configuration would otherwise publish a
+                # second, unregistered batch directory before _collect_artifacts
+                # noticed the immutable record.
+                error = {
+                    "code": "experiment_batch_execution_record_already_exists",
+                    "message": (
+                        "Experiment batch selection execution record is already immutable."
+                    ),
+                }
+                result = {
+                    "status": "failed",
+                    "adapter": adapter_name or "",
+                    "error": error,
+                }
+                result_path = self._write_adapter_result(
+                    run_dir,
+                    task.task_id,
+                    result,
+                    attempt_id=attempt_id,
+                )
+                failure_artifacts = [
+                    ArtifactRef(
+                        artifact_id=f"{task.task_id}_result",
+                        relative_path=self._relative(run_dir, result_path),
+                    )
+                ]
+                self._write_stage(
+                    project_id=project_id,
+                    run_id=run_id,
+                    stage=task.task_id,
+                    status=RunStatus.FAILED,
+                    next_stage=next_stage,
+                    error=error,
+                    artifacts=failure_artifacts,
+                    details={
+                        "adapter": adapter_name or "",
+                        "rejected_before_adapter_dispatch": True,
+                    },
+                )
+                return {
+                    "ok": False,
+                    "run_id": run_id,
+                    "status": RunStatus.FAILED.value,
+                    "failed_task": task.task_id,
+                    "executed_tasks": executed,
+                    "result": result,
+                }
             adapter = self._adapter_for(adapter_name)
             payload = self._payload_for(
                 task.task_id,
@@ -250,11 +309,6 @@ class RunPlanExecutor:
                 actor=actor,
                 approved_gates=approved_gates if task_approval_applies else set(),
                 options=options,
-            )
-            attempt_id = (
-                uuid.uuid4().hex
-                if task.task_id in _IMMUTABLE_EXECUTION_RECORD_TASK_IDS
-                else None
             )
             self._write_stage(
                 project_id=project_id,
@@ -699,6 +753,15 @@ class RunPlanExecutor:
             source_ranked_shortlist_csv = self._absolute_artifact_path(
                 artifact_paths, "oled_registry_screening_shortlist"
             )
+            source_phase1_execution_dir = self._absolute_artifact_path(
+                artifact_paths, "oled_phase1_execution_dir"
+            )
+            source_dataset_snapshot_json = self._absolute_artifact_path(
+                artifact_paths, "oled_dataset_snapshot"
+            )
+            source_registry_snapshot_json = self._absolute_artifact_path(
+                artifact_paths, "oled_registry_snapshot"
+            )
             source_candidate_cost_manifest_json = self._optional_absolute_artifact_path(
                 artifact_paths, "oled_candidate_cost_manifest"
             )
@@ -706,16 +769,43 @@ class RunPlanExecutor:
                 raise ValueError(
                     "oled_candidate_cost_manifest is required when max_budget_minor is set"
                 )
+            # A PR-AP receipt is trustworthy only if its complete publication
+            # can be regenerated from the exact PR-AO/PR-AI/Registry inputs.
+            # Reuse PR-AQ's hardened, run-owned input snapshot so the batch
+            # adapter never receives caller-controlled upstream paths.
+            frozen_replay_anchor = self._registry_screening_frozen_input_paths(
+                run_dir=run_dir,
+                source_phase1_execution_dir=source_phase1_execution_dir,
+                source_dataset_snapshot_json=source_dataset_snapshot_json,
+                source_registry_snapshot_json=source_registry_snapshot_json,
+            )
             frozen = self._experiment_batch_frozen_input_paths(
                 run_dir=run_dir,
                 source_screening_receipt_json=source_screening_receipt_json,
                 source_ranked_shortlist_csv=source_ranked_shortlist_csv,
                 source_candidate_cost_manifest_json=source_candidate_cost_manifest_json,
+                phase1_execution_dir=frozen_replay_anchor["phase1_execution_dir"],
+                dataset_snapshot_json=frozen_replay_anchor["dataset_snapshot_json"],
+                registry_snapshot_json=frozen_replay_anchor["registry_snapshot_json"],
             )
             # The gate snapshot binds named source inputs.  At dispatch the
             # adapter receives only the run-owned frozen bytes, and this final
             # recheck rejects a source replacement made after gate validation.
             if actor:
+                self._verify_registry_screening_source_binding(
+                    source_phase1_execution_dir=source_phase1_execution_dir,
+                    source_dataset_snapshot_json=source_dataset_snapshot_json,
+                    source_registry_snapshot_json=source_registry_snapshot_json,
+                    frozen_phase1_execution_dir=frozen_replay_anchor[
+                        "phase1_execution_dir"
+                    ],
+                    frozen_dataset_snapshot_json=frozen_replay_anchor[
+                        "dataset_snapshot_json"
+                    ],
+                    frozen_registry_snapshot_json=frozen_replay_anchor[
+                        "registry_snapshot_json"
+                    ],
+                )
                 self._verify_experiment_batch_source_binding(
                     source_screening_receipt_json=source_screening_receipt_json,
                     source_ranked_shortlist_csv=source_ranked_shortlist_csv,
@@ -725,6 +815,9 @@ class RunPlanExecutor:
                     frozen_candidate_cost_manifest_json=frozen.get(
                         "candidate_cost_manifest_json", ""
                     ),
+                    phase1_execution_dir=frozen_replay_anchor["phase1_execution_dir"],
+                    dataset_snapshot_json=frozen_replay_anchor["dataset_snapshot_json"],
+                    registry_snapshot_json=frozen_replay_anchor["registry_snapshot_json"],
                 )
             payload = {
                 "run_id": run_id,
@@ -734,11 +827,17 @@ class RunPlanExecutor:
                 "source_screening_receipt_json": source_screening_receipt_json,
                 "source_ranked_shortlist_csv": source_ranked_shortlist_csv,
                 "source_candidate_cost_manifest_json": source_candidate_cost_manifest_json,
+                "source_phase1_execution_dir": source_phase1_execution_dir,
+                "source_dataset_snapshot_json": source_dataset_snapshot_json,
+                "source_registry_snapshot_json": source_registry_snapshot_json,
                 "screening_receipt_json": frozen["screening_receipt_json"],
                 "ranked_shortlist_csv": frozen["ranked_shortlist_csv"],
                 "candidate_cost_manifest_json": frozen.get(
                     "candidate_cost_manifest_json", ""
                 ),
+                "phase1_execution_dir": frozen_replay_anchor["phase1_execution_dir"],
+                "dataset_snapshot_json": frozen_replay_anchor["dataset_snapshot_json"],
+                "registry_snapshot_json": frozen_replay_anchor["registry_snapshot_json"],
                 "output_root": str(run_dir / "oled_experiment_batch"),
                 "target_batch_size": target_batch_size,
                 "minimums": self._string_list_option(
@@ -1372,6 +1471,9 @@ class RunPlanExecutor:
         source_screening_receipt_json: str,
         source_ranked_shortlist_csv: str,
         source_candidate_cost_manifest_json: str,
+        phase1_execution_dir: str,
+        dataset_snapshot_json: str,
+        registry_snapshot_json: str,
     ) -> dict[str, str]:
         """Return one immutable, run-owned copy of the PR-AP batch inputs."""
 
@@ -1394,6 +1496,9 @@ class RunPlanExecutor:
         source = load_oled_experiment_batch_selection_inputs(
             screening_receipt_json=source_screening_receipt_json,
             ranked_shortlist_csv=source_ranked_shortlist_csv,
+            phase1_execution_dir=phase1_execution_dir,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
             candidate_cost_manifest_json=(
                 source_candidate_cost_manifest_json or None
             ),
@@ -1467,6 +1572,9 @@ class RunPlanExecutor:
             frozen_candidate_cost_manifest_json=frozen.get(
                 "candidate_cost_manifest_json", ""
             ),
+            phase1_execution_dir=phase1_execution_dir,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
         )
         return frozen
 
@@ -1542,6 +1650,9 @@ class RunPlanExecutor:
         frozen_screening_receipt_json: str,
         frozen_ranked_shortlist_csv: str,
         frozen_candidate_cost_manifest_json: str,
+        phase1_execution_dir: str,
+        dataset_snapshot_json: str,
+        registry_snapshot_json: str,
     ) -> None:
         """Require named batch sources to still equal the owned frozen copy."""
 
@@ -1552,6 +1663,9 @@ class RunPlanExecutor:
         source = load_oled_experiment_batch_selection_inputs(
             screening_receipt_json=source_screening_receipt_json,
             ranked_shortlist_csv=source_ranked_shortlist_csv,
+            phase1_execution_dir=phase1_execution_dir,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
             candidate_cost_manifest_json=(
                 source_candidate_cost_manifest_json or None
             ),
@@ -1559,6 +1673,9 @@ class RunPlanExecutor:
         frozen = load_oled_experiment_batch_selection_inputs(
             screening_receipt_json=frozen_screening_receipt_json,
             ranked_shortlist_csv=frozen_ranked_shortlist_csv,
+            phase1_execution_dir=phase1_execution_dir,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
             candidate_cost_manifest_json=(
                 frozen_candidate_cost_manifest_json or None
             ),

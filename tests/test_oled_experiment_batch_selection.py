@@ -4,15 +4,23 @@ import csv
 import hashlib
 import io
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from ai4s_agent import oled_experiment_batch_selection as batch_runner
 from ai4s_agent.oled_experiment_batch_selection import (
+    OledExperimentBatchSelectionInputs,
+    OledExperimentBatchSelectionResult,
+    _parse_ranked_shortlist,
     load_oled_experiment_batch_selection_inputs,
     run_oled_experiment_batch_selection_from_files,
 )
+from ai4s_agent.oled_registry_candidate_screening import (
+    run_oled_registry_candidate_screening_from_files,
+)
+from tests.test_oled_registry_candidate_screening import _screening_inputs
 
 
 _PROPERTY_IDS = ("delta_e_st_ev", "s1_ev")
@@ -46,140 +54,88 @@ def _shortlist_bytes(rows: list[dict[str, object]]) -> bytes:
     return stream.getvalue().encode("utf-8")
 
 
-def _rows() -> list[dict[str, object]]:
-    return [
-        {
-            "rank": 1,
-            "material_id": "material:batch-a",
-            "registry_entry_digest": "sha256:" + "1" * 64,
-            "canonical_name": "ethane",
-            "canonical_isomeric_smiles": "CC",
-            "aggregate_percentile": 0.95,
-            "predicted_delta_e_st_ev": 0.10,
-            "predicted_s1_ev": 3.10,
-        },
-        {
-            "rank": 2,
-            "material_id": "material:batch-b",
-            "registry_entry_digest": "sha256:" + "2" * 64,
-            "canonical_name": "benzene",
-            "canonical_isomeric_smiles": "c1ccccc1",
-            "aggregate_percentile": 0.90,
-            "predicted_delta_e_st_ev": 0.12,
-            "predicted_s1_ev": 3.20,
-        },
-        {
-            "rank": 3,
-            "material_id": "material:batch-c",
-            "registry_entry_digest": "sha256:" + "3" * 64,
-            "canonical_name": "ethanol",
-            "canonical_isomeric_smiles": "CCO",
-            "aggregate_percentile": 0.80,
-            "predicted_delta_e_st_ev": 0.18,
-            "predicted_s1_ev": 3.00,
-        },
-    ]
+@dataclass(frozen=True)
+class _ScreeningPublication:
+    screening_receipt: Path
+    ranked_shortlist: Path
+    phase1_execution_dir: Path
+    dataset_snapshot: Path
+    registry_snapshot: Path
 
 
-def _sources() -> dict[str, object]:
-    return {
-        "phase1_execution_id": "oled-real-phase1-execution:fixture",
-        "phase1_execution_sha256": "sha256:" + "a" * 64,
-        "dataset_snapshot_id": "oled-dataset-snapshot:fixture",
-        "dataset_snapshot_digest": "sha256:" + "b" * 64,
-        "dataset_snapshot_sha256": "sha256:" + "c" * 64,
-        "registry_id": "oled-registry:fixture",
-        "registry_version": "registry-version:fixture",
-        "registry_snapshot_digest": "sha256:" + "d" * 64,
-        "registry_snapshot_sha256": "sha256:" + "e" * 64,
-        "model_sha256": {
-            "delta_e_st_ev": "sha256:" + "f" * 64,
-            "s1_ev": "sha256:" + "0" * 64,
-        },
-    }
-
-
-def _screening_paths(
+def _screening_publication(
     tmp_path: Path,
-    rows: list[dict[str, object]] | None = None,
-) -> tuple[Path, Path]:
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    shortlist_rows = _rows() if rows is None else rows
-    shortlist = _shortlist_bytes(shortlist_rows)
-    shortlist_path = tmp_path / "ranked_shortlist.csv"
-    shortlist_path.write_bytes(shortlist)
-    sources = _sources()
-    config = {
-        "property_ids": list(_PROPERTY_IDS),
-        "directions": {
-            "delta_e_st_ev": "minimize",
-            "s1_ev": "maximize",
-        },
-        "constraints": {},
-        "feature_policy": "exact_pr_ao_model_feature_contract",
-        "feature_generator_profile": {"feature_type": "morgan_ecfp", "n_bits": 128},
-        "scoring_policy": "pareto_then_mean_rank_percentile.v1",
-    }
-    screening_id = "oled-registry-screening:" + batch_runner._stable_hash(
-        {
-            "phase1_execution_id": sources["phase1_execution_id"],
-            "phase1_execution_sha256": sources["phase1_execution_sha256"],
-            "dataset_snapshot_digest": sources["dataset_snapshot_digest"],
-            "dataset_snapshot_sha256": sources["dataset_snapshot_sha256"],
-            "registry_snapshot_digest": sources["registry_snapshot_digest"],
-            "registry_snapshot_sha256": sources["registry_snapshot_sha256"],
-            "config": config,
-        }
+    monkeypatch: pytest.MonkeyPatch,
+) -> _ScreeningPublication:
+    """Build a real PR-AP publication and retain its exact replay inputs."""
+
+    anchor_root = tmp_path / "pr-ap-anchor"
+    anchor_root.mkdir(parents=True, exist_ok=True)
+    source = _screening_inputs(anchor_root, monkeypatch)
+    result = run_oled_registry_candidate_screening_from_files(
+        phase1_execution_dir=source.execution_dir,
+        dataset_snapshot_json=source.dataset_snapshot,
+        registry_snapshot_json=source.registry_snapshot,
+        output_root=tmp_path / "screenings",
+        generated_at="2026-07-20T09:00:00+08:00",
     )
-    receipt = {
-        "screening_version": "oled_registry_candidate_screening.v1",
-        "screening_id": screening_id,
-        "generated_at": "2026-07-20T09:00:00+08:00",
-        "status": "completed",
-        "sources": sources,
-        "config": config,
-        "counts": {
-            "registry_candidate_count": 5,
-            "eligible_candidate_count": len(shortlist_rows),
-            "excluded_candidate_count": 2,
-            "prediction_count": len(shortlist_rows),
-            "shortlist_count": len(shortlist_rows),
-        },
-        "reason_code_counts": {},
-        "artifacts": {
-            "eligible_candidates.csv": "sha256:" + "4" * 64,
-            "excluded_candidates.jsonl": "sha256:" + "5" * 64,
-            "predictions.jsonl": "sha256:" + "6" * 64,
-            "ranked_shortlist.csv": _sha256(shortlist),
-        },
-        "claims": {
-            "independent_registry_candidate_pool": True,
-            "training_identity_exclusion_applied": True,
-            "experimental_validation_claimed": False,
-            "benchmark_validated": False,
-            "production_ready": False,
-            "model_registered": False,
-            "registry_mutated": False,
-        },
-    }
-    screening_path = tmp_path / "screening.json"
-    screening_path.write_bytes(_json_bytes(receipt))
-    return screening_path, shortlist_path
+    return _ScreeningPublication(
+        screening_receipt=result.output_dir / "screening.json",
+        ranked_shortlist=result.output_dir / "ranked_shortlist.csv",
+        phase1_execution_dir=source.execution_dir,
+        dataset_snapshot=source.dataset_snapshot,
+        registry_snapshot=source.registry_snapshot,
+    )
+
+
+def _shortlist_rows(publication: _ScreeningPublication) -> list[dict[str, object]]:
+    with publication.ranked_shortlist.open(
+        "r", encoding="utf-8", newline=""
+    ) as stream:
+        return [dict(row) for row in csv.DictReader(stream)]
+
+
+def _load_batch_inputs(
+    publication: _ScreeningPublication,
+    *,
+    candidate_cost_manifest_json: Path | None = None,
+) -> OledExperimentBatchSelectionInputs:
+    return load_oled_experiment_batch_selection_inputs(
+        screening_receipt_json=publication.screening_receipt,
+        ranked_shortlist_csv=publication.ranked_shortlist,
+        phase1_execution_dir=publication.phase1_execution_dir,
+        dataset_snapshot_json=publication.dataset_snapshot,
+        registry_snapshot_json=publication.registry_snapshot,
+        candidate_cost_manifest_json=candidate_cost_manifest_json,
+    )
+
+
+def _run_batch(
+    publication: _ScreeningPublication,
+    **kwargs: object,
+) -> OledExperimentBatchSelectionResult:
+    return run_oled_experiment_batch_selection_from_files(
+        screening_receipt_json=publication.screening_receipt,
+        ranked_shortlist_csv=publication.ranked_shortlist,
+        phase1_execution_dir=publication.phase1_execution_dir,
+        dataset_snapshot_json=publication.dataset_snapshot,
+        registry_snapshot_json=publication.registry_snapshot,
+        **kwargs,
+    )
 
 
 def _cost_manifest_path(
     tmp_path: Path,
     *,
-    screening_path: Path,
-    shortlist_path: Path,
+    publication: _ScreeningPublication,
     rows: list[dict[str, object]],
     costs: list[int],
 ) -> Path:
-    receipt = json.loads(screening_path.read_text(encoding="utf-8"))
+    receipt = json.loads(publication.screening_receipt.read_text(encoding="utf-8"))
     manifest = {
         "cost_manifest_version": "oled_candidate_cost_manifest.v1",
         "screening_id": receipt["screening_id"],
-        "ranked_shortlist_sha256": _sha256(shortlist_path.read_bytes()),
+        "ranked_shortlist_sha256": _sha256(publication.ranked_shortlist.read_bytes()),
         "currency": "USD",
         "entries": [
             {
@@ -197,51 +153,87 @@ def _cost_manifest_path(
 
 def test_loader_binds_exact_screening_shortlist_and_optional_cost_manifest(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rows = _rows()
-    screening_path, shortlist_path = _screening_paths(tmp_path, rows)
+    publication = _screening_publication(tmp_path, monkeypatch)
+    rows = _shortlist_rows(publication)
     costs_path = _cost_manifest_path(
         tmp_path,
-        screening_path=screening_path,
-        shortlist_path=shortlist_path,
+        publication=publication,
         rows=rows,
-        costs=[500, 800, 100],
+        costs=[500, 800],
     )
 
-    loaded = load_oled_experiment_batch_selection_inputs(
-        screening_receipt_json=screening_path,
-        ranked_shortlist_csv=shortlist_path,
+    loaded = _load_batch_inputs(
+        publication,
         candidate_cost_manifest_json=costs_path,
     )
 
     assert loaded.screening_id.startswith("oled-registry-screening:")
-    assert loaded.screening_sha256 == _sha256(screening_path.read_bytes())
-    assert loaded.shortlist_sha256 == _sha256(shortlist_path.read_bytes())
+    assert loaded.screening_sha256 == _sha256(
+        publication.screening_receipt.read_bytes()
+    )
+    assert loaded.shortlist_sha256 == _sha256(
+        publication.ranked_shortlist.read_bytes()
+    )
     assert loaded.cost_manifest_sha256 == _sha256(costs_path.read_bytes())
     assert loaded.property_ids == _PROPERTY_IDS
     assert loaded.cost_currency == "USD"
-    assert loaded.costs_by_candidate[("material:batch-a", "sha256:" + "1" * 64)] == 500
+    assert loaded.costs_by_candidate[
+        (str(rows[0]["material_id"]), str(rows[0]["registry_entry_digest"]))
+    ] == 500
+
+
+def test_fully_resigned_shortlist_fails_exact_pr_ap_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A self-consistent receipt/CSV pair cannot replace PR-AP's publication."""
+
+    publication = _screening_publication(tmp_path, monkeypatch)
+    forged_rows = _shortlist_rows(publication)
+    forged_rows[0] = {
+        **forged_rows[0],
+        "material_id": "material:forged-shortlist-entry",
+        "registry_entry_digest": "sha256:" + "f" * 64,
+        "canonical_name": "forged candidate",
+        "canonical_isomeric_smiles": "CO",
+        "aggregate_percentile": "0.500000",
+        "predicted_delta_e_st_ev": "0.123000",
+        "predicted_s1_ev": "3.456000",
+    }
+    forged_shortlist = _shortlist_bytes(forged_rows)
+    publication.ranked_shortlist.write_bytes(forged_shortlist)
+    forged_receipt = json.loads(
+        publication.screening_receipt.read_text(encoding="utf-8")
+    )
+    original_screening_id = forged_receipt["screening_id"]
+    forged_receipt["artifacts"]["ranked_shortlist.csv"] = _sha256(forged_shortlist)
+    publication.screening_receipt.write_bytes(_json_bytes(forged_receipt))
+
+    assert forged_receipt["screening_id"] == original_screening_id
+    with pytest.raises(ValueError, match="PR-AP screening exact replay mismatch"):
+        _load_batch_inputs(publication)
 
 
 def test_ready_batch_is_diverse_deterministic_and_recommendation_only(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    screening_path, shortlist_path = _screening_paths(tmp_path)
+    publication = _screening_publication(tmp_path, monkeypatch)
+    rows = _shortlist_rows(publication)
 
-    result = run_oled_experiment_batch_selection_from_files(
-        screening_receipt_json=screening_path,
-        ranked_shortlist_csv=shortlist_path,
+    result = _run_batch(
+        publication,
         output_root=tmp_path / "batches",
         target_batch_size=2,
-        maximums=["delta_e_st_ev=0.20"],
-        minimums=["s1_ev=3.00"],
-        max_pairwise_tanimoto=0.0,
+        max_pairwise_tanimoto=1.0,
         generated_at="2026-07-20T10:00:00+08:00",
     )
 
     assert result.status == "ready"
     assert result.selected_count == 2
-    assert result.eligible_count == 3
+    assert result.eligible_count == 2
     assert sorted(path.name for path in result.output_dir.iterdir()) == [
         "batch_selection.json",
         "experiment_batch.csv",
@@ -250,10 +242,9 @@ def test_ready_batch_is_diverse_deterministic_and_recommendation_only(
     receipt = json.loads(
         (result.output_dir / "batch_selection.json").read_text(encoding="utf-8")
     )
-    assert [item["material_id"] for item in receipt["selection"]["selected_candidates"]] == [
-        "material:batch-a",
-        "material:batch-b",
-    ]
+    assert [
+        item["material_id"] for item in receipt["selection"]["selected_candidates"]
+    ] == [row["material_id"] for row in rows]
     assert receipt["claims"] == {
         "recommendation_only": True,
         "experiment_started": False,
@@ -287,22 +278,21 @@ def test_ready_batch_is_diverse_deterministic_and_recommendation_only(
 
 def test_budget_manifest_is_exactly_bound_and_selection_respects_minor_units(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rows = _rows()
-    screening_path, shortlist_path = _screening_paths(tmp_path, rows)
+    publication = _screening_publication(tmp_path, monkeypatch)
+    rows = _shortlist_rows(publication)
     costs_path = _cost_manifest_path(
         tmp_path,
-        screening_path=screening_path,
-        shortlist_path=shortlist_path,
+        publication=publication,
         rows=rows,
-        costs=[500, 800, 100],
+        costs=[700, 500],
     )
 
-    result = run_oled_experiment_batch_selection_from_files(
-        screening_receipt_json=screening_path,
-        ranked_shortlist_csv=shortlist_path,
+    result = _run_batch(
+        publication,
         output_root=tmp_path / "batches",
-        target_batch_size=2,
+        target_batch_size=1,
         max_budget_minor=600,
         max_pairwise_tanimoto=1.0,
         candidate_cost_manifest_json=costs_path,
@@ -313,36 +303,33 @@ def test_budget_manifest_is_exactly_bound_and_selection_respects_minor_units(
         (result.output_dir / "batch_selection.json").read_text(encoding="utf-8")
     )
     assert result.status == "ready"
-    assert result.total_cost_minor == 600
-    assert [item["material_id"] for item in receipt["selection"]["selected_candidates"]] == [
-        "material:batch-a",
-        "material:batch-c",
-    ]
+    assert result.total_cost_minor == 500
+    assert [
+        item["material_id"] for item in receipt["selection"]["selected_candidates"]
+    ] == [rows[1]["material_id"]]
     assert receipt["selection"]["currency"] == "USD"
 
     malformed = json.loads(costs_path.read_text(encoding="utf-8"))
     malformed["screening_id"] = "oled-registry-screening:other"
     costs_path.write_bytes(_json_bytes(malformed))
     with pytest.raises(ValueError, match="screening binding mismatch"):
-        load_oled_experiment_batch_selection_inputs(
-            screening_receipt_json=screening_path,
-            ranked_shortlist_csv=shortlist_path,
+        _load_batch_inputs(
+            publication,
             candidate_cost_manifest_json=costs_path,
         )
 
 
 def test_valid_infeasible_request_publishes_not_ready_without_partial_batch(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rows = _rows()[:2]
-    screening_path, shortlist_path = _screening_paths(tmp_path, rows)
+    publication = _screening_publication(tmp_path, monkeypatch)
 
-    result = run_oled_experiment_batch_selection_from_files(
-        screening_receipt_json=screening_path,
-        ranked_shortlist_csv=shortlist_path,
+    result = _run_batch(
+        publication,
         output_root=tmp_path / "batches",
         target_batch_size=3,
-        max_pairwise_tanimoto=0.0,
+        max_pairwise_tanimoto=1.0,
         generated_at="2026-07-20T10:02:00+08:00",
     )
 
@@ -364,20 +351,19 @@ def test_valid_infeasible_request_publishes_not_ready_without_partial_batch(
 
 def test_missing_costs_are_a_not_ready_outcome_under_a_money_budget(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rows = _rows()
-    screening_path, shortlist_path = _screening_paths(tmp_path, rows)
+    publication = _screening_publication(tmp_path, monkeypatch)
+    rows = _shortlist_rows(publication)
     costs_path = _cost_manifest_path(
         tmp_path,
-        screening_path=screening_path,
-        shortlist_path=shortlist_path,
+        publication=publication,
         rows=rows[:1],
         costs=[500],
     )
 
-    result = run_oled_experiment_batch_selection_from_files(
-        screening_receipt_json=screening_path,
-        ranked_shortlist_csv=shortlist_path,
+    result = _run_batch(
+        publication,
         output_root=tmp_path / "batches",
         target_batch_size=2,
         max_budget_minor=1_000,
@@ -395,26 +381,24 @@ def test_missing_costs_are_a_not_ready_outcome_under_a_money_budget(
         item["material_id"]: item["reason_codes"]
         for item in receipt["selection"]["candidate_decisions"]
     }
-    assert reasons["material:batch-b"] == ["candidate_cost_unavailable"]
-    assert reasons["material:batch-c"] == ["candidate_cost_unavailable"]
+    assert reasons[rows[1]["material_id"]] == ["candidate_cost_unavailable"]
 
 
 def test_partial_cost_manifest_never_reports_a_partial_total_without_budget(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rows = _rows()
-    screening_path, shortlist_path = _screening_paths(tmp_path, rows)
+    publication = _screening_publication(tmp_path, monkeypatch)
+    rows = _shortlist_rows(publication)
     costs_path = _cost_manifest_path(
         tmp_path,
-        screening_path=screening_path,
-        shortlist_path=shortlist_path,
+        publication=publication,
         rows=rows[:1],
         costs=[500],
     )
 
-    result = run_oled_experiment_batch_selection_from_files(
-        screening_receipt_json=screening_path,
-        ranked_shortlist_csv=shortlist_path,
+    result = _run_batch(
+        publication,
         output_root=tmp_path / "batches",
         target_batch_size=2,
         max_pairwise_tanimoto=1.0,
@@ -432,68 +416,65 @@ def test_partial_cost_manifest_never_reports_a_partial_total_without_budget(
 
 def test_tampered_shortlist_or_invalid_options_fail_before_publication(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    screening_path, shortlist_path = _screening_paths(tmp_path)
-    shortlist_path.write_bytes(shortlist_path.read_bytes() + b"\n")
+    publication = _screening_publication(tmp_path, monkeypatch)
+    publication.ranked_shortlist.write_bytes(
+        publication.ranked_shortlist.read_bytes() + b"\n"
+    )
     output_root = tmp_path / "batches"
 
     with pytest.raises(ValueError, match="shortlist SHA-256 mismatch"):
-        run_oled_experiment_batch_selection_from_files(
-            screening_receipt_json=screening_path,
-            ranked_shortlist_csv=shortlist_path,
+        _run_batch(
+            publication,
             output_root=output_root,
             target_batch_size=1,
         )
     assert not output_root.exists() or not any(output_root.iterdir())
 
-    screening_path, shortlist_path = _screening_paths(tmp_path / "fresh")
+    publication = _screening_publication(tmp_path / "fresh", monkeypatch)
     with pytest.raises(ValueError, match="unknown property"):
-        run_oled_experiment_batch_selection_from_files(
-            screening_receipt_json=screening_path,
-            ranked_shortlist_csv=shortlist_path,
+        _run_batch(
+            publication,
             output_root=output_root,
             target_batch_size=1,
             minimums=["plqy=0.9"],
         )
     with pytest.raises(ValueError, match="required for a multi-material"):
-        run_oled_experiment_batch_selection_from_files(
-            screening_receipt_json=screening_path,
-            ranked_shortlist_csv=shortlist_path,
+        _run_batch(
+            publication,
             output_root=output_root,
             target_batch_size=2,
         )
     assert not output_root.exists() or not any(output_root.iterdir())
 
 
-def test_duplicate_shortlist_chemical_identity_fails_before_publication(
+def test_duplicate_shortlist_chemical_identity_is_rejected(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rows = _rows()
-    rows[2] = {
-        **rows[2],
+    publication = _screening_publication(tmp_path, monkeypatch)
+    rows = _shortlist_rows(publication)
+    duplicate = {
+        **rows[1],
+        "rank": 3,
         "material_id": "material:batch-duplicate",
         "registry_entry_digest": "sha256:" + "9" * 64,
         "canonical_isomeric_smiles": rows[0]["canonical_isomeric_smiles"],
     }
-    screening_path, shortlist_path = _screening_paths(tmp_path, rows)
-    output_root = tmp_path / "batches"
 
     with pytest.raises(ValueError, match="chemical identity is duplicated"):
-        run_oled_experiment_batch_selection_from_files(
-            screening_receipt_json=screening_path,
-            ranked_shortlist_csv=shortlist_path,
-            output_root=output_root,
-            target_batch_size=1,
+        _parse_ranked_shortlist(
+            _shortlist_bytes([rows[0], rows[1], duplicate]),
+            property_ids=_PROPERTY_IDS,
         )
-
-    assert not output_root.exists() or not any(output_root.iterdir())
 
 
 def test_diversity_requires_rdkit_and_existing_batch_is_never_replaced(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    screening_path, shortlist_path = _screening_paths(tmp_path)
+    publication = _screening_publication(tmp_path, monkeypatch)
     output_root = tmp_path / "batches"
     original_chem = batch_runner.Chem
     original_all_chem = batch_runner.AllChem
@@ -504,9 +485,8 @@ def test_diversity_requires_rdkit_and_existing_batch_is_never_replaced(
     monkeypatch.setattr(batch_runner, "DataStructs", None)
     monkeypatch.setattr(batch_runner, "rdBase", None)
     with pytest.raises(ValueError, match="requires RDKit"):
-        run_oled_experiment_batch_selection_from_files(
-            screening_receipt_json=screening_path,
-            ranked_shortlist_csv=shortlist_path,
+        _run_batch(
+            publication,
             output_root=output_root,
             target_batch_size=2,
             max_pairwise_tanimoto=0.5,
@@ -517,9 +497,8 @@ def test_diversity_requires_rdkit_and_existing_batch_is_never_replaced(
     monkeypatch.setattr(batch_runner, "DataStructs", original_data_structs)
     monkeypatch.setattr(batch_runner, "rdBase", original_rd_base)
 
-    result = run_oled_experiment_batch_selection_from_files(
-        screening_receipt_json=screening_path,
-        ranked_shortlist_csv=shortlist_path,
+    result = _run_batch(
+        publication,
         output_root=output_root,
         target_batch_size=1,
         generated_at="2026-07-20T10:03:00+08:00",
@@ -527,9 +506,8 @@ def test_diversity_requires_rdkit_and_existing_batch_is_never_replaced(
     marker = result.output_dir / "marker.txt"
     marker.write_text("do not replace\n", encoding="utf-8")
     with pytest.raises(ValueError, match="already exists"):
-        run_oled_experiment_batch_selection_from_files(
-            screening_receipt_json=screening_path,
-            ranked_shortlist_csv=shortlist_path,
+        _run_batch(
+            publication,
             output_root=output_root,
             target_batch_size=1,
             generated_at="2026-07-20T10:04:00+08:00",
@@ -541,7 +519,7 @@ def test_output_parent_replacement_after_input_load_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    screening_path, shortlist_path = _screening_paths(tmp_path)
+    publication = _screening_publication(tmp_path, monkeypatch)
     output_root = tmp_path / "batches"
     replacement = tmp_path / "replacement"
     moved = tmp_path / "moved-batches"
@@ -560,9 +538,8 @@ def test_output_parent_replacement_after_input_load_fails_closed(
 
     monkeypatch.setattr(batch_runner, "_select_batch", replace_parent)
     with pytest.raises(ValueError, match="output parent changed"):
-        run_oled_experiment_batch_selection_from_files(
-            screening_receipt_json=screening_path,
-            ranked_shortlist_csv=shortlist_path,
+        _run_batch(
+            publication,
             output_root=output_root,
             target_batch_size=1,
     )
@@ -573,17 +550,17 @@ def test_output_parent_replacement_after_input_load_fails_closed(
 
 def test_output_symlink_component_is_rejected_before_publication(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    screening_path, shortlist_path = _screening_paths(tmp_path)
+    publication = _screening_publication(tmp_path, monkeypatch)
     real_parent = tmp_path / "real-parent"
     real_parent.mkdir()
     redirected_parent = tmp_path / "redirected-parent"
     redirected_parent.symlink_to(real_parent, target_is_directory=True)
 
     with pytest.raises(ValueError, match="symbolic or unsafe"):
-        run_oled_experiment_batch_selection_from_files(
-            screening_receipt_json=screening_path,
-            ranked_shortlist_csv=shortlist_path,
+        _run_batch(
+            publication,
             output_root=redirected_parent / "batches",
             target_batch_size=1,
         )
