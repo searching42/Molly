@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -21,7 +21,10 @@ from ai4s_agent.domains.oled_supplementary_material_identity_evidence_response i
 from ai4s_agent.oled_real_phase1_execution import (
     run_oled_real_phase1_execution_from_files,
 )
-from ai4s_agent.oled_registry_candidate_screening import _load_screening_inputs
+from ai4s_agent.oled_registry_candidate_screening import (
+    _load_screening_inputs,
+    _screen_registry_candidates,
+)
 from tests.test_oled_real_phase1_execution import _snapshot_path
 
 
@@ -114,6 +117,72 @@ def test_loads_exact_inputs_and_rederives_training_identities(
     assert len(prepared.training_registry_digests) == 2
     assert len(prepared.training_smiles) == 2
     assert len(prepared.registry.entries) == 4
+
+
+def test_excludes_train_materials_and_predicts_complete_nontrain_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    prepared = _load_screening_inputs(
+        phase1_execution_dir=inputs.execution_dir,
+        dataset_snapshot_json=inputs.dataset_snapshot,
+        registry_snapshot_json=inputs.registry_snapshot,
+    )
+    eligible, excluded, predictions = _screen_registry_candidates(prepared)
+
+    assert [item["material_id"] for item in eligible] == [
+        "material:execution-02",
+        "material:execution-03",
+    ]
+    assert {
+        item["material_id"]: item["reason_codes"] for item in excluded
+    } == {
+        "material:execution-00": [
+            "training_material_id_overlap",
+            "training_smiles_overlap",
+        ],
+        "material:execution-01": [
+            "training_material_id_overlap",
+            "training_smiles_overlap",
+        ],
+    }
+    assert [item["material_id"] for item in predictions] == [
+        "material:execution-02",
+        "material:execution-03",
+    ]
+    assert all(
+        set(item["predictions"]) == {"delta_e_st_ev", "s1_ev"}
+        for item in predictions
+    )
+
+
+def test_digest_and_smiles_training_overlap_have_independent_reason_codes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    prepared = _load_screening_inputs(
+        phase1_execution_dir=inputs.execution_dir,
+        dataset_snapshot_json=inputs.dataset_snapshot,
+        registry_snapshot_json=inputs.registry_snapshot,
+    )
+    target = prepared.registry.entries[-1]
+    prepared = replace(
+        prepared,
+        training_material_ids=frozenset(),
+        training_registry_digests=frozenset({target.entry_digest}),
+        training_smiles=frozenset({target.canonical_isomeric_smiles}),
+    )
+
+    _, excluded, _ = _screen_registry_candidates(prepared)
+
+    assert next(
+        item for item in excluded if item["material_id"] == target.material_id
+    )["reason_codes"] == [
+        "training_registry_digest_overlap",
+        "training_smiles_overlap",
+    ]
 
 
 @pytest.mark.parametrize("target", ["execution", "model", "dataset", "registry"])

@@ -15,7 +15,9 @@ from ai4s_agent.domains.oled_material_registry_resolution_request import (
 from ai4s_agent.oled_real_phase1_execution import (
     _EXECUTION_VERSION,
     _MODEL_KIND,
+    _feature_vector_for_model,
     _json_bytes,
+    _predict_feature_vector,
     _safe_token,
     _validated_split_by_row,
 )
@@ -23,6 +25,7 @@ from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _absolute_local_path,
     _read_bound_json,
 )
+from ai4s_agent.trainability import generate_baseline_features
 
 
 _MAX_INPUT_BYTES = 1024 * 1024 * 1024
@@ -198,6 +201,79 @@ def _validate_model_binding(
         or any(sorted(row.features) != feature_names for row in train_rows)
     ):
         raise ValueError("PR-AO model feature contract mismatch")
+
+
+def _screen_registry_candidates(
+    prepared: _PreparedScreeningInputs,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    feature_names = list(prepared.models[prepared.property_ids[0]]["feature_names"])
+    if any(
+        model.get("feature_names") != feature_names
+        for model in prepared.models.values()
+    ):
+        raise ValueError("screening models use inconsistent feature contracts")
+    split_by_row = _validated_split_by_row(prepared.dataset)
+    train_feature_types = {
+        row.feature_type
+        for row in prepared.dataset.rows
+        if row.property_id in prepared.property_ids
+        and split_by_row[row.row_id] == "train"
+    }
+    if len(train_feature_types) != 1:
+        raise ValueError("training rows use inconsistent feature backends")
+    expected_feature_type = next(iter(train_feature_types))
+
+    eligible: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    predictions: list[dict[str, Any]] = []
+    for entry in prepared.registry.entries:
+        reasons: list[str] = []
+        if entry.material_id in prepared.training_material_ids:
+            reasons.append("training_material_id_overlap")
+        if entry.entry_digest in prepared.training_registry_digests:
+            reasons.append("training_registry_digest_overlap")
+        if entry.canonical_isomeric_smiles in prepared.training_smiles:
+            reasons.append("training_smiles_overlap")
+        if reasons:
+            excluded.append(_excluded_entry(entry, reasons))
+            continue
+        try:
+            generated = generate_baseline_features(
+                [entry.canonical_isomeric_smiles],
+                n_bits=len(feature_names),
+            )
+            if generated.feature_type != expected_feature_type or generated.fallback_reason:
+                raise ValueError("candidate feature backend mismatch")
+            features = dict(zip(feature_names, generated.matrix[0], strict=True))
+            property_predictions = {
+                property_id: _predict_feature_vector(
+                    _feature_vector_for_model(features, prepared.models[property_id]),
+                    prepared.models[property_id],
+                )
+                for property_id in prepared.property_ids
+            }
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            excluded.append(_excluded_entry(entry, ["feature_or_prediction_failed"]))
+            continue
+        identity = {
+            "material_id": entry.material_id,
+            "registry_entry_digest": entry.entry_digest,
+            "canonical_name": entry.canonical_name,
+            "canonical_isomeric_smiles": entry.canonical_isomeric_smiles,
+        }
+        eligible.append(identity)
+        predictions.append(identity | {"predictions": property_predictions})
+    return eligible, excluded, predictions
+
+
+def _excluded_entry(entry: Any, reason_codes: list[str]) -> dict[str, Any]:
+    return {
+        "material_id": entry.material_id,
+        "registry_entry_digest": entry.entry_digest,
+        "canonical_name": entry.canonical_name,
+        "canonical_isomeric_smiles": entry.canonical_isomeric_smiles,
+        "reason_codes": sorted(set(reason_codes)),
+    }
 
 
 def _registry_publication_bytes(snapshot: OledMaterialRegistrySnapshot) -> bytes:
