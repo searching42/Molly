@@ -75,6 +75,46 @@ The deterministic, atomic no-replace output directory contains:
 PR-AP does not retrain or register models, mutate the Registry, validate a
 benchmark, establish experimental performance, or promote shortlist entries.
 
+## Agent-managed execution (PR-AQ)
+
+`execute_oled_registry_candidate_screening` makes this runner available through
+the controlled RunPlan agent path.  A Registry-screening goal in the planner or
+chat preview selects this task instead of falling back to the generic report
+workflow.
+
+The caller must explicitly provide all three exact artifact paths under these
+artifact IDs; the agent never searches for a latest version:
+
+- `oled_phase1_execution_dir` — one complete PR-AO execution directory;
+- `oled_dataset_snapshot` — the PR-AI categorical dataset snapshot used by
+  that execution; and
+- `oled_registry_snapshot` — one immutable Material Registry snapshot.
+
+Optional task options are only repeated string lists named `minimums` and
+`maximums`, using the same `property=value` syntax as the CLI.  The first
+`/api/run-plan/execute` call validates and immutably materializes those exact
+inputs below the run directory, then records source and frozen-input manifests
+and pauses at `gate_5_final_threshold`; it does not run screening.  The owned
+bundle preserves the PR-AO execution-ID directory basename and contains the
+exact PR-AO file roster plus exact dataset and Registry JSON bytes. Resume
+through `/api/run-plan/resume` must provide the same source artifact paths and
+unchanged constraints along with that gate approval. Any changed path, input
+bytes, execution-directory contents, or constraint fails closed before PR-AP
+is invoked. After snapshot recheck and immediately before dispatch, the agent
+rechecks the named sources against the frozen bundle; the adapter then consumes
+only the run-local frozen paths. A post-recheck source swap therefore cannot
+redirect a screening publication.
+
+PR-AQ fixes publication below the project run directory at
+`oled_registry_screening/<screening_id>/`.  It registers the PR-AP receipt,
+shortlist, predictions, exclusions, eligible candidates, report, and the task
+execution record as run artifacts.  There is no overwrite option: rerunning
+the same deterministic screening inside the same run fails without replacing
+the original publication. Each adapter invocation writes a fresh,
+attempt-scoped result record with no replacement semantics. The artifact
+registry remains bound to the first successful execution record if a later
+retry fails.
+
 ## paper016 canary
 
 The real paper016 canary binds the 21-row PR-AI snapshot, three PR-AO models,

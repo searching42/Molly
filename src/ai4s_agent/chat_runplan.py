@@ -156,6 +156,12 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
             if tasks:
                 return tasks
     goal = str(modeling_payload.get("goal") or "").lower()
+    registry_terms = ("registry", "material registry", "注册表", "材料库")
+    screening_terms = ("screen", "predict", "rank", "candidate", "筛选", "预测", "排序", "候选")
+    if any(term in goal for term in registry_terms) and any(
+        term in goal for term in screening_terms
+    ):
+        return ["execute_oled_registry_candidate_screening"]
     if any(term in goal for term in ("report", "top", "rank", "screen", "筛选", "排序", "报告")):
         return ["render_report"]
     if any(term in goal for term in ("generate", "candidate", "design", "生成", "候选", "设计")):

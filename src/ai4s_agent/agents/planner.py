@@ -236,6 +236,12 @@ class PlannerAgent:
 
     def _select_tasks(self, goal: str) -> list[str]:
         normalized = goal.lower()
+        registry_terms = ["registry", "material registry", "注册表", "材料库"]
+        screening_terms = ["screen", "predict", "rank", "candidate", "筛选", "预测", "排序", "候选"]
+        if any(term in normalized for term in registry_terms) and any(
+            term in normalized for term in screening_terms
+        ):
+            return ["execute_oled_registry_candidate_screening"]
         if any(term in normalized for term in ["literature", "paper", "papers", "doi", "pdf", "mine", "论文", "文献", "挖掘"]):
             return ["literature_to_dataset_workflow"]
         if any(
@@ -275,6 +281,10 @@ class PlannerAgent:
     def _rationale_for(self, task_id: str) -> PlanRationale:
         spec = self.registry.get(task_id)
         reasons = {
+            "execute_oled_registry_candidate_screening": (
+                "The goal asks to screen an existing material Registry, so require exact PR-AO "
+                "execution, dataset snapshot, and Registry snapshot bindings before a gated shortlist run."
+            ),
             "literature_to_dataset_workflow": "The goal asks for literature mining or evidence-derived data, so use the audited literature-to-dataset workflow.",
             "render_report": "The goal asks for a complete modeling/screening outcome, so plan through final report generation.",
             "train_model": "The goal asks for model training, so select the training task and its dependencies.",
