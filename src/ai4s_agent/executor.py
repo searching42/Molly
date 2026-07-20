@@ -1299,6 +1299,7 @@ class RunPlanExecutor:
             for artifact_id in (
                 "oled_experiment_batch_receipt",
                 "oled_experiment_batch_handoff",
+                "oled_candidate_decision_dossier",
                 "oled_experiment_batch_report",
             ):
                 output = str(outputs.get(artifact_id) or "").strip()

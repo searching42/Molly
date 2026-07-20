@@ -157,6 +157,11 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
                 return tasks
     goal = str(modeling_payload.get("goal") or "").lower()
     experiment_batch_terms = (
+        "candidate decision",
+        "candidate dossier",
+        "decision dossier",
+        "top-n candidate",
+        "top n candidate",
         "experiment batch",
         "experimental batch",
         "validation batch",
@@ -168,6 +173,13 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
         "待验证 batch",
         "批次选择",
         "实验交接",
+        "候选决策",
+        "候选决策包",
+        "候选报告",
+        "候选top n",
+        "候选top-n",
+        "候选top",
+        "可解释候选",
     )
     if any(term in goal for term in experiment_batch_terms):
         return ["execute_oled_experiment_batch_selection"]

@@ -2,8 +2,8 @@
 
 This module deliberately starts from a completed PR-AP screening publication.  It
 does not re-run a model, discover a "latest" artifact, purchase material, or
-record an experimental result.  Its only publication is an immutable local
-recommendation and handoff package.
+assert an experimental result. Its only publication is an immutable local
+candidate-decision package.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import json
 import math
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence, TextIO
 
@@ -30,6 +30,9 @@ except Exception:  # pragma: no cover - exercised by a controlled monkeypatch.
     rdBase = None  # type: ignore[assignment]
 
 from ai4s_agent._utils import now_iso
+from ai4s_agent.domains.oled_property_ontology import (
+    DEFAULT_OLED_PROPERTY_ONTOLOGY,
+)
 from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_directory
 from ai4s_agent.oled_registry_candidate_screening import (
     _load_screening_inputs as _load_pr_ap_screening_inputs,
@@ -48,7 +51,7 @@ from ai4s_agent.oled_supplementary_scoped_candidate_response import (
 
 
 _MAX_INPUT_BYTES = 128 * 1024 * 1024
-_BATCH_SELECTION_VERSION = "oled_experiment_batch_selection.v1"
+_BATCH_SELECTION_VERSION = "oled_experiment_batch_selection.v2"
 _SCREENING_VERSION = "oled_registry_candidate_screening.v1"
 _COST_MANIFEST_VERSION = "oled_candidate_cost_manifest.v1"
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -102,6 +105,8 @@ class OledExperimentBatchSelectionResult:
     eligible_count: int
     excluded_count: int
     total_cost_minor: int | None
+    candidate_supply_count: int
+    inverse_design_should_trigger: bool
 
 
 @dataclass(frozen=True)
@@ -113,11 +118,38 @@ class _SelectedCandidate:
 
 
 @dataclass(frozen=True)
+class _SelectionStepEvidence:
+    """One candidate's exact feasibility check during greedy selection.
+
+    This is deliberately recorded while the selector runs rather than inferred
+    from its final output.  A final batch alone cannot show whether a
+    non-selected candidate lost on cumulative budget, diversity, or simply the
+    deterministic rank-anchored tie-break.
+    """
+
+    selection_order: int
+    prior_selected: tuple[tuple[str, str], ...]
+    provisional_cost_minor_before: int | None
+    candidate_cost_minor: int | None
+    cumulative_cost_if_selected_minor: int | None
+    budget_status: str
+    maximum_similarity_to_prior: float | None
+    max_pairwise_tanimoto: float | None
+    diversity_status: str
+    feasible: bool
+    selection_sort_key: tuple[Any, ...]
+    decision_at_step: str
+
+
+@dataclass(frozen=True)
 class _SelectionOutcome:
     status: str
     selected: tuple[_SelectedCandidate, ...]
     eligible_candidates: tuple[OledExperimentBatchCandidate, ...]
     candidate_reason_codes: dict[tuple[str, str], tuple[str, ...]]
+    candidate_selection_steps: dict[
+        tuple[str, str], tuple[_SelectionStepEvidence, ...]
+    ]
     not_ready_reasons: tuple[str, ...]
     total_cost_minor: int | None
 
@@ -241,7 +273,7 @@ def run_oled_experiment_batch_selection_from_files(
     candidate_cost_manifest_json: str | Path | None = None,
     generated_at: str | None = None,
 ) -> OledExperimentBatchSelectionResult:
-    """Publish one immutable, recommendation-only experimental batch package.
+    """Publish one immutable, recommendation-only candidate batch package.
 
     A batch is published as ``ready`` only when *exactly*
     ``target_batch_size`` candidates meet all requested constraints.  A valid
@@ -286,8 +318,17 @@ def run_oled_experiment_batch_selection_from_files(
             max_pairwise_tanimoto=clean_similarity,
             currency=inputs.cost_currency,
         )
+        # The dossier's names, units, and interpretations are publication
+        # bytes, so pin the exact presentation contract before deriving the
+        # deterministic batch identity. A later ontology edit must create a
+        # successor publication rather than silently changing an old ID's
+        # rendered contents.
+        request_config["property_presentation"] = _property_presentation_contract(
+            inputs.property_ids
+        )
         batch_id = "oled-experiment-batch:" + _stable_hash(
             {
+                "batch_selection_version": _BATCH_SELECTION_VERSION,
                 "screening_id": inputs.screening_id,
                 "screening_receipt_sha256": inputs.screening_sha256,
                 "ranked_shortlist_sha256": inputs.shortlist_sha256,
@@ -302,12 +343,19 @@ def run_oled_experiment_batch_selection_from_files(
             max_budget_minor=clean_budget,
             max_pairwise_tanimoto=clean_similarity,
         )
+        candidate_supply = _candidate_supply_payload(
+            inputs=inputs,
+            constraints=constraints,
+            target_batch_size=clean_target_size,
+            outcome=outcome,
+        )
         publication_time = generated_at or now_iso()
         payloads = _batch_payloads(
             inputs=inputs,
             batch_id=batch_id,
             request_config=request_config,
             outcome=outcome,
+            candidate_supply=candidate_supply,
             generated_at=publication_time,
         )
         output_dir = root / batch_id
@@ -326,6 +374,8 @@ def run_oled_experiment_batch_selection_from_files(
         excluded_count=len(inputs.shortlist_candidates)
         - len(outcome.eligible_candidates),
         total_cost_minor=outcome.total_cost_minor,
+        candidate_supply_count=candidate_supply["property_eligible_candidate_count"],
+        inverse_design_should_trigger=candidate_supply["inverse_design_should_trigger"],
     )
 
 
@@ -786,6 +836,12 @@ def _select_batch(
     max_pairwise_tanimoto: float | None,
 ) -> _SelectionOutcome:
     candidate_reason_codes: dict[tuple[str, str], tuple[str, ...]] = {}
+    candidate_selection_steps: dict[
+        tuple[str, str], list[_SelectionStepEvidence]
+    ] = {
+        _candidate_key(candidate.material_id, candidate.registry_entry_digest): []
+        for candidate in inputs.shortlist_candidates
+    }
     eligible: list[OledExperimentBatchCandidate] = []
     for candidate in inputs.shortlist_candidates:
         reasons = _candidate_constraint_reasons(candidate, constraints)
@@ -817,19 +873,28 @@ def _select_batch(
     while len(provisional) < target_batch_size:
         feasible: list[tuple[float, OledExperimentBatchCandidate]] = []
         for candidate in remaining:
+            key = _candidate_key(candidate.material_id, candidate.registry_entry_digest)
             cost = inputs.costs_by_candidate.get(
-                (candidate.material_id, candidate.registry_entry_digest)
+                key
             )
+            budget_status = "not_requested"
+            budget_feasible = True
             if max_budget_minor is not None:
                 assert cost is not None
                 if provisional_cost + cost > max_budget_minor:
-                    continue
-            maximum_similarity = 0.0
+                    budget_status = "exceeds_remaining_budget"
+                    budget_feasible = False
+                else:
+                    budget_status = "within_remaining_budget"
+
+            maximum_similarity: float | None = None
+            diversity_status = "not_requested"
+            diversity_feasible = True
             if provisional:
                 assert max_pairwise_tanimoto is not None
                 maximum_similarity = max(
                     _tanimoto_similarity(
-                        fingerprints[(candidate.material_id, candidate.registry_entry_digest)],
+                        fingerprints[key],
                         fingerprints[(
                             selected.candidate.material_id,
                             selected.candidate.registry_entry_digest,
@@ -838,8 +903,62 @@ def _select_batch(
                     for selected in provisional
                 )
                 if maximum_similarity > max_pairwise_tanimoto:
-                    continue
-            feasible.append((maximum_similarity, candidate))
+                    diversity_status = "exceeds_max_pairwise_tanimoto"
+                    diversity_feasible = False
+                else:
+                    diversity_status = "within_max_pairwise_tanimoto"
+            elif max_pairwise_tanimoto is not None:
+                diversity_status = "no_prior_selected_candidate"
+
+            is_feasible = budget_feasible and diversity_feasible
+            selection_sort_key: tuple[Any, ...]
+            if provisional:
+                assert maximum_similarity is not None
+                selection_sort_key = (
+                    maximum_similarity,
+                    candidate.source_rank,
+                    candidate.material_id,
+                )
+            else:
+                selection_sort_key = (candidate.source_rank, candidate.material_id)
+            if not budget_feasible and not diversity_feasible:
+                decision_at_step = "infeasible_budget_and_diversity"
+            elif not budget_feasible:
+                decision_at_step = "infeasible_budget"
+            elif not diversity_feasible:
+                decision_at_step = "infeasible_diversity"
+            else:
+                decision_at_step = "feasible_but_lower_priority"
+            candidate_selection_steps[key].append(
+                _SelectionStepEvidence(
+                    selection_order=len(provisional) + 1,
+                    prior_selected=tuple(
+                        _candidate_key(
+                            selected.candidate.material_id,
+                            selected.candidate.registry_entry_digest,
+                        )
+                        for selected in provisional
+                    ),
+                    provisional_cost_minor_before=(
+                        provisional_cost if max_budget_minor is not None else None
+                    ),
+                    candidate_cost_minor=cost,
+                    cumulative_cost_if_selected_minor=(
+                        provisional_cost + cost
+                        if max_budget_minor is not None and cost is not None
+                        else None
+                    ),
+                    budget_status=budget_status,
+                    maximum_similarity_to_prior=maximum_similarity,
+                    max_pairwise_tanimoto=max_pairwise_tanimoto,
+                    diversity_status=diversity_status,
+                    feasible=is_feasible,
+                    selection_sort_key=selection_sort_key,
+                    decision_at_step=decision_at_step,
+                )
+            )
+            if is_feasible:
+                feasible.append((maximum_similarity or 0.0, candidate))
         if not feasible:
             break
         if provisional:
@@ -865,6 +984,14 @@ def _select_batch(
         selected_cost = inputs.costs_by_candidate.get(
             (selected_candidate.material_id, selected_candidate.registry_entry_digest)
         )
+        selected_key = _candidate_key(
+            selected_candidate.material_id,
+            selected_candidate.registry_entry_digest,
+        )
+        candidate_selection_steps[selected_key][-1] = replace(
+            candidate_selection_steps[selected_key][-1],
+            decision_at_step="provisionally_chosen",
+        )
         if selected_cost is not None:
             provisional_cost += selected_cost
         provisional.append(
@@ -878,19 +1005,53 @@ def _select_batch(
         remaining.remove(selected_candidate)
 
     if len(provisional) == target_batch_size:
+        for item in provisional:
+            key = _candidate_key(
+                item.candidate.material_id,
+                item.candidate.registry_entry_digest,
+            )
+            last_step = candidate_selection_steps[key][-1]
+            if last_step.decision_at_step != "provisionally_chosen":
+                raise ValueError("candidate selection trace lost provisional choice")
+            candidate_selection_steps[key][-1] = replace(
+                last_step,
+                decision_at_step="chosen",
+            )
         selected_keys = {
             (item.candidate.material_id, item.candidate.registry_entry_digest)
             for item in provisional
         }
+        for item in provisional:
+            key = (item.candidate.material_id, item.candidate.registry_entry_digest)
+            reasons = {
+                "selected_by_rank_anchored_greedy_policy",
+                f"selected_at_order:{item.selection_order}",
+            }
+            if item.selection_order == 1:
+                reasons.add("highest_ranked_feasible_candidate")
+            elif max_pairwise_tanimoto is not None:
+                reasons.add("selected_by_diversity_aware_greedy_policy")
+            if constraints:
+                reasons.add("satisfies_all_batch_constraints")
+            else:
+                reasons.add("no_additional_batch_constraints_requested")
+            candidate_reason_codes[key] = tuple(sorted(reasons))
         for candidate in eligible:
             key = (candidate.material_id, candidate.registry_entry_digest)
             if key not in selected_keys:
-                candidate_reason_codes[key] = ("not_selected_by_deterministic_policy",)
+                candidate_reason_codes[key] = (
+                    "eligible_but_target_batch_filled",
+                    "not_selected_by_rank_anchored_greedy_policy",
+                )
         return _SelectionOutcome(
             status="ready",
             selected=tuple(provisional),
             eligible_candidates=tuple(eligible),
             candidate_reason_codes=candidate_reason_codes,
+            candidate_selection_steps={
+                key: tuple(steps)
+                for key, steps in candidate_selection_steps.items()
+            },
             not_ready_reasons=(),
             # A partial local cost manifest is permitted for advisory work, but
             # never present a sum of only the known rows as a batch total.
@@ -917,9 +1078,71 @@ def _select_batch(
         selected=(),
         eligible_candidates=tuple(eligible),
         candidate_reason_codes=candidate_reason_codes,
+        candidate_selection_steps={
+            key: tuple(steps)
+            for key, steps in candidate_selection_steps.items()
+        },
         not_ready_reasons=tuple(sorted(set(not_ready_reasons))),
         total_cost_minor=None,
     )
+
+
+def _candidate_supply_payload(
+    *,
+    inputs: OledExperimentBatchSelectionInputs,
+    constraints: dict[str, dict[str, float]],
+    target_batch_size: int,
+    outcome: _SelectionOutcome,
+) -> dict[str, Any]:
+    """State the narrow condition that may request future inverse design.
+
+    Candidate generation is not a generic recovery path for a failed batch:
+    budget and diversity policies can make an otherwise sufficiently large pool
+    infeasible, and generating more molecules does not satisfy those policies.
+    Only a shortage after the explicit property constraints is generation
+    eligible. This artifact records a *routing decision*, never a claim that a
+    generative model has run.
+    """
+
+    property_eligible_count = sum(
+        not _candidate_constraint_reasons(candidate, constraints)
+        for candidate in inputs.shortlist_candidates
+    )
+    shortfall_count = max(target_batch_size - property_eligible_count, 0)
+    inverse_design_should_trigger = shortfall_count > 0
+    return {
+        "shortlist_candidate_count": len(inputs.shortlist_candidates),
+        "property_eligible_candidate_count": property_eligible_count,
+        "target_batch_size": target_batch_size,
+        "candidate_shortfall_count": shortfall_count,
+        "candidate_quantity_status": (
+            "insufficient_after_property_constraints"
+            if inverse_design_should_trigger
+            else "sufficient_after_property_constraints"
+        ),
+        "inverse_design_should_trigger": inverse_design_should_trigger,
+        "inverse_design_reason": (
+            "candidate_quantity_insufficient_after_property_constraints"
+            if inverse_design_should_trigger
+            else "candidate_quantity_sufficient_no_generation_requested"
+        ),
+        "generation_executed": False,
+        "required_return_path": (
+            [
+                "inverse_design",
+                "controlled_prediction",
+                "filter",
+                "rank",
+                "candidate_decision_dossier",
+            ]
+            if inverse_design_should_trigger
+            else []
+        ),
+        "ready_batch_status": outcome.status,
+        "non_supply_policy_prevented_ready_batch": (
+            outcome.status == "not_ready" and not inverse_design_should_trigger
+        ),
+    }
 
 
 def _candidate_constraint_reasons(
@@ -967,21 +1190,43 @@ def _batch_payloads(
     batch_id: str,
     request_config: dict[str, Any],
     outcome: _SelectionOutcome,
+    candidate_supply: dict[str, Any],
     generated_at: str,
 ) -> dict[str, bytes]:
+    decisions = _candidate_decision_payloads(
+        inputs=inputs,
+        request_config=request_config,
+        outcome=outcome,
+    )
+    decisions_by_key = {
+        _candidate_key_from_payload(item): item
+        for item in decisions
+    }
     batch_csv = _experiment_batch_csv_bytes(
         selected=outcome.selected,
         property_ids=inputs.property_ids,
         currency=inputs.cost_currency,
+        inputs=inputs,
+        request_config=request_config,
+        decisions_by_key=decisions_by_key,
+    )
+    dossier_csv = _candidate_decision_dossier_csv_bytes(
+        decisions=decisions,
+        property_ids=inputs.property_ids,
+        inputs=inputs,
+        request_config=request_config,
     )
     handoff = _experiment_handoff_bytes(
         batch_id=batch_id,
         inputs=inputs,
         request_config=request_config,
         outcome=outcome,
+        candidate_supply=candidate_supply,
+        decisions=decisions,
     )
     payloads = {
         "experiment_batch.csv": batch_csv,
+        "candidate_decision_dossier.csv": dossier_csv,
         "experiment_handoff.md": handoff,
     }
     artifact_hashes = {
@@ -1010,16 +1255,29 @@ def _batch_payloads(
         },
         "selection": {
             "target_batch_size": request_config["target_batch_size"],
+            "candidate_supply": candidate_supply,
             "not_ready_reasons": list(outcome.not_ready_reasons),
             "total_cost_minor": outcome.total_cost_minor,
             "currency": inputs.cost_currency,
             "selected_candidates": [
-                _selected_candidate_payload(item, inputs.property_ids)
+                _selected_candidate_payload(
+                    item,
+                    inputs.property_ids,
+                    decision=decisions_by_key[
+                        _candidate_key(
+                            item.candidate.material_id,
+                            item.candidate.registry_entry_digest,
+                        )
+                    ],
+                )
                 for item in outcome.selected
             ],
-            "candidate_decisions": _candidate_decision_payloads(
+            "candidate_decisions": decisions,
+            "greedy_trace": _greedy_trace_payload(
                 inputs=inputs,
+                request_config=request_config,
                 outcome=outcome,
+                decisions=decisions,
             ),
         },
         "artifacts": artifact_hashes,
@@ -1048,6 +1306,8 @@ def _batch_payloads(
 def _selected_candidate_payload(
     item: _SelectedCandidate,
     property_ids: tuple[str, ...],
+    *,
+    decision: dict[str, Any],
 ) -> dict[str, Any]:
     candidate = item.candidate
     return {
@@ -1064,29 +1324,90 @@ def _selected_candidate_payload(
         },
         "cost_minor": item.cost_minor,
         "maximum_similarity_to_prior": item.maximum_similarity_to_prior,
+        "selection_status": decision["selection_status"],
+        "selection_reason_codes": list(decision["reason_codes"]),
+        "selection_basis": decision["selection_basis"],
+        "selection_evidence": decision["selection_evidence"],
     }
 
 
 def _candidate_decision_payloads(
     *,
     inputs: OledExperimentBatchSelectionInputs,
+    request_config: dict[str, Any],
     outcome: _SelectionOutcome,
 ) -> list[dict[str, Any]]:
-    selected_keys = {
-        (item.candidate.material_id, item.candidate.registry_entry_digest)
+    selected_by_key = {
+        _candidate_key(
+            item.candidate.material_id,
+            item.candidate.registry_entry_digest,
+        ): item
         for item in outcome.selected
     }
+    eligible_keys = {
+        _candidate_key(candidate.material_id, candidate.registry_entry_digest)
+        for candidate in outcome.eligible_candidates
+    }
+    screening_constraints = _required_dict(inputs.config, "constraints")
+    batch_constraints = _required_dict(request_config, "constraints")
+    presentation = _required_dict(request_config, "property_presentation")
     decisions: list[dict[str, Any]] = []
     for candidate in inputs.shortlist_candidates:
-        key = (candidate.material_id, candidate.registry_entry_digest)
+        key = _candidate_key(candidate.material_id, candidate.registry_entry_digest)
+        selected = selected_by_key.get(key)
+        reason_codes = list(outcome.candidate_reason_codes[key])
+        selection_status = _candidate_selection_status(
+            key=key,
+            selected_by_key=selected_by_key,
+            eligible_keys=eligible_keys,
+            batch_status=outcome.status,
+        )
+        selection_evidence = _candidate_selection_evidence_payload(
+            candidate=candidate,
+            inputs=inputs,
+            request_config=request_config,
+            outcome=outcome,
+        )
         decisions.append(
             {
                 "source_rank": candidate.source_rank,
                 "material_id": candidate.material_id,
                 "registry_entry_digest": candidate.registry_entry_digest,
-                "eligible": candidate in outcome.eligible_candidates,
-                "selected": key in selected_keys,
-                "reason_codes": list(outcome.candidate_reason_codes[key]),
+                "canonical_name": candidate.canonical_name,
+                "canonical_isomeric_smiles": candidate.canonical_isomeric_smiles,
+                "aggregate_percentile": candidate.aggregate_percentile,
+                "eligible": key in eligible_keys,
+                "selected": selected is not None,
+                "selection_status": selection_status,
+                "selection_order": selected.selection_order if selected else None,
+                "reason_codes": reason_codes,
+                "selection_basis": _selection_basis(
+                    selection_status=selection_status,
+                    reason_codes=reason_codes,
+                    request_config=request_config,
+                    selection_evidence=selection_evidence,
+                ),
+                "selection_evidence": selection_evidence,
+                "properties": [
+                    _property_dossier_payload(
+                        property_id=property_id,
+                        predicted_value=candidate.predictions[property_id],
+                        direction=inputs.directions[property_id],
+                        descriptor=_presentation_descriptor_for_property(
+                            presentation,
+                            property_id,
+                        ),
+                        screening_bounds=_constraint_bounds_for_property(
+                            screening_constraints,
+                            property_id,
+                        ),
+                        batch_bounds=_constraint_bounds_for_property(
+                            batch_constraints,
+                            property_id,
+                        ),
+                    )
+                    for property_id in inputs.property_ids
+                ],
             }
         )
     return decisions
@@ -1097,6 +1418,9 @@ def _experiment_batch_csv_bytes(
     selected: Sequence[_SelectedCandidate],
     property_ids: tuple[str, ...],
     currency: str | None,
+    inputs: OledExperimentBatchSelectionInputs,
+    request_config: dict[str, Any],
+    decisions_by_key: dict[tuple[str, str], dict[str, Any]],
 ) -> bytes:
     fieldnames = [
         "selection_order",
@@ -1110,10 +1434,14 @@ def _experiment_batch_csv_bytes(
         "currency",
         "maximum_similarity_to_prior",
         *[f"predicted_{property_id}" for property_id in property_ids],
+        *_decision_context_fieldnames(property_ids),
     ]
     rows: list[dict[str, Any]] = []
     for item in selected:
         candidate = item.candidate
+        decision = decisions_by_key[
+            _candidate_key(candidate.material_id, candidate.registry_entry_digest)
+        ]
         rows.append(
             {
                 "selection_order": item.selection_order,
@@ -1134,6 +1462,61 @@ def _experiment_batch_csv_bytes(
                     f"predicted_{property_id}": candidate.predictions[property_id]
                     for property_id in property_ids
                 },
+                **_decision_context_row(
+                    decision=decision,
+                    property_ids=property_ids,
+                    inputs=inputs,
+                    request_config=request_config,
+                ),
+            }
+        )
+    return _csv_bytes(rows, fieldnames)
+
+
+def _candidate_decision_dossier_csv_bytes(
+    *,
+    decisions: Sequence[dict[str, Any]],
+    property_ids: tuple[str, ...],
+    inputs: OledExperimentBatchSelectionInputs,
+    request_config: dict[str, Any],
+) -> bytes:
+    fieldnames = [
+        "selection_status",
+        "selection_order",
+        "source_rank",
+        "material_id",
+        "registry_entry_digest",
+        "canonical_name",
+        "canonical_isomeric_smiles",
+        "aggregate_percentile",
+        *[f"predicted_{property_id}" for property_id in property_ids],
+        *_decision_context_fieldnames(property_ids, include_selection_status=False),
+    ]
+    rows: list[dict[str, Any]] = []
+    for decision in decisions:
+        properties = _properties_by_id(decision)
+        rows.append(
+            {
+                "selection_status": decision["selection_status"],
+                "selection_order": (
+                    "" if decision["selection_order"] is None else decision["selection_order"]
+                ),
+                "source_rank": decision["source_rank"],
+                "material_id": decision["material_id"],
+                "registry_entry_digest": decision["registry_entry_digest"],
+                "canonical_name": decision["canonical_name"],
+                "canonical_isomeric_smiles": decision["canonical_isomeric_smiles"],
+                "aggregate_percentile": decision["aggregate_percentile"],
+                **{
+                    f"predicted_{property_id}": properties[property_id]["predicted_value"]
+                    for property_id in property_ids
+                },
+                **_decision_context_row(
+                    decision=decision,
+                    property_ids=property_ids,
+                    inputs=inputs,
+                    request_config=request_config,
+                ),
             }
         )
     return _csv_bytes(rows, fieldnames)
@@ -1145,49 +1528,879 @@ def _experiment_handoff_bytes(
     inputs: OledExperimentBatchSelectionInputs,
     request_config: dict[str, Any],
     outcome: _SelectionOutcome,
+    candidate_supply: dict[str, Any],
+    decisions: Sequence[dict[str, Any]],
 ) -> bytes:
     lines = [
-        "# OLED experiment batch handoff",
+        "# OLED candidate decision dossier",
         "",
         f"- Batch: `{batch_id}`",
         f"- Status: `{outcome.status}`",
         f"- Source screening: `{inputs.screening_id}`",
         f"- Target batch size: `{request_config['target_batch_size']}`",
         f"- Selected candidates: `{len(outcome.selected)}`",
+        "- Candidate supply after property constraints: "
+        f"`{candidate_supply['property_eligible_candidate_count']}` / "
+        f"`{candidate_supply['target_batch_size']}`",
+        "- Inverse-design routing requested: "
+        f"`{candidate_supply['inverse_design_should_trigger']}`",
         "",
+        "## Decision context",
+        "",
+        f"- PR-AP scoring policy: `{inputs.config['scoring_policy']}`",
+        f"- Batch selection policy: `{request_config['selection_policy']}`",
+        f"- Screening receipt SHA-256: `{inputs.screening_sha256}`",
+        f"- Ranked shortlist SHA-256: `{inputs.shortlist_sha256}`",
     ]
-    if outcome.status == "ready":
-        lines.extend(["## Recommended materials", ""])
-        lines.extend(
-            f"- {item.selection_order}. `{item.candidate.material_id}` "
-            f"(source rank={item.candidate.source_rank}, "
-            f"aggregate percentile={item.candidate.aggregate_percentile:.6f})"
-            for item in outcome.selected
+    budget = _required_dict(request_config, "budget")
+    max_budget_minor = budget["max_budget_minor"]
+    currency = budget.get("currency")
+    if max_budget_minor is None:
+        lines.append("- Budget policy: not requested.")
+    else:
+        lines.append(
+            "- Budget policy: maximum cumulative selected-batch cost is "
+            f"`{max_budget_minor}` `{currency}` minor units; each candidate's "
+            "cost and stepwise cumulative feasibility are recorded below."
         )
-        lines.append("")
+    diversity = _required_dict(request_config, "diversity")
+    max_pairwise_tanimoto = diversity["max_pairwise_tanimoto"]
+    if max_pairwise_tanimoto is None:
+        lines.append("- Diversity policy: not requested.")
+    else:
+        lines.append(
+            "- Diversity policy: maximum pairwise Morgan/Tanimoto similarity is "
+            f"`{max_pairwise_tanimoto}`; every greedy-step similarity is recorded "
+            "in the dossier CSV and receipt."
+        )
+    if candidate_supply["inverse_design_should_trigger"]:
+        lines.append(
+            "- Next routing decision: candidate quantity is insufficient after "
+            "property constraints. A future inverse-design task may generate new "
+            "candidates, which must re-enter controlled prediction, filtering, "
+            "ranking, and this dossier boundary. No generation is executed here."
+        )
+    elif candidate_supply["non_supply_policy_prevented_ready_batch"]:
+        lines.append(
+            "- Next routing decision: inverse design is not requested because "
+            "candidate quantity is sufficient; a budget, diversity, or other "
+            "selection policy prevented a complete ready batch."
+        )
+    lines.extend(
+        [
+            "",
+            "### Property objectives and requested bounds",
+            "",
+            "| Property | Objective | PR-AP screening bounds | Additional batch bounds |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    screening_constraints = _required_dict(inputs.config, "constraints")
+    batch_constraints = _required_dict(request_config, "constraints")
+    presentation = _required_dict(request_config, "property_presentation")
+    for property_id in inputs.property_ids:
+        descriptor = _presentation_descriptor_for_property(presentation, property_id)
+        lines.append(
+            "| "
+            + _markdown_cell(f"{descriptor['display_name']} (`{property_id}`; {descriptor['unit']})")
+            + " | "
+            + _markdown_cell(inputs.directions[property_id])
+            + " | "
+            + _markdown_cell(
+                _constraint_label(
+                    _constraint_evaluation(
+                        0.0,
+                        _constraint_bounds_for_property(
+                            screening_constraints,
+                            property_id,
+                        ),
+                        evaluate_value=False,
+                    )
+                )
+            )
+            + " | "
+            + _markdown_cell(
+                _constraint_label(
+                    _constraint_evaluation(
+                        0.0,
+                        _constraint_bounds_for_property(
+                            batch_constraints,
+                            property_id,
+                        ),
+                        evaluate_value=False,
+                    )
+                )
+            )
+            + " |"
+        )
+    if not batch_constraints:
+        lines.extend(
+            [
+                "",
+                "No additional batch property constraints were supplied. The ready "
+                "Top-N is therefore selected from the exact PR-AP shortlist by its "
+                "rank order and scoring policy plus this batch policy; it is not "
+                "represented as meeting an unstated scientific threshold.",
+            ]
+        )
+    lines.append("")
+    if outcome.status == "ready":
+        lines.extend(["## Selected Top-N candidates", ""])
+        for decision in decisions:
+            if not decision["selected"]:
+                continue
+            lines.extend(_selected_candidate_markdown_lines(decision))
     else:
         lines.extend(
             [
                 "## Not ready",
                 "",
-                "No partial material batch is provided. Reasons:",
+                "No partial Top-N batch is provided. Reasons:",
                 *[f"- `{reason}`" for reason in outcome.not_ready_reasons],
                 "",
             ]
         )
     lines.extend(
         [
-            "## Required human checks before any laboratory work",
+            "## Shortlist comparison",
             "",
-            "- Confirm material availability, pricing, safety, and synthesis feasibility.",
-            "- Confirm the predicted-property constraints are appropriate for the intended assay.",
-            "- Define experiment conditions, controls, and acceptance criteria outside this artifact.",
+            "| Rank | Candidate | Predicted properties | Decision | Reason | Policy evidence |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for decision in decisions:
+        lines.append(
+            "| "
+            + str(decision["source_rank"])
+            + " | "
+            + _markdown_cell(
+                f"{decision['canonical_name']} (`{decision['material_id']}`)"
+            )
+            + " | "
+            + _markdown_cell(_property_prediction_summary(decision))
+            + " | "
+            + _markdown_cell(str(decision["selection_status"]))
+            + " | "
+            + _markdown_cell("; ".join(decision["reason_codes"]))
+            + " |"
+            + " "
+            + _markdown_cell(_selection_evidence_summary(decision))
+            + " |"
+        )
+    lines.extend(
+        [
             "",
-            "This is a local recommendation and handoff only. It does not claim or start procurement, synthesis, measurement, experimental validation, Registry mutation, Gold/dataset writing, or model registration.",
+            "## Scope boundary",
+            "",
+            "This is a local, model-prediction-based candidate decision only. It does not claim or start procurement, synthesis, measurement, experimental validation, computational validation, Registry mutation, Gold/dataset writing, or model registration.",
             "",
         ]
     )
     return "\n".join(lines).encode("utf-8")
+
+
+def _candidate_key(material_id: str, registry_entry_digest: str) -> tuple[str, str]:
+    return material_id, registry_entry_digest
+
+
+def _candidate_key_from_payload(payload: dict[str, Any]) -> tuple[str, str]:
+    return _candidate_key(
+        str(payload["material_id"]),
+        str(payload["registry_entry_digest"]),
+    )
+
+
+def _candidate_selection_status(
+    *,
+    key: tuple[str, str],
+    selected_by_key: dict[tuple[str, str], _SelectedCandidate],
+    eligible_keys: set[tuple[str, str]],
+    batch_status: str,
+) -> str:
+    if key in selected_by_key:
+        return "selected"
+    if key not in eligible_keys:
+        return "excluded_by_batch_policy"
+    if batch_status == "ready":
+        return "eligible_not_selected"
+    return "eligible_but_batch_not_ready"
+
+
+def _candidate_selection_evidence_payload(
+    *,
+    candidate: OledExperimentBatchCandidate,
+    inputs: OledExperimentBatchSelectionInputs,
+    request_config: dict[str, Any],
+    outcome: _SelectionOutcome,
+) -> dict[str, Any]:
+    """Freeze preflight and actual greedy-step evidence for one candidate."""
+
+    key = _candidate_key(candidate.material_id, candidate.registry_entry_digest)
+    budget = _required_dict(request_config, "budget")
+    max_budget_minor = budget["max_budget_minor"]
+    if max_budget_minor is not None:
+        max_budget_minor = _optional_nonnegative_int(
+            max_budget_minor, "max_budget_minor"
+        )
+        assert max_budget_minor is not None
+    currency = budget.get("currency")
+    if currency is not None and not isinstance(currency, str):
+        raise ValueError("candidate dossier budget currency is invalid")
+    diversity = _required_dict(request_config, "diversity")
+    max_pairwise_tanimoto = diversity.get("max_pairwise_tanimoto")
+    if max_pairwise_tanimoto is not None:
+        max_pairwise_tanimoto = _optional_tanimoto_threshold(max_pairwise_tanimoto)
+
+    candidate_cost_minor = inputs.costs_by_candidate.get(key)
+    preflight_reason_codes = _candidate_constraint_reasons(
+        candidate,
+        _required_dict(request_config, "constraints"),
+    )
+    if max_budget_minor is None:
+        preflight_budget_status = "not_requested"
+    elif candidate_cost_minor is None:
+        preflight_budget_status = "cost_unavailable"
+        preflight_reason_codes.append("candidate_cost_unavailable")
+    elif candidate_cost_minor > max_budget_minor:
+        preflight_budget_status = "exceeds_per_candidate_limit"
+        preflight_reason_codes.append("candidate_cost_exceeds_max_budget")
+    else:
+        preflight_budget_status = "within_per_candidate_limit"
+
+    steps = outcome.candidate_selection_steps[key]
+    step_payloads = [_selection_step_payload(step) for step in steps]
+    finalized_step = next(
+        (
+            step
+            for step in step_payloads
+            if step["decision_at_step"] == "chosen"
+        ),
+        None,
+    )
+    provisional_step = next(
+        (
+            step
+            for step in step_payloads
+            if step["decision_at_step"] == "provisionally_chosen"
+        ),
+        None,
+    )
+    if finalized_step is not None:
+        terminal_status = f"chosen_at_step:{finalized_step['selection_order']}"
+    elif provisional_step is not None:
+        terminal_status = (
+            "provisionally_chosen_not_finalized_at_step:"
+            f"{provisional_step['selection_order']}"
+        )
+    elif step_payloads:
+        last_step = step_payloads[-1]
+        if last_step["decision_at_step"] == "feasible_but_lower_priority":
+            terminal_status = (
+                "feasible_but_not_chosen_before_target_reached"
+                if outcome.status == "ready"
+                else "feasible_but_no_complete_batch"
+            )
+        else:
+            terminal_status = (
+                f"{last_step['decision_at_step']}_at_step:"
+                f"{last_step['selection_order']}"
+            )
+    else:
+        terminal_status = "excluded_during_preflight"
+
+    return {
+        "preflight": {
+            "initial_eligibility": (
+                "eligible_for_greedy_selection"
+                if not preflight_reason_codes
+                else "excluded_before_greedy_selection"
+            ),
+            "hard_constraint_reason_codes": sorted(
+                reason
+                for reason in preflight_reason_codes
+                if reason.startswith("hard_constraint_failed:")
+            ),
+            "candidate_cost_minor": candidate_cost_minor,
+            "currency": currency,
+            "max_budget_minor": max_budget_minor,
+            "budget_status": preflight_budget_status,
+            "max_pairwise_tanimoto": max_pairwise_tanimoto,
+        },
+        "selection_steps": step_payloads,
+        "terminal_status": terminal_status,
+    }
+
+
+def _selection_step_payload(step: _SelectionStepEvidence) -> dict[str, Any]:
+    return {
+        "selection_order": step.selection_order,
+        "prior_selected": [
+            {
+                "material_id": material_id,
+                "registry_entry_digest": registry_entry_digest,
+            }
+            for material_id, registry_entry_digest in step.prior_selected
+        ],
+        "provisional_cost_minor_before": step.provisional_cost_minor_before,
+        "candidate_cost_minor": step.candidate_cost_minor,
+        "cumulative_cost_if_selected_minor": step.cumulative_cost_if_selected_minor,
+        "budget_status": step.budget_status,
+        "maximum_similarity_to_prior": step.maximum_similarity_to_prior,
+        "max_pairwise_tanimoto": step.max_pairwise_tanimoto,
+        "diversity_status": step.diversity_status,
+        "feasible": step.feasible,
+        "selection_sort_key": list(step.selection_sort_key),
+        "decision_at_step": step.decision_at_step,
+    }
+
+
+def _greedy_trace_payload(
+    *,
+    inputs: OledExperimentBatchSelectionInputs,
+    request_config: dict[str, Any],
+    outcome: _SelectionOutcome,
+    decisions: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return a replayable explanation of the exact greedy decision process."""
+
+    decisions_by_key = {
+        _candidate_key_from_payload(decision): decision for decision in decisions
+    }
+    ordered_candidates = sorted(
+        inputs.shortlist_candidates,
+        key=lambda candidate: (candidate.source_rank, candidate.material_id),
+    )
+    ordered_keys = [
+        _candidate_key(candidate.material_id, candidate.registry_entry_digest)
+        for candidate in ordered_candidates
+    ]
+    preflight = [
+        {
+            "material_id": candidate.material_id,
+            "registry_entry_digest": candidate.registry_entry_digest,
+            **decisions_by_key[
+                _candidate_key(candidate.material_id, candidate.registry_entry_digest)
+            ]["selection_evidence"]["preflight"],
+        }
+        for candidate in ordered_candidates
+    ]
+    step_numbers = sorted(
+        {
+            int(step["selection_order"])
+            for decision in decisions
+            for step in decision["selection_evidence"]["selection_steps"]
+        }
+    )
+    steps: list[dict[str, Any]] = []
+    provisional_selected: list[dict[str, str]] = []
+    for selection_order in step_numbers:
+        evaluations = [
+            {
+                "material_id": decisions_by_key[key]["material_id"],
+                "registry_entry_digest": decisions_by_key[key][
+                    "registry_entry_digest"
+                ],
+                **step,
+            }
+            for key in ordered_keys
+            for step in decisions_by_key[key]["selection_evidence"][
+                "selection_steps"
+            ]
+            if step["selection_order"] == selection_order
+        ]
+        if not evaluations:
+            raise ValueError("candidate selection trace is incomplete")
+        provisional_choice = next(
+            (
+                step
+                for step in evaluations
+                if step["decision_at_step"]
+                in {"chosen", "provisionally_chosen"}
+            ),
+            None,
+        )
+        provisional_choice_candidate = None
+        finalized_choice_candidate = None
+        if provisional_choice is not None:
+            provisional_choice_candidate = {
+                "material_id": provisional_choice["material_id"],
+                "registry_entry_digest": provisional_choice["registry_entry_digest"],
+            }
+            provisional_selected.append(provisional_choice_candidate)
+            if provisional_choice["decision_at_step"] == "chosen":
+                finalized_choice_candidate = provisional_choice_candidate
+        steps.append(
+            {
+                "selection_order": selection_order,
+                "prior_selected": evaluations[0]["prior_selected"],
+                "prior_total_cost_minor": evaluations[0][
+                    "provisional_cost_minor_before"
+                ],
+                "evaluations": evaluations,
+                "provisional_choice": provisional_choice_candidate,
+                "finalized_choice": finalized_choice_candidate,
+            }
+        )
+    return {
+        "algorithm": request_config["selection_policy"],
+        "candidate_order": [
+            {
+                "source_rank": candidate.source_rank,
+                "material_id": candidate.material_id,
+                "registry_entry_digest": candidate.registry_entry_digest,
+            }
+            for candidate in ordered_candidates
+        ],
+        "preflight": preflight,
+        "steps": steps,
+        "termination": (
+            "target_reached" if outcome.status == "ready" else "no_feasible_candidate"
+        ),
+        "provisional_selected": provisional_selected,
+        "finalized_selected": [
+            {
+                "material_id": item.candidate.material_id,
+                "registry_entry_digest": item.candidate.registry_entry_digest,
+            }
+            for item in outcome.selected
+        ],
+    }
+
+
+def _selection_basis(
+    *,
+    selection_status: str,
+    reason_codes: Sequence[str],
+    request_config: dict[str, Any],
+    selection_evidence: dict[str, Any],
+) -> str:
+    policy = str(request_config["selection_policy"])
+    if selection_status == "selected":
+        if "selected_by_diversity_aware_greedy_policy" in reason_codes:
+            return (
+                f"selected by `{policy}` for diversity among the remaining "
+                "feasible PR-AP candidates"
+            )
+        return f"selected by `{policy}` from the exact PR-AP rank order"
+    if selection_status == "eligible_not_selected":
+        terminal_status = str(selection_evidence["terminal_status"])
+        if terminal_status.startswith("infeasible_budget_and_diversity"):
+            return (
+                "eligible before greedy selection, but exceeded both the remaining "
+                "requested batch budget and diversity threshold at its last "
+                "evaluated step"
+            )
+        if terminal_status.startswith("infeasible_budget"):
+            return (
+                "eligible before greedy selection, but exceeded the remaining "
+                "requested batch budget at its last evaluated step"
+            )
+        if terminal_status.startswith("infeasible_diversity"):
+            return (
+                "eligible before greedy selection, but exceeded the requested "
+                "diversity threshold at its last evaluated step"
+            )
+        return f"eligible, but target batch size was filled by `{policy}`"
+    if selection_status == "eligible_but_batch_not_ready":
+        terminal_status = str(selection_evidence["terminal_status"])
+        if terminal_status.startswith("provisionally_chosen_not_finalized"):
+            return (
+                "provisionally chosen during greedy selection, but not finalized "
+                "because no complete requested Top-N batch could be formed"
+            )
+        if terminal_status.startswith("infeasible_budget_and_diversity"):
+            return (
+                "eligible before greedy selection, but the requested complete "
+                "Top-N could not be formed after this candidate exceeded both the "
+                "remaining batch budget and diversity threshold"
+            )
+        if terminal_status.startswith("infeasible_budget"):
+            return (
+                "eligible before greedy selection, but the requested complete "
+                "Top-N could not be formed after this candidate exceeded the "
+                "remaining batch budget"
+            )
+        if terminal_status.startswith("infeasible_diversity"):
+            return (
+                "eligible before greedy selection, but the requested complete "
+                "Top-N could not be formed after this candidate exceeded the "
+                "diversity threshold"
+            )
+        return "eligible, but no complete requested Top-N batch could be formed"
+    if any(code.startswith("hard_constraint_failed:") for code in reason_codes):
+        return "excluded because one or more additional batch property constraints failed"
+    if any(code.startswith("candidate_cost_") for code in reason_codes):
+        return "excluded by the requested batch cost policy"
+    return "excluded by the declared batch selection policy"
+
+
+def _property_dossier_payload(
+    *,
+    property_id: str,
+    predicted_value: float,
+    direction: str,
+    descriptor: dict[str, str],
+    screening_bounds: dict[str, float],
+    batch_bounds: dict[str, float],
+) -> dict[str, Any]:
+    return {
+        "property_id": property_id,
+        "display_name": descriptor["display_name"],
+        "unit": descriptor["unit"],
+        "physical_interpretation": descriptor["physical_interpretation"],
+        "ontology_status": descriptor["ontology_status"],
+        "objective_direction": direction,
+        "predicted_value": predicted_value,
+        "screening_constraint": _constraint_evaluation(
+            predicted_value,
+            screening_bounds,
+        ),
+        "batch_constraint": _constraint_evaluation(
+            predicted_value,
+            batch_bounds,
+        ),
+    }
+
+
+def _property_descriptor(property_id: str) -> dict[str, str]:
+    try:
+        definition = DEFAULT_OLED_PROPERTY_ONTOLOGY.get(property_id)
+    except KeyError:
+        return {
+            "display_name": property_id,
+            "unit": "unknown",
+            "physical_interpretation": "not available because this property ID is not mapped in the OLED ontology",
+            "ontology_status": "unmapped",
+        }
+    return {
+        "display_name": definition.name,
+        "unit": definition.canonical_unit,
+        "physical_interpretation": definition.physical_interpretation,
+        "ontology_status": "mapped",
+    }
+
+
+def _property_presentation_contract(
+    property_ids: tuple[str, ...],
+) -> dict[str, dict[str, str]]:
+    return {
+        property_id: _property_descriptor(property_id)
+        for property_id in property_ids
+    }
+
+
+def _presentation_descriptor_for_property(
+    presentation: dict[str, Any],
+    property_id: str,
+) -> dict[str, str]:
+    value = presentation.get(property_id)
+    required_keys = (
+        "display_name",
+        "unit",
+        "physical_interpretation",
+        "ontology_status",
+    )
+    if (
+        not isinstance(value, dict)
+        or set(value) != set(required_keys)
+        or any(not isinstance(value.get(key), str) or not value[key] for key in required_keys)
+    ):
+        raise ValueError("candidate dossier property presentation contract is invalid")
+    return {key: str(value[key]) for key in required_keys}
+
+
+def _constraint_bounds_for_property(
+    constraints: dict[str, Any],
+    property_id: str,
+) -> dict[str, float]:
+    raw = constraints.get(property_id)
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: _finite_float(raw[key], "dossier constraint value")
+        for key in ("min", "max")
+        if key in raw
+    }
+
+
+def _constraint_evaluation(
+    value: float,
+    bounds: dict[str, float],
+    *,
+    evaluate_value: bool = True,
+) -> dict[str, Any]:
+    minimum = bounds.get("min")
+    maximum = bounds.get("max")
+    if minimum is None and maximum is None:
+        status = "not_requested"
+    elif not evaluate_value:
+        status = "requested"
+    else:
+        failed_minimum = minimum is not None and value < minimum
+        failed_maximum = maximum is not None and value > maximum
+        if failed_minimum and failed_maximum:
+            status = "failed_minimum_and_maximum"
+        elif failed_minimum:
+            status = "failed_minimum"
+        elif failed_maximum:
+            status = "failed_maximum"
+        else:
+            status = "passed"
+    return {"min": minimum, "max": maximum, "status": status}
+
+
+def _constraint_label(evaluation: dict[str, Any]) -> str:
+    if evaluation["status"] == "not_requested":
+        return "not requested"
+    parts: list[str] = []
+    if evaluation["min"] is not None:
+        parts.append(f"min={evaluation['min']}")
+    if evaluation["max"] is not None:
+        parts.append(f"max={evaluation['max']}")
+    return "; ".join(parts) if parts else "not requested"
+
+
+def _properties_by_id(decision: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    properties = decision.get("properties")
+    if not isinstance(properties, list):
+        raise ValueError("candidate decision properties are invalid")
+    result: dict[str, dict[str, Any]] = {}
+    for item in properties:
+        if not isinstance(item, dict) or not isinstance(item.get("property_id"), str):
+            raise ValueError("candidate decision property is invalid")
+        result[item["property_id"]] = item
+    return result
+
+
+def _decision_context_fieldnames(
+    property_ids: tuple[str, ...],
+    *,
+    include_selection_status: bool = True,
+) -> list[str]:
+    fieldnames = [
+        "selection_reason_codes",
+        "selection_basis",
+        "policy_candidate_cost_minor",
+        "policy_cost_currency",
+        "max_budget_minor",
+        "preflight_budget_status",
+        "max_pairwise_tanimoto",
+        "selection_terminal_status",
+        "last_selection_order",
+        "last_step_provisional_cost_minor_before",
+        "last_step_cumulative_cost_if_selected_minor",
+        "last_step_budget_status",
+        "last_step_maximum_similarity_to_prior",
+        "last_step_diversity_status",
+        "last_step_feasible",
+        "last_step_decision",
+        "selection_step_evidence_json",
+        "source_screening_id",
+        "screening_receipt_sha256",
+        "ranked_shortlist_sha256",
+        "screening_scoring_policy",
+        "batch_selection_policy",
+    ]
+    if include_selection_status:
+        fieldnames.insert(0, "selection_status")
+    fieldnames.extend(
+        field
+        for property_id in property_ids
+        for field in (
+            f"property_name_{property_id}",
+            f"property_unit_{property_id}",
+            f"property_ontology_status_{property_id}",
+            f"objective_{property_id}",
+            f"screening_constraints_{property_id}",
+            f"screening_constraint_status_{property_id}",
+            f"batch_constraints_{property_id}",
+            f"batch_constraint_status_{property_id}",
+        )
+    )
+    return fieldnames
+
+
+def _decision_context_row(
+    *,
+    decision: dict[str, Any],
+    property_ids: tuple[str, ...],
+    inputs: OledExperimentBatchSelectionInputs,
+    request_config: dict[str, Any],
+) -> dict[str, Any]:
+    properties = _properties_by_id(decision)
+    selection_evidence = _required_dict(decision, "selection_evidence")
+    preflight = _required_dict(selection_evidence, "preflight")
+    steps = selection_evidence.get("selection_steps")
+    if not isinstance(steps, list) or any(not isinstance(step, dict) for step in steps):
+        raise ValueError("candidate selection evidence steps are invalid")
+    last_step = steps[-1] if steps else None
+    row: dict[str, Any] = {
+        "selection_status": decision["selection_status"],
+        "selection_reason_codes": ";".join(decision["reason_codes"]),
+        "selection_basis": decision["selection_basis"],
+        "policy_candidate_cost_minor": _optional_csv_value(
+            preflight.get("candidate_cost_minor")
+        ),
+        "policy_cost_currency": _optional_csv_value(preflight.get("currency")),
+        "max_budget_minor": _optional_csv_value(preflight.get("max_budget_minor")),
+        "preflight_budget_status": preflight.get("budget_status", ""),
+        "max_pairwise_tanimoto": _optional_csv_value(
+            preflight.get("max_pairwise_tanimoto")
+        ),
+        "selection_terminal_status": selection_evidence.get("terminal_status", ""),
+        "last_selection_order": _optional_csv_value(
+            last_step.get("selection_order") if last_step else None
+        ),
+        "last_step_provisional_cost_minor_before": _optional_csv_value(
+            last_step.get("provisional_cost_minor_before") if last_step else None
+        ),
+        "last_step_cumulative_cost_if_selected_minor": _optional_csv_value(
+            last_step.get("cumulative_cost_if_selected_minor") if last_step else None
+        ),
+        "last_step_budget_status": (
+            last_step.get("budget_status", "") if last_step else "not_evaluated"
+        ),
+        "last_step_maximum_similarity_to_prior": _optional_csv_value(
+            last_step.get("maximum_similarity_to_prior") if last_step else None
+        ),
+        "last_step_diversity_status": (
+            last_step.get("diversity_status", "") if last_step else "not_evaluated"
+        ),
+        "last_step_feasible": _optional_csv_value(
+            last_step.get("feasible") if last_step else None
+        ),
+        "last_step_decision": (
+            last_step.get("decision_at_step", "") if last_step else "not_evaluated"
+        ),
+        "selection_step_evidence_json": _compact_json_text(steps),
+        "source_screening_id": inputs.screening_id,
+        "screening_receipt_sha256": inputs.screening_sha256,
+        "ranked_shortlist_sha256": inputs.shortlist_sha256,
+        "screening_scoring_policy": inputs.config["scoring_policy"],
+        "batch_selection_policy": request_config["selection_policy"],
+    }
+    for property_id in property_ids:
+        property_payload = properties[property_id]
+        screening = property_payload["screening_constraint"]
+        batch = property_payload["batch_constraint"]
+        row.update(
+            {
+                f"property_name_{property_id}": property_payload["display_name"],
+                f"property_unit_{property_id}": property_payload["unit"],
+                f"property_ontology_status_{property_id}": property_payload[
+                    "ontology_status"
+                ],
+                f"objective_{property_id}": property_payload["objective_direction"],
+                f"screening_constraints_{property_id}": _constraint_label(screening),
+                f"screening_constraint_status_{property_id}": screening["status"],
+                f"batch_constraints_{property_id}": _constraint_label(batch),
+                f"batch_constraint_status_{property_id}": batch["status"],
+            }
+        )
+    return row
+
+
+def _selected_candidate_markdown_lines(decision: dict[str, Any]) -> list[str]:
+    lines = [
+        f"### {decision['selection_order']}. {decision['canonical_name']}",
+        "",
+        f"- Material: `{decision['material_id']}`",
+        f"- Registry entry: `{decision['registry_entry_digest']}`",
+        f"- Canonical SMILES: `{decision['canonical_isomeric_smiles']}`",
+        f"- PR-AP source rank: `{decision['source_rank']}`",
+        f"- Aggregate percentile: `{decision['aggregate_percentile']:.6f}`",
+        f"- Selection basis: {decision['selection_basis']}",
+        f"- Reasons: {', '.join(f'`{code}`' for code in decision['reason_codes'])}",
+        f"- Policy evidence: {_selection_evidence_summary(decision)}",
+        "",
+        "| Property | Model prediction | Objective | PR-AP screening status | Additional batch status |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for property_payload in decision["properties"]:
+        lines.append(
+            "| "
+            + _markdown_cell(
+                f"{property_payload['display_name']} (`{property_payload['property_id']}`; {property_payload['unit']})"
+            )
+            + " | "
+            + _markdown_cell(str(property_payload["predicted_value"]))
+            + " | "
+            + _markdown_cell(property_payload["objective_direction"])
+            + " | "
+            + _markdown_cell(
+                f"{_constraint_label(property_payload['screening_constraint'])}; "
+                f"{property_payload['screening_constraint']['status']}"
+            )
+            + " | "
+            + _markdown_cell(
+                f"{_constraint_label(property_payload['batch_constraint'])}; "
+                f"{property_payload['batch_constraint']['status']}"
+            )
+            + " |"
+        )
+    lines.append("")
+    return lines
+
+
+def _selection_evidence_summary(decision: dict[str, Any]) -> str:
+    evidence = _required_dict(decision, "selection_evidence")
+    preflight = _required_dict(evidence, "preflight")
+    parts = [
+        "preflight=" + str(preflight.get("initial_eligibility", "invalid")),
+        "cost=" + _evidence_value_label(preflight.get("candidate_cost_minor")),
+        "budget=" + _evidence_value_label(preflight.get("max_budget_minor")),
+        "preflight_budget=" + str(preflight.get("budget_status", "invalid")),
+        "similarity_limit="
+        + _evidence_value_label(preflight.get("max_pairwise_tanimoto")),
+    ]
+    steps = evidence.get("selection_steps")
+    if not isinstance(steps, list) or any(not isinstance(step, dict) for step in steps):
+        raise ValueError("candidate selection evidence steps are invalid")
+    if steps:
+        last_step = steps[-1]
+        parts.extend(
+            [
+                "last_step=" + str(last_step.get("selection_order", "invalid")),
+                "proposed_cumulative_cost="
+                + _evidence_value_label(
+                    last_step.get("cumulative_cost_if_selected_minor")
+                ),
+                "similarity="
+                + _evidence_value_label(
+                    last_step.get("maximum_similarity_to_prior")
+                ),
+                "last_budget=" + str(last_step.get("budget_status", "invalid")),
+                "last_diversity="
+                + str(last_step.get("diversity_status", "invalid")),
+                "step_decision="
+                + str(last_step.get("decision_at_step", "invalid")),
+            ]
+        )
+    parts.append("terminal=" + str(evidence.get("terminal_status", "invalid")))
+    return "; ".join(parts)
+
+
+def _evidence_value_label(value: Any) -> str:
+    return "not_applicable" if value is None else str(value)
+
+
+def _property_prediction_summary(decision: dict[str, Any]) -> str:
+    return "; ".join(
+        f"{item['property_id']}={item['predicted_value']} {item['unit']} ({item['objective_direction']})"
+        for item in decision["properties"]
+    )
+
+
+def _markdown_cell(value: str) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def _optional_csv_value(value: Any) -> Any:
+    return "" if value is None else value
+
+
+def _compact_json_text(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _csv_bytes(rows: Sequence[dict[str, Any]], fieldnames: list[str]) -> bytes:
