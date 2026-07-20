@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -9,6 +12,18 @@ from typing import Any
 from ai4s_agent import adapters
 from ai4s_agent.agents.modeling import ModelingAgent
 from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, strict_bool, strict_smiles_cleaning_enabled, write_json
+from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_directory
+from ai4s_agent.oled_real_phase1_execution import (
+    _build_execution_payloads,
+    _validated_split_by_row,
+)
+from ai4s_agent.oled_registry_candidate_screening import _load_screening_inputs
+from ai4s_agent.oled_supplementary_material_identity_review import (
+    _pinned_output_parents_without_symlink_components,
+)
+from ai4s_agent.oled_supplementary_scoped_candidate_response import (
+    _read_regular_file_bound,
+)
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import (
     ArtifactRef,
@@ -34,6 +49,11 @@ _ADAPTER_OVERRIDE_ALLOWLIST: dict[str, set[str]] = {
         "predict_candidates_unimol_legacy_adapter",
     },
 }
+
+_REGISTRY_SCREENING_TASK_ID = "execute_oled_registry_candidate_screening"
+_REGISTRY_SCREENING_MAX_INPUT_BYTES = 1024 * 1024 * 1024
+_REGISTRY_SCREENING_FROZEN_EXECUTION_PARENT = "frozen_phase1_execution"
+_REGISTRY_SCREENING_FROZEN_INPUTS_DIR = "frozen_inputs"
 
 
 class RunPlanExecutor:
@@ -218,6 +238,11 @@ class RunPlanExecutor:
                 approved_gates=approved_gates if task_approval_applies else set(),
                 options=options,
             )
+            attempt_id = (
+                uuid.uuid4().hex
+                if task.task_id == _REGISTRY_SCREENING_TASK_ID
+                else None
+            )
             self._write_stage(
                 project_id=project_id,
                 run_id=run_id,
@@ -233,7 +258,34 @@ class RunPlanExecutor:
                 try:
                     result = adapter(payload)
                 except Exception as exc:
-                    error = {"code": "adapter_exception", "message": str(exc)}
+                    if task.task_id == _REGISTRY_SCREENING_TASK_ID:
+                        # This result may become an execution record.  Keep an
+                        # unexpected retry failure separate from any earlier
+                        # successful record and avoid persisting host paths
+                        # leaked by an arbitrary adapter exception.
+                        error = {
+                            "code": "adapter_exception",
+                            "message": "Registry candidate screening adapter failed.",
+                        }
+                        result_path = self._write_adapter_result(
+                            run_dir,
+                            task.task_id,
+                            {
+                                "status": "failed",
+                                "adapter": adapter_name or "",
+                                "error": error,
+                            },
+                            attempt_id=attempt_id,
+                        )
+                        failure_artifacts = [
+                            ArtifactRef(
+                                artifact_id=f"{task.task_id}_result",
+                                relative_path=self._relative(run_dir, result_path),
+                            )
+                        ]
+                    else:
+                        error = {"code": "adapter_exception", "message": str(exc)}
+                        failure_artifacts = []
                     self._write_stage(
                         project_id=project_id,
                         run_id=run_id,
@@ -241,6 +293,7 @@ class RunPlanExecutor:
                         status=RunStatus.FAILED,
                         next_stage=next_stage,
                         error=error,
+                        artifacts=failure_artifacts,
                     )
                     return {
                         "ok": False,
@@ -250,7 +303,12 @@ class RunPlanExecutor:
                         "executed_tasks": executed,
                         "error": error,
                     }
-            result_path = self._write_adapter_result(run_dir, task.task_id, result)
+            result_path = self._write_adapter_result(
+                run_dir,
+                task.task_id,
+                result,
+                attempt_id=attempt_id,
+            )
             result_status = str(result.get("status") or "")
             if result_status == "planned":
                 rel = self._relative(run_dir, result_path)
@@ -587,24 +645,53 @@ class RunPlanExecutor:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         approved = approved_gates or set()
-        if task_id == "execute_oled_registry_candidate_screening":
+        if task_id == _REGISTRY_SCREENING_TASK_ID:
             task_options = self._payload_options(options)
             unexpected = sorted(set(task_options) - {"minimums", "maximums"})
             if unexpected:
                 raise ValueError(
                     "unsupported Registry screening task option: " + ", ".join(unexpected)
                 )
+            source_phase1_execution_dir = self._absolute_artifact_path(
+                artifact_paths, "oled_phase1_execution_dir"
+            )
+            source_dataset_snapshot_json = self._absolute_artifact_path(
+                artifact_paths, "oled_dataset_snapshot"
+            )
+            source_registry_snapshot_json = self._absolute_artifact_path(
+                artifact_paths, "oled_registry_snapshot"
+            )
+            frozen = self._registry_screening_frozen_input_paths(
+                run_dir=run_dir,
+                source_phase1_execution_dir=source_phase1_execution_dir,
+                source_dataset_snapshot_json=source_dataset_snapshot_json,
+                source_registry_snapshot_json=source_registry_snapshot_json,
+            )
+            # A resumed task takes one final source-to-frozen binding check
+            # after gate validation and immediately before dispatch.  If a
+            # source path is replaced after the snapshot recheck, fail before
+            # the adapter can publish anything.  A later replacement cannot
+            # redirect execution because the adapter consumes frozen bytes.
+            if actor:
+                self._verify_registry_screening_source_binding(
+                    source_phase1_execution_dir=source_phase1_execution_dir,
+                    source_dataset_snapshot_json=source_dataset_snapshot_json,
+                    source_registry_snapshot_json=source_registry_snapshot_json,
+                    frozen_phase1_execution_dir=frozen["phase1_execution_dir"],
+                    frozen_dataset_snapshot_json=frozen["dataset_snapshot_json"],
+                    frozen_registry_snapshot_json=frozen["registry_snapshot_json"],
+                )
             return {
                 "run_id": run_id,
-                "phase1_execution_dir": self._absolute_artifact_path(
-                    artifact_paths, "oled_phase1_execution_dir"
-                ),
-                "dataset_snapshot_json": self._absolute_artifact_path(
-                    artifact_paths, "oled_dataset_snapshot"
-                ),
-                "registry_snapshot_json": self._absolute_artifact_path(
-                    artifact_paths, "oled_registry_snapshot"
-                ),
+                # The source paths remain snapshot-bound so a change before
+                # approval invalidates the gate.  They are audit-only at
+                # dispatch; the adapter receives the owned frozen paths.
+                "source_phase1_execution_dir": source_phase1_execution_dir,
+                "source_dataset_snapshot_json": source_dataset_snapshot_json,
+                "source_registry_snapshot_json": source_registry_snapshot_json,
+                "phase1_execution_dir": frozen["phase1_execution_dir"],
+                "dataset_snapshot_json": frozen["dataset_snapshot_json"],
+                "registry_snapshot_json": frozen["registry_snapshot_json"],
                 "output_root": str(run_dir / "oled_registry_screening"),
                 "minimums": self._string_list_option(
                     task_options.get("minimums", []), key="minimums"
@@ -912,6 +999,11 @@ class RunPlanExecutor:
                     artifact_paths[artifact_id] = str(output_path)
             return
         if task_id == "execute_oled_registry_candidate_screening":
+            existing_registry = self.storage.read_artifact_registry(project_id, run_id)
+            if "oled_registry_screening_execution_record" in existing_registry:
+                raise ValueError(
+                    "Registry screening execution record is already immutable"
+                )
             outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
             output_paths: dict[str, Path] = {}
             for artifact_id in (
@@ -1085,15 +1177,328 @@ class RunPlanExecutor:
                 return clean
         return ""
 
+    def _registry_screening_frozen_input_paths(
+        self,
+        *,
+        run_dir: Path,
+        source_phase1_execution_dir: str,
+        source_dataset_snapshot_json: str,
+        source_registry_snapshot_json: str,
+    ) -> dict[str, str]:
+        """Return one immutable, run-owned copy of the three PR-AQ inputs."""
+
+        task_root = run_dir / _REGISTRY_SCREENING_TASK_ID
+        execution_parent = task_root / _REGISTRY_SCREENING_FROZEN_EXECUTION_PARENT
+        frozen_inputs_dir = task_root / _REGISTRY_SCREENING_FROZEN_INPUTS_DIR
+        with _pinned_output_parents_without_symlink_components(
+            task_root,
+            execution_parent,
+        ) as pinned:
+            existing = self._registry_screening_existing_frozen_paths(
+                task_root=task_root,
+                task_root_descriptor=pinned[task_root],
+                execution_parent=execution_parent,
+                execution_parent_descriptor=pinned[execution_parent],
+                frozen_inputs_dir=frozen_inputs_dir,
+            )
+        if existing is not None:
+            return existing
+
+        # PR-AP's loader pins source descriptors and exact-replays the PR-AO
+        # directory before any bytes are copied into the run-owned bundle.
+        source_prepared = _load_screening_inputs(
+            phase1_execution_dir=source_phase1_execution_dir,
+            dataset_snapshot_json=source_dataset_snapshot_json,
+            registry_snapshot_json=source_registry_snapshot_json,
+        )
+        dataset_bytes, dataset_sha256 = _read_regular_file_bound(
+            Path(source_dataset_snapshot_json),
+            max_bytes=_REGISTRY_SCREENING_MAX_INPUT_BYTES,
+            reject_symlink_components=True,
+        )
+        registry_bytes, registry_sha256 = _read_regular_file_bound(
+            Path(source_registry_snapshot_json),
+            max_bytes=_REGISTRY_SCREENING_MAX_INPUT_BYTES,
+            reject_symlink_components=True,
+        )
+        if (
+            dataset_sha256 != source_prepared.dataset_sha256
+            or registry_sha256 != source_prepared.registry_sha256
+        ):
+            raise ValueError("Registry screening source inputs changed while frozen")
+
+        execution = source_prepared.execution
+        execution_id = str(execution.get("execution_id") or "")
+        generated_at = str(execution.get("generated_at") or "")
+        config = execution.get("config")
+        if not execution_id or not generated_at or not isinstance(config, dict):
+            raise ValueError("Registry screening source execution is invalid")
+        execution_payloads, _ = _build_execution_payloads(
+            snapshot=source_prepared.dataset,
+            source_sha=source_prepared.dataset_sha256,
+            execution_id=execution_id,
+            config=config,
+            generated_at=generated_at,
+            split_by_row=_validated_split_by_row(source_prepared.dataset),
+        )
+        execution_bytes = execution_payloads.get("execution.json")
+        if (
+            not isinstance(execution_bytes, bytes)
+            or "sha256:" + hashlib.sha256(execution_bytes).hexdigest()
+            != source_prepared.execution_sha256
+        ):
+            raise ValueError("Registry screening source execution replay mismatch")
+        frozen_execution_dir = execution_parent / execution_id
+
+        # Re-pin after reading sources.  A concurrent publisher can win only
+        # by publishing a complete immutable layout; a partial layout fails
+        # closed and is never repaired or overwritten.
+        with _pinned_output_parents_without_symlink_components(
+            task_root,
+            execution_parent,
+        ) as pinned:
+            existing = self._registry_screening_existing_frozen_paths(
+                task_root=task_root,
+                task_root_descriptor=pinned[task_root],
+                execution_parent=execution_parent,
+                execution_parent_descriptor=pinned[execution_parent],
+                frozen_inputs_dir=frozen_inputs_dir,
+            )
+            if existing is not None:
+                return existing
+            _publish_payload_directory(
+                output_dir=frozen_execution_dir,
+                parent_descriptor=pinned[execution_parent],
+                payloads=execution_payloads,
+                artifact_label="Registry screening frozen PR-AO execution",
+            )
+            _publish_payload_directory(
+                output_dir=frozen_inputs_dir,
+                parent_descriptor=pinned[task_root],
+                payloads={
+                    "dataset_snapshot.json": dataset_bytes,
+                    "registry_snapshot.json": registry_bytes,
+                },
+                artifact_label="Registry screening frozen inputs",
+            )
+
+        frozen = {
+            "phase1_execution_dir": str(frozen_execution_dir),
+            "dataset_snapshot_json": str(frozen_inputs_dir / "dataset_snapshot.json"),
+            "registry_snapshot_json": str(frozen_inputs_dir / "registry_snapshot.json"),
+        }
+        # Do not make an approval snapshot if source paths changed during
+        # staging and the owned bundle therefore represents different bytes.
+        self._verify_registry_screening_source_binding(
+            source_phase1_execution_dir=source_phase1_execution_dir,
+            source_dataset_snapshot_json=source_dataset_snapshot_json,
+            source_registry_snapshot_json=source_registry_snapshot_json,
+            frozen_phase1_execution_dir=frozen["phase1_execution_dir"],
+            frozen_dataset_snapshot_json=frozen["dataset_snapshot_json"],
+            frozen_registry_snapshot_json=frozen["registry_snapshot_json"],
+        )
+        return frozen
+
+    @staticmethod
+    def _registry_screening_existing_frozen_paths(
+        *,
+        task_root: Path,
+        task_root_descriptor: int,
+        execution_parent: Path,
+        execution_parent_descriptor: int,
+        frozen_inputs_dir: Path,
+    ) -> dict[str, str] | None:
+        """Return a complete frozen layout, rejecting partial or redirected state."""
+
+        no_follow = getattr(os, "O_NOFOLLOW", None)
+        directory_flag = getattr(os, "O_DIRECTORY", None)
+        if no_follow is None or directory_flag is None:
+            raise ValueError("Registry screening frozen inputs require safe dirfd support")
+
+        execution_names = sorted(os.listdir(execution_parent_descriptor))
+        try:
+            inputs_stat = os.stat(
+                frozen_inputs_dir.name,
+                dir_fd=task_root_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            inputs_stat = None
+        if not execution_names and inputs_stat is None:
+            return None
+        if len(execution_names) != 1 or inputs_stat is None:
+            raise ValueError("Registry screening frozen input snapshot is incomplete")
+
+        execution_name = execution_names[0]
+        try:
+            execution_stat = os.stat(
+                execution_name,
+                dir_fd=execution_parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError as exc:
+            raise ValueError("Registry screening frozen input snapshot is incomplete") from exc
+        if not stat.S_ISDIR(execution_stat.st_mode) or not stat.S_ISDIR(inputs_stat.st_mode):
+            raise ValueError("Registry screening frozen input snapshot is unsafe")
+
+        inputs_descriptor = -1
+        try:
+            inputs_descriptor = os.open(
+                frozen_inputs_dir.name,
+                os.O_RDONLY | directory_flag | no_follow,
+                dir_fd=task_root_descriptor,
+            )
+            if set(os.listdir(inputs_descriptor)) != {
+                "dataset_snapshot.json",
+                "registry_snapshot.json",
+            }:
+                raise ValueError("Registry screening frozen input snapshot is incomplete")
+            for filename in ("dataset_snapshot.json", "registry_snapshot.json"):
+                item_stat = os.stat(
+                    filename,
+                    dir_fd=inputs_descriptor,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISREG(item_stat.st_mode):
+                    raise ValueError("Registry screening frozen input snapshot is unsafe")
+        except ValueError:
+            raise
+        except OSError as exc:
+            raise ValueError("Registry screening frozen input snapshot is unsafe") from exc
+        finally:
+            if inputs_descriptor != -1:
+                os.close(inputs_descriptor)
+
+        return {
+            "phase1_execution_dir": str(execution_parent / execution_name),
+            "dataset_snapshot_json": str(frozen_inputs_dir / "dataset_snapshot.json"),
+            "registry_snapshot_json": str(frozen_inputs_dir / "registry_snapshot.json"),
+        }
+
+    @staticmethod
+    def _verify_registry_screening_source_binding(
+        *,
+        source_phase1_execution_dir: str,
+        source_dataset_snapshot_json: str,
+        source_registry_snapshot_json: str,
+        frozen_phase1_execution_dir: str,
+        frozen_dataset_snapshot_json: str,
+        frozen_registry_snapshot_json: str,
+    ) -> None:
+        """Require named source inputs to still equal the owned frozen copy."""
+
+        source = _load_screening_inputs(
+            phase1_execution_dir=source_phase1_execution_dir,
+            dataset_snapshot_json=source_dataset_snapshot_json,
+            registry_snapshot_json=source_registry_snapshot_json,
+        )
+        frozen = _load_screening_inputs(
+            phase1_execution_dir=frozen_phase1_execution_dir,
+            dataset_snapshot_json=frozen_dataset_snapshot_json,
+            registry_snapshot_json=frozen_registry_snapshot_json,
+        )
+        if (
+            source.execution_sha256 != frozen.execution_sha256
+            or source.dataset_sha256 != frozen.dataset_sha256
+            or source.registry_sha256 != frozen.registry_sha256
+            or source.execution.get("execution_id") != frozen.execution.get("execution_id")
+            or source.model_sha256 != frozen.model_sha256
+        ):
+            raise ValueError("Registry screening source binding changed after gate snapshot")
+
     def _register(self, project_id: str, run_id: str, artifact_id: str, relative_path: str) -> None:
         self.storage.register_artifact_path(project_id, run_id, artifact_id, relative_path)
 
     @staticmethod
-    def _write_adapter_result(run_dir: Path, task_id: str, result: dict[str, Any]) -> Path:
+    def _write_adapter_result(
+        run_dir: Path,
+        task_id: str,
+        result: dict[str, Any],
+        *,
+        attempt_id: str | None = None,
+    ) -> Path:
         result_dir = run_dir / task_id
+        if attempt_id is not None:
+            clean_attempt_id = str(attempt_id).strip()
+            if not clean_attempt_id or not clean_attempt_id.isalnum():
+                raise ValueError("adapter result attempt ID is invalid")
+            path = result_dir / f"adapter_result_{clean_attempt_id}.json"
+            RunPlanExecutor._write_fresh_attempt_adapter_result(path, result)
+            return path
         result_dir.mkdir(parents=True, exist_ok=True)
         path = result_dir / "adapter_result.json"
         return write_json(path, result)
+
+    @staticmethod
+    def _write_fresh_attempt_adapter_result(path: Path, result: dict[str, Any]) -> None:
+        """Persist an AQ attempt receipt without ever replacing an older one."""
+
+        payload = (json.dumps(result, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        no_follow = getattr(os, "O_NOFOLLOW", None)
+        if no_follow is None:
+            raise ValueError("adapter attempt record requires O_NOFOLLOW support")
+        descriptor = -1
+        created_stat: os.stat_result | None = None
+        keep_file = False
+        try:
+            with _pinned_output_parents_without_symlink_components(path.parent) as pinned:
+                parent_descriptor = pinned[path.parent]
+                descriptor = os.open(
+                    path.name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow,
+                    0o600,
+                    dir_fd=parent_descriptor,
+                )
+                created_stat = os.fstat(descriptor)
+                view = memoryview(payload)
+                while view:
+                    written = os.write(descriptor, view)
+                    if written <= 0:
+                        raise OSError("short write")
+                    view = view[written:]
+                os.fsync(descriptor)
+                named_stat = os.stat(
+                    path.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISREG(named_stat.st_mode)
+                    or named_stat.st_dev != created_stat.st_dev
+                    or named_stat.st_ino != created_stat.st_ino
+                    or named_stat.st_size != len(payload)
+                ):
+                    raise ValueError("adapter attempt record changed while written")
+                os.fsync(parent_descriptor)
+                keep_file = True
+        except FileExistsError as exc:
+            raise ValueError("adapter attempt record already exists") from exc
+        except ValueError:
+            raise
+        except OSError as exc:
+            raise ValueError("adapter attempt record cannot be written") from exc
+        finally:
+            if descriptor != -1:
+                os.close(descriptor)
+            if not keep_file and created_stat is not None:
+                parent_descriptor = -1
+                try:
+                    with _pinned_output_parents_without_symlink_components(path.parent) as pinned:
+                        parent_descriptor = pinned[path.parent]
+                        named_stat = os.stat(
+                            path.name,
+                            dir_fd=parent_descriptor,
+                            follow_symlinks=False,
+                        )
+                        if (
+                            stat.S_ISREG(named_stat.st_mode)
+                            and named_stat.st_dev == created_stat.st_dev
+                            and named_stat.st_ino == created_stat.st_ino
+                        ):
+                            os.unlink(path.name, dir_fd=parent_descriptor)
+                            os.fsync(parent_descriptor)
+                except OSError:
+                    pass
 
     def _write_stage(
         self,

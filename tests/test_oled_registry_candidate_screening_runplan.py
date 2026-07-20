@@ -11,6 +11,10 @@ from ai4s_agent.adapters.oled_registry_screening import (
 )
 from ai4s_agent.agents.planner import PlannerAgent
 from ai4s_agent.app import create_app
+from ai4s_agent.domains.oled_material_registry_resolution_request import (
+    OledMaterialRegistrySnapshot,
+    oled_material_registry_snapshot_digest,
+)
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
 from ai4s_agent.schemas import GateName, RiskLevel, RunStatus
@@ -73,6 +77,31 @@ def _placeholder_inputs(tmp_path: Path) -> dict[str, str]:
         execution_dir=execution_dir,
         dataset_snapshot=dataset_snapshot,
         registry_snapshot=registry_snapshot,
+    )
+
+
+def _replace_with_distinct_valid_registry_snapshot(path: Path) -> None:
+    original = OledMaterialRegistrySnapshot.model_validate_json(
+        path.read_text(encoding="utf-8")
+    )
+    replacement = original.model_copy(
+        update={
+            "registry_version": "registry-version:screening-replacement",
+            "snapshot_digest": "sha256:" + "0" * 64,
+        }
+    )
+    replacement = replacement.model_copy(
+        update={
+            "snapshot_digest": oled_material_registry_snapshot_digest(replacement)
+        }
+    )
+    replacement = OledMaterialRegistrySnapshot.model_validate(
+        replacement.model_dump(mode="json")
+    )
+    assert replacement.snapshot_digest != original.snapshot_digest
+    path.write_text(
+        json.dumps(replacement.model_dump(mode="json"), indent=2) + "\n",
+        encoding="utf-8",
     )
 
 
@@ -146,10 +175,15 @@ def test_registry_screening_gate_snapshot_rejects_changed_inputs_before_adapter_
     tmp_path: Path,
     change: str,
 ) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
     storage = ProjectStorage(tmp_path / "workspace")
     run_id = f"registry-snapshot-{change}"
     run_plan = _run_plan(run_id)
-    input_artifacts = _placeholder_inputs(tmp_path)
+    input_artifacts = _input_artifacts(
+        execution_dir=inputs.execution_dir,
+        dataset_snapshot=inputs.dataset_snapshot,
+        registry_snapshot=inputs.registry_snapshot,
+    )
     calls: list[dict[str, object]] = []
 
     def unexpected_adapter(payload: dict[str, object]) -> dict[str, object]:
@@ -227,9 +261,14 @@ def test_registry_screening_snapshot_binds_relative_execution_directory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
     monkeypatch.chdir(tmp_path)
     storage = ProjectStorage(tmp_path / "workspace")
-    input_artifacts = _placeholder_inputs(tmp_path)
+    input_artifacts = _input_artifacts(
+        execution_dir=inputs.execution_dir,
+        dataset_snapshot=inputs.dataset_snapshot,
+        registry_snapshot=inputs.registry_snapshot,
+    )
     relative_artifacts = {
         artifact_id: str(Path(path).relative_to(tmp_path))
         for artifact_id, path in input_artifacts.items()
@@ -279,9 +318,18 @@ def test_registry_screening_executes_after_gate_and_surfaces_all_artifacts(
         task_options=options,
     )
     assert first["status"] == RunStatus.WAITING_USER.value
+    run_dir = storage.run_dir("registry-project", run_id)
     state = storage.read_stage_state("registry-project", run_id)
     assert state is not None
     snapshot = state.details["execution_snapshot"]
+    snapshot_payload = snapshot["execution_payload"]
+    assert snapshot_payload["source_registry_snapshot_json"] == str(
+        inputs.registry_snapshot
+    )
+    assert snapshot_payload["registry_snapshot_json"] != str(inputs.registry_snapshot)
+    frozen_registry_path = Path(snapshot_payload["registry_snapshot_json"])
+    assert frozen_registry_path.is_file()
+    assert frozen_registry_path.is_relative_to(run_dir / TASK_ID)
 
     result = executor.resume_after_gate(
         project_id="registry-project",
@@ -297,13 +345,14 @@ def test_registry_screening_executes_after_gate_and_surfaces_all_artifacts(
     assert result["executed_tasks"] == [TASK_ID]
     registry = storage.read_artifact_registry("registry-project", run_id)
     assert set(registry) == {*OUTPUT_FILENAMES, EXECUTION_RECORD_ARTIFACT_ID}
-    run_dir = storage.run_dir("registry-project", run_id)
     for artifact_id, filename in OUTPUT_FILENAMES.items():
         artifact_path = run_dir / registry[artifact_id]
         assert artifact_path.is_file()
         assert artifact_path.name == filename
         assert artifact_path.is_relative_to(run_dir)
-    assert (run_dir / registry[EXECUTION_RECORD_ARTIFACT_ID]).name == "adapter_result.json"
+    assert (run_dir / registry[EXECUTION_RECORD_ARTIFACT_ID]).name.startswith(
+        "adapter_result_"
+    )
 
     receipt_path = run_dir / registry["oled_registry_screening_receipt"]
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -376,8 +425,12 @@ def test_registry_screening_no_replace_retry_preserves_first_publication(
         task_options=options,
     )["status"] == RunStatus.SUCCEEDED.value
     registry = storage.read_artifact_registry("registry-project", run_id)
-    receipt_path = storage.run_dir("registry-project", run_id) / registry["oled_registry_screening_receipt"]
+    first_registry = dict(registry)
+    run_dir = storage.run_dir("registry-project", run_id)
+    receipt_path = run_dir / registry["oled_registry_screening_receipt"]
     first_receipt_bytes = receipt_path.read_bytes()
+    first_record_path = run_dir / registry[EXECUTION_RECORD_ARTIFACT_ID]
+    first_record_bytes = first_record_path.read_bytes()
 
     assert executor.execute(
         project_id="registry-project",
@@ -398,6 +451,77 @@ def test_registry_screening_no_replace_retry_preserves_first_publication(
     assert failed["failed_task"] == TASK_ID
     assert failed["result"]["error"]["code"] == "registry_candidate_screening_failed"
     assert receipt_path.read_bytes() == first_receipt_bytes
+    assert first_record_path.read_bytes() == first_record_bytes
+    assert storage.read_artifact_registry("registry-project", run_id) == first_registry
+
+    state = storage.read_stage_state("registry-project", run_id)
+    assert state is not None
+    assert state.status == RunStatus.FAILED
+    assert len(state.artifacts) == 1
+    failed_record_path = run_dir / state.artifacts[0].relative_path
+    assert failed_record_path != first_record_path
+    assert json.loads(failed_record_path.read_text(encoding="utf-8"))["status"] == "failed"
+    attempt_records = sorted((run_dir / TASK_ID).glob("adapter_result_*.json"))
+    assert attempt_records == sorted([first_record_path, failed_record_path])
+
+
+def test_registry_screening_rejects_source_swap_after_snapshot_recheck_before_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    storage = ProjectStorage(tmp_path / "workspace")
+    run_id = "registry-screening-post-recheck-swap"
+    run_plan = _run_plan(run_id)
+    input_artifacts = _input_artifacts(
+        execution_dir=inputs.execution_dir,
+        dataset_snapshot=inputs.dataset_snapshot,
+        registry_snapshot=inputs.registry_snapshot,
+    )
+    executor = RunPlanExecutor(storage=storage)
+    assert executor.execute(
+        project_id="registry-project",
+        run_plan=run_plan,
+        input_artifacts=input_artifacts,
+        task_options=_screening_options(),
+    )["status"] == RunStatus.WAITING_USER.value
+
+    adapter_calls: list[dict[str, object]] = []
+    real_adapter = getattr(adapters, ADAPTER_NAME)
+
+    def tracking_adapter(payload: dict[str, object]) -> dict[str, object]:
+        adapter_calls.append(payload)
+        return real_adapter(payload)
+
+    monkeypatch.setattr(adapters, ADAPTER_NAME, tracking_adapter)
+    original_validate = executor._validate_waiting_execution_snapshot
+
+    def validate_then_swap(**kwargs: object) -> tuple[dict[str, dict[str, object]], dict[str, object]]:
+        validated = original_validate(**kwargs)  # type: ignore[arg-type]
+        _replace_with_distinct_valid_registry_snapshot(inputs.registry_snapshot)
+        return validated
+
+    monkeypatch.setattr(
+        executor,
+        "_validate_waiting_execution_snapshot",
+        validate_then_swap,
+    )
+    run_dir = storage.run_dir("registry-project", run_id)
+    with pytest.raises(
+        ValueError,
+        match="source binding changed after gate snapshot",
+    ):
+        executor.resume_after_gate(
+            project_id="registry-project",
+            run_plan=run_plan,
+            approved_gates=[GateName.FINAL_THRESHOLD.value],
+            actor="reviewer",
+            input_artifacts=input_artifacts,
+            task_options=_screening_options(),
+        )
+
+    assert adapter_calls == []
+    assert not (run_dir / "oled_registry_screening").exists()
 
 
 def test_registry_screening_adapter_redacts_failure_paths_and_requires_confirmation(tmp_path: Path) -> None:
