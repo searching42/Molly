@@ -23,14 +23,24 @@ thresholds when none are supplied.
 
 ## Exact inputs and training isolation
 
-The runner independently validates the PR-AO receipt and model SHA-256 values,
-the bound PR-AI snapshot, model training row/material rosters, and the immutable
-Registry snapshot. It re-derives train identities from the dataset rather than
-trusting model metadata alone.
+The runner independently validates the bound PR-AI snapshot and immutable
+Registry snapshot, then exactly replays the complete PR-AO publication from the
+persisted dataset, configuration, and generation timestamp. The execution
+directory basename, complete file roster, and every byte of every model,
+prediction, metric, ranked CSV, receipt, and report must match the replay. It
+re-derives train identities from the dataset rather than trusting model
+metadata alone.
 
 A Registry entry cannot enter prediction if its material ID, Registry entry
-digest, or canonical isomeric SMILES occurs in the train split. All matching
-reason codes are retained in `excluded_candidates.jsonl`.
+digest, canonical isomeric SMILES, regenerated standard InChI, or regenerated
+InChIKey occurs in the train split. All matching reason codes are retained in
+`excluded_candidates.jsonl`.
+
+Before candidate inference, the runner regenerates every selected training
+row's feature vector from its canonical SMILES using the exact 128-bit,
+radius-2 feature profile. Feature version, backend/fallback state, column
+roster, and every bit must equal the persisted PR-AI row. The verified
+generator profile and RDKit runtime version are recorded in `screening.json`.
 
 ## Prediction and ranking
 

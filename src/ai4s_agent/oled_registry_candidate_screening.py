@@ -16,16 +16,21 @@ from typing import Any, Sequence, TextIO
 from ai4s_agent._utils import now_iso
 
 from ai4s_agent.domains.oled_categorical_dataset_execution import (
+    OLED_CATEGORICAL_DATASET_FEATURE_VERSION,
     OledCategoricalDatasetExecutionArtifact,
 )
 from ai4s_agent.domains.oled_material_registry_resolution_request import (
     OledMaterialRegistrySnapshot,
+    _rdkit_chemistry_observation,
+    _rdkit_runtime_versions,
+)
+from ai4s_agent.domains.oled_supplementary_material_identity_evidence_response import (
+    OledSupplementaryMaterialIdentityStructureEncodingKind,
 )
 from ai4s_agent.oled_real_phase1_execution import (
     _EXECUTION_VERSION,
-    _MODEL_KIND,
+    _build_execution_payloads,
     _feature_vector_for_model,
-    _fit_property_model,
     _json_bytes,
     _predict_feature_vector,
     _safe_token,
@@ -71,6 +76,9 @@ class _PreparedScreeningInputs:
     training_material_ids: frozenset[str]
     training_registry_digests: frozenset[str]
     training_smiles: frozenset[str]
+    training_standard_inchi: frozenset[str]
+    training_inchikey: frozenset[str]
+    feature_generator_profile: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -119,6 +127,7 @@ def run_oled_registry_candidate_screening_from_files(
             "directions": prepared.directions,
             "constraints": constraints,
             "feature_policy": "exact_pr_ao_model_feature_contract",
+            "feature_generator_profile": prepared.feature_generator_profile,
             "scoring_policy": "pareto_then_mean_rank_percentile.v1",
         }
         screening_id = "oled-registry-screening:" + _stable_hash(
@@ -255,7 +264,22 @@ def _load_screening_inputs_at(
     )
     if execution_id != expected_execution_id:
         raise ValueError("PR-AO execution ID mismatch")
+    if execution_dir.name != execution_id:
+        raise ValueError("PR-AO execution directory name mismatch")
     split_by_row = _validated_split_by_row(dataset)
+    generated_at = _required_string(execution, "generated_at")
+    replayed_payloads, _ = _build_execution_payloads(
+        snapshot=dataset,
+        source_sha=dataset_sha,
+        execution_id=execution_id,
+        config=config,
+        generated_at=generated_at,
+        split_by_row=split_by_row,
+    )
+    _validate_exact_execution_payloads(
+        execution_descriptor=execution_descriptor,
+        expected_payloads=replayed_payloads,
+    )
 
     artifacts = _required_dict(execution, "artifacts")
     models: dict[str, dict[str, Any]] = {}
@@ -265,22 +289,11 @@ def _load_screening_inputs_at(
         expected_sha = artifacts.get(filename)
         if not isinstance(expected_sha, str):
             raise ValueError("PR-AO model artifact binding is missing")
-        model_payload, actual_sha = _read_bound_json_at(
-            execution_descriptor,
-            filename,
-            f"PR-AO model {property_id}",
-        )
+        model_bytes = replayed_payloads[filename]
+        model_payload = json.loads(model_bytes.decode("utf-8"))
+        actual_sha = _sha256_bytes(model_bytes)
         if actual_sha != expected_sha:
             raise ValueError("PR-AO model SHA-256 mismatch")
-        _validate_model_binding(
-            model_payload,
-            property_id=property_id,
-            execution_id=execution_id,
-            dataset=dataset,
-            dataset_sha=dataset_sha,
-            split_by_row=split_by_row,
-            alpha=alpha,
-        )
         models[property_id] = model_payload
         model_sha[property_id] = actual_sha
 
@@ -297,6 +310,20 @@ def _load_screening_inputs_at(
 
     selected_rows = [row for row in dataset.rows if row.property_id in property_ids]
     train_rows = [row for row in selected_rows if split_by_row[row.row_id] == "train"]
+    feature_generator_profile = _validate_regenerated_training_features(
+        train_rows=train_rows,
+        models=models,
+        property_ids=property_ids,
+    )
+    training_chemistry = [
+        _rdkit_chemistry_observation(
+            encoding_kind=(
+                OledSupplementaryMaterialIdentityStructureEncodingKind.SMILES
+            ),
+            structure_text=smiles,
+        )
+        for smiles in sorted({row.canonical_isomeric_smiles for row in train_rows})
+    ]
     return _PreparedScreeningInputs(
         execution=execution,
         execution_sha256=execution_sha,
@@ -311,68 +338,92 @@ def _load_screening_inputs_at(
         training_material_ids=frozenset(row.selected_material_id for row in train_rows),
         training_registry_digests=frozenset(row.registry_entry_digest for row in train_rows),
         training_smiles=frozenset(row.canonical_isomeric_smiles for row in train_rows),
-    )
-
-
-def _validate_model_binding(
-    model: dict[str, Any],
-    *,
-    property_id: str,
-    execution_id: str,
-    dataset: OledCategoricalDatasetExecutionArtifact,
-    dataset_sha: str,
-    split_by_row: dict[str, str],
-    alpha: float,
-) -> None:
-    if (
-        model.get("model_kind") != _MODEL_KIND
-        or model.get("property_id") != property_id
-        or model.get("execution_id") != execution_id
-        or model.get("source_dataset_snapshot_id") != dataset.dataset_snapshot_id
-        or model.get("source_dataset_snapshot_digest")
-        != dataset.execution_artifact_digest
-        or model.get("source_dataset_snapshot_sha256") != dataset_sha
-    ):
-        raise ValueError("PR-AO model source binding mismatch")
-    train_rows = sorted(
-        (
-            row
-            for row in dataset.rows
-            if row.property_id == property_id
-            and split_by_row[row.row_id] == "train"
+        training_standard_inchi=frozenset(
+            item["standard_inchi"] for item in training_chemistry
         ),
-        key=lambda row: row.row_id,
+        training_inchikey=frozenset(item["inchikey"] for item in training_chemistry),
+        feature_generator_profile=feature_generator_profile,
     )
-    if model.get("training_row_ids") != [row.row_id for row in train_rows]:
-        raise ValueError("PR-AO model training row roster mismatch")
-    if model.get("training_material_ids") != [
-        row.selected_material_id for row in train_rows
-    ]:
-        raise ValueError("PR-AO model training material roster mismatch")
-    feature_names = model.get("feature_names")
+
+
+def _validate_exact_execution_payloads(
+    *,
+    execution_descriptor: int,
+    expected_payloads: dict[str, bytes],
+) -> None:
+    actual_names = set(os.listdir(execution_descriptor))
+    if actual_names != set(expected_payloads):
+        raise ValueError("PR-AO execution exact replay mismatch")
+    for filename, expected_bytes in sorted(expected_payloads.items()):
+        actual_bytes = _read_bound_binary_at(
+            execution_descriptor,
+            filename,
+            max_bytes=_MAX_INPUT_BYTES,
+        )
+        if actual_bytes != expected_bytes:
+            raise ValueError("PR-AO execution exact replay mismatch")
+
+
+def _validate_regenerated_training_features(
+    *,
+    train_rows: list[Any],
+    models: dict[str, dict[str, Any]],
+    property_ids: tuple[str, ...],
+) -> dict[str, Any]:
+    if not train_rows:
+        raise ValueError("PR-AO execution has no training rows")
+    feature_names = models[property_ids[0]].get("feature_names")
+    expected_feature_names = [f"ecfp_{index:03d}" for index in range(128)]
     if (
-        not train_rows
-        or not isinstance(feature_names, list)
-        or feature_names != sorted(train_rows[0].features)
+        not isinstance(feature_names, list)
+        or feature_names != expected_feature_names
+        or any(model.get("feature_names") != feature_names for model in models.values())
         or any(sorted(row.features) != feature_names for row in train_rows)
+        or any(
+            row.feature_version != OLED_CATEGORICAL_DATASET_FEATURE_VERSION
+            for row in train_rows
+        )
     ):
-        raise ValueError("PR-AO model feature contract mismatch")
-    replayed = _fit_property_model(
-        [row for row in dataset.rows if row.property_id == property_id],
-        split_by_row=split_by_row,
-        property_id=property_id,
-        alpha=alpha,
+        raise ValueError("PR-AO training feature contract mismatch")
+    ordered_rows = sorted(train_rows, key=lambda row: row.row_id)
+    generated = generate_baseline_features(
+        [row.canonical_isomeric_smiles for row in ordered_rows],
+        n_bits=len(feature_names),
+        radius=2,
     )
-    replayed.update(
-        {
-            "execution_id": execution_id,
-            "source_dataset_snapshot_id": dataset.dataset_snapshot_id,
-            "source_dataset_snapshot_digest": dataset.execution_artifact_digest,
-            "source_dataset_snapshot_sha256": dataset_sha,
-        }
+    feature_types = {row.feature_type for row in ordered_rows}
+    feature_versions = {row.feature_version for row in ordered_rows}
+    if (
+        len(feature_types) != 1
+        or generated.feature_type != next(iter(feature_types))
+        or len(feature_versions) != 1
+        or len(generated.matrix) != len(ordered_rows)
+    ):
+        raise ValueError("training feature regeneration mismatch")
+    expected_fallback = (
+        "" if generated.feature_type == "morgan_ecfp" else "rdkit_unavailable"
     )
-    if model != replayed:
-        raise ValueError("PR-AO model deterministic replay mismatch")
+    if generated.fallback_reason != expected_fallback:
+        raise ValueError("training feature regeneration mismatch")
+    for row, vector in zip(ordered_rows, generated.matrix, strict=True):
+        regenerated = dict(zip(feature_names, vector, strict=True))
+        if regenerated != row.features:
+            raise ValueError("training feature regeneration mismatch")
+    toolkit_version, _ = _rdkit_runtime_versions()
+    generator_profile = {
+        "feature_version": next(iter(feature_versions)),
+        "feature_type": generated.feature_type,
+        "n_bits": generated.n_bits,
+        "radius": 2,
+        "generator": (
+            "rdkit.AllChem.GetMorganFingerprintAsBitVect.v1"
+            if generated.feature_type == "morgan_ecfp"
+            else "ai4s_agent._hashed_ecfp_like.v1"
+        ),
+        "rdkit_version": toolkit_version,
+        "fallback_reason": generated.fallback_reason,
+    }
+    return generator_profile
 
 
 def _validate_registry_identity_uniqueness(
@@ -420,6 +471,10 @@ def _screen_registry_candidates(
             reasons.append("training_registry_digest_overlap")
         if entry.canonical_isomeric_smiles in prepared.training_smiles:
             reasons.append("training_smiles_overlap")
+        if entry.standard_inchi in prepared.training_standard_inchi:
+            reasons.append("training_standard_inchi_overlap")
+        if entry.inchikey in prepared.training_inchikey:
+            reasons.append("training_inchikey_overlap")
         if reasons:
             excluded.append(_excluded_entry(entry, reasons))
             continue
@@ -446,6 +501,8 @@ def _screen_registry_candidates(
             "registry_entry_digest": entry.entry_digest,
             "canonical_name": entry.canonical_name,
             "canonical_isomeric_smiles": entry.canonical_isomeric_smiles,
+            "standard_inchi": entry.standard_inchi,
+            "inchikey": entry.inchikey,
         }
         eligible.append(identity)
         predictions.append(identity | {"predictions": property_predictions})
@@ -458,6 +515,8 @@ def _excluded_entry(entry: Any, reason_codes: list[str]) -> dict[str, Any]:
         "registry_entry_digest": entry.entry_digest,
         "canonical_name": entry.canonical_name,
         "canonical_isomeric_smiles": entry.canonical_isomeric_smiles,
+        "standard_inchi": entry.standard_inchi,
+        "inchikey": entry.inchikey,
         "reason_codes": sorted(set(reason_codes)),
     }
 
@@ -716,6 +775,8 @@ def _screening_payloads(
                 "registry_entry_digest",
                 "canonical_name",
                 "canonical_isomeric_smiles",
+                "standard_inchi",
+                "inchikey",
             ],
         ),
         "excluded_candidates.jsonl": _jsonl_bytes(excluded),

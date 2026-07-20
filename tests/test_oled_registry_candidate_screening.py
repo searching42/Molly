@@ -17,6 +17,11 @@ from ai4s_agent.domains.oled_material_registry_resolution_request import (
     oled_material_registry_entry_digest,
     oled_material_registry_snapshot_digest,
 )
+from ai4s_agent.domains.oled_categorical_dataset_execution import (
+    OledCategoricalDatasetExecutionArtifact,
+    oled_categorical_dataset_execution_artifact_digest,
+    oled_categorical_dataset_view_row_digest,
+)
 from ai4s_agent.domains.oled_supplementary_material_identity_evidence_response import (
     OledSupplementaryMaterialIdentityStructureEncodingKind,
 )
@@ -32,6 +37,7 @@ from ai4s_agent.oled_registry_candidate_screening import (
     run_oled_registry_candidate_screening_from_files,
 )
 from ai4s_agent import oled_registry_candidate_screening as screening_runner
+from ai4s_agent.trainability import generate_baseline_features
 from tests.test_oled_real_phase1_execution import _snapshot_path
 
 
@@ -47,6 +53,7 @@ def _screening_inputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> _ScreeningInputs:
     dataset_path = _snapshot_path(tmp_path, monkeypatch)
+    _rewrite_fixture_with_exact_128_bit_features(dataset_path)
     execution = run_oled_real_phase1_execution_from_files(
         dataset_snapshot_json=dataset_path,
         output_root=tmp_path / "phase1-executions",
@@ -62,6 +69,58 @@ def _screening_inputs(
         execution_dir=execution.output_dir,
         dataset_snapshot=dataset_path,
         registry_snapshot=registry_path,
+    )
+
+
+def _rewrite_fixture_with_exact_128_bit_features(dataset_path: Path) -> None:
+    snapshot = OledCategoricalDatasetExecutionArtifact.model_validate_json(
+        dataset_path.read_text(encoding="utf-8")
+    )
+    generated = generate_baseline_features(
+        [row.canonical_isomeric_smiles for row in snapshot.rows],
+        n_bits=128,
+        radius=2,
+    )
+    rows = []
+    for row, vector in zip(snapshot.rows, generated.matrix, strict=True):
+        rewritten = row.model_copy(
+            update={
+                "feature_type": generated.feature_type,
+                "features": {
+                    f"ecfp_{index:03d}": value
+                    for index, value in enumerate(vector)
+                },
+                "row_digest": "sha256:" + "0" * 64,
+            }
+        )
+        rewritten = rewritten.model_copy(
+            update={
+                "row_digest": oled_categorical_dataset_view_row_digest(rewritten)
+            }
+        )
+        rows.append(rewritten)
+    rewritten_snapshot = snapshot.model_copy(
+        update={
+            "rows": rows,
+            "execution_artifact_digest": "sha256:" + "0" * 64,
+        },
+        deep=True,
+    )
+    rewritten_snapshot = rewritten_snapshot.model_copy(
+        update={
+            "execution_artifact_digest": (
+                oled_categorical_dataset_execution_artifact_digest(
+                    rewritten_snapshot
+                )
+            )
+        }
+    )
+    rewritten_snapshot = OledCategoricalDatasetExecutionArtifact.model_validate(
+        rewritten_snapshot.model_dump(mode="json")
+    )
+    dataset_path.write_text(
+        json.dumps(rewritten_snapshot.model_dump(mode="json"), indent=2) + "\n",
+        encoding="utf-8",
     )
 
 
@@ -123,6 +182,10 @@ def test_loads_exact_inputs_and_rederives_training_identities(
     )
     assert len(prepared.training_registry_digests) == 2
     assert len(prepared.training_smiles) == 2
+    assert len(prepared.training_standard_inchi) == 2
+    assert len(prepared.training_inchikey) == 2
+    assert prepared.feature_generator_profile["n_bits"] == 128
+    assert prepared.feature_generator_profile["radius"] == 2
     assert len(prepared.registry.entries) == 4
 
 
@@ -146,12 +209,16 @@ def test_excludes_train_materials_and_predicts_complete_nontrain_candidates(
         item["material_id"]: item["reason_codes"] for item in excluded
     } == {
         "material:execution-00": [
+            "training_inchikey_overlap",
             "training_material_id_overlap",
             "training_smiles_overlap",
+            "training_standard_inchi_overlap",
         ],
         "material:execution-01": [
+            "training_inchikey_overlap",
             "training_material_id_overlap",
             "training_smiles_overlap",
+            "training_standard_inchi_overlap",
         ],
     }
     assert [item["material_id"] for item in predictions] == [
@@ -189,6 +256,36 @@ def test_digest_and_smiles_training_overlap_have_independent_reason_codes(
     )["reason_codes"] == [
         "training_registry_digest_overlap",
         "training_smiles_overlap",
+    ]
+
+
+def test_inchi_training_overlap_has_independent_reason_codes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    prepared = _load_screening_inputs(
+        phase1_execution_dir=inputs.execution_dir,
+        dataset_snapshot_json=inputs.dataset_snapshot,
+        registry_snapshot_json=inputs.registry_snapshot,
+    )
+    target = prepared.registry.entries[0]
+    prepared = replace(
+        prepared,
+        training_material_ids=frozenset(),
+        training_registry_digests=frozenset(),
+        training_smiles=frozenset(),
+        training_standard_inchi=frozenset({target.standard_inchi}),
+        training_inchikey=frozenset({target.inchikey}),
+    )
+
+    _, excluded, _ = _screen_registry_candidates(prepared)
+
+    assert next(
+        item for item in excluded if item["material_id"] == target.material_id
+    )["reason_codes"] == [
+        "training_inchikey_overlap",
+        "training_standard_inchi_overlap",
     ]
 
 
@@ -317,6 +414,15 @@ def test_file_runner_publishes_complete_versioned_screening(
         "registry_mutated": False,
         "training_identity_exclusion_applied": True,
     }
+    assert receipt["config"]["feature_generator_profile"] == {
+        "fallback_reason": "",
+        "feature_type": "morgan_ecfp",
+        "feature_version": "morgan_or_hashed_ecfp_128.v1",
+        "generator": "rdkit.AllChem.GetMorganFingerprintAsBitVect.v1",
+        "n_bits": 128,
+        "radius": 2,
+        "rdkit_version": _rdkit_runtime_versions()[0],
+    }
     with pytest.raises(ValueError, match="already exists"):
         run_oled_registry_candidate_screening_from_files(
             phase1_execution_dir=inputs.execution_dir,
@@ -358,7 +464,19 @@ def test_cli_failure_is_stable_redacted_and_publishes_nothing(tmp_path: Path) ->
     )
 
 
-@pytest.mark.parametrize("target", ["execution", "model", "dataset", "registry"])
+@pytest.mark.parametrize(
+    "target",
+    [
+        "execution",
+        "model",
+        "predictions",
+        "metrics",
+        "ranking",
+        "report",
+        "dataset",
+        "registry",
+    ],
+)
 def test_exact_input_byte_tamper_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -368,6 +486,10 @@ def test_exact_input_byte_tamper_fails_closed(
     path = {
         "execution": inputs.execution_dir / "execution.json",
         "model": inputs.execution_dir / "model__s1_ev.json",
+        "predictions": inputs.execution_dir / "predictions.jsonl",
+        "metrics": inputs.execution_dir / "metrics.json",
+        "ranking": inputs.execution_dir / "ranked_candidates.csv",
+        "report": inputs.execution_dir / "report.md",
         "dataset": inputs.dataset_snapshot,
         "registry": inputs.registry_snapshot,
     }[target]
@@ -402,6 +524,72 @@ def test_resigned_direction_change_requires_matching_execution_id(
         )
 
 
+def test_fully_resigned_direction_change_fails_exact_execution_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    receipt_path = inputs.execution_dir / "execution.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["config"]["directions"]["s1_ev"] = "minimize"
+    execution_id = "oled-real-phase1-execution:" + screening_runner._stable_hash(
+        {
+            "source_snapshot_digest": receipt["source"]["dataset_snapshot_digest"],
+            "source_snapshot_sha256": receipt["source"]["dataset_snapshot_sha256"],
+            "config": receipt["config"],
+        }
+    )
+    receipt["execution_id"] = execution_id
+    for model_path in sorted(inputs.execution_dir.glob("model__*.json")):
+        model = json.loads(model_path.read_text(encoding="utf-8"))
+        model["execution_id"] = execution_id
+        model_path.write_bytes(screening_runner._json_bytes(model))
+        receipt["artifacts"][model_path.name] = _sha256(model_path)
+    receipt_path.write_bytes(screening_runner._json_bytes(receipt))
+    resigned_dir = inputs.execution_dir.parent / execution_id
+    inputs.execution_dir.rename(resigned_dir)
+
+    with pytest.raises(ValueError, match="exact replay mismatch"):
+        _load_screening_inputs(
+            phase1_execution_dir=resigned_dir,
+            dataset_snapshot_json=inputs.dataset_snapshot,
+            registry_snapshot_json=inputs.registry_snapshot,
+        )
+
+
+def test_execution_file_roster_mismatch_fails_exact_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    (inputs.execution_dir / "unbound-marker.txt").write_text(
+        "unexpected\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="exact replay mismatch"):
+        _load_screening_inputs(
+            phase1_execution_dir=inputs.execution_dir,
+            dataset_snapshot_json=inputs.dataset_snapshot,
+            registry_snapshot_json=inputs.registry_snapshot,
+        )
+
+
+def test_execution_directory_basename_must_equal_execution_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    renamed = inputs.execution_dir.parent / "not-the-execution-id"
+    inputs.execution_dir.rename(renamed)
+
+    with pytest.raises(ValueError, match="directory name mismatch"):
+        _load_screening_inputs(
+            phase1_execution_dir=renamed,
+            dataset_snapshot_json=inputs.dataset_snapshot,
+            registry_snapshot_json=inputs.registry_snapshot,
+        )
+
+
 def test_resigned_model_change_fails_deterministic_replay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -422,10 +610,75 @@ def test_resigned_model_change_fails_deterministic_replay(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="deterministic replay mismatch"):
+    with pytest.raises(ValueError, match="exact replay mismatch"):
         _load_screening_inputs(
             phase1_execution_dir=inputs.execution_dir,
             dataset_snapshot_json=inputs.dataset_snapshot,
+            registry_snapshot_json=inputs.registry_snapshot,
+        )
+
+
+def test_fully_resigned_train_feature_substitution_fails_regeneration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    snapshot = OledCategoricalDatasetExecutionArtifact.model_validate_json(
+        inputs.dataset_snapshot.read_text(encoding="utf-8")
+    )
+    split_by_row = {
+        assignment.row_id: assignment.split
+        for assignment in snapshot.split_assignments
+    }
+    forged_rows = []
+    changed = False
+    for row in snapshot.rows:
+        if split_by_row[row.row_id] == "train" and not changed:
+            features = dict(row.features)
+            features["ecfp_000"] = 1.0 - features["ecfp_000"]
+            forged_row = row.model_copy(
+                update={"features": features, "row_digest": "sha256:" + "0" * 64}
+            )
+            forged_row = forged_row.model_copy(
+                update={"row_digest": oled_categorical_dataset_view_row_digest(forged_row)}
+            )
+            forged_rows.append(forged_row)
+            changed = True
+        else:
+            forged_rows.append(row)
+    forged = snapshot.model_copy(
+        update={
+            "rows": forged_rows,
+            "execution_artifact_digest": "sha256:" + "0" * 64,
+        },
+        deep=True,
+    )
+    forged = forged.model_copy(
+        update={
+            "execution_artifact_digest": (
+                oled_categorical_dataset_execution_artifact_digest(forged)
+            )
+        }
+    )
+    forged = OledCategoricalDatasetExecutionArtifact.model_validate(
+        forged.model_dump(mode="json")
+    )
+    forged_path = tmp_path / "forged-dataset.json"
+    forged_path.write_text(
+        json.dumps(forged.model_dump(mode="json"), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    execution = run_oled_real_phase1_execution_from_files(
+        dataset_snapshot_json=forged_path,
+        output_root=tmp_path / "forged-executions",
+        property_ids=["delta_e_st_ev", "s1_ev"],
+        generated_at="2026-07-20T08:10:00+08:00",
+    )
+
+    with pytest.raises(ValueError, match="training feature regeneration mismatch"):
+        _load_screening_inputs(
+            phase1_execution_dir=execution.output_dir,
+            dataset_snapshot_json=forged_path,
             registry_snapshot_json=inputs.registry_snapshot,
         )
 
