@@ -47,6 +47,9 @@ from ai4s_agent.adapters.oled_demo import execute_oled_local_demo_adapter
 from ai4s_agent.adapters.oled_registry_screening import (
     execute_oled_registry_candidate_screening_adapter,
 )
+from ai4s_agent.adapters.oled_experiment_batch_selection import (
+    execute_oled_experiment_batch_selection_adapter,
+)
 from ai4s_agent.adapters.runtime import AdapterRuntimeError
 
 
@@ -118,4 +121,5 @@ __all__ = [
     "normalize_extracted_units_adapter",
     "execute_oled_local_demo_adapter",
     "execute_oled_registry_candidate_screening_adapter",
+    "execute_oled_experiment_batch_selection_adapter",
 ]

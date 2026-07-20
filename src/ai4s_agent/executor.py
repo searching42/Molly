@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import stat
 import uuid
@@ -13,6 +14,9 @@ from ai4s_agent import adapters
 from ai4s_agent.agents.modeling import ModelingAgent
 from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, strict_bool, strict_smiles_cleaning_enabled, write_json
 from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_directory
+from ai4s_agent.oled_experiment_batch_selection import (
+    load_oled_experiment_batch_selection_inputs,
+)
 from ai4s_agent.oled_real_phase1_execution import (
     _build_execution_payloads,
     _validated_split_by_row,
@@ -54,6 +58,15 @@ _REGISTRY_SCREENING_TASK_ID = "execute_oled_registry_candidate_screening"
 _REGISTRY_SCREENING_MAX_INPUT_BYTES = 1024 * 1024 * 1024
 _REGISTRY_SCREENING_FROZEN_EXECUTION_PARENT = "frozen_phase1_execution"
 _REGISTRY_SCREENING_FROZEN_INPUTS_DIR = "frozen_inputs"
+_EXPERIMENT_BATCH_TASK_ID = "execute_oled_experiment_batch_selection"
+_EXPERIMENT_BATCH_MAX_INPUT_BYTES = 1024 * 1024 * 1024
+_EXPERIMENT_BATCH_FROZEN_INPUTS_DIR = "frozen_inputs"
+_IMMUTABLE_EXECUTION_RECORD_TASK_IDS = frozenset(
+    {
+        _REGISTRY_SCREENING_TASK_ID,
+        _EXPERIMENT_BATCH_TASK_ID,
+    }
+)
 
 
 class RunPlanExecutor:
@@ -240,7 +253,7 @@ class RunPlanExecutor:
             )
             attempt_id = (
                 uuid.uuid4().hex
-                if task.task_id == _REGISTRY_SCREENING_TASK_ID
+                if task.task_id in _IMMUTABLE_EXECUTION_RECORD_TASK_IDS
                 else None
             )
             self._write_stage(
@@ -258,14 +271,14 @@ class RunPlanExecutor:
                 try:
                     result = adapter(payload)
                 except Exception as exc:
-                    if task.task_id == _REGISTRY_SCREENING_TASK_ID:
+                    if task.task_id in _IMMUTABLE_EXECUTION_RECORD_TASK_IDS:
                         # This result may become an execution record.  Keep an
                         # unexpected retry failure separate from any earlier
                         # successful record and avoid persisting host paths
                         # leaked by an arbitrary adapter exception.
                         error = {
                             "code": "adapter_exception",
-                            "message": "Registry candidate screening adapter failed.",
+                            "message": self._immutable_adapter_exception_message(task.task_id),
                         }
                         result_path = self._write_adapter_result(
                             run_dir,
@@ -394,6 +407,12 @@ class RunPlanExecutor:
         if not callable(adapter):
             raise ValueError(f"unknown adapter: {adapter_name}")
         return adapter
+
+    @staticmethod
+    def _immutable_adapter_exception_message(task_id: str) -> str:
+        if task_id == _EXPERIMENT_BATCH_TASK_ID:
+            return "Experiment batch selection adapter failed."
+        return "Registry candidate screening adapter failed."
 
     @staticmethod
     def _normalize_task_options(task_options: TaskOptions | None) -> TaskOptions:
@@ -645,6 +664,101 @@ class RunPlanExecutor:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         approved = approved_gates or set()
+        if task_id == _EXPERIMENT_BATCH_TASK_ID:
+            task_options = self._payload_options(options)
+            allowed_options = {
+                "target_batch_size",
+                "minimums",
+                "maximums",
+                "max_budget_minor",
+                "max_pairwise_tanimoto",
+            }
+            unexpected = sorted(set(task_options) - allowed_options)
+            if unexpected:
+                raise ValueError(
+                    "unsupported experiment batch selection task option: "
+                    + ", ".join(unexpected)
+                )
+            target_batch_size = self._positive_int_option(
+                task_options.get("target_batch_size"), key="target_batch_size"
+            )
+            max_budget_minor = self._optional_nonnegative_int_option(
+                task_options.get("max_budget_minor"), key="max_budget_minor"
+            )
+            max_pairwise_tanimoto = self._optional_probability_option(
+                task_options.get("max_pairwise_tanimoto"),
+                key="max_pairwise_tanimoto",
+            )
+            if target_batch_size > 1 and max_pairwise_tanimoto is None:
+                raise ValueError(
+                    "max_pairwise_tanimoto is required when target_batch_size is greater than one"
+                )
+            source_screening_receipt_json = self._absolute_artifact_path(
+                artifact_paths, "oled_registry_screening_receipt"
+            )
+            source_ranked_shortlist_csv = self._absolute_artifact_path(
+                artifact_paths, "oled_registry_screening_shortlist"
+            )
+            source_candidate_cost_manifest_json = self._optional_absolute_artifact_path(
+                artifact_paths, "oled_candidate_cost_manifest"
+            )
+            if max_budget_minor is not None and not source_candidate_cost_manifest_json:
+                raise ValueError(
+                    "oled_candidate_cost_manifest is required when max_budget_minor is set"
+                )
+            frozen = self._experiment_batch_frozen_input_paths(
+                run_dir=run_dir,
+                source_screening_receipt_json=source_screening_receipt_json,
+                source_ranked_shortlist_csv=source_ranked_shortlist_csv,
+                source_candidate_cost_manifest_json=source_candidate_cost_manifest_json,
+            )
+            # The gate snapshot binds named source inputs.  At dispatch the
+            # adapter receives only the run-owned frozen bytes, and this final
+            # recheck rejects a source replacement made after gate validation.
+            if actor:
+                self._verify_experiment_batch_source_binding(
+                    source_screening_receipt_json=source_screening_receipt_json,
+                    source_ranked_shortlist_csv=source_ranked_shortlist_csv,
+                    source_candidate_cost_manifest_json=source_candidate_cost_manifest_json,
+                    frozen_screening_receipt_json=frozen["screening_receipt_json"],
+                    frozen_ranked_shortlist_csv=frozen["ranked_shortlist_csv"],
+                    frozen_candidate_cost_manifest_json=frozen.get(
+                        "candidate_cost_manifest_json", ""
+                    ),
+                )
+            payload = {
+                "run_id": run_id,
+                # Source paths are included only in snapshot material so the
+                # user approves their exact bytes.  Dispatch below removes
+                # them: the adapter/core runner receives frozen paths only.
+                "source_screening_receipt_json": source_screening_receipt_json,
+                "source_ranked_shortlist_csv": source_ranked_shortlist_csv,
+                "source_candidate_cost_manifest_json": source_candidate_cost_manifest_json,
+                "screening_receipt_json": frozen["screening_receipt_json"],
+                "ranked_shortlist_csv": frozen["ranked_shortlist_csv"],
+                "candidate_cost_manifest_json": frozen.get(
+                    "candidate_cost_manifest_json", ""
+                ),
+                "output_root": str(run_dir / "oled_experiment_batch"),
+                "target_batch_size": target_batch_size,
+                "minimums": self._string_list_option(
+                    task_options.get("minimums", []), key="minimums"
+                ),
+                "maximums": self._string_list_option(
+                    task_options.get("maximums", []), key="maximums"
+                ),
+                "max_budget_minor": max_budget_minor,
+                "max_pairwise_tanimoto": max_pairwise_tanimoto,
+                "confirmed": GateName.FINAL_THRESHOLD.value in approved,
+                "actor": actor,
+            }
+            if actor:
+                return {
+                    key: value
+                    for key, value in payload.items()
+                    if not key.startswith("source_")
+                }
+            return payload
         if task_id == _REGISTRY_SCREENING_TASK_ID:
             task_options = self._payload_options(options)
             unexpected = sorted(set(task_options) - {"minimums", "maximums"})
@@ -837,6 +951,31 @@ class RunPlanExecutor:
             raise ValueError(f"{key} must be a list of non-empty strings")
         return [item.strip() for item in value]
 
+    @staticmethod
+    def _positive_int_option(value: Any, *, key: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{key} must be a positive integer")
+        return value
+
+    @staticmethod
+    def _optional_nonnegative_int_option(value: Any, *, key: str) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{key} must be a non-negative integer")
+        return value
+
+    @staticmethod
+    def _optional_probability_option(value: Any, *, key: str) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{key} must be a finite number between 0 and 1")
+        parsed = float(value)
+        if not math.isfinite(parsed) or not 0.0 <= parsed <= 1.0:
+            raise ValueError(f"{key} must be a finite number between 0 and 1")
+        return parsed
+
     def _planned_external_result(self, task_id: str, adapter_name: str | None, payload: dict[str, Any]) -> dict[str, Any] | None:
         if task_id == "generate_candidates" and str(payload.get("backend") or "").strip().lower() == "reinvent4":
             if self._truthy(payload.get("execute")) or payload.get("reinvent4_output_csv") or payload.get("source_csv"):
@@ -877,6 +1016,16 @@ class RunPlanExecutor:
     def _absolute_artifact_path(cls, artifact_paths: dict[str, str], artifact_id: str) -> str:
         """Make snapshot-relevant external paths explicit without resolving symlinks."""
         path = Path(cls._require_artifact(artifact_paths, artifact_id)).expanduser()
+        return str(path if path.is_absolute() else (Path.cwd() / path).absolute())
+
+    @classmethod
+    def _optional_absolute_artifact_path(
+        cls, artifact_paths: dict[str, str], artifact_id: str
+    ) -> str:
+        raw = str(artifact_paths.get(artifact_id) or "").strip()
+        if not raw:
+            return ""
+        path = Path(raw).expanduser()
         return str(path if path.is_absolute() else (Path.cwd() / path).absolute())
 
     def _collect_artifacts(
@@ -1040,6 +1189,45 @@ class RunPlanExecutor:
             )
             artifact_paths["oled_registry_screening_execution_record"] = str(result_path)
             return
+        if task_id == _EXPERIMENT_BATCH_TASK_ID:
+            existing_registry = self.storage.read_artifact_registry(project_id, run_id)
+            if "oled_experiment_batch_execution_record" in existing_registry:
+                raise ValueError(
+                    "Experiment batch selection execution record is already immutable"
+                )
+            outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+            output_paths: dict[str, Path] = {}
+            for artifact_id in (
+                "oled_experiment_batch_receipt",
+                "oled_experiment_batch_handoff",
+                "oled_experiment_batch_report",
+            ):
+                output = str(outputs.get(artifact_id) or "").strip()
+                if not output:
+                    raise ValueError(f"missing experiment batch selection output: {artifact_id}")
+                output_path = Path(output)
+                if not output_path.is_file():
+                    raise ValueError(f"missing experiment batch selection file: {artifact_id}")
+                # Resolve all outputs before changing the registry so a
+                # malformed adapter response cannot create a partial binding.
+                self._relative(run_dir, output_path)
+                output_paths[artifact_id] = output_path
+            for artifact_id, output_path in output_paths.items():
+                self._register(
+                    project_id,
+                    run_id,
+                    artifact_id,
+                    self._relative(run_dir, output_path),
+                )
+                artifact_paths[artifact_id] = str(output_path)
+            self._register(
+                project_id,
+                run_id,
+                "oled_experiment_batch_execution_record",
+                result_rel,
+            )
+            artifact_paths["oled_experiment_batch_execution_record"] = str(result_path)
+            return
 
     def _artifact_paths_from_registry(self, project_id: str, run_id: str, run_dir: Path) -> dict[str, str]:
         resolved_run_dir = run_dir.resolve()
@@ -1176,6 +1364,213 @@ class RunPlanExecutor:
             if clean:
                 return clean
         return ""
+
+    def _experiment_batch_frozen_input_paths(
+        self,
+        *,
+        run_dir: Path,
+        source_screening_receipt_json: str,
+        source_ranked_shortlist_csv: str,
+        source_candidate_cost_manifest_json: str,
+    ) -> dict[str, str]:
+        """Return one immutable, run-owned copy of the PR-AP batch inputs."""
+
+        task_root = run_dir / _EXPERIMENT_BATCH_TASK_ID
+        frozen_inputs_dir = task_root / _EXPERIMENT_BATCH_FROZEN_INPUTS_DIR
+        has_cost_manifest = bool(source_candidate_cost_manifest_json)
+        with _pinned_output_parents_without_symlink_components(task_root) as pinned:
+            existing = self._experiment_batch_existing_frozen_paths(
+                task_root=task_root,
+                task_root_descriptor=pinned[task_root],
+                frozen_inputs_dir=frozen_inputs_dir,
+                has_cost_manifest=has_cost_manifest,
+            )
+        if existing is not None:
+            return existing
+
+        # The public core loader validates the exact receipt/CSV binding and
+        # rejects unsafe or malformed input before bytes enter the run-local
+        # snapshot.
+        source = load_oled_experiment_batch_selection_inputs(
+            screening_receipt_json=source_screening_receipt_json,
+            ranked_shortlist_csv=source_ranked_shortlist_csv,
+            candidate_cost_manifest_json=(
+                source_candidate_cost_manifest_json or None
+            ),
+        )
+        screening_bytes, screening_sha256 = _read_regular_file_bound(
+            Path(source_screening_receipt_json),
+            max_bytes=_EXPERIMENT_BATCH_MAX_INPUT_BYTES,
+            reject_symlink_components=True,
+        )
+        shortlist_bytes, shortlist_sha256 = _read_regular_file_bound(
+            Path(source_ranked_shortlist_csv),
+            max_bytes=_EXPERIMENT_BATCH_MAX_INPUT_BYTES,
+            reject_symlink_components=True,
+        )
+        payloads = {
+            "screening.json": screening_bytes,
+            "ranked_shortlist.csv": shortlist_bytes,
+        }
+        if (
+            screening_sha256 != source.screening_sha256
+            or shortlist_sha256 != source.shortlist_sha256
+        ):
+            raise ValueError("Experiment batch source inputs changed while frozen")
+        if has_cost_manifest:
+            cost_bytes, cost_sha256 = _read_regular_file_bound(
+                Path(source_candidate_cost_manifest_json),
+                max_bytes=_EXPERIMENT_BATCH_MAX_INPUT_BYTES,
+                reject_symlink_components=True,
+            )
+            if cost_sha256 != source.cost_manifest_sha256:
+                raise ValueError("Experiment batch source inputs changed while frozen")
+            payloads["candidate_cost_manifest.json"] = cost_bytes
+        elif source.cost_manifest_sha256 is not None:
+            raise ValueError("Experiment batch source inputs changed while frozen")
+
+        # A concurrent writer can only win by publishing the complete frozen
+        # layout.  An incomplete/redirected state fails closed rather than
+        # being repaired or overwritten by this invocation.
+        with _pinned_output_parents_without_symlink_components(task_root) as pinned:
+            existing = self._experiment_batch_existing_frozen_paths(
+                task_root=task_root,
+                task_root_descriptor=pinned[task_root],
+                frozen_inputs_dir=frozen_inputs_dir,
+                has_cost_manifest=has_cost_manifest,
+            )
+            if existing is not None:
+                return existing
+            _publish_payload_directory(
+                output_dir=frozen_inputs_dir,
+                parent_descriptor=pinned[task_root],
+                payloads=payloads,
+                artifact_label="experiment batch frozen inputs",
+            )
+
+        frozen = {
+            "screening_receipt_json": str(frozen_inputs_dir / "screening.json"),
+            "ranked_shortlist_csv": str(frozen_inputs_dir / "ranked_shortlist.csv"),
+        }
+        if has_cost_manifest:
+            frozen["candidate_cost_manifest_json"] = str(
+                frozen_inputs_dir / "candidate_cost_manifest.json"
+            )
+        # Do not create an approval snapshot when the named source paths moved
+        # during staging and therefore no longer equal the owned bytes.
+        self._verify_experiment_batch_source_binding(
+            source_screening_receipt_json=source_screening_receipt_json,
+            source_ranked_shortlist_csv=source_ranked_shortlist_csv,
+            source_candidate_cost_manifest_json=source_candidate_cost_manifest_json,
+            frozen_screening_receipt_json=frozen["screening_receipt_json"],
+            frozen_ranked_shortlist_csv=frozen["ranked_shortlist_csv"],
+            frozen_candidate_cost_manifest_json=frozen.get(
+                "candidate_cost_manifest_json", ""
+            ),
+        )
+        return frozen
+
+    @staticmethod
+    def _experiment_batch_existing_frozen_paths(
+        *,
+        task_root: Path,
+        task_root_descriptor: int,
+        frozen_inputs_dir: Path,
+        has_cost_manifest: bool,
+    ) -> dict[str, str] | None:
+        """Return a complete frozen layout, rejecting partial/redirected state."""
+
+        no_follow = getattr(os, "O_NOFOLLOW", None)
+        directory_flag = getattr(os, "O_DIRECTORY", None)
+        if no_follow is None or directory_flag is None:
+            raise ValueError("Experiment batch frozen inputs require safe dirfd support")
+        try:
+            frozen_stat = os.stat(
+                frozen_inputs_dir.name,
+                dir_fd=task_root_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISDIR(frozen_stat.st_mode):
+            raise ValueError("Experiment batch frozen input snapshot is unsafe")
+
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                frozen_inputs_dir.name,
+                os.O_RDONLY | directory_flag | no_follow,
+                dir_fd=task_root_descriptor,
+            )
+            expected_names = {"screening.json", "ranked_shortlist.csv"}
+            if has_cost_manifest:
+                expected_names.add("candidate_cost_manifest.json")
+            if set(os.listdir(descriptor)) != expected_names:
+                raise ValueError("Experiment batch frozen input snapshot is incomplete")
+            for filename in expected_names:
+                item_stat = os.stat(
+                    filename,
+                    dir_fd=descriptor,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISREG(item_stat.st_mode):
+                    raise ValueError("Experiment batch frozen input snapshot is unsafe")
+        except ValueError:
+            raise
+        except OSError as exc:
+            raise ValueError("Experiment batch frozen input snapshot is unsafe") from exc
+        finally:
+            if descriptor != -1:
+                os.close(descriptor)
+
+        paths = {
+            "screening_receipt_json": str(frozen_inputs_dir / "screening.json"),
+            "ranked_shortlist_csv": str(frozen_inputs_dir / "ranked_shortlist.csv"),
+        }
+        if has_cost_manifest:
+            paths["candidate_cost_manifest_json"] = str(
+                frozen_inputs_dir / "candidate_cost_manifest.json"
+            )
+        return paths
+
+    @staticmethod
+    def _verify_experiment_batch_source_binding(
+        *,
+        source_screening_receipt_json: str,
+        source_ranked_shortlist_csv: str,
+        source_candidate_cost_manifest_json: str,
+        frozen_screening_receipt_json: str,
+        frozen_ranked_shortlist_csv: str,
+        frozen_candidate_cost_manifest_json: str,
+    ) -> None:
+        """Require named batch sources to still equal the owned frozen copy."""
+
+        if bool(source_candidate_cost_manifest_json) != bool(
+            frozen_candidate_cost_manifest_json
+        ):
+            raise ValueError("Experiment batch source binding changed after gate snapshot")
+        source = load_oled_experiment_batch_selection_inputs(
+            screening_receipt_json=source_screening_receipt_json,
+            ranked_shortlist_csv=source_ranked_shortlist_csv,
+            candidate_cost_manifest_json=(
+                source_candidate_cost_manifest_json or None
+            ),
+        )
+        frozen = load_oled_experiment_batch_selection_inputs(
+            screening_receipt_json=frozen_screening_receipt_json,
+            ranked_shortlist_csv=frozen_ranked_shortlist_csv,
+            candidate_cost_manifest_json=(
+                frozen_candidate_cost_manifest_json or None
+            ),
+        )
+        if (
+            source.screening_sha256 != frozen.screening_sha256
+            or source.shortlist_sha256 != frozen.shortlist_sha256
+            or source.cost_manifest_sha256 != frozen.cost_manifest_sha256
+            or source.screening_id != frozen.screening_id
+            or tuple(source.property_ids) != tuple(frozen.property_ids)
+        ):
+            raise ValueError("Experiment batch source binding changed after gate snapshot")
 
     def _registry_screening_frozen_input_paths(
         self,
