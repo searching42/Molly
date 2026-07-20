@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, replace
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,8 @@ from ai4s_agent.oled_registry_candidate_screening import (
     _parse_constraints,
     _rank_candidates,
     _screen_registry_candidates,
+    main,
+    run_oled_registry_candidate_screening_from_files,
 )
 from tests.test_oled_real_phase1_execution import _snapshot_path
 
@@ -265,6 +268,92 @@ def test_constraint_failure_remains_in_predictions_but_not_shortlist() -> None:
         "hard_constraint_failed:gap:max"
     ]
     assert [item["material_id"] for item in shortlist] == ["material:a"]
+
+
+def test_file_runner_publishes_complete_versioned_screening(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    result = run_oled_registry_candidate_screening_from_files(
+        phase1_execution_dir=inputs.execution_dir,
+        dataset_snapshot_json=inputs.dataset_snapshot,
+        registry_snapshot_json=inputs.registry_snapshot,
+        output_root=tmp_path / "screenings",
+        maximums=["delta_e_st_ev=1.0"],
+        generated_at="2026-07-20T09:00:00+08:00",
+    )
+
+    assert result.eligible_candidate_count == 2
+    assert result.excluded_candidate_count == 2
+    assert result.prediction_count == 2
+    assert result.shortlist_count >= 1
+    assert sorted(path.name for path in result.output_dir.iterdir()) == [
+        "eligible_candidates.csv",
+        "excluded_candidates.jsonl",
+        "predictions.jsonl",
+        "ranked_shortlist.csv",
+        "report.md",
+        "screening.json",
+    ]
+    receipt = json.loads(
+        (result.output_dir / "screening.json").read_text(encoding="utf-8")
+    )
+    assert receipt["counts"] == {
+        "eligible_candidate_count": 2,
+        "excluded_candidate_count": 2,
+        "prediction_count": 2,
+        "registry_candidate_count": 4,
+        "shortlist_count": result.shortlist_count,
+    }
+    assert receipt["claims"] == {
+        "benchmark_validated": False,
+        "experimental_validation_claimed": False,
+        "independent_registry_candidate_pool": True,
+        "model_registered": False,
+        "production_ready": False,
+        "registry_mutated": False,
+        "training_identity_exclusion_applied": True,
+    }
+    with pytest.raises(ValueError, match="already exists"):
+        run_oled_registry_candidate_screening_from_files(
+            phase1_execution_dir=inputs.execution_dir,
+            dataset_snapshot_json=inputs.dataset_snapshot,
+            registry_snapshot_json=inputs.registry_snapshot,
+            output_root=tmp_path / "screenings",
+            maximums=["delta_e_st_ev=1.0"],
+        )
+
+
+def test_cli_failure_is_stable_redacted_and_publishes_nothing(tmp_path: Path) -> None:
+    private_execution = tmp_path / "private-execution"
+    private_execution.mkdir()
+    stream = StringIO()
+
+    exit_code = main(
+        [
+            "--phase1-execution-dir",
+            str(private_execution),
+            "--dataset-snapshot",
+            str(tmp_path / "private-dataset.json"),
+            "--registry-snapshot",
+            str(tmp_path / "private-registry.json"),
+            "--output-root",
+            str(tmp_path / "screenings"),
+        ],
+        stdout=stream,
+    )
+
+    assert exit_code == 2
+    assert json.loads(stream.getvalue()) == {
+        "error_code": "registry_candidate_screening_failed",
+        "error_type": "ValueError",
+        "status": "error",
+    }
+    assert "private" not in stream.getvalue()
+    assert not (tmp_path / "screenings").exists() or not any(
+        (tmp_path / "screenings").iterdir()
+    )
 
 
 @pytest.mark.parametrize("target", ["execution", "model", "dataset", "registry"])

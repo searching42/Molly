@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import argparse
+import csv
 import hashlib
+import io
 import json
 import math
+import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence, TextIO
+
+from ai4s_agent._utils import now_iso
 
 from ai4s_agent.domains.oled_categorical_dataset_execution import (
     OledCategoricalDatasetExecutionArtifact,
@@ -20,7 +27,14 @@ from ai4s_agent.oled_real_phase1_execution import (
     _json_bytes,
     _predict_feature_vector,
     _safe_token,
+    _stable_hash,
     _validated_split_by_row,
+)
+from ai4s_agent.oled_categorical_dataset_execution import (
+    _publish_payload_directory,
+)
+from ai4s_agent.oled_supplementary_material_identity_review import (
+    _pinned_output_parents_without_symlink_components,
 )
 from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _absolute_local_path,
@@ -30,6 +44,7 @@ from ai4s_agent.trainability import generate_baseline_features
 
 
 _MAX_INPUT_BYTES = 1024 * 1024 * 1024
+_SCREENING_VERSION = "oled_registry_candidate_screening.v1"
 
 
 @dataclass(frozen=True)
@@ -47,6 +62,92 @@ class _PreparedScreeningInputs:
     training_material_ids: frozenset[str]
     training_registry_digests: frozenset[str]
     training_smiles: frozenset[str]
+
+
+@dataclass(frozen=True)
+class OledRegistryCandidateScreeningResult:
+    screening_id: str
+    output_dir: Path
+    eligible_candidate_count: int
+    excluded_candidate_count: int
+    prediction_count: int
+    shortlist_count: int
+
+
+def run_oled_registry_candidate_screening_from_files(
+    *,
+    phase1_execution_dir: str | Path,
+    dataset_snapshot_json: str | Path,
+    registry_snapshot_json: str | Path,
+    output_root: str | Path,
+    minimums: list[str] | None = None,
+    maximums: list[str] | None = None,
+    generated_at: str | None = None,
+) -> OledRegistryCandidateScreeningResult:
+    root = _absolute_local_path(output_root)
+    with _pinned_output_parents_without_symlink_components(root) as pinned:
+        prepared = _load_screening_inputs(
+            phase1_execution_dir=phase1_execution_dir,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
+        )
+        constraints = _parse_constraints(
+            minimums=minimums or [],
+            maximums=maximums or [],
+            property_ids=prepared.property_ids,
+        )
+        eligible, excluded, raw_predictions = _screen_registry_candidates(prepared)
+        if not eligible or not raw_predictions:
+            raise ValueError("Registry screening has no eligible candidates")
+        predictions, shortlist = _rank_candidates(
+            raw_predictions,
+            property_ids=prepared.property_ids,
+            directions=prepared.directions,
+            constraints=constraints,
+        )
+        config = {
+            "property_ids": list(prepared.property_ids),
+            "directions": prepared.directions,
+            "constraints": constraints,
+            "feature_policy": "exact_pr_ao_model_feature_contract",
+            "scoring_policy": "pareto_then_mean_rank_percentile.v1",
+        }
+        screening_id = "oled-registry-screening:" + _stable_hash(
+            {
+                "phase1_execution_id": prepared.execution["execution_id"],
+                "phase1_execution_sha256": prepared.execution_sha256,
+                "dataset_snapshot_digest": prepared.dataset.execution_artifact_digest,
+                "dataset_snapshot_sha256": prepared.dataset_sha256,
+                "registry_snapshot_digest": prepared.registry.snapshot_digest,
+                "registry_snapshot_sha256": prepared.registry_sha256,
+                "config": config,
+            }
+        )
+        payloads = _screening_payloads(
+            prepared=prepared,
+            screening_id=screening_id,
+            config=config,
+            eligible=eligible,
+            excluded=excluded,
+            predictions=predictions,
+            shortlist=shortlist,
+            generated_at=generated_at or now_iso(),
+        )
+        output_dir = root / screening_id
+        _publish_payload_directory(
+            output_dir=output_dir,
+            parent_descriptor=pinned[root],
+            payloads=payloads,
+            artifact_label="Registry candidate screening",
+        )
+    return OledRegistryCandidateScreeningResult(
+        screening_id=screening_id,
+        output_dir=output_dir,
+        eligible_candidate_count=len(eligible),
+        excluded_candidate_count=len(excluded),
+        prediction_count=len(predictions),
+        shortlist_count=len(shortlist),
+    )
 
 
 def _load_screening_inputs(
@@ -463,3 +564,231 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"required string is missing: {key}")
     return value
+
+
+def _screening_payloads(
+    *,
+    prepared: _PreparedScreeningInputs,
+    screening_id: str,
+    config: dict[str, Any],
+    eligible: list[dict[str, Any]],
+    excluded: list[dict[str, Any]],
+    predictions: list[dict[str, Any]],
+    shortlist: list[dict[str, Any]],
+    generated_at: str,
+) -> dict[str, bytes]:
+    payloads = {
+        "eligible_candidates.csv": _csv_bytes(
+            eligible,
+            [
+                "material_id",
+                "registry_entry_digest",
+                "canonical_name",
+                "canonical_isomeric_smiles",
+            ],
+        ),
+        "excluded_candidates.jsonl": _jsonl_bytes(excluded),
+        "predictions.jsonl": _jsonl_bytes(predictions),
+        "ranked_shortlist.csv": _shortlist_csv_bytes(
+            shortlist, prepared.property_ids
+        ),
+    }
+    artifact_hashes = {
+        name: _sha256_bytes(content) for name, content in sorted(payloads.items())
+    }
+    reason_counts = Counter(
+        reason
+        for item in excluded
+        for reason in item.get("reason_codes", [])
+    )
+    reason_counts.update(
+        reason
+        for item in predictions
+        for reason in item.get("decision_reason_codes", [])
+    )
+    receipt = {
+        "screening_version": _SCREENING_VERSION,
+        "screening_id": screening_id,
+        "generated_at": generated_at,
+        "status": "completed",
+        "sources": {
+            "phase1_execution_id": prepared.execution["execution_id"],
+            "phase1_execution_sha256": prepared.execution_sha256,
+            "dataset_snapshot_id": prepared.dataset.dataset_snapshot_id,
+            "dataset_snapshot_digest": prepared.dataset.execution_artifact_digest,
+            "dataset_snapshot_sha256": prepared.dataset_sha256,
+            "registry_id": prepared.registry.registry_id,
+            "registry_version": prepared.registry.registry_version,
+            "registry_snapshot_digest": prepared.registry.snapshot_digest,
+            "registry_snapshot_sha256": prepared.registry_sha256,
+            "model_sha256": prepared.model_sha256,
+        },
+        "config": config,
+        "counts": {
+            "registry_candidate_count": len(prepared.registry.entries),
+            "eligible_candidate_count": len(eligible),
+            "excluded_candidate_count": len(excluded),
+            "prediction_count": len(predictions),
+            "shortlist_count": len(shortlist),
+        },
+        "reason_code_counts": dict(sorted(reason_counts.items())),
+        "artifacts": artifact_hashes,
+        "claims": {
+            "independent_registry_candidate_pool": True,
+            "training_identity_exclusion_applied": True,
+            "experimental_validation_claimed": False,
+            "benchmark_validated": False,
+            "production_ready": False,
+            "model_registered": False,
+            "registry_mutated": False,
+        },
+    }
+    payloads["screening.json"] = _json_bytes(receipt)
+    payloads["report.md"] = _report_bytes(receipt, shortlist)
+    return payloads
+
+
+def _csv_bytes(rows: list[dict[str, Any]], fieldnames: list[str]) -> bytes:
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=fieldnames, lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({name: row.get(name, "") for name in fieldnames})
+    return stream.getvalue().encode("utf-8")
+
+
+def _shortlist_csv_bytes(
+    rows: list[dict[str, Any]],
+    property_ids: tuple[str, ...],
+) -> bytes:
+    fieldnames = [
+        "rank",
+        "material_id",
+        "registry_entry_digest",
+        "canonical_name",
+        "canonical_isomeric_smiles",
+        "aggregate_percentile",
+        *[f"predicted_{property_id}" for property_id in property_ids],
+    ]
+    flattened = [
+        {
+            **{name: row.get(name, "") for name in fieldnames[:6]},
+            **{
+                f"predicted_{property_id}": row["predictions"][property_id]
+                for property_id in property_ids
+            },
+        }
+        for row in rows
+    ]
+    return _csv_bytes(flattened, fieldnames)
+
+
+def _jsonl_bytes(rows: list[dict[str, Any]]) -> bytes:
+    return (
+        "\n".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            for row in rows
+        )
+        + ("\n" if rows else "")
+    ).encode("utf-8")
+
+
+def _report_bytes(receipt: dict[str, Any], shortlist: list[dict[str, Any]]) -> bytes:
+    counts = receipt["counts"]
+    lines = [
+        "# OLED Registry candidate screening",
+        "",
+        f"- Screening: `{receipt['screening_id']}`",
+        f"- Registry candidates: `{counts['registry_candidate_count']}`",
+        f"- Training-overlap/invalid exclusions: `{counts['excluded_candidate_count']}`",
+        f"- Complete predictions: `{counts['prediction_count']}`",
+        f"- Shortlist: `{counts['shortlist_count']}`",
+        "- Experimental validation claimed: `false`",
+        "- Production ready: `false`",
+        "",
+        "## Shortlist",
+        "",
+    ]
+    lines.extend(
+        f"- {item['rank']}. `{item['material_id']}` "
+        f"(aggregate percentile={item['aggregate_percentile']:.6f})"
+        for item in shortlist
+    )
+    lines.extend(
+        [
+            "",
+            "This is a model-based review shortlist, not an experimental "
+            "validation, benchmark, model registration, or promotion claim.",
+            "",
+        ]
+    )
+    return "\n".join(lines).encode("utf-8")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Screen an immutable OLED Registry with exact PR-AO models."
+    )
+    parser.add_argument("--phase1-execution-dir", required=True)
+    parser.add_argument("--dataset-snapshot", required=True)
+    parser.add_argument("--registry-snapshot", required=True)
+    parser.add_argument("--output-root", required=True)
+    parser.add_argument("--min", dest="minimums", action="append", default=[])
+    parser.add_argument("--max", dest="maximums", action="append", default=[])
+    return parser
+
+
+def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> int:
+    stream = stdout or sys.stdout
+    args = build_parser().parse_args(argv)
+    try:
+        result = run_oled_registry_candidate_screening_from_files(
+            phase1_execution_dir=args.phase1_execution_dir,
+            dataset_snapshot_json=args.dataset_snapshot,
+            registry_snapshot_json=args.registry_snapshot,
+            output_root=args.output_root,
+            minimums=args.minimums,
+            maximums=args.maximums,
+        )
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "error",
+                    "error_code": "registry_candidate_screening_failed",
+                    "error_type": type(exc).__name__,
+                },
+                sort_keys=True,
+            ),
+            file=stream,
+        )
+        return 2
+    print(
+        json.dumps(
+            {
+                "status": "completed",
+                "screening_id": result.screening_id,
+                "eligible_candidate_count": result.eligible_candidate_count,
+                "excluded_candidate_count": result.excluded_candidate_count,
+                "prediction_count": result.prediction_count,
+                "shortlist_count": result.shortlist_count,
+                "output_directory": result.output_dir.name,
+                "experimental_validation_claimed": False,
+                "production_ready": False,
+            },
+            sort_keys=True,
+        ),
+        file=stream,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+__all__ = [
+    "OledRegistryCandidateScreeningResult",
+    "run_oled_registry_candidate_screening_from_files",
+    "main",
+]
