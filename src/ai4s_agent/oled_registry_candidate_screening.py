@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -274,6 +275,169 @@ def _excluded_entry(entry: Any, reason_codes: list[str]) -> dict[str, Any]:
         "canonical_isomeric_smiles": entry.canonical_isomeric_smiles,
         "reason_codes": sorted(set(reason_codes)),
     }
+
+
+def _parse_constraints(
+    *,
+    minimums: list[str],
+    maximums: list[str],
+    property_ids: tuple[str, ...],
+) -> dict[str, dict[str, float]]:
+    constraints: dict[str, dict[str, float]] = {}
+    allowed = set(property_ids)
+    for kind, values in (("min", minimums), ("max", maximums)):
+        for raw in values:
+            property_id, separator, value_raw = raw.partition("=")
+            property_id = property_id.strip()
+            if separator != "=" or not property_id or not value_raw.strip():
+                raise ValueError(f"invalid {kind} constraint")
+            if property_id not in allowed:
+                raise ValueError("constraint references an unknown property")
+            bound = constraints.setdefault(property_id, {})
+            if kind in bound:
+                label = "minimum" if kind == "min" else "maximum"
+                raise ValueError(f"duplicate {label} constraint")
+            try:
+                numeric = float(value_raw)
+            except ValueError as exc:
+                raise ValueError("constraint value is not numeric") from exc
+            if not math.isfinite(numeric):
+                raise ValueError("constraint value must be finite")
+            bound[kind] = numeric
+    for bound in constraints.values():
+        if "min" in bound and "max" in bound and bound["min"] > bound["max"]:
+            raise ValueError("constraint defines an empty feasible range")
+    return {key: constraints[key] for key in sorted(constraints)}
+
+
+def _rank_candidates(
+    predictions: list[dict[str, Any]],
+    *,
+    property_ids: tuple[str, ...],
+    directions: dict[str, str],
+    constraints: dict[str, dict[str, float]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not predictions:
+        return [], []
+    if set(directions) != set(property_ids) or any(
+        value not in {"minimize", "maximize"} for value in directions.values()
+    ):
+        raise ValueError("candidate ranking directions are invalid")
+    scored = [dict(item) for item in predictions]
+    for item in scored:
+        values = item.get("predictions")
+        if not isinstance(values, dict) or set(values) != set(property_ids):
+            raise ValueError("candidate prediction roster is incomplete")
+        if any(not math.isfinite(float(values[name])) for name in property_ids):
+            raise ValueError("candidate prediction is non-finite")
+        constraint_results: dict[str, dict[str, bool]] = {}
+        reasons: list[str] = []
+        for property_id, bounds in constraints.items():
+            value = float(values[property_id])
+            results: dict[str, bool] = {}
+            if "min" in bounds:
+                results["min"] = value >= bounds["min"]
+                if not results["min"]:
+                    reasons.append(f"hard_constraint_failed:{property_id}:min")
+            if "max" in bounds:
+                results["max"] = value <= bounds["max"]
+                if not results["max"]:
+                    reasons.append(f"hard_constraint_failed:{property_id}:max")
+            constraint_results[property_id] = results
+        item["constraint_results"] = constraint_results
+        item["hard_constraints_passed"] = not reasons
+        item["decision_reason_codes"] = sorted(reasons)
+
+    percentiles = _property_percentiles(scored, property_ids, directions)
+    for item in scored:
+        material_id = str(item["material_id"])
+        item["property_percentiles"] = percentiles[material_id]
+        item["aggregate_percentile"] = sum(
+            percentiles[material_id].values()
+        ) / len(property_ids)
+
+    feasible = [item for item in scored if item["hard_constraints_passed"]]
+    for item in scored:
+        dominated = item in feasible and any(
+            other is not item
+            and _dominates(other["predictions"], item["predictions"], directions)
+            for other in feasible
+        )
+        item["pareto_dominated"] = dominated
+        if dominated:
+            item["decision_reason_codes"] = sorted(
+                [*item["decision_reason_codes"], "pareto_dominated"]
+            )
+    scored.sort(key=lambda item: str(item["material_id"]))
+    shortlist = [
+        dict(item)
+        for item in scored
+        if item["hard_constraints_passed"] and not item["pareto_dominated"]
+    ]
+    shortlist.sort(
+        key=lambda item: (
+            -float(item["aggregate_percentile"]),
+            str(item["material_id"]),
+        )
+    )
+    for index, item in enumerate(shortlist, 1):
+        item["rank"] = index
+    return scored, shortlist
+
+
+def _property_percentiles(
+    rows: list[dict[str, Any]],
+    property_ids: tuple[str, ...],
+    directions: dict[str, str],
+) -> dict[str, dict[str, float]]:
+    output = {str(row["material_id"]): {} for row in rows}
+    count = len(rows)
+    for property_id in property_ids:
+        ordered = sorted(
+            rows,
+            key=lambda row: (
+                (
+                    -float(row["predictions"][property_id])
+                    if directions[property_id] == "maximize"
+                    else float(row["predictions"][property_id])
+                ),
+                str(row["material_id"]),
+            ),
+        )
+        cursor = 0
+        while cursor < count:
+            value = float(ordered[cursor]["predictions"][property_id])
+            end = cursor + 1
+            while (
+                end < count
+                and float(ordered[end]["predictions"][property_id]) == value
+            ):
+                end += 1
+            average_position = (cursor + end - 1) / 2.0
+            percentile = 0.5 if count == 1 else 1.0 - average_position / (count - 1)
+            for row in ordered[cursor:end]:
+                output[str(row["material_id"])][property_id] = percentile
+            cursor = end
+    return output
+
+
+def _dominates(
+    left: dict[str, float],
+    right: dict[str, float],
+    directions: dict[str, str],
+) -> bool:
+    no_worse = True
+    strictly_better = False
+    for property_id, direction in directions.items():
+        left_value = float(left[property_id])
+        right_value = float(right[property_id])
+        if direction == "maximize":
+            no_worse = no_worse and left_value >= right_value
+            strictly_better = strictly_better or left_value > right_value
+        else:
+            no_worse = no_worse and left_value <= right_value
+            strictly_better = strictly_better or left_value < right_value
+    return no_worse and strictly_better
 
 
 def _registry_publication_bytes(snapshot: OledMaterialRegistrySnapshot) -> bytes:

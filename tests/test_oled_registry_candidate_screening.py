@@ -23,6 +23,8 @@ from ai4s_agent.oled_real_phase1_execution import (
 )
 from ai4s_agent.oled_registry_candidate_screening import (
     _load_screening_inputs,
+    _parse_constraints,
+    _rank_candidates,
     _screen_registry_candidates,
 )
 from tests.test_oled_real_phase1_execution import _snapshot_path
@@ -183,6 +185,86 @@ def test_digest_and_smiles_training_overlap_have_independent_reason_codes(
         "training_registry_digest_overlap",
         "training_smiles_overlap",
     ]
+
+
+def test_constraints_reject_duplicates_unknown_properties_and_empty_ranges() -> None:
+    assert _parse_constraints(
+        minimums=["s1_ev=2.8"],
+        maximums=["delta_e_st_ev=0.2"],
+        property_ids=("delta_e_st_ev", "s1_ev"),
+    ) == {
+        "delta_e_st_ev": {"max": 0.2},
+        "s1_ev": {"min": 2.8},
+    }
+    with pytest.raises(ValueError, match="duplicate minimum"):
+        _parse_constraints(
+            minimums=["s1_ev=2.8", "s1_ev=2.9"],
+            maximums=[],
+            property_ids=("s1_ev",),
+        )
+    with pytest.raises(ValueError, match="unknown property"):
+        _parse_constraints(
+            minimums=["plqy=0.8"],
+            maximums=[],
+            property_ids=("s1_ev",),
+        )
+    with pytest.raises(ValueError, match="empty feasible range"):
+        _parse_constraints(
+            minimums=["s1_ev=3.0"],
+            maximums=["s1_ev=2.0"],
+            property_ids=("s1_ev",),
+        )
+
+
+def test_pareto_percentiles_and_material_tie_break_are_deterministic() -> None:
+    predictions = [
+        {"material_id": "material:b", "predictions": {"gap": 0.2, "s1": 3.2}},
+        {"material_id": "material:c", "predictions": {"gap": 0.3, "s1": 2.8}},
+        {"material_id": "material:a", "predictions": {"gap": 0.1, "s1": 3.0}},
+    ]
+
+    scored, shortlist = _rank_candidates(
+        predictions,
+        property_ids=("gap", "s1"),
+        directions={"gap": "minimize", "s1": "maximize"},
+        constraints={},
+    )
+
+    by_id = {item["material_id"]: item for item in scored}
+    assert by_id["material:c"]["pareto_dominated"] is True
+    assert by_id["material:a"]["aggregate_percentile"] == 0.75
+    assert by_id["material:b"]["aggregate_percentile"] == 0.75
+    assert [item["material_id"] for item in shortlist] == [
+        "material:a",
+        "material:b",
+    ]
+    assert [item["rank"] for item in shortlist] == [1, 2]
+
+
+def test_constraint_failure_remains_in_predictions_but_not_shortlist() -> None:
+    predictions = [
+        {"material_id": "material:a", "predictions": {"gap": 0.1, "s1": 3.0}},
+        {"material_id": "material:b", "predictions": {"gap": 0.2, "s1": 3.2}},
+    ]
+    constraints = _parse_constraints(
+        minimums=[],
+        maximums=["gap=0.15"],
+        property_ids=("gap", "s1"),
+    )
+
+    scored, shortlist = _rank_candidates(
+        predictions,
+        property_ids=("gap", "s1"),
+        directions={"gap": "minimize", "s1": "maximize"},
+        constraints=constraints,
+    )
+
+    by_id = {item["material_id"]: item for item in scored}
+    assert by_id["material:b"]["hard_constraints_passed"] is False
+    assert by_id["material:b"]["decision_reason_codes"] == [
+        "hard_constraint_failed:gap:max"
+    ]
+    assert [item["material_id"] for item in shortlist] == ["material:a"]
 
 
 @pytest.mark.parametrize("target", ["execution", "model", "dataset", "registry"])
