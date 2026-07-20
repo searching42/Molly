@@ -587,6 +587,34 @@ class RunPlanExecutor:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         approved = approved_gates or set()
+        if task_id == "execute_oled_registry_candidate_screening":
+            task_options = self._payload_options(options)
+            unexpected = sorted(set(task_options) - {"minimums", "maximums"})
+            if unexpected:
+                raise ValueError(
+                    "unsupported Registry screening task option: " + ", ".join(unexpected)
+                )
+            return {
+                "run_id": run_id,
+                "phase1_execution_dir": self._absolute_artifact_path(
+                    artifact_paths, "oled_phase1_execution_dir"
+                ),
+                "dataset_snapshot_json": self._absolute_artifact_path(
+                    artifact_paths, "oled_dataset_snapshot"
+                ),
+                "registry_snapshot_json": self._absolute_artifact_path(
+                    artifact_paths, "oled_registry_snapshot"
+                ),
+                "output_root": str(run_dir / "oled_registry_screening"),
+                "minimums": self._string_list_option(
+                    task_options.get("minimums", []), key="minimums"
+                ),
+                "maximums": self._string_list_option(
+                    task_options.get("maximums", []), key="maximums"
+                ),
+                "confirmed": GateName.FINAL_THRESHOLD.value in approved,
+                "actor": actor,
+            }
         if task_id == "execute_oled_local_demo":
             raw_options = options if isinstance(options, dict) else {}
             input_bundle = str(raw_options.get("input_bundle") or "").strip()
@@ -714,6 +742,14 @@ class RunPlanExecutor:
             raise ValueError(f"task options cannot override artifact identity keys: {protected}")
         return {str(key): value for key, value in options.items() if str(key) != "adapter"}
 
+    @staticmethod
+    def _string_list_option(value: Any, *, key: str) -> list[str]:
+        if not isinstance(value, list):
+            raise ValueError(f"{key} must be a list of non-empty strings")
+        if not all(isinstance(item, str) and item.strip() for item in value):
+            raise ValueError(f"{key} must be a list of non-empty strings")
+        return [item.strip() for item in value]
+
     def _planned_external_result(self, task_id: str, adapter_name: str | None, payload: dict[str, Any]) -> dict[str, Any] | None:
         if task_id == "generate_candidates" and str(payload.get("backend") or "").strip().lower() == "reinvent4":
             if self._truthy(payload.get("execute")) or payload.get("reinvent4_output_csv") or payload.get("source_csv"):
@@ -749,6 +785,12 @@ class RunPlanExecutor:
         if not value:
             raise ValueError(f"missing artifact path: {artifact_id}")
         return value
+
+    @classmethod
+    def _absolute_artifact_path(cls, artifact_paths: dict[str, str], artifact_id: str) -> str:
+        """Make snapshot-relevant external paths explicit without resolving symlinks."""
+        path = Path(cls._require_artifact(artifact_paths, artifact_id)).expanduser()
+        return str(path if path.is_absolute() else (Path.cwd() / path).absolute())
 
     def _collect_artifacts(
         self,
@@ -868,6 +910,43 @@ class RunPlanExecutor:
                     output_path = Path(output)
                     self._register(project_id, run_id, artifact_id, self._registry_path(run_dir, output_path))
                     artifact_paths[artifact_id] = str(output_path)
+            return
+        if task_id == "execute_oled_registry_candidate_screening":
+            outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+            output_paths: dict[str, Path] = {}
+            for artifact_id in (
+                "oled_registry_screening_receipt",
+                "oled_registry_screening_shortlist",
+                "oled_registry_screening_predictions",
+                "oled_registry_screening_exclusions",
+                "oled_registry_screening_eligible_candidates",
+                "oled_registry_screening_report",
+            ):
+                output = str(outputs.get(artifact_id) or "").strip()
+                if not output:
+                    raise ValueError(f"missing Registry screening output: {artifact_id}")
+                output_path = Path(output)
+                if not output_path.is_file():
+                    raise ValueError(f"missing Registry screening file: {artifact_id}")
+                # Resolve every output before mutating the artifact registry so
+                # a malformed adapter result cannot leave a partial registry.
+                self._relative(run_dir, output_path)
+                output_paths[artifact_id] = output_path
+            for artifact_id, output_path in output_paths.items():
+                self._register(
+                    project_id,
+                    run_id,
+                    artifact_id,
+                    self._relative(run_dir, output_path),
+                )
+                artifact_paths[artifact_id] = str(output_path)
+            self._register(
+                project_id,
+                run_id,
+                "oled_registry_screening_execution_record",
+                result_rel,
+            )
+            artifact_paths["oled_registry_screening_execution_record"] = str(result_path)
             return
 
     def _artifact_paths_from_registry(self, project_id: str, run_id: str, run_dir: Path) -> dict[str, str]:

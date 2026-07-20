@@ -253,6 +253,26 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         risk_level=RiskLevel.LOW,
         default_adapter="execute_oled_local_demo_adapter",
     ),
+    AtomicTaskSpec(
+        task_id="execute_oled_registry_candidate_screening",
+        required_artifacts=[
+            "oled_phase1_execution_dir",
+            "oled_dataset_snapshot",
+            "oled_registry_snapshot",
+        ],
+        output_artifacts=[
+            "oled_registry_screening_receipt",
+            "oled_registry_screening_shortlist",
+            "oled_registry_screening_predictions",
+            "oled_registry_screening_exclusions",
+            "oled_registry_screening_eligible_candidates",
+            "oled_registry_screening_report",
+            "oled_registry_screening_execution_record",
+        ],
+        risk_level=RiskLevel.MEDIUM,
+        gates=[GateName.FINAL_THRESHOLD.value],
+        default_adapter="execute_oled_registry_candidate_screening_adapter",
+    ),
 )
 
 
