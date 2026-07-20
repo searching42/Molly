@@ -60,7 +60,7 @@ class PlannerAgent:
                         question_id="q_goal_scope",
                         prompt="What should the agent optimize or produce?",
                         reason="The goal is too broad to map safely onto registered atomic tasks.",
-                        choices=["train_and_screen", "literature_to_dataset", "generate_candidates", "inspect_dataset"],
+                        choices=["train_and_screen", "experiment_batch", "literature_to_dataset", "inspect_dataset"],
                         blocks_execution=True,
                     )
                 ],
@@ -236,6 +236,20 @@ class PlannerAgent:
 
     def _select_tasks(self, goal: str) -> list[str]:
         normalized = goal.lower()
+        experiment_batch_terms = [
+            "experiment batch",
+            "experimental batch",
+            "validation batch",
+            "batch selection",
+            "lab handoff",
+            "实验批次",
+            "验证批次",
+            "待验证批次",
+            "批次选择",
+            "实验交接",
+        ]
+        if any(term in normalized for term in experiment_batch_terms):
+            return ["execute_oled_experiment_batch_selection"]
         registry_terms = ["registry", "material registry", "注册表", "材料库"]
         screening_terms = ["screen", "predict", "rank", "candidate", "筛选", "预测", "排序", "候选"]
         if any(term in normalized for term in registry_terms) and any(
@@ -281,6 +295,11 @@ class PlannerAgent:
     def _rationale_for(self, task_id: str) -> PlanRationale:
         spec = self.registry.get(task_id)
         reasons = {
+            "execute_oled_experiment_batch_selection": (
+                "The goal asks for an experimental validation batch, so exact-replay the PR-AP "
+                "publication from its PR-AO execution, dataset snapshot, and Registry snapshot "
+                "before producing a gated, recommendation-only handoff."
+            ),
             "execute_oled_registry_candidate_screening": (
                 "The goal asks to screen an existing material Registry, so require exact PR-AO "
                 "execution, dataset snapshot, and Registry snapshot bindings before a gated shortlist run."

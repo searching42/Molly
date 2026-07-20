@@ -156,6 +156,21 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
             if tasks:
                 return tasks
     goal = str(modeling_payload.get("goal") or "").lower()
+    experiment_batch_terms = (
+        "experiment batch",
+        "experimental batch",
+        "validation batch",
+        "batch selection",
+        "lab handoff",
+        "实验批次",
+        "验证批次",
+        "待验证批次",
+        "待验证 batch",
+        "批次选择",
+        "实验交接",
+    )
+    if any(term in goal for term in experiment_batch_terms):
+        return ["execute_oled_experiment_batch_selection"]
     registry_terms = ("registry", "material registry", "注册表", "材料库")
     screening_terms = ("screen", "predict", "rank", "candidate", "筛选", "预测", "排序", "候选")
     if any(term in goal for term in registry_terms) and any(
