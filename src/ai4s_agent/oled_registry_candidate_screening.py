@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import sys
 from collections import Counter
 from dataclasses import dataclass
@@ -37,9 +38,16 @@ from ai4s_agent.oled_categorical_dataset_execution import (
 from ai4s_agent.oled_supplementary_material_identity_review import (
     _pinned_output_parents_without_symlink_components,
 )
+from ai4s_agent.ocsr_candidate_execution import (
+    _open_directory_chain_without_symlinks,
+)
 from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _absolute_local_path,
     _read_bound_json,
+)
+from ai4s_agent.oled_supplementary_source_transcription_review import (
+    _read_bound_binary_at,
+    _validate_pinned_directory_path_without_symlinks,
 )
 from ai4s_agent.trainability import generate_baseline_features
 
@@ -158,13 +166,41 @@ def _load_screening_inputs(
     registry_snapshot_json: str | Path,
 ) -> _PreparedScreeningInputs:
     execution_dir = _absolute_local_path(phase1_execution_dir)
+    execution_descriptor = _open_directory_chain_without_symlinks(
+        execution_dir,
+        create=False,
+    )
+    try:
+        _validate_execution_directory_binding(
+            execution_dir, execution_descriptor
+        )
+        prepared = _load_screening_inputs_at(
+            execution_dir=execution_dir,
+            execution_descriptor=execution_descriptor,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
+        )
+        _validate_execution_directory_binding(
+            execution_dir, execution_descriptor
+        )
+        return prepared
+    finally:
+        os.close(execution_descriptor)
+
+
+def _load_screening_inputs_at(
+    *,
+    execution_dir: Path,
+    execution_descriptor: int,
+    dataset_snapshot_json: str | Path,
+    registry_snapshot_json: str | Path,
+) -> _PreparedScreeningInputs:
     dataset_path = _absolute_local_path(dataset_snapshot_json)
     registry_path = _absolute_local_path(registry_snapshot_json)
-    execution, execution_sha = _read_bound_json(
-        execution_dir / "execution.json",
+    execution, execution_sha = _read_bound_json_at(
+        execution_descriptor,
+        "execution.json",
         "PR-AO execution receipt",
-        max_bytes=_MAX_INPUT_BYTES,
-        reject_symlink_components=True,
     )
     if _sha256_bytes(_json_bytes(execution)) != execution_sha:
         raise ValueError("PR-AO execution receipt is not in canonical form")
@@ -229,11 +265,10 @@ def _load_screening_inputs(
         expected_sha = artifacts.get(filename)
         if not isinstance(expected_sha, str):
             raise ValueError("PR-AO model artifact binding is missing")
-        model_payload, actual_sha = _read_bound_json(
-            execution_dir / filename,
+        model_payload, actual_sha = _read_bound_json_at(
+            execution_descriptor,
+            filename,
             f"PR-AO model {property_id}",
-            max_bytes=_MAX_INPUT_BYTES,
-            reject_symlink_components=True,
         )
         if actual_sha != expected_sha:
             raise ValueError("PR-AO model SHA-256 mismatch")
@@ -595,6 +630,53 @@ def _registry_publication_bytes(snapshot: OledMaterialRegistrySnapshot) -> bytes
         json.dumps(snapshot.model_dump(mode="json"), ensure_ascii=False, indent=2)
         + "\n"
     ).encode("utf-8")
+
+
+def _read_bound_json_at(
+    directory_descriptor: int,
+    filename: str,
+    label: str,
+) -> tuple[dict[str, Any], str]:
+    payload_bytes = _read_bound_binary_at(
+        directory_descriptor,
+        filename,
+        max_bytes=_MAX_INPUT_BYTES,
+    )
+    try:
+        payload = json.loads(
+            payload_bytes.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_nonfinite_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid {label} JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} JSON must be an object")
+    return payload, _sha256_bytes(payload_bytes)
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError("Registry screening JSON contains duplicate keys")
+        payload[key] = value
+    return payload
+
+
+def _reject_nonfinite_constant(value: str) -> None:
+    raise ValueError(f"Registry screening JSON contains {value}")
+
+
+def _validate_execution_directory_binding(
+    execution_dir: Path,
+    execution_descriptor: int,
+) -> None:
+    _validate_pinned_directory_path_without_symlinks(
+        execution_dir,
+        execution_descriptor,
+        error_message="PR-AO execution directory changed",
+    )
 
 
 def _sha256_bytes(payload: bytes) -> str:

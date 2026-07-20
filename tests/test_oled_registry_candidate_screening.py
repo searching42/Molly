@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from dataclasses import dataclass, replace
 from io import StringIO
 from pathlib import Path
@@ -30,6 +31,7 @@ from ai4s_agent.oled_registry_candidate_screening import (
     main,
     run_oled_registry_candidate_screening_from_files,
 )
+from ai4s_agent import oled_registry_candidate_screening as screening_runner
 from tests.test_oled_real_phase1_execution import _snapshot_path
 
 
@@ -472,6 +474,40 @@ def test_resigned_registry_duplicate_chemical_identity_fails(
     )
 
     with pytest.raises(ValueError, match="Registry chemical identity is duplicated"):
+        _load_screening_inputs(
+            phase1_execution_dir=inputs.execution_dir,
+            dataset_snapshot_json=inputs.dataset_snapshot,
+            registry_snapshot_json=inputs.registry_snapshot,
+        )
+
+
+def test_execution_directory_replacement_between_reads_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _screening_inputs(tmp_path, monkeypatch)
+    replacement = tmp_path / "replacement-execution"
+    moved = tmp_path / "moved-execution"
+    shutil.copytree(inputs.execution_dir, replacement)
+    original_read = screening_runner._read_bound_json
+    replaced = False
+
+    def replace_directory_after_read(*args: object, **kwargs: object):
+        nonlocal replaced
+        result = original_read(*args, **kwargs)
+        if not replaced:
+            inputs.execution_dir.rename(moved)
+            replacement.rename(inputs.execution_dir)
+            replaced = True
+        return result
+
+    monkeypatch.setattr(
+        screening_runner,
+        "_read_bound_json",
+        replace_directory_after_read,
+    )
+
+    with pytest.raises(ValueError, match="execution directory changed"):
         _load_screening_inputs(
             phase1_execution_dir=inputs.execution_dir,
             dataset_snapshot_json=inputs.dataset_snapshot,
