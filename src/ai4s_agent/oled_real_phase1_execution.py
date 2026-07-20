@@ -314,21 +314,8 @@ def _predict_property_rows(
 ) -> list[dict[str, Any]]:
     predictions: list[dict[str, Any]] = []
     for row in sorted(rows, key=lambda item: item.row_id):
-        vector = [float(row.features[name]) for name in model["feature_names"]]
-        centered = [
-            value - mean
-            for value, mean in zip(vector, model["feature_mean"], strict=True)
-        ]
-        kernels = [
-            sum(a * b for a, b in zip(centered, train, strict=True))
-            for train in model["centered_training_features"]
-        ]
-        predicted = float(model["target_mean"]) + sum(
-            coefficient * kernel
-            for coefficient, kernel in zip(
-                model["dual_coefficients"], kernels, strict=True
-            )
-        )
+        vector = _feature_vector_for_model(row.features, model)
+        predicted = _predict_feature_vector(vector, model)
         truth = _numeric(row.target_value)
         predictions.append(
             {
@@ -343,6 +330,57 @@ def _predict_property_rows(
             }
         )
     return predictions
+
+
+def _feature_vector_for_model(
+    features: dict[str, float],
+    model: dict[str, Any],
+) -> list[float]:
+    names = model.get("feature_names")
+    if (
+        not isinstance(names, list)
+        or not names
+        or any(not isinstance(name, str) or not name for name in names)
+        or len(names) != len(set(names))
+        or set(features) != set(names)
+    ):
+        raise ValueError("model feature contract mismatch")
+    vector = [float(features[name]) for name in names]
+    if any(not math.isfinite(value) for value in vector):
+        raise ValueError("model feature vector contains non-finite values")
+    return vector
+
+
+def _predict_feature_vector(
+    vector: list[float],
+    model: dict[str, Any],
+) -> float:
+    means = [float(value) for value in model["feature_mean"]]
+    centered_train = [
+        [float(value) for value in row]
+        for row in model["centered_training_features"]
+    ]
+    coefficients = [float(value) for value in model["dual_coefficients"]]
+    if (
+        len(vector) != len(means)
+        or len(centered_train) != len(coefficients)
+        or any(len(row) != len(vector) for row in centered_train)
+    ):
+        raise ValueError("model prediction dimensions mismatch")
+    centered = [
+        value - mean for value, mean in zip(vector, means, strict=True)
+    ]
+    kernels = [
+        sum(a * b for a, b in zip(centered, train, strict=True))
+        for train in centered_train
+    ]
+    predicted = float(model["target_mean"]) + sum(
+        coefficient * kernel
+        for coefficient, kernel in zip(coefficients, kernels, strict=True)
+    )
+    if not math.isfinite(predicted):
+        raise ValueError("model prediction is non-finite")
+    return predicted
 
 
 def _metrics_by_split(

@@ -18,6 +18,8 @@ from ai4s_agent.domains.oled_categorical_dataset_execution import (
 from ai4s_agent.domains.oled_contracts import OledCausalLayer
 from ai4s_agent.domains.oled_dataset_views import OledDatasetViewKind
 from ai4s_agent.oled_real_phase1_execution import (
+    _feature_vector_for_model,
+    _predict_feature_vector,
     _validated_split_by_row,
     main,
     run_oled_real_phase1_execution_from_files,
@@ -162,6 +164,38 @@ def test_real_execution_fits_models_and_ranks_holdout_only(
             property_ids=["delta_e_st_ev", "s1_ev"],
             generated_at="2026-07-19T12:01:00+08:00",
         )
+
+
+def test_model_prediction_helpers_match_written_predictions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot_path = _snapshot_path(tmp_path, monkeypatch)
+    result = run_oled_real_phase1_execution_from_files(
+        dataset_snapshot_json=snapshot_path,
+        output_root=tmp_path / "helper-execution",
+        property_ids=["s1_ev"],
+        generated_at="2026-07-20T08:00:00+08:00",
+    )
+    model = json.loads(
+        (result.output_dir / "model__s1_ev.json").read_text(encoding="utf-8")
+    )
+    snapshot = OledCategoricalDatasetExecutionArtifact.model_validate_json(
+        snapshot_path.read_text(encoding="utf-8")
+    )
+    row = next(item for item in snapshot.rows if item.property_id == "s1_ev")
+    vector = _feature_vector_for_model(row.features, model)
+    predicted = _predict_feature_vector(vector, model)
+    written = [
+        json.loads(line)
+        for line in (result.output_dir / "predictions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+
+    assert predicted == next(
+        item["y_pred"] for item in written if item["row_id"] == row.row_id
+    )
 
 
 def test_real_execution_rejects_tampered_snapshot_before_output(
