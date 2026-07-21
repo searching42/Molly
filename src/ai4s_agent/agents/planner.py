@@ -248,6 +248,17 @@ class PlannerAgent:
             "生成候选重排",
             "全局候选重排",
         ]
+        final_candidate_decision_terms = [
+            "final candidate decision",
+            "final top-n dossier",
+            "final top n dossier",
+            "pr-arb v2",
+            "pr-arb-v2",
+            "最终候选决策",
+            "最终候选报告",
+            "最终top n",
+            "最终top-n",
+        ]
         inverse_design_terms = [
             "inverse design",
             "inverse-design",
@@ -283,6 +294,8 @@ class PlannerAgent:
             "候选top",
             "可解释候选",
         ]
+        if any(term in normalized for term in final_candidate_decision_terms):
+            return ["execute_oled_candidate_decision"]
         if any(term in normalized for term in generated_evaluation_terms):
             return ["execute_oled_generated_candidate_evaluation"]
         if any(term in normalized for term in inverse_design_terms):
@@ -334,6 +347,11 @@ class PlannerAgent:
     def _rationale_for(self, task_id: str) -> PlanRationale:
         spec = self.registry.get(task_id)
         reasons = {
+            "execute_oled_candidate_decision": (
+                "The goal asks for the final explainable Top-N decision, so exact-replay "
+                "the PR-AT evaluation and inherit the original bounded selection request "
+                "for Registry and generated candidates only."
+            ),
             "execute_oled_generated_candidate_evaluation": (
                 "The goal asks to evaluate generated structures, so exact-replay the PR-AS "
                 "and PR-AP publications, apply the same PR-AO prediction contract, and "

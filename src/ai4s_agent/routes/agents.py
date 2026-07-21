@@ -577,6 +577,8 @@ _STAGE_LABELS = {
     "filter_rank": "筛选排序",
     "render_report": "报告生成",
     "execute_oled_inverse_design": "逆向设计候选生成",
+    "execute_oled_generated_candidate_evaluation": "生成候选受控预测与全局重排",
+    "execute_oled_candidate_decision": "最终可解释候选决策",
 }
 
 _GATE_EXPLANATIONS = {

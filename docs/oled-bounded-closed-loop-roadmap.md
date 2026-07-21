@@ -20,6 +20,11 @@ PR-ARb v2 remains a recommendation artifact. It does not assign generated
 structures a Registry material identity and does not include manual
 accept/defer/reject adjudication.
 
+It inherits the exact first PR-ARb target, property constraints, budget, and
+diversity request. It does not create a second configurable selection schema.
+The original rank-anchored greedy max-min Tanimoto policy remains unchanged,
+and an incomplete Top-N produces no final selected candidates.
+
 ## PR-AU: bounded closed-loop discovery controller
 
 The first controller should be described as a **bounded closed-loop discovery

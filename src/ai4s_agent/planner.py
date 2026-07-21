@@ -337,6 +337,28 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         risk_level=RiskLevel.LOW,
         default_adapter="execute_oled_generated_candidate_evaluation_adapter",
     ),
+    AtomicTaskSpec(
+        task_id="execute_oled_candidate_decision",
+        required_artifacts=[
+            "oled_candidate_evaluation_receipt",
+            "oled_inverse_design_receipt",
+            "oled_experiment_batch_receipt",
+            "oled_registry_screening_receipt",
+            "oled_registry_screening_shortlist",
+            "oled_phase1_execution_dir",
+            "oled_dataset_snapshot",
+            "oled_registry_snapshot",
+        ],
+        output_artifacts=[
+            "oled_final_candidate_decision_receipt",
+            "oled_final_candidate_decision_top_n",
+            "oled_final_candidate_decision_dossier",
+            "oled_final_candidate_decision_report",
+            "oled_final_candidate_decision_execution_record",
+        ],
+        risk_level=RiskLevel.LOW,
+        default_adapter="execute_oled_candidate_decision_adapter",
+    ),
 )
 
 
