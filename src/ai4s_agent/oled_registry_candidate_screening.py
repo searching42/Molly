@@ -443,23 +443,6 @@ def _validate_registry_identity_uniqueness(
 def _screen_registry_candidates(
     prepared: _PreparedScreeningInputs,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    feature_names = list(prepared.models[prepared.property_ids[0]]["feature_names"])
-    if any(
-        model.get("feature_names") != feature_names
-        for model in prepared.models.values()
-    ):
-        raise ValueError("screening models use inconsistent feature contracts")
-    split_by_row = _validated_split_by_row(prepared.dataset)
-    train_feature_types = {
-        row.feature_type
-        for row in prepared.dataset.rows
-        if row.property_id in prepared.property_ids
-        and split_by_row[row.row_id] == "train"
-    }
-    if len(train_feature_types) != 1:
-        raise ValueError("training rows use inconsistent feature backends")
-    expected_feature_type = next(iter(train_feature_types))
-
     eligible: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     predictions: list[dict[str, Any]] = []
@@ -479,20 +462,10 @@ def _screen_registry_candidates(
             excluded.append(_excluded_entry(entry, reasons))
             continue
         try:
-            generated = generate_baseline_features(
-                [entry.canonical_isomeric_smiles],
-                n_bits=len(feature_names),
+            property_predictions = _predict_candidate_smiles(
+                prepared,
+                entry.canonical_isomeric_smiles,
             )
-            if generated.feature_type != expected_feature_type or generated.fallback_reason:
-                raise ValueError("candidate feature backend mismatch")
-            features = dict(zip(feature_names, generated.matrix[0], strict=True))
-            property_predictions = {
-                property_id: _predict_feature_vector(
-                    _feature_vector_for_model(features, prepared.models[property_id]),
-                    prepared.models[property_id],
-                )
-                for property_id in prepared.property_ids
-            }
         except (KeyError, TypeError, ValueError, ArithmeticError):
             excluded.append(_excluded_entry(entry, ["feature_or_prediction_failed"]))
             continue
@@ -507,6 +480,44 @@ def _screen_registry_candidates(
         eligible.append(identity)
         predictions.append(identity | {"predictions": property_predictions})
     return eligible, excluded, predictions
+
+
+def _predict_candidate_smiles(
+    prepared: _PreparedScreeningInputs,
+    canonical_isomeric_smiles: str,
+) -> dict[str, float]:
+    """Apply the exact PR-AO feature/model contract to one candidate."""
+
+    feature_names = list(prepared.models[prepared.property_ids[0]]["feature_names"])
+    if any(
+        model.get("feature_names") != feature_names
+        for model in prepared.models.values()
+    ):
+        raise ValueError("screening models use inconsistent feature contracts")
+    split_by_row = _validated_split_by_row(prepared.dataset)
+    train_feature_types = {
+        row.feature_type
+        for row in prepared.dataset.rows
+        if row.property_id in prepared.property_ids
+        and split_by_row[row.row_id] == "train"
+    }
+    if len(train_feature_types) != 1:
+        raise ValueError("training rows use inconsistent feature backends")
+    expected_feature_type = next(iter(train_feature_types))
+    generated = generate_baseline_features(
+        [canonical_isomeric_smiles],
+        n_bits=len(feature_names),
+    )
+    if generated.feature_type != expected_feature_type or generated.fallback_reason:
+        raise ValueError("candidate feature backend mismatch")
+    features = dict(zip(feature_names, generated.matrix[0], strict=True))
+    return {
+        property_id: _predict_feature_vector(
+            _feature_vector_for_model(features, prepared.models[property_id]),
+            prepared.models[property_id],
+        )
+        for property_id in prepared.property_ids
+    }
 
 
 def _excluded_entry(entry: Any, reason_codes: list[str]) -> dict[str, Any]:
@@ -561,6 +572,23 @@ def _rank_candidates(
     directions: dict[str, str],
     constraints: dict[str, dict[str, float]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    return _rank_candidate_records(
+        predictions,
+        identity_key="material_id",
+        property_ids=property_ids,
+        directions=directions,
+        constraints=constraints,
+    )
+
+
+def _rank_candidate_records(
+    predictions: list[dict[str, Any]],
+    *,
+    identity_key: str,
+    property_ids: tuple[str, ...],
+    directions: dict[str, str],
+    constraints: dict[str, dict[str, float]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not predictions:
         return [], []
     if set(directions) != set(property_ids) or any(
@@ -592,12 +620,17 @@ def _rank_candidates(
         item["hard_constraints_passed"] = not reasons
         item["decision_reason_codes"] = sorted(reasons)
 
-    percentiles = _property_percentiles(scored, property_ids, directions)
+    percentiles = _property_percentiles(
+        scored,
+        property_ids,
+        directions,
+        identity_key=identity_key,
+    )
     for item in scored:
-        material_id = str(item["material_id"])
-        item["property_percentiles"] = percentiles[material_id]
+        candidate_id = str(item[identity_key])
+        item["property_percentiles"] = percentiles[candidate_id]
         item["aggregate_percentile"] = sum(
-            percentiles[material_id].values()
+            percentiles[candidate_id].values()
         ) / len(property_ids)
 
     feasible = [item for item in scored if item["hard_constraints_passed"]]
@@ -612,7 +645,7 @@ def _rank_candidates(
             item["decision_reason_codes"] = sorted(
                 [*item["decision_reason_codes"], "pareto_dominated"]
             )
-    scored.sort(key=lambda item: str(item["material_id"]))
+    scored.sort(key=lambda item: str(item[identity_key]))
     shortlist = [
         dict(item)
         for item in scored
@@ -621,7 +654,7 @@ def _rank_candidates(
     shortlist.sort(
         key=lambda item: (
             -float(item["aggregate_percentile"]),
-            str(item["material_id"]),
+            str(item[identity_key]),
         )
     )
     for index, item in enumerate(shortlist, 1):
@@ -633,8 +666,13 @@ def _property_percentiles(
     rows: list[dict[str, Any]],
     property_ids: tuple[str, ...],
     directions: dict[str, str],
+    *,
+    identity_key: str = "material_id",
 ) -> dict[str, dict[str, float]]:
-    output = {str(row["material_id"]): {} for row in rows}
+    identities = [str(row.get(identity_key, "")) for row in rows]
+    if any(not value for value in identities) or len(identities) != len(set(identities)):
+        raise ValueError("candidate ranking identities are invalid")
+    output = {identity: {} for identity in identities}
     count = len(rows)
     for property_id in property_ids:
         ordered = sorted(
@@ -645,7 +683,7 @@ def _property_percentiles(
                     if directions[property_id] == "maximize"
                     else float(row["predictions"][property_id])
                 ),
-                str(row["material_id"]),
+                str(row[identity_key]),
             ),
         )
         cursor = 0
@@ -660,7 +698,7 @@ def _property_percentiles(
             average_position = (cursor + end - 1) / 2.0
             percentile = 0.5 if count == 1 else 1.0 - average_position / (count - 1)
             for row in ordered[cursor:end]:
-                output[str(row["material_id"])][property_id] = percentile
+                output[str(row[identity_key])][property_id] = percentile
             cursor = end
     return output
 

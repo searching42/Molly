@@ -236,6 +236,18 @@ class PlannerAgent:
 
     def _select_tasks(self, goal: str) -> list[str]:
         normalized = goal.lower()
+        generated_evaluation_terms = [
+            "generated candidate evaluation",
+            "generated-candidate evaluation",
+            "controlled prediction of generated",
+            "rerank generated candidates",
+            "global candidate reranking",
+            "pr-at",
+            "生成候选评价",
+            "生成候选预测",
+            "生成候选重排",
+            "全局候选重排",
+        ]
         inverse_design_terms = [
             "inverse design",
             "inverse-design",
@@ -271,6 +283,8 @@ class PlannerAgent:
             "候选top",
             "可解释候选",
         ]
+        if any(term in normalized for term in generated_evaluation_terms):
+            return ["execute_oled_generated_candidate_evaluation"]
         if any(term in normalized for term in inverse_design_terms):
             return ["execute_oled_inverse_design"]
         if any(term in normalized for term in experiment_batch_terms):
@@ -320,6 +334,11 @@ class PlannerAgent:
     def _rationale_for(self, task_id: str) -> PlanRationale:
         spec = self.registry.get(task_id)
         reasons = {
+            "execute_oled_generated_candidate_evaluation": (
+                "The goal asks to evaluate generated structures, so exact-replay the PR-AS "
+                "and PR-AP publications, apply the same PR-AO prediction contract, and "
+                "globally re-rank Registry and generated candidates without promoting designs."
+            ),
             "execute_oled_inverse_design": (
                 "The goal asks for inverse design, so require an exact PR-ARb property-supply "
                 "shortfall route, frozen REINVENT4 inputs, and gated publication of candidates "
