@@ -11,6 +11,7 @@ from ai4s_agent import adapters
 from ai4s_agent.agents.planner import PlannerAgent
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
+from ai4s_agent.oled_inverse_design import run_oled_inverse_design_from_files
 from ai4s_agent.schemas import GateName, RiskLevel, RunStatus
 from ai4s_agent.storage import ProjectStorage
 from tests.test_oled_inverse_design import _shortfall_inputs, _source_csv
@@ -244,6 +245,30 @@ def test_inverse_design_retry_is_idempotent_before_gate_and_preserves_success_re
     first_registry = dict(registry)
     first_record = run_dir / registry[EXECUTION_RECORD_ARTIFACT_ID]
     first_record_bytes = first_record.read_bytes()
+    first_receipt = run_dir / registry["oled_inverse_design_receipt"]
+    first_publication_dir = first_receipt.parent
+
+    alternate_raw = _source_csv(
+        tmp_path / "alternate-reinvent-output.csv",
+        [("alternate-generated", "CCOCC")],
+    )
+    alternate = run_oled_inverse_design_from_files(
+        batch_selection_json=input_artifacts["oled_experiment_batch_receipt"],
+        screening_receipt_json=input_artifacts["oled_registry_screening_receipt"],
+        ranked_shortlist_csv=input_artifacts["oled_registry_screening_shortlist"],
+        phase1_execution_dir=input_artifacts["oled_phase1_execution_dir"],
+        dataset_snapshot_json=input_artifacts["oled_dataset_snapshot"],
+        registry_snapshot_json=input_artifacts["oled_registry_snapshot"],
+        reinvent4_config=input_artifacts["oled_inverse_design_reinvent4_config"],
+        reinvent4_output_csv=alternate_raw,
+        reinvent4_mode="existing_output",
+        output_root=first_publication_dir.parent,
+        seed=17,
+        generated_at="2026-07-21T12:30:00+08:00",
+    )
+    assert alternate.publication_id != first_publication_dir.name
+    assert alternate.output_dir.is_dir()
+    assert storage.read_artifact_registry(project_id, run_id) == first_registry
 
     calls: list[dict[str, object]] = []
     real_adapter = getattr(adapters, ADAPTER_NAME)
@@ -263,6 +288,7 @@ def test_inverse_design_retry_is_idempotent_before_gate_and_preserves_success_re
     assert retried["result"]["already_completed"] is True
     assert calls == []
     assert storage.read_artifact_registry(project_id, run_id) == first_registry
+    assert run_dir / first_registry["oled_inverse_design_receipt"] == first_receipt
     assert first_record.read_bytes() == first_record_bytes
     state = storage.read_stage_state(project_id, run_id)
     assert state is not None
