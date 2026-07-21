@@ -15,12 +15,13 @@ _ADAPTER_NAME = "execute_oled_experiment_batch_selection_adapter"
 _OUTPUT_FILENAMES: dict[str, str] = {
     "oled_experiment_batch_receipt": "batch_selection.json",
     "oled_experiment_batch_handoff": "experiment_batch.csv",
+    "oled_candidate_decision_dossier": "candidate_decision_dossier.csv",
     "oled_experiment_batch_report": "experiment_handoff.md",
 }
 
 
 def execute_oled_experiment_batch_selection_adapter(payload: dict[str, Any]) -> dict[str, Any]:
-    """Produce a recommendation-only experimental batch from a PR-AP shortlist.
+    """Produce a recommendation-only candidate batch from a PR-AP shortlist.
 
     The controlled RunPlan executor owns the output root and supplies only its
     run-local frozen input copies.  This adapter deliberately performs no
@@ -123,6 +124,9 @@ def execute_oled_experiment_batch_selection_adapter(payload: dict[str, Any]) -> 
                 "eligible_count": result.eligible_count,
                 "excluded_count": result.excluded_count,
                 "total_cost_minor": result.total_cost_minor,
+                "candidate_supply_count": result.candidate_supply_count,
+                "inverse_design_should_trigger": result.inverse_design_should_trigger,
+                "generation_executed": False,
                 "recommendation_only": True,
                 "experimental_validation_claimed": False,
                 "experiment_started": False,

@@ -237,6 +237,11 @@ class PlannerAgent:
     def _select_tasks(self, goal: str) -> list[str]:
         normalized = goal.lower()
         experiment_batch_terms = [
+            "candidate decision",
+            "candidate dossier",
+            "decision dossier",
+            "top-n candidate",
+            "top n candidate",
             "experiment batch",
             "experimental batch",
             "validation batch",
@@ -247,6 +252,13 @@ class PlannerAgent:
             "待验证批次",
             "批次选择",
             "实验交接",
+            "候选决策",
+            "候选决策包",
+            "候选报告",
+            "候选top n",
+            "候选top-n",
+            "候选top",
+            "可解释候选",
         ]
         if any(term in normalized for term in experiment_batch_terms):
             return ["execute_oled_experiment_batch_selection"]
@@ -296,9 +308,9 @@ class PlannerAgent:
         spec = self.registry.get(task_id)
         reasons = {
             "execute_oled_experiment_batch_selection": (
-                "The goal asks for an experimental validation batch, so exact-replay the PR-AP "
+                "The goal asks for an explainable Top-N candidate decision, so exact-replay the PR-AP "
                 "publication from its PR-AO execution, dataset snapshot, and Registry snapshot "
-                "before producing a gated, recommendation-only handoff."
+                "before producing a gated, recommendation-only decision dossier."
             ),
             "execute_oled_registry_candidate_screening": (
                 "The goal asks to screen an existing material Registry, so require exact PR-AO "

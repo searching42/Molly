@@ -285,6 +285,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=[
             "oled_experiment_batch_receipt",
             "oled_experiment_batch_handoff",
+            "oled_candidate_decision_dossier",
             "oled_experiment_batch_report",
             "oled_experiment_batch_execution_record",
         ],

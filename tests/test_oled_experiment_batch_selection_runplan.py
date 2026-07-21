@@ -35,6 +35,7 @@ INPUT_ARTIFACT_IDS = (
 OUTPUT_FILENAMES = {
     "oled_experiment_batch_receipt": "batch_selection.json",
     "oled_experiment_batch_handoff": "experiment_batch.csv",
+    "oled_candidate_decision_dossier": "candidate_decision_dossier.csv",
     "oled_experiment_batch_report": "experiment_handoff.md",
 }
 EXECUTION_RECORD_ARTIFACT_ID = "oled_experiment_batch_execution_record"
@@ -139,6 +140,16 @@ def test_experiment_batch_is_agent_selectable_gated_task_and_chat_preview(
     assert proposal.run_plan.missing_artifacts == []
     assert proposal.rationales[0].task_id == TASK_ID
     assert proposal.required_gates == [GateName.FINAL_THRESHOLD.value]
+
+    explainable_proposal = PlannerAgent().propose_plan(
+        run_id="candidate-decision-agent-plan",
+        goal="输出可解释候选 Top N 决策包",
+        available_artifacts=list(INPUT_ARTIFACT_IDS),
+    )
+    assert explainable_proposal.run_plan.requested_tasks == [TASK_ID]
+    assert "explainable Top-N candidate decision" in explainable_proposal.rationales[
+        0
+    ].reason
 
     workspace = tmp_path / "workspace"
     app = create_app(base_runs_dir=workspace / "runs", workspace_dir=workspace)
@@ -411,6 +422,13 @@ def test_experiment_batch_executes_after_gate_and_surfaces_immutable_artifacts(
     assert receipt["claims"]["experimental_validation_claimed"] is False
     assert receipt["claims"]["recommendation_only"] is True
     assert receipt["claims"]["registry_mutated"] is False
+    with (run_dir / registry["oled_candidate_decision_dossier"]).open(
+        newline="", encoding="utf-8"
+    ) as stream:
+        dossier_rows = list(csv.DictReader(stream))
+    assert dossier_rows
+    assert dossier_rows[0]["selection_reason_codes"]
+    assert dossier_rows[0]["property_unit_s1_ev"] == "eV"
 
     adapter_result = json.loads(record_path.read_text(encoding="utf-8"))
     assert adapter_result["status"] == "success"
@@ -422,6 +440,9 @@ def test_experiment_batch_executes_after_gate_and_surfaces_immutable_artifacts(
     assert adapter_result["summary"]["procurement_performed"] is False
     assert adapter_result["summary"]["synthesis_performed"] is False
     assert adapter_result["summary"]["measurement_performed"] is False
+    assert adapter_result["summary"]["candidate_supply_count"] == 2
+    assert adapter_result["summary"]["inverse_design_should_trigger"] is False
+    assert adapter_result["summary"]["generation_executed"] is False
 
     decisions = storage.read_gate_decisions("experiment-batch-project", run_id)
     assert len(decisions) == 1
@@ -470,11 +491,17 @@ def test_experiment_batch_not_ready_is_a_successful_advisory_without_partial_han
     assert (run_dir / registry["oled_experiment_batch_handoff"]).read_text(
         encoding="utf-8"
     ).count("\n") == 1
+    with (run_dir / registry["oled_candidate_decision_dossier"]).open(
+        newline="", encoding="utf-8"
+    ) as stream:
+        assert len(list(csv.DictReader(stream))) == 2
     adapter_result = json.loads(
         (run_dir / registry[EXECUTION_RECORD_ARTIFACT_ID]).read_text(encoding="utf-8")
     )
     assert adapter_result["status"] == "success"
     assert adapter_result["summary"]["batch_status"] == "not_ready"
+    assert adapter_result["summary"]["inverse_design_should_trigger"] is True
+    assert adapter_result["summary"]["generation_executed"] is False
 
 
 def test_experiment_batch_freezes_optional_cost_manifest_for_money_budget(
