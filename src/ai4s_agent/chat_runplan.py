@@ -168,6 +168,17 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
         "生成候选重排",
         "全局候选重排",
     )
+    final_candidate_decision_terms = (
+        "final candidate decision",
+        "final top-n dossier",
+        "final top n dossier",
+        "pr-arb v2",
+        "pr-arb-v2",
+        "最终候选决策",
+        "最终候选报告",
+        "最终top n",
+        "最终top-n",
+    )
     inverse_design_terms = (
         "inverse design",
         "inverse-design",
@@ -204,6 +215,8 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
         "候选top",
         "可解释候选",
     )
+    if any(term in goal for term in final_candidate_decision_terms):
+        return ["execute_oled_candidate_decision"]
     if any(term in goal for term in generated_evaluation_terms):
         return ["execute_oled_generated_candidate_evaluation"]
     if any(term in goal for term in inverse_design_terms):
