@@ -10,6 +10,11 @@ from pathlib import Path
 import pytest
 
 from ai4s_agent import oled_experiment_batch_selection as batch_runner
+from ai4s_agent import oled_registry_candidate_screening as screening_runner
+from ai4s_agent.domains.oled_material_registry_resolution_request import (
+    OledMaterialRegistrySnapshot,
+    oled_material_registry_snapshot_digest,
+)
 from ai4s_agent.oled_experiment_batch_selection import (
     OledExperimentBatchSelectionInputs,
     OledExperimentBatchSelectionResult,
@@ -20,7 +25,10 @@ from ai4s_agent.oled_experiment_batch_selection import (
 from ai4s_agent.oled_registry_candidate_screening import (
     run_oled_registry_candidate_screening_from_files,
 )
-from tests.test_oled_registry_candidate_screening import _screening_inputs
+from tests.test_oled_registry_candidate_screening import (
+    _registry_entry,
+    _screening_inputs,
+)
 
 
 _PROPERTY_IDS = ("delta_e_st_ev", "s1_ev")
@@ -78,6 +86,121 @@ def _screening_publication(
         registry_snapshot_json=source.registry_snapshot,
         output_root=tmp_path / "screenings",
         generated_at="2026-07-20T09:00:00+08:00",
+    )
+    return _ScreeningPublication(
+        screening_receipt=result.output_dir / "screening.json",
+        ranked_shortlist=result.output_dir / "ranked_shortlist.csv",
+        phase1_execution_dir=source.execution_dir,
+        dataset_snapshot=source.dataset_snapshot,
+        registry_snapshot=source.registry_snapshot,
+    )
+
+
+def _pareto_truncated_screening_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> _ScreeningPublication:
+    """Publish a real PR-AP artifact whose frontier is smaller than its pool.
+
+    The controlled predictor is installed both where PR-AP publishes and where
+    PR-ARb exact-replays PR-AP.  This is deliberately not a re-signed
+    shortlist: the test retains the exact replay boundary while giving it a
+    four-prediction pool with three hard-constraint-passing candidates and one
+    Pareto survivor. The fourth prediction proves PR-AP hard constraints are
+    still applied before PR-ARb decides whether supply is sufficient.
+    """
+
+    anchor_root = tmp_path / "pr-ap-anchor"
+    anchor_root.mkdir(parents=True, exist_ok=True)
+    source = _screening_inputs(anchor_root, monkeypatch)
+    original_registry = OledMaterialRegistrySnapshot.model_validate_json(
+        source.registry_snapshot.read_text(encoding="utf-8")
+    )
+    unsigned_registry = original_registry.model_copy(
+        update={
+            "entries": [
+                *original_registry.entries,
+                _registry_entry(4),
+                _registry_entry(5),
+            ],
+            "entry_count": original_registry.entry_count + 2,
+            "snapshot_digest": "sha256:" + "0" * 64,
+        },
+        deep=True,
+    )
+    expanded_registry = unsigned_registry.model_copy(
+        update={
+            "snapshot_digest": oled_material_registry_snapshot_digest(
+                unsigned_registry
+            )
+        }
+    )
+    expanded_registry = OledMaterialRegistrySnapshot.model_validate(
+        expanded_registry.model_dump(mode="json")
+    )
+    source.registry_snapshot.write_text(
+        json.dumps(expanded_registry.model_dump(mode="json"), indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    def controlled_screen(prepared: object) -> tuple[
+        list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]
+    ]:
+        # Entries 00/01 are the PR-AO training identities.  Use the three
+        # genuinely independent Registry entries 02/03/04/05 as the complete
+        # prediction pool. The first strictly dominates the next two; the
+        # fourth fails PR-AP's delta_e_st_ev screening maximum.
+        registry_entries = getattr(prepared, "registry").entries
+        entries = registry_entries[2:]
+        prediction_values = (
+            {"delta_e_st_ev": 0.10, "s1_ev": 3.00},
+            {"delta_e_st_ev": 0.20, "s1_ev": 2.90},
+            {"delta_e_st_ev": 0.30, "s1_ev": 2.80},
+            {"delta_e_st_ev": 0.60, "s1_ev": 3.10},
+        )
+        identities: list[dict[str, object]] = []
+        predictions: list[dict[str, object]] = []
+        for entry, values in zip(entries, prediction_values, strict=True):
+            identity = {
+                "material_id": entry.material_id,
+                "registry_entry_digest": entry.entry_digest,
+                "canonical_name": entry.canonical_name,
+                "canonical_isomeric_smiles": entry.canonical_isomeric_smiles,
+                "standard_inchi": entry.standard_inchi,
+                "inchikey": entry.inchikey,
+            }
+            identities.append(identity)
+            predictions.append(identity | {"predictions": values})
+        excluded = [
+            {
+                "material_id": entry.material_id,
+                "registry_entry_digest": entry.entry_digest,
+                "canonical_name": entry.canonical_name,
+                "canonical_isomeric_smiles": entry.canonical_isomeric_smiles,
+                "standard_inchi": entry.standard_inchi,
+                "inchikey": entry.inchikey,
+                "reason_codes": ["training_material_id_overlap"],
+            }
+            for entry in registry_entries[:2]
+        ]
+        return identities, excluded, predictions
+
+    # The batch loader reconstructs PR-AP through its locally imported alias,
+    # so both call sites must receive byte-identical controlled predictions.
+    monkeypatch.setattr(
+        screening_runner, "_screen_registry_candidates", controlled_screen
+    )
+    monkeypatch.setattr(
+        batch_runner, "_screen_pr_ap_registry_candidates", controlled_screen
+    )
+    result = run_oled_registry_candidate_screening_from_files(
+        phase1_execution_dir=source.execution_dir,
+        dataset_snapshot_json=source.dataset_snapshot,
+        registry_snapshot_json=source.registry_snapshot,
+        output_root=tmp_path / "screenings",
+        minimums=["s1_ev=2.5"],
+        maximums=["delta_e_st_ev=0.5"],
+        generated_at="2026-07-21T09:00:00+08:00",
     )
     return _ScreeningPublication(
         screening_receipt=result.output_dir / "screening.json",
@@ -178,6 +301,13 @@ def test_loader_binds_exact_screening_shortlist_and_optional_cost_manifest(
     )
     assert loaded.cost_manifest_sha256 == _sha256(costs_path.read_bytes())
     assert loaded.property_ids == _PROPERTY_IDS
+    assert [
+        candidate.material_id for candidate in loaded.complete_prediction_candidates
+    ] == ["material:execution-02", "material:execution-03"]
+    assert all(
+        candidate.screening_hard_constraints_passed
+        for candidate in loaded.complete_prediction_candidates
+    )
     assert loaded.cost_currency == "USD"
     assert loaded.costs_by_candidate[
         (str(rows[0]["material_id"]), str(rows[0]["registry_entry_digest"]))
@@ -601,8 +731,11 @@ def test_greedy_trace_reports_cumulative_budget_and_diversity_rejections(
     assert budget_result.status == "not_ready"
     assert budget_receipt["selection"]["selected_candidates"] == []
     assert budget_receipt["selection"]["candidate_supply"] == {
+        "complete_prediction_candidate_count": 2,
         "shortlist_candidate_count": 2,
         "property_eligible_candidate_count": 2,
+        "pareto_shortlist_candidate_count": 2,
+        "pareto_property_eligible_candidate_count": 2,
         "target_batch_size": 2,
         "candidate_shortfall_count": 0,
         "candidate_quantity_status": "sufficient_after_property_constraints",
@@ -699,8 +832,11 @@ def test_valid_infeasible_request_publishes_not_ready_without_partial_batch(
     )
     assert receipt["selection"]["selected_candidates"] == []
     assert receipt["selection"]["candidate_supply"] == {
+        "complete_prediction_candidate_count": 2,
         "shortlist_candidate_count": 2,
         "property_eligible_candidate_count": 2,
+        "pareto_shortlist_candidate_count": 2,
+        "pareto_property_eligible_candidate_count": 2,
         "target_batch_size": 3,
         "candidate_shortfall_count": 1,
         "candidate_quantity_status": "insufficient_after_property_constraints",
@@ -728,6 +864,93 @@ def test_valid_infeasible_request_publishes_not_ready_without_partial_batch(
     assert "No partial Top-N batch is provided" in handoff
     assert "Inverse-design routing requested: `True`" in handoff
     assert "No generation is executed here" in handoff
+
+
+def test_pareto_truncated_shortlist_does_not_route_to_inverse_design(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Pareto policy bottleneck is not a shortage of eligible molecules."""
+
+    publication = _pareto_truncated_screening_publication(tmp_path, monkeypatch)
+    prediction_rows = [
+        json.loads(line)
+        for line in (
+            publication.screening_receipt.parent / "predictions.jsonl"
+        ).read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(prediction_rows) == 4
+    assert {
+        row["material_id"]: row["hard_constraints_passed"]
+        for row in prediction_rows
+    } == {
+        "material:execution-02": True,
+        "material:execution-03": True,
+        "material:execution-04": True,
+        "material:execution-05": False,
+    }
+    assert {
+        row["material_id"]: row["pareto_dominated"] for row in prediction_rows
+    } == {
+        "material:execution-02": False,
+        "material:execution-03": True,
+        "material:execution-04": True,
+        "material:execution-05": False,
+    }
+    assert [row["material_id"] for row in _shortlist_rows(publication)] == [
+        "material:execution-02"
+    ]
+
+    result = _run_batch(
+        publication,
+        output_root=tmp_path / "batches",
+        target_batch_size=2,
+        minimums=["s1_ev=2.5"],
+        maximums=["delta_e_st_ev=0.5"],
+        max_pairwise_tanimoto=1.0,
+        generated_at="2026-07-21T10:00:00+08:00",
+    )
+
+    # PR-ARb retains the exact Pareto shortlist as its selection policy, so
+    # this cannot yield a ready Top-2.  It must nevertheless identify all
+    # three hard-constraint-passing predictions as sufficient material supply
+    # (excluding the fourth hard-constraint failure) and decline to invoke
+    # inverse design.
+    assert result.status == "not_ready"
+    assert result.selected_count == 0
+    assert result.candidate_supply_count == 3
+    assert result.inverse_design_should_trigger is False
+    receipt = json.loads(
+        (result.output_dir / "batch_selection.json").read_text(encoding="utf-8")
+    )
+    supply = receipt["selection"]["candidate_supply"]
+    assert supply["complete_prediction_candidate_count"] == 4
+    assert supply["property_eligible_candidate_count"] == 3
+    assert supply["pareto_shortlist_candidate_count"] == 1
+    assert supply["pareto_property_eligible_candidate_count"] == 1
+    assert supply["candidate_shortfall_count"] == 0
+    assert supply["inverse_design_should_trigger"] is False
+    assert supply["inverse_design_reason"] == (
+        "pareto_shortlist_policy_prevented_complete_batch"
+    )
+    assert supply["required_return_path"] == []
+    assert supply["non_supply_policy_prevented_ready_batch"] is True
+    assert receipt["selection"]["selected_candidates"] == []
+    assert "pareto_shortlist_policy_prevented_complete_batch" in receipt[
+        "selection"
+    ]["not_ready_reasons"]
+    assert "insufficient_eligible_candidates" not in receipt["selection"][
+        "not_ready_reasons"
+    ]
+    handoff = (result.output_dir / "experiment_handoff.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Complete-prediction property supply before Pareto: `3` / `2`" in (
+        handoff
+    )
+    assert "PR-AP's Pareto shortlist policy prevented a complete ready batch" in (
+        handoff
+    )
 
 
 def test_missing_costs_are_a_not_ready_outcome_under_a_money_budget(

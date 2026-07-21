@@ -72,6 +72,24 @@ class OledExperimentBatchCandidate:
 
 
 @dataclass(frozen=True)
+class _CompletePredictionCandidate:
+    """One independently predicted PR-AP candidate retained after exact replay.
+
+    This is intentionally distinct from ``OledExperimentBatchCandidate``:
+    the latter is a persisted, Pareto-frontier shortlist row used for actual
+    batch selection.  The complete replay pool is used only to decide whether
+    there is a genuine property-qualified candidate shortage that could
+    justify routing a future inverse-design task.
+    """
+
+    material_id: str
+    registry_entry_digest: str
+    predictions: dict[str, float]
+    screening_hard_constraints_passed: bool
+    pareto_dominated: bool
+
+
+@dataclass(frozen=True)
 class OledExperimentBatchSelectionInputs:
     """Validated, in-memory bytes and bindings consumed by one invocation.
 
@@ -91,6 +109,7 @@ class OledExperimentBatchSelectionInputs:
     property_ids: tuple[str, ...]
     directions: dict[str, str]
     shortlist_candidates: tuple[OledExperimentBatchCandidate, ...]
+    complete_prediction_candidates: tuple[_CompletePredictionCandidate, ...]
     cost_manifest: dict[str, Any] | None
     cost_currency: str | None
     costs_by_candidate: dict[tuple[str, str], int]
@@ -210,7 +229,7 @@ def load_oled_experiment_batch_selection_inputs(
         shortlist_candidates
     ):
         raise ValueError("PR-AP shortlist count mismatch")
-    _validate_exact_pr_ap_screening_replay(
+    complete_prediction_candidates = _validate_exact_pr_ap_screening_replay(
         receipt=receipt,
         receipt_bytes=screening_bytes,
         shortlist_bytes=shortlist_bytes,
@@ -251,6 +270,7 @@ def load_oled_experiment_batch_selection_inputs(
         property_ids=property_ids,
         directions=directions,
         shortlist_candidates=shortlist_candidates,
+        complete_prediction_candidates=complete_prediction_candidates,
         cost_manifest=cost_manifest,
         cost_currency=cost_currency,
         costs_by_candidate=costs_by_candidate,
@@ -348,6 +368,10 @@ def run_oled_experiment_batch_selection_from_files(
             constraints=constraints,
             target_batch_size=clean_target_size,
             outcome=outcome,
+        )
+        outcome = _annotate_outcome_with_candidate_supply(
+            outcome=outcome,
+            candidate_supply=candidate_supply,
         )
         publication_time = generated_at or now_iso()
         payloads = _batch_payloads(
@@ -493,7 +517,7 @@ def _validate_exact_pr_ap_screening_replay(
     phase1_execution_dir: str | Path,
     dataset_snapshot_json: str | Path,
     registry_snapshot_json: str | Path,
-) -> None:
+) -> tuple[_CompletePredictionCandidate, ...]:
     """Rebuild the PR-AP publication from trusted inputs before PR-AR consumes it.
 
     A screening ID deliberately identifies the PR-AP source/configuration, not
@@ -541,7 +565,7 @@ def _validate_exact_pr_ap_screening_replay(
     eligible, excluded, raw_predictions = _screen_pr_ap_registry_candidates(prepared)
     if not eligible or not raw_predictions:
         raise ValueError("PR-AP screening exact replay mismatch")
-    predictions, shortlist = _rank_pr_ap_candidates(
+    scored_predictions, shortlist = _rank_pr_ap_candidates(
         raw_predictions,
         property_ids=prepared.property_ids,
         directions=prepared.directions,
@@ -553,7 +577,7 @@ def _validate_exact_pr_ap_screening_replay(
         config=expected_config,
         eligible=eligible,
         excluded=excluded,
-        predictions=predictions,
+        predictions=scored_predictions,
         shortlist=shortlist,
         generated_at=generated_at,
     )
@@ -562,6 +586,71 @@ def _validate_exact_pr_ap_screening_replay(
         or shortlist_bytes != expected_payloads["ranked_shortlist.csv"]
     ):
         raise ValueError("PR-AP screening exact replay mismatch")
+    return _complete_prediction_candidates_from_replay(
+        scored_predictions,
+        property_ids=prepared.property_ids,
+    )
+
+
+def _complete_prediction_candidates_from_replay(
+    scored_predictions: Sequence[dict[str, Any]],
+    *,
+    property_ids: tuple[str, ...],
+) -> tuple[_CompletePredictionCandidate, ...]:
+    """Normalize the exact replay pool without trusting persisted prediction bytes.
+
+    ``predictions.jsonl`` is deliberately not a PR-ARb input: it could be
+    rewritten together with a receipt.  At this boundary the scored rows were
+    just regenerated from the pinned PR-AO, PR-AI, and Registry inputs and the
+    full PR-AP publication has already matched byte-for-byte.  Retaining this
+    typed subset lets the routing decision distinguish a real property supply
+    shortage from a Pareto-shortlist policy bottleneck.
+    """
+
+    candidates: list[_CompletePredictionCandidate] = []
+    seen_material_ids: set[str] = set()
+    seen_entry_digests: set[str] = set()
+    for item in scored_predictions:
+        if not isinstance(item, dict):
+            raise ValueError("PR-AP replay prediction row is invalid")
+        material_id = _required_string(item, "material_id")
+        registry_entry_digest = item.get("registry_entry_digest")
+        if not _is_sha256(registry_entry_digest):
+            raise ValueError("PR-AP replay Registry digest is invalid")
+        predictions_raw = item.get("predictions")
+        if not isinstance(predictions_raw, dict) or set(predictions_raw) != set(
+            property_ids
+        ):
+            raise ValueError("PR-AP replay prediction roster is incomplete")
+        predictions = {
+            property_id: _finite_float(
+                predictions_raw[property_id], "PR-AP replay prediction"
+            )
+            for property_id in property_ids
+        }
+        hard_constraints_passed = item.get("hard_constraints_passed")
+        pareto_dominated = item.get("pareto_dominated")
+        if (
+            not isinstance(hard_constraints_passed, bool)
+            or not isinstance(pareto_dominated, bool)
+        ):
+            raise ValueError("PR-AP replay candidate eligibility is invalid")
+        if material_id in seen_material_ids or registry_entry_digest in seen_entry_digests:
+            raise ValueError("PR-AP replay candidate identity is duplicated")
+        seen_material_ids.add(material_id)
+        seen_entry_digests.add(registry_entry_digest)
+        candidates.append(
+            _CompletePredictionCandidate(
+                material_id=material_id,
+                registry_entry_digest=registry_entry_digest,
+                predictions=predictions,
+                screening_hard_constraints_passed=hard_constraints_passed,
+                pareto_dominated=pareto_dominated,
+            )
+        )
+    if not candidates:
+        raise ValueError("PR-AP replay produced no complete predictions")
+    return tuple(candidates)
 
 
 def _normalized_pr_ap_constraints(
@@ -1104,15 +1193,63 @@ def _candidate_supply_payload(
     generative model has run.
     """
 
-    property_eligible_count = sum(
-        not _candidate_constraint_reasons(candidate, constraints)
+    screening_constraints = _normalized_pr_ap_constraints(
+        inputs.config.get("constraints"),
+        property_ids=inputs.property_ids,
+    )
+    shortlist_keys = {
+        _candidate_key(candidate.material_id, candidate.registry_entry_digest)
         for candidate in inputs.shortlist_candidates
+    }
+    replay_pareto_keys: set[tuple[str, str]] = set()
+    property_eligible_candidates: list[_CompletePredictionCandidate] = []
+    for candidate in inputs.complete_prediction_candidates:
+        screening_reasons = _prediction_constraint_reasons(
+            candidate.predictions,
+            screening_constraints,
+        )
+        if candidate.screening_hard_constraints_passed != (not screening_reasons):
+            raise ValueError("PR-AP replay hard-constraint status is inconsistent")
+        key = _candidate_key(candidate.material_id, candidate.registry_entry_digest)
+        if candidate.screening_hard_constraints_passed and not candidate.pareto_dominated:
+            replay_pareto_keys.add(key)
+        if screening_reasons:
+            continue
+        if _prediction_constraint_reasons(candidate.predictions, constraints):
+            continue
+        property_eligible_candidates.append(candidate)
+    if replay_pareto_keys != shortlist_keys:
+        raise ValueError("PR-AP replay Pareto shortlist is inconsistent")
+
+    property_eligible_count = len(property_eligible_candidates)
+    pareto_property_eligible_count = sum(
+        not candidate.pareto_dominated
+        for candidate in property_eligible_candidates
     )
     shortfall_count = max(target_batch_size - property_eligible_count, 0)
     inverse_design_should_trigger = shortfall_count > 0
+    non_supply_policy_prevented_ready_batch = (
+        outcome.status == "not_ready" and not inverse_design_should_trigger
+    )
+    if inverse_design_should_trigger:
+        inverse_design_reason = (
+            "candidate_quantity_insufficient_after_property_constraints"
+        )
+    elif (
+        non_supply_policy_prevented_ready_batch
+        and pareto_property_eligible_count < target_batch_size
+    ):
+        inverse_design_reason = "pareto_shortlist_policy_prevented_complete_batch"
+    else:
+        inverse_design_reason = "candidate_quantity_sufficient_no_generation_requested"
     return {
+        "complete_prediction_candidate_count": len(
+            inputs.complete_prediction_candidates
+        ),
         "shortlist_candidate_count": len(inputs.shortlist_candidates),
         "property_eligible_candidate_count": property_eligible_count,
+        "pareto_shortlist_candidate_count": len(replay_pareto_keys),
+        "pareto_property_eligible_candidate_count": pareto_property_eligible_count,
         "target_batch_size": target_batch_size,
         "candidate_shortfall_count": shortfall_count,
         "candidate_quantity_status": (
@@ -1121,11 +1258,7 @@ def _candidate_supply_payload(
             else "sufficient_after_property_constraints"
         ),
         "inverse_design_should_trigger": inverse_design_should_trigger,
-        "inverse_design_reason": (
-            "candidate_quantity_insufficient_after_property_constraints"
-            if inverse_design_should_trigger
-            else "candidate_quantity_sufficient_no_generation_requested"
-        ),
+        "inverse_design_reason": inverse_design_reason,
         "generation_executed": False,
         "required_return_path": (
             [
@@ -1140,18 +1273,44 @@ def _candidate_supply_payload(
         ),
         "ready_batch_status": outcome.status,
         "non_supply_policy_prevented_ready_batch": (
-            outcome.status == "not_ready" and not inverse_design_should_trigger
+            non_supply_policy_prevented_ready_batch
         ),
     }
+
+
+def _annotate_outcome_with_candidate_supply(
+    *,
+    outcome: _SelectionOutcome,
+    candidate_supply: dict[str, Any],
+) -> _SelectionOutcome:
+    """Make a Pareto-only shortfall explicit in the published selection trace."""
+
+    if (
+        outcome.status != "not_ready"
+        or candidate_supply["inverse_design_reason"]
+        != "pareto_shortlist_policy_prevented_complete_batch"
+    ):
+        return outcome
+    reasons = set(outcome.not_ready_reasons)
+    reasons.discard("insufficient_eligible_candidates")
+    reasons.add("pareto_shortlist_policy_prevented_complete_batch")
+    return replace(outcome, not_ready_reasons=tuple(sorted(reasons)))
 
 
 def _candidate_constraint_reasons(
     candidate: OledExperimentBatchCandidate,
     constraints: dict[str, dict[str, float]],
 ) -> list[str]:
+    return _prediction_constraint_reasons(candidate.predictions, constraints)
+
+
+def _prediction_constraint_reasons(
+    predictions: dict[str, float],
+    constraints: dict[str, dict[str, float]],
+) -> list[str]:
     reasons: list[str] = []
     for property_id, bounds in constraints.items():
-        value = candidate.predictions[property_id]
+        value = predictions[property_id]
         if "min" in bounds and value < bounds["min"]:
             reasons.append(f"hard_constraint_failed:{property_id}:min")
         if "max" in bounds and value > bounds["max"]:
@@ -1539,9 +1698,11 @@ def _experiment_handoff_bytes(
         f"- Source screening: `{inputs.screening_id}`",
         f"- Target batch size: `{request_config['target_batch_size']}`",
         f"- Selected candidates: `{len(outcome.selected)}`",
-        "- Candidate supply after property constraints: "
+        "- Complete-prediction property supply before Pareto: "
         f"`{candidate_supply['property_eligible_candidate_count']}` / "
         f"`{candidate_supply['target_batch_size']}`",
+        "- Pareto-shortlist candidates after PR-AP screening: "
+        f"`{candidate_supply['pareto_shortlist_candidate_count']}`",
         "- Inverse-design routing requested: "
         f"`{candidate_supply['inverse_design_should_trigger']}`",
         "",
@@ -1581,11 +1742,21 @@ def _experiment_handoff_bytes(
             "ranking, and this dossier boundary. No generation is executed here."
         )
     elif candidate_supply["non_supply_policy_prevented_ready_batch"]:
-        lines.append(
-            "- Next routing decision: inverse design is not requested because "
-            "candidate quantity is sufficient; a budget, diversity, or other "
-            "selection policy prevented a complete ready batch."
-        )
+        if (
+            candidate_supply["inverse_design_reason"]
+            == "pareto_shortlist_policy_prevented_complete_batch"
+        ):
+            lines.append(
+                "- Next routing decision: inverse design is not requested because "
+                "the complete property-qualified pool is sufficient; PR-AP's Pareto "
+                "shortlist policy prevented a complete ready batch."
+            )
+        else:
+            lines.append(
+                "- Next routing decision: inverse design is not requested because "
+                "candidate quantity is sufficient; a budget, diversity, or other "
+                "selection policy prevented a complete ready batch."
+            )
     lines.extend(
         [
             "",

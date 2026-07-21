@@ -9,11 +9,14 @@ dataset, mutate the Registry, or register a model.
 There is no generated human `accept`/`defer`/`reject` state. A `ready` result
 is the agent's bounded Top-N output. A future inverse-design branch is eligible
 only when the count of candidates satisfying the explicit property constraints
-is below the requested Top-N count. A `not_ready` caused by a monetary budget,
-structural-diversity threshold, or another non-supply selection policy does
-not request generation. When the narrow count-shortfall condition is true, new
-candidates must re-enter the same PR-AP controlled prediction, filter, rank,
-and dossier boundary.
+is below the requested Top-N count. That supply count comes from PR-AP's
+complete, independently predicted replay pool after reapplying both PR-AP
+screening hard constraints and PR-ARb's additional property constraints; it is
+not the smaller Pareto shortlist. A `not_ready` caused by Pareto policy, a
+monetary budget, a structural-diversity threshold, or another non-supply
+selection policy does not request generation. When the narrow count-shortfall
+condition is true, new candidates must re-enter the same PR-AP controlled
+prediction, filter, rank, and dossier boundary.
 
 ## Exact inputs
 
@@ -31,11 +34,14 @@ It also requires the exact replay anchor that produced that publication:
 It verifies the receipt's recorded SHA-256 for the shortlist before using a
 row. It then exact-replays PR-AP from the three anchored inputs and requires
 the reconstructed `screening.json` and `ranked_shortlist.csv` bytes to match.
-This prevents a self-consistent, re-signed receipt/shortlist pair from changing
-the recommended material identity, structure, name, or prediction. It also
-validates the screening identity, property roster, directions, candidate
-identities, ranks, predictions, and finite numeric values. The runner never
-discovers a latest screening, model, dataset, or Registry.
+The replay retains the complete scored prediction pool in memory for supply
+accounting, but actual Top-N selection continues to consume only the exact
+Pareto shortlist. This prevents a self-consistent, re-signed receipt/shortlist
+pair from changing the recommended material identity, structure, name, or
+prediction. It also validates the screening identity, property roster,
+directions, candidate identities, ranks, predictions, and finite numeric
+values. The runner never discovers a latest screening, model, dataset, or
+Registry.
 
 For a monetary budget, the caller must additionally provide a local
 `oled_candidate_cost_manifest` JSON artifact.  The manifest has one currency
@@ -75,10 +81,17 @@ partial Top-N candidate batch. Invalid/tampered inputs, invalid options, or an
 unsafe output path fail before any publication.
 
 The receipt makes that boundary machine-readable with `candidate_supply`:
-`inverse_design_should_trigger=true` only for the above property-eligible
-candidate count shortfall, and always records `generation_executed=false`.
-It also separates provisional greedy choices from finalized Top-N choices, so
-an incomplete batch can never be mistaken for a partial selected output.
+`complete_prediction_candidate_count`,
+`property_eligible_candidate_count`, and
+`pareto_shortlist_candidate_count` distinguish complete prediction supply from
+the policy-limited frontier (and it additionally records the frontier rows that
+meet PR-ARb's property bounds). `inverse_design_should_trigger=true` only for
+the complete-pool property-eligible count shortfall. If that pool is large
+enough but the Pareto shortlist cannot form Top-N, the receipt reports
+`pareto_shortlist_policy_prevented_complete_batch`, returns no inverse-design
+path, and records `generation_executed=false`. It also separates provisional
+greedy choices from finalized Top-N choices, so an incomplete batch can never
+be mistaken for a partial selected output.
 
 ## Published local artifacts
 
