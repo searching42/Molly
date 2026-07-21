@@ -44,9 +44,12 @@ max_generated_candidates: 512
 ```
 
 `max_generated_candidates` is cumulative across the controller invocation, not
-per generation round. The controller stops before dispatching an action that
-would exceed any limit. Reaching a limit is a normal bounded outcome recorded
-in the final receipt, not permission to silently increase the budget.
+per generation round. One iteration is one supply-evaluation and candidate-
+decision cycle; a generation round is only an iteration that actually invokes
+the generator. Callers may request smaller positive limits, but v1 rejects any
+value above these ceilings. The controller stops before dispatching an action
+that would exceed any limit. Reaching a limit is a normal bounded outcome
+recorded in the final receipt, not permission to silently increase the budget.
 
 Human approval remains attached to the gated generation action; it is not a
 manual accept/defer/reject step for each candidate. Computational or molecular
