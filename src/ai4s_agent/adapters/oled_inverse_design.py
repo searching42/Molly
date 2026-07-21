@@ -144,7 +144,8 @@ def execute_oled_inverse_design_adapter(payload: dict[str, Any]) -> dict[str, An
             "adapter": _ADAPTER_NAME,
             "outputs": outputs,
             "summary": {
-                "design_id": result.design_id,
+                "design_request_id": result.design_request_id,
+                "publication_id": result.publication_id,
                 "requested_candidate_count": result.requested_candidate_count,
                 "accepted_candidate_count": result.accepted_candidate_count,
                 "excluded_candidate_count": result.excluded_candidate_count,

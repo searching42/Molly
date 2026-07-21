@@ -134,6 +134,10 @@ def test_imports_full_raw_roster_and_publishes_only_independent_candidates(
     receipt = json.loads(
         (result.output_dir / "inverse_design.json").read_text(encoding="utf-8")
     )
+    assert receipt["design_request_id"] == result.design_request_id
+    assert receipt["publication_id"] == result.publication_id
+    assert result.output_dir.name == result.publication_id
+    assert receipt["generator"]["transport_provenance_sha256"].startswith("sha256:")
     assert receipt["claims"]["generation_executed"] is False
     assert receipt["claims"]["existing_generator_output_imported"] is True
     assert receipt["claims"]["property_qualification_claimed"] is False
@@ -149,7 +153,8 @@ def test_imports_full_raw_roster_and_publishes_only_independent_candidates(
         dataset_snapshot_json=publication.dataset_snapshot,
         registry_snapshot_json=publication.registry_snapshot,
     )
-    assert verified.design_id == result.design_id
+    assert verified.design_request_id == result.design_request_id
+    assert verified.publication_id == result.publication_id
     assert verified.accepted_candidate_count == 2
 
 
@@ -218,7 +223,7 @@ def test_remote_mode_renders_an_isolated_reinvent4_attempt_without_real_transpor
     config = tmp_path / "reinvent4-template.toml"
     config.write_text(
         "output='{{molly_output_csv}}'\n"
-        "run='{{molly_design_id}}'\n"
+        "run='{{molly_design_request_id}}'\n"
         "seed={{molly_seed}}\n"
         "molly_design_request_sha256='{{molly_design_request_sha256}}'\n",
         encoding="utf-8",
@@ -300,7 +305,8 @@ def test_remote_mode_renders_an_isolated_reinvent4_attempt_without_real_transpor
         registry_snapshot_json=publication.registry_snapshot,
         remote_known_hosts=known_hosts,
     )
-    assert verified.design_id == result.design_id
+    assert verified.design_request_id == result.design_request_id
+    assert verified.publication_id == result.publication_id
 
 
 def test_remote_mode_requires_an_active_exact_design_request_binding_before_transport(
@@ -311,7 +317,7 @@ def test_remote_mode_requires_an_active_exact_design_request_binding_before_tran
     config = tmp_path / "reinvent4-template.toml"
     config.write_text(
         "output='{{molly_output_csv}}'\n"
-        "run='{{molly_design_id}}'\n"
+        "run='{{molly_design_request_id}}'\n"
         "seed={{molly_seed}}\n"
         "# {{molly_design_request_sha256}}\n",
         encoding="utf-8",
@@ -346,7 +352,7 @@ def test_remote_mode_rejects_transport_output_outside_its_private_workspace(
     config = tmp_path / "reinvent4-template.toml"
     config.write_text(
         "output='{{molly_output_csv}}'\n"
-        "run='{{molly_design_id}}'\n"
+        "run='{{molly_design_request_id}}'\n"
         "seed={{molly_seed}}\n"
         "molly_design_request_sha256='{{molly_design_request_sha256}}'\n",
         encoding="utf-8",
@@ -494,4 +500,126 @@ def test_publication_verifier_rejects_a_fully_resigned_generated_candidate_csv(
             phase1_execution_dir=publication.phase1_execution_dir,
             dataset_snapshot_json=publication.dataset_snapshot,
             registry_snapshot_json=publication.registry_snapshot,
+        )
+
+
+def test_remote_verifier_rejects_fully_resigned_raw_output_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication, batch_receipt = _shortfall_inputs(tmp_path, monkeypatch)
+    config = tmp_path / "reinvent4-template.toml"
+    config.write_text(
+        "output='{{molly_output_csv}}'\n"
+        "run='{{molly_design_request_id}}'\n"
+        "seed={{molly_seed}}\n"
+        "molly_design_request_sha256='{{molly_design_request_sha256}}'\n",
+        encoding="utf-8",
+    )
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        "workstation2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
+        encoding="utf-8",
+    )
+
+    def fake_transport(
+        payload: dict[str, object],
+        *,
+        run_id: str,
+        output_dir: Path,
+        count: int,
+    ) -> dict[str, object]:
+        del run_id, output_dir, count
+        local_output = Path(str(payload["local_output_csv"]))
+        local_output.write_text(
+            "candidate_id,SMILES\nremote-original,CCCCC\n",
+            encoding="utf-8",
+        )
+        return {
+            "source_csv": str(local_output),
+            "mode": "remote",
+            "remote": {"endpoint_hostname_verified": True},
+        }
+
+    monkeypatch.setattr(
+        inverse_runner,
+        "_generate_candidates_reinvent4_backend",
+        fake_transport,
+    )
+    result = run_oled_inverse_design_from_files(
+        batch_selection_json=batch_receipt,
+        screening_receipt_json=publication.screening_receipt,
+        ranked_shortlist_csv=publication.ranked_shortlist,
+        phase1_execution_dir=publication.phase1_execution_dir,
+        dataset_snapshot_json=publication.dataset_snapshot,
+        registry_snapshot_json=publication.registry_snapshot,
+        reinvent4_config=config,
+        output_root=tmp_path / "inverse-designs",
+        reinvent4_mode="remote",
+        seed=23,
+        remote_known_hosts=known_hosts,
+        generated_at="2026-07-21T12:05:00+08:00",
+    )
+    receipt_path = result.output_dir / "inverse_design.json"
+    original_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    original_request_id = original_receipt["design_request_id"]
+    original_publication_id = original_receipt["publication_id"]
+    original_provenance = original_receipt["generator"]["provenance"]
+
+    route = inverse_runner._verify_inverse_design_route(  # type: ignore[attr-defined]
+        batch_selection_json=batch_receipt,
+        screening_receipt_json=publication.screening_receipt,
+        ranked_shortlist_csv=publication.ranked_shortlist,
+        phase1_execution_dir=publication.phase1_execution_dir,
+        dataset_snapshot_json=publication.dataset_snapshot,
+        registry_snapshot_json=publication.registry_snapshot,
+        candidate_cost_manifest_json=None,
+    )
+    forged_raw = b"candidate_id,SMILES\nremote-forged,COC\n"
+    forged_rows = inverse_runner._parse_raw_reinvent4_csv(forged_raw)  # type: ignore[attr-defined]
+    effective = (result.output_dir / "reinvent4_effective_config.toml").read_bytes()
+    template = (result.output_dir / "reinvent4_config_template.toml").read_bytes()
+    remote_transport = original_provenance["remote_transport"]
+    forged_transport = inverse_runner._replayed_transport(  # type: ignore[attr-defined]
+        mode="remote",
+        config_sha256=inverse_runner._sha256_bytes(template),  # type: ignore[attr-defined]
+        effective_config_bytes=effective,
+        raw_output_bytes=forged_raw,
+        rows=forged_rows,
+        remote_transport=remote_transport,
+    )
+    forged_candidates, forged_excluded = inverse_runner._normalize_generated_rows(  # type: ignore[attr-defined]
+        rows=forged_rows,
+        publication_id=original_publication_id,
+        prepared=route.prepared_screening,
+    )
+    forged_payloads = inverse_runner._inverse_design_payloads(  # type: ignore[attr-defined]
+        design_request_id=original_request_id,
+        publication_id=original_publication_id,
+        route=route,
+        candidates=forged_candidates,
+        excluded=forged_excluded,
+        config_template_bytes=template,
+        config_sha256=inverse_runner._sha256_bytes(template),  # type: ignore[attr-defined]
+        transport=forged_transport,
+        seed=23,
+        generated_at=original_receipt["generated_at"],
+    )
+    for filename, payload in forged_payloads.items():
+        (result.output_dir / filename).write_bytes(payload)
+    forged_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert forged_receipt["design_request_id"] == original_request_id
+    assert forged_receipt["generator"]["provenance"] == original_provenance
+    assert forged_receipt["publication_id"] == original_publication_id
+
+    with pytest.raises(ValueError, match="publication ID/source binding mismatch"):
+        inverse_runner.verify_oled_inverse_design_publication_from_files(
+            inverse_design_json=receipt_path,
+            batch_selection_json=batch_receipt,
+            screening_receipt_json=publication.screening_receipt,
+            ranked_shortlist_csv=publication.ranked_shortlist,
+            phase1_execution_dir=publication.phase1_execution_dir,
+            dataset_snapshot_json=publication.dataset_snapshot,
+            registry_snapshot_json=publication.registry_snapshot,
+            remote_known_hosts=known_hosts,
         )

@@ -40,7 +40,7 @@ The remote configuration template must contain all four placeholders:
 
 ```text
 {{molly_output_csv}}
-{{molly_design_id}}
+{{molly_design_request_id}}
 {{molly_seed}}
 {{molly_design_request_sha256}}
 ```
@@ -60,6 +60,14 @@ controlled-prediction/filter/rank authority.
 It allocates a one-shot remote `/tmp/molly-pr-as-…` directory before copying the
 configuration. The remote output and config must both remain inside that
 attempt-owned directory.
+
+PR-AS uses two distinct identities. `design_request_id` is fixed before
+execution and binds the exact PR-ARb route, configuration template, transport
+contract, seed, and requested count; it is the identity embedded in the remote
+configuration and attempt namespace. `publication_id` is derived only after
+the generator returns and additionally binds the raw generator-output SHA-256,
+effective-configuration SHA-256, and canonical transport-provenance SHA-256.
+The immutable output-directory basename is the `publication_id`.
 
 ## Publication and replay
 
@@ -81,7 +89,8 @@ It assigns `oled-generated:` IDs; it never assigns Registry material IDs.
 `verify_oled_inverse_design_publication_from_files()` is the mandatory
 downstream replay anchor. It exact-replays PR-ARb and the upstream PR-AP/PR-AO/
 PR-AI/Registry chain, reconstructs identity filtering from the raw CSV, renders
-the effective REINVENT4 config again, and compares every persisted byte. It
+the effective REINVENT4 config again, rederives both identities (including the
+raw-output-bound publication identity), and compares every persisted byte. It
 uses a pinned no-symlink directory descriptor while reading the publication;
 the RunPlan executor keeps that descriptor pinned through a single atomic
 artifact-registry update and accepts adapter paths only for its four fixed

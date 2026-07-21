@@ -56,7 +56,7 @@ from ai4s_agent.oled_supplementary_source_transcription_review import (
 )
 
 
-_INVERSE_DESIGN_VERSION = "oled_inverse_design.v2"
+_INVERSE_DESIGN_VERSION = "oled_inverse_design.v3"
 _BATCH_SELECTION_VERSION = "oled_experiment_batch_selection.v2"
 _MAX_INPUT_BYTES = 1024 * 1024 * 1024
 _REINVENT4_BACKEND = "reinvent4"
@@ -87,12 +87,19 @@ class OledInverseDesignCandidate:
 
 @dataclass(frozen=True)
 class OledInverseDesignResult:
-    design_id: str
+    design_request_id: str
+    publication_id: str
     output_dir: Path
     requested_candidate_count: int
     accepted_candidate_count: int
     excluded_candidate_count: int
     backend_mode: str
+
+    @property
+    def design_id(self) -> str:
+        """Backward-compatible name for the persisted publication identity."""
+
+        return self.publication_id
 
 
 @dataclass(frozen=True)
@@ -110,10 +117,15 @@ class OledInverseDesignRoute:
 class OledInverseDesignVerificationResult:
     """Result of independently replaying one persisted PR-AS publication."""
 
-    design_id: str
+    design_request_id: str
+    publication_id: str
     output_dir: Path
     accepted_candidate_count: int
     excluded_candidate_count: int
+
+    @property
+    def design_id(self) -> str:
+        return self.publication_id
 
 
 @dataclass
@@ -291,11 +303,10 @@ def run_oled_inverse_design_from_files(
             candidate_cost_manifest_json=frozen.candidate_cost_manifest_json,
         )
         with _pinned_output_parents_without_symlink_components(root) as pinned:
-            design_id = _design_id(
+            design_request_id = _design_request_id(
                 route=route,
                 reinvent4_config_sha256=frozen.config_sha256,
                 reinvent4_mode=clean_mode,
-                existing_output_sha256=frozen.raw_output_sha256,
                 remote_transport_contract_sha256=(
                     _required_string(remote_contract, "contract_sha256")
                     if remote_contract is not None
@@ -303,11 +314,8 @@ def run_oled_inverse_design_from_files(
                 ),
                 seed=clean_seed,
             )
-            output_dir = root / design_id
-            _assert_fresh_design_output(output_dir, pinned[root])
-
             transport = _execute_reinvent4_generation(
-                design_id=design_id,
+                design_request_id=design_request_id,
                 requested_count=route.candidate_shortfall_count,
                 mode=clean_mode,
                 config_bytes=frozen.config_bytes,
@@ -320,9 +328,20 @@ def run_oled_inverse_design_from_files(
                 remote_known_hosts_path=frozen.remote_known_hosts,
                 timeout_sec=clean_timeout,
             )
+            transport_provenance_sha256 = _sha256_bytes(
+                _json_bytes(transport.backend_provenance)
+            )
+            publication_id = _publication_id(
+                design_request_id=design_request_id,
+                raw_generator_output_sha256=transport.raw_output_sha256,
+                effective_reinvent4_config_sha256=transport.effective_config_sha256,
+                transport_provenance_sha256=transport_provenance_sha256,
+            )
+            output_dir = root / publication_id
+            _assert_fresh_design_output(output_dir, pinned[root])
             candidates, excluded = _normalize_generated_rows(
                 rows=transport.rows,
-                design_id=design_id,
+                publication_id=publication_id,
                 prepared=route.prepared_screening,
             )
             if not candidates:
@@ -331,7 +350,8 @@ def run_oled_inverse_design_from_files(
                 )
 
             payloads = _inverse_design_payloads(
-                design_id=design_id,
+                design_request_id=design_request_id,
+                publication_id=publication_id,
                 route=route,
                 candidates=candidates,
                 excluded=excluded,
@@ -348,7 +368,8 @@ def run_oled_inverse_design_from_files(
                 artifact_label="OLED inverse design",
             )
     return OledInverseDesignResult(
-        design_id=design_id,
+        design_request_id=design_request_id,
+        publication_id=publication_id,
         output_dir=output_dir,
         requested_candidate_count=route.candidate_shortfall_count,
         accepted_candidate_count=len(candidates),
@@ -532,20 +553,17 @@ def _verified_oled_inverse_design_publication_from_files(
             )
             remote_transport = _validated_remote_transport_provenance(
                 generator_provenance,
-                design_id=_required_string(receipt, "design_id"),
+                design_request_id=_required_string(receipt, "design_request_id"),
                 expected_known_hosts_sha256=known_hosts_sha256,
             )
         if mode == "existing_output" and (
             "remote_transport" in generator_provenance or remote_known_hosts is not None
         ):
             raise ValueError("OLED inverse-design import has remote transport provenance")
-        design_id = _design_id(
+        design_request_id = _design_request_id(
             route=route,
             reinvent4_config_sha256=config_template_sha256,
             reinvent4_mode=mode,
-            existing_output_sha256=(
-                raw_output_sha256 if mode == "existing_output" else None
-            ),
             remote_transport_contract_sha256=(
                 _required_string(remote_transport, "contract_sha256")
                 if remote_transport is not None
@@ -553,36 +571,50 @@ def _verified_oled_inverse_design_publication_from_files(
             ),
             seed=seed,
         )
-        if receipt.get("design_id") != design_id or output_dir.name != design_id:
-            raise ValueError("OLED inverse-design ID/source binding mismatch")
+        if receipt.get("design_request_id") != design_request_id:
+            raise ValueError("OLED inverse-design request ID/source binding mismatch")
         _validate_effective_config_replay(
             mode=mode,
             template_bytes=published["reinvent4_config_template.toml"],
             effective_bytes=published["reinvent4_effective_config.toml"],
-            design_id=design_id,
+            design_request_id=design_request_id,
             seed=seed,
             design_request=route.request,
             remote_transport=remote_transport,
         )
         rows = _parse_raw_reinvent4_csv(published["raw_generator_output.csv"])
-        candidates, excluded = _normalize_generated_rows(
-            rows=rows,
-            design_id=design_id,
-            prepared=route.prepared_screening,
-        )
-        if not candidates:
-            raise ValueError("OLED inverse-design publication has no independent candidates")
         expected_transport = _replayed_transport(
             mode=mode,
             config_sha256=config_template_sha256,
             effective_config_bytes=published["reinvent4_effective_config.toml"],
             raw_output_bytes=published["raw_generator_output.csv"],
             rows=rows,
-            design_id=design_id,
             remote_transport=remote_transport,
         )
+        transport_provenance_sha256 = _sha256_bytes(
+            _json_bytes(expected_transport.backend_provenance)
+        )
+        if generator.get("transport_provenance_sha256") != transport_provenance_sha256:
+            raise ValueError("OLED inverse-design transport provenance binding is invalid")
+        publication_id = _publication_id(
+            design_request_id=design_request_id,
+            raw_generator_output_sha256=raw_output_sha256,
+            effective_reinvent4_config_sha256=effective_config_sha256,
+            transport_provenance_sha256=transport_provenance_sha256,
+        )
+        if receipt.get("publication_id") != publication_id or output_dir.name != publication_id:
+            raise ValueError("OLED inverse-design publication ID/source binding mismatch")
+        rows = expected_transport.rows
+        candidates, excluded = _normalize_generated_rows(
+            rows=rows,
+            publication_id=publication_id,
+            prepared=route.prepared_screening,
+        )
+        if not candidates:
+            raise ValueError("OLED inverse-design publication has no independent candidates")
         expected_payloads = _inverse_design_payloads(
-            design_id=design_id,
+            design_request_id=design_request_id,
+            publication_id=publication_id,
             route=route,
             candidates=candidates,
             excluded=excluded,
@@ -601,7 +633,8 @@ def _verified_oled_inverse_design_publication_from_files(
             raise ValueError("OLED inverse-design exact replay mismatch")
         bound = _BoundInverseDesignPublication(
             result=OledInverseDesignVerificationResult(
-                design_id=design_id,
+                design_request_id=design_request_id,
+                publication_id=publication_id,
                 output_dir=output_dir,
                 accepted_candidate_count=len(candidates),
                 excluded_candidate_count=len(excluded),
@@ -1117,7 +1150,7 @@ def _batch_replay_options(
 
 def _execute_reinvent4_generation(
     *,
-    design_id: str,
+    design_request_id: str,
     requested_count: int,
     mode: str,
     config_bytes: bytes,
@@ -1146,7 +1179,7 @@ def _execute_reinvent4_generation(
         }
         rendered_config_sha256: str | None = None
         effective_config_bytes = config_bytes
-        remote_namespace = design_id.rsplit(":", 1)[-1]
+        remote_namespace = design_request_id.rsplit(":", 1)[-1]
         remote_output_csv: str | None = None
         if mode == "existing_output":
             if existing_output_bytes is None or existing_output_sha256 is None:
@@ -1169,7 +1202,7 @@ def _execute_reinvent4_generation(
             remote_output_csv = remote_output
             rendered_config = _render_remote_reinvent4_config(
                 config_bytes=config_bytes,
-                design_id=design_id,
+                design_request_id=design_request_id,
                 seed=seed,
                 remote_output_csv=remote_output,
                 design_request=design_request,
@@ -1269,7 +1302,7 @@ def _execute_reinvent4_generation(
 def _render_remote_reinvent4_config(
     *,
     config_bytes: bytes,
-    design_id: str,
+    design_request_id: str,
     seed: int,
     remote_output_csv: str,
     design_request: dict[str, Any],
@@ -1282,13 +1315,13 @@ def _render_remote_reinvent4_config(
         raise ValueError("REINVENT4 config must be UTF-8 text") from exc
     required = {
         "{{molly_output_csv}}",
-        "{{molly_design_id}}",
+        "{{molly_design_request_id}}",
         "{{molly_seed}}",
         "{{molly_design_request_sha256}}",
     }
     if any(token not in template for token in required):
         raise ValueError(
-            "REINVENT4 config must contain molly_output_csv, molly_design_id, "
+            "REINVENT4 config must contain molly_output_csv, molly_design_request_id, "
             "molly_seed, and molly_design_request_sha256 placeholders"
         )
     # Do not accept a request hash hidden in a comment: a remote template must
@@ -1307,7 +1340,7 @@ def _render_remote_reinvent4_config(
     request_sha256 = _sha256_bytes(_json_bytes(design_request))
     rendered = (
         template.replace("{{molly_output_csv}}", remote_output_csv)
-        .replace("{{molly_design_id}}", design_id)
+        .replace("{{molly_design_request_id}}", design_request_id)
         .replace("{{molly_seed}}", str(seed))
         .replace("{{molly_design_request_sha256}}", request_sha256)
     )
@@ -1321,7 +1354,7 @@ def _validate_effective_config_replay(
     mode: str,
     template_bytes: bytes,
     effective_bytes: bytes,
-    design_id: str,
+    design_request_id: str,
     seed: int,
     design_request: dict[str, Any],
     remote_transport: dict[str, Any] | None,
@@ -1337,7 +1370,7 @@ def _validate_effective_config_replay(
     remote_output_csv = _required_string(remote_transport, "remote_output_csv")
     expected = _render_remote_reinvent4_config(
         config_bytes=template_bytes,
-        design_id=design_id,
+        design_request_id=design_request_id,
         seed=seed,
         remote_output_csv=remote_output_csv,
         design_request=design_request,
@@ -1350,7 +1383,7 @@ def _validate_effective_config_replay(
 def _validated_remote_transport_provenance(
     provenance: dict[str, Any],
     *,
-    design_id: str,
+    design_request_id: str,
     expected_known_hosts_sha256: str,
 ) -> dict[str, Any]:
     """Validate the fixed remote profile and isolated attempt fields on disk."""
@@ -1372,7 +1405,7 @@ def _validated_remote_transport_provenance(
         or remote.get("contract_sha256") != _sha256_bytes(_json_bytes(expected_static))
     ):
         raise ValueError("OLED inverse-design remote transport contract is invalid")
-    namespace = design_id.rsplit(":", 1)[-1]
+    namespace = design_request_id.rsplit(":", 1)[-1]
     expected_prefix = f"/tmp/molly-pr-as-{namespace}-"
     attempt_dir = _required_string(remote, "remote_attempt_dir")
     if not attempt_dir.startswith(expected_prefix):
@@ -1411,7 +1444,6 @@ def _replayed_transport(
     effective_config_bytes: bytes,
     raw_output_bytes: bytes,
     rows: tuple[dict[str, Any], ...],
-    design_id: str,
     remote_transport: dict[str, Any] | None,
 ) -> _GeneratorTransportResult:
     """Build the exact deterministic transport metadata for publication replay."""
@@ -1444,7 +1476,7 @@ def _replayed_transport(
 def _normalize_generated_rows(
     *,
     rows: Sequence[dict[str, Any]],
-    design_id: str,
+    publication_id: str,
     prepared: Any,
 ) -> tuple[list[OledInverseDesignCandidate], list[dict[str, Any]]]:
     """Canonicalize generated SMILES and exclude known chemical identities."""
@@ -1531,7 +1563,7 @@ def _normalize_generated_rows(
                 generated_candidate_id="oled-generated:"
                 + _stable_hash(
                     {
-                        "design_id": design_id,
+                        "publication_id": publication_id,
                         "canonical_isomeric_smiles": canonical_smiles,
                     }
                 )[:32],
@@ -1636,7 +1668,8 @@ def _raw_smiles_from_generator_row(row: dict[str, Any]) -> str:
 
 def _inverse_design_payloads(
     *,
-    design_id: str,
+    design_request_id: str,
+    publication_id: str,
     route: _VerifiedInverseDesignRoute,
     candidates: Sequence[OledInverseDesignCandidate],
     excluded: Sequence[dict[str, Any]],
@@ -1677,7 +1710,8 @@ def _inverse_design_payloads(
         "excluded_candidates.jsonl": _jsonl_bytes(excluded),
     }
     payloads["report.md"] = _report_bytes(
-        design_id=design_id,
+        design_request_id=design_request_id,
+        publication_id=publication_id,
         route=route,
         candidates=candidates,
         excluded=excluded,
@@ -1689,7 +1723,8 @@ def _inverse_design_payloads(
     }
     receipt = {
         "inverse_design_version": _INVERSE_DESIGN_VERSION,
-        "design_id": design_id,
+        "design_request_id": design_request_id,
+        "publication_id": publication_id,
         "generated_at": generated_at,
         "status": "completed",
         "sources": {
@@ -1712,6 +1747,9 @@ def _inverse_design_payloads(
             "effective_reinvent4_config_sha256": transport.effective_config_sha256,
             "rendered_reinvent4_config_sha256": transport.rendered_config_sha256,
             "raw_generator_output_sha256": transport.raw_output_sha256,
+            "transport_provenance_sha256": _sha256_bytes(
+                _json_bytes(transport.backend_provenance)
+            ),
             "provenance": transport.backend_provenance,
         },
         "counts": {
@@ -1750,7 +1788,8 @@ def _inverse_design_payloads(
 
 def _report_bytes(
     *,
-    design_id: str,
+    design_request_id: str,
+    publication_id: str,
     route: _VerifiedInverseDesignRoute,
     candidates: Sequence[OledInverseDesignCandidate],
     excluded: Sequence[dict[str, Any]],
@@ -1760,7 +1799,8 @@ def _report_bytes(
     lines = [
         "# OLED inverse-design candidate publication",
         "",
-        f"- Design: `{design_id}`",
+        f"- Design request: `{design_request_id}`",
+        f"- Publication: `{publication_id}`",
         f"- Authorized PR-ARb batch: `{request['batch_id']}`",
         f"- Property-supply shortfall requested: `{request['candidate_shortfall_count']}`",
         f"- Raw REINVENT4 rows: `{len(transport.rows)}`",
@@ -1801,26 +1841,44 @@ def _report_bytes(
     return "\n".join(lines).encode("utf-8")
 
 
-def _design_id(
+def _design_request_id(
     *,
     route: _VerifiedInverseDesignRoute,
     reinvent4_config_sha256: str,
     reinvent4_mode: str,
-    existing_output_sha256: str | None,
     remote_transport_contract_sha256: str | None,
     seed: int,
 ) -> str:
-    return "oled-inverse-design:" + _stable_hash(
+    return "oled-inverse-design-request:" + _stable_hash(
         {
             "inverse_design_version": _INVERSE_DESIGN_VERSION,
             "batch_selection_sha256": route.batch_receipt_sha256,
             "design_request": route.request,
             "reinvent4_config_sha256": reinvent4_config_sha256,
             "reinvent4_mode": reinvent4_mode,
-            "existing_output_sha256": existing_output_sha256,
             "remote_transport_contract_sha256": remote_transport_contract_sha256,
             "seed": seed,
             "requested_candidate_count": route.candidate_shortfall_count,
+        }
+    )
+
+
+def _publication_id(
+    *,
+    design_request_id: str,
+    raw_generator_output_sha256: str,
+    effective_reinvent4_config_sha256: str,
+    transport_provenance_sha256: str,
+) -> str:
+    """Bind the immutable publication to the exact generator response bytes."""
+
+    return "oled-inverse-design-publication:" + _stable_hash(
+        {
+            "inverse_design_version": _INVERSE_DESIGN_VERSION,
+            "design_request_id": design_request_id,
+            "raw_generator_output_sha256": raw_generator_output_sha256,
+            "effective_reinvent4_config_sha256": effective_reinvent4_config_sha256,
+            "transport_provenance_sha256": transport_provenance_sha256,
         }
     )
 
@@ -2074,7 +2132,8 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         json.dumps(
             {
                 "status": "completed",
-                "design_id": result.design_id,
+                "design_request_id": result.design_request_id,
+                "publication_id": result.publication_id,
                 "requested_candidate_count": result.requested_candidate_count,
                 "accepted_candidate_count": result.accepted_candidate_count,
                 "excluded_candidate_count": result.excluded_candidate_count,
