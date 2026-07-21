@@ -236,6 +236,17 @@ class PlannerAgent:
 
     def _select_tasks(self, goal: str) -> list[str]:
         normalized = goal.lower()
+        inverse_design_terms = [
+            "inverse design",
+            "inverse-design",
+            "de novo",
+            "reinvent inverse",
+            "reinvent4 inverse",
+            "generative design",
+            "逆向设计",
+            "生成式设计",
+            "从头设计",
+        ]
         experiment_batch_terms = [
             "candidate decision",
             "candidate dossier",
@@ -260,6 +271,8 @@ class PlannerAgent:
             "候选top",
             "可解释候选",
         ]
+        if any(term in normalized for term in inverse_design_terms):
+            return ["execute_oled_inverse_design"]
         if any(term in normalized for term in experiment_batch_terms):
             return ["execute_oled_experiment_batch_selection"]
         registry_terms = ["registry", "material registry", "注册表", "材料库"]
@@ -307,6 +320,11 @@ class PlannerAgent:
     def _rationale_for(self, task_id: str) -> PlanRationale:
         spec = self.registry.get(task_id)
         reasons = {
+            "execute_oled_inverse_design": (
+                "The goal asks for inverse design, so require an exact PR-ARb property-supply "
+                "shortfall route, frozen REINVENT4 inputs, and gated publication of candidates "
+                "that must still return through controlled prediction, filtering, and ranking."
+            ),
             "execute_oled_experiment_batch_selection": (
                 "The goal asks for an explainable Top-N candidate decision, so exact-replay the PR-AP "
                 "publication from its PR-AO execution, dataset snapshot, and Registry snapshot "

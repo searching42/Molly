@@ -190,6 +190,37 @@ def test_project_storage_artifact_registry_roundtrip(tmp_path: Path) -> None:
     assert registry["trainability_report"] == "03_training/trainability_report.json"
 
 
+def test_immutable_artifact_registry_group_preserves_concurrent_entries_and_cleanup_is_cas(
+    tmp_path: Path,
+) -> None:
+    storage = ProjectStorage(workspace_dir=tmp_path)
+    group = {"inverse_receipt": "inverse/receipt.json", "inverse_csv": "inverse/candidates.csv"}
+    storage.register_artifact_path("proj-a", "run-1", "unrelated", "other.json")
+    storage.register_new_artifact_registry_paths("proj-a", "run-1", group)
+    with pytest.raises(ValueError, match="already immutable"):
+        storage.register_new_artifact_registry_paths(
+            "proj-a", "run-1", {"inverse_receipt": "replacement.json"}
+        )
+    storage.register_artifact_path(
+        "proj-a", "run-1", "inverse_receipt", "concurrently-replaced.json"
+    )
+    storage.remove_artifact_registry_paths_if_all_equal("proj-a", "run-1", group)
+    assert storage.read_artifact_registry("proj-a", "run-1") == {
+        "unrelated": "other.json",
+        "inverse_receipt": "concurrently-replaced.json",
+        "inverse_csv": "inverse/candidates.csv",
+    }
+
+    clean_group = {"other_receipt": "other/receipt.json", "other_csv": "other/candidates.csv"}
+    storage.register_new_artifact_registry_paths("proj-a", "run-1", clean_group)
+    storage.remove_artifact_registry_paths_if_all_equal("proj-a", "run-1", clean_group)
+    assert storage.read_artifact_registry("proj-a", "run-1") == {
+        "unrelated": "other.json",
+        "inverse_receipt": "concurrently-replaced.json",
+        "inverse_csv": "inverse/candidates.csv",
+    }
+
+
 def test_register_model_asset_creates_versioned_manifest(tmp_path: Path) -> None:
     storage = ProjectStorage(workspace_dir=tmp_path)
     model_dir = storage.run_dir("proj-a", "run-1") / "03_training" / "source_model"

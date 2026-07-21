@@ -116,6 +116,7 @@ def _read_regular_file_bound(
     *,
     max_bytes: int,
     reject_symlink_components: bool = False,
+    allow_empty: bool = False,
 ) -> tuple[bytes, str]:
     no_follow = getattr(os, "O_NOFOLLOW", None)
     directory_flag = getattr(os, "O_DIRECTORY", None)
@@ -142,7 +143,10 @@ def _read_regular_file_bound(
             initial_stat = os.fstat(handle.fileno())
             if not stat.S_ISREG(initial_stat.st_mode):
                 raise ValueError("supplementary candidate response input must be a regular file")
-            if initial_stat.st_size <= 0 or initial_stat.st_size > max_bytes:
+            if (
+                (initial_stat.st_size <= 0 and not allow_empty)
+                or initial_stat.st_size > max_bytes
+            ):
                 raise ValueError(
                     "supplementary candidate response input has an unsupported byte size"
                 )

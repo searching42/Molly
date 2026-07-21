@@ -293,6 +293,28 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         gates=[GateName.FINAL_THRESHOLD.value],
         default_adapter="execute_oled_experiment_batch_selection_adapter",
     ),
+    AtomicTaskSpec(
+        task_id="execute_oled_inverse_design",
+        required_artifacts=[
+            "oled_experiment_batch_receipt",
+            "oled_registry_screening_receipt",
+            "oled_registry_screening_shortlist",
+            "oled_phase1_execution_dir",
+            "oled_dataset_snapshot",
+            "oled_registry_snapshot",
+            "oled_inverse_design_reinvent4_config",
+        ],
+        output_artifacts=[
+            "oled_inverse_design_receipt",
+            "oled_inverse_design_candidates",
+            "oled_inverse_design_exclusions",
+            "oled_inverse_design_report",
+            "oled_inverse_design_execution_record",
+        ],
+        risk_level=RiskLevel.MEDIUM,
+        gates=[GateName.FINAL_THRESHOLD.value],
+        default_adapter="execute_oled_inverse_design_adapter",
+    ),
 )
 
 

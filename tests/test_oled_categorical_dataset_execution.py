@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from io import StringIO
 from pathlib import Path
 
@@ -255,6 +256,66 @@ def test_concurrent_target_created_before_commit_survives_unchanged(
         path.name.startswith(".oled-categorical-dataset-snapshot")
         for path in output_root.iterdir()
     )
+
+
+def test_shared_publisher_rejects_named_entry_replacement_after_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_root = tmp_path / "publisher"
+    output_root.mkdir()
+    output_dir = output_root / "versioned-output"
+    attacker_source = tmp_path / "attacker-payload"
+    attacker_source.write_bytes(b"attacker-owned-bytes\n")
+    attacker_stat = attacker_source.stat()
+    real_fstat = os.fstat
+    replaced = False
+
+    def replace_named_entry_after_open(descriptor: int) -> os.stat_result:
+        nonlocal replaced
+        opened_stat = real_fstat(descriptor)
+        if (
+            not replaced
+            and stat.S_ISREG(opened_stat.st_mode)
+            and output_dir.is_dir()
+        ):
+            replaced = True
+            os.replace(attacker_source, output_dir / "empty.jsonl")
+        return opened_stat
+
+    monkeypatch.setattr(execution_runner.os, "fstat", replace_named_entry_after_open)
+    parent_descriptor = os.open(
+        output_root,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    try:
+        with pytest.raises(ValueError, match="named entry inode mismatch"):
+            execution_runner._publish_payload_directory(
+                output_dir=output_dir,
+                parent_descriptor=parent_descriptor,
+                payloads={
+                    "empty.jsonl": b"",
+                    "payload.json": b'{"trusted":true}\n',
+                },
+                artifact_label="adversarial test",
+            )
+    finally:
+        os.close(parent_descriptor)
+
+    assert replaced
+    assert not attacker_source.exists()
+    assert output_dir.is_dir()
+    assert sorted(path.name for path in output_dir.iterdir()) == ["empty.jsonl"]
+    published_attacker = output_dir / "empty.jsonl"
+    published_stat = published_attacker.stat()
+    assert (published_stat.st_dev, published_stat.st_ino) == (
+        attacker_stat.st_dev,
+        attacker_stat.st_ino,
+    )
+    assert published_attacker.read_bytes() == b"attacker-owned-bytes\n"
+    assert sorted(path.name for path in output_root.iterdir()) == [
+        "versioned-output"
+    ]
 
 
 def test_output_parent_replacement_or_symlink_redirect_fails_closed(
