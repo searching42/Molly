@@ -359,15 +359,17 @@ def _validate_published_owned_directory(
     owned_stat: os.stat_result,
     expected_payloads: dict[str, bytes],
 ) -> None:
-    named_stat = os.stat(
+    named_initial = os.stat(
         output_dir.name,
         dir_fd=parent_descriptor,
         follow_symlinks=False,
     )
+    opened_initial = os.fstat(temp_descriptor)
     if (
-        not stat.S_ISDIR(named_stat.st_mode)
-        or not _same_inode(named_stat, owned_stat)
-        or not _same_inode(os.fstat(temp_descriptor), owned_stat)
+        not stat.S_ISDIR(named_initial.st_mode)
+        or not stat.S_ISDIR(opened_initial.st_mode)
+        or not _same_inode(named_initial, owned_stat)
+        or not _same_inode(opened_initial, owned_stat)
     ):
         raise ValueError("categorical dataset published directory inode mismatch")
     if set(os.listdir(temp_descriptor)) != set(expected_payloads):
@@ -384,7 +386,30 @@ def _validate_published_owned_directory(
             raise ValueError(
                 "categorical dataset published directory content mismatch"
             )
+    opened_final = os.fstat(temp_descriptor)
+    final_roster = set(os.listdir(temp_descriptor))
     _validate_output_parent_binding(output_dir, parent_descriptor)
+    named_final = os.stat(
+        output_dir.name,
+        dir_fd=parent_descriptor,
+        follow_symlinks=False,
+    )
+    if (
+        not stat.S_ISDIR(named_final.st_mode)
+        or not stat.S_ISDIR(opened_final.st_mode)
+        or not _same_inode(named_final, owned_stat)
+        or not _same_inode(opened_final, owned_stat)
+        or opened_final.st_size != opened_initial.st_size
+        or opened_final.st_mtime_ns != opened_initial.st_mtime_ns
+        or opened_final.st_ctime_ns != opened_initial.st_ctime_ns
+        or named_final.st_size != opened_initial.st_size
+        or named_final.st_mtime_ns != opened_initial.st_mtime_ns
+        or named_final.st_ctime_ns != opened_initial.st_ctime_ns
+        or final_roster != set(expected_payloads)
+    ):
+        raise ValueError(
+            "categorical dataset published directory changed while validated"
+        )
 
 
 def _read_exact_published_payload_at(
@@ -393,7 +418,7 @@ def _read_exact_published_payload_at(
     *,
     max_bytes: int,
 ) -> bytes:
-    """Read an owned publication payload, allowing a valid empty roster."""
+    """Read an owned payload while binding its name to the opened inode."""
 
     no_follow = getattr(os, "O_NOFOLLOW", None)
     if no_follow is None:
@@ -405,23 +430,64 @@ def _read_exact_published_payload_at(
             os.O_RDONLY | no_follow | getattr(os, "O_NONBLOCK", 0),
             dir_fd=directory_descriptor,
         )
-        with os.fdopen(descriptor, "rb", closefd=True) as handle:
-            descriptor = -1
-            initial_stat = os.fstat(handle.fileno())
-            if not stat.S_ISREG(initial_stat.st_mode):
-                raise ValueError("categorical dataset publication file is not regular")
-            if initial_stat.st_size < 0 or initial_stat.st_size > max_bytes:
-                raise ValueError("categorical dataset publication file has an unsupported size")
-            payload = handle.read(max_bytes + 1)
-            final_stat = os.fstat(handle.fileno())
-            if (
-                len(payload) != initial_stat.st_size
-                or final_stat.st_size != initial_stat.st_size
-                or final_stat.st_mtime_ns != initial_stat.st_mtime_ns
-                or final_stat.st_ctime_ns != initial_stat.st_ctime_ns
-            ):
-                raise ValueError("categorical dataset publication file changed while read")
-            return payload
+        opened_initial = os.fstat(descriptor)
+        named_initial = os.stat(
+            filename,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(opened_initial.st_mode)
+            or not stat.S_ISREG(named_initial.st_mode)
+            or not _same_inode(named_initial, opened_initial)
+        ):
+            raise ValueError(
+                "categorical dataset publication named entry inode mismatch"
+            )
+        if opened_initial.st_size < 0 or opened_initial.st_size > max_bytes:
+            raise ValueError(
+                "categorical dataset publication file has an unsupported size"
+            )
+        if (
+            named_initial.st_size != opened_initial.st_size
+            or named_initial.st_mtime_ns != opened_initial.st_mtime_ns
+            or named_initial.st_ctime_ns != opened_initial.st_ctime_ns
+        ):
+            raise ValueError(
+                "categorical dataset publication named entry changed before read"
+            )
+        payload = bytearray()
+        while len(payload) <= max_bytes:
+            chunk = os.read(
+                descriptor,
+                min(1024 * 1024, max_bytes + 1 - len(payload)),
+            )
+            if not chunk:
+                break
+            payload.extend(chunk)
+        opened_final = os.fstat(descriptor)
+        named_final = os.stat(
+            filename,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(opened_final.st_mode)
+            or not stat.S_ISREG(named_final.st_mode)
+            or not _same_inode(opened_final, opened_initial)
+            or not _same_inode(named_final, opened_initial)
+            or len(payload) != opened_initial.st_size
+            or opened_final.st_size != opened_initial.st_size
+            or opened_final.st_mtime_ns != opened_initial.st_mtime_ns
+            or opened_final.st_ctime_ns != opened_initial.st_ctime_ns
+            or named_final.st_size != opened_initial.st_size
+            or named_final.st_mtime_ns != opened_initial.st_mtime_ns
+            or named_final.st_ctime_ns != opened_initial.st_ctime_ns
+        ):
+            raise ValueError(
+                "categorical dataset publication file changed while read"
+            )
+        return bytes(payload)
     except ValueError:
         raise
     except OSError as exc:
