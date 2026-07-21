@@ -16,10 +16,15 @@ concurrency:
 
 jobs:
   test:
+    name: test (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
-    # Keep the job alive after pytest's own hard limit so timeout evidence can
-    # still be uploaded and enforced instead of losing the step exit status.
-    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    # Each deterministic half has its own hard pytest limit and evidence. Keep
+    # the job alive long enough to upload that evidence when pytest times out.
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -53,9 +58,23 @@ jobs:
         shell: bash
         run: |
           set +e
-          timeout --signal=TERM --kill-after=30s 30m \
-            python -m pytest -q --junitxml=pytest-results.xml > pytest.log 2>&1
-          status=$?
+          mapfile -t selected_tests < <(
+            find tests -type f -name 'test_*.py' -print \
+              | LC_ALL=C sort \
+              | awk -v shard="${{ matrix.shard }}" '((NR - 1) % 2) == shard'
+          )
+          if [ "${#selected_tests[@]}" -eq 0 ]; then
+            echo "pytest shard ${{ matrix.shard }} selected no test files" > pytest.log
+            status=2
+          else
+            printf 'pytest shard %s selected %s files\n' \
+              "${{ matrix.shard }}" "${#selected_tests[@]}" > pytest.log
+            printf '%s\n' "${selected_tests[@]}" >> pytest.log
+            timeout --signal=TERM --kill-after=30s 25m \
+              python -m pytest -q --junitxml=pytest-results.xml \
+              "${selected_tests[@]}" >> pytest.log 2>&1
+            status=$?
+          fi
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           tail -n 80 pytest.log
           exit 0
@@ -64,7 +83,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: pytest-evidence-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
           path: |
             pytest.log
             pytest-results.xml
