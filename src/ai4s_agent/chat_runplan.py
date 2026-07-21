@@ -156,6 +156,18 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
             if tasks:
                 return tasks
     goal = str(modeling_payload.get("goal") or "").lower()
+    generated_evaluation_terms = (
+        "generated candidate evaluation",
+        "generated-candidate evaluation",
+        "controlled prediction of generated",
+        "rerank generated candidates",
+        "global candidate reranking",
+        "pr-at",
+        "生成候选评价",
+        "生成候选预测",
+        "生成候选重排",
+        "全局候选重排",
+    )
     inverse_design_terms = (
         "inverse design",
         "inverse-design",
@@ -192,6 +204,8 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
         "候选top",
         "可解释候选",
     )
+    if any(term in goal for term in generated_evaluation_terms):
+        return ["execute_oled_generated_candidate_evaluation"]
     if any(term in goal for term in inverse_design_terms):
         return ["execute_oled_inverse_design"]
     if any(term in goal for term in experiment_batch_terms):

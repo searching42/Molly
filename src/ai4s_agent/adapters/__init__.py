@@ -53,6 +53,9 @@ from ai4s_agent.adapters.oled_experiment_batch_selection import (
 from ai4s_agent.adapters.oled_inverse_design import (
     execute_oled_inverse_design_adapter,
 )
+from ai4s_agent.adapters.oled_generated_candidate_evaluation import (
+    execute_oled_generated_candidate_evaluation_adapter,
+)
 from ai4s_agent.adapters.runtime import AdapterRuntimeError
 
 
@@ -126,4 +129,5 @@ __all__ = [
     "execute_oled_registry_candidate_screening_adapter",
     "execute_oled_experiment_batch_selection_adapter",
     "execute_oled_inverse_design_adapter",
+    "execute_oled_generated_candidate_evaluation_adapter",
 ]

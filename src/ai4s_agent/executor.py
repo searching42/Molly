@@ -21,6 +21,9 @@ from ai4s_agent.oled_inverse_design import (
     _verified_oled_inverse_design_publication_from_files,
     verify_oled_inverse_design_route_from_files,
 )
+from ai4s_agent.oled_generated_candidate_evaluation import (
+    _verified_oled_generated_candidate_evaluation_from_files,
+)
 from ai4s_agent.oled_real_phase1_execution import (
     _build_execution_payloads,
     _validated_split_by_row,
@@ -68,16 +71,19 @@ _EXPERIMENT_BATCH_FROZEN_INPUTS_DIR = "frozen_inputs"
 _INVERSE_DESIGN_TASK_ID = "execute_oled_inverse_design"
 _INVERSE_DESIGN_MAX_INPUT_BYTES = 1024 * 1024 * 1024
 _INVERSE_DESIGN_FROZEN_INPUTS_DIR = "frozen_inputs"
+_GENERATED_EVALUATION_TASK_ID = "execute_oled_generated_candidate_evaluation"
 _IMMUTABLE_EXECUTION_RECORD_TASK_IDS = frozenset(
     {
         _REGISTRY_SCREENING_TASK_ID,
         _EXPERIMENT_BATCH_TASK_ID,
         _INVERSE_DESIGN_TASK_ID,
+        _GENERATED_EVALUATION_TASK_ID,
     }
 )
 _IMMUTABLE_RECORD_BY_TASK = {
     _EXPERIMENT_BATCH_TASK_ID: "oled_experiment_batch_execution_record",
     _INVERSE_DESIGN_TASK_ID: "oled_inverse_design_execution_record",
+    _GENERATED_EVALUATION_TASK_ID: "oled_generated_evaluation_execution_record",
 }
 
 
@@ -213,7 +219,8 @@ class RunPlanExecutor:
             next_stage = run_plan.tasks[index + 1].task_id if index + 1 < len(run_plan.tasks) else None
             immutable_record = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id)
             if (
-                task.task_id == _INVERSE_DESIGN_TASK_ID
+                task.task_id
+                in {_INVERSE_DESIGN_TASK_ID, _GENERATED_EVALUATION_TASK_ID}
                 and immutable_record
                 and immutable_record in self.storage.read_artifact_registry(
                     project_id, run_id
@@ -543,6 +550,8 @@ class RunPlanExecutor:
             return "Experiment batch selection adapter failed."
         if task_id == _INVERSE_DESIGN_TASK_ID:
             return "OLED inverse-design adapter failed."
+        if task_id == _GENERATED_EVALUATION_TASK_ID:
+            return "OLED generated-candidate evaluation adapter failed."
         return "Registry candidate screening adapter failed."
 
     @staticmethod
@@ -557,6 +566,14 @@ class RunPlanExecutor:
                 "code": "inverse_design_execution_record_already_exists",
                 "message": "OLED inverse-design execution record is already immutable.",
             }
+        if task_id == _GENERATED_EVALUATION_TASK_ID:
+            return {
+                "code": "generated_evaluation_execution_record_already_exists",
+                "message": (
+                    "OLED generated-candidate evaluation execution record is already "
+                    "immutable."
+                ),
+            }
         raise ValueError("immutable execution record task is invalid")
 
     @staticmethod
@@ -567,6 +584,8 @@ class RunPlanExecutor:
             return "Experiment batch publication verification failed."
         if task_id == _INVERSE_DESIGN_TASK_ID:
             return "OLED inverse-design publication verification failed."
+        if task_id == _GENERATED_EVALUATION_TASK_ID:
+            return "OLED generated-candidate evaluation publication verification failed."
         raise ValueError("immutable execution record task is invalid")
 
     @staticmethod
@@ -819,6 +838,43 @@ class RunPlanExecutor:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         approved = approved_gates or set()
+        if task_id == _GENERATED_EVALUATION_TASK_ID:
+            task_options = self._payload_options(options)
+            if task_options:
+                raise ValueError(
+                    "OLED generated-candidate evaluation does not accept task options"
+                )
+            return {
+                "run_id": run_id,
+                "inverse_design_json": self._absolute_artifact_path(
+                    artifact_paths, "oled_inverse_design_receipt"
+                ),
+                "batch_selection_json": self._absolute_artifact_path(
+                    artifact_paths, "oled_experiment_batch_receipt"
+                ),
+                "screening_receipt_json": self._absolute_artifact_path(
+                    artifact_paths, "oled_registry_screening_receipt"
+                ),
+                "ranked_shortlist_csv": self._absolute_artifact_path(
+                    artifact_paths, "oled_registry_screening_shortlist"
+                ),
+                "phase1_execution_dir": self._absolute_artifact_path(
+                    artifact_paths, "oled_phase1_execution_dir"
+                ),
+                "dataset_snapshot_json": self._absolute_artifact_path(
+                    artifact_paths, "oled_dataset_snapshot"
+                ),
+                "registry_snapshot_json": self._absolute_artifact_path(
+                    artifact_paths, "oled_registry_snapshot"
+                ),
+                "candidate_cost_manifest_json": self._optional_absolute_artifact_path(
+                    artifact_paths, "oled_candidate_cost_manifest"
+                ),
+                "remote_known_hosts": self._optional_absolute_artifact_path(
+                    artifact_paths, "oled_inverse_design_remote_known_hosts"
+                ),
+                "output_root": str(run_dir / "oled_generated_evaluation"),
+            }
         if task_id == _INVERSE_DESIGN_TASK_ID:
             task_options = self._payload_options(options)
             allowed_options = {
@@ -1714,6 +1770,94 @@ class RunPlanExecutor:
             for artifact_id, output_path in expected_paths.items():
                 artifact_paths[artifact_id] = str(output_path)
             artifact_paths["oled_inverse_design_execution_record"] = str(result_path)
+            return
+        if task_id == _GENERATED_EVALUATION_TASK_ID:
+            existing_registry = self.storage.read_artifact_registry(project_id, run_id)
+            if "oled_generated_evaluation_execution_record" in existing_registry:
+                raise ValueError(
+                    "OLED generated-candidate evaluation record is already immutable"
+                )
+            outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+            expected_filenames = {
+                "oled_generated_evaluation_receipt": "evaluation.json",
+                "oled_generated_evaluation_predictions": "complete_predictions.jsonl",
+                "oled_generated_evaluation_shortlist": "ranked_shortlist.csv",
+                "oled_generated_evaluation_exclusions": "generated_candidate_exclusions.jsonl",
+                "oled_generated_evaluation_report": "report.md",
+            }
+            registry_registered = False
+            registered_paths: dict[str, str] = {}
+            try:
+                receipt_raw = str(
+                    outputs.get("oled_generated_evaluation_receipt") or ""
+                ).strip()
+                if not receipt_raw:
+                    raise ValueError("missing OLED generated evaluation receipt")
+                receipt_path = Path(receipt_raw).expanduser().absolute()
+                with _verified_oled_generated_candidate_evaluation_from_files(
+                    evaluation_json=receipt_path,
+                    inverse_design_json=str(payload.get("inverse_design_json") or ""),
+                    batch_selection_json=str(payload.get("batch_selection_json") or ""),
+                    screening_receipt_json=str(payload.get("screening_receipt_json") or ""),
+                    ranked_shortlist_csv=str(payload.get("ranked_shortlist_csv") or ""),
+                    phase1_execution_dir=str(payload.get("phase1_execution_dir") or ""),
+                    dataset_snapshot_json=str(payload.get("dataset_snapshot_json") or ""),
+                    registry_snapshot_json=str(payload.get("registry_snapshot_json") or ""),
+                    candidate_cost_manifest_json=(
+                        str(payload.get("candidate_cost_manifest_json") or "") or None
+                    ),
+                    remote_known_hosts=(
+                        str(payload.get("remote_known_hosts") or "") or None
+                    ),
+                ) as bound:
+                    output_root = (run_dir / "oled_generated_evaluation").absolute()
+                    if bound.output_dir.parent != output_root:
+                        raise ValueError(
+                            "OLED generated evaluation is outside executor output root"
+                        )
+                    expected_paths = {
+                        artifact_id: bound.output_dir / filename
+                        for artifact_id, filename in expected_filenames.items()
+                    }
+                    for artifact_id, expected_path in expected_paths.items():
+                        reported = str(outputs.get(artifact_id) or "").strip()
+                        if (
+                            not reported
+                            or Path(reported).expanduser().absolute() != expected_path
+                        ):
+                            raise ValueError(
+                                "OLED generated evaluation adapter output is not the verified "
+                                f"publication file: {artifact_id}"
+                            )
+                        expected_path.relative_to(run_dir)
+                    bound.assert_stable()
+                    registered_paths = {
+                        artifact_id: str(path.relative_to(run_dir))
+                        for artifact_id, path in expected_paths.items()
+                    }
+                    registered_paths[
+                        "oled_generated_evaluation_execution_record"
+                    ] = result_rel
+                    self.storage.register_new_artifact_registry_paths(
+                        project_id,
+                        run_id,
+                        registered_paths,
+                    )
+                    registry_registered = True
+                    bound.assert_stable()
+            except Exception:
+                if registry_registered:
+                    self.storage.remove_artifact_registry_paths_if_all_equal(
+                        project_id,
+                        run_id,
+                        registered_paths,
+                    )
+                raise
+            for artifact_id, output_path in expected_paths.items():
+                artifact_paths[artifact_id] = str(output_path)
+            artifact_paths["oled_generated_evaluation_execution_record"] = str(
+                result_path
+            )
             return
 
     def _artifact_paths_from_registry(self, project_id: str, run_id: str, run_dir: Path) -> dict[str, str]:
