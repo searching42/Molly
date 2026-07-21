@@ -83,7 +83,7 @@ _IMMUTABLE_EXECUTION_RECORD_TASK_IDS = frozenset(
 _IMMUTABLE_RECORD_BY_TASK = {
     _EXPERIMENT_BATCH_TASK_ID: "oled_experiment_batch_execution_record",
     _INVERSE_DESIGN_TASK_ID: "oled_inverse_design_execution_record",
-    _GENERATED_EVALUATION_TASK_ID: "oled_generated_evaluation_execution_record",
+    _GENERATED_EVALUATION_TASK_ID: "oled_candidate_evaluation_execution_record",
 }
 
 
@@ -873,7 +873,7 @@ class RunPlanExecutor:
                 "remote_known_hosts": self._optional_absolute_artifact_path(
                     artifact_paths, "oled_inverse_design_remote_known_hosts"
                 ),
-                "output_root": str(run_dir / "oled_generated_evaluation"),
+                "output_root": str(run_dir / "oled_candidate_evaluation"),
             }
         if task_id == _INVERSE_DESIGN_TASK_ID:
             task_options = self._payload_options(options)
@@ -1773,23 +1773,23 @@ class RunPlanExecutor:
             return
         if task_id == _GENERATED_EVALUATION_TASK_ID:
             existing_registry = self.storage.read_artifact_registry(project_id, run_id)
-            if "oled_generated_evaluation_execution_record" in existing_registry:
+            if "oled_candidate_evaluation_execution_record" in existing_registry:
                 raise ValueError(
                     "OLED generated-candidate evaluation record is already immutable"
                 )
             outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
             expected_filenames = {
-                "oled_generated_evaluation_receipt": "evaluation.json",
-                "oled_generated_evaluation_predictions": "complete_predictions.jsonl",
-                "oled_generated_evaluation_shortlist": "ranked_shortlist.csv",
-                "oled_generated_evaluation_exclusions": "generated_candidate_exclusions.jsonl",
-                "oled_generated_evaluation_report": "report.md",
+                "oled_candidate_evaluation_receipt": "evaluation.json",
+                "oled_candidate_evaluation_predictions": "complete_predictions.jsonl",
+                "oled_candidate_evaluation_shortlist": "ranked_shortlist.csv",
+                "oled_candidate_evaluation_exclusions": "generated_candidate_exclusions.jsonl",
+                "oled_candidate_evaluation_report": "report.md",
             }
             registry_registered = False
             registered_paths: dict[str, str] = {}
             try:
                 receipt_raw = str(
-                    outputs.get("oled_generated_evaluation_receipt") or ""
+                    outputs.get("oled_candidate_evaluation_receipt") or ""
                 ).strip()
                 if not receipt_raw:
                     raise ValueError("missing OLED generated evaluation receipt")
@@ -1810,7 +1810,7 @@ class RunPlanExecutor:
                         str(payload.get("remote_known_hosts") or "") or None
                     ),
                 ) as bound:
-                    output_root = (run_dir / "oled_generated_evaluation").absolute()
+                    output_root = (run_dir / "oled_candidate_evaluation").absolute()
                     if bound.output_dir.parent != output_root:
                         raise ValueError(
                             "OLED generated evaluation is outside executor output root"
@@ -1836,7 +1836,7 @@ class RunPlanExecutor:
                         for artifact_id, path in expected_paths.items()
                     }
                     registered_paths[
-                        "oled_generated_evaluation_execution_record"
+                        "oled_candidate_evaluation_execution_record"
                     ] = result_rel
                     self.storage.register_new_artifact_registry_paths(
                         project_id,
@@ -1855,7 +1855,7 @@ class RunPlanExecutor:
                 raise
             for artifact_id, output_path in expected_paths.items():
                 artifact_paths[artifact_id] = str(output_path)
-            artifact_paths["oled_generated_evaluation_execution_record"] = str(
+            artifact_paths["oled_candidate_evaluation_execution_record"] = str(
                 result_path
             )
             return

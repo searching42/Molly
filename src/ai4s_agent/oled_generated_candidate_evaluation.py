@@ -16,7 +16,7 @@ import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Iterator, Literal, Sequence
 
 from ai4s_agent._utils import now_iso
 from ai4s_agent.domains.oled_supplementary_material_identity_evidence_response import (
@@ -52,6 +52,11 @@ from ai4s_agent.oled_supplementary_source_transcription_review import (
 
 
 _EVALUATION_VERSION = "oled_generated_candidate_evaluation.v1"
+OledCandidateSourceType = Literal["registry", "generated"]
+_CANDIDATE_SOURCE_TYPES: tuple[OledCandidateSourceType, ...] = (
+    "registry",
+    "generated",
+)
 @dataclass(frozen=True)
 class OledGeneratedCandidateEvaluationResult:
     evaluation_id: str
@@ -369,6 +374,8 @@ def _build_evaluation_from_files(
         candidate_ids = [str(item["candidate_id"]) for item in combined]
         if len(candidate_ids) != len(set(candidate_ids)):
             raise ValueError("PR-AT combined candidate IDs are duplicated")
+        if any(item.get("source_kind") not in _CANDIDATE_SOURCE_TYPES for item in combined):
+            raise ValueError("PR-AT candidate source type is unsupported")
         constraints = _normalized_constraints(
             pr_ap.config.get("constraints"),
             property_ids=prepared.property_ids,
@@ -388,6 +395,7 @@ def _build_evaluation_from_files(
             "feature_generator_profile": prepared.feature_generator_profile,
             "scoring_policy": "global_pareto_then_mean_rank_percentile.v1",
             "candidate_source_policy": "registry_plus_exact_pr_as_publication.v1",
+            "candidate_source_types": list(_CANDIDATE_SOURCE_TYPES),
         }
         inverse_receipt_sha256 = _sha256_bytes(
             inverse_bound.expected_payloads["inverse_design.json"]
@@ -532,7 +540,7 @@ def _predict_generated_candidates(
         predictions.append(
             {
                 "candidate_id": candidate_id,
-                "source_kind": "inverse_design",
+                "source_kind": "generated",
                 "source_candidate_id": candidate_id,
                 "source_identity_digest": identity_digest,
                 "source_publication_id": publication_id,
@@ -650,7 +658,7 @@ def _evaluation_payloads(
             ),
             "generated_source_count": generated_source_count,
             "generated_prediction_count": sum(
-                item["source_kind"] == "inverse_design" for item in predictions
+                item["source_kind"] == "generated" for item in predictions
             ),
             "generated_exclusion_count": len(generated_exclusions),
             "complete_prediction_count": len(predictions),
@@ -667,7 +675,7 @@ def _evaluation_payloads(
             "dataset_written": False,
             "model_registered": False,
         },
-        "next_required_step": "pr_arb_candidate_decision_successor",
+        "next_required_step": "pr_arb_v2_candidate_decision",
     }
     payloads["evaluation.json"] = _json_bytes(receipt)
     payloads["report.md"] = _report_bytes(receipt, shortlist)
@@ -824,6 +832,7 @@ def _directory_flag() -> int:
 __all__ = [
     "OledGeneratedCandidateEvaluationResult",
     "OledGeneratedCandidateEvaluationVerificationResult",
+    "OledCandidateSourceType",
     "_verified_oled_generated_candidate_evaluation_from_files",
     "run_oled_generated_candidate_evaluation_from_files",
     "verify_oled_generated_candidate_evaluation_from_files",

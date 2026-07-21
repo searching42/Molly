@@ -11,11 +11,11 @@ from ai4s_agent.oled_generated_candidate_evaluation import (
 
 _ADAPTER_NAME = "execute_oled_generated_candidate_evaluation_adapter"
 _OUTPUT_FILENAMES = {
-    "oled_generated_evaluation_receipt": "evaluation.json",
-    "oled_generated_evaluation_predictions": "complete_predictions.jsonl",
-    "oled_generated_evaluation_shortlist": "ranked_shortlist.csv",
-    "oled_generated_evaluation_exclusions": "generated_candidate_exclusions.jsonl",
-    "oled_generated_evaluation_report": "report.md",
+    "oled_candidate_evaluation_receipt": "evaluation.json",
+    "oled_candidate_evaluation_predictions": "complete_predictions.jsonl",
+    "oled_candidate_evaluation_shortlist": "ranked_shortlist.csv",
+    "oled_candidate_evaluation_exclusions": "generated_candidate_exclusions.jsonl",
+    "oled_candidate_evaluation_report": "report.md",
 }
 
 
@@ -43,7 +43,7 @@ def execute_oled_generated_candidate_evaluation_adapter(
             "missing_required_fields",
             "Exact PR-AS, PR-ARb, PR-AP, PR-AO, PR-AI, and Registry inputs are required.",
         )
-    if Path(required["output_root"]).expanduser().name != "oled_generated_evaluation":
+    if Path(required["output_root"]).expanduser().name != "oled_candidate_evaluation":
         return _failed(
             "invalid_output_root",
             "Generated-candidate evaluation output root is not executor-owned.",

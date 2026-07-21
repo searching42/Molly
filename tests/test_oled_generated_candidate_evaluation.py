@@ -84,7 +84,8 @@ def test_evaluates_generated_candidates_and_globally_reranks_without_registry_id
     assert receipt["counts"]["generated_exclusion_count"] == 0
     assert receipt["claims"]["registry_and_generated_pool_globally_ranked"] is True
     assert receipt["claims"]["generated_candidates_assigned_registry_material_ids"] is False
-    assert receipt["next_required_step"] == "pr_arb_candidate_decision_successor"
+    assert receipt["config"]["candidate_source_types"] == ["registry", "generated"]
+    assert receipt["next_required_step"] == "pr_arb_v2_candidate_decision"
 
     with (result.output_dir / "ranked_shortlist.csv").open(
         encoding="utf-8",
@@ -95,7 +96,7 @@ def test_evaluates_generated_candidates_and_globally_reranks_without_registry_id
         assert "material_id" not in (reader.fieldnames or [])
         assert "registry_entry_digest" not in (reader.fieldnames or [])
     assert rows
-    assert {row["source_kind"] for row in rows} == {"inverse_design"}
+    assert {row["source_kind"] for row in rows} == {"generated"}
     assert all(row["candidate_id"].startswith("oled-generated:") for row in rows)
 
     complete = [
@@ -106,7 +107,7 @@ def test_evaluates_generated_candidates_and_globally_reranks_without_registry_id
     ]
     assert {row["source_kind"] for row in complete} == {
         "registry",
-        "inverse_design",
+        "generated",
     }
     verified = verify_oled_generated_candidate_evaluation_from_files(
         evaluation_json=result.output_dir / "evaluation.json",

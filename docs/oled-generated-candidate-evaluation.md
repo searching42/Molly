@@ -27,7 +27,7 @@ atomic artifact-registry update.
 The combined pool uses a source-neutral `candidate_id` and carries explicit
 source provenance:
 
-- `source_kind`: `registry` or `inverse_design`;
+- `source_kind`: `registry` or `generated`;
 - `source_candidate_id`;
 - `source_identity_digest`;
 - `source_publication_id`.
@@ -64,10 +64,15 @@ and all output bytes.
 ## Agent boundary
 
 `execute_oled_generated_candidate_evaluation` is a low-risk, ungated atomic
-task because it performs deterministic local inference and ranking only. It
-registers one immutable execution record and retries return the existing
+task because it performs deterministic local inference and ranking only. Its
+registered artifacts use the `oled_candidate_evaluation_*` namespace to make
+clear that the publication is an evaluation artifact, not a Registry update.
+It registers one immutable execution record and retries return the existing
 success without dispatching the adapter again.
 
-The next step is a PR-ARb successor that consumes this source-neutral global
-shortlist and emits the final explainable Top-N dossier. Iterative generation,
-loop budgets, and stop conditions remain outside PR-AT.
+The next step is a narrowly scoped PR-ARb v2 consumer that accepts exactly two
+source types: `registry` and `generated`. It must not introduce a universal
+candidate framework or predeclare literature, external-database, simulation,
+or human candidate variants. It emits the final explainable Top-N dossier.
+
+Iterative generation, loop budgets, and stop conditions remain outside PR-AT.

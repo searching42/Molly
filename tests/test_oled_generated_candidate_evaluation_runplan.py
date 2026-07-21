@@ -27,13 +27,13 @@ INPUT_ARTIFACT_IDS = (
     "oled_registry_snapshot",
 )
 OUTPUT_FILENAMES = {
-    "oled_generated_evaluation_receipt": "evaluation.json",
-    "oled_generated_evaluation_predictions": "complete_predictions.jsonl",
-    "oled_generated_evaluation_shortlist": "ranked_shortlist.csv",
-    "oled_generated_evaluation_exclusions": "generated_candidate_exclusions.jsonl",
-    "oled_generated_evaluation_report": "report.md",
+    "oled_candidate_evaluation_receipt": "evaluation.json",
+    "oled_candidate_evaluation_predictions": "complete_predictions.jsonl",
+    "oled_candidate_evaluation_shortlist": "ranked_shortlist.csv",
+    "oled_candidate_evaluation_exclusions": "generated_candidate_exclusions.jsonl",
+    "oled_candidate_evaluation_report": "report.md",
 }
-EXECUTION_RECORD_ID = "oled_generated_evaluation_execution_record"
+EXECUTION_RECORD_ID = "oled_candidate_evaluation_execution_record"
 
 
 def _input_artifacts(
@@ -103,7 +103,7 @@ def test_executor_publishes_registers_and_retries_generated_evaluation_idempoten
         path = run_dir / registry[artifact_id]
         assert path.is_file()
         assert path.name == filename
-    receipt_path = run_dir / registry["oled_generated_evaluation_receipt"]
+    receipt_path = run_dir / registry["oled_candidate_evaluation_receipt"]
     initial_receipt = receipt_path.read_bytes()
 
     calls: list[dict[str, object]] = []
@@ -136,10 +136,10 @@ def test_executor_rejects_fully_resigned_generated_evaluation_output(
 
     def forged_adapter(payload: dict[str, object]) -> dict[str, object]:
         result = real_adapter(payload)
-        shortlist = Path(str(result["outputs"]["oled_generated_evaluation_shortlist"]))
+        shortlist = Path(str(result["outputs"]["oled_candidate_evaluation_shortlist"]))
         forged = shortlist.read_bytes().replace(b"CCCCC", b"CCCCN")
         shortlist.write_bytes(forged)
-        receipt_path = Path(str(result["outputs"]["oled_generated_evaluation_receipt"]))
+        receipt_path = Path(str(result["outputs"]["oled_candidate_evaluation_receipt"]))
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         receipt["artifacts"]["ranked_shortlist.csv"] = _sha256_bytes(forged)
         receipt_path.write_bytes(_json_bytes(receipt))
