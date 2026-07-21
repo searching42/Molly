@@ -6,8 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from ai4s_agent import oled_candidate_decision as decision_runner
 from ai4s_agent.oled_candidate_decision import (
+    _Candidate,
+    _payloads,
     _parse_shortlist,
+    _select,
     run_oled_candidate_decision_from_files,
     verify_oled_candidate_decision_from_files,
 )
@@ -156,3 +160,128 @@ def test_candidate_source_roster_rejects_unplanned_generic_variant() -> None:
 
     with pytest.raises(ValueError, match="identity/source"):
         _parse_shortlist(payload, ("p1",))
+
+
+def _candidate(rank: int, candidate_id: str) -> _Candidate:
+    return _Candidate(
+        rank=rank,
+        candidate_id=candidate_id,
+        source_kind="generated",
+        source_candidate_id=candidate_id,
+        source_identity_digest=f"digest-{candidate_id}",
+        source_publication_id="publication-1",
+        canonical_name=candidate_id,
+        canonical_isomeric_smiles="CC",
+        standard_inchi="InChI=1S/C2H6/c1-2/h1-2H3",
+        inchikey=f"inchikey-{candidate_id}",
+        aggregate_percentile=1.0 - rank / 10.0,
+        predictions={"p1": float(rank)},
+    )
+
+
+def _selection_kwargs(candidates: list[_Candidate], target_count: int) -> dict[str, object]:
+    return {
+        "candidates": candidates,
+        "property_ids": ("p1",),
+        "screening_constraints": {},
+        "batch_constraints": {},
+        "directions": {"p1": "maximize"},
+        "presentation": {
+            "p1": {
+                "display_name": "Property 1",
+                "unit": "a.u.",
+                "physical_interpretation": "test property",
+                "ontology_status": "mapped",
+            }
+        },
+        "target_count": target_count,
+        "max_budget": None,
+        "costs_by_candidate": {},
+    }
+
+
+def test_incomplete_top_n_publishes_no_final_selection() -> None:
+    candidates = [_candidate(1, "a"), _candidate(2, "b")]
+    selected, decisions, total_cost = _select(
+        **_selection_kwargs(candidates, 3),  # type: ignore[arg-type]
+        max_similarity=None,
+    )
+    assert selected == []
+    assert total_cost is None
+    assert {item["selection_status"] for item in decisions} == {
+        "eligible_but_incomplete_batch"
+    }
+    assert all("provisional_not_final" in item["reason_codes"] for item in decisions)
+
+    config = {
+        "target_top_n": 3,
+        "candidate_source_types": ["registry", "generated"],
+        "constraints": {},
+        "directions": {"p1": "maximize"},
+        "max_pairwise_tanimoto": None,
+        "max_budget_minor": None,
+        "currency": None,
+        "selection_policy": "rank_anchored_greedy_max_min_tanimoto.v1",
+        "property_presentation": _selection_kwargs(candidates, 3)["presentation"],
+    }
+    payloads = _payloads(
+        decision_id="oled-candidate-decision:test",
+        generated_at="2026-07-21T20:00:00+08:00",
+        status="incomplete",
+        evaluation_receipt={"evaluation_id": "evaluation-1"},
+        evaluation_sha256="sha256:" + "1" * 64,
+        batch_receipt={"batch_id": "batch-1"},
+        batch_sha256="sha256:" + "2" * 64,
+        config=config,
+        property_ids=("p1",),
+        selected=selected,
+        decisions=decisions,
+        total_cost=total_cost,
+    )
+    assert list(csv.DictReader(payloads["top_candidates.csv"].decode().splitlines())) == []
+    receipt = json.loads(payloads["candidate_decision.json"])
+    assert receipt["selected_candidates"] == []
+    assert receipt["counts"]["selected_candidate_count"] == 0
+    assert not any(
+        item["selection_status"] == "selected"
+        for item in receipt["candidate_decisions"]
+    )
+
+
+def test_selection_inherits_rank_anchored_greedy_max_min_diversity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = [
+        _candidate(1, "a"),
+        _candidate(2, "b"),
+        _candidate(3, "c"),
+    ]
+    similarities = {
+        frozenset(("a", "b")): 0.80,
+        frozenset(("a", "c")): 0.20,
+        frozenset(("b", "c")): 0.30,
+    }
+    monkeypatch.setattr(
+        decision_runner,
+        "_fingerprints",
+        lambda values: {item.candidate_id: item.candidate_id for item in values},
+    )
+    monkeypatch.setattr(
+        decision_runner,
+        "_tanimoto_similarity",
+        lambda left, right: similarities[frozenset((left, right))],
+    )
+
+    selected, decisions, _ = _select(
+        **_selection_kwargs(candidates, 2),  # type: ignore[arg-type]
+        max_similarity=0.90,
+    )
+
+    assert [item.candidate_id for item in selected] == ["a", "c"]
+    selected_decisions = [
+        item for item in decisions if item["selection_status"] == "selected"
+    ]
+    assert [item["candidate"]["candidate_id"] for item in selected_decisions] == [
+        "a",
+        "c",
+    ]

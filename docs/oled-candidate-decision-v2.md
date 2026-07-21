@@ -32,9 +32,13 @@ than estimating or inventing a value.
 
 ## Selection and explanation
 
-Candidates are considered in PR-AT global rank order. The selector reapplies
-the inherited property constraints, then the inherited cumulative budget and
-pairwise diversity policies. The publication contains:
+The selector preserves the exact inherited
+`rank_anchored_greedy_max_min_tanimoto.v1` policy. It chooses the highest-ranked
+feasible candidate first. At each later step it chooses, from all currently
+feasible candidates, the candidate whose maximum similarity to the selected
+set is lowest, with PR-AT rank and candidate ID as deterministic tie-breakers.
+The inherited property, cumulative-budget, and diversity-threshold constraints
+remain hard feasibility checks. The publication contains:
 
 - `candidate_decision.json` with every candidate decision and exact provenance;
 - `top_candidates.csv` with the selected recommendations;
@@ -44,6 +48,13 @@ pairwise diversity policies. The publication contains:
 Both CSV artifacts expose candidate source provenance and, for every modeled
 property, the display name, unit, objective direction, predicted value,
 screening-constraint status, and final decision-constraint status.
+
+Final Top-N publication is fail closed. If a complete target set cannot be
+formed, `top_candidates.csv` contains only its header, `selected_candidates` is
+empty, and `selected_candidate_count` is zero. The dossier retains the
+selection attempt as `eligible_but_incomplete_batch` evidence and marks any
+provisional choices `provisional_not_final`; it never exposes a partial set as
+a final recommendation.
 
 ## Claims and next step
 

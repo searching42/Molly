@@ -345,6 +345,9 @@ def _build_decision_from_files(
         raise ValueError("PR-AS receipt is not canonical")
     batch_config = _required_dict(batch_receipt, "config")
     target_count = _positive_int(batch_config, "target_batch_size")
+    selection_policy = batch_config.get("selection_policy")
+    if selection_policy != "rank_anchored_greedy_max_min_tanimoto.v1":
+        raise ValueError("PR-ARb source selection policy is unsupported")
     batch_constraints = _normalized_constraints(batch_config.get("constraints"))
     diversity = _required_dict(batch_config, "diversity")
     threshold = diversity.get("max_pairwise_tanimoto")
@@ -438,7 +441,7 @@ def _build_decision_from_files(
             "max_pairwise_tanimoto": max_similarity,
             "max_budget_minor": max_budget,
             "currency": budget.get("currency"),
-            "selection_policy": "pr_at_rank_anchored_top_n.v1",
+            "selection_policy": selection_policy,
             "property_presentation": presentation,
         }
         decision_id = "oled-candidate-decision:" + _stable_hash(
@@ -536,8 +539,8 @@ def _select(
     costs_by_candidate: dict[tuple[str, str], int],
 ) -> tuple[list[_Candidate], list[dict[str, Any]], int | None]:
     del property_ids
-    selected: list[_Candidate] = []
-    selected_cost = 0
+    provisional: list[_Candidate] = []
+    provisional_cost = 0
     decision_state: dict[str, dict[str, Any]] = {}
     fingerprints: dict[str, Any] = {}
     if max_similarity is not None:
@@ -550,46 +553,90 @@ def _select(
         elif max_budget is not None and cost is not None and cost > max_budget:
             reasons.append("candidate_cost_exceeds_max_budget")
         decision_state[candidate.candidate_id] = {
-            "reasons": reasons,
+            "base_reasons": reasons,
+            "last_step_reasons": [],
             "cost": cost,
             "maximum_similarity": None,
+            "provisional": False,
         }
-    for candidate in candidates:
-        if len(selected) >= target_count:
-            break
-        state = decision_state[candidate.candidate_id]
-        if state["reasons"]:
-            continue
-        cost = state["cost"]
-        if max_budget is not None and selected_cost + int(cost) > max_budget:
-            state["reasons"].append("candidate_exceeds_remaining_budget")
-            continue
-        if selected and max_similarity is not None:
-            similarity = max(
-                _tanimoto_similarity(
-                    fingerprints[candidate.candidate_id],
-                    fingerprints[item.candidate_id],
+    remaining = [
+        candidate
+        for candidate in candidates
+        if not decision_state[candidate.candidate_id]["base_reasons"]
+    ]
+    while len(provisional) < target_count:
+        feasible: list[tuple[float, _Candidate]] = []
+        for candidate in remaining:
+            state = decision_state[candidate.candidate_id]
+            step_reasons: list[str] = []
+            cost = state["cost"]
+            if (
+                max_budget is not None
+                and provisional_cost + int(cost) > max_budget
+            ):
+                step_reasons.append("candidate_exceeds_remaining_budget")
+            maximum_similarity: float | None = None
+            if provisional and max_similarity is not None:
+                maximum_similarity = max(
+                    _tanimoto_similarity(
+                        fingerprints[candidate.candidate_id],
+                        fingerprints[item.candidate_id],
+                    )
+                    for item in provisional
                 )
-                for item in selected
+                if maximum_similarity > max_similarity:
+                    step_reasons.append("candidate_exceeds_diversity_threshold")
+            state["last_step_reasons"] = step_reasons
+            state["maximum_similarity"] = maximum_similarity
+            if not step_reasons:
+                feasible.append((maximum_similarity or 0.0, candidate))
+        if not feasible:
+            break
+        if provisional:
+            _, chosen = min(
+                feasible,
+                key=lambda item: (item[0], item[1].rank, item[1].candidate_id),
             )
-            state["maximum_similarity"] = similarity
-            if similarity > max_similarity:
-                state["reasons"].append("candidate_exceeds_diversity_threshold")
-                continue
-        selected.append(candidate)
+        else:
+            _, chosen = min(
+                feasible,
+                key=lambda item: (item[1].rank, item[1].candidate_id),
+            )
+        chosen_state = decision_state[chosen.candidate_id]
+        chosen_state["provisional"] = True
+        provisional.append(chosen)
+        remaining.remove(chosen)
+        cost = chosen_state["cost"]
         if cost is not None:
-            selected_cost += int(cost)
+            provisional_cost += int(cost)
+
+    complete = len(provisional) == target_count
+    selected = list(provisional) if complete else []
     selected_ids = {item.candidate_id for item in selected}
+    provisional_ids = {item.candidate_id for item in provisional}
     decisions: list[dict[str, Any]] = []
     for candidate in candidates:
         state = decision_state[candidate.candidate_id]
         chosen = candidate.candidate_id in selected_ids
-        reasons = sorted(set(state["reasons"]))
+        base_reasons = list(state["base_reasons"])
+        step_reasons = list(state["last_step_reasons"])
         if chosen:
-            reasons = ["selected_by_global_rank"]
+            reasons = ["selected_by_rank_anchored_greedy_max_min_tanimoto"]
             status = "selected"
-        elif reasons:
+        elif base_reasons:
+            reasons = sorted(set(base_reasons))
             status = "ineligible"
+        elif not complete:
+            status = "eligible_but_incomplete_batch"
+            if candidate.candidate_id in provisional_ids:
+                reasons = ["provisional_not_final"]
+            elif step_reasons:
+                reasons = sorted(set(step_reasons))
+            else:
+                reasons = ["not_selected_before_incomplete_termination"]
+        elif step_reasons:
+            reasons = sorted(set(step_reasons))
+            status = "eligible_not_selected"
         else:
             reasons = ["rank_below_top_n_cutoff"]
             status = "eligible_not_selected"
@@ -622,7 +669,8 @@ def _select(
                 },
             }
         )
-    return selected, decisions, selected_cost if max_budget is not None else None
+    total_cost = provisional_cost if complete and max_budget is not None else None
+    return selected, decisions, total_cost
 
 
 def _payloads(
@@ -648,7 +696,7 @@ def _payloads(
         {
             "selection_order": selected_by_id[item.candidate_id],
             **_flat_decision(decisions_by_id[item.candidate_id], property_ids),
-            "selection_reason": "selected_by_global_rank",
+            "selection_reason": "selected_by_rank_anchored_greedy_max_min_tanimoto",
         }
         for item in selected
     ]

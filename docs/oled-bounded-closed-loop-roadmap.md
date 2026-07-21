@@ -22,6 +22,8 @@ accept/defer/reject adjudication.
 
 It inherits the exact first PR-ARb target, property constraints, budget, and
 diversity request. It does not create a second configurable selection schema.
+The original rank-anchored greedy max-min Tanimoto policy remains unchanged,
+and an incomplete Top-N produces no final selected candidates.
 
 ## PR-AU: bounded closed-loop discovery controller
 
