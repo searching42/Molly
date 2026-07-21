@@ -60,3 +60,7 @@ Human approval remains attached to the gated generation action; it is not a
 manual accept/defer/reject step for each candidate. Computational or molecular
 dynamics validation is optional future capability and is not an acceptance
 criterion for closing this first end-to-end workflow.
+
+PR-AU implements this as a control-decision publication. It never executes a
+generation action itself: `request_generation_approval` routes the existing
+gated PR-AS task, while `stop` is terminal for the supplied bounded history.

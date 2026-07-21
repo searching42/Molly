@@ -27,6 +27,9 @@ from ai4s_agent.oled_generated_candidate_evaluation import (
 from ai4s_agent.oled_candidate_decision import (
     _verified_oled_candidate_decision_from_files,
 )
+from ai4s_agent.oled_bounded_discovery_controller import (
+    _verified_oled_bounded_discovery_controller_from_files,
+)
 from ai4s_agent.oled_real_phase1_execution import (
     _build_execution_payloads,
     _validated_split_by_row,
@@ -76,6 +79,7 @@ _INVERSE_DESIGN_MAX_INPUT_BYTES = 1024 * 1024 * 1024
 _INVERSE_DESIGN_FROZEN_INPUTS_DIR = "frozen_inputs"
 _GENERATED_EVALUATION_TASK_ID = "execute_oled_generated_candidate_evaluation"
 _CANDIDATE_DECISION_TASK_ID = "execute_oled_candidate_decision"
+_BOUNDED_CONTROLLER_TASK_ID = "execute_oled_bounded_discovery_controller"
 _IMMUTABLE_EXECUTION_RECORD_TASK_IDS = frozenset(
     {
         _REGISTRY_SCREENING_TASK_ID,
@@ -83,6 +87,7 @@ _IMMUTABLE_EXECUTION_RECORD_TASK_IDS = frozenset(
         _INVERSE_DESIGN_TASK_ID,
         _GENERATED_EVALUATION_TASK_ID,
         _CANDIDATE_DECISION_TASK_ID,
+        _BOUNDED_CONTROLLER_TASK_ID,
     }
 )
 _IMMUTABLE_RECORD_BY_TASK = {
@@ -90,6 +95,7 @@ _IMMUTABLE_RECORD_BY_TASK = {
     _INVERSE_DESIGN_TASK_ID: "oled_inverse_design_execution_record",
     _GENERATED_EVALUATION_TASK_ID: "oled_candidate_evaluation_execution_record",
     _CANDIDATE_DECISION_TASK_ID: "oled_final_candidate_decision_execution_record",
+    _BOUNDED_CONTROLLER_TASK_ID: "oled_bounded_controller_execution_record",
 }
 
 
@@ -230,6 +236,7 @@ class RunPlanExecutor:
                     _INVERSE_DESIGN_TASK_ID,
                     _GENERATED_EVALUATION_TASK_ID,
                     _CANDIDATE_DECISION_TASK_ID,
+                    _BOUNDED_CONTROLLER_TASK_ID,
                 }
                 and immutable_record
                 and immutable_record in self.storage.read_artifact_registry(
@@ -564,6 +571,8 @@ class RunPlanExecutor:
             return "OLED generated-candidate evaluation adapter failed."
         if task_id == _CANDIDATE_DECISION_TASK_ID:
             return "OLED final candidate-decision adapter failed."
+        if task_id == _BOUNDED_CONTROLLER_TASK_ID:
+            return "OLED bounded discovery controller adapter failed."
         return "Registry candidate screening adapter failed."
 
     @staticmethod
@@ -591,6 +600,11 @@ class RunPlanExecutor:
                 "code": "candidate_decision_execution_record_already_exists",
                 "message": "OLED final candidate-decision record is already immutable.",
             }
+        if task_id == _BOUNDED_CONTROLLER_TASK_ID:
+            return {
+                "code": "bounded_controller_execution_record_already_exists",
+                "message": "OLED bounded-controller record is already immutable.",
+            }
         raise ValueError("immutable execution record task is invalid")
 
     @staticmethod
@@ -605,6 +619,8 @@ class RunPlanExecutor:
             return "OLED generated-candidate evaluation publication verification failed."
         if task_id == _CANDIDATE_DECISION_TASK_ID:
             return "OLED final candidate-decision publication verification failed."
+        if task_id == _BOUNDED_CONTROLLER_TASK_ID:
+            return "OLED bounded-controller publication verification failed."
         raise ValueError("immutable execution record task is invalid")
 
     @staticmethod
@@ -857,6 +873,17 @@ class RunPlanExecutor:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         approved = approved_gates or set()
+        if task_id == _BOUNDED_CONTROLLER_TASK_ID:
+            task_options = self._payload_options(options)
+            if task_options:
+                raise ValueError("OLED bounded controller does not accept task options")
+            return {
+                "run_id": run_id,
+                "controller_request_json": self._absolute_artifact_path(
+                    artifact_paths, "oled_bounded_controller_request"
+                ),
+                "output_root": str(run_dir / "oled_bounded_controller"),
+            }
         if task_id == _CANDIDATE_DECISION_TASK_ID:
             task_options = self._payload_options(options)
             if task_options:
@@ -1999,6 +2026,79 @@ class RunPlanExecutor:
             for artifact_id, output_path in expected_paths.items():
                 artifact_paths[artifact_id] = str(output_path)
             artifact_paths["oled_final_candidate_decision_execution_record"] = str(
+                result_path
+            )
+            return
+        if task_id == _BOUNDED_CONTROLLER_TASK_ID:
+            existing_registry = self.storage.read_artifact_registry(project_id, run_id)
+            if "oled_bounded_controller_execution_record" in existing_registry:
+                raise ValueError("OLED bounded-controller record is immutable")
+            outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+            expected_filenames = {
+                "oled_bounded_controller_receipt": "controller.json",
+                "oled_bounded_controller_report": "report.md",
+            }
+            registry_registered = False
+            registered_paths: dict[str, str] = {}
+            try:
+                receipt_raw = str(
+                    outputs.get("oled_bounded_controller_receipt") or ""
+                ).strip()
+                if not receipt_raw:
+                    raise ValueError("missing OLED bounded-controller receipt")
+                receipt_path = Path(receipt_raw).expanduser().absolute()
+                with _verified_oled_bounded_discovery_controller_from_files(
+                    controller_json=receipt_path,
+                    controller_request_json=str(
+                        payload.get("controller_request_json") or ""
+                    ),
+                ) as bound:
+                    output_root = (run_dir / "oled_bounded_controller").absolute()
+                    if bound.output_dir.parent != output_root:
+                        raise ValueError(
+                            "OLED bounded controller is outside executor output root"
+                        )
+                    expected_paths = {
+                        artifact_id: bound.output_dir / filename
+                        for artifact_id, filename in expected_filenames.items()
+                    }
+                    for artifact_id, expected_path in expected_paths.items():
+                        reported = str(outputs.get(artifact_id) or "").strip()
+                        if (
+                            not reported
+                            or Path(reported).expanduser().absolute() != expected_path
+                        ):
+                            raise ValueError(
+                                "OLED bounded-controller adapter output is not the "
+                                f"verified publication file: {artifact_id}"
+                            )
+                        expected_path.relative_to(run_dir)
+                    bound.assert_stable()
+                    registered_paths = {
+                        artifact_id: str(path.relative_to(run_dir))
+                        for artifact_id, path in expected_paths.items()
+                    }
+                    registered_paths["oled_bounded_controller_execution_record"] = (
+                        result_rel
+                    )
+                    self.storage.register_new_artifact_registry_paths(
+                        project_id,
+                        run_id,
+                        registered_paths,
+                    )
+                    registry_registered = True
+                    bound.assert_stable()
+            except Exception:
+                if registry_registered:
+                    self.storage.remove_artifact_registry_paths_if_all_equal(
+                        project_id,
+                        run_id,
+                        registered_paths,
+                    )
+                raise
+            for artifact_id, output_path in expected_paths.items():
+                artifact_paths[artifact_id] = str(output_path)
+            artifact_paths["oled_bounded_controller_execution_record"] = str(
                 result_path
             )
             return

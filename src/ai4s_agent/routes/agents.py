@@ -579,6 +579,7 @@ _STAGE_LABELS = {
     "execute_oled_inverse_design": "逆向设计候选生成",
     "execute_oled_generated_candidate_evaluation": "生成候选受控预测与全局重排",
     "execute_oled_candidate_decision": "最终可解释候选决策",
+    "execute_oled_bounded_discovery_controller": "有界闭环发现控制器",
 }
 
 _GATE_EXPLANATIONS = {

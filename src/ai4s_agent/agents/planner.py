@@ -259,6 +259,16 @@ class PlannerAgent:
             "最终top n",
             "最终top-n",
         ]
+        bounded_controller_terms = [
+            "bounded closed-loop discovery controller",
+            "bounded closed loop discovery controller",
+            "bounded discovery controller",
+            "pr-au",
+            "pr au",
+            "受限闭环发现控制器",
+            "有界闭环发现控制器",
+            "闭环发现控制器",
+        ]
         inverse_design_terms = [
             "inverse design",
             "inverse-design",
@@ -294,6 +304,8 @@ class PlannerAgent:
             "候选top",
             "可解释候选",
         ]
+        if any(term in normalized for term in bounded_controller_terms):
+            return ["execute_oled_bounded_discovery_controller"]
         if any(term in normalized for term in final_candidate_decision_terms):
             return ["execute_oled_candidate_decision"]
         if any(term in normalized for term in generated_evaluation_terms):
@@ -347,6 +359,11 @@ class PlannerAgent:
     def _rationale_for(self, task_id: str) -> PlanRationale:
         spec = self.registry.get(task_id)
         reasons = {
+            "execute_oled_bounded_discovery_controller": (
+                "The goal asks for the bounded discovery controller, so exact-replay the "
+                "declared PR-AT/PR-ARb v2 iteration history, enforce hard budgets, and "
+                "publish only a stop or gated-generation request action."
+            ),
             "execute_oled_candidate_decision": (
                 "The goal asks for the final explainable Top-N decision, so exact-replay "
                 "the PR-AT evaluation and inherit the original bounded selection request "
