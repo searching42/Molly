@@ -17,6 +17,16 @@ or mutates Registry, Gold, dataset, or model state. A generated action remains
 a separate gated execution, so one controller invocation cannot silently run
 multiple generation rounds.
 
+When, and only when, it requests generation, PR-AU emits a narrow
+`generation_authorization.json`. It binds the existing
+`execute_oled_inverse_design` task to the controller ID, the latest source-state
+fingerprint, the exact requested candidate count, the fixed final-threshold
+gate, and the exact PR-ARb/PR-AP/PR-AO/PR-AI/Registry/model source bindings.
+The executor freezes this bundle before writing the PR-AS gate snapshot, then
+replays it again before adapter dispatch. A direct PR-AS invocation remains
+possible, but it cannot claim to be the controller-routed action unless it
+consumes this authorization.
+
 ## Request and exact replay
 
 The canonical request contains only:
@@ -30,10 +40,17 @@ PR-AP, PR-AO, PR-AI, and Registry paths required by the existing independent
 verifiers. The controller replays every iteration and records the resulting
 decision, evaluation, and generation-publication identities and SHA-256 values.
 
-Candidate IDs must form a monotonic superset across iterations. This prevents a
-later generation round from silently discarding candidates found in an earlier
-round. Until a cumulative PR-AT publication is available, a second iteration
-that drops earlier generated candidates fails closed.
+Every iteration must have the same immutable loop fingerprint: Top-N target,
+property constraints and directions, budget/currency, diversity threshold,
+selection policy, PR-AP screening anchor, model binding, Phase-1 execution,
+dataset snapshot, and Registry snapshot. Only the PR-AS publication, the
+cumulative PR-AT evaluation, and the matching PR-ARb v2 decision may advance.
+
+Candidate IDs must form a monotonic superset across iterations. The controller
+also keeps a three-part chemical identity ledger over canonical isomeric
+SMILES, standard InChI, and InChIKey. It rejects a reissued structure under a
+different publication-scoped candidate ID, a candidate ID rebound to a new
+structure, or a later cumulative pool that drops an earlier chemical identity.
 
 ## Hard ceilings
 
@@ -45,9 +62,11 @@ max_generation_rounds: 2
 max_generated_candidates: 512
 ```
 
-The generated-candidate limit is cumulative over the latest verified monotonic
-pool. The controller stops before requesting an action that would exceed a
-ceiling.
+The generated-candidate limit is cumulative over unique PR-AS publications,
+using each publication's accepted/source candidate count rather than only the
+subset that later reaches PR-AT prediction. Thus identity overlaps and
+feature/prediction failures still consume the generation budget. The controller
+stops before requesting an action that would exceed a ceiling.
 
 ## Stop and continuation semantics
 
@@ -59,15 +78,18 @@ The controller stops when:
 - any iteration, generation-round, or generated-candidate budget is exhausted.
 
 Only a true property-qualified supply shortfall may produce
-`request_generation_approval`. The receipt includes the shortfall-sized
-requested candidate count, the required gate, and the suggested existing task.
-It is a routing request, not evidence that generation ran or was approved.
+`request_generation_approval`. The receipt and authorization include the
+shortfall-sized requested candidate count, the required gate, and the target
+existing task. This is a bounded, executable routing grant—not evidence that
+generation ran or was approved.
 
 ## Publication
 
 The immutable publication contains exactly:
 
 - `controller.json`;
+- `controller_request.json`;
+- `generation_authorization.json`;
 - `report.md`.
 
 The RunPlan executor independently replays the controller while keeping the

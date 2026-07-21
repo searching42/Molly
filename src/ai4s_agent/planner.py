@@ -364,6 +364,8 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         required_artifacts=["oled_bounded_controller_request"],
         output_artifacts=[
             "oled_bounded_controller_receipt",
+            "oled_bounded_controller_request_snapshot",
+            "oled_bounded_controller_generation_authorization",
             "oled_bounded_controller_report",
             "oled_bounded_controller_execution_record",
         ],

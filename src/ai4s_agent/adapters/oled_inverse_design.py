@@ -119,6 +119,18 @@ def execute_oled_inverse_design_adapter(payload: dict[str, Any]) -> dict[str, An
             seed=seed,
             remote_profile_id=remote_profile_id or None,
             remote_known_hosts=remote_known_hosts or None,
+            controller_request_json=(
+                _optional_string(payload.get("controller_request_json")) or None
+            ),
+            controller_json=(
+                _optional_string(payload.get("controller_json")) or None
+            ),
+            generation_authorization_json=(
+                _optional_string(payload.get("generation_authorization_json")) or None
+            ),
+            controller_report_md=(
+                _optional_string(payload.get("controller_report_md")) or None
+            ),
             timeout_sec=timeout_sec,
         )
     except Exception:

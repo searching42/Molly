@@ -36,6 +36,12 @@ def execute_oled_bounded_discovery_controller_adapter(
         )
     outputs = {
         "oled_bounded_controller_receipt": str(result.output_dir / "controller.json"),
+        "oled_bounded_controller_request_snapshot": str(
+            result.output_dir / "controller_request.json"
+        ),
+        "oled_bounded_controller_generation_authorization": str(
+            result.output_dir / "generation_authorization.json"
+        ),
         "oled_bounded_controller_report": str(result.output_dir / "report.md"),
     }
     return validate_adapter_output_shape(

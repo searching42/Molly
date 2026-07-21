@@ -29,6 +29,7 @@ from ai4s_agent.oled_candidate_decision import (
 )
 from ai4s_agent.oled_bounded_discovery_controller import (
     _verified_oled_bounded_discovery_controller_from_files,
+    validate_oled_bounded_generation_authorization_bundle,
 )
 from ai4s_agent.oled_real_phase1_execution import (
     _build_execution_payloads,
@@ -1017,6 +1018,33 @@ class RunPlanExecutor:
             source_remote_known_hosts = self._optional_absolute_artifact_path(
                 artifact_paths, "oled_inverse_design_remote_known_hosts"
             )
+            source_controller_request_json = (
+                self._optional_absolute_artifact_path(
+                    artifact_paths, "oled_bounded_controller_request_snapshot"
+                )
+                or self._optional_absolute_artifact_path(
+                    artifact_paths, "oled_bounded_controller_request"
+                )
+            )
+            source_controller_json = self._optional_absolute_artifact_path(
+                artifact_paths, "oled_bounded_controller_receipt"
+            )
+            source_generation_authorization_json = self._optional_absolute_artifact_path(
+                artifact_paths, "oled_bounded_controller_generation_authorization"
+            )
+            source_controller_report_md = self._optional_absolute_artifact_path(
+                artifact_paths, "oled_bounded_controller_report"
+            )
+            controller_source_paths = (
+                source_controller_request_json,
+                source_controller_json,
+                source_generation_authorization_json,
+                source_controller_report_md,
+            )
+            if any(controller_source_paths) and not all(controller_source_paths):
+                raise ValueError(
+                    "controller-authorized inverse design requires the complete controller artifact bundle"
+                )
             if mode == "existing_output" and not source_reinvent4_output_csv:
                 raise ValueError(
                     "oled_inverse_design_generator_output is required for existing_output mode"
@@ -1054,6 +1082,10 @@ class RunPlanExecutor:
                 source_reinvent4_config=source_reinvent4_config,
                 source_reinvent4_output_csv=source_reinvent4_output_csv,
                 source_remote_known_hosts=source_remote_known_hosts,
+                source_controller_request_json=source_controller_request_json,
+                source_controller_json=source_controller_json,
+                source_generation_authorization_json=source_generation_authorization_json,
+                source_controller_report_md=source_controller_report_md,
                 screening_receipt_json=frozen_batch["screening_receipt_json"],
                 ranked_shortlist_csv=frozen_batch["ranked_shortlist_csv"],
                 candidate_cost_manifest_json=frozen_batch.get(
@@ -1118,6 +1150,40 @@ class RunPlanExecutor:
                     dataset_snapshot_json=frozen_replay_anchor["dataset_snapshot_json"],
                     registry_snapshot_json=frozen_replay_anchor["registry_snapshot_json"],
                 )
+                self._verify_controller_authorization_source_binding(
+                    source_controller_request_json=source_controller_request_json,
+                    source_controller_json=source_controller_json,
+                    source_generation_authorization_json=source_generation_authorization_json,
+                    source_controller_report_md=source_controller_report_md,
+                    frozen_controller_request_json=frozen.get(
+                        "controller_request_json", ""
+                    ),
+                    frozen_controller_json=frozen.get("controller_json", ""),
+                    frozen_generation_authorization_json=frozen.get(
+                        "generation_authorization_json", ""
+                    ),
+                    frozen_controller_report_md=frozen.get("controller_report_md", ""),
+                )
+            controller_context: dict[str, Any] | None = None
+            if source_controller_request_json:
+                authorization = validate_oled_bounded_generation_authorization_bundle(
+                    controller_request_json=frozen["controller_request_json"],
+                    controller_json=frozen["controller_json"],
+                    generation_authorization_json=frozen[
+                        "generation_authorization_json"
+                    ],
+                    controller_report_md=frozen["controller_report_md"],
+                )
+                controller_context = {
+                    "authorization_id": authorization.authorization_id,
+                    "controller_id": authorization.controller_id,
+                    "latest_source_state_fingerprint": (
+                        authorization.latest_source_state_fingerprint
+                    ),
+                    "requested_candidate_count": authorization.requested_candidate_count,
+                    "target_task": authorization.target_task,
+                    "required_gate": authorization.required_gate,
+                }
             payload = {
                 "run_id": run_id,
                 "source_batch_selection_json": source_batch_selection_json,
@@ -1130,6 +1196,10 @@ class RunPlanExecutor:
                 "source_reinvent4_config": source_reinvent4_config,
                 "source_reinvent4_output_csv": source_reinvent4_output_csv,
                 "source_remote_known_hosts": source_remote_known_hosts,
+                "source_controller_request_json": source_controller_request_json,
+                "source_controller_json": source_controller_json,
+                "source_generation_authorization_json": source_generation_authorization_json,
+                "source_controller_report_md": source_controller_report_md,
                 "batch_selection_json": frozen["batch_selection_json"],
                 "screening_receipt_json": frozen_batch["screening_receipt_json"],
                 "ranked_shortlist_csv": frozen_batch["ranked_shortlist_csv"],
@@ -1142,6 +1212,13 @@ class RunPlanExecutor:
                 "reinvent4_config": frozen["reinvent4_config"],
                 "reinvent4_output_csv": frozen.get("reinvent4_output_csv", ""),
                 "remote_known_hosts": frozen.get("remote_known_hosts", ""),
+                "controller_request_json": frozen.get("controller_request_json", ""),
+                "controller_json": frozen.get("controller_json", ""),
+                "generation_authorization_json": frozen.get(
+                    "generation_authorization_json", ""
+                ),
+                "controller_report_md": frozen.get("controller_report_md", ""),
+                "controller_context": controller_context,
                 "reinvent4_mode": mode,
                 "remote_profile_id": remote_profile_id,
                 "seed": seed,
@@ -2036,6 +2113,8 @@ class RunPlanExecutor:
             outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
             expected_filenames = {
                 "oled_bounded_controller_receipt": "controller.json",
+                "oled_bounded_controller_request_snapshot": "controller_request.json",
+                "oled_bounded_controller_generation_authorization": "generation_authorization.json",
                 "oled_bounded_controller_report": "report.md",
             }
             registry_registered = False
@@ -2472,6 +2551,10 @@ class RunPlanExecutor:
         source_reinvent4_config: str,
         source_reinvent4_output_csv: str,
         source_remote_known_hosts: str,
+        source_controller_request_json: str,
+        source_controller_json: str,
+        source_generation_authorization_json: str,
+        source_controller_report_md: str,
         screening_receipt_json: str,
         ranked_shortlist_csv: str,
         candidate_cost_manifest_json: str,
@@ -2485,6 +2568,7 @@ class RunPlanExecutor:
         frozen_inputs_dir = task_root / _INVERSE_DESIGN_FROZEN_INPUTS_DIR
         has_generator_output = bool(source_reinvent4_output_csv)
         has_remote_known_hosts = bool(source_remote_known_hosts)
+        has_controller_authorization = bool(source_controller_request_json)
         with _pinned_output_parents_without_symlink_components(task_root) as pinned:
             existing = self._inverse_design_existing_frozen_paths(
                 task_root=task_root,
@@ -2492,9 +2576,18 @@ class RunPlanExecutor:
                 frozen_inputs_dir=frozen_inputs_dir,
                 has_generator_output=has_generator_output,
                 has_remote_known_hosts=has_remote_known_hosts,
+                has_controller_authorization=has_controller_authorization,
             )
         if existing is not None:
             return existing
+
+        if has_controller_authorization:
+            validate_oled_bounded_generation_authorization_bundle(
+                controller_request_json=source_controller_request_json,
+                controller_json=source_controller_json,
+                generation_authorization_json=source_generation_authorization_json,
+                controller_report_md=source_controller_report_md,
+            )
 
         # Replay first, before copying any caller-owned bytes.  This rejects a
         # re-signed ARb receipt that merely claims a generation route.
@@ -2539,6 +2632,22 @@ class RunPlanExecutor:
             if not known_hosts_bytes:
                 raise ValueError("Inverse-design remote known-hosts file is empty")
             payloads["remote_known_hosts"] = known_hosts_bytes
+        if has_controller_authorization:
+            for source_path, filename in (
+                (source_controller_request_json, "controller_request.json"),
+                (source_controller_json, "controller.json"),
+                (
+                    source_generation_authorization_json,
+                    "generation_authorization.json",
+                ),
+                (source_controller_report_md, "controller_report.md"),
+            ):
+                controller_bytes, _ = _read_regular_file_bound(
+                    Path(source_path),
+                    max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+                    reject_symlink_components=True,
+                )
+                payloads[filename] = controller_bytes
 
         with _pinned_output_parents_without_symlink_components(task_root) as pinned:
             existing = self._inverse_design_existing_frozen_paths(
@@ -2547,6 +2656,7 @@ class RunPlanExecutor:
                 frozen_inputs_dir=frozen_inputs_dir,
                 has_generator_output=has_generator_output,
                 has_remote_known_hosts=has_remote_known_hosts,
+                has_controller_authorization=has_controller_authorization,
             )
             if existing is not None:
                 return existing
@@ -2567,6 +2677,21 @@ class RunPlanExecutor:
             )
         if has_remote_known_hosts:
             frozen["remote_known_hosts"] = str(frozen_inputs_dir / "remote_known_hosts")
+        if has_controller_authorization:
+            frozen.update(
+                {
+                    "controller_request_json": str(
+                        frozen_inputs_dir / "controller_request.json"
+                    ),
+                    "controller_json": str(frozen_inputs_dir / "controller.json"),
+                    "generation_authorization_json": str(
+                        frozen_inputs_dir / "generation_authorization.json"
+                    ),
+                    "controller_report_md": str(
+                        frozen_inputs_dir / "controller_report.md"
+                    ),
+                }
+            )
         # Check both route authorization and the ordinary byte-bound transport
         # files after publication, so the source cannot move during staging.
         frozen_route = verify_oled_inverse_design_route_from_files(
@@ -2621,6 +2746,27 @@ class RunPlanExecutor:
                 or source_known_hosts_bytes != frozen_known_hosts_bytes
             ):
                 raise ValueError("Inverse-design source inputs changed while frozen")
+        if has_controller_authorization:
+            validate_oled_bounded_generation_authorization_bundle(
+                controller_request_json=frozen["controller_request_json"],
+                controller_json=frozen["controller_json"],
+                generation_authorization_json=frozen[
+                    "generation_authorization_json"
+                ],
+                controller_report_md=frozen["controller_report_md"],
+            )
+            self._verify_controller_authorization_source_binding(
+                source_controller_request_json=source_controller_request_json,
+                source_controller_json=source_controller_json,
+                source_generation_authorization_json=source_generation_authorization_json,
+                source_controller_report_md=source_controller_report_md,
+                frozen_controller_request_json=frozen["controller_request_json"],
+                frozen_controller_json=frozen["controller_json"],
+                frozen_generation_authorization_json=frozen[
+                    "generation_authorization_json"
+                ],
+                frozen_controller_report_md=frozen["controller_report_md"],
+            )
         return frozen
 
     @staticmethod
@@ -2631,6 +2777,7 @@ class RunPlanExecutor:
         frozen_inputs_dir: Path,
         has_generator_output: bool,
         has_remote_known_hosts: bool,
+        has_controller_authorization: bool,
     ) -> dict[str, str] | None:
         """Return a complete immutable PR-AS input roster or reject it."""
 
@@ -2660,6 +2807,15 @@ class RunPlanExecutor:
                 expected_names.add("reinvent4_existing_output.csv")
             if has_remote_known_hosts:
                 expected_names.add("remote_known_hosts")
+            if has_controller_authorization:
+                expected_names.update(
+                    {
+                        "controller_request.json",
+                        "controller.json",
+                        "generation_authorization.json",
+                        "controller_report.md",
+                    }
+                )
             if set(os.listdir(descriptor)) != expected_names:
                 raise ValueError("inverse-design frozen input snapshot is incomplete")
             for filename in expected_names:
@@ -2687,6 +2843,21 @@ class RunPlanExecutor:
             )
         if has_remote_known_hosts:
             paths["remote_known_hosts"] = str(frozen_inputs_dir / "remote_known_hosts")
+        if has_controller_authorization:
+            paths.update(
+                {
+                    "controller_request_json": str(
+                        frozen_inputs_dir / "controller_request.json"
+                    ),
+                    "controller_json": str(frozen_inputs_dir / "controller.json"),
+                    "generation_authorization_json": str(
+                        frozen_inputs_dir / "generation_authorization.json"
+                    ),
+                    "controller_report_md": str(
+                        frozen_inputs_dir / "controller_report.md"
+                    ),
+                }
+            )
         return paths
 
     @staticmethod
@@ -2760,6 +2931,66 @@ class RunPlanExecutor:
             )
             if source_sha256 != frozen_sha256 or source_bytes != frozen_bytes:
                 raise ValueError("Inverse-design source binding changed after gate snapshot")
+
+    @staticmethod
+    def _verify_controller_authorization_source_binding(
+        *,
+        source_controller_request_json: str,
+        source_controller_json: str,
+        source_generation_authorization_json: str,
+        source_controller_report_md: str,
+        frozen_controller_request_json: str,
+        frozen_controller_json: str,
+        frozen_generation_authorization_json: str,
+        frozen_controller_report_md: str,
+    ) -> None:
+        """Bind a PR-AU route decision to the exact gate-approved input bytes."""
+
+        source_paths = (
+            source_controller_request_json,
+            source_controller_json,
+            source_generation_authorization_json,
+            source_controller_report_md,
+        )
+        frozen_paths = (
+            frozen_controller_request_json,
+            frozen_controller_json,
+            frozen_generation_authorization_json,
+            frozen_controller_report_md,
+        )
+        if not any(source_paths):
+            if any(frozen_paths):
+                raise ValueError("Controller authorization source binding changed after gate snapshot")
+            return
+        if not all(source_paths) or not all(frozen_paths):
+            raise ValueError("Controller authorization source binding changed after gate snapshot")
+        source_authorization = validate_oled_bounded_generation_authorization_bundle(
+            controller_request_json=source_controller_request_json,
+            controller_json=source_controller_json,
+            generation_authorization_json=source_generation_authorization_json,
+            controller_report_md=source_controller_report_md,
+        )
+        frozen_authorization = validate_oled_bounded_generation_authorization_bundle(
+            controller_request_json=frozen_controller_request_json,
+            controller_json=frozen_controller_json,
+            generation_authorization_json=frozen_generation_authorization_json,
+            controller_report_md=frozen_controller_report_md,
+        )
+        if source_authorization != frozen_authorization:
+            raise ValueError("Controller authorization source binding changed after gate snapshot")
+        for source_path, frozen_path in zip(source_paths, frozen_paths, strict=True):
+            source_bytes, source_sha256 = _read_regular_file_bound(
+                Path(source_path),
+                max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+                reject_symlink_components=True,
+            )
+            frozen_bytes, frozen_sha256 = _read_regular_file_bound(
+                Path(frozen_path),
+                max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+                reject_symlink_components=True,
+            )
+            if source_sha256 != frozen_sha256 or source_bytes != frozen_bytes:
+                raise ValueError("Controller authorization source binding changed after gate snapshot")
 
     def _registry_screening_frozen_input_paths(
         self,

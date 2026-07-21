@@ -19,6 +19,8 @@ TASK_ID = "execute_oled_bounded_discovery_controller"
 ADAPTER_NAME = "execute_oled_bounded_discovery_controller_adapter"
 OUTPUTS = {
     "oled_bounded_controller_receipt": "controller.json",
+    "oled_bounded_controller_request_snapshot": "controller_request.json",
+    "oled_bounded_controller_generation_authorization": "generation_authorization.json",
     "oled_bounded_controller_report": "report.md",
 }
 RECORD_ID = "oled_bounded_controller_execution_record"

@@ -23,6 +23,7 @@ from ai4s_agent.oled_generated_candidate_evaluation import (
 from ai4s_agent.oled_inverse_design import (
     _open_existing_directory_chain_without_symlinks,
     _read_published_inverse_design_file_at,
+    _verified_oled_inverse_design_publication_from_files,
 )
 from ai4s_agent.oled_real_phase1_execution import _json_bytes, _stable_hash
 from ai4s_agent.oled_registry_candidate_screening import _sha256_bytes
@@ -32,14 +33,18 @@ from ai4s_agent.oled_supplementary_material_identity_review import (
 from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _absolute_local_path,
     _read_bound_json,
+    _read_regular_file_bound,
 )
 from ai4s_agent.oled_supplementary_source_transcription_review import (
     _validate_pinned_directory_path_without_symlinks,
 )
 
 
-_CONTROLLER_VERSION = "oled_bounded_discovery_controller.v1"
+_CONTROLLER_VERSION = "oled_bounded_discovery_controller.v2"
 _REQUEST_VERSION = "oled_bounded_discovery_controller_request.v1"
+_GENERATION_AUTHORIZATION_VERSION = "oled_bounded_generation_authorization.v1"
+_GENERATION_TARGET_TASK = "execute_oled_inverse_design"
+_GENERATION_REQUIRED_GATE = "gate_5_final_threshold"
 _MAX_ITERATIONS = 3
 _MAX_GENERATION_ROUNDS = 2
 _MAX_GENERATED_CANDIDATES = 512
@@ -67,6 +72,20 @@ class OledBoundedDiscoveryControllerResult:
     iterations_used: int
     generation_rounds_used: int
     generated_candidates_used: int
+
+
+@dataclass(frozen=True)
+class OledBoundedGenerationAuthorization:
+    """One narrow, exact-bound controller route into the existing PR-AS task."""
+
+    authorization_id: str
+    controller_id: str
+    loop_fingerprint: str
+    latest_source_state_fingerprint: str
+    requested_candidate_count: int
+    target_task: str
+    required_gate: str
+    source_bindings: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -180,7 +199,12 @@ def _verified_oled_bounded_discovery_controller_from_files(
             or named.st_ino != initial_directory.st_ino
         ):
             raise ValueError("PR-AU publication directory is unsafe")
-        names = {"controller.json", "report.md"}
+        names = {
+            "controller.json",
+            "controller_request.json",
+            "generation_authorization.json",
+            "report.md",
+        }
         if set(os.listdir(directory_descriptor)) != names:
             raise ValueError("PR-AU publication roster is invalid")
         published = {
@@ -246,9 +270,18 @@ def _build_controller(
 
     source_summaries: list[dict[str, Any]] = []
     previous_candidates: set[str] = set()
+    previous_chemical_identities: set[tuple[str, str, str]] = set()
+    candidate_identity_by_id: dict[str, tuple[str, str, str]] = {}
+    identity_owner_by_field = {
+        "canonical_isomeric_smiles": {},
+        "standard_inchi": {},
+        "inchikey": {},
+    }
     latest_decision: dict[str, Any] | None = None
     latest_predictions: list[dict[str, Any]] = []
-    generation_publications: set[str] = set()
+    latest_summary: dict[str, Any] | None = None
+    loop_payload: dict[str, Any] | None = None
+    generation_publications: dict[str, int] = {}
     for index, raw in enumerate(iterations, 1):
         paths = _iteration_paths(raw)
         with _verified_oled_candidate_decision_from_files(
@@ -294,14 +327,46 @@ def _build_controller(
             candidate_ids = {str(item.get("candidate_id") or "") for item in predictions}
             if "" in candidate_ids or not previous_candidates.issubset(candidate_ids):
                 raise ValueError("PR-AU candidate pool is not monotonically cumulative")
+            current_chemical_identities = _accumulate_chemical_identity_ledger(
+                predictions=predictions,
+                candidate_identity_by_id=candidate_identity_by_id,
+                identity_owner_by_field=identity_owner_by_field,
+            )
+            if not previous_chemical_identities.issubset(current_chemical_identities):
+                raise ValueError(
+                    "PR-AU candidate pool dropped a previously admitted chemical identity"
+                )
             previous_candidates = candidate_ids
+            previous_chemical_identities = current_chemical_identities
             publication_id = _required_string(
                 _required_dict(evaluation_payload, "sources"),
                 "pr_as_publication_id",
             )
             if publication_id in generation_publications:
                 raise ValueError("PR-AU generation publication is duplicated")
-            generation_publications.add(publication_id)
+            with _verified_oled_inverse_design_publication_from_files(
+                inverse_design_json=paths["inverse_design_json"],
+                batch_selection_json=paths["batch_selection_json"],
+                screening_receipt_json=paths["screening_receipt_json"],
+                ranked_shortlist_csv=paths["ranked_shortlist_csv"],
+                phase1_execution_dir=paths["phase1_execution_dir"],
+                dataset_snapshot_json=paths["dataset_snapshot_json"],
+                registry_snapshot_json=paths["registry_snapshot_json"],
+                candidate_cost_manifest_json=paths["candidate_cost_manifest_json"],
+                remote_known_hosts=paths["remote_known_hosts"],
+            ) as inverse_bound:
+                if inverse_bound.result.publication_id != publication_id:
+                    raise ValueError("PR-AU evaluation/inverse-design binding mismatch")
+                generated_source_count = _nonnegative_int(
+                    _required_dict(evaluation_payload, "counts"),
+                    "generated_source_count",
+                )
+                if generated_source_count != inverse_bound.result.accepted_candidate_count:
+                    raise ValueError(
+                        "PR-AU generated-source count does not match PR-AS accepted candidates"
+                    )
+                generation_publications[publication_id] = generated_source_count
+                inverse_bound.assert_stable()
             evaluation_sha256 = _sha256_bytes(
                 evaluation_bound.expected_payloads["evaluation.json"]
             )
@@ -309,28 +374,36 @@ def _build_controller(
         decision_sources = _required_dict(decision_payload, "sources")
         if decision_sources.get("evaluation_sha256") != evaluation_sha256:
             raise ValueError("PR-AU decision/evaluation binding mismatch")
-        source_summaries.append(
-            {
-                "iteration": index,
-                "decision_id": _required_string(decision_payload, "decision_id"),
-                "decision_sha256": decision_sha256,
-                "decision_status": _required_string(decision_payload, "status"),
-                "evaluation_id": _required_string(evaluation_payload, "evaluation_id"),
-                "evaluation_sha256": evaluation_sha256,
-                "generation_publication_id": publication_id,
-                "candidate_count": len(candidate_ids),
-                "generated_candidate_count": sum(
-                    item.get("source_kind") == "generated" for item in predictions
-                ),
-            }
+        iteration_loop_payload = _loop_fingerprint_payload(
+            decision=decision_payload,
+            evaluation=evaluation_payload,
         )
+        if loop_payload is None:
+            loop_payload = iteration_loop_payload
+        elif loop_payload != iteration_loop_payload:
+            raise ValueError("PR-AU iteration loop fingerprint changed")
+        summary = {
+            "iteration": index,
+            "decision_id": _required_string(decision_payload, "decision_id"),
+            "decision_sha256": decision_sha256,
+            "decision_status": _required_string(decision_payload, "status"),
+            "evaluation_id": _required_string(evaluation_payload, "evaluation_id"),
+            "evaluation_sha256": evaluation_sha256,
+            "generation_publication_id": publication_id,
+            "candidate_count": len(candidate_ids),
+            "generated_source_count": generation_publications[publication_id],
+            "source_bindings": _source_bindings_from_evaluation(
+                evaluation=evaluation_payload,
+                decision=decision_payload,
+            ),
+        }
+        source_summaries.append(summary)
         latest_decision = decision_payload
         latest_predictions = predictions
+        latest_summary = summary
 
-    assert latest_decision is not None
-    generated_count = sum(
-        item.get("source_kind") == "generated" for item in latest_predictions
-    )
+    assert latest_decision is not None and latest_summary is not None and loop_payload is not None
+    generated_count = sum(generation_publications.values())
     if len(generation_publications) > limits["max_generation_rounds"]:
         raise ValueError("PR-AU generation-round budget is already exceeded")
     if generated_count > limits["max_generated_candidates"]:
@@ -343,12 +416,25 @@ def _build_controller(
         generated_candidates_used=generated_count,
         limits=limits,
     )
+    loop_fingerprint = "oled-bounded-loop:" + _stable_hash(loop_payload)
+    identity_ledger_digest = _chemical_identity_ledger_digest(candidate_identity_by_id)
+    latest_source_state_fingerprint = "oled-bounded-loop-state:" + _stable_hash(
+        {
+            "loop_fingerprint": loop_fingerprint,
+            "latest_source": latest_summary,
+            "candidate_identity_ledger_digest": identity_ledger_digest,
+            "candidate_ids": sorted(previous_candidates),
+        }
+    )
     controller_id = "oled-bounded-controller:" + _stable_hash(
         {
             "controller_version": _CONTROLLER_VERSION,
             "request_sha256": request_sha256,
             "sources": source_summaries,
             "limits": limits,
+            "loop_fingerprint": loop_fingerprint,
+            "latest_source_state_fingerprint": latest_source_state_fingerprint,
+            "candidate_identity_ledger_digest": identity_ledger_digest,
             "route": {
                 "status": status,
                 "next_action": next_action,
@@ -357,6 +443,14 @@ def _build_controller(
             },
         }
     )
+    generation_authorization = _generation_authorization(
+        controller_id=controller_id,
+        loop_fingerprint=loop_fingerprint,
+        latest_source_state_fingerprint=latest_source_state_fingerprint,
+        requested_candidate_count=requested_count,
+        next_action=next_action,
+        source_bindings=_authorization_source_bindings(latest_summary),
+    )
     receipt = {
         "controller_version": _CONTROLLER_VERSION,
         "controller_id": controller_id,
@@ -364,6 +458,9 @@ def _build_controller(
         "status": status,
         "request_sha256": request_sha256,
         "limits": limits,
+        "loop_fingerprint": loop_fingerprint,
+        "latest_source_state_fingerprint": latest_source_state_fingerprint,
+        "candidate_identity_ledger_digest": identity_ledger_digest,
         "usage": {
             "iterations": len(iterations),
             "generation_rounds": len(generation_publications),
@@ -376,15 +473,23 @@ def _build_controller(
             "requested_candidate_count": requested_count,
             "requires_human_approval": next_action == "request_generation_approval",
             "required_gate": (
-                "gate_5_final_threshold"
+                _GENERATION_REQUIRED_GATE
                 if next_action == "request_generation_approval"
                 else None
             ),
             "suggested_task": (
-                "execute_oled_inverse_design"
+                _GENERATION_TARGET_TASK
                 if next_action == "request_generation_approval"
                 else None
             ),
+            "generation_authorization": {
+                "authorization_id": generation_authorization["authorization_id"],
+                "filename": "generation_authorization.json",
+                "target_task": generation_authorization["target_task"],
+                "requested_candidate_count": generation_authorization[
+                    "requested_candidate_count"
+                ],
+            },
         },
         "claims": {
             "bounded_controller_only": True,
@@ -398,6 +503,8 @@ def _build_controller(
     }
     payloads = {
         "controller.json": _json_bytes(receipt),
+        "controller_request.json": _json_bytes(request),
+        "generation_authorization.json": _json_bytes(generation_authorization),
         "report.md": _report(receipt).encode("utf-8"),
     }
     return _BuiltController(
@@ -450,6 +557,314 @@ def _route(
         "property_eligible_candidate_shortfall",
         shortfall,
     )
+
+
+def validate_oled_bounded_generation_authorization_bundle(
+    *,
+    controller_request_json: str | Path,
+    controller_json: str | Path,
+    generation_authorization_json: str | Path,
+    controller_report_md: str | Path,
+) -> OledBoundedGenerationAuthorization:
+    """Exactly replay a controller publication and return its active PR-AS grant.
+
+    The executor may pass a run-owned frozen copy of the controller publication,
+    so this verifier compares exact bytes rebuilt from the request rather than
+    requiring the files to remain neighbours in the original publication
+    directory.
+    """
+
+    controller_request_bytes, _ = _read_regular_file_bound(
+        _absolute_local_path(controller_request_json),
+        max_bytes=1024 * 1024,
+        reject_symlink_components=True,
+    )
+    controller_bytes, _ = _read_regular_file_bound(
+        _absolute_local_path(controller_json),
+        max_bytes=1024 * 1024,
+        reject_symlink_components=True,
+    )
+    authorization_bytes, _ = _read_regular_file_bound(
+        _absolute_local_path(generation_authorization_json),
+        max_bytes=1024 * 1024,
+        reject_symlink_components=True,
+    )
+    report_bytes, _ = _read_regular_file_bound(
+        _absolute_local_path(controller_report_md),
+        max_bytes=1024 * 1024,
+        reject_symlink_components=True,
+    )
+    receipt = _parse_json_object(controller_bytes, "PR-AU receipt")
+    if controller_bytes != _json_bytes(receipt):
+        raise ValueError("PR-AU receipt is not canonical")
+    built = _build_controller(
+        controller_request_json=controller_request_json,
+        generated_at=_required_string(receipt, "generated_at"),
+    )
+    expected = built.payloads
+    if (
+        controller_request_bytes != expected["controller_request.json"]
+        or controller_bytes != expected["controller.json"]
+        or authorization_bytes != expected["generation_authorization.json"]
+        or report_bytes != expected["report.md"]
+    ):
+        raise ValueError("PR-AU controller authorization exact replay mismatch")
+    authorization = _parse_json_object(
+        authorization_bytes,
+        "PR-AU generation authorization",
+    )
+    if authorization_bytes != _json_bytes(authorization):
+        raise ValueError("PR-AU generation authorization is not canonical")
+    return _validated_generation_authorization(authorization, receipt=receipt)
+
+
+def _generation_authorization(
+    *,
+    controller_id: str,
+    loop_fingerprint: str,
+    latest_source_state_fingerprint: str,
+    requested_candidate_count: int,
+    next_action: str,
+    source_bindings: dict[str, str],
+) -> dict[str, Any]:
+    authorized = next_action == "request_generation_approval"
+    count = requested_candidate_count if authorized else 0
+    target_task = _GENERATION_TARGET_TASK if authorized else None
+    required_gate = _GENERATION_REQUIRED_GATE if authorized else None
+    authorization_id = "oled-bounded-generation-authorization:" + _stable_hash(
+        {
+            "authorization_version": _GENERATION_AUTHORIZATION_VERSION,
+            "controller_id": controller_id,
+            "loop_fingerprint": loop_fingerprint,
+            "latest_source_state_fingerprint": latest_source_state_fingerprint,
+            "requested_candidate_count": count,
+            "target_task": target_task,
+            "required_gate": required_gate,
+            "source_bindings": source_bindings,
+        }
+    )
+    return {
+        "authorization_version": _GENERATION_AUTHORIZATION_VERSION,
+        "authorization_id": authorization_id,
+        "controller_id": controller_id,
+        "loop_fingerprint": loop_fingerprint,
+        "latest_source_state_fingerprint": latest_source_state_fingerprint,
+        "status": "authorized" if authorized else "not_authorized",
+        "target_task": target_task,
+        "required_gate": required_gate,
+        "requested_candidate_count": count,
+        "source_bindings": source_bindings,
+    }
+
+
+def _validated_generation_authorization(
+    payload: dict[str, Any],
+    *,
+    receipt: dict[str, Any],
+) -> OledBoundedGenerationAuthorization:
+    expected_keys = {
+        "authorization_version",
+        "authorization_id",
+        "controller_id",
+        "loop_fingerprint",
+        "latest_source_state_fingerprint",
+        "status",
+        "target_task",
+        "required_gate",
+        "requested_candidate_count",
+        "source_bindings",
+    }
+    if set(payload) != expected_keys:
+        raise ValueError("PR-AU generation authorization schema is invalid")
+    if payload.get("authorization_version") != _GENERATION_AUTHORIZATION_VERSION:
+        raise ValueError("unsupported PR-AU generation authorization version")
+    if payload.get("status") != "authorized":
+        raise ValueError("PR-AU controller did not authorize inverse design")
+    if payload.get("target_task") != _GENERATION_TARGET_TASK:
+        raise ValueError("PR-AU generation authorization target task is invalid")
+    if payload.get("required_gate") != _GENERATION_REQUIRED_GATE:
+        raise ValueError("PR-AU generation authorization gate is invalid")
+    source_bindings = _string_dict(payload.get("source_bindings"), "source_bindings")
+    authorization = OledBoundedGenerationAuthorization(
+        authorization_id=_required_string(payload, "authorization_id"),
+        controller_id=_required_string(payload, "controller_id"),
+        loop_fingerprint=_required_string(payload, "loop_fingerprint"),
+        latest_source_state_fingerprint=_required_string(
+            payload, "latest_source_state_fingerprint"
+        ),
+        requested_candidate_count=_positive_int(payload, "requested_candidate_count"),
+        target_task=_required_string(payload, "target_task"),
+        required_gate=_required_string(payload, "required_gate"),
+        source_bindings=source_bindings,
+    )
+    route = _required_dict(receipt, "route")
+    route_authorization = _required_dict(route, "generation_authorization")
+    if (
+        authorization.controller_id != _required_string(receipt, "controller_id")
+        or authorization.loop_fingerprint != _required_string(receipt, "loop_fingerprint")
+        or authorization.latest_source_state_fingerprint
+        != _required_string(receipt, "latest_source_state_fingerprint")
+        or authorization.authorization_id
+        != _required_string(route_authorization, "authorization_id")
+        or authorization.target_task != route.get("suggested_task")
+        or authorization.required_gate != route.get("required_gate")
+        or authorization.requested_candidate_count
+        != _positive_int(route, "requested_candidate_count")
+    ):
+        raise ValueError("PR-AU generation authorization/receipt binding mismatch")
+    return authorization
+
+
+def _loop_fingerprint_payload(
+    *,
+    decision: dict[str, Any],
+    evaluation: dict[str, Any],
+) -> dict[str, Any]:
+    """Extract the invariant scientific context permitted across PR-AU rounds."""
+
+    config = _required_dict(decision, "config")
+    evaluation_sources = _required_dict(evaluation, "sources")
+    evaluation_config = _required_dict(evaluation, "config")
+    return {
+        "target_top_n": _positive_int(config, "target_top_n"),
+        "constraints": _required_dict(config, "constraints"),
+        "directions": _string_dict(config.get("directions"), "directions"),
+        "max_pairwise_tanimoto": _optional_finite_float(
+            config.get("max_pairwise_tanimoto")
+        ),
+        "max_budget_minor": _optional_nonnegative_int(config.get("max_budget_minor")),
+        "currency": _optional_string(config.get("currency")),
+        "selection_policy": _required_string(config, "selection_policy"),
+        "property_presentation": _required_dict(config, "property_presentation"),
+        "pr_ap_screening": {
+            "screening_id": _required_string(
+                evaluation_sources, "pr_ap_screening_id"
+            ),
+            "screening_sha256": _required_string(
+                evaluation_sources, "pr_ap_screening_sha256"
+            ),
+            "ranked_shortlist_sha256": _required_string(
+                evaluation_sources, "pr_ap_ranked_shortlist_sha256"
+            ),
+            "constraints": _required_dict(evaluation_config, "constraints"),
+            "scoring_policy": _required_string(evaluation_config, "scoring_policy"),
+        },
+        "model": _model_binding(evaluation_sources.get("model_sha256")),
+        "phase1_execution": {
+            "id": _required_string(evaluation_sources, "phase1_execution_id"),
+            "sha256": _required_string(evaluation_sources, "phase1_execution_sha256"),
+        },
+        "dataset_snapshot": {
+            "id": _required_string(evaluation_sources, "dataset_snapshot_id"),
+            "sha256": _required_string(evaluation_sources, "dataset_snapshot_sha256"),
+        },
+        "registry_snapshot": {
+            "id": _required_string(evaluation_sources, "registry_id"),
+            "sha256": _required_string(evaluation_sources, "registry_snapshot_sha256"),
+        },
+    }
+
+
+def _source_bindings_from_evaluation(
+    *,
+    evaluation: dict[str, Any],
+    decision: dict[str, Any],
+) -> dict[str, str]:
+    sources = _required_dict(evaluation, "sources")
+    decision_sources = _required_dict(decision, "sources")
+    return {
+        "batch_id": _required_string(decision_sources, "source_batch_id"),
+        "batch_selection_sha256": _required_string(
+            decision_sources, "source_batch_sha256"
+        ),
+        "screening_id": _required_string(sources, "pr_ap_screening_id"),
+        "screening_receipt_sha256": _required_string(
+            sources, "pr_ap_screening_sha256"
+        ),
+        "ranked_shortlist_sha256": _required_string(
+            sources, "pr_ap_ranked_shortlist_sha256"
+        ),
+        "phase1_execution_sha256": _required_string(
+            sources, "phase1_execution_sha256"
+        ),
+        "dataset_snapshot_sha256": _required_string(
+            sources, "dataset_snapshot_sha256"
+        ),
+        "registry_snapshot_sha256": _required_string(
+            sources, "registry_snapshot_sha256"
+        ),
+        "model_binding_sha256": _model_binding_sha256(
+            sources.get("model_sha256")
+        ),
+    }
+
+
+def _authorization_source_bindings(summary: dict[str, Any]) -> dict[str, str]:
+    return _string_dict(summary.get("source_bindings"), "source_bindings")
+
+
+def _accumulate_chemical_identity_ledger(
+    *,
+    predictions: list[dict[str, Any]],
+    candidate_identity_by_id: dict[str, tuple[str, str, str]],
+    identity_owner_by_field: dict[str, dict[str, str]],
+) -> set[tuple[str, str, str]]:
+    current: set[tuple[str, str, str]] = set()
+    for row in predictions:
+        candidate_id = _required_string(row, "candidate_id")
+        identity = tuple(
+            _required_string(row, key)
+            for key in (
+                "canonical_isomeric_smiles",
+                "standard_inchi",
+                "inchikey",
+            )
+        )
+        existing_identity = candidate_identity_by_id.get(candidate_id)
+        if existing_identity is not None and existing_identity != identity:
+            raise ValueError("PR-AU candidate ID was rebound to a different chemical identity")
+        candidate_identity_by_id[candidate_id] = identity
+        for key, value in zip(identity_owner_by_field, identity, strict=True):
+            owner = identity_owner_by_field[key].get(value)
+            if owner is not None and owner != candidate_id:
+                raise ValueError("PR-AU chemical identity is duplicated across candidate IDs")
+            identity_owner_by_field[key][value] = candidate_id
+        current.add(identity)
+    return current
+
+
+def _chemical_identity_ledger_digest(
+    candidate_identity_by_id: dict[str, tuple[str, str, str]],
+) -> str:
+    return _sha256_bytes(
+        _json_bytes(
+            [
+                {
+                    "candidate_id": candidate_id,
+                    "canonical_isomeric_smiles": identity[0],
+                    "standard_inchi": identity[1],
+                    "inchikey": identity[2],
+                }
+                for candidate_id, identity in sorted(candidate_identity_by_id.items())
+            ]
+        )
+    )
+
+
+def _model_binding(value: Any) -> str | dict[str, str] | None:
+    """Normalize either legacy per-property model hashes or a single model hash."""
+
+    if value is None:
+        return None
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, dict):
+        return _string_dict(value, "model_sha256")
+    raise ValueError("PR-AU model binding is invalid")
+
+
+def _model_binding_sha256(value: Any) -> str:
+    return _sha256_bytes(_json_bytes(_model_binding(value)))
 
 
 def _validate_limits(payload: dict[str, Any]) -> dict[str, int]:
@@ -533,6 +948,12 @@ def _report(receipt: dict[str, Any]) -> str:
             f"- Iterations used: `{usage['iterations']}`",
             f"- Generation rounds used: `{usage['generation_rounds']}`",
             f"- Generated candidates used: `{usage['generated_candidates']}`",
+            f"- Loop fingerprint: `{receipt['loop_fingerprint']}`",
+            (
+                "- Generation authorization: `"
+                + str(route["generation_authorization"]["authorization_id"])
+                + "`"
+            ),
             "- Generation executed by controller: `false`",
             "- Gate bypassed: `false`",
             "",
@@ -566,10 +987,25 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
     return value
 
 
+def _optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError("PR-AU optional string is invalid")
+    return value
+
+
 def _positive_int(payload: dict[str, Any], key: str) -> int:
     value = payload.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"required positive integer is invalid: {key}")
+    return value
+
+
+def _nonnegative_int(payload: dict[str, Any], key: str) -> int:
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"required non-negative integer is invalid: {key}")
     return value
 
 
@@ -581,6 +1017,31 @@ def _finite_float(value: Any) -> float:
     if not math.isfinite(parsed):
         raise ValueError("PR-AU numeric value is invalid")
     return parsed
+
+
+def _optional_finite_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return _finite_float(value)
+
+
+def _optional_nonnegative_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("PR-AU non-negative integer is invalid")
+    return value
+
+
+def _string_dict(value: Any, label: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError(f"PR-AU {label} is invalid")
+    result: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not isinstance(item, str) or not key or not item:
+            raise ValueError(f"PR-AU {label} is invalid")
+        result[key] = item
+    return {key: result[key] for key in sorted(result)}
 
 
 def _no_follow_flag() -> int:
@@ -599,5 +1060,7 @@ def _directory_flag() -> int:
 
 __all__ = [
     "OledBoundedDiscoveryControllerResult",
+    "OledBoundedGenerationAuthorization",
     "run_oled_bounded_discovery_controller_from_files",
+    "validate_oled_bounded_generation_authorization_bundle",
 ]

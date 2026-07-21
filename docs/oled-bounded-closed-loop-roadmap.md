@@ -48,8 +48,9 @@ max_generation_rounds: 2
 max_generated_candidates: 512
 ```
 
-`max_generated_candidates` is cumulative across the controller invocation, not
-per generation round. One iteration is one supply-evaluation and candidate-
+`max_generated_candidates` is cumulative across unique PR-AS publications,
+using accepted/source candidates before PR-AT exclusion rather than only later
+prediction successes. One iteration is one supply-evaluation and candidate-
 decision cycle; a generation round is only an iteration that actually invokes
 the generator. Callers may request smaller positive limits, but v1 rejects any
 value above these ceilings. The controller stops before dispatching an action
@@ -62,5 +63,9 @@ dynamics validation is optional future capability and is not an acceptance
 criterion for closing this first end-to-end workflow.
 
 PR-AU implements this as a control-decision publication. It never executes a
-generation action itself: `request_generation_approval` routes the existing
-gated PR-AS task, while `stop` is terminal for the supplied bounded history.
+generation action itself: `request_generation_approval` emits an exact-bound
+authorization for the existing gated PR-AS task, while `stop` is terminal for
+the supplied bounded history. All rounds share a loop fingerprint over the
+scientific target and upstream model/dataset/Registry context, and a chemical
+identity ledger prevents publication-scoped generated IDs from hiding repeated
+molecules across rounds.

@@ -10,6 +10,16 @@ import pytest
 from ai4s_agent import adapters
 from ai4s_agent.agents.planner import PlannerAgent
 from ai4s_agent.executor import RunPlanExecutor
+from ai4s_agent.oled_bounded_discovery_controller import (
+    run_oled_bounded_discovery_controller_from_files,
+)
+from ai4s_agent.oled_candidate_decision import run_oled_candidate_decision_from_files
+from ai4s_agent.oled_experiment_batch_selection import (
+    run_oled_experiment_batch_selection_from_files,
+)
+from ai4s_agent.oled_generated_candidate_evaluation import (
+    run_oled_generated_candidate_evaluation_from_files,
+)
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
 from ai4s_agent.oled_inverse_design import run_oled_inverse_design_from_files
 from ai4s_agent.schemas import GateName, RiskLevel, RunStatus
@@ -75,6 +85,126 @@ def _input_artifacts(
         "oled_registry_snapshot": str(publication.registry_snapshot),
         "oled_inverse_design_reinvent4_config": str(config),
         "oled_inverse_design_generator_output": str(raw_output),
+    }
+
+
+def _controller_authorized_input_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, str]:
+    publication, _ = _shortfall_inputs(tmp_path, monkeypatch)
+    batch = run_oled_experiment_batch_selection_from_files(
+        screening_receipt_json=publication.screening_receipt,  # type: ignore[attr-defined]
+        ranked_shortlist_csv=publication.ranked_shortlist,  # type: ignore[attr-defined]
+        phase1_execution_dir=publication.phase1_execution_dir,  # type: ignore[attr-defined]
+        dataset_snapshot_json=publication.dataset_snapshot,  # type: ignore[attr-defined]
+        registry_snapshot_json=publication.registry_snapshot,  # type: ignore[attr-defined]
+        output_root=tmp_path / "controller-batches",
+        target_batch_size=5,
+        max_pairwise_tanimoto=1.0,
+        generated_at="2026-07-21T21:00:00+08:00",
+    )
+    batch_receipt = batch.output_dir / "batch_selection.json"
+    config = tmp_path / "controller-reinvent4.toml"
+    config.write_text("# exact-bound REINVENT4 input\n", encoding="utf-8")
+    raw_output = _source_csv(
+        tmp_path / "controller-reinvent-output.csv",
+        [("controller-generated-one", "CCCCC"), ("controller-generated-two", "COC")],
+    )
+    inverse = run_oled_inverse_design_from_files(
+        batch_selection_json=batch_receipt,
+        screening_receipt_json=publication.screening_receipt,  # type: ignore[attr-defined]
+        ranked_shortlist_csv=publication.ranked_shortlist,  # type: ignore[attr-defined]
+        phase1_execution_dir=publication.phase1_execution_dir,  # type: ignore[attr-defined]
+        dataset_snapshot_json=publication.dataset_snapshot,  # type: ignore[attr-defined]
+        registry_snapshot_json=publication.registry_snapshot,  # type: ignore[attr-defined]
+        reinvent4_config=config,
+        reinvent4_output_csv=raw_output,
+        reinvent4_mode="existing_output",
+        output_root=tmp_path / "controller-inverse",
+        seed=17,
+        generated_at="2026-07-21T21:05:00+08:00",
+    )
+    evaluation = run_oled_generated_candidate_evaluation_from_files(
+        inverse_design_json=inverse.output_dir / "inverse_design.json",
+        batch_selection_json=batch_receipt,
+        screening_receipt_json=publication.screening_receipt,  # type: ignore[attr-defined]
+        ranked_shortlist_csv=publication.ranked_shortlist,  # type: ignore[attr-defined]
+        phase1_execution_dir=publication.phase1_execution_dir,  # type: ignore[attr-defined]
+        dataset_snapshot_json=publication.dataset_snapshot,  # type: ignore[attr-defined]
+        registry_snapshot_json=publication.registry_snapshot,  # type: ignore[attr-defined]
+        output_root=tmp_path / "controller-evaluations",
+        generated_at="2026-07-21T21:10:00+08:00",
+    )
+    decision = run_oled_candidate_decision_from_files(
+        evaluation_json=evaluation.output_dir / "evaluation.json",
+        inverse_design_json=inverse.output_dir / "inverse_design.json",
+        batch_selection_json=batch_receipt,
+        screening_receipt_json=publication.screening_receipt,  # type: ignore[attr-defined]
+        ranked_shortlist_csv=publication.ranked_shortlist,  # type: ignore[attr-defined]
+        phase1_execution_dir=publication.phase1_execution_dir,  # type: ignore[attr-defined]
+        dataset_snapshot_json=publication.dataset_snapshot,  # type: ignore[attr-defined]
+        registry_snapshot_json=publication.registry_snapshot,  # type: ignore[attr-defined]
+        output_root=tmp_path / "controller-decisions",
+        generated_at="2026-07-21T21:15:00+08:00",
+    )
+    request_payload = {
+        "request_version": "oled_bounded_discovery_controller_request.v1",
+        "limits": {
+            "max_iterations": 3,
+            "max_generation_rounds": 2,
+            "max_generated_candidates": 512,
+        },
+        "iterations": [
+            {
+                "decision_json": str(decision.output_dir / "candidate_decision.json"),
+                "evaluation_json": str(evaluation.output_dir / "evaluation.json"),
+                "inverse_design_json": str(inverse.output_dir / "inverse_design.json"),
+                "batch_selection_json": str(batch_receipt),
+                "screening_receipt_json": str(publication.screening_receipt),  # type: ignore[attr-defined]
+                "ranked_shortlist_csv": str(publication.ranked_shortlist),  # type: ignore[attr-defined]
+                "phase1_execution_dir": str(publication.phase1_execution_dir),  # type: ignore[attr-defined]
+                "dataset_snapshot_json": str(publication.dataset_snapshot),  # type: ignore[attr-defined]
+                "registry_snapshot_json": str(publication.registry_snapshot),  # type: ignore[attr-defined]
+                "candidate_cost_manifest_json": None,
+                "remote_known_hosts": None,
+            }
+        ],
+    }
+    request = tmp_path / "controller-request.json"
+    request.write_text(
+        json.dumps(request_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    controller = run_oled_bounded_discovery_controller_from_files(
+        controller_request_json=request,
+        output_root=tmp_path / "controllers",
+        generated_at="2026-07-21T22:00:00+08:00",
+    )
+    controller_receipt = json.loads(
+        (controller.output_dir / "controller.json").read_text(encoding="utf-8")
+    )
+    assert controller_receipt["route"]["next_action"] == "request_generation_approval"
+    entry = request_payload["iterations"][0]
+    return {
+        "oled_experiment_batch_receipt": str(entry["batch_selection_json"]),
+        "oled_registry_screening_receipt": str(entry["screening_receipt_json"]),
+        "oled_registry_screening_shortlist": str(entry["ranked_shortlist_csv"]),
+        "oled_phase1_execution_dir": str(entry["phase1_execution_dir"]),
+        "oled_dataset_snapshot": str(entry["dataset_snapshot_json"]),
+        "oled_registry_snapshot": str(entry["registry_snapshot_json"]),
+        "oled_inverse_design_reinvent4_config": str(config),
+        "oled_inverse_design_generator_output": str(raw_output),
+        "oled_bounded_controller_request_snapshot": str(
+            controller.output_dir / "controller_request.json"
+        ),
+        "oled_bounded_controller_receipt": str(
+            controller.output_dir / "controller.json"
+        ),
+        "oled_bounded_controller_generation_authorization": str(
+            controller.output_dir / "generation_authorization.json"
+        ),
+        "oled_bounded_controller_report": str(controller.output_dir / "report.md"),
     }
 
 
@@ -164,6 +294,110 @@ def test_inverse_design_freezes_inputs_runs_after_gate_and_registers_immutable_o
     assert receipt["claims"]["generation_executed"] is False
     assert receipt["claims"]["controlled_prediction_executed"] is False
     assert receipt["claims"]["registry_mutated"] is False
+
+
+def test_controller_authorization_is_bound_into_inverse_design_gate_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    input_artifacts = _controller_authorized_input_artifacts(tmp_path, monkeypatch)
+    storage = ProjectStorage(tmp_path / "workspace")
+    executor = RunPlanExecutor(storage=storage)
+    run_id = "controller-authorized-inverse"
+    run_plan = _run_plan(run_id)
+
+    first = executor.execute(
+        project_id="inverse-design-project",
+        run_plan=run_plan,
+        input_artifacts=input_artifacts,
+        task_options=_options(),
+    )
+    assert first["status"] == RunStatus.WAITING_USER.value
+    state = storage.read_stage_state("inverse-design-project", run_id)
+    assert state is not None
+    snapshot_payload = state.details["execution_snapshot"]["execution_payload"]
+    context = snapshot_payload["controller_context"]
+    assert context["target_task"] == TASK_ID
+    assert context["required_gate"] == GateName.FINAL_THRESHOLD.value
+    assert context["requested_candidate_count"] > 0
+    assert snapshot_payload["generation_authorization_json"] != input_artifacts[
+        "oled_bounded_controller_generation_authorization"
+    ]
+    assert snapshot_payload["source_generation_authorization_json"] == input_artifacts[
+        "oled_bounded_controller_generation_authorization"
+    ]
+
+    calls: list[dict[str, object]] = []
+
+    def unexpected_adapter(payload: dict[str, object]) -> dict[str, object]:
+        calls.append(payload)
+        raise AssertionError("tampered controller authorization must fail before dispatch")
+
+    monkeypatch.setattr(adapters, ADAPTER_NAME, unexpected_adapter)
+    authorization_path = Path(
+        input_artifacts["oled_bounded_controller_generation_authorization"]
+    )
+    authorization = json.loads(authorization_path.read_text(encoding="utf-8"))
+    authorization["requested_candidate_count"] += 1
+    authorization_path.write_text(
+        json.dumps(authorization, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        executor.resume_after_gate(
+            project_id="inverse-design-project",
+            run_plan=run_plan,
+            approved_gates=[GateName.FINAL_THRESHOLD.value],
+            actor="reviewer",
+            input_artifacts=input_artifacts,
+            task_options=_options(),
+        )
+    assert calls == []
+    run_dir = storage.run_dir("inverse-design-project", run_id)
+    assert not list((run_dir / "oled_inverse_design").glob("oled-inverse-design:*"))
+
+
+def test_controller_authorized_inverse_design_consumes_controller_shortfall(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    input_artifacts = _controller_authorized_input_artifacts(tmp_path, monkeypatch)
+    storage = ProjectStorage(tmp_path / "workspace")
+    executor = RunPlanExecutor(storage=storage)
+    run_id = "controller-authorized-inverse-success"
+    run_plan = _run_plan(run_id)
+    assert executor.execute(
+        project_id="inverse-design-project",
+        run_plan=run_plan,
+        input_artifacts=input_artifacts,
+        task_options=_options(),
+    )["status"] == RunStatus.WAITING_USER.value
+    state = storage.read_stage_state("inverse-design-project", run_id)
+    assert state is not None
+    expected_count = state.details["execution_snapshot"]["execution_payload"][
+        "controller_context"
+    ]["requested_candidate_count"]
+
+    result = executor.resume_after_gate(
+        project_id="inverse-design-project",
+        run_plan=run_plan,
+        approved_gates=[GateName.FINAL_THRESHOLD.value],
+        actor="reviewer",
+        input_artifacts=input_artifacts,
+        task_options=_options(),
+    )
+    assert result["status"] == RunStatus.SUCCEEDED.value
+    registry = storage.read_artifact_registry("inverse-design-project", run_id)
+    receipt = json.loads(
+        (
+            storage.run_dir("inverse-design-project", run_id)
+            / registry["oled_inverse_design_receipt"]
+        ).read_text(encoding="utf-8")
+    )
+    assert receipt["generator"]["requested_candidate_count"] == expected_count
+    assert receipt["design_request"]["candidate_shortfall_count"] == expected_count
+    assert receipt["controller_authorization"]["requested_candidate_count"] == expected_count
+    assert receipt["controller_authorization"]["target_task"] == TASK_ID
 
 
 def test_inverse_design_post_gate_source_swap_fails_before_adapter_dispatch(
