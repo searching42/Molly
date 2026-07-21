@@ -31,7 +31,6 @@ from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _read_bound_json,
 )
 from ai4s_agent.oled_supplementary_source_transcription_review import (
-    _read_bound_binary_at,
     _validate_pinned_directory_path_without_symlinks,
     _write_fresh_bytes_at,
 )
@@ -376,7 +375,7 @@ def _validate_published_owned_directory(
             "categorical dataset published directory file coverage mismatch"
         )
     for filename, expected in expected_payloads.items():
-        actual = _read_bound_binary_at(
+        actual = _read_exact_published_payload_at(
             temp_descriptor,
             filename,
             max_bytes=_MAX_INPUT_BYTES,
@@ -386,6 +385,50 @@ def _validate_published_owned_directory(
                 "categorical dataset published directory content mismatch"
             )
     _validate_output_parent_binding(output_dir, parent_descriptor)
+
+
+def _read_exact_published_payload_at(
+    directory_descriptor: int,
+    filename: str,
+    *,
+    max_bytes: int,
+) -> bytes:
+    """Read an owned publication payload, allowing a valid empty roster."""
+
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise ValueError("categorical dataset publisher requires O_NOFOLLOW support")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            filename,
+            os.O_RDONLY | no_follow | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=directory_descriptor,
+        )
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = -1
+            initial_stat = os.fstat(handle.fileno())
+            if not stat.S_ISREG(initial_stat.st_mode):
+                raise ValueError("categorical dataset publication file is not regular")
+            if initial_stat.st_size < 0 or initial_stat.st_size > max_bytes:
+                raise ValueError("categorical dataset publication file has an unsupported size")
+            payload = handle.read(max_bytes + 1)
+            final_stat = os.fstat(handle.fileno())
+            if (
+                len(payload) != initial_stat.st_size
+                or final_stat.st_size != initial_stat.st_size
+                or final_stat.st_mtime_ns != initial_stat.st_mtime_ns
+                or final_stat.st_ctime_ns != initial_stat.st_ctime_ns
+            ):
+                raise ValueError("categorical dataset publication file changed while read")
+            return payload
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError("categorical dataset publication file is unavailable") from exc
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
 
 
 def _jsonl_bytes(items: list[dict[str, object]]) -> bytes:

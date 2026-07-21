@@ -172,6 +172,7 @@ def install_phase3_executor_support() -> None:
         result: dict[str, Any],
         result_path: Path,
         artifact_paths: dict[str, str],
+        payload: dict[str, Any],
     ) -> None:
         if task_id in _PHASE3_OUTPUT_DIRS:
             _collect_phase3_artifacts(
@@ -194,6 +195,7 @@ def install_phase3_executor_support() -> None:
             result=result,
             result_path=result_path,
             artifact_paths=artifact_paths,
+            payload=payload,
         )
 
     payload_for_with_phase3._phase3_payload_support = True  # type: ignore[attr-defined]

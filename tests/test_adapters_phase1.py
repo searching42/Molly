@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 import ai4s_agent.adapters.phase1 as phase1_module
 from ai4s_agent.adapters import claude_scripts
 from ai4s_agent.adapters.contract_validation import (
@@ -650,6 +652,144 @@ def test_generate_candidates_reinvent4_backend_executes_remote_config_and_normal
     assert [row["SMILES"] for row in rows] == ["CCC", "CCCl"]
 
 
+def test_reinvent4_remote_attempt_directory_is_created_before_transport(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = tmp_path / "sampling.toml"
+    config.write_text("# minimal test config\n", encoding="utf-8")
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        "node45 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
+        encoding="utf-8",
+    )
+    remote_raw = tmp_path / "remote_raw.csv"
+    remote_raw.write_text("SMILES\nCCCCC\n", encoding="utf-8")
+    attempt_dir = "/tmp/molly-pr-as-isolated-attempt"
+    calls: list[list[str]] = []
+
+    def fake_run_argv_cmd(*, argv: list[str], cwd: Path, timeout_sec: int = 120) -> dict[str, object]:
+        calls.append(argv)
+        if argv[0] == "scp" and argv[-2].startswith("workstation2:"):
+            Path(argv[-1]).write_text(remote_raw.read_text(encoding="utf-8"), encoding="utf-8")
+        return {"argv": argv, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(phase1_module, "run_argv_cmd", fake_run_argv_cmd)
+    result = phase1_module._generate_candidates_reinvent4_backend(
+        {
+            "execute": True,
+            "reinvent4_mode": "remote",
+            "reinvent4_config": str(config),
+            "reinvent4_remote_attempt_dir": attempt_dir,
+                "reinvent4_remote_config": f"{attempt_dir}/config.toml",
+                "reinvent4_remote_output_csv": f"{attempt_dir}/output.csv",
+                "reinvent4_remote_known_hosts_file": str(known_hosts),
+                "reinvent4_remote_host_key_alias": "node45",
+                "local_output_csv": str(tmp_path / "local-output.csv"),
+        },
+        run_id="isolated-attempt",
+        output_dir=tmp_path,
+        count=1,
+    )
+
+    assert result["mode"] == "remote"
+    assert calls[0][0] == "ssh"
+    assert calls[0][-1] == f"mkdir -m 700 -- {attempt_dir}"
+    assert "StrictHostKeyChecking=yes" in calls[0]
+    assert f"UserKnownHostsFile={known_hosts}" in calls[0]
+    assert "HostKeyAlias=node45" in calls[0]
+    assert result["remote"]["attempt_dir"] == attempt_dir
+    with pytest.raises(ValueError, match="isolated remote path is invalid"):
+        phase1_module._generate_candidates_reinvent4_backend(
+            {
+                "execute": True,
+                "reinvent4_mode": "remote",
+                "reinvent4_config": str(config),
+                "reinvent4_remote_attempt_dir": attempt_dir,
+                "reinvent4_remote_config": f"{attempt_dir}/config.toml",
+                "reinvent4_remote_output_csv": f"{attempt_dir}/../outside.csv",
+            },
+            run_id="unsafe-attempt",
+            output_dir=tmp_path,
+            count=1,
+        )
+
+
+def test_reinvent4_pinned_endpoint_hostname_is_checked_before_workspace_creation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = tmp_path / "sampling.toml"
+    config.write_text("# minimal test config\n", encoding="utf-8")
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        "workstation2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
+        encoding="utf-8",
+    )
+    remote_raw = tmp_path / "remote_raw.csv"
+    remote_raw.write_text("SMILES\nCCCCC\n", encoding="utf-8")
+    attempt_dir = "/tmp/molly-pr-as-identity-check"
+    calls: list[list[str]] = []
+
+    def fake_run_argv_cmd(*, argv: list[str], cwd: Path, timeout_sec: int = 120) -> dict[str, object]:
+        calls.append(argv)
+        if argv[0] == "scp" and argv[-2].startswith("workstation2:"):
+            Path(argv[-1]).write_text(remote_raw.read_text(encoding="utf-8"), encoding="utf-8")
+        return {"argv": argv, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(phase1_module, "run_argv_cmd", fake_run_argv_cmd)
+    result = phase1_module._generate_candidates_reinvent4_backend(
+        {
+            "execute": True,
+            "reinvent4_mode": "remote",
+            "reinvent4_config": str(config),
+            "reinvent4_remote_attempt_dir": attempt_dir,
+            "reinvent4_remote_config": f"{attempt_dir}/config.toml",
+            "reinvent4_remote_output_csv": f"{attempt_dir}/output.csv",
+            "reinvent4_remote_known_hosts_file": str(known_hosts),
+            "reinvent4_remote_host_key_alias": "workstation2",
+            "reinvent4_remote_expected_hostname": "node45",
+            "local_output_csv": str(tmp_path / "local-output.csv"),
+        },
+        run_id="endpoint-check",
+        output_dir=tmp_path,
+        count=1,
+    )
+
+    assert calls[0][0] == "ssh"
+    assert calls[0][-1] == 'test "$(hostname -s)" = node45'
+    assert calls[1][-1] == f"mkdir -m 700 -- {attempt_dir}"
+    assert result["remote"]["endpoint_hostname_verified"] is True
+
+
+def test_reinvent4_rejects_ssh_option_injection_before_any_transport(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = tmp_path / "sampling.toml"
+    config.write_text("# minimal test config\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run_argv_cmd(*, argv: list[str], cwd: Path, timeout_sec: int = 120) -> dict[str, object]:
+        calls.append(argv)
+        return {"argv": argv, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(phase1_module, "run_argv_cmd", fake_run_argv_cmd)
+    with pytest.raises(ValueError, match="remote SSH target is invalid"):
+        phase1_module._generate_candidates_reinvent4_backend(
+            {
+                "execute": True,
+                "reinvent4_mode": "remote",
+                "reinvent4_config": str(config),
+                "remote_host": "-oProxyCommand=echo-injected",
+            },
+            run_id="unsafe-host",
+            output_dir=tmp_path,
+            count=1,
+        )
+    assert calls == []
+
+
 def test_generate_candidates_reinvent4_backend_defaults_to_project_sampling_output(
     tmp_path: Path,
     monkeypatch,
@@ -950,6 +1090,7 @@ def test_unimol_legacy_remote_training_executes_scp_and_ssh(tmp_path: Path, monk
 
     assert result["status"] == "success"
     assert [call[0] for call in calls] == ["scp", "scp", "ssh"]
+    assert "StrictHostKeyChecking=no" in calls[0]
     assert calls[0][-1] == "workstation2:/remote/tmp/r-remote_plqy_train.csv"
     assert calls[2][-2] == "workstation2"
     assert "/remote/bin/python /remote/tmp/r-remote_plqy_train.py" in calls[2][-1]

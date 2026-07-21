@@ -201,6 +201,81 @@ class ProjectStorage:
             return {}
         return {str(k): str(v) for k, v in artifacts.items()}
 
+    def register_new_artifact_registry_paths(
+        self,
+        project_id: str,
+        run_id: str,
+        artifacts: dict[str, str],
+    ) -> Path:
+        """Atomically add a new immutable group of artifact-path mappings.
+
+        The absent-key check and update occur under the registry lock.  This
+        preserves unrelated entries written concurrently and prevents another
+        executor from replacing a published immutable artifact group.
+        """
+
+        from ai4s_agent.json_rmw_lock import locked_storage_json_update
+
+        clean = {str(key): str(value) for key, value in artifacts.items()}
+        run_path = self.run_dir(project_id, run_id)
+
+        def add_new(payload: dict[str, Any]) -> dict[str, Any]:
+            existing = payload.get("artifacts", {})
+            if not isinstance(existing, dict):
+                existing = {}
+            conflicts = sorted(key for key in clean if key in existing)
+            if conflicts:
+                raise ValueError(
+                    "artifact registry paths are already immutable: " + ", ".join(conflicts)
+                )
+            updated = {str(key): str(value) for key, value in existing.items()}
+            updated.update(clean)
+            return {"artifacts": updated}
+
+        return locked_storage_json_update(
+            self,
+            run_path,
+            "artifact_registry.json",
+            add_new,
+        )
+
+    def remove_artifact_registry_paths_if_all_equal(
+        self,
+        project_id: str,
+        run_id: str,
+        artifacts: dict[str, str],
+    ) -> Path:
+        """Remove an immutable group only if every mapping still matches.
+
+        This is the compensating action if an immutable publication changes
+        after its registry insertion.  It intentionally leaves both unrelated
+        concurrent updates and a concurrently changed group intact, avoiding
+        a partially removed publication group.
+        """
+
+        from ai4s_agent.json_rmw_lock import locked_storage_json_update
+
+        clean = {str(key): str(value) for key, value in artifacts.items()}
+        run_path = self.run_dir(project_id, run_id)
+
+        def remove_if_all_equal(payload: dict[str, Any]) -> dict[str, Any]:
+            existing = payload.get("artifacts", {})
+            if not isinstance(existing, dict):
+                existing = {}
+            updated = {str(key): str(value) for key, value in existing.items()}
+            if not all(updated.get(key) == value for key, value in clean.items()):
+                return {"artifacts": updated}
+            for key in clean:
+                del updated[key]
+            return {"artifacts": updated}
+
+        return locked_storage_json_update(
+            self,
+            run_path,
+            "artifact_registry.json",
+            remove_if_all_equal,
+        )
+
     def write_asset_manifest(
         self,
         project_id: str,

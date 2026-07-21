@@ -576,6 +576,7 @@ _STAGE_LABELS = {
     "predict_candidates": "候选性质预测",
     "filter_rank": "筛选排序",
     "render_report": "报告生成",
+    "execute_oled_inverse_design": "逆向设计候选生成",
 }
 
 _GATE_EXPLANATIONS = {

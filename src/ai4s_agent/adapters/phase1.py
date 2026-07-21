@@ -7,6 +7,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import shlex
 import subprocess
 import statistics
@@ -14,7 +15,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ai4s_agent.adapters.claude_scripts import CLAUDE_SCRIPTS, WORKSPACE, build_run_mvp_flow_cmd
@@ -217,12 +218,63 @@ def _write_model_package_manifests(
     }
 
 
-def _ssh_scp_options(*, timeout_sec: int | None = None) -> list[str]:
-    opts = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
+def _ssh_scp_options(
+    *,
+    timeout_sec: int | None = None,
+    known_hosts_file: str | None = None,
+    host_key_alias: str | None = None,
+) -> list[str]:
+    """Return non-interactive SSH options.
+
+    A caller that supplies a dedicated known-hosts file opts into strict host
+    key pinning.  The legacy remote adapters do not supply such a file and
+    retain their historical connection behaviour; PR-AS must never use that
+    compatibility path.
+    """
+
+    strict_pinned = bool(known_hosts_file)
+    opts = [
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"StrictHostKeyChecking={'yes' if strict_pinned else 'no'}",
+    ]
+    if known_hosts_file:
+        opts.extend(
+            [
+                "-o",
+                f"UserKnownHostsFile={known_hosts_file}",
+                "-o",
+                "GlobalKnownHostsFile=/dev/null",
+            ]
+        )
+    if host_key_alias:
+        opts.extend(["-o", f"HostKeyAlias={host_key_alias}"])
     if timeout_sec is not None:
         timeout = max(int(timeout_sec), 1)
         opts.extend(["-o", f"ConnectTimeout={timeout}", "-o", "ConnectionAttempts=1"])
     return opts
+
+
+_SAFE_SSH_TARGET_RE = re.compile(
+    r"^(?:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}@)?"
+    r"(?:[A-Za-z0-9][A-Za-z0-9.-]{0,253}|\[[0-9A-Fa-f:.]+\])$"
+)
+
+
+def _validate_remote_ssh_target(value: str) -> str:
+    """Reject values that an OpenSSH client could parse as an option."""
+
+    target = str(value or "").strip()
+    if (
+        not target
+        or target != value
+        or not _SAFE_SSH_TARGET_RE.fullmatch(target)
+        or ".." in target
+        or target.startswith("-")
+    ):
+        raise ValueError("remote SSH target is invalid")
+    return target
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -491,7 +543,14 @@ def _generate_candidates_reinvent4_backend(
     if mode not in {"preflight", "remote", "existing_output"}:
         mode = "preflight"
 
-    remote_host = str(payload.get("remote_host") or payload.get("remote_ssh_host") or payload.get("reinvent4_remote_host") or _remote_default_host()).strip()
+    remote_host = _validate_remote_ssh_target(
+        str(
+            payload.get("remote_host")
+            or payload.get("remote_ssh_host")
+            or payload.get("reinvent4_remote_host")
+            or _remote_default_host()
+        ).strip()
+    )
     remote_repo = str(payload.get("remote_repo") or payload.get("reinvent4_remote_repo") or _remote_default_reinvent4_root()).strip()
     remote_python = str(payload.get("remote_python") or payload.get("remote_py") or payload.get("reinvent4_remote_python") or _remote_default_reinvent4_python()).strip()
     remote_conda_env = str(payload.get("remote_conda_env") or payload.get("reinvent4_remote_conda_env") or _remote_default_reinvent4_conda_env()).strip()
@@ -506,6 +565,47 @@ def _generate_candidates_reinvent4_backend(
         or _remote_default_reinvent4_config()
     ).strip()
     remote_output_csv = str(payload.get("remote_output_csv") or payload.get("reinvent4_remote_output_csv") or _remote_default_reinvent4_output_csv()).strip()
+    remote_attempt_dir = str(
+        payload.get("reinvent4_remote_attempt_dir")
+        or payload.get("remote_attempt_dir")
+        or ""
+    ).strip()
+    remote_known_hosts_file = str(
+        payload.get("reinvent4_remote_known_hosts_file")
+        or payload.get("remote_known_hosts_file")
+        or ""
+    ).strip()
+    remote_host_key_alias = str(
+        payload.get("reinvent4_remote_host_key_alias")
+        or payload.get("remote_host_key_alias")
+        or ""
+    ).strip()
+    remote_expected_hostname = str(
+        payload.get("reinvent4_remote_expected_hostname")
+        or payload.get("remote_expected_hostname")
+        or ""
+    ).strip()
+    if remote_known_hosts_file:
+        known_hosts_path = _resolve_path(remote_known_hosts_file, base=WORKSPACE)
+        if not known_hosts_path.is_file() or known_hosts_path.is_symlink():
+            raise ValueError("REINVENT4 remote known-hosts file is unavailable")
+        remote_known_hosts_file = str(known_hosts_path)
+    if remote_host_key_alias and (
+        not _SAFE_SSH_TARGET_RE.fullmatch(remote_host_key_alias)
+        or remote_host_key_alias.startswith("-")
+        or ".." in remote_host_key_alias
+    ):
+        raise ValueError("REINVENT4 remote host-key alias is invalid")
+    if remote_expected_hostname and (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,253}", remote_expected_hostname)
+        or ".." in remote_expected_hostname
+        or remote_expected_hostname.startswith("-")
+    ):
+        raise ValueError("REINVENT4 expected remote hostname is invalid")
+    if remote_expected_hostname and not remote_known_hosts_file:
+        raise ValueError(
+            "REINVENT4 expected remote hostname requires a pinned known-hosts file"
+        )
     local_output_csv = str(payload.get("local_output_csv") or payload.get("reinvent4_local_output_csv") or output_dir / f"{run_id}_reinvent4_raw.csv").strip()
     local_source_csv = _resolve_path(local_output_csv, base=WORKSPACE)
 
@@ -517,6 +617,15 @@ def _generate_candidates_reinvent4_backend(
         "local_config": str(local_reinvent4_config),
         "remote_config": remote_reinvent4_config,
         "remote_output_csv": remote_output_csv,
+        "attempt_dir": remote_attempt_dir or None,
+        "host_key_policy": (
+            "strict_known_hosts"
+            if remote_known_hosts_file
+            else "legacy_unpinned_compatibility"
+        ),
+        "host_key_alias": remote_host_key_alias or None,
+        "expected_hostname": remote_expected_hostname or None,
+        "endpoint_hostname_verified": False,
     }
 
     if mode == "existing_output":
@@ -538,6 +647,53 @@ def _generate_candidates_reinvent4_backend(
     if not local_reinvent4_config.exists():
         raise FileNotFoundError(f"REINVENT4 local config not found: {local_reinvent4_config}")
 
+    if remote_expected_hostname:
+        endpoint_check = run_argv_cmd(
+            argv=[
+                "ssh",
+                *_ssh_scp_options(
+                    known_hosts_file=remote_known_hosts_file,
+                    host_key_alias=remote_host_key_alias or None,
+                ),
+                "--",
+                remote_host,
+                "test \"$(hostname -s)\" = " + shlex.quote(remote_expected_hostname),
+            ],
+            cwd=WORKSPACE,
+            timeout_sec=int(payload.get("timeout_sec", 7200)),
+        )
+        if int(endpoint_check.get("returncode", 1)) != 0:
+            raise RuntimeError(
+                f"REINVENT4 remote endpoint hostname check failed: {endpoint_check}"
+            )
+        remote["endpoint_hostname_verified"] = True
+
+    remote_attempt_create: dict[str, Any] | None = None
+    if remote_attempt_dir:
+        _validate_reinvent4_remote_attempt_paths(
+            remote_attempt_dir=remote_attempt_dir,
+            remote_config=remote_reinvent4_config,
+            remote_output_csv=remote_output_csv,
+        )
+        remote_attempt_create = run_argv_cmd(
+            argv=[
+                "ssh",
+                *_ssh_scp_options(
+                    known_hosts_file=remote_known_hosts_file or None,
+                    host_key_alias=remote_host_key_alias or None,
+                ),
+                "--",
+                remote_host,
+                "mkdir -m 700 -- " + shlex.quote(remote_attempt_dir),
+            ],
+            cwd=WORKSPACE,
+            timeout_sec=int(payload.get("timeout_sec", 7200)),
+        )
+        if int(remote_attempt_create.get("returncode", 1)) != 0:
+            raise RuntimeError(
+                f"failed to allocate isolated REINVENT4 remote workspace: {remote_attempt_create}"
+            )
+
     remote_output_file = str(Path(remote_output_csv))
     remote_command = " ".join(
         [
@@ -552,7 +708,16 @@ def _generate_candidates_reinvent4_backend(
     )
 
     scp_config = run_argv_cmd(
-        argv=["scp", *_ssh_scp_options(), str(local_reinvent4_config), f"{remote_host}:{remote_reinvent4_config}"],
+        argv=[
+            "scp",
+            *_ssh_scp_options(
+                known_hosts_file=remote_known_hosts_file or None,
+                host_key_alias=remote_host_key_alias or None,
+            ),
+            "--",
+            str(local_reinvent4_config),
+            f"{remote_host}:{remote_reinvent4_config}",
+        ],
         cwd=WORKSPACE,
         timeout_sec=int(payload.get("timeout_sec", 7200)),
     )
@@ -560,7 +725,16 @@ def _generate_candidates_reinvent4_backend(
         raise RuntimeError(f"failed to copy REINVENT4 config: {scp_config}")
 
     ssh_result = run_argv_cmd(
-        argv=["ssh", *_ssh_scp_options(), remote_host, remote_command],
+        argv=[
+            "ssh",
+            *_ssh_scp_options(
+                known_hosts_file=remote_known_hosts_file or None,
+                host_key_alias=remote_host_key_alias or None,
+            ),
+            "--",
+            remote_host,
+            remote_command,
+        ],
         cwd=WORKSPACE,
         timeout_sec=int(payload.get("timeout_sec", 7200)),
     )
@@ -568,7 +742,16 @@ def _generate_candidates_reinvent4_backend(
         raise RuntimeError(f"REINVENT4 remote execution failed: {ssh_result}")
 
     fetch_output = run_argv_cmd(
-        argv=["scp", *_ssh_scp_options(), f"{remote_host}:{remote_output_file}", str(local_source_csv)],
+        argv=[
+            "scp",
+            *_ssh_scp_options(
+                known_hosts_file=remote_known_hosts_file or None,
+                host_key_alias=remote_host_key_alias or None,
+            ),
+            "--",
+            f"{remote_host}:{remote_output_file}",
+            str(local_source_csv),
+        ],
         cwd=WORKSPACE,
         timeout_sec=int(payload.get("timeout_sec", 7200)),
     )
@@ -585,11 +768,45 @@ def _generate_candidates_reinvent4_backend(
         "mode": "remote",
         "remote": remote,
         "execution": {
+            "remote_attempt_create": remote_attempt_create,
             "config_copy": scp_config,
             "ssh": ssh_result,
             "fetch_output": fetch_output,
         },
     }
+
+
+def _validate_reinvent4_remote_attempt_paths(
+    *,
+    remote_attempt_dir: str,
+    remote_config: str,
+    remote_output_csv: str,
+) -> None:
+    """Require a caller-owned remote directory for a one-shot REINVENT run."""
+
+    attempt = PurePosixPath(remote_attempt_dir)
+    if (
+        not attempt.is_absolute()
+        or "\x00" in remote_attempt_dir
+        or any(part in {"", ".", ".."} for part in attempt.parts[1:])
+    ):
+        raise ValueError("REINVENT4 remote attempt directory is invalid")
+    for path in (remote_config, remote_output_csv):
+        candidate = PurePosixPath(path)
+        if (
+            not candidate.is_absolute()
+            or "\x00" in path
+            or any(part in {"", ".", ".."} for part in candidate.parts[1:])
+        ):
+            raise ValueError("REINVENT4 isolated remote path is invalid")
+        try:
+            relative = candidate.relative_to(attempt)
+        except ValueError as exc:
+            raise ValueError(
+                "REINVENT4 remote config and output must be inside the isolated attempt directory"
+            ) from exc
+        if not relative.parts:
+            raise ValueError("REINVENT4 isolated remote path is invalid")
 
 
 def _execute_flag(payload: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
@@ -1700,6 +1917,17 @@ def train_model_unimol_legacy_adapter(payload: dict[str, Any]) -> dict[str, Any]
                     "message": "remote_host/remote_python/remote_tmp_base are required together for remote training",
                 },
             }
+        try:
+            remote_host = _validate_remote_ssh_target(remote_host)
+        except ValueError as exc:
+            return {
+                "status": "failed",
+                "adapter": "train_model_unimol_legacy",
+                "error": {
+                    "code": "invalid_remote_host",
+                    "message": str(exc),
+                },
+            }
 
         remote_train_csv = f"{remote_tmp_base}/{run_id}_{target_property}_train.csv"
         remote_train_script = f"{remote_tmp_base}/{run_id}_{target_property}_train.py"
@@ -1747,7 +1975,13 @@ def train_model_unimol_legacy_adapter(payload: dict[str, Any]) -> dict[str, Any]
             )
 
             scp_csv = run_argv_cmd(
-                argv=["scp", *_ssh_scp_options(timeout_sec=timeout_sec), train_csv, f"{remote_host}:{remote_train_csv}"],
+                argv=[
+                    "scp",
+                    *_ssh_scp_options(timeout_sec=timeout_sec),
+                    "--",
+                    train_csv,
+                    f"{remote_host}:{remote_train_csv}",
+                ],
                 cwd=WORKSPACE,
                 timeout_sec=timeout_sec,
             )
@@ -1763,7 +1997,13 @@ def train_model_unimol_legacy_adapter(payload: dict[str, Any]) -> dict[str, Any]
                 }
 
             scp_script = run_argv_cmd(
-                argv=["scp", *_ssh_scp_options(timeout_sec=timeout_sec), str(local_script), f"{remote_host}:{remote_train_script}"],
+                argv=[
+                    "scp",
+                    *_ssh_scp_options(timeout_sec=timeout_sec),
+                    "--",
+                    str(local_script),
+                    f"{remote_host}:{remote_train_script}",
+                ],
                 cwd=WORKSPACE,
                 timeout_sec=timeout_sec,
             )
@@ -1780,7 +2020,13 @@ def train_model_unimol_legacy_adapter(payload: dict[str, Any]) -> dict[str, Any]
 
             remote_command = f"{remote_python} {remote_train_script}"
             ssh_train = run_argv_cmd(
-                argv=["ssh", *_ssh_scp_options(timeout_sec=timeout_sec), remote_host, remote_command],
+                argv=[
+                    "ssh",
+                    *_ssh_scp_options(timeout_sec=timeout_sec),
+                    "--",
+                    remote_host,
+                    remote_command,
+                ],
                 cwd=WORKSPACE,
                 timeout_sec=timeout_sec,
             )

@@ -17,6 +17,10 @@ from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_direc
 from ai4s_agent.oled_experiment_batch_selection import (
     load_oled_experiment_batch_selection_inputs,
 )
+from ai4s_agent.oled_inverse_design import (
+    _verified_oled_inverse_design_publication_from_files,
+    verify_oled_inverse_design_route_from_files,
+)
 from ai4s_agent.oled_real_phase1_execution import (
     _build_execution_payloads,
     _validated_split_by_row,
@@ -61,12 +65,20 @@ _REGISTRY_SCREENING_FROZEN_INPUTS_DIR = "frozen_inputs"
 _EXPERIMENT_BATCH_TASK_ID = "execute_oled_experiment_batch_selection"
 _EXPERIMENT_BATCH_MAX_INPUT_BYTES = 1024 * 1024 * 1024
 _EXPERIMENT_BATCH_FROZEN_INPUTS_DIR = "frozen_inputs"
+_INVERSE_DESIGN_TASK_ID = "execute_oled_inverse_design"
+_INVERSE_DESIGN_MAX_INPUT_BYTES = 1024 * 1024 * 1024
+_INVERSE_DESIGN_FROZEN_INPUTS_DIR = "frozen_inputs"
 _IMMUTABLE_EXECUTION_RECORD_TASK_IDS = frozenset(
     {
         _REGISTRY_SCREENING_TASK_ID,
         _EXPERIMENT_BATCH_TASK_ID,
+        _INVERSE_DESIGN_TASK_ID,
     }
 )
+_IMMUTABLE_RECORD_BY_TASK = {
+    _EXPERIMENT_BATCH_TASK_ID: "oled_experiment_batch_execution_record",
+    _INVERSE_DESIGN_TASK_ID: "oled_inverse_design_execution_record",
+}
 
 
 class RunPlanExecutor:
@@ -199,6 +211,29 @@ class RunPlanExecutor:
         for index, task in enumerate(run_plan.tasks[start_index:], start=start_index):
             spec = self.registry.get(task.task_id)
             next_stage = run_plan.tasks[index + 1].task_id if index + 1 < len(run_plan.tasks) else None
+            immutable_record = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id)
+            if (
+                task.task_id == _INVERSE_DESIGN_TASK_ID
+                and immutable_record
+                and immutable_record in self.storage.read_artifact_registry(
+                    project_id, run_id
+                )
+            ):
+                # A successful immutable publication is already the terminal
+                # result for this task.  Return it idempotently before a gate
+                # snapshot is written, so a retry cannot make a succeeded run
+                # look like it is awaiting another human decision.
+                return {
+                    "ok": True,
+                    "run_id": run_id,
+                    "status": RunStatus.SUCCEEDED.value,
+                    "executed_tasks": executed,
+                    "result": {
+                        "status": "success",
+                        "already_completed": True,
+                        "execution_record_artifact_id": immutable_record,
+                    },
+                }
             task_approval_applies = (
                 bool(spec.gates)
                 and approved_task_id == task.task_id
@@ -246,22 +281,16 @@ class RunPlanExecutor:
                 if task.task_id in _IMMUTABLE_EXECUTION_RECORD_TASK_IDS
                 else None
             )
-            if task.task_id == _EXPERIMENT_BATCH_TASK_ID and (
-                "oled_experiment_batch_execution_record"
+            immutable_record = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id)
+            if immutable_record and (
+                immutable_record
                 in self.storage.read_artifact_registry(project_id, run_id)
             ):
-                # A registered execution record is written only after a
-                # successful batch publication.  Reject a later retry before
-                # constructing adapter payloads or invoking the adapter: a
-                # different selection configuration would otherwise publish a
-                # second, unregistered batch directory before _collect_artifacts
-                # noticed the immutable record.
-                error = {
-                    "code": "experiment_batch_execution_record_already_exists",
-                    "message": (
-                        "Experiment batch selection execution record is already immutable."
-                    ),
-                }
+                # Keep the established batch-selection retry contract: a
+                # rejected attempt gets its own immutable record.  PR-AS is
+                # handled above before its gate snapshot to preserve the
+                # already-succeeded stage state.
+                error = self._immutable_execution_record_exists_error(task.task_id)
                 result = {
                     "status": "failed",
                     "adapter": adapter_name or "",
@@ -431,15 +460,61 @@ class RunPlanExecutor:
                     "result": result,
                 }
 
-            self._collect_artifacts(
-                project_id=project_id,
-                run_id=run_id,
-                run_dir=run_dir,
-                task_id=task.task_id,
-                result=result,
-                result_path=result_path,
-                artifact_paths=artifact_paths,
-            )
+            try:
+                self._collect_artifacts(
+                    project_id=project_id,
+                    run_id=run_id,
+                    run_dir=run_dir,
+                    task_id=task.task_id,
+                    result=result,
+                    result_path=result_path,
+                    artifact_paths=artifact_paths,
+                    payload=payload,
+                )
+            except Exception as exc:
+                if task.task_id in _IMMUTABLE_EXECUTION_RECORD_TASK_IDS:
+                    error = {
+                        "code": "artifact_collection_failed",
+                        "message": self._immutable_artifact_collection_message(
+                            task.task_id
+                        ),
+                    }
+                    failure_path = self._write_adapter_result(
+                        run_dir,
+                        task.task_id,
+                        {
+                            "status": "failed",
+                            "adapter": adapter_name or "",
+                            "error": error,
+                        },
+                        attempt_id=uuid.uuid4().hex,
+                    )
+                    failure_artifacts = [
+                        ArtifactRef(
+                            artifact_id=f"{task.task_id}_result",
+                            relative_path=self._relative(run_dir, failure_path),
+                        )
+                    ]
+                else:
+                    error = {"code": "artifact_collection_failed", "message": str(exc)}
+                    failure_artifacts = []
+                self._write_stage(
+                    project_id=project_id,
+                    run_id=run_id,
+                    stage=task.task_id,
+                    status=RunStatus.FAILED,
+                    next_stage=next_stage,
+                    error=error,
+                    artifacts=failure_artifacts,
+                )
+                return {
+                    "ok": False,
+                    "run_id": run_id,
+                    "status": RunStatus.FAILED.value,
+                    "failed_task": task.task_id,
+                    "executed_tasks": executed,
+                    "result": {"status": "failed", "error": error},
+                }
             executed.append(task.task_id)
             self._write_stage(
                 project_id=project_id,
@@ -466,7 +541,33 @@ class RunPlanExecutor:
     def _immutable_adapter_exception_message(task_id: str) -> str:
         if task_id == _EXPERIMENT_BATCH_TASK_ID:
             return "Experiment batch selection adapter failed."
+        if task_id == _INVERSE_DESIGN_TASK_ID:
+            return "OLED inverse-design adapter failed."
         return "Registry candidate screening adapter failed."
+
+    @staticmethod
+    def _immutable_execution_record_exists_error(task_id: str) -> dict[str, str]:
+        if task_id == _EXPERIMENT_BATCH_TASK_ID:
+            return {
+                "code": "experiment_batch_execution_record_already_exists",
+                "message": "Experiment batch selection execution record is already immutable.",
+            }
+        if task_id == _INVERSE_DESIGN_TASK_ID:
+            return {
+                "code": "inverse_design_execution_record_already_exists",
+                "message": "OLED inverse-design execution record is already immutable.",
+            }
+        raise ValueError("immutable execution record task is invalid")
+
+    @staticmethod
+    def _immutable_artifact_collection_message(task_id: str) -> str:
+        if task_id == _REGISTRY_SCREENING_TASK_ID:
+            return "Registry screening publication verification failed."
+        if task_id == _EXPERIMENT_BATCH_TASK_ID:
+            return "Experiment batch publication verification failed."
+        if task_id == _INVERSE_DESIGN_TASK_ID:
+            return "OLED inverse-design publication verification failed."
+        raise ValueError("immutable execution record task is invalid")
 
     @staticmethod
     def _normalize_task_options(task_options: TaskOptions | None) -> TaskOptions:
@@ -718,6 +819,204 @@ class RunPlanExecutor:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         approved = approved_gates or set()
+        if task_id == _INVERSE_DESIGN_TASK_ID:
+            task_options = self._payload_options(options)
+            allowed_options = {
+                "reinvent4_mode",
+                "seed",
+                "timeout_sec",
+                "remote_profile_id",
+            }
+            unexpected = sorted(set(task_options) - allowed_options)
+            if unexpected:
+                raise ValueError(
+                    "unsupported OLED inverse-design task option: "
+                    + ", ".join(unexpected)
+                )
+            mode = str(task_options.get("reinvent4_mode") or "").strip().lower()
+            if mode not in {"existing_output", "remote"}:
+                raise ValueError("reinvent4_mode must be existing_output or remote")
+            seed = self._optional_nonnegative_int_option(
+                task_options.get("seed", 0), key="seed"
+            )
+            assert seed is not None
+            timeout_sec = self._positive_int_option(
+                task_options.get("timeout_sec", 7200), key="timeout_sec"
+            )
+            remote_profile_id = self._optional_task_string(
+                task_options.get("remote_profile_id"),
+                key="remote_profile_id",
+            )
+            source_batch_selection_json = self._absolute_artifact_path(
+                artifact_paths, "oled_experiment_batch_receipt"
+            )
+            source_screening_receipt_json = self._absolute_artifact_path(
+                artifact_paths, "oled_registry_screening_receipt"
+            )
+            source_ranked_shortlist_csv = self._absolute_artifact_path(
+                artifact_paths, "oled_registry_screening_shortlist"
+            )
+            source_phase1_execution_dir = self._absolute_artifact_path(
+                artifact_paths, "oled_phase1_execution_dir"
+            )
+            source_dataset_snapshot_json = self._absolute_artifact_path(
+                artifact_paths, "oled_dataset_snapshot"
+            )
+            source_registry_snapshot_json = self._absolute_artifact_path(
+                artifact_paths, "oled_registry_snapshot"
+            )
+            source_reinvent4_config = self._absolute_artifact_path(
+                artifact_paths, "oled_inverse_design_reinvent4_config"
+            )
+            source_candidate_cost_manifest_json = self._optional_absolute_artifact_path(
+                artifact_paths, "oled_candidate_cost_manifest"
+            )
+            source_reinvent4_output_csv = self._optional_absolute_artifact_path(
+                artifact_paths, "oled_inverse_design_generator_output"
+            )
+            source_remote_known_hosts = self._optional_absolute_artifact_path(
+                artifact_paths, "oled_inverse_design_remote_known_hosts"
+            )
+            if mode == "existing_output" and not source_reinvent4_output_csv:
+                raise ValueError(
+                    "oled_inverse_design_generator_output is required for existing_output mode"
+                )
+            if mode == "remote" and source_reinvent4_output_csv:
+                raise ValueError(
+                    "oled_inverse_design_generator_output is not allowed for remote mode"
+                )
+            if mode == "remote" and not source_remote_known_hosts:
+                raise ValueError(
+                    "oled_inverse_design_remote_known_hosts is required for remote mode"
+                )
+            if mode != "remote" and source_remote_known_hosts:
+                raise ValueError(
+                    "oled_inverse_design_remote_known_hosts is only allowed for remote mode"
+                )
+            frozen_replay_anchor = self._registry_screening_frozen_input_paths(
+                run_dir=run_dir,
+                source_phase1_execution_dir=source_phase1_execution_dir,
+                source_dataset_snapshot_json=source_dataset_snapshot_json,
+                source_registry_snapshot_json=source_registry_snapshot_json,
+            )
+            frozen_batch = self._experiment_batch_frozen_input_paths(
+                run_dir=run_dir,
+                source_screening_receipt_json=source_screening_receipt_json,
+                source_ranked_shortlist_csv=source_ranked_shortlist_csv,
+                source_candidate_cost_manifest_json=source_candidate_cost_manifest_json,
+                phase1_execution_dir=frozen_replay_anchor["phase1_execution_dir"],
+                dataset_snapshot_json=frozen_replay_anchor["dataset_snapshot_json"],
+                registry_snapshot_json=frozen_replay_anchor["registry_snapshot_json"],
+            )
+            frozen = self._inverse_design_frozen_input_paths(
+                run_dir=run_dir,
+                source_batch_selection_json=source_batch_selection_json,
+                source_reinvent4_config=source_reinvent4_config,
+                source_reinvent4_output_csv=source_reinvent4_output_csv,
+                source_remote_known_hosts=source_remote_known_hosts,
+                screening_receipt_json=frozen_batch["screening_receipt_json"],
+                ranked_shortlist_csv=frozen_batch["ranked_shortlist_csv"],
+                candidate_cost_manifest_json=frozen_batch.get(
+                    "candidate_cost_manifest_json", ""
+                ),
+                phase1_execution_dir=frozen_replay_anchor["phase1_execution_dir"],
+                dataset_snapshot_json=frozen_replay_anchor["dataset_snapshot_json"],
+                registry_snapshot_json=frozen_replay_anchor["registry_snapshot_json"],
+            )
+            if actor:
+                self._verify_registry_screening_source_binding(
+                    source_phase1_execution_dir=source_phase1_execution_dir,
+                    source_dataset_snapshot_json=source_dataset_snapshot_json,
+                    source_registry_snapshot_json=source_registry_snapshot_json,
+                    frozen_phase1_execution_dir=frozen_replay_anchor[
+                        "phase1_execution_dir"
+                    ],
+                    frozen_dataset_snapshot_json=frozen_replay_anchor[
+                        "dataset_snapshot_json"
+                    ],
+                    frozen_registry_snapshot_json=frozen_replay_anchor[
+                        "registry_snapshot_json"
+                    ],
+                )
+                self._verify_experiment_batch_source_binding(
+                    source_screening_receipt_json=source_screening_receipt_json,
+                    source_ranked_shortlist_csv=source_ranked_shortlist_csv,
+                    source_candidate_cost_manifest_json=source_candidate_cost_manifest_json,
+                    frozen_screening_receipt_json=frozen_batch[
+                        "screening_receipt_json"
+                    ],
+                    frozen_ranked_shortlist_csv=frozen_batch["ranked_shortlist_csv"],
+                    frozen_candidate_cost_manifest_json=frozen_batch.get(
+                        "candidate_cost_manifest_json", ""
+                    ),
+                    phase1_execution_dir=frozen_replay_anchor["phase1_execution_dir"],
+                    dataset_snapshot_json=frozen_replay_anchor["dataset_snapshot_json"],
+                    registry_snapshot_json=frozen_replay_anchor["registry_snapshot_json"],
+                )
+                self._verify_inverse_design_source_binding(
+                    source_batch_selection_json=source_batch_selection_json,
+                    source_screening_receipt_json=source_screening_receipt_json,
+                    source_ranked_shortlist_csv=source_ranked_shortlist_csv,
+                    source_candidate_cost_manifest_json=source_candidate_cost_manifest_json,
+                    source_reinvent4_config=source_reinvent4_config,
+                    source_reinvent4_output_csv=source_reinvent4_output_csv,
+                    source_remote_known_hosts=source_remote_known_hosts,
+                    frozen_batch_selection_json=frozen["batch_selection_json"],
+                    frozen_screening_receipt_json=frozen_batch[
+                        "screening_receipt_json"
+                    ],
+                    frozen_ranked_shortlist_csv=frozen_batch["ranked_shortlist_csv"],
+                    frozen_candidate_cost_manifest_json=frozen_batch.get(
+                        "candidate_cost_manifest_json", ""
+                    ),
+                    frozen_reinvent4_config=frozen["reinvent4_config"],
+                    frozen_reinvent4_output_csv=frozen.get(
+                        "reinvent4_output_csv", ""
+                    ),
+                    frozen_remote_known_hosts=frozen.get("remote_known_hosts", ""),
+                    phase1_execution_dir=frozen_replay_anchor["phase1_execution_dir"],
+                    dataset_snapshot_json=frozen_replay_anchor["dataset_snapshot_json"],
+                    registry_snapshot_json=frozen_replay_anchor["registry_snapshot_json"],
+                )
+            payload = {
+                "run_id": run_id,
+                "source_batch_selection_json": source_batch_selection_json,
+                "source_screening_receipt_json": source_screening_receipt_json,
+                "source_ranked_shortlist_csv": source_ranked_shortlist_csv,
+                "source_candidate_cost_manifest_json": source_candidate_cost_manifest_json,
+                "source_phase1_execution_dir": source_phase1_execution_dir,
+                "source_dataset_snapshot_json": source_dataset_snapshot_json,
+                "source_registry_snapshot_json": source_registry_snapshot_json,
+                "source_reinvent4_config": source_reinvent4_config,
+                "source_reinvent4_output_csv": source_reinvent4_output_csv,
+                "source_remote_known_hosts": source_remote_known_hosts,
+                "batch_selection_json": frozen["batch_selection_json"],
+                "screening_receipt_json": frozen_batch["screening_receipt_json"],
+                "ranked_shortlist_csv": frozen_batch["ranked_shortlist_csv"],
+                "candidate_cost_manifest_json": frozen_batch.get(
+                    "candidate_cost_manifest_json", ""
+                ),
+                "phase1_execution_dir": frozen_replay_anchor["phase1_execution_dir"],
+                "dataset_snapshot_json": frozen_replay_anchor["dataset_snapshot_json"],
+                "registry_snapshot_json": frozen_replay_anchor["registry_snapshot_json"],
+                "reinvent4_config": frozen["reinvent4_config"],
+                "reinvent4_output_csv": frozen.get("reinvent4_output_csv", ""),
+                "remote_known_hosts": frozen.get("remote_known_hosts", ""),
+                "reinvent4_mode": mode,
+                "remote_profile_id": remote_profile_id,
+                "seed": seed,
+                "timeout_sec": timeout_sec,
+                "output_root": str(run_dir / "oled_inverse_design"),
+                "confirmed": GateName.FINAL_THRESHOLD.value in approved,
+                "actor": actor,
+            }
+            if actor:
+                return {
+                    key: value
+                    for key, value in payload.items()
+                    if not key.startswith("source_")
+                }
+            return payload
         if task_id == _EXPERIMENT_BATCH_TASK_ID:
             task_options = self._payload_options(options)
             allowed_options = {
@@ -1075,6 +1374,14 @@ class RunPlanExecutor:
             raise ValueError(f"{key} must be a finite number between 0 and 1")
         return parsed
 
+    @staticmethod
+    def _optional_task_string(value: Any, *, key: str) -> str:
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must be a string")
+        return value.strip()
+
     def _planned_external_result(self, task_id: str, adapter_name: str | None, payload: dict[str, Any]) -> dict[str, Any] | None:
         if task_id == "generate_candidates" and str(payload.get("backend") or "").strip().lower() == "reinvent4":
             if self._truthy(payload.get("execute")) or payload.get("reinvent4_output_csv") or payload.get("source_csv"):
@@ -1137,6 +1444,7 @@ class RunPlanExecutor:
         result: dict[str, Any],
         result_path: Path,
         artifact_paths: dict[str, str],
+        payload: dict[str, Any],
     ) -> None:
         result_rel = self._relative(run_dir, result_path)
         if task_id == "inspect_dataset":
@@ -1327,6 +1635,85 @@ class RunPlanExecutor:
                 result_rel,
             )
             artifact_paths["oled_experiment_batch_execution_record"] = str(result_path)
+            return
+        if task_id == _INVERSE_DESIGN_TASK_ID:
+            existing_registry = self.storage.read_artifact_registry(project_id, run_id)
+            if "oled_inverse_design_execution_record" in existing_registry:
+                raise ValueError("OLED inverse-design execution record is already immutable")
+            outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+            expected_filenames = {
+                "oled_inverse_design_receipt": "inverse_design.json",
+                "oled_inverse_design_candidates": "generated_candidates.csv",
+                "oled_inverse_design_exclusions": "excluded_candidates.jsonl",
+                "oled_inverse_design_report": "report.md",
+            }
+            registry_registered = False
+            registered_paths: dict[str, str] = {}
+            try:
+                receipt_raw = str(
+                    outputs.get("oled_inverse_design_receipt") or ""
+                ).strip()
+                if not receipt_raw:
+                    raise ValueError("missing OLED inverse-design output: oled_inverse_design_receipt")
+                receipt_path = Path(receipt_raw).expanduser().absolute()
+                with _verified_oled_inverse_design_publication_from_files(
+                    inverse_design_json=receipt_path,
+                    batch_selection_json=str(payload.get("batch_selection_json") or ""),
+                    screening_receipt_json=str(payload.get("screening_receipt_json") or ""),
+                    ranked_shortlist_csv=str(payload.get("ranked_shortlist_csv") or ""),
+                    phase1_execution_dir=str(payload.get("phase1_execution_dir") or ""),
+                    dataset_snapshot_json=str(payload.get("dataset_snapshot_json") or ""),
+                    registry_snapshot_json=str(payload.get("registry_snapshot_json") or ""),
+                    candidate_cost_manifest_json=(
+                        str(payload.get("candidate_cost_manifest_json") or "") or None
+                    ),
+                    remote_known_hosts=(
+                        str(payload.get("remote_known_hosts") or "") or None
+                    ),
+                ) as bound:
+                    output_root = (run_dir / "oled_inverse_design").absolute()
+                    if bound.output_dir.parent != output_root:
+                        raise ValueError("OLED inverse-design publication is outside executor output root")
+                    expected_paths = {
+                        artifact_id: bound.output_dir / filename
+                        for artifact_id, filename in expected_filenames.items()
+                    }
+                    for artifact_id, expected_path in expected_paths.items():
+                        reported = str(outputs.get(artifact_id) or "").strip()
+                        if not reported:
+                            raise ValueError(f"missing OLED inverse-design output: {artifact_id}")
+                        if Path(reported).expanduser().absolute() != expected_path:
+                            raise ValueError(
+                                f"OLED inverse-design adapter output is not the verified publication file: {artifact_id}"
+                            )
+                        expected_path.relative_to(run_dir)
+                    bound.assert_stable()
+                    registered_paths = {
+                        artifact_id: str(path.relative_to(run_dir))
+                        for artifact_id, path in expected_paths.items()
+                    }
+                    registered_paths["oled_inverse_design_execution_record"] = result_rel
+                    self.storage.register_new_artifact_registry_paths(
+                        project_id,
+                        run_id,
+                        registered_paths,
+                    )
+                    registry_registered = True
+                    bound.assert_stable()
+            except Exception:
+                if registry_registered:
+                    self.storage.remove_artifact_registry_paths_if_all_equal(
+                        project_id,
+                        run_id,
+                        registered_paths,
+                    )
+                raise
+            # Use the exact arithmetic paths only after the descriptor-bound
+            # context has closed successfully; do not re-resolve attacker
+            # supplied adapter paths here.
+            for artifact_id, output_path in expected_paths.items():
+                artifact_paths[artifact_id] = str(output_path)
+            artifact_paths["oled_inverse_design_execution_record"] = str(result_path)
             return
 
     def _artifact_paths_from_registry(self, project_id: str, run_id: str, run_dir: Path) -> dict[str, str]:
@@ -1689,6 +2076,303 @@ class RunPlanExecutor:
             or tuple(source.property_ids) != tuple(frozen.property_ids)
         ):
             raise ValueError("Experiment batch source binding changed after gate snapshot")
+
+    def _inverse_design_frozen_input_paths(
+        self,
+        *,
+        run_dir: Path,
+        source_batch_selection_json: str,
+        source_reinvent4_config: str,
+        source_reinvent4_output_csv: str,
+        source_remote_known_hosts: str,
+        screening_receipt_json: str,
+        ranked_shortlist_csv: str,
+        candidate_cost_manifest_json: str,
+        phase1_execution_dir: str,
+        dataset_snapshot_json: str,
+        registry_snapshot_json: str,
+    ) -> dict[str, str]:
+        """Freeze the exact PR-ARb receipt and REINVENT4 transport inputs."""
+
+        task_root = run_dir / _INVERSE_DESIGN_TASK_ID
+        frozen_inputs_dir = task_root / _INVERSE_DESIGN_FROZEN_INPUTS_DIR
+        has_generator_output = bool(source_reinvent4_output_csv)
+        has_remote_known_hosts = bool(source_remote_known_hosts)
+        with _pinned_output_parents_without_symlink_components(task_root) as pinned:
+            existing = self._inverse_design_existing_frozen_paths(
+                task_root=task_root,
+                task_root_descriptor=pinned[task_root],
+                frozen_inputs_dir=frozen_inputs_dir,
+                has_generator_output=has_generator_output,
+                has_remote_known_hosts=has_remote_known_hosts,
+            )
+        if existing is not None:
+            return existing
+
+        # Replay first, before copying any caller-owned bytes.  This rejects a
+        # re-signed ARb receipt that merely claims a generation route.
+        source_route = verify_oled_inverse_design_route_from_files(
+            batch_selection_json=source_batch_selection_json,
+            screening_receipt_json=screening_receipt_json,
+            ranked_shortlist_csv=ranked_shortlist_csv,
+            phase1_execution_dir=phase1_execution_dir,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
+            candidate_cost_manifest_json=(candidate_cost_manifest_json or None),
+        )
+        batch_bytes, batch_sha256 = _read_regular_file_bound(
+            Path(source_batch_selection_json),
+            max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+            reject_symlink_components=True,
+        )
+        config_bytes, config_sha256 = _read_regular_file_bound(
+            Path(source_reinvent4_config),
+            max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+            reject_symlink_components=True,
+        )
+        if batch_sha256 != source_route.batch_selection_sha256:
+            raise ValueError("Inverse-design source inputs changed while frozen")
+        payloads = {
+            "batch_selection.json": batch_bytes,
+            "reinvent4_config.toml": config_bytes,
+        }
+        if has_generator_output:
+            output_bytes, _ = _read_regular_file_bound(
+                Path(source_reinvent4_output_csv),
+                max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+                reject_symlink_components=True,
+            )
+            payloads["reinvent4_existing_output.csv"] = output_bytes
+        if has_remote_known_hosts:
+            known_hosts_bytes, _ = _read_regular_file_bound(
+                Path(source_remote_known_hosts),
+                max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+                reject_symlink_components=True,
+            )
+            if not known_hosts_bytes:
+                raise ValueError("Inverse-design remote known-hosts file is empty")
+            payloads["remote_known_hosts"] = known_hosts_bytes
+
+        with _pinned_output_parents_without_symlink_components(task_root) as pinned:
+            existing = self._inverse_design_existing_frozen_paths(
+                task_root=task_root,
+                task_root_descriptor=pinned[task_root],
+                frozen_inputs_dir=frozen_inputs_dir,
+                has_generator_output=has_generator_output,
+                has_remote_known_hosts=has_remote_known_hosts,
+            )
+            if existing is not None:
+                return existing
+            _publish_payload_directory(
+                output_dir=frozen_inputs_dir,
+                parent_descriptor=pinned[task_root],
+                payloads=payloads,
+                artifact_label="inverse-design frozen inputs",
+            )
+
+        frozen = {
+            "batch_selection_json": str(frozen_inputs_dir / "batch_selection.json"),
+            "reinvent4_config": str(frozen_inputs_dir / "reinvent4_config.toml"),
+        }
+        if has_generator_output:
+            frozen["reinvent4_output_csv"] = str(
+                frozen_inputs_dir / "reinvent4_existing_output.csv"
+            )
+        if has_remote_known_hosts:
+            frozen["remote_known_hosts"] = str(frozen_inputs_dir / "remote_known_hosts")
+        # Check both route authorization and the ordinary byte-bound transport
+        # files after publication, so the source cannot move during staging.
+        frozen_route = verify_oled_inverse_design_route_from_files(
+            batch_selection_json=frozen["batch_selection_json"],
+            screening_receipt_json=screening_receipt_json,
+            ranked_shortlist_csv=ranked_shortlist_csv,
+            phase1_execution_dir=phase1_execution_dir,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
+            candidate_cost_manifest_json=(candidate_cost_manifest_json or None),
+        )
+        frozen_config_bytes, frozen_config_sha256 = _read_regular_file_bound(
+            Path(frozen["reinvent4_config"]),
+            max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+            reject_symlink_components=True,
+        )
+        if (
+            source_route != frozen_route
+            or config_sha256 != frozen_config_sha256
+            or config_bytes != frozen_config_bytes
+        ):
+            raise ValueError("Inverse-design source inputs changed while frozen")
+        if has_generator_output:
+            source_output_bytes, source_output_sha256 = _read_regular_file_bound(
+                Path(source_reinvent4_output_csv),
+                max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+                reject_symlink_components=True,
+            )
+            frozen_output_bytes, frozen_output_sha256 = _read_regular_file_bound(
+                Path(frozen["reinvent4_output_csv"]),
+                max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+                reject_symlink_components=True,
+            )
+            if (
+                source_output_sha256 != frozen_output_sha256
+                or source_output_bytes != frozen_output_bytes
+            ):
+                raise ValueError("Inverse-design source inputs changed while frozen")
+        if has_remote_known_hosts:
+            source_known_hosts_bytes, source_known_hosts_sha256 = _read_regular_file_bound(
+                Path(source_remote_known_hosts),
+                max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+                reject_symlink_components=True,
+            )
+            frozen_known_hosts_bytes, frozen_known_hosts_sha256 = _read_regular_file_bound(
+                Path(frozen["remote_known_hosts"]),
+                max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+                reject_symlink_components=True,
+            )
+            if (
+                source_known_hosts_sha256 != frozen_known_hosts_sha256
+                or source_known_hosts_bytes != frozen_known_hosts_bytes
+            ):
+                raise ValueError("Inverse-design source inputs changed while frozen")
+        return frozen
+
+    @staticmethod
+    def _inverse_design_existing_frozen_paths(
+        *,
+        task_root: Path,
+        task_root_descriptor: int,
+        frozen_inputs_dir: Path,
+        has_generator_output: bool,
+        has_remote_known_hosts: bool,
+    ) -> dict[str, str] | None:
+        """Return a complete immutable PR-AS input roster or reject it."""
+
+        no_follow = getattr(os, "O_NOFOLLOW", None)
+        directory_flag = getattr(os, "O_DIRECTORY", None)
+        if no_follow is None or directory_flag is None:
+            raise ValueError("inverse-design frozen inputs require safe dirfd support")
+        try:
+            frozen_stat = os.stat(
+                frozen_inputs_dir.name,
+                dir_fd=task_root_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISDIR(frozen_stat.st_mode):
+            raise ValueError("inverse-design frozen input snapshot is unsafe")
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                frozen_inputs_dir.name,
+                os.O_RDONLY | directory_flag | no_follow,
+                dir_fd=task_root_descriptor,
+            )
+            expected_names = {"batch_selection.json", "reinvent4_config.toml"}
+            if has_generator_output:
+                expected_names.add("reinvent4_existing_output.csv")
+            if has_remote_known_hosts:
+                expected_names.add("remote_known_hosts")
+            if set(os.listdir(descriptor)) != expected_names:
+                raise ValueError("inverse-design frozen input snapshot is incomplete")
+            for filename in expected_names:
+                item_stat = os.stat(
+                    filename,
+                    dir_fd=descriptor,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISREG(item_stat.st_mode):
+                    raise ValueError("inverse-design frozen input snapshot is unsafe")
+        except ValueError:
+            raise
+        except OSError as exc:
+            raise ValueError("inverse-design frozen input snapshot is unsafe") from exc
+        finally:
+            if descriptor != -1:
+                os.close(descriptor)
+        paths = {
+            "batch_selection_json": str(frozen_inputs_dir / "batch_selection.json"),
+            "reinvent4_config": str(frozen_inputs_dir / "reinvent4_config.toml"),
+        }
+        if has_generator_output:
+            paths["reinvent4_output_csv"] = str(
+                frozen_inputs_dir / "reinvent4_existing_output.csv"
+            )
+        if has_remote_known_hosts:
+            paths["remote_known_hosts"] = str(frozen_inputs_dir / "remote_known_hosts")
+        return paths
+
+    @staticmethod
+    def _verify_inverse_design_source_binding(
+        *,
+        source_batch_selection_json: str,
+        source_screening_receipt_json: str,
+        source_ranked_shortlist_csv: str,
+        source_candidate_cost_manifest_json: str,
+        source_reinvent4_config: str,
+        source_reinvent4_output_csv: str,
+        source_remote_known_hosts: str,
+        frozen_batch_selection_json: str,
+        frozen_screening_receipt_json: str,
+        frozen_ranked_shortlist_csv: str,
+        frozen_candidate_cost_manifest_json: str,
+        frozen_reinvent4_config: str,
+        frozen_reinvent4_output_csv: str,
+        frozen_remote_known_hosts: str,
+        phase1_execution_dir: str,
+        dataset_snapshot_json: str,
+        registry_snapshot_json: str,
+    ) -> None:
+        """Bind the approved generation route and generator files to frozen bytes."""
+
+        if (
+            bool(source_candidate_cost_manifest_json)
+            != bool(frozen_candidate_cost_manifest_json)
+            or bool(source_reinvent4_output_csv)
+            != bool(frozen_reinvent4_output_csv)
+            or bool(source_remote_known_hosts)
+            != bool(frozen_remote_known_hosts)
+        ):
+            raise ValueError("Inverse-design source binding changed after gate snapshot")
+        source_route = verify_oled_inverse_design_route_from_files(
+            batch_selection_json=source_batch_selection_json,
+            screening_receipt_json=source_screening_receipt_json,
+            ranked_shortlist_csv=source_ranked_shortlist_csv,
+            phase1_execution_dir=phase1_execution_dir,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
+            candidate_cost_manifest_json=(source_candidate_cost_manifest_json or None),
+        )
+        frozen_route = verify_oled_inverse_design_route_from_files(
+            batch_selection_json=frozen_batch_selection_json,
+            screening_receipt_json=frozen_screening_receipt_json,
+            ranked_shortlist_csv=frozen_ranked_shortlist_csv,
+            phase1_execution_dir=phase1_execution_dir,
+            dataset_snapshot_json=dataset_snapshot_json,
+            registry_snapshot_json=registry_snapshot_json,
+            candidate_cost_manifest_json=(frozen_candidate_cost_manifest_json or None),
+        )
+        if source_route != frozen_route:
+            raise ValueError("Inverse-design source binding changed after gate snapshot")
+        for source_path, frozen_path in (
+            (source_reinvent4_config, frozen_reinvent4_config),
+            (source_reinvent4_output_csv, frozen_reinvent4_output_csv),
+            (source_remote_known_hosts, frozen_remote_known_hosts),
+        ):
+            if not source_path:
+                continue
+            source_bytes, source_sha256 = _read_regular_file_bound(
+                Path(source_path),
+                max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+                reject_symlink_components=True,
+            )
+            frozen_bytes, frozen_sha256 = _read_regular_file_bound(
+                Path(frozen_path),
+                max_bytes=_INVERSE_DESIGN_MAX_INPUT_BYTES,
+                reject_symlink_components=True,
+            )
+            if source_sha256 != frozen_sha256 or source_bytes != frozen_bytes:
+                raise ValueError("Inverse-design source binding changed after gate snapshot")
 
     def _registry_screening_frozen_input_paths(
         self,

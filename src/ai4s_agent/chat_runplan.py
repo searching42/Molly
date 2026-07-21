@@ -156,6 +156,17 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
             if tasks:
                 return tasks
     goal = str(modeling_payload.get("goal") or "").lower()
+    inverse_design_terms = (
+        "inverse design",
+        "inverse-design",
+        "de novo",
+        "reinvent inverse",
+        "reinvent4 inverse",
+        "generative design",
+        "逆向设计",
+        "生成式设计",
+        "从头设计",
+    )
     experiment_batch_terms = (
         "candidate decision",
         "candidate dossier",
@@ -181,6 +192,8 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
         "候选top",
         "可解释候选",
     )
+    if any(term in goal for term in inverse_design_terms):
+        return ["execute_oled_inverse_design"]
     if any(term in goal for term in experiment_batch_terms):
         return ["execute_oled_experiment_batch_selection"]
     registry_terms = ("registry", "material registry", "注册表", "材料库")
