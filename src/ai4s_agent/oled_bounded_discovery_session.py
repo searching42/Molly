@@ -47,59 +47,37 @@ _ROSTER_VERSION = "oled_generated_candidate_evaluation_roster.v1"
 _REQUEST_VERSION = "oled_bounded_discovery_controller_request.v1"
 _FINAL_GATE = "gate_5_final_threshold"
 
-CREATED = "CREATED"
-WAITING_SCREENING_GATE = "WAITING_SCREENING_GATE"
-SCREENING_COMPLETE = "SCREENING_COMPLETE"
-WAITING_INITIAL_DECISION_GATE = "WAITING_INITIAL_DECISION_GATE"
-INITIAL_DECISION_COMPLETE = "INITIAL_DECISION_COMPLETE"
-WAITING_GENERATION_GATE = "WAITING_GENERATION_GATE"
-GENERATION_COMPLETE = "GENERATION_COMPLETE"
-EVALUATION_COMPLETE = "EVALUATION_COMPLETE"
-CANDIDATE_DECISION_COMPLETE = "CANDIDATE_DECISION_COMPLETE"
-CONTROLLER_COMPLETE = "CONTROLLER_COMPLETE"
+ACTIVE = "ACTIVE"
+WAITING_USER = "WAITING_USER"
 COMPLETED_TOP_N = "COMPLETED_TOP_N"
 STOPPED_BOUNDED_NO_SOLUTION = "STOPPED_BOUNDED_NO_SOLUTION"
 RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
-FAILED_INTEGRITY = "FAILED_INTEGRITY"
-FAILED_EXECUTION = "FAILED_EXECUTION"
+FAILED = "FAILED"
+
+SCREENING = "screening"
+INITIAL_DECISION = "initial_decision"
+GENERATION = "generation"
+EVALUATION = "evaluation"
+CANDIDATE_DECISION = "candidate_decision"
+CONTROLLER = "controller"
+_STEPS = {
+    SCREENING,
+    INITIAL_DECISION,
+    GENERATION,
+    EVALUATION,
+    CANDIDATE_DECISION,
+    CONTROLLER,
+}
 
 _TERMINAL = {
     COMPLETED_TOP_N,
     STOPPED_BOUNDED_NO_SOLUTION,
     RECOVERY_REQUIRED,
-    FAILED_INTEGRITY,
-    FAILED_EXECUTION,
+    FAILED,
 }
-_WAITING = {
-    WAITING_SCREENING_GATE,
-    WAITING_INITIAL_DECISION_GATE,
-    WAITING_GENERATION_GATE,
-}
-_ALLOWED_STATE_TRANSITIONS = {
-    CREATED: {WAITING_SCREENING_GATE, SCREENING_COMPLETE},
-    WAITING_SCREENING_GATE: {SCREENING_COMPLETE},
-    SCREENING_COMPLETE: {
-        WAITING_INITIAL_DECISION_GATE,
-        INITIAL_DECISION_COMPLETE,
-    },
-    WAITING_INITIAL_DECISION_GATE: {INITIAL_DECISION_COMPLETE},
-    INITIAL_DECISION_COMPLETE: {
-        WAITING_GENERATION_GATE,
-        GENERATION_COMPLETE,
-        COMPLETED_TOP_N,
-        STOPPED_BOUNDED_NO_SOLUTION,
-    },
-    WAITING_GENERATION_GATE: {GENERATION_COMPLETE},
-    GENERATION_COMPLETE: {EVALUATION_COMPLETE},
-    EVALUATION_COMPLETE: {CANDIDATE_DECISION_COMPLETE},
-    CANDIDATE_DECISION_COMPLETE: {CONTROLLER_COMPLETE},
-    CONTROLLER_COMPLETE: {
-        WAITING_GENERATION_GATE,
-        GENERATION_COMPLETE,
-        COMPLETED_TOP_N,
-        STOPPED_BOUNDED_NO_SOLUTION,
-    },
-}
+_NONTERMINAL = {ACTIVE, WAITING_USER}
+_ALL_STATUSES = _NONTERMINAL | _TERMINAL
+_REVISION_PUBLISH_FAULT_HOOK: Any = None
 
 _TASKS = {
     "screening": "execute_oled_registry_candidate_screening",
@@ -127,6 +105,7 @@ class OledBoundedDiscoverySessionResult:
     session_dir: Path
     revision: int
     status: str
+    current_step: str
     waiting_run_id: str | None
     waiting_task_id: str | None
     result_json: Path | None
@@ -156,10 +135,10 @@ def create_oled_bounded_discovery_session(
             "session_id": session_id,
             "revision": 0,
             "previous_state_digest": None,
-            "status": CREATED,
+            "status": ACTIVE,
+            "current_step": SCREENING,
             "created_at": timestamp,
             "updated_at": timestamp,
-            "active_child": None,
             "children": [],
             "failure": None,
             "result": None,
@@ -172,7 +151,9 @@ def create_oled_bounded_discovery_session(
             existing_spec = _read_session_json(session_dir, "session_spec.json")
             if existing_spec != published_spec:
                 raise ValueError("PR-AV session ID is bound to a different spec")
-            return _result_from_state(session_dir, _read_state(session_dir))
+            current = _read_state(session_dir)
+            _validate_external_state(storage, project_id, session_dir, published_spec, current)
+            return _result_from_state(session_dir, current)
         with _pinned_output_parents_without_symlink_components(root) as pinned:
             _publish_payload_directory(
                 output_dir=session_dir,
@@ -192,8 +173,10 @@ def inspect_oled_bounded_discovery_session(
 ) -> OledBoundedDiscoverySessionResult:
     session_dir = _session_dir(storage, project_id, session_id)
     with _session_lock(session_dir):
-        _read_spec(session_dir)
-        return _result_from_state(session_dir, _read_state(session_dir))
+        spec = _read_spec(session_dir)
+        state = _read_state(session_dir)
+        _validate_external_state(storage, project_id, session_dir, spec, state)
+        return _result_from_state(session_dir, state)
 
 
 def advance_oled_bounded_discovery_session(
@@ -211,10 +194,10 @@ def advance_oled_bounded_discovery_session(
         spec = _read_spec(session_dir)
         state = _read_state(session_dir)
         _require_revision(state, expected_revision)
-        if state["status"] in _TERMINAL or state["status"] in _WAITING:
-            return _result_from_state(session_dir, state)
         try:
-            _assert_session_inputs_stable(spec)
+            _validate_external_state(storage, project_id, session_dir, spec, state)
+            if state["status"] in _TERMINAL or state["status"] == WAITING_USER:
+                return _result_from_state(session_dir, state)
             action = _next_action(
                 storage=storage,
                 project_id=project_id,
@@ -244,8 +227,7 @@ def advance_oled_bounded_discovery_session(
                 storage,
                 session_dir,
                 state,
-                status=FAILED_INTEGRITY,
-                active_child=None,
+                status=FAILED,
                 failure={
                     "code": "session_integrity_failure",
                     "message": str(exc),
@@ -273,10 +255,11 @@ def approve_oled_bounded_discovery_session_gate(
     with _session_lock(session_dir):
         spec = _read_spec(session_dir)
         state = _read_state(session_dir)
+        _validate_external_state(storage, project_id, session_dir, spec, state)
         _require_revision(state, expected_revision)
-        if state["status"] not in _WAITING:
+        if state["status"] != WAITING_USER:
             raise ValueError("PR-AV session is not waiting for a gate")
-        active = str(state.get("active_child") or "")
+        active = _waiting_child_label(state)
         child = _child_by_label(state, active)
         try:
             _assert_session_inputs_stable(spec)
@@ -285,8 +268,7 @@ def approve_oled_bounded_discovery_session_gate(
                 storage,
                 session_dir,
                 state,
-                status=FAILED_INTEGRITY,
-                active_child=active,
+                status=FAILED,
                 failure={
                     "code": "session_input_binding_changed",
                     "task_id": child["task_id"],
@@ -320,8 +302,7 @@ def approve_oled_bounded_discovery_session_gate(
                 storage,
                 session_dir,
                 state,
-                status=FAILED_INTEGRITY,
-                active_child=active,
+                status=FAILED,
                 failure={
                     "code": "gate_resume_integrity_failure",
                     "task_id": action["task_id"],
@@ -357,8 +338,7 @@ def approve_oled_bounded_discovery_session_gate(
                     storage,
                     session_dir,
                     state,
-                    status=FAILED_INTEGRITY,
-                    active_child=active,
+                    status=FAILED,
                     children=children,
                     failure={
                         "code": "child_publication_verification_failed",
@@ -381,8 +361,10 @@ def approve_oled_bounded_discovery_session_gate(
                 storage,
                 session_dir,
                 state,
-                status=action["success_status"],
-                active_child=None,
+                status=ACTIVE,
+                current_step=_success_step(
+                    storage, project_id, {**state, "children": children}, active, action
+                ),
                 children=children,
                 failure=None,
             )
@@ -400,8 +382,7 @@ def approve_oled_bounded_discovery_session_gate(
             storage,
             session_dir,
             state,
-            status=FAILED_EXECUTION,
-            active_child=None,
+            status=FAILED,
             children=children,
             failure={
                 "code": "child_execution_failed",
@@ -456,8 +437,10 @@ def _execute_child_transition(
                 storage,
                 session_dir,
                 state,
-                status=action["success_status"],
-                active_child=None,
+                status=ACTIVE,
+                current_step=_success_step(
+                    storage, project_id, {**state, "children": children}, label, action
+                ),
                 children=children,
                 failure=None,
             )
@@ -477,7 +460,7 @@ def _execute_child_transition(
                 session_dir,
                 state,
                 status=RECOVERY_REQUIRED,
-                active_child=label,
+                current_step=_step_for_label(label),
                 children=children,
                 failure={
                     "code": "child_running_without_registered_publication",
@@ -495,13 +478,14 @@ def _execute_child_transition(
                 status="waiting_user",
                 artifacts={},
                 artifact_manifest_sha256="",
+                gate_snapshot=_stage_snapshot_binding(existing),
             )
             updated = _transition(
                 storage,
                 session_dir,
                 state,
-                status=action["waiting_status"],
-                active_child=label,
+                status=WAITING_USER,
+                current_step=_step_for_label(label),
                 children=children,
                 failure=None,
             )
@@ -520,8 +504,8 @@ def _execute_child_transition(
                 storage,
                 session_dir,
                 state,
-                status=FAILED_EXECUTION,
-                active_child=None,
+                status=FAILED,
+                current_step=_step_for_label(label),
                 children=children,
                 failure={
                     "code": "child_execution_failed",
@@ -540,6 +524,9 @@ def _execute_child_transition(
     )
     status = result.get("status")
     if status == RunStatus.WAITING_USER.value:
+        waiting_stage = storage.read_stage_state(project_id, run_id)
+        if waiting_stage is None:
+            raise ValueError("PR-AV waiting child StageState disappeared")
         children = _upsert_child(
             state,
             label=label,
@@ -548,13 +535,14 @@ def _execute_child_transition(
             status="waiting_user",
             artifacts={},
             artifact_manifest_sha256="",
+            gate_snapshot=_stage_snapshot_binding(waiting_stage),
         )
         updated = _transition(
             storage,
             session_dir,
             state,
-            status=action["waiting_status"],
-            active_child=label,
+            status=WAITING_USER,
+            current_step=_step_for_label(label),
             children=children,
             failure=None,
         )
@@ -587,8 +575,10 @@ def _execute_child_transition(
             storage,
             session_dir,
             state,
-            status=action["success_status"],
-            active_child=None,
+            status=ACTIVE,
+            current_step=_success_step(
+                storage, project_id, {**state, "children": children}, label, action
+            ),
             children=children,
             failure=None,
         )
@@ -606,8 +596,8 @@ def _execute_child_transition(
         storage,
         session_dir,
         state,
-        status=FAILED_EXECUTION,
-        active_child=None,
+        status=FAILED,
+        current_step=_step_for_label(label),
         children=children,
         failure={
             "code": "child_execution_failed",
@@ -626,16 +616,16 @@ def _next_action(
     spec: dict[str, Any],
     state: dict[str, Any],
 ) -> dict[str, Any]:
-    status = state["status"]
-    if status == CREATED:
+    step = state["current_step"]
+    if step == SCREENING:
         return _action_for_label(
             storage, project_id, session_dir, spec, state, "screening"
         )
-    if status == SCREENING_COMPLETE:
+    if step == INITIAL_DECISION and _child_status(state, "initial_decision") != "succeeded":
         return _action_for_label(
             storage, project_id, session_dir, spec, state, "initial_decision"
         )
-    if status == INITIAL_DECISION_COMPLETE:
+    if step == INITIAL_DECISION:
         receipt = _child_receipt(
             storage,
             project_id,
@@ -668,8 +658,18 @@ def _next_action(
             ),
             "child_label": "initial_decision",
         }
+    if step == GENERATION:
+        round_index = 1 + sum(
+            1
+            for item in state["children"]
+            if str(item.get("label") or "").startswith("generation_")
+            and item.get("status") == "succeeded"
+        )
+        return _action_for_label(
+            storage, project_id, session_dir, spec, state, f"generation_{round_index:02d}"
+        )
     round_index = _latest_round(state)
-    if status == GENERATION_COMPLETE:
+    if step == EVALUATION:
         return _action_for_label(
             storage,
             project_id,
@@ -678,7 +678,7 @@ def _next_action(
             state,
             f"evaluation_{round_index:02d}",
         )
-    if status == EVALUATION_COMPLETE:
+    if step == CANDIDATE_DECISION:
         return _action_for_label(
             storage,
             project_id,
@@ -687,7 +687,7 @@ def _next_action(
             state,
             f"candidate_decision_{round_index:02d}",
         )
-    if status == CANDIDATE_DECISION_COMPLETE:
+    if step == CONTROLLER and _child_status(state, f"controller_{round_index:02d}") != "succeeded":
         return _action_for_label(
             storage,
             project_id,
@@ -696,7 +696,7 @@ def _next_action(
             state,
             f"controller_{round_index:02d}",
         )
-    if status == CONTROLLER_COMPLETE:
+    if step == CONTROLLER:
         controller = _child_receipt(
             storage,
             project_id,
@@ -728,7 +728,7 @@ def _next_action(
             "child_label": f"candidate_decision_{round_index:02d}",
             "controller_label": f"controller_{round_index:02d}",
         }
-    raise ValueError(f"PR-AV session status cannot advance: {status}")
+    raise ValueError(f"PR-AV session step cannot advance: {step}")
 
 
 def _action_for_label(
@@ -750,8 +750,7 @@ def _action_for_label(
                     "maximums": list(spec["screening"]["maximums"]),
                 }
             },
-            WAITING_SCREENING_GATE,
-            SCREENING_COMPLETE,
+            INITIAL_DECISION,
         )
     if label == "initial_decision":
         inputs = {
@@ -773,8 +772,7 @@ def _action_for_label(
             _TASKS["initial_decision"],
             inputs,
             {_TASKS["initial_decision"]: _decision_options(spec)},
-            WAITING_INITIAL_DECISION_GATE,
-            INITIAL_DECISION_COMPLETE,
+            INITIAL_DECISION,
         )
     prefix, round_index = _round_label(label)
     base = _round_base_inputs(storage, project_id, spec, state)
@@ -803,8 +801,7 @@ def _action_for_label(
             _TASKS["generation"],
             inputs,
             options,
-            WAITING_GENERATION_GATE,
-            GENERATION_COMPLETE,
+            EVALUATION,
         )
     inverse_label = f"generation_{round_index:02d}"
     inverse_receipt = _child_artifact_path(
@@ -828,8 +825,7 @@ def _action_for_label(
                 **roster_inputs,
             },
             {},
-            "",
-            EVALUATION_COMPLETE,
+            CANDIDATE_DECISION,
         )
     evaluation_receipt = _child_artifact_path(
         storage,
@@ -850,8 +846,7 @@ def _action_for_label(
                 **roster_inputs,
             },
             {},
-            "",
-            CANDIDATE_DECISION_COMPLETE,
+            CONTROLLER,
         )
     if prefix == "controller":
         request = _controller_request(
@@ -862,8 +857,7 @@ def _action_for_label(
             _TASKS["controller"],
             {"oled_bounded_controller_request": str(request)},
             {},
-            "",
-            CONTROLLER_COMPLETE,
+            CONTROLLER,
         )
     raise ValueError("PR-AV child label is invalid")
 
@@ -873,8 +867,7 @@ def _action(
     task_id: str,
     inputs: dict[str, str],
     options: dict[str, dict[str, Any]],
-    waiting_status: str,
-    success_status: str,
+    success_step: str,
 ) -> dict[str, Any]:
     return {
         "kind": "child",
@@ -882,9 +875,48 @@ def _action(
         "task_id": task_id,
         "inputs": inputs,
         "options": options,
-        "waiting_status": waiting_status,
-        "success_status": success_status,
+        "success_step": success_step,
     }
+
+
+def _success_step(
+    storage: ProjectStorage,
+    project_id: str,
+    state: dict[str, Any],
+    label: str,
+    action: dict[str, Any],
+) -> str:
+    if label == "initial_decision":
+        receipt = _child_receipt(
+            storage,
+            project_id,
+            state,
+            label,
+            "oled_experiment_batch_receipt",
+        )
+        if receipt.get("status") == "ready":
+            return INITIAL_DECISION
+        supply = _required_dict(_required_dict(receipt, "selection"), "candidate_supply")
+        return (
+            GENERATION
+            if supply.get("inverse_design_should_trigger") is True
+            else INITIAL_DECISION
+        )
+    if label.startswith("controller_"):
+        receipt = _child_receipt(
+            storage,
+            project_id,
+            state,
+            label,
+            "oled_bounded_controller_receipt",
+        )
+        return (
+            GENERATION
+            if _required_dict(receipt, "route").get("next_action")
+            == "request_generation_approval"
+            else CONTROLLER
+        )
+    return str(action["success_step"])
 
 
 def _controller_request(
@@ -976,10 +1008,14 @@ def _generation_roster(
     state: dict[str, Any],
     round_index: int,
 ) -> Path:
-    if round_index != 2:
-        raise ValueError("PR-AV v1 cumulative roster supports exactly two rounds")
+    from ai4s_agent.oled_generated_candidate_evaluation import (
+        oled_generated_candidate_evaluation_max_generation_sources,
+    )
+
+    if not 2 <= round_index <= oled_generated_candidate_evaluation_max_generation_sources():
+        raise ValueError("PR-AV cumulative roster exceeds PR-ATb capacity")
     sources: list[dict[str, Any]] = []
-    for index in (1, 2):
+    for index in range(1, round_index + 1):
         sources.append(
             {
                 "inverse_design_json": _child_artifact_path(
@@ -1004,7 +1040,7 @@ def _generation_roster(
         ),
         "sources": sources,
     }
-    path = session_dir / "generation_roster_02.json"
+    path = session_dir / f"generation_roster_{round_index:02d}.json"
     _write_immutable_bytes(path, _json_bytes(payload))
     return path
 
@@ -1057,7 +1093,7 @@ def _publish_terminal(
         session_dir,
         state,
         status=terminal["status"],
-        active_child=None,
+        current_step=CONTROLLER if terminal.get("controller_label") else INITIAL_DECISION,
         result={"result_id": result_id, "path": str(result_path)},
         failure=None,
     )
@@ -1143,15 +1179,19 @@ def _validated_spec(raw: dict[str, Any]) -> dict[str, Any]:
         "max_generated_candidates",
     }:
         raise ValueError("PR-AV controller-limit schema is invalid")
-    normalized_limits = {
-        "max_iterations": _bounded_positive_int(limits["max_iterations"], 3, "max_iterations"),
-        "max_generation_rounds": _bounded_positive_int(
-            limits["max_generation_rounds"], 2, "max_generation_rounds"
-        ),
-        "max_generated_candidates": _bounded_positive_int(
-            limits["max_generated_candidates"], 512, "max_generated_candidates"
-        ),
-    }
+    from ai4s_agent.oled_bounded_discovery_controller import (
+        validate_oled_bounded_discovery_limits,
+    )
+    from ai4s_agent.oled_generated_candidate_evaluation import (
+        oled_generated_candidate_evaluation_max_generation_sources,
+    )
+
+    normalized_limits = validate_oled_bounded_discovery_limits(limits)
+    if (
+        normalized_limits["max_generation_rounds"]
+        > oled_generated_candidate_evaluation_max_generation_sources()
+    ):
+        raise ValueError("PR-AV controller limits exceed PR-ATb roster capacity")
     if mode == "existing_output" and len(outputs) < normalized_limits["max_generation_rounds"]:
         raise ValueError("PR-AV existing-output roster cannot cover controller generation rounds")
     return {
@@ -1312,6 +1352,7 @@ def _read_state(session_dir: Path) -> dict[str, Any]:
             session_dir=session_dir,
             expected_revision=index,
         )
+        _validate_state_child_structure(state)
         if index == 0:
             if state.get("previous_state_digest") is not None:
                 raise ValueError("PR-AV initial state predecessor is invalid")
@@ -1350,6 +1391,12 @@ def _validated_state_payload(
         raise ValueError("PR-AV session revision is invalid")
     if not isinstance(payload.get("children"), list):
         raise ValueError("PR-AV child history is invalid")
+    if payload.get("status") not in _ALL_STATUSES:
+        raise ValueError("PR-AV session status is invalid")
+    if payload.get("current_step") not in _STEPS:
+        raise ValueError("PR-AV session current step is invalid")
+    if "active_child" in payload:
+        raise ValueError("PR-AV session state uses the retired active_child field")
     return {**payload, "state_digest": digest}
 
 
@@ -1358,12 +1405,7 @@ def _validate_state_transition(
 ) -> None:
     before = str(previous.get("status") or "")
     after = str(current.get("status") or "")
-    allowed = set(_ALLOWED_STATE_TRANSITIONS.get(before, set())) | {
-        RECOVERY_REQUIRED,
-        FAILED_INTEGRITY,
-        FAILED_EXECUTION,
-    }
-    if before in _TERMINAL or after not in allowed:
+    if before in _TERMINAL or after not in _ALL_STATUSES:
         raise ValueError("PR-AV immutable state transition is invalid")
     previous_children = {
         str(item.get("label") or ""): item
@@ -1408,6 +1450,261 @@ def _validate_state_transition(
             raise ValueError("PR-AV terminal transition is missing its result")
     elif current.get("result") is not None:
         raise ValueError("PR-AV nonterminal transition contains a result")
+
+
+def _validate_state_child_structure(state: dict[str, Any]) -> None:
+    expected: list[str] = ["screening", "initial_decision"]
+    for index in range(1, 1000):
+        expected.extend(
+            [
+                f"generation_{index:02d}",
+                f"evaluation_{index:02d}",
+                f"candidate_decision_{index:02d}",
+                f"controller_{index:02d}",
+            ]
+        )
+        if len(expected) >= len(state["children"]):
+            break
+    labels: list[str] = []
+    for child in state["children"]:
+        if not isinstance(child, dict):
+            raise ValueError("PR-AV child entry is invalid")
+        label = str(child.get("label") or "")
+        labels.append(label)
+        if child.get("run_id") != _child_run_id(str(state["session_id"]), label):
+            raise ValueError("PR-AV child run identity is invalid")
+        if child.get("task_id") != _TASKS[_step_for_label(label)]:
+            raise ValueError("PR-AV child task identity is invalid")
+        if child.get("status") not in {
+            "waiting_user",
+            "succeeded",
+            "failed",
+            "integrity_failed",
+            "recovery_required",
+        }:
+            raise ValueError("PR-AV child status is invalid")
+        gate_snapshot = child.get("gate_snapshot")
+        if gate_snapshot is not None and (
+            not isinstance(gate_snapshot, dict)
+            or set(gate_snapshot) != {"snapshot_id", "snapshot_hash"}
+            or not all(isinstance(value, str) and value for value in gate_snapshot.values())
+        ):
+            raise ValueError("PR-AV child gate snapshot binding is invalid")
+    if labels != expected[: len(labels)]:
+        raise ValueError("PR-AV child roster is not a valid workflow prefix")
+
+
+def _validate_external_state(
+    storage: ProjectStorage,
+    project_id: str,
+    session_dir: Path,
+    spec: dict[str, Any],
+    state: dict[str, Any],
+) -> None:
+    """Rebuild the current revision from executor and publication facts."""
+
+    _validate_state_child_structure(state)
+    _assert_session_inputs_stable(spec)
+    waiting_labels: list[str] = []
+    for child in state["children"]:
+        label = str(child["label"])
+        run_id = str(child["run_id"])
+        task_id = str(child["task_id"])
+        stage = storage.read_stage_state(project_id, run_id)
+        if stage is None or stage.stage != task_id:
+            raise ValueError("PR-AV child StageState binding is invalid")
+        child_status = str(child["status"])
+        if child_status == "waiting_user":
+            if stage.status != RunStatus.WAITING_USER:
+                raise ValueError("PR-AV waiting child StageState is invalid")
+            action = _action_for_label(
+                storage, project_id, session_dir, spec, state, label
+            )
+            engine = RunPlanExecutor(storage=storage)
+            run_plan = _run_plan(run_id, task_id, action["inputs"])
+            engine._validate_waiting_execution_snapshot(
+                state=stage,
+                run_plan=run_plan,
+                run_dir=storage.run_dir(project_id, run_id),
+                artifact_paths=action["inputs"],
+                approved_gates={_FINAL_GATE},
+                task_options=action["options"],
+            )
+            if child.get("gate_snapshot") != _stage_snapshot_binding(stage):
+                raise ValueError("PR-AV waiting child gate snapshot changed")
+            waiting_labels.append(label)
+        elif child_status == "succeeded":
+            if stage.status != RunStatus.SUCCEEDED:
+                raise ValueError("PR-AV succeeded child StageState is invalid")
+            action = _action_for_label(
+                storage, project_id, session_dir, spec, state, label
+            )
+            registry = _complete_child_registry(storage, project_id, run_id, task_id)
+            if registry != child.get("artifacts"):
+                raise ValueError("PR-AV child artifact registry changed")
+            if child.get("artifact_manifest_sha256") != _registry_manifest_sha256(
+                storage, project_id, run_id, registry
+            ):
+                raise ValueError("PR-AV child artifact manifest changed")
+            _verify_child_publication(
+                storage=storage,
+                project_id=project_id,
+                run_id=run_id,
+                task_id=task_id,
+                inputs=action["inputs"],
+                options=action["options"],
+                registry=registry,
+            )
+            gate_snapshot = child.get("gate_snapshot")
+            if gate_snapshot is not None:
+                engine = RunPlanExecutor(storage=storage)
+                run_plan = _run_plan(run_id, task_id, action["inputs"])
+                task_spec = engine.registry.get(task_id)
+                replayed_snapshot = engine._execution_snapshot(
+                    task_id=task_id,
+                    spec_default_adapter=task_spec.default_adapter,
+                    run_plan=run_plan,
+                    run_dir=storage.run_dir(project_id, run_id),
+                    artifact_paths=action["inputs"],
+                    approved_gates={_FINAL_GATE},
+                    options=action["options"].get(task_id, {}),
+                )
+                if {
+                    "snapshot_id": replayed_snapshot["snapshot_id"],
+                    "snapshot_hash": replayed_snapshot["snapshot_hash"],
+                } != gate_snapshot:
+                    raise ValueError("PR-AV succeeded child gate snapshot changed")
+                decisions = storage.read_gate_decisions(project_id, run_id)
+                matches = [
+                    item
+                    for item in decisions
+                    if item.get("approved") is True
+                    and item.get("approved_snapshot_id") == gate_snapshot["snapshot_id"]
+                    and item.get("approved_snapshot_hash") == gate_snapshot["snapshot_hash"]
+                ]
+                if len(matches) != 1:
+                    raise ValueError("PR-AV succeeded child gate approval is invalid")
+        elif child_status == "recovery_required":
+            if stage.status != RunStatus.RUNNING:
+                raise ValueError("PR-AV recovery child StageState is invalid")
+        elif child_status == "failed":
+            if stage.status != RunStatus.FAILED:
+                raise ValueError("PR-AV failed child StageState is invalid")
+        elif child_status == "integrity_failed":
+            if stage.status not in {RunStatus.SUCCEEDED, RunStatus.FAILED}:
+                raise ValueError("PR-AV integrity-failed child StageState is invalid")
+
+    if len(waiting_labels) > 1 or (
+        waiting_labels and waiting_labels[-1] != state["children"][-1]["label"]
+    ):
+        raise ValueError("PR-AV waiting child roster is invalid")
+    status = str(state["status"])
+    if status == WAITING_USER:
+        if len(waiting_labels) != 1 or state["current_step"] != _step_for_label(
+            waiting_labels[0]
+        ):
+            raise ValueError("PR-AV waiting state is not externally supported")
+        if state.get("result") is not None:
+            raise ValueError("PR-AV waiting state contains a result")
+        return
+    if waiting_labels:
+        raise ValueError("PR-AV non-waiting state has a waiting child")
+    if status == RECOVERY_REQUIRED:
+        if not state["children"] or state["children"][-1].get("status") != "recovery_required":
+            raise ValueError("PR-AV recovery state is not externally supported")
+        return
+    if status == FAILED:
+        if not isinstance(state.get("failure"), dict) or state.get("result") is not None:
+            raise ValueError("PR-AV failed state is invalid")
+        return
+
+    derived = _derived_action(storage, project_id, session_dir, spec, state)
+    if derived["kind"] == "terminal":
+        if status == ACTIVE:
+            expected_step = CONTROLLER if derived.get("controller_label") else INITIAL_DECISION
+            if state["current_step"] != expected_step or state.get("result") is not None:
+                raise ValueError("PR-AV terminal-ready state is invalid")
+            return
+        if status != derived["status"]:
+            raise ValueError("PR-AV terminal state is not externally supported")
+        _validate_terminal_result(storage, project_id, session_dir, state, derived)
+        return
+    if status != ACTIVE or state["current_step"] != _step_for_label(derived["label"]):
+        raise ValueError("PR-AV active state is not externally supported")
+    if state.get("result") is not None:
+        raise ValueError("PR-AV active state contains a result")
+
+
+def _derived_action(
+    storage: ProjectStorage,
+    project_id: str,
+    session_dir: Path,
+    spec: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    children = state["children"]
+    if not children:
+        step = SCREENING
+    else:
+        last = children[-1]
+        if last.get("status") != "succeeded":
+            raise ValueError("PR-AV active state ends in an incomplete child")
+        label = str(last["label"])
+        step = {
+            "screening": INITIAL_DECISION,
+            "initial_decision": INITIAL_DECISION,
+            "generation": EVALUATION,
+            "evaluation": CANDIDATE_DECISION,
+            "candidate_decision": CONTROLLER,
+            "controller": CONTROLLER,
+        }[_step_for_label(label)]
+    probe = {**state, "status": ACTIVE, "current_step": step, "result": None}
+    return _next_action(
+        storage=storage,
+        project_id=project_id,
+        session_dir=session_dir,
+        spec=spec,
+        state=probe,
+    )
+
+
+def _validate_terminal_result(
+    storage: ProjectStorage,
+    project_id: str,
+    session_dir: Path,
+    state: dict[str, Any],
+    terminal: dict[str, Any],
+) -> None:
+    child = _child_by_label(state, terminal["child_label"])
+    usage = {"iterations": 0, "generation_rounds": 0, "generated_candidates": 0}
+    if terminal.get("controller_label"):
+        controller = _child_receipt(
+            storage,
+            project_id,
+            state,
+            terminal["controller_label"],
+            "oled_bounded_controller_receipt",
+        )
+        usage = _required_dict(controller, "usage")
+    payload = {
+        "result_version": _RESULT_VERSION,
+        "session_id": state["session_id"],
+        "status": terminal["status"],
+        "has_complete_top_n": terminal["has_complete_top_n"],
+        "result_source": terminal["result_source"],
+        "stop_reason": terminal["reason"],
+        "source_child_run_id": child["run_id"],
+        "source_artifacts": child["artifacts"],
+        "usage": usage,
+    }
+    payload["result_id"] = "oled-bounded-session-result:" + _stable_hash(payload)
+    result_path = session_dir / "session_result.json"
+    persisted = _read_session_json(session_dir, result_path.name)
+    if persisted != payload or state.get("result") != {
+        "result_id": payload["result_id"],
+        "path": str(result_path),
+    }:
+        raise ValueError("PR-AV terminal result is not externally supported")
 
 
 def _transition(
@@ -1856,8 +2153,13 @@ def _upsert_child(
     status: str,
     artifacts: dict[str, str],
     artifact_manifest_sha256: str,
+    gate_snapshot: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     children = [dict(item) for item in state["children"]]
+    matches = [index for index, item in enumerate(children) if item.get("label") == label]
+    existing_snapshot = (
+        children[matches[0]].get("gate_snapshot") if len(matches) == 1 else None
+    )
     entry = {
         "label": label,
         "run_id": run_id,
@@ -1865,8 +2167,8 @@ def _upsert_child(
         "status": status,
         "artifacts": artifacts,
         "artifact_manifest_sha256": artifact_manifest_sha256,
+        "gate_snapshot": gate_snapshot if gate_snapshot is not None else existing_snapshot,
     }
-    matches = [index for index, item in enumerate(children) if item.get("label") == label]
     if len(matches) > 1:
         raise ValueError("PR-AV child label is duplicated")
     if matches:
@@ -1899,11 +2201,48 @@ def _updated_child(
     )
 
 
+def _stage_snapshot_binding(stage: Any) -> dict[str, str]:
+    snapshot = stage.details.get("execution_snapshot")
+    if not isinstance(snapshot, dict):
+        raise ValueError("PR-AV waiting child execution snapshot is unavailable")
+    snapshot_id = str(snapshot.get("snapshot_id") or "")
+    snapshot_hash = str(snapshot.get("snapshot_hash") or "")
+    if not snapshot_id or not snapshot_hash:
+        raise ValueError("PR-AV waiting child execution snapshot is invalid")
+    return {"snapshot_id": snapshot_id, "snapshot_hash": snapshot_hash}
+
+
 def _child_by_label(state: dict[str, Any], label: str) -> dict[str, Any]:
     matches = [item for item in state["children"] if item.get("label") == label]
     if len(matches) != 1 or not isinstance(matches[0], dict):
         raise ValueError(f"PR-AV child is unavailable: {label}")
     return matches[0]
+
+
+def _child_status(state: dict[str, Any], label: str) -> str | None:
+    matches = [item for item in state["children"] if item.get("label") == label]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError("PR-AV child label is duplicated")
+    return str(matches[0].get("status") or "")
+
+
+def _waiting_child_label(state: dict[str, Any]) -> str:
+    labels = [
+        str(item.get("label") or "")
+        for item in state["children"]
+        if item.get("status") == "waiting_user"
+    ]
+    if len(labels) != 1:
+        raise ValueError("PR-AV waiting child is unavailable")
+    return labels[0]
+
+
+def _step_for_label(label: str) -> str:
+    if label in {SCREENING, INITIAL_DECISION}:
+        return label
+    return _round_label(label)[0]
 
 
 def _latest_round(state: dict[str, Any]) -> int:
@@ -1976,10 +2315,11 @@ def _write_immutable_bytes(path: Path, payload: bytes) -> None:
             raise ValueError("PR-AV immutable session artifact already differs")
         return
     parent_fd = _open_existing_directory_chain_without_symlinks(path.parent)
+    temporary = f".{path.name}.{uuid.uuid4().hex}.tmp"
     descriptor = -1
     try:
         descriptor = os.open(
-            path.name,
+            temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
             0o600,
             dir_fd=parent_fd,
@@ -1992,8 +2332,19 @@ def _write_immutable_bytes(path: Path, payload: bytes) -> None:
                 raise OSError("short write")
             written += count
         os.fsync(descriptor)
-        named = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         opened = os.fstat(descriptor)
+        if opened.st_size != len(payload):
+            raise ValueError("PR-AV immutable session artifact write was incomplete")
+        if path.name.startswith("state_") and _REVISION_PUBLISH_FAULT_HOOK is not None:
+            _REVISION_PUBLISH_FAULT_HOOK(path)
+        os.link(
+            temporary,
+            path.name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        named = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         if (
             not stat.S_ISREG(named.st_mode)
             or named.st_dev != opened.st_dev
@@ -2002,9 +2353,22 @@ def _write_immutable_bytes(path: Path, payload: bytes) -> None:
         ):
             raise ValueError("PR-AV immutable session artifact publication changed")
         os.fsync(parent_fd)
+    except FileExistsError:
+        existing, _ = _read_regular_file_bound(
+            path,
+            max_bytes=max(len(payload), 1),
+            reject_symlink_components=True,
+            allow_empty=True,
+        )
+        if existing != payload:
+            raise ValueError("PR-AV immutable session artifact already differs") from None
     finally:
         if descriptor != -1:
             os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=parent_fd)
+        except FileNotFoundError:
+            pass
         os.close(parent_fd)
     if path.read_bytes() != payload:
         raise ValueError("PR-AV immutable session artifact verification failed")
@@ -2063,16 +2427,20 @@ def _read_session_json(session_dir: Path, filename: str) -> dict[str, Any]:
 def _result_from_state(
     session_dir: Path, state: dict[str, Any]
 ) -> OledBoundedDiscoverySessionResult:
-    active = str(state.get("active_child") or "")
-    child = _child_by_label(state, active) if active else None
+    child = (
+        _child_by_label(state, _waiting_child_label(state))
+        if state["status"] == WAITING_USER
+        else None
+    )
     result = state.get("result")
     return OledBoundedDiscoverySessionResult(
         session_id=str(state["session_id"]),
         session_dir=session_dir,
         revision=int(state["revision"]),
         status=str(state["status"]),
-        waiting_run_id=str(child["run_id"]) if child and state["status"] in _WAITING else None,
-        waiting_task_id=str(child["task_id"]) if child and state["status"] in _WAITING else None,
+        current_step=str(state["current_step"]),
+        waiting_run_id=str(child["run_id"]) if child else None,
+        waiting_task_id=str(child["task_id"]) if child else None,
         result_json=Path(str(result["path"])) if isinstance(result, dict) else None,
     )
 

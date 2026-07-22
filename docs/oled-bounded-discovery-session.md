@@ -51,9 +51,17 @@ cannot silently reuse the session.
 revision. The session lock and revision comparison form a compare-and-swap:
 two callers holding the same revision cannot both advance the session. One
 call commits at most one session-state transition. Every transition is first
-published as a canonical no-replace revision whose predecessor digest binds
-the prior revision; `session_state.json` is only a recoverable convenience
-head over that immutable chain.
+written and fsynced to an invocation-owned temporary inode, then atomically
+hard-linked under its canonical no-replace revision name and followed by a
+parent-directory fsync. A crash before the link leaves the preceding revision
+authoritative. `session_state.json` is only a recoverable convenience head.
+
+The public state contract has six statuses: `ACTIVE`, `WAITING_USER`,
+`COMPLETED_TOP_N`, `STOPPED_BOUNDED_NO_SOLUTION`, `RECOVERY_REQUIRED`, and
+`FAILED`. `current_step` is one of `screening`, `initial_decision`,
+`generation`, `evaluation`, `candidate_decision`, or `controller`. Stage
+completion is derived from verified child facts; it is not persisted as a
+second family of top-level statuses.
 
 PR-AQ, initial PR-ARb, and every PR-AS child retain their existing
 `gate_5_final_threshold` gate. The coordinator returns a waiting child ID and
@@ -67,10 +75,13 @@ copies neither PR-AU routing logic nor its budget arithmetic.
 
 ## Recovery and integrity
 
-Every successful child stores the exact artifact-registry mapping and a digest
-over every registered file. Before a child result is committed to session
-state, its publication is exact-replayed from its upstream inputs. Later
-consumption rechecks the stored registry and byte manifest.
+Every child label is rebound to its deterministic run and task. Waiting
+children are checked against their exact `StageState`, RunPlan, execution
+snapshot, and later gate decision. Successful children are checked against
+their exact registry, file manifest, and publication replay. Terminal state is
+accepted only when `session_result.json` can be rebuilt byte-for-byte from its
+verified source child and controller. These checks run on inspect and advance,
+so a self-consistent re-signed state chain is not a trust anchor.
 
 Recovery rules are deliberately conservative:
 
@@ -80,7 +91,7 @@ Recovery rules are deliberately conservative:
 - a child left `RUNNING` without a complete registered publication transitions
   the session to `RECOVERY_REQUIRED` and is never dispatched automatically;
 - changed Registry mappings, bytes, source receipts, or replay results fail as
-  `FAILED_INTEGRITY` before another child run is created.
+  `FAILED` with an integrity failure code before another child run is created.
 
 This is an at-most-once recovery contract. It does not claim that an
 unregistered remote REINVENT4 side effect can be reconciled automatically.

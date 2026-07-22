@@ -996,6 +996,12 @@ def _validate_limits(payload: dict[str, Any]) -> dict[str, int]:
     return limits
 
 
+def validate_oled_bounded_discovery_limits(payload: dict[str, Any]) -> dict[str, int]:
+    """Validate PR-AU limits against the controller's authoritative ceilings."""
+
+    return _validate_limits(payload)
+
+
 def _iteration_paths(value: Any) -> dict[str, str | None]:
     if (
         not isinstance(value, dict)
@@ -1341,4 +1347,5 @@ __all__ = [
     "run_oled_bounded_discovery_controller_from_files",
     "validate_oled_bounded_generation_authorization_bundle",
     "validate_oled_bounded_generation_authorization_predecessor",
+    "validate_oled_bounded_discovery_limits",
 ]
