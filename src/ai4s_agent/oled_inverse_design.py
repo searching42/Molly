@@ -19,9 +19,10 @@ import re
 import secrets
 import stat
 import tempfile
+import tomllib
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Sequence, TextIO
 
 from ai4s_agent._utils import now_iso
@@ -61,16 +62,38 @@ _BATCH_SELECTION_VERSION = "oled_experiment_batch_selection.v2"
 _MAX_INPUT_BYTES = 1024 * 1024 * 1024
 _REINVENT4_BACKEND = "reinvent4"
 _REINVENT4_MODES = frozenset({"existing_output", "remote"})
-_REMOTE_PROFILE_ID = "workstation2-node45-reinvent4-v1"
-_REMOTE_TRANSPORT_PROFILE = {
-    "profile_id": _REMOTE_PROFILE_ID,
-    "ssh_target": "workstation2",
-    "expected_hostname": "node45",
-    "repo": "/home/lbh/work/wk1/REINVENT4",
-    "python": "/home/lbh/miniconda3/envs/REINVENT4/bin/python",
-    "host_key_policy": "strict_pinned_known_hosts",
+_LEGACY_REMOTE_PROFILE_ID = "workstation2-node45-reinvent4-v1"
+_REMOTE_V2_PROFILE_ID = "workstation2-node45-reinvent4-v2"
+_REMOTE_PROFILE_ID = _REMOTE_V2_PROFILE_ID
+_REMOTE_TRANSPORT_PROFILES = {
+    _LEGACY_REMOTE_PROFILE_ID: {
+        "profile_id": _LEGACY_REMOTE_PROFILE_ID,
+        "ssh_target": "workstation2",
+        "expected_hostname": "node45",
+        "repo": "/home/lbh/work/wk1/REINVENT4",
+        "python": "/home/lbh/miniconda3/envs/REINVENT4/bin/python",
+        "host_key_policy": "strict_pinned_known_hosts",
+    },
+    _REMOTE_V2_PROFILE_ID: {
+        "profile_id": _REMOTE_V2_PROFILE_ID,
+        "ssh_target": "workstation2",
+        "expected_hostname": "node45",
+        "repo": "/home/lbh/work/wk1/REINVENT4",
+        "python": "/home/lbh/miniconda3/envs/reinvent4/bin/python",
+        "host_key_policy": "strict_pinned_known_hosts",
+        "device_policy": "cpu_only",
+        "process_policy": "nice_19_single_thread",
+    },
 }
+_REMOTE_TRANSPORT_PROFILE = _REMOTE_TRANSPORT_PROFILES[_REMOTE_PROFILE_ID]
 _REMOTE_PROFILE_KEYS = frozenset(_REMOTE_TRANSPORT_PROFILE)
+
+_REMOTE_REINVENT_REQUIRED_PLACEHOLDERS = {
+    "{{molly_output_csv}}",
+    "{{molly_design_request_id}}",
+    "{{molly_seed}}",
+    "{{molly_design_request_sha256}}",
+}
 
 
 @dataclass(frozen=True)
@@ -1633,22 +1656,66 @@ def _render_remote_reinvent4_config(
         template = config_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("REINVENT4 config must be UTF-8 text") from exc
-    required = {
-        "{{molly_output_csv}}",
-        "{{molly_design_request_id}}",
-        "{{molly_seed}}",
-        "{{molly_design_request_sha256}}",
-    }
-    if any(token not in template for token in required):
+    if any(token not in template for token in _REMOTE_REINVENT_REQUIRED_PLACEHOLDERS):
         raise ValueError(
             "REINVENT4 config must contain molly_output_csv, molly_design_request_id, "
             "molly_seed, and molly_design_request_sha256 placeholders"
         )
-    # Do not accept a request hash hidden in a comment: a remote template must
-    # contain an active TOML assignment that binds its scoring configuration to
-    # this exact PR-ARb design request.  The template author chooses the field
-    # appropriate to their REINVENT4 configuration extension, while PR-AS
-    # proves that its value was not silently reused for a different request.
+    request_sha256 = _sha256_bytes(_json_bytes(design_request))
+    rendered = (
+        template.replace("{{molly_output_csv}}", remote_output_csv)
+        .replace("{{molly_design_request_id}}", design_request_id)
+        .replace("{{molly_seed}}", str(seed))
+        .replace("{{molly_design_request_sha256}}", request_sha256)
+    )
+    if "{{molly_" in rendered:
+        raise ValueError("REINVENT4 config contains an unresolved Molly placeholder")
+    try:
+        parsed = tomllib.loads(rendered)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError("rendered REINVENT4 config is not valid TOML") from exc
+    if parsed.get("run_type") != "sampling":
+        raise ValueError("remote REINVENT4 config must use run_type = sampling")
+    if parsed.get("device") != "cpu":
+        raise ValueError("remote REINVENT4 config must use device = cpu")
+    if parsed.get("seed") != seed:
+        raise ValueError("remote REINVENT4 config seed binding is invalid")
+    parameters = parsed.get("parameters")
+    if not isinstance(parameters, dict) or parameters.get("output_file") != remote_output_csv:
+        raise ValueError("remote REINVENT4 output-file binding is invalid")
+    json_out_config = parsed.get("json_out_config")
+    if (
+        not isinstance(json_out_config, str)
+        or design_request_id not in json_out_config
+        or request_sha256 not in json_out_config
+    ):
+        raise ValueError(
+            "REINVENT4 json_out_config must actively bind the design request ID and SHA-256"
+        )
+    if PurePosixPath(json_out_config).parent != PurePosixPath(remote_output_csv).parent:
+        raise ValueError("REINVENT4 json_out_config must remain inside the remote attempt")
+    return rendered.encode("utf-8")
+
+
+def _render_legacy_remote_reinvent4_v1_config(
+    *,
+    config_bytes: bytes,
+    design_request_id: str,
+    seed: int,
+    remote_output_csv: str,
+    design_request: dict[str, Any],
+) -> bytes:
+    """Replay the historical v1 template contract without enabling v1 runs."""
+
+    try:
+        template = config_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("REINVENT4 config must be UTF-8 text") from exc
+    if any(token not in template for token in _REMOTE_REINVENT_REQUIRED_PLACEHOLDERS):
+        raise ValueError(
+            "REINVENT4 config must contain molly_output_csv, molly_design_request_id, "
+            "molly_seed, and molly_design_request_sha256 placeholders"
+        )
     binding_pattern = re.compile(
         r"(?m)^\s*molly_design_request_sha256\s*=\s*"
         r"(?:['\"])?\{\{molly_design_request_sha256\}\}(?:['\"])?\s*(?:#.*)?$"
@@ -1688,7 +1755,14 @@ def _validate_effective_config_replay(
     if remote_transport is None:
         raise ValueError("OLED inverse-design remote transport provenance is invalid")
     remote_output_csv = _required_string(remote_transport, "remote_output_csv")
-    expected = _render_remote_reinvent4_config(
+    profile_id = _required_string(remote_transport, "profile_id")
+    if profile_id == _LEGACY_REMOTE_PROFILE_ID:
+        renderer = _render_legacy_remote_reinvent4_v1_config
+    elif profile_id == _REMOTE_V2_PROFILE_ID:
+        renderer = _render_remote_reinvent4_config
+    else:
+        raise ValueError("OLED inverse-design remote transport profile is invalid")
+    expected = renderer(
         config_bytes=template_bytes,
         design_request_id=design_request_id,
         seed=seed,
@@ -1709,12 +1783,13 @@ def _validated_remote_transport_provenance(
     """Validate the fixed remote profile and isolated attempt fields on disk."""
 
     remote = _required_dict(provenance, "remote_transport")
-    static = {
-        key: remote.get(key)
-        for key in (*sorted(_REMOTE_PROFILE_KEYS), "known_hosts_sha256")
-    }
+    profile_id = remote.get("profile_id")
+    profile = _REMOTE_TRANSPORT_PROFILES.get(profile_id)
+    if profile is None:
+        raise ValueError("OLED inverse-design remote transport profile is invalid")
+    static = {key: remote.get(key) for key in (*sorted(profile), "known_hosts_sha256")}
     expected_static = {
-        **_REMOTE_TRANSPORT_PROFILE,
+        **profile,
         "known_hosts_sha256": static["known_hosts_sha256"],
     }
     if (

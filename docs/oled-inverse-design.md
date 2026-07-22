@@ -37,12 +37,19 @@ and executor registration exact-replays the same frozen controller bundle
 against the publication receipt.
 
 `remote` mode is restricted to the checked-in
-`workstation2-node45-reinvent4-v1` transport profile. It requires an
+`workstation2-node45-reinvent4-v2` transport profile. It requires an
 executor-frozen `oled_inverse_design_remote_known_hosts` artifact and uses
 `StrictHostKeyChecking=yes`. Before it creates a remote work directory, its
 strict SSH session verifies the configured remote short hostname (`node45`).
 Arbitrary SSH hosts, repositories, Python paths, and conda environments are
-not task options.
+not task options. The v2 profile is deliberately CPU-only. It launches one
+low-priority process with `nice -n 19` and fixes the common BLAS/OpenMP thread
+counts to one, so the canary cannot allocate GPU memory or contend with the
+existing GPU workload. The legacy v1 profile remains verifier-only for
+previously persisted receipts and cannot be selected for a new run. Its
+effective configuration is replayed with the original v1 placeholder and
+active `molly_design_request_sha256` assignment rules; v2's sampling, CPU, and
+`json_out_config` requirements are not retroactively applied to v1 artifacts.
 
 The remote configuration template must contain all four placeholders:
 
@@ -53,11 +60,22 @@ The remote configuration template must contain all four placeholders:
 {{molly_design_request_sha256}}
 ```
 
-`{{molly_design_request_sha256}}` must occur in an active TOML assignment,
-for example:
+The template must be valid REINVENT4 sampling TOML with `device = "cpu"`.
+Because REINVENT4 rejects unknown top-level fields, the exact request identity
+is bound through the REINVENT-consumed `json_out_config` path, for example:
 
 ```toml
-molly_design_request_sha256 = "{{molly_design_request_sha256}}"
+run_type = "sampling"
+device = "cpu"
+seed = {{molly_seed}}
+json_out_config = "{{molly_output_csv}}.{{molly_design_request_id}}.{{molly_design_request_sha256}}.json"
+
+[parameters]
+model_file = "priors/reinvent.prior"
+output_file = "{{molly_output_csv}}"
+num_smiles = 2
+unique_molecules = true
+randomize_smiles = true
 ```
 
 This binds the exact PR-ARb properties, directions, and bounds to the submitted
