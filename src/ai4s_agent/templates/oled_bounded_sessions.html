@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OLED 有界发现会话</title>
+    <style>
+      :root { --ink:#172027; --muted:#66747b; --line:rgba(23,32,39,.16); --panel:#fff; --blue:#145c72; --green:#2d6a4f; --rust:#a54d16; --bg:#edf1f3; }
+      * { box-sizing:border-box; }
+      body { margin:0; font-family:"Avenir Next","Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
+      main { width:min(1280px,100%); margin:0 auto; padding:1rem; display:grid; gap:1rem; }
+      header,.panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:1rem; }
+      header { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
+      h1,h2,h3,p { margin-top:0; }
+      h1 { font-size:1.3rem; margin-bottom:.25rem; }
+      h2 { font-size:1.05rem; }
+      a { color:var(--blue); font-weight:700; }
+      .muted { color:var(--muted); }
+      .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
+      .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.65rem; }
+      .stat { border:1px solid var(--line); border-radius:8px; padding:.7rem; }
+      .stat span { display:block; color:var(--muted); font-size:.75rem; }
+      .stat strong { display:block; margin-top:.2rem; word-break:break-word; }
+      form { display:grid; gap:.65rem; }
+      label { font-weight:800; font-size:.82rem; }
+      input,textarea,button { width:100%; font:inherit; border-radius:8px; padding:.7rem .8rem; }
+      input,textarea { border:1px solid var(--line); }
+      textarea { min-height:190px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+      button { border:0; background:var(--blue); color:#fff; font-weight:900; cursor:pointer; }
+      button.approve { background:var(--rust); }
+      button:disabled { cursor:not-allowed; opacity:.45; }
+      .actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.65rem; }
+      .badge { display:inline-flex; border-radius:999px; padding:.3rem .6rem; background:#e8eef1; font-weight:900; font-size:.78rem; }
+      .badge.complete { background:#dcefe5; color:var(--green); }
+      .badge.waiting { background:#f4d8bd; color:#6b310e; }
+      .error { color:#8a2813; }
+      table { width:100%; border-collapse:collapse; font-size:.84rem; }
+      th,td { border-bottom:1px solid var(--line); padding:.6rem; text-align:left; vertical-align:top; }
+      th { color:var(--muted); }
+      code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+      pre { max-height:280px; overflow:auto; background:#111a1f; color:#dbedf3; border-radius:8px; padding:.8rem; }
+      [hidden] { display:none !important; }
+      @media(max-width:800px) { .grid,.stats,.actions { grid-template-columns:1fr; } header { align-items:flex-start; flex-direction:column; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>OLED 有界发现会话</h1>
+          <p class="muted">PR-AW 控制面只调用 PR-AV coordinator；候选是预测建议，不代表实验或计算验证。</p>
+        </div>
+        <a href="/">返回 Agent 控制台</a>
+      </header>
+
+      <section class="grid">
+        <article class="panel">
+          <h2>打开会话</h2>
+          <form id="inspect-form">
+            <label for="project-id">项目 ID</label>
+            <input id="project-id" value="proj-oled" required />
+            <label for="session-id">Session ID</label>
+            <input id="session-id" placeholder="oled-bounded-session-…" required />
+            <button type="submit">检查并 exact replay</button>
+          </form>
+        </article>
+        <article class="panel">
+          <h2>创建会话</h2>
+          <form id="create-form">
+            <label for="create-project-id">项目 ID</label>
+            <input id="create-project-id" value="proj-oled" required />
+            <label for="session-spec">SessionSpec JSON</label>
+            <textarea id="session-spec" required>{}</textarea>
+            <button type="submit">创建 immutable SessionSpec</button>
+          </form>
+        </article>
+      </section>
+
+      <section id="session-panel" class="panel" hidden>
+        <div class="stats">
+          <div class="stat"><span>状态</span><strong id="session-status">-</strong></div>
+          <div class="stat"><span>当前步骤</span><strong id="current-step">-</strong></div>
+          <div class="stat"><span>Revision</span><strong id="session-revision">-</strong></div>
+          <div class="stat"><span>Session</span><strong id="session-id-view">-</strong></div>
+        </div>
+        <h3 style="margin-top:1rem">预算</h3>
+        <div id="budget-stats" class="stats"></div>
+        <div class="actions" style="margin-top:1rem">
+          <button id="advance-button" type="button">推进一个 durable transition</button>
+          <button id="refresh-button" type="button">刷新并 exact replay</button>
+        </div>
+        <form id="approval-form" style="margin-top:1rem" hidden>
+          <h3>Gate 审批</h3>
+          <p id="gate-description" class="muted"></p>
+          <label for="approval-actor">审批人</label>
+          <input id="approval-actor" value="reviewer" required />
+          <label for="approval-note">说明</label>
+          <input id="approval-note" placeholder="批准 exact-bound gate snapshot" />
+          <button class="approve" type="submit">批准当前 gate</button>
+        </form>
+      </section>
+
+      <section id="top-n-panel" class="panel" hidden>
+        <h2>Explainable Top-N</h2>
+        <p id="terminal-summary" class="muted"></p>
+        <div style="overflow:auto">
+          <table>
+            <thead><tr><th>#</th><th>候选</th><th>来源</th><th>预测性质</th><th>选择理由</th></tr></thead>
+            <tbody id="top-n-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>操作状态</h2>
+        <p id="message" class="muted">就绪。</p>
+        <pre id="raw-output">{}</pre>
+      </section>
+    </main>
+    <script>
+      let currentSession = null;
+      const $ = (id) => document.getElementById(id);
+      const enc = (value) => encodeURIComponent(String(value || "").trim());
+
+      async function requestJSON(url, options = {}) {
+        const response = await fetch(url, { headers: { "Content-Type": "application/json" }, ...options });
+        const payload = await response.json().catch(() => ({ ok:false, error:`HTTP ${response.status}` }));
+        if (!response.ok || payload.ok === false) throw new Error(payload.error || `HTTP ${response.status}`);
+        return payload;
+      }
+
+      function show(payload, message = "") {
+        $("raw-output").textContent = JSON.stringify(payload, null, 2);
+        $("message").textContent = message || "完成。";
+      }
+
+      function escapeHTML(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
+      }
+
+      function renderSession(session) {
+        currentSession = session;
+        $("session-panel").hidden = false;
+        $("session-status").textContent = session.status;
+        $("current-step").textContent = session.current_step;
+        $("session-revision").textContent = session.revision;
+        $("session-id-view").textContent = session.session_id;
+        $("session-status").className = `badge ${session.status === "WAITING_USER" ? "waiting" : session.status === "COMPLETED_TOP_N" ? "complete" : ""}`;
+        $("advance-button").disabled = session.status !== "ACTIVE";
+        $("approval-form").hidden = !session.gate?.required;
+        $("gate-description").textContent = session.gate?.required ? `${session.gate.gate} · ${session.gate.task_id} · ${session.gate.run_id}` : "";
+        $("budget-stats").innerHTML = ["iterations","generation_rounds","generated_candidates"].map((key) => `<div class="stat"><span>${escapeHTML(key)}</span><strong>${escapeHTML(session.usage[key])} / ${escapeHTML(session.limits[`max_${key}`])}</strong></div>`).join("");
+        renderTerminal(session.terminal);
+        $("project-id").value = $("project-id").value || "proj-oled";
+        $("session-id").value = session.session_id;
+        show(session, "会话已通过外部事实重放。")
+      }
+
+      function renderTerminal(terminal) {
+        $("top-n-panel").hidden = !terminal;
+        if (!terminal) return;
+        $("terminal-summary").textContent = `${terminal.status} · ${terminal.result_source} · ${terminal.stop_reason}`;
+        $("top-n-body").innerHTML = (terminal.top_candidates || []).map((item) => {
+          const props = Object.entries(item.properties || {}).map(([key,value]) => `${escapeHTML(value.display_name || key)}: ${escapeHTML(value.predicted_value ?? "-")} ${escapeHTML(value.unit || "")}`).join("<br>");
+          return `<tr><td>${escapeHTML(item.selection_order ?? "-")}</td><td><strong>${escapeHTML(item.canonical_name || item.candidate_id)}</strong><br><code>${escapeHTML(item.canonical_isomeric_smiles || "")}</code></td><td>${escapeHTML(item.source_kind)}</td><td>${props}</td><td>${escapeHTML((item.reason_codes || []).join(", "))}</td></tr>`;
+        }).join("");
+      }
+
+      async function inspectSession() {
+        const project = enc($("project-id").value);
+        const session = enc($("session-id").value);
+        const payload = await requestJSON(`/api/projects/${project}/oled-bounded-sessions/${session}`);
+        renderSession(payload.session);
+      }
+
+      async function enqueueAction(kind, extra = {}) {
+        if (!currentSession) throw new Error("请先检查会话");
+        const project = enc($("project-id").value);
+        const session = enc(currentSession.session_id);
+        const payload = await requestJSON(`/api/projects/${project}/oled-bounded-sessions/${session}/actions/${kind}`, {
+          method:"POST",
+          body:JSON.stringify({ expected_revision:currentSession.revision, ...extra }),
+        });
+        show(payload, `已提交 ${kind}，HTTP 请求不会等待科学任务完成。`);
+        await pollAction(project, payload.action.action_id);
+      }
+
+      async function pollAction(project, actionId) {
+        for (;;) {
+          const payload = await requestJSON(`/api/projects/${project}/oled-bounded-session-actions/${enc(actionId)}`);
+          show(payload, `Action: ${payload.action.status}`);
+          if (["SUCCEEDED","FAILED","RECOVERY_REQUIRED"].includes(payload.action.status)) {
+            if (payload.action.status === "SUCCEEDED") renderSession(payload.action.result);
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 750));
+        }
+      }
+
+      $("inspect-form").addEventListener("submit", async (event) => { event.preventDefault(); try { await inspectSession(); } catch (err) { show({ok:false,error:err.message}, "检查失败"); } });
+      $("create-form").addEventListener("submit", async (event) => { event.preventDefault(); try {
+        const project = enc($("create-project-id").value);
+        const spec = JSON.parse($("session-spec").value);
+        const payload = await requestJSON(`/api/projects/${project}/oled-bounded-sessions`, {method:"POST",body:JSON.stringify({session_spec:spec})});
+        $("project-id").value = decodeURIComponent(project); renderSession(payload.session);
+      } catch (err) { show({ok:false,error:err.message}, "创建失败"); } });
+      $("advance-button").addEventListener("click", async () => { try { await enqueueAction("advance"); } catch (err) { show({ok:false,error:err.message}, "推进失败"); } });
+      $("refresh-button").addEventListener("click", async () => { try { await inspectSession(); } catch (err) { show({ok:false,error:err.message}, "刷新失败"); } });
+      $("approval-form").addEventListener("submit", async (event) => { event.preventDefault(); try { await enqueueAction("approve", {actor:$("approval-actor").value,note:$("approval-note").value}); } catch (err) { show({ok:false,error:err.message}, "审批失败"); } });
+    </script>
+  </body>
+</html>

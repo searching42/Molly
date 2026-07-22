@@ -130,5 +130,41 @@ approve_oled_bounded_discovery_session_gate(
 )
 ```
 
-PR-AW may add the user-facing session controls and result presentation. It
-must consume these APIs rather than bypassing the coordinator.
+## PR-AW control plane and result presentation
+
+PR-AW adds a narrow web/API control plane around the coordinator. It does not
+add another scientific task, candidate source, decision policy, or remote
+transport branch.
+
+The session endpoints are project scoped:
+
+```text
+GET  /api/projects/<project>/oled-bounded-sessions
+POST /api/projects/<project>/oled-bounded-sessions
+GET  /api/projects/<project>/oled-bounded-sessions/<session>
+POST /api/projects/<project>/oled-bounded-sessions/<session>/actions/advance
+POST /api/projects/<project>/oled-bounded-sessions/<session>/actions/approve
+GET  /api/projects/<project>/oled-bounded-session-actions/<action>
+```
+
+Creation and inspection validate the exact PR-AV facts before returning a
+path-redacted presentation. Advance and approval requests require the caller's
+`expected_revision` and return `202` with a pollable action instead of holding
+the HTTP request open while a child task runs. Only the public PR-AV create,
+advance, and approval entry points can mutate a session.
+
+The action service has one same-process worker. An action left `QUEUED` or
+`RUNNING` by a previous process is reported as `RECOVERY_REQUIRED` and is never
+automatically replayed. It blocks another transition while its expected
+session revision remains current. If independently verified PR-AV recovery
+later advances beyond that revision, the obsolete control record no longer
+locks the session. Action JSON is mutable control metadata, not a scientific
+trust anchor: a successful action poll always rebuilds the current session
+view through PR-AV external-fact validation instead of serving a persisted
+candidate result.
+
+`/oled-bounded-sessions` exposes status, current step, exact gate identity,
+PR-AU limits and observed use, child progress, and explainable terminal Top-N.
+Candidate strings are escaped before HTML insertion. The page contains no
+manual accept/defer/reject action and explicitly states that the output is a
+recommendation, not experimental or computational validation.
