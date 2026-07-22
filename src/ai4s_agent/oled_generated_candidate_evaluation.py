@@ -498,6 +498,15 @@ def _build_evaluation_from_files(
             generated_by_publication.append((publication_id, generated_rows))
             inverse_bound.assert_stable()
 
+    if previous_evaluation_binding is not None:
+        _validate_cumulative_predecessor_binding(
+            source=roster.sources[-1],
+            predecessor_publication_id=str(
+                generation_bindings[-2]["publication_id"]
+            ),
+            previous_evaluation=previous_evaluation_binding,
+        )
+
     _validate_cumulative_generated_identities(generated_by_publication)
     generated_predictions: list[dict[str, Any]] = []
     generated_exclusions: list[dict[str, Any]] = []
@@ -590,6 +599,42 @@ def _build_evaluation_from_files(
         generated_exclusion_count=len(generated_exclusions),
         shortlist_count=len(shortlist),
     )
+
+
+def _validate_cumulative_predecessor_binding(
+    *,
+    source: _GenerationSource,
+    predecessor_publication_id: str,
+    previous_evaluation: dict[str, str],
+) -> None:
+    """Bind the second PR-AS grant to the exact roster predecessor chain."""
+
+    from ai4s_agent.oled_bounded_discovery_controller import (
+        validate_oled_bounded_generation_authorization_predecessor,
+    )
+
+    bundle = (
+        source.controller_request_json,
+        source.controller_json,
+        source.generation_authorization_json,
+        source.controller_report_md,
+    )
+    if not all(bundle):
+        raise ValueError("PR-AT cumulative successor controller bundle is incomplete")
+    predecessor = validate_oled_bounded_generation_authorization_predecessor(
+        controller_request_json=str(source.controller_request_json),
+        controller_json=str(source.controller_json),
+        generation_authorization_json=str(source.generation_authorization_json),
+        controller_report_md=str(source.controller_report_md),
+    )
+    if (
+        predecessor.generation_publication_id != predecessor_publication_id
+        or predecessor.evaluation_id != previous_evaluation["evaluation_id"]
+        or predecessor.evaluation_sha256 != previous_evaluation["evaluation_sha256"]
+    ):
+        raise ValueError(
+            "PR-AT cumulative successor authorization is not bound to the roster predecessor"
+        )
 
 
 def _load_generation_roster(

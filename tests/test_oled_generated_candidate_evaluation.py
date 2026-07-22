@@ -7,6 +7,10 @@ from pathlib import Path
 import pytest
 
 from ai4s_agent import oled_generated_candidate_evaluation as evaluator
+from ai4s_agent.oled_bounded_discovery_controller import (
+    run_oled_bounded_discovery_controller_from_files,
+)
+from ai4s_agent.oled_candidate_decision import run_oled_candidate_decision_from_files
 from ai4s_agent.oled_generated_candidate_evaluation import (
     run_oled_generated_candidate_evaluation_from_files,
     verify_oled_generated_candidate_evaluation_from_files,
@@ -328,3 +332,145 @@ def test_cumulative_successor_rejects_cross_publication_chemical_duplicate(
             generation_roster_json=roster,
             output_root=tmp_path / "duplicate-evaluations",
         )
+
+
+def test_cumulative_successor_rejects_second_source_authorized_by_another_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A controller-valid X -> B chain cannot be spliced after unrelated root A."""
+
+    from tests.test_oled_inverse_design_runplan import (
+        _controller_authorized_input_artifacts,
+    )
+
+    artifacts = _controller_authorized_input_artifacts(tmp_path, monkeypatch)
+    common = {
+        "batch_selection_json": artifacts["oled_experiment_batch_receipt"],
+        "screening_receipt_json": artifacts["oled_registry_screening_receipt"],
+        "ranked_shortlist_csv": artifacts["oled_registry_screening_shortlist"],
+        "phase1_execution_dir": artifacts["oled_phase1_execution_dir"],
+        "dataset_snapshot_json": artifacts["oled_dataset_snapshot"],
+        "registry_snapshot_json": artifacts["oled_registry_snapshot"],
+    }
+
+    x_raw = _source_csv(tmp_path / "x-generation.csv", [("x", "CCCCCC")])
+    x_inverse = run_oled_inverse_design_from_files(
+        **common,
+        reinvent4_config=artifacts["oled_inverse_design_reinvent4_config"],
+        reinvent4_output_csv=x_raw,
+        reinvent4_mode="existing_output",
+        output_root=tmp_path / "x-inverse",
+        seed=29,
+        generated_at="2026-07-22T12:10:00+08:00",
+    )
+    x_evaluation = run_oled_generated_candidate_evaluation_from_files(
+        **common,
+        inverse_design_json=x_inverse.output_dir / "inverse_design.json",
+        output_root=tmp_path / "x-evaluations",
+        generated_at="2026-07-22T12:15:00+08:00",
+    )
+    x_decision = run_oled_candidate_decision_from_files(
+        **common,
+        evaluation_json=x_evaluation.output_dir / "evaluation.json",
+        inverse_design_json=x_inverse.output_dir / "inverse_design.json",
+        output_root=tmp_path / "x-decisions",
+        generated_at="2026-07-22T12:20:00+08:00",
+    )
+    x_request = tmp_path / "x-controller-request.json"
+    x_request.write_bytes(
+        _json_bytes(
+            {
+                "request_version": "oled_bounded_discovery_controller_request.v1",
+                "limits": {
+                    "max_iterations": 3,
+                    "max_generation_rounds": 2,
+                    "max_generated_candidates": 512,
+                },
+                "iterations": [
+                    {
+                        "decision_json": str(
+                            x_decision.output_dir / "candidate_decision.json"
+                        ),
+                        "evaluation_json": str(
+                            x_evaluation.output_dir / "evaluation.json"
+                        ),
+                        "inverse_design_json": str(
+                            x_inverse.output_dir / "inverse_design.json"
+                        ),
+                        **common,
+                        "candidate_cost_manifest_json": None,
+                        "remote_known_hosts": None,
+                    }
+                ],
+            }
+        )
+    )
+    x_controller = run_oled_bounded_discovery_controller_from_files(
+        controller_request_json=x_request,
+        output_root=tmp_path / "x-controllers",
+        generated_at="2026-07-22T12:25:00+08:00",
+    )
+    x_bundle = {
+        "controller_request_json": str(
+            x_controller.output_dir / "controller_request.json"
+        ),
+        "controller_json": str(x_controller.output_dir / "controller.json"),
+        "generation_authorization_json": str(
+            x_controller.output_dir / "generation_authorization.json"
+        ),
+        "controller_report_md": str(x_controller.output_dir / "report.md"),
+    }
+
+    b_raw = _source_csv(tmp_path / "b-generation.csv", [("b", "CCCCCCC")])
+    b_inverse = run_oled_inverse_design_from_files(
+        **common,
+        reinvent4_config=artifacts["oled_inverse_design_reinvent4_config"],
+        reinvent4_output_csv=b_raw,
+        reinvent4_mode="existing_output",
+        output_root=tmp_path / "b-inverse",
+        seed=31,
+        generated_at="2026-07-22T12:30:00+08:00",
+        **x_bundle,
+    )
+    forged_roster = tmp_path / "forged-generation-roster.json"
+    forged_roster.write_bytes(
+        _json_bytes(
+            {
+                "roster_version": "oled_generated_candidate_evaluation_roster.v1",
+                "previous_evaluation_json": artifacts[
+                    "oled_root_candidate_evaluation_receipt"
+                ],
+                "sources": [
+                    {
+                        "inverse_design_json": artifacts[
+                            "oled_root_inverse_design_receipt"
+                        ],
+                        "remote_known_hosts": None,
+                        "controller_request_json": None,
+                        "controller_json": None,
+                        "generation_authorization_json": None,
+                        "controller_report_md": None,
+                    },
+                    {
+                        "inverse_design_json": str(
+                            b_inverse.output_dir / "inverse_design.json"
+                        ),
+                        "remote_known_hosts": None,
+                        **x_bundle,
+                    },
+                ],
+            }
+        )
+    )
+    output_root = tmp_path / "forged-cumulative-evaluations"
+
+    with pytest.raises(ValueError, match="not bound to the roster predecessor"):
+        run_oled_generated_candidate_evaluation_from_files(
+            **common,
+            inverse_design_json=b_inverse.output_dir / "inverse_design.json",
+            generation_roster_json=forged_roster,
+            output_root=output_root,
+            **x_bundle,
+        )
+    assert list(output_root.iterdir()) == []

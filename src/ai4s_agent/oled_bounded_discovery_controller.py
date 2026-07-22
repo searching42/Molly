@@ -101,6 +101,18 @@ class OledBoundedGenerationAuthorization:
 
 
 @dataclass(frozen=True)
+class OledBoundedGenerationAuthorizationPredecessor:
+    """The exact latest source state that produced one PR-AS grant."""
+
+    authorization: OledBoundedGenerationAuthorization
+    generation_publication_id: str
+    evaluation_id: str
+    evaluation_sha256: str
+    decision_id: str
+    decision_sha256: str
+
+
+@dataclass(frozen=True)
 class _BuiltController:
     controller_id: str
     payloads: dict[str, bytes]
@@ -621,6 +633,55 @@ def validate_oled_bounded_generation_authorization_bundle(
     directory.
     """
 
+    authorization, _ = _validated_generation_authorization_bundle(
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
+    )
+    return authorization
+
+
+def validate_oled_bounded_generation_authorization_predecessor(
+    *,
+    controller_request_json: str | Path,
+    controller_json: str | Path,
+    generation_authorization_json: str | Path,
+    controller_report_md: str | Path,
+) -> OledBoundedGenerationAuthorizationPredecessor:
+    """Replay one grant and expose the exact source state that authorized it."""
+
+    authorization, receipt = _validated_generation_authorization_bundle(
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
+    )
+    sources = receipt.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError("PR-AU controller source history is invalid")
+    latest = sources[-1]
+    if not isinstance(latest, dict):
+        raise ValueError("PR-AU controller latest source is invalid")
+    return OledBoundedGenerationAuthorizationPredecessor(
+        authorization=authorization,
+        generation_publication_id=_required_string(
+            latest, "generation_publication_id"
+        ),
+        evaluation_id=_required_string(latest, "evaluation_id"),
+        evaluation_sha256=_required_string(latest, "evaluation_sha256"),
+        decision_id=_required_string(latest, "decision_id"),
+        decision_sha256=_required_string(latest, "decision_sha256"),
+    )
+
+
+def _validated_generation_authorization_bundle(
+    *,
+    controller_request_json: str | Path,
+    controller_json: str | Path,
+    generation_authorization_json: str | Path,
+    controller_report_md: str | Path,
+) -> tuple[OledBoundedGenerationAuthorization, dict[str, Any]]:
     controller_request_bytes, _ = _read_regular_file_bound(
         _absolute_local_path(controller_request_json),
         max_bytes=1024 * 1024,
@@ -662,7 +723,7 @@ def validate_oled_bounded_generation_authorization_bundle(
     )
     if authorization_bytes != _json_bytes(authorization):
         raise ValueError("PR-AU generation authorization is not canonical")
-    return _validated_generation_authorization(authorization, receipt=receipt)
+    return _validated_generation_authorization(authorization, receipt=receipt), receipt
 
 
 def _generation_authorization(
@@ -1091,12 +1152,13 @@ def _validate_iteration_predecessor_authorization(
         raise ValueError(
             "PR-AU predecessor controller request is not the exact preceding history"
         )
-    authorization = validate_oled_bounded_generation_authorization_bundle(
+    predecessor = validate_oled_bounded_generation_authorization_predecessor(
         controller_request_json=str(bundle["controller_request_json"]),
         controller_json=str(bundle["controller_json"]),
         generation_authorization_json=str(bundle["generation_authorization_json"]),
         controller_report_md=str(bundle["controller_report_md"]),
     )
+    authorization = predecessor.authorization
     expected_authorization = {
         "authorization_version": _GENERATION_AUTHORIZATION_VERSION,
         "authorization_id": authorization.authorization_id,
@@ -1275,6 +1337,8 @@ def _directory_flag() -> int:
 __all__ = [
     "OledBoundedDiscoveryControllerResult",
     "OledBoundedGenerationAuthorization",
+    "OledBoundedGenerationAuthorizationPredecessor",
     "run_oled_bounded_discovery_controller_from_files",
     "validate_oled_bounded_generation_authorization_bundle",
+    "validate_oled_bounded_generation_authorization_predecessor",
 ]
