@@ -1654,7 +1654,7 @@ class RunPlanExecutor:
                     "python": str(
                         payload.get("remote_python")
                         or payload.get("reinvent4_remote_python")
-                        or "/home/lbh/miniconda3/envs/REINVENT4/bin/python"
+                        or "/home/lbh/miniconda3/envs/reinvent4/bin/python"
                     ),
                     "mode": "preflight",
                 },

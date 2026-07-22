@@ -47,6 +47,31 @@ def _source_csv(path: Path, rows: list[tuple[str, str]]) -> Path:
     return path
 
 
+def _remote_reinvent4_template(
+    *,
+    device: str = "cpu",
+    active_request_binding: bool = True,
+) -> str:
+    json_out_config = (
+        'json_out_config = "{{molly_output_csv}}.{{molly_design_request_id}}.'
+        '{{molly_design_request_sha256}}.json"\n'
+        if active_request_binding
+        else '# {{molly_design_request_id}} {{molly_design_request_sha256}}\n'
+    )
+    return (
+        'run_type = "sampling"\n'
+        f'device = "{device}"\n'
+        "seed = {{molly_seed}}\n"
+        + json_out_config
+        + "\n[parameters]\n"
+        'model_file = "priors/reinvent.prior"\n'
+        'output_file = "{{molly_output_csv}}"\n'
+        "num_smiles = 2\n"
+        "unique_molecules = true\n"
+        "randomize_smiles = true\n"
+    )
+
+
 def _run(
     *,
     tmp_path: Path,
@@ -221,13 +246,7 @@ def test_remote_mode_renders_an_isolated_reinvent4_attempt_without_real_transpor
 ) -> None:
     publication, batch_receipt = _shortfall_inputs(tmp_path, monkeypatch)
     config = tmp_path / "reinvent4-template.toml"
-    config.write_text(
-        "output='{{molly_output_csv}}'\n"
-        "run='{{molly_design_request_id}}'\n"
-        "seed={{molly_seed}}\n"
-        "molly_design_request_sha256='{{molly_design_request_sha256}}'\n",
-        encoding="utf-8",
-    )
+    config.write_text(_remote_reinvent4_template(), encoding="utf-8")
     known_hosts = tmp_path / "known_hosts"
     known_hosts.write_text("workstation2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n", encoding="utf-8")
     payloads: list[dict[str, object]] = []
@@ -250,7 +269,7 @@ def test_remote_mode_renders_an_isolated_reinvent4_attempt_without_real_transpor
         )
         assert payload["remote_host"] == "workstation2"
         assert payload["remote_repo"] == "/home/lbh/work/wk1/REINVENT4"
-        assert payload["remote_python"] == "/home/lbh/miniconda3/envs/REINVENT4/bin/python"
+        assert payload["remote_python"] == "/home/lbh/miniconda3/envs/reinvent4/bin/python"
         assert payload["reinvent4_remote_known_hosts_file"]
         assert payload["reinvent4_remote_expected_hostname"] == "node45"
         local_output = Path(str(payload["local_output_csv"]))
@@ -274,7 +293,7 @@ def test_remote_mode_renders_an_isolated_reinvent4_attempt_without_real_transpor
         output_root=tmp_path / "inverse-designs",
         reinvent4_mode="remote",
         seed=19,
-        remote_profile_id="workstation2-node45-reinvent4-v1",
+        remote_profile_id="workstation2-node45-reinvent4-v2",
         remote_known_hosts=known_hosts,
         generated_at="2026-07-21T12:05:00+08:00",
     )
@@ -287,14 +306,15 @@ def test_remote_mode_renders_an_isolated_reinvent4_attempt_without_real_transpor
     assert receipt["claims"]["existing_generator_output_imported"] is False
     assert receipt["generator"]["provenance"]["remote_transport"]["remote_attempt_isolated"] is True
     assert receipt["generator"]["provenance"]["remote_transport"]["profile_id"] == (
-        "workstation2-node45-reinvent4-v1"
+        "workstation2-node45-reinvent4-v2"
     )
     assert receipt["claims"]["requested_inverse_design_objectives_bound_to_remote_config"] is True
     rendered = (result.output_dir / "reinvent4_effective_config.toml").read_text(
         encoding="utf-8"
     )
     assert "{{molly_" not in rendered
-    assert "seed=19" in rendered
+    assert "seed = 19" in rendered
+    assert 'device = "cpu"' in rendered
     verified = inverse_runner.verify_oled_inverse_design_publication_from_files(
         inverse_design_json=result.output_dir / "inverse_design.json",
         batch_selection_json=batch_receipt,
@@ -316,11 +336,7 @@ def test_remote_mode_requires_an_active_exact_design_request_binding_before_tran
     publication, batch_receipt = _shortfall_inputs(tmp_path, monkeypatch)
     config = tmp_path / "reinvent4-template.toml"
     config.write_text(
-        "output='{{molly_output_csv}}'\n"
-        "run='{{molly_design_request_id}}'\n"
-        "seed={{molly_seed}}\n"
-        "# {{molly_design_request_sha256}}\n",
-        encoding="utf-8",
+        _remote_reinvent4_template(active_request_binding=False), encoding="utf-8"
     )
     known_hosts = tmp_path / "known_hosts"
     known_hosts.write_text("workstation2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n", encoding="utf-8")
@@ -329,7 +345,41 @@ def test_remote_mode_requires_an_active_exact_design_request_binding_before_tran
         raise AssertionError("transport must not run without an active request binding")
 
     monkeypatch.setattr(inverse_runner, "_generate_candidates_reinvent4_backend", unexpected_transport)
-    with pytest.raises(ValueError, match="bind molly_design_request_sha256"):
+    with pytest.raises(ValueError, match="json_out_config must actively bind"):
+        run_oled_inverse_design_from_files(
+            batch_selection_json=batch_receipt,
+            screening_receipt_json=publication.screening_receipt,
+            ranked_shortlist_csv=publication.ranked_shortlist,
+            phase1_execution_dir=publication.phase1_execution_dir,
+            dataset_snapshot_json=publication.dataset_snapshot,
+            registry_snapshot_json=publication.registry_snapshot,
+            reinvent4_config=config,
+            output_root=tmp_path / "inverse-designs",
+            reinvent4_mode="remote",
+            remote_known_hosts=known_hosts,
+        )
+
+
+def test_remote_mode_rejects_gpu_config_before_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication, batch_receipt = _shortfall_inputs(tmp_path, monkeypatch)
+    config = tmp_path / "reinvent4-template.toml"
+    config.write_text(_remote_reinvent4_template(device="cuda:0"), encoding="utf-8")
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        "workstation2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
+        encoding="utf-8",
+    )
+
+    def unexpected_transport(**_: object) -> object:
+        raise AssertionError("transport must not run for a GPU config")
+
+    monkeypatch.setattr(
+        inverse_runner, "_generate_candidates_reinvent4_backend", unexpected_transport
+    )
+    with pytest.raises(ValueError, match="device = cpu"):
         run_oled_inverse_design_from_files(
             batch_selection_json=batch_receipt,
             screening_receipt_json=publication.screening_receipt,
@@ -350,13 +400,7 @@ def test_remote_mode_rejects_transport_output_outside_its_private_workspace(
 ) -> None:
     publication, batch_receipt = _shortfall_inputs(tmp_path, monkeypatch)
     config = tmp_path / "reinvent4-template.toml"
-    config.write_text(
-        "output='{{molly_output_csv}}'\n"
-        "run='{{molly_design_request_id}}'\n"
-        "seed={{molly_seed}}\n"
-        "molly_design_request_sha256='{{molly_design_request_sha256}}'\n",
-        encoding="utf-8",
-    )
+    config.write_text(_remote_reinvent4_template(), encoding="utf-8")
     known_hosts = tmp_path / "known_hosts"
     known_hosts.write_text(
         "workstation2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
@@ -509,13 +553,7 @@ def test_remote_verifier_rejects_fully_resigned_raw_output_publication(
 ) -> None:
     publication, batch_receipt = _shortfall_inputs(tmp_path, monkeypatch)
     config = tmp_path / "reinvent4-template.toml"
-    config.write_text(
-        "output='{{molly_output_csv}}'\n"
-        "run='{{molly_design_request_id}}'\n"
-        "seed={{molly_seed}}\n"
-        "molly_design_request_sha256='{{molly_design_request_sha256}}'\n",
-        encoding="utf-8",
-    )
+    config.write_text(_remote_reinvent4_template(), encoding="utf-8")
     known_hosts = tmp_path / "known_hosts"
     known_hosts.write_text(
         "workstation2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",

@@ -512,11 +512,11 @@ def _remote_default_reinvent4_root() -> str:
 
 
 def _remote_default_reinvent4_python() -> str:
-    return "/home/lbh/miniconda3/envs/REINVENT4/bin/python"
+    return "/home/lbh/miniconda3/envs/reinvent4/bin/python"
 
 
 def _remote_default_reinvent4_conda_env() -> str:
-    return "REINVENT4"
+    return "reinvent4"
 
 
 def _remote_default_reinvent4_config() -> str:
@@ -700,6 +700,13 @@ def _generate_candidates_reinvent4_backend(
             "cd",
             shlex.quote(remote_repo),
             "&&",
+            "env",
+            "OMP_NUM_THREADS=1",
+            "MKL_NUM_THREADS=1",
+            "OPENBLAS_NUM_THREADS=1",
+            "nice",
+            "-n",
+            "19",
             shlex.quote(remote_python),
             "-m",
             "reinvent.Reinvent",

@@ -644,8 +644,18 @@ def test_generate_candidates_reinvent4_backend_executes_remote_config_and_normal
     assert result["generation_report"]["backend"] == "reinvent4"
     assert result["generation_report"]["provenance"]["mode"] == "remote"
     assert result["remote"]["host"] == "workstation2"
-    assert result["remote"]["conda_env"] == "REINVENT4"
+    assert result["remote"]["conda_env"] == "reinvent4"
     assert any(call[0] == "ssh" and call[-2] == "workstation2" and "REINVENT4" in call[-1] for call in calls)
+    execution_commands = [
+        call[-1]
+        for call in calls
+        if call[0] == "ssh" and "reinvent.Reinvent" in call[-1]
+    ]
+    assert len(execution_commands) == 1
+    assert "OMP_NUM_THREADS=1" in execution_commands[0]
+    assert "MKL_NUM_THREADS=1" in execution_commands[0]
+    assert "OPENBLAS_NUM_THREADS=1" in execution_commands[0]
+    assert "nice -n 19" in execution_commands[0]
 
     with Path(result["outputs"]["candidate_csv"]).open(encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
