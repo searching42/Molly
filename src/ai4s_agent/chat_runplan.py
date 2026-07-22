@@ -179,6 +179,16 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
         "最终top n",
         "最终top-n",
     )
+    bounded_controller_terms = (
+        "bounded closed-loop discovery controller",
+        "bounded closed loop discovery controller",
+        "bounded discovery controller",
+        "pr-au",
+        "pr au",
+        "受限闭环发现控制器",
+        "有界闭环发现控制器",
+        "闭环发现控制器",
+    )
     inverse_design_terms = (
         "inverse design",
         "inverse-design",
@@ -215,6 +225,8 @@ def _requested_tasks(*, payload: dict[str, Any], modeling_payload: dict[str, Any
         "候选top",
         "可解释候选",
     )
+    if any(term in goal for term in bounded_controller_terms):
+        return ["execute_oled_bounded_discovery_controller"]
     if any(term in goal for term in final_candidate_decision_terms):
         return ["execute_oled_candidate_decision"]
     if any(term in goal for term in generated_evaluation_terms):

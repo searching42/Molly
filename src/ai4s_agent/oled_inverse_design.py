@@ -209,6 +209,10 @@ class _FrozenInverseDesignInputs:
     candidate_cost_manifest_json: Path | None
     reinvent4_output_csv: Path | None
     remote_known_hosts: Path | None
+    controller_request_json: Path | None
+    controller_json: Path | None
+    generation_authorization_json: Path | None
+    controller_report_md: Path | None
     config_bytes: bytes
     config_sha256: str
     raw_output_bytes: bytes | None
@@ -233,6 +237,10 @@ def run_oled_inverse_design_from_files(
     seed: int = 0,
     remote_profile_id: str | None = None,
     remote_known_hosts: str | Path | None = None,
+    controller_request_json: str | Path | None = None,
+    controller_json: str | Path | None = None,
+    generation_authorization_json: str | Path | None = None,
+    controller_report_md: str | Path | None = None,
     timeout_sec: int = 7200,
     generated_at: str | None = None,
 ) -> OledInverseDesignResult:
@@ -266,6 +274,18 @@ def run_oled_inverse_design_from_files(
         )
     elif remote_profile_id is not None or remote_known_hosts is not None:
         raise ValueError("remote transport inputs are only allowed in remote mode")
+    controller_paths = (
+        controller_request_json,
+        controller_json,
+        generation_authorization_json,
+        controller_report_md,
+    )
+    if any(path is not None for path in controller_paths) and not all(
+        path is not None for path in controller_paths
+    ):
+        raise ValueError(
+            "controller-authorized inverse design requires request, receipt, authorization, and report"
+        )
 
     # Copy all consumers' exact bytes into a private invocation bundle before
     # replaying PR-ARb.  The route checker and novelty filter then consume the
@@ -287,6 +307,10 @@ def run_oled_inverse_design_from_files(
             candidate_cost_manifest_json=candidate_cost_manifest_json,
             reinvent4_output_csv=reinvent4_output_csv,
             remote_known_hosts=(remote_known_hosts if clean_mode == "remote" else None),
+            controller_request_json=controller_request_json,
+            controller_json=controller_json,
+            generation_authorization_json=generation_authorization_json,
+            controller_report_md=controller_report_md,
         )
         if remote_contract is not None and (
             frozen.remote_known_hosts_sha256
@@ -302,9 +326,25 @@ def run_oled_inverse_design_from_files(
             registry_snapshot_json=frozen.registry_snapshot_json,
             candidate_cost_manifest_json=frozen.candidate_cost_manifest_json,
         )
+        controller_authorization = _controller_authorization_from_frozen_bundle(
+            frozen=frozen,
+            route=route,
+        )
+        requested_candidate_count = _effective_requested_candidate_count(
+            route=route,
+            controller_authorization=controller_authorization,
+        )
+        design_request = _effective_design_request(
+            route=route,
+            requested_candidate_count=requested_candidate_count,
+            controller_authorization=controller_authorization,
+        )
         with _pinned_output_parents_without_symlink_components(root) as pinned:
             design_request_id = _design_request_id(
                 route=route,
+                design_request=design_request,
+                requested_candidate_count=requested_candidate_count,
+                controller_authorization=controller_authorization,
                 reinvent4_config_sha256=frozen.config_sha256,
                 reinvent4_mode=clean_mode,
                 remote_transport_contract_sha256=(
@@ -316,14 +356,14 @@ def run_oled_inverse_design_from_files(
             )
             transport = _execute_reinvent4_generation(
                 design_request_id=design_request_id,
-                requested_count=route.candidate_shortfall_count,
+                requested_count=requested_candidate_count,
                 mode=clean_mode,
                 config_bytes=frozen.config_bytes,
                 config_sha256=frozen.config_sha256,
                 existing_output_bytes=frozen.raw_output_bytes,
                 existing_output_sha256=frozen.raw_output_sha256,
                 seed=clean_seed,
-                design_request=route.request,
+                design_request=design_request,
                 remote_transport_contract=remote_contract,
                 remote_known_hosts_path=frozen.remote_known_hosts,
                 timeout_sec=clean_timeout,
@@ -348,11 +388,21 @@ def run_oled_inverse_design_from_files(
                 raise ValueError(
                     "inverse design produced no independent valid candidates"
                 )
+            if (
+                controller_authorization is not None
+                and len(candidates) > requested_candidate_count
+            ):
+                raise ValueError(
+                    "controller-authorized inverse design accepted candidate count exceeds authorization"
+                )
 
             payloads = _inverse_design_payloads(
                 design_request_id=design_request_id,
                 publication_id=publication_id,
                 route=route,
+                design_request=design_request,
+                requested_candidate_count=requested_candidate_count,
+                controller_authorization=controller_authorization,
                 candidates=candidates,
                 excluded=excluded,
                 config_template_bytes=frozen.config_bytes,
@@ -371,7 +421,7 @@ def run_oled_inverse_design_from_files(
         design_request_id=design_request_id,
         publication_id=publication_id,
         output_dir=output_dir,
-        requested_candidate_count=route.candidate_shortfall_count,
+        requested_candidate_count=requested_candidate_count,
         accepted_candidate_count=len(candidates),
         excluded_candidate_count=len(excluded),
         backend_mode=clean_mode,
@@ -424,6 +474,10 @@ def verify_oled_inverse_design_publication_from_files(
     registry_snapshot_json: str | Path,
     candidate_cost_manifest_json: str | Path | None = None,
     remote_known_hosts: str | Path | None = None,
+    controller_request_json: str | Path | None = None,
+    controller_json: str | Path | None = None,
+    generation_authorization_json: str | Path | None = None,
+    controller_report_md: str | Path | None = None,
 ) -> OledInverseDesignVerificationResult:
     """Replay a persisted PR-AS publication from its exact upstream anchors.
 
@@ -443,6 +497,10 @@ def verify_oled_inverse_design_publication_from_files(
         registry_snapshot_json=registry_snapshot_json,
         candidate_cost_manifest_json=candidate_cost_manifest_json,
         remote_known_hosts=remote_known_hosts,
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
     ) as bound:
         return bound.result
 
@@ -459,6 +517,10 @@ def _verified_oled_inverse_design_publication_from_files(
     registry_snapshot_json: str | Path,
     candidate_cost_manifest_json: str | Path | None = None,
     remote_known_hosts: str | Path | None = None,
+    controller_request_json: str | Path | None = None,
+    controller_json: str | Path | None = None,
+    generation_authorization_json: str | Path | None = None,
+    controller_report_md: str | Path | None = None,
 ) -> Iterator[_BoundInverseDesignPublication]:
     """Exact-replay a publication while retaining its directory descriptor.
 
@@ -523,6 +585,45 @@ def _verified_oled_inverse_design_publication_from_files(
             registry_snapshot_json=registry_snapshot_json,
             candidate_cost_manifest_json=candidate_cost_manifest_json,
         )
+        controller_authorization_raw = receipt.get("controller_authorization")
+        external_controller_authorization = _controller_authorization_from_bundle_paths(
+            controller_request_json=controller_request_json,
+            controller_json=controller_json,
+            generation_authorization_json=generation_authorization_json,
+            controller_report_md=controller_report_md,
+            route=route,
+        )
+        if controller_authorization_raw is None:
+            if external_controller_authorization is not None:
+                raise ValueError(
+                    "unconsumed controller authorization bundle was supplied for inverse design"
+                )
+            controller_authorization = None
+        else:
+            if external_controller_authorization is None:
+                raise ValueError(
+                    "controller-authorized inverse design publication requires an exact PR-AU bundle"
+                )
+            receipt_controller_authorization = _validated_controller_authorization_for_route(
+                _required_dict(receipt, "controller_authorization"),
+                route=route,
+            )
+            if receipt_controller_authorization != external_controller_authorization:
+                raise ValueError(
+                    "OLED inverse-design controller authorization external binding changed"
+                )
+            controller_authorization = external_controller_authorization
+        requested_candidate_count = _effective_requested_candidate_count(
+            route=route,
+            controller_authorization=controller_authorization,
+        )
+        design_request = _effective_design_request(
+            route=route,
+            requested_candidate_count=requested_candidate_count,
+            controller_authorization=controller_authorization,
+        )
+        if receipt.get("design_request") != design_request:
+            raise ValueError("OLED inverse-design effective request binding is invalid")
         generator = _required_dict(receipt, "generator")
         mode = _validate_mode(_required_string(generator, "mode"))
         seed = _required_nonnegative_int(generator, "seed")
@@ -562,6 +663,9 @@ def _verified_oled_inverse_design_publication_from_files(
             raise ValueError("OLED inverse-design import has remote transport provenance")
         design_request_id = _design_request_id(
             route=route,
+            design_request=design_request,
+            requested_candidate_count=requested_candidate_count,
+            controller_authorization=controller_authorization,
             reinvent4_config_sha256=config_template_sha256,
             reinvent4_mode=mode,
             remote_transport_contract_sha256=(
@@ -579,7 +683,7 @@ def _verified_oled_inverse_design_publication_from_files(
             effective_bytes=published["reinvent4_effective_config.toml"],
             design_request_id=design_request_id,
             seed=seed,
-            design_request=route.request,
+            design_request=design_request,
             remote_transport=remote_transport,
         )
         rows = _parse_raw_reinvent4_csv(published["raw_generator_output.csv"])
@@ -612,10 +716,20 @@ def _verified_oled_inverse_design_publication_from_files(
         )
         if not candidates:
             raise ValueError("OLED inverse-design publication has no independent candidates")
+        if (
+            controller_authorization is not None
+            and len(candidates) > requested_candidate_count
+        ):
+            raise ValueError(
+                "controller-authorized inverse design accepted candidate count exceeds authorization"
+            )
         expected_payloads = _inverse_design_payloads(
             design_request_id=design_request_id,
             publication_id=publication_id,
             route=route,
+            design_request=design_request,
+            requested_candidate_count=requested_candidate_count,
+            controller_authorization=controller_authorization,
             candidates=candidates,
             excluded=excluded,
             config_template_bytes=published["reinvent4_config_template.toml"],
@@ -815,6 +929,10 @@ def _materialize_inverse_design_inputs(
     candidate_cost_manifest_json: str | Path | None,
     reinvent4_output_csv: str | Path | None,
     remote_known_hosts: str | Path | None,
+    controller_request_json: str | Path | None,
+    controller_json: str | Path | None,
+    generation_authorization_json: str | Path | None,
+    controller_report_md: str | Path | None,
 ) -> _FrozenInverseDesignInputs:
     """Freeze one coherent input set in an invocation-owned private directory."""
 
@@ -924,6 +1042,24 @@ def _materialize_inverse_design_inputs(
         ) = freeze_file(remote_known_hosts, "remote_known_hosts")
         if not remote_known_hosts_bytes:
             raise ValueError("REINVENT4 remote known-hosts file is empty")
+    controller_request_path: Path | None = None
+    controller_path: Path | None = None
+    authorization_path: Path | None = None
+    controller_report_path: Path | None = None
+    if controller_request_json is not None:
+        controller_request_path, _, _ = freeze_file(
+            controller_request_json,
+            "controller_request.json",
+        )
+        controller_path, _, _ = freeze_file(controller_json, "controller.json")
+        authorization_path, _, _ = freeze_file(
+            generation_authorization_json,
+            "generation_authorization.json",
+        )
+        controller_report_path, _, _ = freeze_file(
+            controller_report_md,
+            "controller_report.md",
+        )
     return _FrozenInverseDesignInputs(
         batch_selection_json=batch_path,
         screening_receipt_json=screening_path,
@@ -935,6 +1071,10 @@ def _materialize_inverse_design_inputs(
         candidate_cost_manifest_json=cost_path,
         reinvent4_output_csv=raw_output_path,
         remote_known_hosts=remote_known_hosts_path,
+        controller_request_json=controller_request_path,
+        controller_json=controller_path,
+        generation_authorization_json=authorization_path,
+        controller_report_md=controller_report_path,
         config_bytes=config_bytes,
         config_sha256=config_sha256,
         raw_output_bytes=raw_output_bytes,
@@ -1096,6 +1236,186 @@ def _verify_inverse_design_route(
         candidate_shortfall_count=shortfall,
         request=request,
     )
+
+
+def _controller_authorization_from_frozen_bundle(
+    *,
+    frozen: _FrozenInverseDesignInputs,
+    route: _VerifiedInverseDesignRoute,
+) -> dict[str, Any] | None:
+    return _controller_authorization_from_bundle_paths(
+        controller_request_json=frozen.controller_request_json,
+        controller_json=frozen.controller_json,
+        generation_authorization_json=frozen.generation_authorization_json,
+        controller_report_md=frozen.controller_report_md,
+        route=route,
+    )
+
+
+def _controller_authorization_from_bundle_paths(
+    *,
+    controller_request_json: str | Path | None,
+    controller_json: str | Path | None,
+    generation_authorization_json: str | Path | None,
+    controller_report_md: str | Path | None,
+    route: _VerifiedInverseDesignRoute,
+) -> dict[str, Any] | None:
+    """Exact-replay an optional PR-AU bundle into the PR-AS receipt shape."""
+
+    paths = (
+        controller_request_json,
+        controller_json,
+        generation_authorization_json,
+        controller_report_md,
+    )
+    if not any(paths):
+        return None
+    if not all(paths):
+        raise ValueError("controller authorization bundle is incomplete")
+    # Keep this import local: PR-AU imports PR-AS's descriptor helpers, while
+    # PR-AS only needs the controller verifier when this optional narrow route
+    # is actually consumed.
+    from ai4s_agent.oled_bounded_discovery_controller import (
+        validate_oled_bounded_generation_authorization_bundle,
+    )
+
+    authorization = validate_oled_bounded_generation_authorization_bundle(
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
+    )
+    result = {
+        "authorization_version": "oled_bounded_generation_authorization.v1",
+        "authorization_id": authorization.authorization_id,
+        "controller_id": authorization.controller_id,
+        "loop_fingerprint": authorization.loop_fingerprint,
+        "latest_source_state_fingerprint": authorization.latest_source_state_fingerprint,
+        "target_task": authorization.target_task,
+        "required_gate": authorization.required_gate,
+        "requested_candidate_count": authorization.requested_candidate_count,
+        "source_bindings": dict(authorization.source_bindings),
+    }
+    return _validated_controller_authorization_for_route(result, route=route)
+
+
+def _validated_controller_authorization_for_route(
+    payload: dict[str, Any],
+    *,
+    route: _VerifiedInverseDesignRoute,
+) -> dict[str, Any]:
+    expected_keys = {
+        "authorization_version",
+        "authorization_id",
+        "controller_id",
+        "loop_fingerprint",
+        "latest_source_state_fingerprint",
+        "target_task",
+        "required_gate",
+        "requested_candidate_count",
+        "source_bindings",
+    }
+    if set(payload) != expected_keys:
+        raise ValueError("controller authorization payload is invalid")
+    if (
+        payload.get("authorization_version")
+        != "oled_bounded_generation_authorization.v1"
+        or payload.get("target_task") != "execute_oled_inverse_design"
+        or payload.get("required_gate") != "gate_5_final_threshold"
+    ):
+        raise ValueError("controller authorization target/gate is invalid")
+    result = {
+        key: _required_string(payload, key)
+        for key in (
+            "authorization_version",
+            "authorization_id",
+            "controller_id",
+            "loop_fingerprint",
+            "latest_source_state_fingerprint",
+            "target_task",
+            "required_gate",
+        )
+    }
+    requested = _required_positive_int(payload, "requested_candidate_count")
+    if requested > route.candidate_shortfall_count:
+        raise ValueError("controller authorization exceeds the PR-ARb shortfall")
+    source_bindings_raw = payload.get("source_bindings")
+    if not isinstance(source_bindings_raw, dict) or any(
+        not isinstance(key, str)
+        or not key
+        or not isinstance(value, str)
+        or not value
+        for key, value in source_bindings_raw.items()
+    ):
+        raise ValueError("controller authorization source bindings are invalid")
+    source_bindings = {
+        str(key): str(value)
+        for key, value in sorted(source_bindings_raw.items())
+    }
+    if source_bindings != _controller_route_source_bindings(route):
+        raise ValueError("controller authorization source bindings changed")
+    return {
+        **result,
+        "requested_candidate_count": requested,
+        "source_bindings": source_bindings,
+    }
+
+
+def _controller_route_source_bindings(
+    route: _VerifiedInverseDesignRoute,
+) -> dict[str, str]:
+    prepared = route.prepared_screening
+    return {
+        "batch_id": _required_string(route.batch_receipt, "batch_id"),
+        "batch_selection_sha256": route.batch_receipt_sha256,
+        "screening_id": route.batch_inputs.screening_id,
+        "screening_receipt_sha256": route.batch_inputs.screening_sha256,
+        "ranked_shortlist_sha256": route.batch_inputs.shortlist_sha256,
+        "phase1_execution_sha256": prepared.execution_sha256,
+        "dataset_snapshot_sha256": prepared.dataset_sha256,
+        "registry_snapshot_sha256": prepared.registry_sha256,
+        "model_binding_sha256": _model_binding_sha256(prepared.model_sha256),
+    }
+
+
+def _effective_requested_candidate_count(
+    *,
+    route: _VerifiedInverseDesignRoute,
+    controller_authorization: dict[str, Any] | None,
+) -> int:
+    if controller_authorization is None:
+        return route.candidate_shortfall_count
+    return _required_positive_int(controller_authorization, "requested_candidate_count")
+
+
+def _model_binding_sha256(value: Any) -> str:
+    if value is None:
+        normalized: str | dict[str, str] | None = None
+    elif isinstance(value, str) and value:
+        normalized = value
+    elif isinstance(value, dict) and all(
+        isinstance(key, str)
+        and key
+        and isinstance(item, str)
+        and item
+        for key, item in value.items()
+    ):
+        normalized = {str(key): str(value[key]) for key in sorted(value)}
+    else:
+        raise ValueError("inverse-design model binding is invalid")
+    return _sha256_bytes(_json_bytes(normalized))
+
+
+def _effective_design_request(
+    *,
+    route: _VerifiedInverseDesignRoute,
+    requested_candidate_count: int,
+    controller_authorization: dict[str, Any] | None,
+) -> dict[str, Any]:
+    request = {**route.request, "candidate_shortfall_count": requested_candidate_count}
+    if controller_authorization is not None:
+        request["controller_authorization"] = controller_authorization
+    return request
 
 
 def _validate_batch_receipt_shape(receipt: dict[str, Any]) -> None:
@@ -1678,7 +1998,16 @@ def _inverse_design_payloads(
     transport: _GeneratorTransportResult,
     seed: int,
     generated_at: str,
+    design_request: dict[str, Any] | None = None,
+    requested_candidate_count: int | None = None,
+    controller_authorization: dict[str, Any] | None = None,
 ) -> dict[str, bytes]:
+    effective_request = design_request or route.request
+    effective_requested_count = (
+        route.candidate_shortfall_count
+        if requested_candidate_count is None
+        else requested_candidate_count
+    )
     candidate_rows = [
         {
             "generated_candidate_id": candidate.generated_candidate_id,
@@ -1712,7 +2041,7 @@ def _inverse_design_payloads(
     payloads["report.md"] = _report_bytes(
         design_request_id=design_request_id,
         publication_id=publication_id,
-        route=route,
+        design_request=effective_request,
         candidates=candidates,
         excluded=excluded,
         transport=transport,
@@ -1737,12 +2066,12 @@ def _inverse_design_payloads(
             "dataset_snapshot_sha256": route.prepared_screening.dataset_sha256,
             "registry_snapshot_sha256": route.prepared_screening.registry_sha256,
         },
-        "design_request": route.request,
+        "design_request": effective_request,
         "generator": {
             "backend": _REINVENT4_BACKEND,
             "mode": transport.backend_provenance["mode"],
             "seed": seed,
-            "requested_candidate_count": route.candidate_shortfall_count,
+            "requested_candidate_count": effective_requested_count,
             "reinvent4_config_sha256": config_sha256,
             "effective_reinvent4_config_sha256": transport.effective_config_sha256,
             "rendered_reinvent4_config_sha256": transport.rendered_config_sha256,
@@ -1782,6 +2111,8 @@ def _inverse_design_payloads(
         },
         "next_required_step": "pr_at_controlled_prediction_filter_and_rank",
     }
+    if controller_authorization is not None:
+        receipt["controller_authorization"] = controller_authorization
     payloads["inverse_design.json"] = _json_bytes(receipt)
     return payloads
 
@@ -1790,12 +2121,12 @@ def _report_bytes(
     *,
     design_request_id: str,
     publication_id: str,
-    route: _VerifiedInverseDesignRoute,
+    design_request: dict[str, Any],
     candidates: Sequence[OledInverseDesignCandidate],
     excluded: Sequence[dict[str, Any]],
     transport: _GeneratorTransportResult,
 ) -> bytes:
-    request = route.request
+    request = design_request
     lines = [
         "# OLED inverse-design candidate publication",
         "",
@@ -1819,6 +2150,18 @@ def _report_bytes(
             f"- `{property_id}`: objective `{direction}`; PR-AP bounds "
             f"`{_constraint_label(screening)}`; additional PR-ARb bounds "
             f"`{_constraint_label(additional)}`."
+        )
+    if "controller_authorization" in request:
+        controller = request["controller_authorization"]
+        lines.extend(
+            [
+                "- Controller authorization: `"
+                + str(controller["authorization_id"])
+                + "`",
+                "- Controller state: `"
+                + str(controller["latest_source_state_fingerprint"])
+                + "`",
+            ]
         )
     lines.extend(
         [
@@ -1844,22 +2187,34 @@ def _report_bytes(
 def _design_request_id(
     *,
     route: _VerifiedInverseDesignRoute,
+    design_request: dict[str, Any] | None = None,
+    requested_candidate_count: int | None = None,
+    controller_authorization: dict[str, Any] | None = None,
     reinvent4_config_sha256: str,
     reinvent4_mode: str,
     remote_transport_contract_sha256: str | None,
     seed: int,
 ) -> str:
+    effective_request = design_request or route.request
+    effective_requested_count = (
+        route.candidate_shortfall_count
+        if requested_candidate_count is None
+        else requested_candidate_count
+    )
+    identity = {
+        "inverse_design_version": _INVERSE_DESIGN_VERSION,
+        "batch_selection_sha256": route.batch_receipt_sha256,
+        "design_request": effective_request,
+        "reinvent4_config_sha256": reinvent4_config_sha256,
+        "reinvent4_mode": reinvent4_mode,
+        "remote_transport_contract_sha256": remote_transport_contract_sha256,
+        "seed": seed,
+        "requested_candidate_count": effective_requested_count,
+    }
+    if controller_authorization is not None:
+        identity["controller_authorization"] = controller_authorization
     return "oled-inverse-design-request:" + _stable_hash(
-        {
-            "inverse_design_version": _INVERSE_DESIGN_VERSION,
-            "batch_selection_sha256": route.batch_receipt_sha256,
-            "design_request": route.request,
-            "reinvent4_config_sha256": reinvent4_config_sha256,
-            "reinvent4_mode": reinvent4_mode,
-            "remote_transport_contract_sha256": remote_transport_contract_sha256,
-            "seed": seed,
-            "requested_candidate_count": route.candidate_shortfall_count,
-        }
+        identity
     )
 
 

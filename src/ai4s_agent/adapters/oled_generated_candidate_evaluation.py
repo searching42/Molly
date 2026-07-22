@@ -63,6 +63,19 @@ def execute_oled_generated_candidate_evaluation_adapter(
             remote_known_hosts=(
                 _optional_string(payload.get("remote_known_hosts")) or None
             ),
+            controller_request_json=(
+                _optional_string(payload.get("controller_request_json")) or None
+            ),
+            controller_json=(
+                _optional_string(payload.get("controller_json")) or None
+            ),
+            generation_authorization_json=(
+                _optional_string(payload.get("generation_authorization_json"))
+                or None
+            ),
+            controller_report_md=(
+                _optional_string(payload.get("controller_report_md")) or None
+            ),
             output_root=required["output_root"],
         )
     except Exception:

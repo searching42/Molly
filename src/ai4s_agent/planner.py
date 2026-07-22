@@ -359,6 +359,19 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         risk_level=RiskLevel.LOW,
         default_adapter="execute_oled_candidate_decision_adapter",
     ),
+    AtomicTaskSpec(
+        task_id="execute_oled_bounded_discovery_controller",
+        required_artifacts=["oled_bounded_controller_request"],
+        output_artifacts=[
+            "oled_bounded_controller_receipt",
+            "oled_bounded_controller_request_snapshot",
+            "oled_bounded_controller_generation_authorization",
+            "oled_bounded_controller_report",
+            "oled_bounded_controller_execution_record",
+        ],
+        risk_level=RiskLevel.LOW,
+        default_adapter="execute_oled_bounded_discovery_controller_adapter",
+    ),
 )
 
 
