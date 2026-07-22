@@ -96,6 +96,18 @@ remote execution. See `docs/oled-bounded-discovery-session.md`.
 The paper018 local `existing_output` canary is complete; see
 `docs/evidence/oled-paper018-existing-output-session-canary-20260722.md`. It
 formed an explainable mixed-source Top-4 and a durable `COMPLETED_TOP_N`
-session result after one generation round. The next acceptance step is the
-same session contract with the node45 remote REINVENT4 transport. PR-AW then
-adds the user-facing session controls and result display.
+session result after one generation round.
+
+## PR-AW: bounded session control plane
+
+PR-AW exposes PR-AV through project-scoped create, inspect, revision-CAS
+advance, and exact gate-approval APIs plus a dedicated result page. Long child
+transitions run outside the HTTP request thread and leave pollable action
+metadata. Interrupted actions fail closed as `RECOVERY_REQUIRED`; they are not
+automatically replayed. Successful action reads revalidate the authoritative
+session and child publications before displaying an explainable Top-N.
+
+This control plane does not change scientific selection semantics and does not
+claim experimental or computational validation. The remaining runtime
+acceptance step is the same bounded session contract with node45's remote
+REINVENT4 transport once non-disruptive GPU capacity is available.

@@ -7,6 +7,9 @@ from flask import Flask
 
 from ai4s_agent.job_manager import JobManager
 from ai4s_agent.memory import PermissionPolicy, ProjectMemory
+from ai4s_agent.oled_bounded_discovery_session_actions import (
+    OledBoundedDiscoverySessionActionService,
+)
 from ai4s_agent.orchestrator import Orchestrator
 from ai4s_agent.routes import run_control as run_control_routes
 from ai4s_agent.routes.agents import _as_bool, register_agent_routes
@@ -14,6 +17,7 @@ from ai4s_agent.routes.core import register_core_routes
 from ai4s_agent.routes.internal_run_plan_queue import register_internal_run_plan_queue_routes
 from ai4s_agent.routes.jobs import register_job_routes
 from ai4s_agent.routes.legacy_plan import register_legacy_plan_routes
+from ai4s_agent.routes.oled_bounded_sessions import register_oled_bounded_session_routes
 from ai4s_agent.routes.project_assets import register_project_asset_routes
 from ai4s_agent.routes.project_runs import register_project_run_routes
 from ai4s_agent.routes.projects import register_project_routes
@@ -68,6 +72,11 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
     projects = ProjectStorage(workspace_dir=workspace)
     project_memory = ProjectMemory(workspace_dir=workspace)
     permissions = PermissionPolicy()
+    bounded_session_actions = OledBoundedDiscoverySessionActionService(
+        storage=projects,
+        actions_root=runs / "oled-bounded-session-actions",
+    )
+    app.extensions["oled_bounded_session_actions"] = bounded_session_actions
 
     register_core_routes(app)
     register_legacy_plan_routes(app, orch=orch, jobs=jobs)
@@ -95,3 +104,8 @@ def register_routes(app: Flask, base_runs_dir: Path | None = None, workspace_dir
     register_project_asset_routes(app, projects=projects, permissions=permissions)
     register_project_run_routes(app, projects=projects, jobs=jobs)
     register_job_routes(app, jobs=jobs, orch=orch, projects=projects)
+    register_oled_bounded_session_routes(
+        app,
+        projects=projects,
+        actions=bounded_session_actions,
+    )
