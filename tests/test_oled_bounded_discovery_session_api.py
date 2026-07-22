@@ -15,6 +15,7 @@ from ai4s_agent.oled_bounded_discovery_session import (
     advance_oled_bounded_discovery_session,
     approve_oled_bounded_discovery_session_gate,
     create_oled_bounded_discovery_session,
+    inspect_oled_bounded_discovery_session,
 )
 from ai4s_agent.oled_bounded_discovery_session_actions import (
     OledBoundedDiscoverySessionActionService,
@@ -22,6 +23,7 @@ from ai4s_agent.oled_bounded_discovery_session_actions import (
 from ai4s_agent.oled_bounded_discovery_session_view import (
     build_oled_bounded_discovery_session_view,
 )
+from ai4s_agent.oled_real_phase1_execution import _stable_hash
 from ai4s_agent.storage import ProjectStorage
 from tests.test_oled_bounded_discovery_session import _spec
 
@@ -79,8 +81,7 @@ def test_bounded_session_api_creates_advances_and_approves_without_blocking_http
     assert waiting["status"] == "WAITING_USER"
     assert waiting["gate"]["required"] is True
 
-    # The mutable action record is not allowed to become a candidate-result
-    # trust anchor.  A fully rewritten stored result is ignored and the API
+    # Candidate results are absent from mutable action state. A successful poll
     # exact-replays the authoritative PR-AV session instead.
     action_id = queued.get_json()["action"]["action_id"]
     action_path = (
@@ -92,14 +93,7 @@ def test_bounded_session_api_creates_advances_and_approves_without_blocking_http
         / "action.json"
     )
     persisted = json.loads(action_path.read_text(encoding="utf-8"))
-    persisted["result"] = {
-        "status": "COMPLETED_TOP_N",
-        "terminal": {"top_candidates": [{"candidate_id": "forged"}]},
-    }
-    action_path.write_text(
-        json.dumps(persisted, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    assert "result" not in persisted
     replayed = client.get(
         f"/api/projects/{project_id}/oled-bounded-session-actions/{action_id}"
     ).get_json()["action"]
@@ -268,6 +262,157 @@ def test_reconciled_revision_is_not_permanently_blocked_by_old_action_record(
     assert approval["status"] == "QUEUED"
 
 
+def test_queued_action_request_rewrite_fails_closed_without_cross_session_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    project_id = "frozen-action"
+    first_spec = _spec(tmp_path, monkeypatch, target_top_n=1)
+    first = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=first_spec,
+    )
+    second_spec = json.loads(json.dumps(first_spec))
+    second_spec["candidate_decision"]["target_top_n"] = 2
+    second_spec["candidate_decision"]["max_pairwise_tanimoto"] = 1.0
+    second = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=second_spec,
+    )
+    second = advance_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=second.session_id,
+        expected_revision=0,
+    )
+    assert second.status == "WAITING_USER"
+
+    deferred = _DeferredExecutor()
+    root = tmp_path / "actions"
+    service = OledBoundedDiscoverySessionActionService(
+        storage=storage,
+        actions_root=root,
+        executor=deferred,  # type: ignore[arg-type]
+    )
+    queued = service.enqueue_advance(
+        project_id=project_id,
+        session_id=first.session_id,
+        expected_revision=0,
+    )
+    action_dir = root / project_id / queued["action_id"]
+
+    # Fully re-sign the immutable-envelope payload to target the waiting second
+    # session, and also inject the old control fields into mutable state.
+    request_path = action_dir / "request.json"
+    forged_request = json.loads(request_path.read_text(encoding="utf-8"))
+    forged_request.update(
+        {
+            "action": "approve",
+            "session_id": second.session_id,
+            "expected_revision": second.revision,
+            "actor": "forged-reviewer",
+            "note": "forged approval",
+        }
+    )
+    unsigned = dict(forged_request)
+    unsigned.pop("request_digest")
+    forged_request["request_digest"] = "sha256:" + _stable_hash(unsigned)
+    request_path.write_text(
+        json.dumps(forged_request, ensure_ascii=False, sort_keys=True, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+    state_path = action_dir / "action.json"
+    forged_state = json.loads(state_path.read_text(encoding="utf-8"))
+    forged_state.update(
+        {
+            "action": "approve",
+            "session_id": second.session_id,
+            "expected_revision": second.revision,
+            "actor": "forged-reviewer",
+        }
+    )
+    state_path.write_text(
+        json.dumps(forged_state, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    deferred.run()
+    failed_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert failed_state["status"] == "FAILED"
+    assert failed_state["error"]["code"] == "action_request_integrity_failed"
+    assert inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=first.session_id,
+    ).revision == 0
+    unchanged_second = inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=second.session_id,
+    )
+    assert unchanged_second.revision == second.revision
+    assert unchanged_second.status == "WAITING_USER"
+
+
+@pytest.mark.parametrize("noncanonical", ["canonical-project ", " canonical-project"])
+def test_project_id_whitespace_is_rejected_before_cross_project_session_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    noncanonical: str,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    spec = _spec(tmp_path, monkeypatch, target_top_n=1)
+    canonical = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id="canonical-project",
+        session_spec=spec,
+    )
+    padded = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=noncanonical,
+        session_spec=spec,
+    )
+    assert canonical.session_id == padded.session_id
+    service = OledBoundedDiscoverySessionActionService(
+        storage=storage,
+        actions_root=tmp_path / "actions",
+        executor=_HoldingExecutor(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="project_id must be canonical"):
+        service.enqueue_advance(
+            project_id=noncanonical,
+            session_id=canonical.session_id,
+            expected_revision=0,
+        )
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+    )
+    encoded_project = noncanonical.replace(" ", "%20")
+    response = app.test_client().post(
+        f"/api/projects/{encoded_project}/oled-bounded-sessions/"
+        f"{canonical.session_id}/actions/advance",
+        json={"expected_revision": 0},
+    )
+    assert response.status_code == 400
+    assert "project_id must be canonical" in response.get_json()["error"]
+    assert inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id="canonical-project",
+        session_id=canonical.session_id,
+    ).revision == 0
+    assert inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=noncanonical,
+        session_id=padded.session_id,
+    ).revision == 0
+
+
 def test_completed_session_view_presents_exact_replayed_top_n(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -352,3 +497,24 @@ class _HoldingExecutor:
     def submit(self, function: Any, *args: Any) -> Future[Any]:
         del function, args
         return Future()
+
+
+class _DeferredExecutor:
+    def __init__(self) -> None:
+        self.call: tuple[Any, tuple[Any, ...]] | None = None
+        self.future: Future[Any] = Future()
+
+    def submit(self, function: Any, *args: Any) -> Future[Any]:
+        self.call = (function, args)
+        return self.future
+
+    def run(self) -> None:
+        assert self.call is not None
+        function, args = self.call
+        try:
+            result = function(*args)
+        except Exception as exc:  # pragma: no cover - worker catches expected failure.
+            self.future.set_exception(exc)
+            raise
+        else:
+            self.future.set_result(result)

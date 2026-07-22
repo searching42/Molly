@@ -14,6 +14,7 @@ from ai4s_agent.oled_bounded_discovery_session_actions import (
 )
 from ai4s_agent.oled_bounded_discovery_session_view import (
     build_oled_bounded_discovery_session_view,
+    validated_oled_bounded_project_id,
 )
 from ai4s_agent.storage import ProjectStorage
 
@@ -31,7 +32,8 @@ def register_oled_bounded_session_routes(
     @app.get("/api/projects/<project_id>/oled-bounded-sessions")
     def list_oled_bounded_sessions(project_id: str):
         try:
-            root = projects.project_dir(project_id) / "bounded-discovery-sessions"
+            clean_project = validated_oled_bounded_project_id(project_id)
+            root = projects.project_dir(clean_project) / "bounded-discovery-sessions"
             session_ids = (
                 sorted(
                     child.name
@@ -46,30 +48,33 @@ def register_oled_bounded_session_routes(
             sessions = [
                 build_oled_bounded_discovery_session_view(
                     storage=projects,
-                    project_id=project_id,
+                    project_id=clean_project,
                     session_id=session_id,
                 )
                 for session_id in session_ids
             ]
-            return jsonify({"ok": True, "project_id": project_id, "sessions": sessions})
+            return jsonify(
+                {"ok": True, "project_id": clean_project, "sessions": sessions}
+            )
         except (OSError, ValueError) as exc:
             return _error(exc)
 
     @app.post("/api/projects/<project_id>/oled-bounded-sessions")
     def create_oled_bounded_session(project_id: str):
         try:
+            clean_project = validated_oled_bounded_project_id(project_id)
             payload = _json_object()
             spec = payload.get("session_spec")
             if not isinstance(spec, dict):
                 raise ValueError("session_spec object required")
             created = create_oled_bounded_discovery_session(
                 storage=projects,
-                project_id=project_id,
+                project_id=clean_project,
                 session_spec=spec,
             )
             view = build_oled_bounded_discovery_session_view(
                 storage=projects,
-                project_id=project_id,
+                project_id=clean_project,
                 session_id=created.session_id,
             )
             return jsonify({"ok": True, "session": view}), 201
@@ -81,9 +86,10 @@ def register_oled_bounded_session_routes(
     )
     def inspect_oled_bounded_session(project_id: str, session_id: str):
         try:
+            clean_project = validated_oled_bounded_project_id(project_id)
             view = build_oled_bounded_discovery_session_view(
                 storage=projects,
-                project_id=project_id,
+                project_id=clean_project,
                 session_id=session_id,
             )
             return jsonify({"ok": True, "session": view})

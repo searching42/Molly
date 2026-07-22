@@ -28,17 +28,20 @@ def build_oled_bounded_discovery_session_view(
 ) -> dict[str, Any]:
     """Validate external facts and return only user-facing session data."""
 
-    session_dir = _session_dir(storage, project_id, session_id)
+    clean_project = validated_oled_bounded_project_id(project_id)
+    session_dir = _session_dir(storage, clean_project, session_id)
     with _session_lock(session_dir):
         spec = _read_spec(session_dir)
         state = _read_state(session_dir)
-        state = _reconcile_waiting_child(storage, project_id, session_dir, spec, state)
-        _validate_external_state(storage, project_id, session_dir, spec, state)
+        state = _reconcile_waiting_child(
+            storage, clean_project, session_dir, spec, state
+        )
+        _validate_external_state(storage, clean_project, session_dir, spec, state)
         result = _result_from_state(session_dir, state)
-        usage = _usage(storage=storage, project_id=project_id, state=state)
+        usage = _usage(storage=storage, project_id=clean_project, state=state)
         terminal = _terminal_view(
             storage=storage,
-            project_id=project_id,
+            project_id=clean_project,
             session_dir=session_dir,
             state=state,
         )
@@ -91,6 +94,22 @@ def build_oled_bounded_discovery_session_view(
                 "human_candidate_adjudication_performed": False,
             },
         }
+
+
+def validated_oled_bounded_project_id(value: str) -> str:
+    """Return one unmodified safe project ID or reject it before any read."""
+
+    if not isinstance(value, str) or value != value.strip():
+        raise ValueError("PR-AW project_id must be canonical")
+    if (
+        not value
+        or value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+        or Path(value).name != value
+    ):
+        raise ValueError("PR-AW project_id is invalid")
+    return value
 
 
 def _usage(
@@ -252,4 +271,7 @@ def _list(payload: dict[str, Any], key: str) -> list[Any]:
     return value
 
 
-__all__ = ["build_oled_bounded_discovery_session_view"]
+__all__ = [
+    "build_oled_bounded_discovery_session_view",
+    "validated_oled_bounded_project_id",
+]
