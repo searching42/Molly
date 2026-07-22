@@ -57,6 +57,8 @@ When `RunPlanExecutor` completes baseline training with model package manifests,
 
 `OLEDDiscoveryActionHandoffAgent` converts an integrated review-loop recommendation into a review-only action handoff. It maps the recommended next action to a selected tool/task, required inputs, gates, permissions, blocked reasons, and a placeholder payload template without executing adapters or mutating artifacts.
 
+`oled_bounded_discovery_session.py` provides the executable PR-AV session coordinator for the bounded OLED candidate loop. It persists an immutable SessionSpec, dispatches deterministic child runs only through `RunPlanExecutor`, pauses on the existing PR-AQ/PR-ARb/PR-AS gates, exact-replays registered child publications, preserves PR-AU controller grants and PR-ATb cumulative history, and publishes an immutable terminal result without adding new scientific decision rules.
+
 `OLEDDiscoveryExecutionPreviewAgent` turns a review-only action handoff into a review-only execution preview. It resolves selected tools to known atomic tasks where possible, summarizes adapter policy, risk level, gates, missing inputs, approval mode, and execution preconditions without calling `RunPlanExecutor` or executing adapters.
 
 `OLEDDiscoveryDryRunPacketAgent` converts an execution preview into a review-only dry-run packet. It records the would-run task/adapter intent, approval mode, dry-run mode, payload template, snapshot material, and review checklist without executing adapters, approving gates, or mutating run state.
