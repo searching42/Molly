@@ -1,8 +1,17 @@
 # OLED bounded closed-loop roadmap
 
-This roadmap constrains the two steps after PR-AT. It is intentionally narrow:
+This roadmap constrains the executable loop after PR-AT. It is intentionally narrow:
 the immediate goal is an executable end-to-end candidate-discovery flow, not a
 general candidate ontology or an autonomous-scientist claim.
+
+## PR-ATb: cumulative generated-candidate evaluation
+
+Before a session coordinator can execute a second generation round, PR-AT must
+retain the prior generated pool. PR-ATb therefore adds an ordered, exact-bound
+PR-AS roster and a previous-evaluation binding. It continues to support only
+`registry` and `generated` sources, preserves the single-round v1 contract, and
+recomputes one global ranking over Registry plus every accepted generation
+publication. It adds no new prediction, selection, or budget policy.
 
 ## PR-ARb v2: candidate decision successor
 
@@ -69,3 +78,11 @@ the supplied bounded history. All rounds share a loop fingerprint over the
 scientific target and upstream model/dataset/Registry context, and a chemical
 identity ledger prevents publication-scoped generated IDs from hiding repeated
 molecules across rounds.
+
+## PR-AV: bounded discovery session coordinator
+
+After PR-ATb, PR-AV may coordinate the existing PR-AQ, PR-ARb, PR-AS, PR-AT,
+PR-ARb v2, and PR-AU tasks through deterministic child runs. It must use the
+existing RunPlanExecutor and gate snapshots, advance at most one durable state
+transition at a time, and never call scientific adapters directly or maintain
+a second copy of PR-AU's budget decisions.

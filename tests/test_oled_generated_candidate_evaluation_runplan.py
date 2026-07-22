@@ -13,6 +13,7 @@ from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
 from ai4s_agent.schemas import RiskLevel, RunStatus
 from ai4s_agent.storage import ProjectStorage
 from tests.test_oled_generated_candidate_evaluation import _evaluation_inputs
+from tests.test_oled_generated_candidate_evaluation import _cumulative_inputs
 
 
 TASK_ID = "execute_oled_generated_candidate_evaluation"
@@ -58,6 +59,39 @@ def _run_plan(run_id: str) -> object:
         requested_tasks=[TASK_ID],
         available_artifacts=list(INPUT_ARTIFACT_IDS),
     )
+
+
+def _cumulative_input_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, str]:
+    artifacts, second, roster = _cumulative_inputs(tmp_path, monkeypatch)
+    return {
+        "oled_inverse_design_receipt": str(
+            second.output_dir / "inverse_design.json"  # type: ignore[attr-defined]
+        ),
+        "oled_experiment_batch_receipt": artifacts["oled_experiment_batch_receipt"],
+        "oled_registry_screening_receipt": artifacts[
+            "oled_registry_screening_receipt"
+        ],
+        "oled_registry_screening_shortlist": artifacts[
+            "oled_registry_screening_shortlist"
+        ],
+        "oled_phase1_execution_dir": artifacts["oled_phase1_execution_dir"],
+        "oled_dataset_snapshot": artifacts["oled_dataset_snapshot"],
+        "oled_registry_snapshot": artifacts["oled_registry_snapshot"],
+        "oled_bounded_controller_request_snapshot": artifacts[
+            "oled_bounded_controller_request_snapshot"
+        ],
+        "oled_bounded_controller_receipt": artifacts[
+            "oled_bounded_controller_receipt"
+        ],
+        "oled_bounded_controller_generation_authorization": artifacts[
+            "oled_bounded_controller_generation_authorization"
+        ],
+        "oled_bounded_controller_report": artifacts["oled_bounded_controller_report"],
+        "oled_inverse_design_generation_roster": str(roster),
+    }
 
 
 def test_generated_evaluation_is_a_low_risk_plannable_agent_task() -> None:
@@ -122,6 +156,35 @@ def test_executor_publishes_registers_and_retries_generated_evaluation_idempoten
     assert retry["result"]["already_completed"] is True
     assert calls == []
     assert receipt_path.read_bytes() == initial_receipt
+
+
+def test_executor_publishes_cumulative_generated_evaluation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_artifacts = _cumulative_input_artifacts(tmp_path, monkeypatch)
+    storage = ProjectStorage(tmp_path / "cumulative-workspace")
+    run_id = "cumulative-generated-evaluation"
+    result = RunPlanExecutor(storage=storage).execute(
+        project_id="cumulative-generated-evaluation-project",
+        run_plan=_run_plan(run_id),
+        input_artifacts=input_artifacts,
+    )
+
+    assert result["status"] == RunStatus.SUCCEEDED.value
+    registry = storage.read_artifact_registry(
+        "cumulative-generated-evaluation-project",
+        run_id,
+    )
+    receipt = json.loads(
+        (
+            storage.run_dir("cumulative-generated-evaluation-project", run_id)
+            / registry["oled_candidate_evaluation_receipt"]
+        ).read_text(encoding="utf-8")
+    )
+    assert receipt["evaluation_version"] == "oled_generated_candidate_evaluation.v2"
+    assert receipt["counts"]["generated_source_count"] == 2
+    assert len(receipt["sources"]["generation_publications"]) == 2
 
 
 def test_executor_rejects_fully_resigned_generated_evaluation_output(

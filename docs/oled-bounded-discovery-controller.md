@@ -54,6 +54,14 @@ bundle's request must be the exact current-request prefix through iteration
 predecessor controller ID, state fingerprint, authorization ID, target task,
 gate, source bindings, and requested count exactly.
 
+Every later iteration must also name the canonical cumulative PR-AT generation
+roster. Its ordered PR-AS publication IDs must equal the prior controller
+history plus the current publication, and its previous-evaluation ID/SHA must
+equal the immediately preceding iteration. The controller charges only the
+current publication's per-source count while preserving all prior candidates
+in the evaluation pool; it never mistakes the cumulative PR-AT count for the
+new generation-round usage.
+
 Every iteration must have the same immutable loop fingerprint: Top-N target,
 property constraints and directions, budget/currency, diversity threshold,
 selection policy, PR-AP screening anchor, model binding, Phase-1 execution,

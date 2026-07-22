@@ -8,11 +8,16 @@ import pytest
 from ai4s_agent import adapters
 from ai4s_agent.agents.planner import PlannerAgent
 from ai4s_agent.executor import RunPlanExecutor
-from ai4s_agent.oled_generated_candidate_evaluation import _json_bytes, _sha256_bytes
+from ai4s_agent.oled_generated_candidate_evaluation import (
+    _json_bytes,
+    _sha256_bytes,
+    run_oled_generated_candidate_evaluation_from_files,
+)
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
 from ai4s_agent.schemas import RiskLevel, RunStatus
 from ai4s_agent.storage import ProjectStorage
 from tests.test_oled_candidate_decision import _inputs
+from tests.test_oled_generated_candidate_evaluation import _cumulative_inputs
 
 
 TASK_ID = "execute_oled_candidate_decision"
@@ -61,6 +66,65 @@ def _plan(run_id: str) -> object:
         requested_tasks=[TASK_ID],
         available_artifacts=list(INPUT_IDS),
     )
+
+
+def _cumulative_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, str]:
+    artifacts, second, roster = _cumulative_inputs(tmp_path, monkeypatch)
+    bundle = {
+        "controller_request_json": artifacts[
+            "oled_bounded_controller_request_snapshot"
+        ],
+        "controller_json": artifacts["oled_bounded_controller_receipt"],
+        "generation_authorization_json": artifacts[
+            "oled_bounded_controller_generation_authorization"
+        ],
+        "controller_report_md": artifacts["oled_bounded_controller_report"],
+    }
+    evaluation = run_oled_generated_candidate_evaluation_from_files(
+        inverse_design_json=second.output_dir / "inverse_design.json",  # type: ignore[attr-defined]
+        batch_selection_json=artifacts["oled_experiment_batch_receipt"],
+        screening_receipt_json=artifacts["oled_registry_screening_receipt"],
+        ranked_shortlist_csv=artifacts["oled_registry_screening_shortlist"],
+        phase1_execution_dir=artifacts["oled_phase1_execution_dir"],
+        dataset_snapshot_json=artifacts["oled_dataset_snapshot"],
+        registry_snapshot_json=artifacts["oled_registry_snapshot"],
+        generation_roster_json=roster,
+        output_root=tmp_path / "cumulative-decision-evaluation",
+        generated_at="2026-07-22T12:30:00+08:00",
+        **bundle,
+    )
+    return {
+        "oled_candidate_evaluation_receipt": str(
+            evaluation.output_dir / "evaluation.json"
+        ),
+        "oled_inverse_design_receipt": str(
+            second.output_dir / "inverse_design.json"  # type: ignore[attr-defined]
+        ),
+        "oled_experiment_batch_receipt": artifacts["oled_experiment_batch_receipt"],
+        "oled_registry_screening_receipt": artifacts[
+            "oled_registry_screening_receipt"
+        ],
+        "oled_registry_screening_shortlist": artifacts[
+            "oled_registry_screening_shortlist"
+        ],
+        "oled_phase1_execution_dir": artifacts["oled_phase1_execution_dir"],
+        "oled_dataset_snapshot": artifacts["oled_dataset_snapshot"],
+        "oled_registry_snapshot": artifacts["oled_registry_snapshot"],
+        "oled_bounded_controller_request_snapshot": artifacts[
+            "oled_bounded_controller_request_snapshot"
+        ],
+        "oled_bounded_controller_receipt": artifacts[
+            "oled_bounded_controller_receipt"
+        ],
+        "oled_bounded_controller_generation_authorization": artifacts[
+            "oled_bounded_controller_generation_authorization"
+        ],
+        "oled_bounded_controller_report": artifacts["oled_bounded_controller_report"],
+        "oled_inverse_design_generation_roster": str(roster),
+    }
 
 
 def test_candidate_decision_is_narrow_low_risk_agent_task() -> None:
@@ -118,6 +182,27 @@ def test_executor_registers_and_retries_final_decision_idempotently(
     assert retry["result"]["already_completed"] is True
     assert calls == []
     assert receipt.read_bytes() == before
+
+
+def test_executor_consumes_cumulative_generated_evaluation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _cumulative_artifacts(tmp_path, monkeypatch)
+    storage = ProjectStorage(tmp_path / "cumulative-decision-workspace")
+    run_id = "cumulative-final-decision"
+    result = RunPlanExecutor(storage=storage).execute(
+        project_id="cumulative-final-decision-project",
+        run_plan=_plan(run_id),
+        input_artifacts=inputs,
+    )
+
+    assert result["status"] == RunStatus.SUCCEEDED.value
+    registry = storage.read_artifact_registry(
+        "cumulative-final-decision-project",
+        run_id,
+    )
+    assert "oled_final_candidate_decision_receipt" in registry
 
 
 def test_executor_rejects_fully_resigned_final_dossier(

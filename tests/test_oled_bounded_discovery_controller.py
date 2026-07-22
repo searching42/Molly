@@ -9,6 +9,7 @@ import pytest
 from ai4s_agent.oled_bounded_discovery_controller import (
     _accumulate_chemical_identity_ledger,
     _validate_iteration_predecessor_authorization,
+    _validate_cumulative_evaluation_history,
     _loop_fingerprint_payload,
     _route,
     _verified_oled_bounded_discovery_controller_from_files,
@@ -195,6 +196,35 @@ def test_controller_rejects_a_second_iteration_with_the_wrong_previous_grant(
         )
 
 
+def test_controller_rejects_cumulative_evaluation_bound_to_wrong_predecessor() -> None:
+    evaluation = {
+        "sources": {
+            "generation_publications": [
+                {"publication_id": "publication-1"},
+                {"publication_id": "publication-2"},
+            ],
+            "previous_evaluation": {
+                "evaluation_id": "evaluation-1",
+                "evaluation_sha256": "wrong-sha",
+            },
+        }
+    }
+    previous = [
+        {
+            "generation_publication_id": "publication-1",
+            "evaluation_id": "evaluation-1",
+            "evaluation_sha256": "expected-sha",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="predecessor binding mismatch"):
+        _validate_cumulative_evaluation_history(
+            evaluation=evaluation,
+            previous_summaries=previous,
+            current_publication_id="publication-2",
+        )
+
+
 def test_controller_rejects_truncated_history_starting_with_authorized_pr_as(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -290,6 +320,88 @@ def test_controller_rejects_truncated_history_starting_with_authorized_pr_as(
         )
 
     assert not output_root.exists() or not list(output_root.iterdir())
+
+
+def test_controller_accepts_cumulative_second_generation_evaluation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.test_oled_generated_candidate_evaluation import _cumulative_inputs
+
+    artifacts, second, roster = _cumulative_inputs(tmp_path, monkeypatch)
+    controller_bundle = {
+        "controller_request_json": artifacts[
+            "oled_bounded_controller_request_snapshot"
+        ],
+        "controller_json": artifacts["oled_bounded_controller_receipt"],
+        "generation_authorization_json": artifacts[
+            "oled_bounded_controller_generation_authorization"
+        ],
+        "controller_report_md": artifacts["oled_bounded_controller_report"],
+    }
+    evaluation = run_oled_generated_candidate_evaluation_from_files(
+        inverse_design_json=second.output_dir / "inverse_design.json",  # type: ignore[attr-defined]
+        batch_selection_json=artifacts["oled_experiment_batch_receipt"],
+        screening_receipt_json=artifacts["oled_registry_screening_receipt"],
+        ranked_shortlist_csv=artifacts["oled_registry_screening_shortlist"],
+        phase1_execution_dir=artifacts["oled_phase1_execution_dir"],
+        dataset_snapshot_json=artifacts["oled_dataset_snapshot"],
+        registry_snapshot_json=artifacts["oled_registry_snapshot"],
+        generation_roster_json=roster,
+        output_root=tmp_path / "second-evaluations",
+        generated_at="2026-07-22T12:10:00+08:00",
+        **controller_bundle,
+    )
+    decision = run_oled_candidate_decision_from_files(
+        evaluation_json=evaluation.output_dir / "evaluation.json",
+        inverse_design_json=second.output_dir / "inverse_design.json",  # type: ignore[attr-defined]
+        batch_selection_json=artifacts["oled_experiment_batch_receipt"],
+        screening_receipt_json=artifacts["oled_registry_screening_receipt"],
+        ranked_shortlist_csv=artifacts["oled_registry_screening_shortlist"],
+        phase1_execution_dir=artifacts["oled_phase1_execution_dir"],
+        dataset_snapshot_json=artifacts["oled_dataset_snapshot"],
+        registry_snapshot_json=artifacts["oled_registry_snapshot"],
+        generation_roster_json=roster,
+        output_root=tmp_path / "second-decisions",
+        generated_at="2026-07-22T12:15:00+08:00",
+        **controller_bundle,
+    )
+    request_payload = json.loads(
+        Path(controller_bundle["controller_request_json"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    request_payload["iterations"].append(
+        {
+            "decision_json": str(decision.output_dir / "candidate_decision.json"),
+            "evaluation_json": str(evaluation.output_dir / "evaluation.json"),
+            "inverse_design_json": str(second.output_dir / "inverse_design.json"),  # type: ignore[attr-defined]
+            "batch_selection_json": artifacts["oled_experiment_batch_receipt"],
+            "screening_receipt_json": artifacts["oled_registry_screening_receipt"],
+            "ranked_shortlist_csv": artifacts["oled_registry_screening_shortlist"],
+            "phase1_execution_dir": artifacts["oled_phase1_execution_dir"],
+            "dataset_snapshot_json": artifacts["oled_dataset_snapshot"],
+            "registry_snapshot_json": artifacts["oled_registry_snapshot"],
+            "candidate_cost_manifest_json": None,
+            "remote_known_hosts": None,
+            "generation_roster_json": str(roster),
+            **controller_bundle,
+        }
+    )
+    request = tmp_path / "two-round-controller-request.json"
+    request.write_bytes(_json_bytes(request_payload))
+    result = run_oled_bounded_discovery_controller_from_files(
+        controller_request_json=request,
+        output_root=tmp_path / "two-round-controllers",
+        generated_at="2026-07-22T12:20:00+08:00",
+    )
+    receipt = json.loads(
+        (result.output_dir / "controller.json").read_text(encoding="utf-8")
+    )
+    assert receipt["usage"]["iterations"] == 2
+    assert receipt["usage"]["generation_rounds"] == 2
+    assert receipt["usage"]["generated_candidates"] == 2
+    assert receipt["route"]["next_action"] == "stop"
 
 
 def _incomplete_decision(target: int = 3) -> dict[str, object]:

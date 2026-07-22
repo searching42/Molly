@@ -154,6 +154,7 @@ def run_oled_candidate_decision_from_files(
     controller_json: str | Path | None = None,
     generation_authorization_json: str | Path | None = None,
     controller_report_md: str | Path | None = None,
+    generation_roster_json: str | Path | None = None,
     generated_at: str | None = None,
 ) -> OledCandidateDecisionResult:
     root = _absolute_local_path(output_root)
@@ -173,6 +174,7 @@ def run_oled_candidate_decision_from_files(
             controller_json=controller_json,
             generation_authorization_json=generation_authorization_json,
             controller_report_md=controller_report_md,
+            generation_roster_json=generation_roster_json,
             generated_at=generated_at or now_iso(),
         )
         output_dir = root / built.decision_id
@@ -208,6 +210,7 @@ def verify_oled_candidate_decision_from_files(
     controller_json: str | Path | None = None,
     generation_authorization_json: str | Path | None = None,
     controller_report_md: str | Path | None = None,
+    generation_roster_json: str | Path | None = None,
 ) -> OledCandidateDecisionVerificationResult:
     with _verified_oled_candidate_decision_from_files(
         decision_json=decision_json,
@@ -225,6 +228,7 @@ def verify_oled_candidate_decision_from_files(
         controller_json=controller_json,
         generation_authorization_json=generation_authorization_json,
         controller_report_md=controller_report_md,
+        generation_roster_json=generation_roster_json,
     ) as bound:
         return bound.result
 
@@ -247,6 +251,7 @@ def _verified_oled_candidate_decision_from_files(
     controller_json: str | Path | None = None,
     generation_authorization_json: str | Path | None = None,
     controller_report_md: str | Path | None = None,
+    generation_roster_json: str | Path | None = None,
 ) -> Iterator[_BoundCandidateDecision]:
     receipt_path = _absolute_local_path(decision_json)
     if receipt_path.name != "candidate_decision.json":
@@ -304,6 +309,7 @@ def _verified_oled_candidate_decision_from_files(
             controller_json=controller_json,
             generation_authorization_json=generation_authorization_json,
             controller_report_md=controller_report_md,
+            generation_roster_json=generation_roster_json,
             generated_at=_required_string(receipt, "generated_at"),
         )
         if output_dir.name != built.decision_id or published != built.payloads:
@@ -353,6 +359,7 @@ def _build_decision_from_files(
     controller_json: str | Path | None,
     generation_authorization_json: str | Path | None,
     controller_report_md: str | Path | None,
+    generation_roster_json: str | Path | None,
     generated_at: str,
 ) -> _BuiltDecision:
     batch_receipt, batch_sha256 = _read_bound_json(
@@ -414,6 +421,7 @@ def _build_decision_from_files(
         controller_json=controller_json,
         generation_authorization_json=generation_authorization_json,
         controller_report_md=controller_report_md,
+        generation_roster_json=generation_roster_json,
     ) as evaluation_bound:
         evaluation_receipt = _parse_json_object(
             evaluation_bound.expected_payloads["evaluation.json"],

@@ -69,6 +69,9 @@ def execute_oled_candidate_decision_adapter(payload: dict[str, Any]) -> dict[str
             controller_report_md=(
                 str(payload.get("controller_report_md") or "").strip() or None
             ),
+            generation_roster_json=(
+                str(payload.get("generation_roster_json") or "").strip() or None
+            ),
             output_root=required["output_root"],
         )
     except Exception:

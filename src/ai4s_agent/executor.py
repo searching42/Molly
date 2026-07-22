@@ -939,6 +939,9 @@ class RunPlanExecutor:
                 "controller_report_md": self._optional_absolute_artifact_path(
                     artifact_paths, "oled_bounded_controller_report"
                 ),
+                "generation_roster_json": self._optional_absolute_artifact_path(
+                    artifact_paths, "oled_inverse_design_generation_roster"
+                ),
                 "output_root": str(run_dir / "oled_candidate_decision"),
             }
         if task_id == _GENERATED_EVALUATION_TASK_ID:
@@ -993,6 +996,9 @@ class RunPlanExecutor:
                 ),
                 "controller_report_md": self._optional_absolute_artifact_path(
                     artifact_paths, "oled_bounded_controller_report"
+                ),
+                "generation_roster_json": self._optional_absolute_artifact_path(
+                    artifact_paths, "oled_inverse_design_generation_roster"
                 ),
                 "output_root": str(run_dir / "oled_candidate_evaluation"),
             }
@@ -2030,6 +2036,9 @@ class RunPlanExecutor:
                     controller_report_md=(
                         str(payload.get("controller_report_md") or "") or None
                     ),
+                    generation_roster_json=(
+                        str(payload.get("generation_roster_json") or "") or None
+                    ),
                 ) as bound:
                     output_root = (run_dir / "oled_candidate_evaluation").absolute()
                     if bound.output_dir.parent != output_root:
@@ -2127,6 +2136,9 @@ class RunPlanExecutor:
                     ),
                     controller_report_md=(
                         str(payload.get("controller_report_md") or "") or None
+                    ),
+                    generation_roster_json=(
+                        str(payload.get("generation_roster_json") or "") or None
                     ),
                 ) as bound:
                     output_root = (run_dir / "oled_candidate_decision").absolute()
