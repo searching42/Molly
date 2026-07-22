@@ -12,11 +12,11 @@ from typing import Any
 from ai4s_agent._utils import now_iso
 from ai4s_agent.oled_bounded_discovery_session import (
     WAITING_USER,
-    _write_immutable_bytes,
     _write_mutable_json,
     advance_oled_bounded_discovery_session,
     approve_oled_bounded_discovery_session_gate,
 )
+from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_directory
 from ai4s_agent.oled_bounded_discovery_session_view import (
     build_oled_bounded_discovery_session_view,
     validated_oled_bounded_project_id,
@@ -24,6 +24,9 @@ from ai4s_agent.oled_bounded_discovery_session_view import (
 from ai4s_agent.oled_real_phase1_execution import _json_bytes, _stable_hash
 from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _read_regular_file_bound,
+)
+from ai4s_agent.oled_supplementary_material_identity_review import (
+    _pinned_output_parents_without_symlink_components,
 )
 from ai4s_agent.storage import ProjectStorage
 
@@ -222,10 +225,12 @@ class OledBoundedDiscoverySessionActionService:
                 "completed_revision": None,
                 "error": None,
             }
-            _write_immutable_bytes(
-                self._request_path(clean_project, action_id), frozen_bytes
+            self._publish_initial_action(
+                project_id=clean_project,
+                action_id=action_id,
+                request_bytes=frozen_bytes,
+                queued_state=queued_state,
             )
-            self._write_state(queued_state)
             try:
                 self._futures[action_id] = self._executor.submit(
                     self._execute,
@@ -362,6 +367,27 @@ class OledBoundedDiscoverySessionActionService:
         if path.resolve() != path:
             raise ValueError("PR-AW project action root escapes storage")
         return path
+
+    def _publish_initial_action(
+        self,
+        *,
+        project_id: str,
+        action_id: str,
+        request_bytes: bytes,
+        queued_state: dict[str, Any],
+    ) -> None:
+        root = self._project_root(project_id)
+        output_dir = self._action_dir(project_id, action_id)
+        with _pinned_output_parents_without_symlink_components(root) as pinned:
+            _publish_payload_directory(
+                output_dir=output_dir,
+                parent_descriptor=pinned[root],
+                payloads={
+                    "request.json": request_bytes,
+                    "action.json": _json_bytes(queued_state),
+                },
+                artifact_label="bounded session action",
+            )
 
     def _action_dir(self, project_id: str, action_id: str) -> Path:
         clean_action = _safe_action_id(action_id)

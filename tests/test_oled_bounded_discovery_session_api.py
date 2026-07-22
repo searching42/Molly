@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 import ai4s_agent.oled_bounded_discovery_session_actions as action_module
+import ai4s_agent.oled_categorical_dataset_execution as dataset_execution_module
 from ai4s_agent.app import create_app
 from ai4s_agent.oled_bounded_discovery_session import (
     advance_oled_bounded_discovery_session,
@@ -215,6 +216,75 @@ def test_interrupted_action_is_reported_recovery_required_and_not_replayed(
         project_id=project_id,
         session_id=current.session_id,
     )["revision"] == 0
+
+
+def test_initial_action_directory_publication_is_atomic_on_mid_build_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    project_id = "atomic-action"
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=_spec(tmp_path, monkeypatch, target_top_n=1),
+    )
+    root = tmp_path / "actions"
+    service = OledBoundedDiscoverySessionActionService(
+        storage=storage,
+        actions_root=root,
+        executor=_HoldingExecutor(),  # type: ignore[arg-type]
+    )
+    original_write = dataset_execution_module._write_fresh_bytes_at
+    request_written = False
+
+    def fail_before_initial_state(
+        directory_descriptor: int, name: str, payload: bytes
+    ) -> Any:
+        nonlocal request_written
+        if name == "request.json":
+            request_written = True
+            return original_write(directory_descriptor, name, payload)
+        if name == "action.json" and request_written:
+            raise RuntimeError("simulated exit before initial action state")
+        return original_write(directory_descriptor, name, payload)
+
+    monkeypatch.setattr(
+        dataset_execution_module,
+        "_write_fresh_bytes_at",
+        fail_before_initial_state,
+    )
+    with pytest.raises(RuntimeError, match="simulated exit"):
+        service.enqueue_advance(
+            project_id=project_id,
+            session_id=current.session_id,
+            expected_revision=0,
+        )
+    assert request_written is True
+    project_root = root / project_id
+    assert list(project_root.iterdir()) == []
+    assert inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,
+    ).revision == 0
+
+    # The uncommitted attempt cannot permanently lock this or another session.
+    monkeypatch.setattr(
+        dataset_execution_module,
+        "_write_fresh_bytes_at",
+        original_write,
+    )
+    retry = service.enqueue_advance(
+        project_id=project_id,
+        session_id=current.session_id,
+        expected_revision=0,
+    )
+    action_dir = project_root / retry["action_id"]
+    assert sorted(path.name for path in action_dir.iterdir()) == [
+        "action.json",
+        "request.json",
+    ]
 
 
 def test_reconciled_revision_is_not_permanently_blocked_by_old_action_record(

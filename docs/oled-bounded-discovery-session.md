@@ -159,6 +159,11 @@ operation, expected revision, and approval identity at enqueue time. The
 same-process worker receives those frozen bytes directly and requires the
 on-disk request and initial state to remain byte-for-byte identical before it
 calls PR-AV. Mutable state cannot select or replace a scientific operation.
+The two initial files are written and fsynced inside an invocation-owned
+temporary directory, the temporary directory is fsynced, and the complete
+directory is atomically published no-replace under the action ID followed by a
+parent fsync. A crash before that directory commit exposes no action; a crash
+after it exposes a complete inspectable `QUEUED` action.
 Leading or trailing whitespace in a project ID is rejected before any session
 read; the same unmodified ID is used for view validation, action storage,
 duplicate detection, execution, and polling.
