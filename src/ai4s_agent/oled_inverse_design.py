@@ -63,7 +63,8 @@ _MAX_INPUT_BYTES = 1024 * 1024 * 1024
 _REINVENT4_BACKEND = "reinvent4"
 _REINVENT4_MODES = frozenset({"existing_output", "remote"})
 _LEGACY_REMOTE_PROFILE_ID = "workstation2-node45-reinvent4-v1"
-_REMOTE_PROFILE_ID = "workstation2-node45-reinvent4-v2"
+_REMOTE_V2_PROFILE_ID = "workstation2-node45-reinvent4-v2"
+_REMOTE_PROFILE_ID = _REMOTE_V2_PROFILE_ID
 _REMOTE_TRANSPORT_PROFILES = {
     _LEGACY_REMOTE_PROFILE_ID: {
         "profile_id": _LEGACY_REMOTE_PROFILE_ID,
@@ -73,8 +74,8 @@ _REMOTE_TRANSPORT_PROFILES = {
         "python": "/home/lbh/miniconda3/envs/REINVENT4/bin/python",
         "host_key_policy": "strict_pinned_known_hosts",
     },
-    _REMOTE_PROFILE_ID: {
-        "profile_id": _REMOTE_PROFILE_ID,
+    _REMOTE_V2_PROFILE_ID: {
+        "profile_id": _REMOTE_V2_PROFILE_ID,
         "ssh_target": "workstation2",
         "expected_hostname": "node45",
         "repo": "/home/lbh/work/wk1/REINVENT4",
@@ -1696,6 +1697,45 @@ def _render_remote_reinvent4_config(
     return rendered.encode("utf-8")
 
 
+def _render_legacy_remote_reinvent4_v1_config(
+    *,
+    config_bytes: bytes,
+    design_request_id: str,
+    seed: int,
+    remote_output_csv: str,
+    design_request: dict[str, Any],
+) -> bytes:
+    """Replay the historical v1 template contract without enabling v1 runs."""
+
+    try:
+        template = config_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("REINVENT4 config must be UTF-8 text") from exc
+    if any(token not in template for token in _REMOTE_REINVENT_REQUIRED_PLACEHOLDERS):
+        raise ValueError(
+            "REINVENT4 config must contain molly_output_csv, molly_design_request_id, "
+            "molly_seed, and molly_design_request_sha256 placeholders"
+        )
+    binding_pattern = re.compile(
+        r"(?m)^\s*molly_design_request_sha256\s*=\s*"
+        r"(?:['\"])?\{\{molly_design_request_sha256\}\}(?:['\"])?\s*(?:#.*)?$"
+    )
+    if not binding_pattern.search(template):
+        raise ValueError(
+            "REINVENT4 config must bind molly_design_request_sha256 in an active TOML assignment"
+        )
+    request_sha256 = _sha256_bytes(_json_bytes(design_request))
+    rendered = (
+        template.replace("{{molly_output_csv}}", remote_output_csv)
+        .replace("{{molly_design_request_id}}", design_request_id)
+        .replace("{{molly_seed}}", str(seed))
+        .replace("{{molly_design_request_sha256}}", request_sha256)
+    )
+    if "{{molly_" in rendered:
+        raise ValueError("REINVENT4 config contains an unresolved Molly placeholder")
+    return rendered.encode("utf-8")
+
+
 def _validate_effective_config_replay(
     *,
     mode: str,
@@ -1715,7 +1755,14 @@ def _validate_effective_config_replay(
     if remote_transport is None:
         raise ValueError("OLED inverse-design remote transport provenance is invalid")
     remote_output_csv = _required_string(remote_transport, "remote_output_csv")
-    expected = _render_remote_reinvent4_config(
+    profile_id = _required_string(remote_transport, "profile_id")
+    if profile_id == _LEGACY_REMOTE_PROFILE_ID:
+        renderer = _render_legacy_remote_reinvent4_v1_config
+    elif profile_id == _REMOTE_V2_PROFILE_ID:
+        renderer = _render_remote_reinvent4_config
+    else:
+        raise ValueError("OLED inverse-design remote transport profile is invalid")
+    expected = renderer(
         config_bytes=template_bytes,
         design_request_id=design_request_id,
         seed=seed,

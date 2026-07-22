@@ -72,6 +72,15 @@ def _remote_reinvent4_template(
     )
 
 
+def _legacy_remote_reinvent4_v1_template() -> str:
+    return (
+        "output='{{molly_output_csv}}'\n"
+        "run='{{molly_design_request_id}}'\n"
+        "seed={{molly_seed}}\n"
+        "molly_design_request_sha256='{{molly_design_request_sha256}}'\n"
+    )
+
+
 def _run(
     *,
     tmp_path: Path,
@@ -327,6 +336,131 @@ def test_remote_mode_renders_an_isolated_reinvent4_attempt_without_real_transpor
     )
     assert verified.design_request_id == result.design_request_id
     assert verified.publication_id == result.publication_id
+
+
+def test_legacy_v1_remote_publication_remains_exactly_replayable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication, batch_receipt = _shortfall_inputs(tmp_path, monkeypatch)
+    config = tmp_path / "reinvent4-v1-template.toml"
+    config.write_text(_legacy_remote_reinvent4_v1_template(), encoding="utf-8")
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        "workstation2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
+        encoding="utf-8",
+    )
+
+    def fake_transport(
+        payload: dict[str, object],
+        *,
+        run_id: str,
+        output_dir: Path,
+        count: int,
+    ) -> dict[str, object]:
+        del run_id, output_dir, count
+        local_output = Path(str(payload["local_output_csv"]))
+        local_output.write_text(
+            "candidate_id,SMILES\nlegacy-v1,CCCCC\n",
+            encoding="utf-8",
+        )
+        return {
+            "source_csv": str(local_output),
+            "mode": "remote",
+            "remote": {"endpoint_hostname_verified": True},
+        }
+
+    legacy_profile = inverse_runner._REMOTE_TRANSPORT_PROFILES[  # type: ignore[attr-defined]
+        "workstation2-node45-reinvent4-v1"
+    ]
+    with monkeypatch.context() as legacy:
+        legacy.setattr(
+            inverse_runner,
+            "_REMOTE_PROFILE_ID",
+            "workstation2-node45-reinvent4-v1",
+        )
+        legacy.setattr(inverse_runner, "_REMOTE_TRANSPORT_PROFILE", legacy_profile)
+        legacy.setattr(
+            inverse_runner,
+            "_render_remote_reinvent4_config",
+            inverse_runner._render_legacy_remote_reinvent4_v1_config,  # type: ignore[attr-defined]
+        )
+        legacy.setattr(
+            inverse_runner,
+            "_generate_candidates_reinvent4_backend",
+            fake_transport,
+        )
+        result = run_oled_inverse_design_from_files(
+            batch_selection_json=batch_receipt,
+            screening_receipt_json=publication.screening_receipt,
+            ranked_shortlist_csv=publication.ranked_shortlist,
+            phase1_execution_dir=publication.phase1_execution_dir,
+            dataset_snapshot_json=publication.dataset_snapshot,
+            registry_snapshot_json=publication.registry_snapshot,
+            reinvent4_config=config,
+            output_root=tmp_path / "inverse-designs",
+            reinvent4_mode="remote",
+            seed=29,
+            remote_profile_id="workstation2-node45-reinvent4-v1",
+            remote_known_hosts=known_hosts,
+            generated_at="2026-07-21T12:05:00+08:00",
+        )
+
+    receipt = json.loads(
+        (result.output_dir / "inverse_design.json").read_text(encoding="utf-8")
+    )
+    assert receipt["generator"]["provenance"]["remote_transport"]["profile_id"] == (
+        "workstation2-node45-reinvent4-v1"
+    )
+    verified = inverse_runner.verify_oled_inverse_design_publication_from_files(
+        inverse_design_json=result.output_dir / "inverse_design.json",
+        batch_selection_json=batch_receipt,
+        screening_receipt_json=publication.screening_receipt,
+        ranked_shortlist_csv=publication.ranked_shortlist,
+        phase1_execution_dir=publication.phase1_execution_dir,
+        dataset_snapshot_json=publication.dataset_snapshot,
+        registry_snapshot_json=publication.registry_snapshot,
+        remote_known_hosts=known_hosts,
+    )
+    assert verified.design_request_id == result.design_request_id
+    assert verified.publication_id == result.publication_id
+
+
+def test_new_remote_run_explicitly_rejects_legacy_v1_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication, batch_receipt = _shortfall_inputs(tmp_path, monkeypatch)
+    config = tmp_path / "reinvent4-v1-template.toml"
+    config.write_text(_legacy_remote_reinvent4_v1_template(), encoding="utf-8")
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        "workstation2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
+        encoding="utf-8",
+    )
+
+    def unexpected_transport(**_: object) -> object:
+        raise AssertionError("legacy v1 must be rejected before transport")
+
+    monkeypatch.setattr(
+        inverse_runner,
+        "_generate_candidates_reinvent4_backend",
+        unexpected_transport,
+    )
+    with pytest.raises(ValueError, match="remote profile is not allowed"):
+        run_oled_inverse_design_from_files(
+            batch_selection_json=batch_receipt,
+            screening_receipt_json=publication.screening_receipt,
+            ranked_shortlist_csv=publication.ranked_shortlist,
+            phase1_execution_dir=publication.phase1_execution_dir,
+            dataset_snapshot_json=publication.dataset_snapshot,
+            registry_snapshot_json=publication.registry_snapshot,
+            reinvent4_config=config,
+            output_root=tmp_path / "inverse-designs",
+            reinvent4_mode="remote",
+            remote_profile_id="workstation2-node45-reinvent4-v1",
+            remote_known_hosts=known_hosts,
+        )
 
 
 def test_remote_mode_requires_an_active_exact_design_request_binding_before_transport(

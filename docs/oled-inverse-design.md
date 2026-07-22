@@ -46,7 +46,10 @@ not task options. The v2 profile is deliberately CPU-only. It launches one
 low-priority process with `nice -n 19` and fixes the common BLAS/OpenMP thread
 counts to one, so the canary cannot allocate GPU memory or contend with the
 existing GPU workload. The legacy v1 profile remains verifier-only for
-previously persisted receipts and cannot be selected for a new run.
+previously persisted receipts and cannot be selected for a new run. Its
+effective configuration is replayed with the original v1 placeholder and
+active `molly_design_request_sha256` assignment rules; v2's sampling, CPU, and
+`json_out_config` requirements are not retroactively applied to v1 artifacts.
 
 The remote configuration template must contain all four placeholders:
 
