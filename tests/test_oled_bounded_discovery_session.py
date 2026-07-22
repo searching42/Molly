@@ -97,6 +97,21 @@ def _approve(storage: ProjectStorage, project_id: str, current: object) -> objec
     )
 
 
+class _CountingExecutor:
+    def __init__(self, storage: ProjectStorage) -> None:
+        self.delegate = RunPlanExecutor(storage=storage)
+        self.execute_count = 0
+        self.resume_count = 0
+
+    def execute(self, **kwargs: object) -> dict[str, object]:
+        self.execute_count += 1
+        return self.delegate.execute(**kwargs)  # type: ignore[arg-type]
+
+    def resume_after_gate(self, **kwargs: object) -> dict[str, object]:
+        self.resume_count += 1
+        return self.delegate.resume_after_gate(**kwargs)  # type: ignore[arg-type]
+
+
 def test_registry_supply_completes_without_creating_inverse_design_child(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -528,16 +543,7 @@ def test_interrupted_revision_publish_recovers_without_redispatching_child(
         session_spec=_spec(tmp_path, monkeypatch, target_top_n=1),
     )
 
-    class CountingExecutor:
-        def __init__(self) -> None:
-            self.delegate = RunPlanExecutor(storage=storage)
-            self.execute_count = 0
-
-        def execute(self, **kwargs: object) -> dict[str, object]:
-            self.execute_count += 1
-            return self.delegate.execute(**kwargs)  # type: ignore[arg-type]
-
-    executor = CountingExecutor()
+    executor = _CountingExecutor(storage)
 
     def crash_before_publish(path: Path) -> None:
         raise SystemExit(f"simulated crash before publishing {path.name}")
@@ -566,3 +572,151 @@ def test_interrupted_revision_publish_recovers_without_redispatching_child(
     )
     assert (recovered.status, recovered.current_step) == (WAITING_USER, SCREENING)
     assert executor.execute_count == 1
+
+
+def test_stale_mutable_head_is_rebuilt_from_committed_immutable_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    project_id = "stale-head-session"
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=_spec(tmp_path, monkeypatch, target_top_n=1),
+    )
+    executor = _CountingExecutor(storage)
+
+    def crash_before_head_refresh(path: Path) -> None:
+        raise SystemExit(f"simulated crash before refreshing {path.name}")
+
+    monkeypatch.setattr(
+        session_module, "_HEAD_REFRESH_FAULT_HOOK", crash_before_head_refresh
+    )
+    with pytest.raises(SystemExit, match="simulated crash"):
+        advance_oled_bounded_discovery_session(
+            storage=storage,
+            project_id=project_id,
+            session_id=current.session_id,
+            expected_revision=current.revision,
+            executor=executor,  # type: ignore[arg-type]
+        )
+    assert (current.session_dir / "state_000001.json").is_file()
+    stale_head = json.loads(
+        (current.session_dir / "session_state.json").read_text(encoding="utf-8")
+    )
+    assert stale_head["revision"] == 0
+
+    monkeypatch.setattr(session_module, "_HEAD_REFRESH_FAULT_HOOK", None)
+    recovered = inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,
+    )
+    assert (recovered.revision, recovered.status, recovered.current_step) == (
+        1,
+        WAITING_USER,
+        SCREENING,
+    )
+    repaired_head = json.loads(
+        (current.session_dir / "session_state.json").read_text(encoding="utf-8")
+    )
+    assert repaired_head["revision"] == 1
+    assert executor.execute_count == 1
+
+
+def test_successful_gate_resume_is_reconciled_without_second_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    project_id = "gate-resume-crash-session"
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=_spec(tmp_path, monkeypatch, target_top_n=1),
+    )
+    executor = _CountingExecutor(storage)
+    waiting = advance_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,
+        expected_revision=current.revision,
+        executor=executor,  # type: ignore[arg-type]
+    )
+
+    def crash_before_succeeded_revision(path: Path) -> None:
+        raise SystemExit(f"simulated crash before publishing {path.name}")
+
+    monkeypatch.setattr(
+        session_module, "_REVISION_PUBLISH_FAULT_HOOK", crash_before_succeeded_revision
+    )
+    with pytest.raises(SystemExit, match="simulated crash"):
+        approve_oled_bounded_discovery_session_gate(
+            storage=storage,
+            project_id=project_id,
+            session_id=waiting.session_id,
+            expected_revision=waiting.revision,
+            actor="session-reviewer",
+            executor=executor,  # type: ignore[arg-type]
+        )
+    assert executor.execute_count == 1
+    assert executor.resume_count == 1
+    assert not (waiting.session_dir / "state_000002.json").exists()
+
+    monkeypatch.setattr(session_module, "_REVISION_PUBLISH_FAULT_HOOK", None)
+    recovered = inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=waiting.session_id,
+    )
+    assert (recovered.revision, recovered.status, recovered.current_step) == (
+        2,
+        ACTIVE,
+        INITIAL_DECISION,
+    )
+    assert executor.execute_count == 1
+    assert executor.resume_count == 1
+
+
+def test_failed_gate_child_is_reconciled_without_second_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    project_id = "failed-gate-reconciliation"
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=_spec(tmp_path, monkeypatch, target_top_n=1),
+    )
+    executor = _CountingExecutor(storage)
+    waiting = advance_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,
+        expected_revision=current.revision,
+        executor=executor,  # type: ignore[arg-type]
+    )
+    stage = storage.read_stage_state(project_id, waiting.waiting_run_id or "")
+    assert stage is not None
+    storage.write_stage_state(
+        project_id,
+        waiting.waiting_run_id or "",
+        StageState(
+            stage=stage.stage,
+            status=RunStatus.FAILED,
+            started_at=stage.started_at,
+            updated_at=stage.updated_at,
+            error={"code": "simulated_failure"},
+        ),
+    )
+
+    recovered = inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=waiting.session_id,
+    )
+    assert recovered.status == FAILED
+    assert executor.execute_count == 1
+    assert executor.resume_count == 0

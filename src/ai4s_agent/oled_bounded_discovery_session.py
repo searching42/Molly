@@ -78,6 +78,7 @@ _TERMINAL = {
 _NONTERMINAL = {ACTIVE, WAITING_USER}
 _ALL_STATUSES = _NONTERMINAL | _TERMINAL
 _REVISION_PUBLISH_FAULT_HOOK: Any = None
+_HEAD_REFRESH_FAULT_HOOK: Any = None
 
 _TASKS = {
     "screening": "execute_oled_registry_candidate_screening",
@@ -152,6 +153,9 @@ def create_oled_bounded_discovery_session(
             if existing_spec != published_spec:
                 raise ValueError("PR-AV session ID is bound to a different spec")
             current = _read_state(session_dir)
+            current = _reconcile_waiting_child(
+                storage, project_id, session_dir, published_spec, current
+            )
             _validate_external_state(storage, project_id, session_dir, published_spec, current)
             return _result_from_state(session_dir, current)
         with _pinned_output_parents_without_symlink_components(root) as pinned:
@@ -175,6 +179,9 @@ def inspect_oled_bounded_discovery_session(
     with _session_lock(session_dir):
         spec = _read_spec(session_dir)
         state = _read_state(session_dir)
+        state = _reconcile_waiting_child(
+            storage, project_id, session_dir, spec, state
+        )
         _validate_external_state(storage, project_id, session_dir, spec, state)
         return _result_from_state(session_dir, state)
 
@@ -194,6 +201,12 @@ def advance_oled_bounded_discovery_session(
         spec = _read_spec(session_dir)
         state = _read_state(session_dir)
         _require_revision(state, expected_revision)
+        reconciled = _reconcile_waiting_child(
+            storage, project_id, session_dir, spec, state
+        )
+        if reconciled["revision"] != state["revision"]:
+            _validate_external_state(storage, project_id, session_dir, spec, reconciled)
+            return _result_from_state(session_dir, reconciled)
         try:
             _validate_external_state(storage, project_id, session_dir, spec, state)
             if state["status"] in _TERMINAL or state["status"] == WAITING_USER:
@@ -255,8 +268,14 @@ def approve_oled_bounded_discovery_session_gate(
     with _session_lock(session_dir):
         spec = _read_spec(session_dir)
         state = _read_state(session_dir)
-        _validate_external_state(storage, project_id, session_dir, spec, state)
         _require_revision(state, expected_revision)
+        reconciled = _reconcile_waiting_child(
+            storage, project_id, session_dir, spec, state
+        )
+        if reconciled["revision"] != state["revision"]:
+            _validate_external_state(storage, project_id, session_dir, spec, reconciled)
+            return _result_from_state(session_dir, reconciled)
+        _validate_external_state(storage, project_id, session_dir, spec, state)
         if state["status"] != WAITING_USER:
             raise ValueError("PR-AV session is not waiting for a gate")
         active = _waiting_child_label(state)
@@ -1363,11 +1382,20 @@ def _read_state(session_dir: Path) -> dict[str, Any]:
             _validate_state_transition(previous, state)
         previous = state
     assert previous is not None
-    head = _validated_state_payload(
-        _read_session_json(session_dir, "session_state.json"),
-        session_dir=session_dir,
-        expected_revision=int(previous["revision"]),
-    )
+    try:
+        raw_head = _read_session_json(session_dir, "session_state.json")
+        head_revision = raw_head.get("revision")
+        if isinstance(head_revision, bool) or not isinstance(head_revision, int):
+            raise ValueError("PR-AV mutable session head revision is invalid")
+        head = _validated_state_payload(
+            raw_head,
+            session_dir=session_dir,
+            expected_revision=head_revision,
+        )
+    except (OSError, ValueError):
+        # The mutable head is a disposable cache.  A missing, malformed, stale,
+        # or otherwise invalid copy never outranks the immutable revision chain.
+        head = None
     if head != previous:
         # The immutable revision is authoritative if a process stopped after
         # publishing it but before refreshing the convenience head file.
@@ -1492,6 +1520,119 @@ def _validate_state_child_structure(state: dict[str, Any]) -> None:
             raise ValueError("PR-AV child gate snapshot binding is invalid")
     if labels != expected[: len(labels)]:
         raise ValueError("PR-AV child roster is not a valid workflow prefix")
+
+
+def _reconcile_waiting_child(
+    storage: ProjectStorage,
+    project_id: str,
+    session_dir: Path,
+    spec: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Adopt a deterministic gated child whose executor fact already advanced."""
+
+    if state["status"] != WAITING_USER:
+        return state
+    _validate_state_child_structure(state)
+    _assert_session_inputs_stable(spec)
+    label = _waiting_child_label(state)
+    child = _child_by_label(state, label)
+    stage = storage.read_stage_state(project_id, str(child["run_id"]))
+    if stage is None or stage.stage != child["task_id"]:
+        raise ValueError("PR-AV waiting child StageState binding is invalid")
+    if stage.status == RunStatus.WAITING_USER:
+        return state
+
+    action = _action_for_label(
+        storage, project_id, session_dir, spec, state, label
+    )
+    if stage.status == RunStatus.SUCCEEDED:
+        registry = _complete_child_registry(
+            storage, project_id, str(child["run_id"]), str(child["task_id"])
+        )
+        children = _updated_child(
+            state,
+            label,
+            status="succeeded",
+            artifacts=registry,
+            artifact_manifest_sha256=_registry_manifest_sha256(
+                storage, project_id, str(child["run_id"]), registry
+            ),
+        )
+        probe = {
+            **state,
+            "status": ACTIVE,
+            "current_step": _success_step(
+                storage, project_id, {**state, "children": children}, label, action
+            ),
+            "children": children,
+            "failure": None,
+        }
+        _validate_external_state(storage, project_id, session_dir, spec, probe)
+        return _transition(
+            storage,
+            session_dir,
+            state,
+            status=probe["status"],
+            current_step=probe["current_step"],
+            children=children,
+            failure=None,
+        )
+    if stage.status == RunStatus.FAILED:
+        children = _updated_child(
+            state,
+            label,
+            status="failed",
+            artifacts={},
+            artifact_manifest_sha256="",
+        )
+        probe = {
+            **state,
+            "status": FAILED,
+            "children": children,
+            "failure": {
+                "code": "child_execution_failed_before_session_commit",
+                "task_id": child["task_id"],
+                "run_id": child["run_id"],
+            },
+        }
+        _validate_external_state(storage, project_id, session_dir, spec, probe)
+        return _transition(
+            storage,
+            session_dir,
+            state,
+            status=FAILED,
+            children=children,
+            failure=probe["failure"],
+        )
+    if stage.status == RunStatus.RUNNING:
+        children = _updated_child(
+            state,
+            label,
+            status="recovery_required",
+            artifacts={},
+            artifact_manifest_sha256="",
+        )
+        probe = {
+            **state,
+            "status": RECOVERY_REQUIRED,
+            "children": children,
+            "failure": {
+                "code": "child_running_after_gate_resume_interruption",
+                "task_id": child["task_id"],
+                "run_id": child["run_id"],
+            },
+        }
+        _validate_external_state(storage, project_id, session_dir, spec, probe)
+        return _transition(
+            storage,
+            session_dir,
+            state,
+            status=RECOVERY_REQUIRED,
+            children=children,
+            failure=probe["failure"],
+        )
+    raise ValueError("PR-AV waiting child StageState cannot be reconciled")
 
 
 def _validate_external_state(
@@ -1726,6 +1867,8 @@ def _transition(
         session_dir / f"state_{signed['revision']:06d}.json",
         _json_bytes(signed),
     )
+    if _HEAD_REFRESH_FAULT_HOOK is not None:
+        _HEAD_REFRESH_FAULT_HOOK(session_dir / "session_state.json")
     _write_mutable_json(session_dir / "session_state.json", signed)
     return signed
 

@@ -54,7 +54,9 @@ call commits at most one session-state transition. Every transition is first
 written and fsynced to an invocation-owned temporary inode, then atomically
 hard-linked under its canonical no-replace revision name and followed by a
 parent-directory fsync. A crash before the link leaves the preceding revision
-authoritative. `session_state.json` is only a recoverable convenience head.
+authoritative. `session_state.json` is only a disposable convenience head: a
+missing, malformed, or stale copy is atomically rebuilt from the final valid
+immutable revision.
 
 The public state contract has six statuses: `ACTIVE`, `WAITING_USER`,
 `COMPLETED_TOP_N`, `STOPPED_BOUNDED_NO_SOLUTION`, `RECOVERY_REQUIRED`, and
@@ -88,6 +90,12 @@ Recovery rules are deliberately conservative:
 - a fully registered child publication is exact-replayed and reused without
   adapter dispatch;
 - a waiting child keeps its original RunPlan and gate snapshot;
+- if a gated child reached `SUCCEEDED` before its session revision was
+  published, the coordinator verifies its execution record, Registry manifest,
+  publication replay, original snapshot, and gate decision, then adopts it
+  without calling resume or the adapter again;
+- a waiting child whose executor fact already reached `FAILED` is reconciled
+  to session `FAILED`, while `RUNNING` becomes `RECOVERY_REQUIRED`;
 - a child left `RUNNING` without a complete registered publication transitions
   the session to `RECOVERY_REQUIRED` and is never dispatched automatically;
 - changed Registry mappings, bytes, source receipts, or replay results fail as
