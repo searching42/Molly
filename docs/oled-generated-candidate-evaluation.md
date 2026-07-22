@@ -7,7 +7,7 @@ validation.
 
 ## Exact inputs
 
-The runner consumes and independently replays:
+The legacy single-round runner consumes and independently replays:
 
 - the immutable PR-AS inverse-design publication;
 - the PR-ARb shortfall decision used to authorize generation;
@@ -21,6 +21,34 @@ The PR-AS publication stays descriptor-pinned while PR-AT is built. Before an
 executor registers the result, PR-AT is replayed from the external upstream
 anchors and the publication directory remains descriptor-pinned through the
 atomic artifact-registry update.
+
+## Cumulative successor
+
+PR-AT v2 adds one optional canonical
+`oled_inverse_design_generation_roster` input. The cumulative roster contains
+exactly two ordered PR-AS publications, matching PR-AU's fixed generation-round
+ceiling; the first round continues to use the compatible v1 single-source
+path. The roster's first source must be that direct/root PR-AS publication. Its
+second source must carry the complete controller request, receipt, generation
+authorization, and report bundle that its PR-AS publication consumed. The
+roster's last source must exactly match the ordinary
+`oled_inverse_design_receipt` and latest
+controller artifacts supplied to the task.
+
+A multi-source roster also binds the exact previous PR-AT publication. The
+runner independently replays that predecessor and requires every prior
+candidate identity, source binding, and property prediction to remain present
+and unchanged. It then exact-replays every PR-AS source, rejects duplicate
+candidate IDs or repeated SMILES/InChI/InChIKey identities across generation
+publications, and rebuilds the complete Registry-plus-generated prediction
+pool. Constraints, Pareto dominance, percentiles, and ranks are recomputed
+globally over that cumulative pool.
+
+The v2 receipt records the roster SHA-256, ordered PR-AS publication IDs and
+receipt hashes, per-publication accepted/source counts, controller
+authorization IDs, and the previous evaluation ID/SHA. The latest legacy
+`pr_as_publication_id` fields remain present so PR-ARb v2 can retain its narrow
+latest-action binding while independently replaying the full roster.
 
 ## Candidate identity
 
@@ -68,11 +96,14 @@ task because it performs deterministic local inference and ranking only. Its
 registered artifacts use the `oled_candidate_evaluation_*` namespace to make
 clear that the publication is an evaluation artifact, not a Registry update.
 It registers one immutable execution record and retries return the existing
-success without dispatching the adapter again.
+success without dispatching the adapter again. A later-round child run supplies
+the optional roster as `oled_inverse_design_generation_roster`; the adapter,
+Executor registration verifier, PR-ARb v2, and PR-AU all replay the same roster
+anchor.
 
 The next step is a narrowly scoped PR-ARb v2 consumer that accepts exactly two
 source types: `registry` and `generated`. It must not introduce a universal
 candidate framework or predeclare literature, external-database, simulation,
 or human candidate variants. It emits the final explainable Top-N dossier.
 
-Iterative generation, loop budgets, and stop conditions remain outside PR-AT.
+Loop authorization, budgets, and stop conditions remain outside PR-AT.

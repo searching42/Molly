@@ -76,6 +76,9 @@ def execute_oled_generated_candidate_evaluation_adapter(
             controller_report_md=(
                 _optional_string(payload.get("controller_report_md")) or None
             ),
+            generation_roster_json=(
+                _optional_string(payload.get("generation_roster_json")) or None
+            ),
             output_root=required["output_root"],
         )
     except Exception:

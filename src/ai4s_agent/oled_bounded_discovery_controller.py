@@ -9,7 +9,7 @@ import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 from ai4s_agent._utils import now_iso
 from ai4s_agent.oled_candidate_decision import (
@@ -67,7 +67,12 @@ _CONTROLLER_BUNDLE_ITERATION_KEYS = {
     "generation_authorization_json",
     "controller_report_md",
 }
-_ITERATION_KEYS = _BASE_ITERATION_KEYS | _CONTROLLER_BUNDLE_ITERATION_KEYS
+_OPTIONAL_ITERATION_KEYS = {"generation_roster_json"}
+_ITERATION_KEYS = (
+    _BASE_ITERATION_KEYS
+    | _CONTROLLER_BUNDLE_ITERATION_KEYS
+    | _OPTIONAL_ITERATION_KEYS
+)
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,18 @@ class OledBoundedGenerationAuthorization:
     target_task: str
     required_gate: str
     source_bindings: dict[str, str]
+
+
+@dataclass(frozen=True)
+class OledBoundedGenerationAuthorizationPredecessor:
+    """The exact latest source state that produced one PR-AS grant."""
+
+    authorization: OledBoundedGenerationAuthorization
+    generation_publication_id: str
+    evaluation_id: str
+    evaluation_sha256: str
+    decision_id: str
+    decision_sha256: str
 
 
 @dataclass(frozen=True)
@@ -304,6 +321,7 @@ def _build_controller(
             registry_snapshot_json=paths["registry_snapshot_json"],
             candidate_cost_manifest_json=paths["candidate_cost_manifest_json"],
             remote_known_hosts=paths["remote_known_hosts"],
+            generation_roster_json=paths["generation_roster_json"],
             **controller_bundle,
         ) as decision_bound:
             decision_payload = _parse_json_object(
@@ -325,6 +343,7 @@ def _build_controller(
             registry_snapshot_json=paths["registry_snapshot_json"],
             candidate_cost_manifest_json=paths["candidate_cost_manifest_json"],
             remote_known_hosts=paths["remote_known_hosts"],
+            generation_roster_json=paths["generation_roster_json"],
             **controller_bundle,
         ) as evaluation_bound:
             evaluation_payload = _parse_json_object(
@@ -389,11 +408,16 @@ def _build_controller(
                         paths=paths,
                         inverse_receipt=inverse_payload,
                     )
+                _validate_cumulative_evaluation_history(
+                    evaluation=evaluation_payload,
+                    previous_summaries=source_summaries,
+                    current_publication_id=publication_id,
+                )
                 if publication_id in generation_publications:
                     raise ValueError("PR-AU generation publication is duplicated")
-                generated_source_count = _nonnegative_int(
-                    _required_dict(evaluation_payload, "counts"),
-                    "generated_source_count",
+                generated_source_count = _generation_source_count_for_publication(
+                    evaluation=evaluation_payload,
+                    publication_id=publication_id,
                 )
                 if generated_source_count != inverse_bound.result.accepted_candidate_count:
                     raise ValueError(
@@ -609,6 +633,55 @@ def validate_oled_bounded_generation_authorization_bundle(
     directory.
     """
 
+    authorization, _ = _validated_generation_authorization_bundle(
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
+    )
+    return authorization
+
+
+def validate_oled_bounded_generation_authorization_predecessor(
+    *,
+    controller_request_json: str | Path,
+    controller_json: str | Path,
+    generation_authorization_json: str | Path,
+    controller_report_md: str | Path,
+) -> OledBoundedGenerationAuthorizationPredecessor:
+    """Replay one grant and expose the exact source state that authorized it."""
+
+    authorization, receipt = _validated_generation_authorization_bundle(
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
+    )
+    sources = receipt.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError("PR-AU controller source history is invalid")
+    latest = sources[-1]
+    if not isinstance(latest, dict):
+        raise ValueError("PR-AU controller latest source is invalid")
+    return OledBoundedGenerationAuthorizationPredecessor(
+        authorization=authorization,
+        generation_publication_id=_required_string(
+            latest, "generation_publication_id"
+        ),
+        evaluation_id=_required_string(latest, "evaluation_id"),
+        evaluation_sha256=_required_string(latest, "evaluation_sha256"),
+        decision_id=_required_string(latest, "decision_id"),
+        decision_sha256=_required_string(latest, "decision_sha256"),
+    )
+
+
+def _validated_generation_authorization_bundle(
+    *,
+    controller_request_json: str | Path,
+    controller_json: str | Path,
+    generation_authorization_json: str | Path,
+    controller_report_md: str | Path,
+) -> tuple[OledBoundedGenerationAuthorization, dict[str, Any]]:
     controller_request_bytes, _ = _read_regular_file_bound(
         _absolute_local_path(controller_request_json),
         max_bytes=1024 * 1024,
@@ -650,7 +723,7 @@ def validate_oled_bounded_generation_authorization_bundle(
     )
     if authorization_bytes != _json_bytes(authorization):
         raise ValueError("PR-AU generation authorization is not canonical")
-    return _validated_generation_authorization(authorization, receipt=receipt)
+    return _validated_generation_authorization(authorization, receipt=receipt), receipt
 
 
 def _generation_authorization(
@@ -924,8 +997,10 @@ def _validate_limits(payload: dict[str, Any]) -> dict[str, int]:
 
 
 def _iteration_paths(value: Any) -> dict[str, str | None]:
-    if not isinstance(value, dict) or (
-        set(value) != _BASE_ITERATION_KEYS and set(value) != _ITERATION_KEYS
+    if (
+        not isinstance(value, dict)
+        or not _BASE_ITERATION_KEYS.issubset(value)
+        or not set(value).issubset(_ITERATION_KEYS)
     ):
         raise ValueError("PR-AU iteration entry is invalid")
     result: dict[str, str | None] = {}
@@ -940,12 +1015,78 @@ def _iteration_paths(value: Any) -> dict[str, str | None]:
     for key in sorted(_CONTROLLER_BUNDLE_ITERATION_KEYS):
         raw = value.get(key)
         result[key] = str(raw).strip() if raw else None
+    result["generation_roster_json"] = (
+        str(value.get("generation_roster_json")).strip()
+        if value.get("generation_roster_json")
+        else None
+    )
     controller_paths = tuple(
         result[key] for key in sorted(_CONTROLLER_BUNDLE_ITERATION_KEYS)
     )
     if any(controller_paths) and not all(controller_paths):
         raise ValueError("PR-AU iteration controller authorization bundle is incomplete")
     return result
+
+
+def _generation_source_count_for_publication(
+    *,
+    evaluation: dict[str, Any],
+    publication_id: str,
+) -> int:
+    """Return the current PR-AS source count, not the cumulative PR-AT total."""
+
+    sources = _required_dict(evaluation, "sources")
+    roster = sources.get("generation_publications")
+    if roster is None:
+        return _nonnegative_int(
+            _required_dict(evaluation, "counts"),
+            "generated_source_count",
+        )
+    if not isinstance(roster, list) or not roster:
+        raise ValueError("PR-AU cumulative generation source roster is invalid")
+    matches = [
+        item
+        for item in roster
+        if isinstance(item, dict) and item.get("publication_id") == publication_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("PR-AU current generation source is missing from cumulative PR-AT")
+    return _nonnegative_int(matches[0], "generated_source_count")
+
+
+def _validate_cumulative_evaluation_history(
+    *,
+    evaluation: dict[str, Any],
+    previous_summaries: Sequence[dict[str, Any]],
+    current_publication_id: str,
+) -> None:
+    sources = _required_dict(evaluation, "sources")
+    roster = sources.get("generation_publications")
+    previous = sources.get("previous_evaluation")
+    if roster is None:
+        if previous_summaries:
+            raise ValueError("PR-AU later iteration requires cumulative PR-AT evaluation")
+        return
+    if not isinstance(roster, list) or any(
+        not isinstance(item, dict) for item in roster
+    ):
+        raise ValueError("PR-AU cumulative PR-AT source roster is invalid")
+    observed_ids = [str(item.get("publication_id") or "") for item in roster]
+    expected_ids = [
+        str(item["generation_publication_id"]) for item in previous_summaries
+    ] + [current_publication_id]
+    if observed_ids != expected_ids:
+        raise ValueError("PR-AU cumulative PR-AT source history is not append-only")
+    if previous_summaries:
+        latest_previous = previous_summaries[-1]
+        expected_previous = {
+            "evaluation_id": latest_previous["evaluation_id"],
+            "evaluation_sha256": latest_previous["evaluation_sha256"],
+        }
+        if previous != expected_previous:
+            raise ValueError("PR-AU cumulative PR-AT predecessor binding mismatch")
+    elif previous is not None:
+        raise ValueError("PR-AU root cumulative PR-AT cannot name a predecessor")
 
 
 def _controller_bundle_arguments(
@@ -1011,12 +1152,13 @@ def _validate_iteration_predecessor_authorization(
         raise ValueError(
             "PR-AU predecessor controller request is not the exact preceding history"
         )
-    authorization = validate_oled_bounded_generation_authorization_bundle(
+    predecessor = validate_oled_bounded_generation_authorization_predecessor(
         controller_request_json=str(bundle["controller_request_json"]),
         controller_json=str(bundle["controller_json"]),
         generation_authorization_json=str(bundle["generation_authorization_json"]),
         controller_report_md=str(bundle["controller_report_md"]),
     )
+    authorization = predecessor.authorization
     expected_authorization = {
         "authorization_version": _GENERATION_AUTHORIZATION_VERSION,
         "authorization_id": authorization.authorization_id,
@@ -1195,6 +1337,8 @@ def _directory_flag() -> int:
 __all__ = [
     "OledBoundedDiscoveryControllerResult",
     "OledBoundedGenerationAuthorization",
+    "OledBoundedGenerationAuthorizationPredecessor",
     "run_oled_bounded_discovery_controller_from_files",
     "validate_oled_bounded_generation_authorization_bundle",
+    "validate_oled_bounded_generation_authorization_predecessor",
 ]

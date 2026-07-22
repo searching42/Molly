@@ -45,6 +45,7 @@ from ai4s_agent.oled_supplementary_material_identity_review import (
 )
 from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _absolute_local_path,
+    _read_bound_json,
 )
 from ai4s_agent.oled_supplementary_source_transcription_review import (
     _validate_pinned_directory_path_without_symlinks,
@@ -52,6 +53,9 @@ from ai4s_agent.oled_supplementary_source_transcription_review import (
 
 
 _EVALUATION_VERSION = "oled_generated_candidate_evaluation.v1"
+_CUMULATIVE_EVALUATION_VERSION = "oled_generated_candidate_evaluation.v2"
+_GENERATION_ROSTER_VERSION = "oled_generated_candidate_evaluation_roster.v1"
+_MAX_GENERATION_SOURCES = 2
 OledCandidateSourceType = Literal["registry", "generated"]
 _CANDIDATE_SOURCE_TYPES: tuple[OledCandidateSourceType, ...] = (
     "registry",
@@ -83,6 +87,24 @@ class _BuiltEvaluation:
     generated_prediction_count: int
     generated_exclusion_count: int
     shortlist_count: int
+
+
+@dataclass(frozen=True)
+class _GenerationSource:
+    inverse_design_json: str
+    remote_known_hosts: str | None
+    controller_request_json: str | None
+    controller_json: str | None
+    generation_authorization_json: str | None
+    controller_report_md: str | None
+
+
+@dataclass(frozen=True)
+class _GenerationRoster:
+    sources: tuple[_GenerationSource, ...]
+    previous_evaluation_json: str | None
+    sha256: str | None
+    evaluation_version: str
 
 
 @dataclass
@@ -148,6 +170,7 @@ def run_oled_generated_candidate_evaluation_from_files(
     controller_json: str | Path | None = None,
     generation_authorization_json: str | Path | None = None,
     controller_report_md: str | Path | None = None,
+    generation_roster_json: str | Path | None = None,
     generated_at: str | None = None,
 ) -> OledGeneratedCandidateEvaluationResult:
     """Publish one immutable global evaluation successor."""
@@ -168,6 +191,7 @@ def run_oled_generated_candidate_evaluation_from_files(
             controller_json=controller_json,
             generation_authorization_json=generation_authorization_json,
             controller_report_md=controller_report_md,
+            generation_roster_json=generation_roster_json,
             generated_at=generated_at or now_iso(),
         )
         output_dir = root / built.evaluation_id
@@ -203,6 +227,7 @@ def verify_oled_generated_candidate_evaluation_from_files(
     controller_json: str | Path | None = None,
     generation_authorization_json: str | Path | None = None,
     controller_report_md: str | Path | None = None,
+    generation_roster_json: str | Path | None = None,
 ) -> OledGeneratedCandidateEvaluationVerificationResult:
     """Exact-replay a PR-AT publication from its external trusted anchors."""
 
@@ -221,6 +246,7 @@ def verify_oled_generated_candidate_evaluation_from_files(
         controller_json=controller_json,
         generation_authorization_json=generation_authorization_json,
         controller_report_md=controller_report_md,
+        generation_roster_json=generation_roster_json,
     ) as bound:
         return bound.result
 
@@ -242,6 +268,7 @@ def _verified_oled_generated_candidate_evaluation_from_files(
     controller_json: str | Path | None = None,
     generation_authorization_json: str | Path | None = None,
     controller_report_md: str | Path | None = None,
+    generation_roster_json: str | Path | None = None,
 ) -> Iterator[_BoundGeneratedCandidateEvaluation]:
     """Keep the verified publication inode pinned through registration."""
 
@@ -284,7 +311,12 @@ def _verified_oled_generated_candidate_evaluation_from_files(
         receipt = _parse_json_object(published["evaluation.json"], "PR-AT receipt")
         if published["evaluation.json"] != _json_bytes(receipt):
             raise ValueError("PR-AT evaluation receipt is not canonical")
-        if receipt.get("evaluation_version") != _EVALUATION_VERSION:
+        expected_version = (
+            _CUMULATIVE_EVALUATION_VERSION
+            if generation_roster_json is not None
+            else _EVALUATION_VERSION
+        )
+        if receipt.get("evaluation_version") != expected_version:
             raise ValueError("unsupported PR-AT evaluation version")
         built = _build_evaluation_from_files(
             inverse_design_json=inverse_design_json,
@@ -300,6 +332,7 @@ def _verified_oled_generated_candidate_evaluation_from_files(
             controller_json=controller_json,
             generation_authorization_json=generation_authorization_json,
             controller_report_md=controller_report_md,
+            generation_roster_json=generation_roster_json,
             generated_at=_required_string(receipt, "generated_at"),
         )
         if (
@@ -353,121 +386,449 @@ def _build_evaluation_from_files(
     controller_json: str | Path | None,
     generation_authorization_json: str | Path | None,
     controller_report_md: str | Path | None,
+    generation_roster_json: str | Path | None,
     generated_at: str,
 ) -> _BuiltEvaluation:
-    with _verified_oled_inverse_design_publication_from_files(
+    roster = _load_generation_roster(
+        generation_roster_json=generation_roster_json,
         inverse_design_json=inverse_design_json,
-        batch_selection_json=batch_selection_json,
+        remote_known_hosts=remote_known_hosts,
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
+    )
+    pr_ap = load_oled_experiment_batch_selection_inputs(
         screening_receipt_json=screening_receipt_json,
         ranked_shortlist_csv=ranked_shortlist_csv,
         phase1_execution_dir=phase1_execution_dir,
         dataset_snapshot_json=dataset_snapshot_json,
         registry_snapshot_json=registry_snapshot_json,
         candidate_cost_manifest_json=candidate_cost_manifest_json,
-        remote_known_hosts=remote_known_hosts,
-        controller_request_json=controller_request_json,
-        controller_json=controller_json,
-        generation_authorization_json=generation_authorization_json,
-        controller_report_md=controller_report_md,
-    ) as inverse_bound:
-        inverse_receipt = _parse_json_object(
-            inverse_bound.expected_payloads["inverse_design.json"],
-            "PR-AS receipt",
-        )
-        pr_ap = load_oled_experiment_batch_selection_inputs(
+    )
+    prepared = _load_screening_inputs(
+        phase1_execution_dir=phase1_execution_dir,
+        dataset_snapshot_json=dataset_snapshot_json,
+        registry_snapshot_json=registry_snapshot_json,
+    )
+    _validate_prepared_binding(prepared, pr_ap)
+    _, _, registry_raw_predictions = _screen_registry_candidates(prepared)
+    registry_predictions = [
+        _registry_candidate_record(row, screening_id=pr_ap.screening_id)
+        for row in registry_raw_predictions
+    ]
+
+    previous_evaluation_binding: dict[str, str] | None = None
+    previous_predictions: list[dict[str, Any]] = []
+    if roster.previous_evaluation_json is not None:
+        predecessor_source = roster.sources[-2]
+        with _verified_oled_generated_candidate_evaluation_from_files(
+            evaluation_json=roster.previous_evaluation_json,
+            inverse_design_json=predecessor_source.inverse_design_json,
+            batch_selection_json=batch_selection_json,
             screening_receipt_json=screening_receipt_json,
             ranked_shortlist_csv=ranked_shortlist_csv,
             phase1_execution_dir=phase1_execution_dir,
             dataset_snapshot_json=dataset_snapshot_json,
             registry_snapshot_json=registry_snapshot_json,
             candidate_cost_manifest_json=candidate_cost_manifest_json,
-        )
-        _validate_pr_as_pr_ap_binding(inverse_receipt, pr_ap)
-        prepared = _load_screening_inputs(
+            remote_known_hosts=predecessor_source.remote_known_hosts,
+            controller_request_json=predecessor_source.controller_request_json,
+            controller_json=predecessor_source.controller_json,
+            generation_authorization_json=(
+                predecessor_source.generation_authorization_json
+            ),
+            controller_report_md=predecessor_source.controller_report_md,
+        ) as previous_bound:
+            previous_receipt_bytes = previous_bound.expected_payloads["evaluation.json"]
+            previous_evaluation_binding = {
+                "evaluation_id": previous_bound.result.evaluation_id,
+                "evaluation_sha256": _sha256_bytes(previous_receipt_bytes),
+            }
+            previous_predictions = _parse_prediction_jsonl(
+                previous_bound.expected_payloads["complete_predictions.jsonl"]
+            )
+            previous_bound.assert_stable()
+
+    generation_bindings: list[dict[str, Any]] = []
+    generated_by_publication: list[tuple[str, list[dict[str, str]]]] = []
+    for source_index, source in enumerate(roster.sources, 1):
+        with _verified_oled_inverse_design_publication_from_files(
+            inverse_design_json=source.inverse_design_json,
+            batch_selection_json=batch_selection_json,
+            screening_receipt_json=screening_receipt_json,
+            ranked_shortlist_csv=ranked_shortlist_csv,
             phase1_execution_dir=phase1_execution_dir,
             dataset_snapshot_json=dataset_snapshot_json,
             registry_snapshot_json=registry_snapshot_json,
+            candidate_cost_manifest_json=candidate_cost_manifest_json,
+            remote_known_hosts=source.remote_known_hosts,
+            controller_request_json=source.controller_request_json,
+            controller_json=source.controller_json,
+            generation_authorization_json=source.generation_authorization_json,
+            controller_report_md=source.controller_report_md,
+        ) as inverse_bound:
+            inverse_receipt = _parse_json_object(
+                inverse_bound.expected_payloads["inverse_design.json"],
+                "PR-AS receipt",
+            )
+            _validate_pr_as_pr_ap_binding(inverse_receipt, pr_ap)
+            generated_rows = _parse_generated_candidates_csv(
+                inverse_bound.expected_payloads["generated_candidates.csv"]
+            )
+            publication_id = inverse_bound.result.publication_id
+            inverse_receipt_sha256 = _sha256_bytes(
+                inverse_bound.expected_payloads["inverse_design.json"]
+            )
+            authorization = inverse_receipt.get("controller_authorization")
+            authorization_id = (
+                _required_string(authorization, "authorization_id")
+                if isinstance(authorization, dict)
+                else None
+            )
+            generation_bindings.append(
+                {
+                    "source_index": source_index,
+                    "publication_id": publication_id,
+                    "receipt_sha256": inverse_receipt_sha256,
+                    "generated_source_count": len(generated_rows),
+                    "controller_authorization_id": authorization_id,
+                }
+            )
+            generated_by_publication.append((publication_id, generated_rows))
+            inverse_bound.assert_stable()
+
+    if previous_evaluation_binding is not None:
+        _validate_cumulative_predecessor_binding(
+            source=roster.sources[-1],
+            predecessor_publication_id=str(
+                generation_bindings[-2]["publication_id"]
+            ),
+            previous_evaluation=previous_evaluation_binding,
         )
-        _validate_prepared_binding(prepared, pr_ap)
-        _, _, registry_raw_predictions = _screen_registry_candidates(prepared)
-        registry_predictions = [
-            _registry_candidate_record(row, screening_id=pr_ap.screening_id)
-            for row in registry_raw_predictions
-        ]
-        generated_rows = _parse_generated_candidates_csv(
-            inverse_bound.expected_payloads["generated_candidates.csv"]
-        )
-        generated_predictions, generated_exclusions = _predict_generated_candidates(
+
+    _validate_cumulative_generated_identities(generated_by_publication)
+    generated_predictions: list[dict[str, Any]] = []
+    generated_exclusions: list[dict[str, Any]] = []
+    for publication_id, generated_rows in generated_by_publication:
+        source_predictions, source_exclusions = _predict_generated_candidates(
             generated_rows=generated_rows,
             prepared=prepared,
-            publication_id=inverse_bound.result.publication_id,
+            publication_id=publication_id,
         )
-        combined = [*registry_predictions, *generated_predictions]
-        candidate_ids = [str(item["candidate_id"]) for item in combined]
-        if len(candidate_ids) != len(set(candidate_ids)):
-            raise ValueError("PR-AT combined candidate IDs are duplicated")
-        if any(item.get("source_kind") not in _CANDIDATE_SOURCE_TYPES for item in combined):
-            raise ValueError("PR-AT candidate source type is unsupported")
-        constraints = _normalized_constraints(
-            pr_ap.config.get("constraints"),
-            property_ids=prepared.property_ids,
+        generated_predictions.extend(source_predictions)
+        generated_exclusions.extend(source_exclusions)
+
+    combined = [*registry_predictions, *generated_predictions]
+    candidate_ids = [str(item["candidate_id"]) for item in combined]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise ValueError("PR-AT combined candidate IDs are duplicated")
+    if any(item.get("source_kind") not in _CANDIDATE_SOURCE_TYPES for item in combined):
+        raise ValueError("PR-AT candidate source type is unsupported")
+    constraints = _normalized_constraints(
+        pr_ap.config.get("constraints"),
+        property_ids=prepared.property_ids,
+    )
+    predictions, shortlist = _rank_candidate_records(
+        combined,
+        identity_key="candidate_id",
+        property_ids=prepared.property_ids,
+        directions=prepared.directions,
+        constraints=constraints,
+    )
+    if previous_predictions:
+        _validate_previous_candidate_pool(
+            previous=previous_predictions,
+            current=predictions,
         )
-        predictions, shortlist = _rank_candidate_records(
-            combined,
-            identity_key="candidate_id",
-            property_ids=prepared.property_ids,
-            directions=prepared.directions,
-            constraints=constraints,
+    cumulative = roster.evaluation_version == _CUMULATIVE_EVALUATION_VERSION
+    config = {
+        "property_ids": list(prepared.property_ids),
+        "directions": prepared.directions,
+        "constraints": constraints,
+        "feature_policy": "exact_pr_ao_model_feature_contract",
+        "feature_generator_profile": prepared.feature_generator_profile,
+        "scoring_policy": "global_pareto_then_mean_rank_percentile.v1",
+        "candidate_source_policy": (
+            "registry_plus_exact_pr_as_publication_roster.v2"
+            if cumulative
+            else "registry_plus_exact_pr_as_publication.v1"
+        ),
+        "candidate_source_types": list(_CANDIDATE_SOURCE_TYPES),
+    }
+    latest_binding = generation_bindings[-1]
+    identity_payload = {
+        "evaluation_version": roster.evaluation_version,
+        "pr_ap_screening_id": pr_ap.screening_id,
+        "pr_ap_screening_sha256": pr_ap.screening_sha256,
+        "pr_ap_shortlist_sha256": pr_ap.shortlist_sha256,
+        "phase1_execution_sha256": prepared.execution_sha256,
+        "dataset_snapshot_sha256": prepared.dataset_sha256,
+        "registry_snapshot_sha256": prepared.registry_sha256,
+        "config": config,
+    }
+    if cumulative:
+        identity_payload["generation_sources"] = generation_bindings
+        identity_payload["generation_roster_sha256"] = roster.sha256
+        identity_payload["previous_evaluation"] = previous_evaluation_binding
+    else:
+        identity_payload["pr_as_publication_id"] = latest_binding["publication_id"]
+        identity_payload["pr_as_receipt_sha256"] = latest_binding["receipt_sha256"]
+    evaluation_id = "oled-generated-evaluation:" + _stable_hash(identity_payload)
+    payloads = _evaluation_payloads(
+        evaluation_version=roster.evaluation_version,
+        evaluation_id=evaluation_id,
+        generated_at=generated_at,
+        pr_ap=pr_ap,
+        prepared=prepared,
+        latest_generation_binding=latest_binding,
+        generation_bindings=generation_bindings,
+        generation_roster_sha256=roster.sha256,
+        previous_evaluation_binding=previous_evaluation_binding,
+        config=config,
+        generated_source_count=sum(len(rows) for _, rows in generated_by_publication),
+        generated_exclusions=generated_exclusions,
+        predictions=predictions,
+        shortlist=shortlist,
+    )
+    return _BuiltEvaluation(
+        evaluation_id=evaluation_id,
+        payloads=payloads,
+        registry_prediction_count=len(registry_predictions),
+        generated_prediction_count=len(generated_predictions),
+        generated_exclusion_count=len(generated_exclusions),
+        shortlist_count=len(shortlist),
+    )
+
+
+def _validate_cumulative_predecessor_binding(
+    *,
+    source: _GenerationSource,
+    predecessor_publication_id: str,
+    previous_evaluation: dict[str, str],
+) -> None:
+    """Bind the second PR-AS grant to the exact roster predecessor chain."""
+
+    from ai4s_agent.oled_bounded_discovery_controller import (
+        validate_oled_bounded_generation_authorization_predecessor,
+    )
+
+    bundle = (
+        source.controller_request_json,
+        source.controller_json,
+        source.generation_authorization_json,
+        source.controller_report_md,
+    )
+    if not all(bundle):
+        raise ValueError("PR-AT cumulative successor controller bundle is incomplete")
+    predecessor = validate_oled_bounded_generation_authorization_predecessor(
+        controller_request_json=str(source.controller_request_json),
+        controller_json=str(source.controller_json),
+        generation_authorization_json=str(source.generation_authorization_json),
+        controller_report_md=str(source.controller_report_md),
+    )
+    if (
+        predecessor.generation_publication_id != predecessor_publication_id
+        or predecessor.evaluation_id != previous_evaluation["evaluation_id"]
+        or predecessor.evaluation_sha256 != previous_evaluation["evaluation_sha256"]
+    ):
+        raise ValueError(
+            "PR-AT cumulative successor authorization is not bound to the roster predecessor"
         )
-        config = {
-            "property_ids": list(prepared.property_ids),
-            "directions": prepared.directions,
-            "constraints": constraints,
-            "feature_policy": "exact_pr_ao_model_feature_contract",
-            "feature_generator_profile": prepared.feature_generator_profile,
-            "scoring_policy": "global_pareto_then_mean_rank_percentile.v1",
-            "candidate_source_policy": "registry_plus_exact_pr_as_publication.v1",
-            "candidate_source_types": list(_CANDIDATE_SOURCE_TYPES),
-        }
-        inverse_receipt_sha256 = _sha256_bytes(
-            inverse_bound.expected_payloads["inverse_design.json"]
+
+
+def _load_generation_roster(
+    *,
+    generation_roster_json: str | Path | None,
+    inverse_design_json: str | Path,
+    remote_known_hosts: str | Path | None,
+    controller_request_json: str | Path | None,
+    controller_json: str | Path | None,
+    generation_authorization_json: str | Path | None,
+    controller_report_md: str | Path | None,
+) -> _GenerationRoster:
+    latest = _generation_source_from_values(
+        inverse_design_json=inverse_design_json,
+        remote_known_hosts=remote_known_hosts,
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
+    )
+    if generation_roster_json is None:
+        return _GenerationRoster(
+            sources=(latest,),
+            previous_evaluation_json=None,
+            sha256=None,
+            evaluation_version=_EVALUATION_VERSION,
         )
-        evaluation_id = "oled-generated-evaluation:" + _stable_hash(
-            {
-                "evaluation_version": _EVALUATION_VERSION,
-                "pr_ap_screening_id": pr_ap.screening_id,
-                "pr_ap_screening_sha256": pr_ap.screening_sha256,
-                "pr_ap_shortlist_sha256": pr_ap.shortlist_sha256,
-                "pr_as_publication_id": inverse_bound.result.publication_id,
-                "pr_as_receipt_sha256": inverse_receipt_sha256,
-                "phase1_execution_sha256": prepared.execution_sha256,
-                "dataset_snapshot_sha256": prepared.dataset_sha256,
-                "registry_snapshot_sha256": prepared.registry_sha256,
-                "config": config,
-            }
+    roster, roster_sha256 = _read_bound_json(
+        _absolute_local_path(generation_roster_json),
+        "PR-AT generation roster",
+        max_bytes=1024 * 1024,
+        reject_symlink_components=True,
+    )
+    if _sha256_bytes(_json_bytes(roster)) != roster_sha256:
+        raise ValueError("PR-AT generation roster is not canonical")
+    if set(roster) != {
+        "roster_version",
+        "previous_evaluation_json",
+        "sources",
+    } or roster.get("roster_version") != _GENERATION_ROSTER_VERSION:
+        raise ValueError("PR-AT generation roster schema is invalid")
+    raw_sources = roster.get("sources")
+    if (
+        not isinstance(raw_sources, list)
+        or len(raw_sources) != _MAX_GENERATION_SOURCES
+    ):
+        raise ValueError("PR-AT generation roster size is invalid")
+    expected_keys = {
+        "inverse_design_json",
+        "remote_known_hosts",
+        "controller_request_json",
+        "controller_json",
+        "generation_authorization_json",
+        "controller_report_md",
+    }
+    sources: list[_GenerationSource] = []
+    for index, raw in enumerate(raw_sources):
+        if not isinstance(raw, dict) or set(raw) != expected_keys:
+            raise ValueError("PR-AT generation source schema is invalid")
+        source = _generation_source_from_values(**raw)
+        bundle = (
+            source.controller_request_json,
+            source.controller_json,
+            source.generation_authorization_json,
+            source.controller_report_md,
         )
-        payloads = _evaluation_payloads(
-            evaluation_id=evaluation_id,
-            generated_at=generated_at,
-            pr_ap=pr_ap,
-            prepared=prepared,
-            inverse_receipt=inverse_receipt,
-            inverse_receipt_sha256=inverse_receipt_sha256,
-            config=config,
-            generated_source_count=len(generated_rows),
-            generated_exclusions=generated_exclusions,
-            predictions=predictions,
-            shortlist=shortlist,
-        )
-        inverse_bound.assert_stable()
-        return _BuiltEvaluation(
-            evaluation_id=evaluation_id,
-            payloads=payloads,
-            registry_prediction_count=len(registry_predictions),
-            generated_prediction_count=len(generated_predictions),
-            generated_exclusion_count=len(generated_exclusions),
-            shortlist_count=len(shortlist),
-        )
+        if any(bundle) and not all(bundle):
+            raise ValueError("PR-AT generation source controller bundle is incomplete")
+        if index == 0 and any(bundle):
+            raise ValueError("PR-AT generation roster root must be direct PR-AS")
+        if index > 0 and not all(bundle):
+            raise ValueError(
+                "PR-AT generation roster successor requires controller authorization"
+            )
+        sources.append(source)
+    if sources[-1] != latest:
+        raise ValueError("PR-AT generation roster latest source binding mismatch")
+    inverse_paths = [source.inverse_design_json for source in sources]
+    if len(inverse_paths) != len(set(inverse_paths)):
+        raise ValueError("PR-AT generation roster contains duplicate source paths")
+    previous_raw = roster.get("previous_evaluation_json")
+    if previous_raw is not None and (
+        not isinstance(previous_raw, str) or not previous_raw.strip()
+    ):
+        raise ValueError("PR-AT generation roster predecessor path is invalid")
+    previous_evaluation_json = (
+        str(_absolute_local_path(previous_raw)) if previous_raw is not None else None
+    )
+    if previous_evaluation_json is None:
+        raise ValueError("PR-AT generation roster predecessor binding is invalid")
+    return _GenerationRoster(
+        sources=tuple(sources),
+        previous_evaluation_json=previous_evaluation_json,
+        sha256=roster_sha256,
+        evaluation_version=_CUMULATIVE_EVALUATION_VERSION,
+    )
+
+
+def _generation_source_from_values(
+    *,
+    inverse_design_json: str | Path,
+    remote_known_hosts: str | Path | None,
+    controller_request_json: str | Path | None,
+    controller_json: str | Path | None,
+    generation_authorization_json: str | Path | None,
+    controller_report_md: str | Path | None,
+) -> _GenerationSource:
+    if not isinstance(inverse_design_json, (str, Path)) or not str(
+        inverse_design_json
+    ).strip():
+        raise ValueError("PR-AT generation source inverse-design path is missing")
+
+    def optional_path(value: str | Path | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, (str, Path)) or not str(value).strip():
+            raise ValueError("PR-AT generation source optional path is invalid")
+        return str(_absolute_local_path(value))
+
+    return _GenerationSource(
+        inverse_design_json=str(_absolute_local_path(inverse_design_json)),
+        remote_known_hosts=optional_path(remote_known_hosts),
+        controller_request_json=optional_path(controller_request_json),
+        controller_json=optional_path(controller_json),
+        generation_authorization_json=optional_path(generation_authorization_json),
+        controller_report_md=optional_path(controller_report_md),
+    )
+
+
+def _validate_cumulative_generated_identities(
+    sources: Sequence[tuple[str, list[dict[str, str]]]],
+) -> None:
+    seen_ids: set[str] = set()
+    owners: dict[str, dict[str, str]] = {
+        "canonical_isomeric_smiles": {},
+        "standard_inchi": {},
+        "inchikey": {},
+    }
+    for _, rows in sources:
+        for row in rows:
+            candidate_id = row["generated_candidate_id"]
+            if candidate_id in seen_ids:
+                raise ValueError("PR-AT cumulative generated candidate ID is duplicated")
+            seen_ids.add(candidate_id)
+            for field, field_owners in owners.items():
+                value = row[field]
+                existing = field_owners.get(value)
+                if existing is not None and existing != candidate_id:
+                    raise ValueError(
+                        "PR-AT cumulative generated chemical identity is duplicated"
+                    )
+                field_owners[value] = candidate_id
+
+
+def _parse_prediction_jsonl(payload: bytes) -> list[dict[str, Any]]:
+    try:
+        lines = payload.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ValueError("PR-AT predecessor predictions are not UTF-8") from exc
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        value = _parse_json_object((line + "\n").encode("utf-8"), "PR-AT prediction")
+        rows.append(value)
+    if not rows:
+        raise ValueError("PR-AT predecessor prediction pool is empty")
+    return rows
+
+
+def _validate_previous_candidate_pool(
+    *,
+    previous: Sequence[dict[str, Any]],
+    current: Sequence[dict[str, Any]],
+) -> None:
+    current_by_id = {
+        _required_string(item, "candidate_id"): item for item in current
+    }
+    stable_fields = (
+        "source_kind",
+        "source_candidate_id",
+        "source_identity_digest",
+        "source_publication_id",
+        "canonical_name",
+        "canonical_isomeric_smiles",
+        "standard_inchi",
+        "inchikey",
+        "predictions",
+    )
+    for prior in previous:
+        candidate_id = _required_string(prior, "candidate_id")
+        observed = current_by_id.get(candidate_id)
+        if observed is None or any(
+            observed.get(field) != prior.get(field) for field in stable_fields
+        ):
+            raise ValueError("PR-AT cumulative successor changed predecessor candidate data")
 
 
 def _validate_pr_as_pr_ap_binding(inverse_receipt: dict[str, Any], pr_ap: Any) -> None:
@@ -641,12 +1002,15 @@ def _normalized_constraints(
 
 def _evaluation_payloads(
     *,
+    evaluation_version: str,
     evaluation_id: str,
     generated_at: str,
     pr_ap: Any,
     prepared: Any,
-    inverse_receipt: dict[str, Any],
-    inverse_receipt_sha256: str,
+    latest_generation_binding: dict[str, Any],
+    generation_bindings: Sequence[dict[str, Any]],
+    generation_roster_sha256: str | None,
+    previous_evaluation_binding: dict[str, str] | None,
     config: dict[str, Any],
     generated_source_count: int,
     generated_exclusions: Sequence[dict[str, Any]],
@@ -664,25 +1028,46 @@ def _evaluation_payloads(
     artifact_hashes = {
         name: _sha256_bytes(content) for name, content in sorted(payloads.items())
     }
+    source_bindings = {
+        "pr_ap_screening_id": pr_ap.screening_id,
+        "pr_ap_screening_sha256": pr_ap.screening_sha256,
+        "pr_ap_ranked_shortlist_sha256": pr_ap.shortlist_sha256,
+        "pr_as_publication_id": latest_generation_binding["publication_id"],
+        "pr_as_receipt_sha256": latest_generation_binding["receipt_sha256"],
+        "phase1_execution_id": prepared.execution["execution_id"],
+        "phase1_execution_sha256": prepared.execution_sha256,
+        "dataset_snapshot_id": prepared.dataset.dataset_snapshot_id,
+        "dataset_snapshot_sha256": prepared.dataset_sha256,
+        "registry_id": prepared.registry.registry_id,
+        "registry_snapshot_sha256": prepared.registry_sha256,
+        "model_sha256": prepared.model_sha256,
+    }
+    if evaluation_version == _CUMULATIVE_EVALUATION_VERSION:
+        source_bindings.update(
+            {
+                "generation_roster_sha256": generation_roster_sha256,
+                "generation_publications": list(generation_bindings),
+                "previous_evaluation": previous_evaluation_binding,
+            }
+        )
+    claims = {
+        "generated_candidates_controlled_predicted": True,
+        "registry_and_generated_pool_globally_ranked": True,
+        "generated_candidates_assigned_registry_material_ids": False,
+        "experimental_validation_claimed": False,
+        "registry_mutated": False,
+        "gold_written": False,
+        "dataset_written": False,
+        "model_registered": False,
+    }
+    if evaluation_version == _CUMULATIVE_EVALUATION_VERSION:
+        claims["all_generation_publications_cumulatively_evaluated"] = True
     receipt = {
-        "evaluation_version": _EVALUATION_VERSION,
+        "evaluation_version": evaluation_version,
         "evaluation_id": evaluation_id,
         "generated_at": generated_at,
         "status": "completed",
-        "sources": {
-            "pr_ap_screening_id": pr_ap.screening_id,
-            "pr_ap_screening_sha256": pr_ap.screening_sha256,
-            "pr_ap_ranked_shortlist_sha256": pr_ap.shortlist_sha256,
-            "pr_as_publication_id": _required_string(inverse_receipt, "publication_id"),
-            "pr_as_receipt_sha256": inverse_receipt_sha256,
-            "phase1_execution_id": prepared.execution["execution_id"],
-            "phase1_execution_sha256": prepared.execution_sha256,
-            "dataset_snapshot_id": prepared.dataset.dataset_snapshot_id,
-            "dataset_snapshot_sha256": prepared.dataset_sha256,
-            "registry_id": prepared.registry.registry_id,
-            "registry_snapshot_sha256": prepared.registry_sha256,
-            "model_sha256": prepared.model_sha256,
-        },
+        "sources": source_bindings,
         "config": config,
         "counts": {
             "registry_prediction_count": sum(
@@ -697,16 +1082,7 @@ def _evaluation_payloads(
             "shortlist_count": len(shortlist),
         },
         "artifacts": artifact_hashes,
-        "claims": {
-            "generated_candidates_controlled_predicted": True,
-            "registry_and_generated_pool_globally_ranked": True,
-            "generated_candidates_assigned_registry_material_ids": False,
-            "experimental_validation_claimed": False,
-            "registry_mutated": False,
-            "gold_written": False,
-            "dataset_written": False,
-            "model_registered": False,
-        },
+        "claims": claims,
         "next_required_step": "pr_arb_v2_candidate_decision",
     }
     payloads["evaluation.json"] = _json_bytes(receipt)

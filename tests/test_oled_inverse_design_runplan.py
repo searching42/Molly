@@ -218,6 +218,15 @@ def _controller_authorized_input_artifacts(
             controller.output_dir / "generation_authorization.json"
         ),
         "oled_bounded_controller_report": str(controller.output_dir / "report.md"),
+        "oled_root_inverse_design_receipt": str(
+            inverse.output_dir / "inverse_design.json"
+        ),
+        "oled_root_candidate_evaluation_receipt": str(
+            evaluation.output_dir / "evaluation.json"
+        ),
+        "oled_root_candidate_decision_receipt": str(
+            decision.output_dir / "candidate_decision.json"
+        ),
     }
 
 
