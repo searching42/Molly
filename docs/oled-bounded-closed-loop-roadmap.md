@@ -81,8 +81,18 @@ molecules across rounds.
 
 ## PR-AV: bounded discovery session coordinator
 
-After PR-ATb, PR-AV may coordinate the existing PR-AQ, PR-ARb, PR-AS, PR-AT,
-PR-ARb v2, and PR-AU tasks through deterministic child runs. It must use the
-existing RunPlanExecutor and gate snapshots, advance at most one durable state
-transition at a time, and never call scientific adapters directly or maintain
-a second copy of PR-AU's budget decisions.
+PR-AV coordinates the existing PR-AQ, PR-ARb, PR-AS, PR-AT, PR-ARb v2, and
+PR-AU tasks through deterministic child runs. It uses the existing
+RunPlanExecutor and gate snapshots, advances at most one durable state
+transition at a time, and never calls scientific adapters directly or
+maintains a second copy of PR-AU's budget decisions.
+
+The implementation is a project-level persistent session rather than another
+AtomicTask. It provides immutable SessionSpec/result artifacts, revision-CAS
+advancement, exact child-publication replay, restart-safe waiting gates, and a
+fail-closed `RECOVERY_REQUIRED` boundary for an interrupted unregistered
+remote execution. See `docs/oled-bounded-discovery-session.md`.
+
+The next acceptance step is a paper018 local `existing_output` canary, followed
+by the same session contract with the node45 remote REINVENT4 transport. PR-AW
+then adds the user-facing session controls and result display.

@@ -61,6 +61,12 @@ _CANDIDATE_SOURCE_TYPES: tuple[OledCandidateSourceType, ...] = (
     "registry",
     "generated",
 )
+
+
+def oled_generated_candidate_evaluation_max_generation_sources() -> int:
+    """Return the public PR-ATb cumulative-roster capacity."""
+
+    return _MAX_GENERATION_SOURCES
 @dataclass(frozen=True)
 class OledGeneratedCandidateEvaluationResult:
     evaluation_id: str
@@ -1244,4 +1250,5 @@ __all__ = [
     "_verified_oled_generated_candidate_evaluation_from_files",
     "run_oled_generated_candidate_evaluation_from_files",
     "verify_oled_generated_candidate_evaluation_from_files",
+    "oled_generated_candidate_evaluation_max_generation_sources",
 ]
