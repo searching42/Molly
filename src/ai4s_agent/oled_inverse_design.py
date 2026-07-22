@@ -388,6 +388,13 @@ def run_oled_inverse_design_from_files(
                 raise ValueError(
                     "inverse design produced no independent valid candidates"
                 )
+            if (
+                controller_authorization is not None
+                and len(candidates) > requested_candidate_count
+            ):
+                raise ValueError(
+                    "controller-authorized inverse design accepted candidate count exceeds authorization"
+                )
 
             payloads = _inverse_design_payloads(
                 design_request_id=design_request_id,
@@ -467,6 +474,10 @@ def verify_oled_inverse_design_publication_from_files(
     registry_snapshot_json: str | Path,
     candidate_cost_manifest_json: str | Path | None = None,
     remote_known_hosts: str | Path | None = None,
+    controller_request_json: str | Path | None = None,
+    controller_json: str | Path | None = None,
+    generation_authorization_json: str | Path | None = None,
+    controller_report_md: str | Path | None = None,
 ) -> OledInverseDesignVerificationResult:
     """Replay a persisted PR-AS publication from its exact upstream anchors.
 
@@ -486,6 +497,10 @@ def verify_oled_inverse_design_publication_from_files(
         registry_snapshot_json=registry_snapshot_json,
         candidate_cost_manifest_json=candidate_cost_manifest_json,
         remote_known_hosts=remote_known_hosts,
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
     ) as bound:
         return bound.result
 
@@ -502,6 +517,10 @@ def _verified_oled_inverse_design_publication_from_files(
     registry_snapshot_json: str | Path,
     candidate_cost_manifest_json: str | Path | None = None,
     remote_known_hosts: str | Path | None = None,
+    controller_request_json: str | Path | None = None,
+    controller_json: str | Path | None = None,
+    generation_authorization_json: str | Path | None = None,
+    controller_report_md: str | Path | None = None,
 ) -> Iterator[_BoundInverseDesignPublication]:
     """Exact-replay a publication while retaining its directory descriptor.
 
@@ -567,14 +586,33 @@ def _verified_oled_inverse_design_publication_from_files(
             candidate_cost_manifest_json=candidate_cost_manifest_json,
         )
         controller_authorization_raw = receipt.get("controller_authorization")
-        controller_authorization = (
-            None
-            if controller_authorization_raw is None
-            else _validated_controller_authorization_for_route(
+        external_controller_authorization = _controller_authorization_from_bundle_paths(
+            controller_request_json=controller_request_json,
+            controller_json=controller_json,
+            generation_authorization_json=generation_authorization_json,
+            controller_report_md=controller_report_md,
+            route=route,
+        )
+        if controller_authorization_raw is None:
+            if external_controller_authorization is not None:
+                raise ValueError(
+                    "unconsumed controller authorization bundle was supplied for inverse design"
+                )
+            controller_authorization = None
+        else:
+            if external_controller_authorization is None:
+                raise ValueError(
+                    "controller-authorized inverse design publication requires an exact PR-AU bundle"
+                )
+            receipt_controller_authorization = _validated_controller_authorization_for_route(
                 _required_dict(receipt, "controller_authorization"),
                 route=route,
             )
-        )
+            if receipt_controller_authorization != external_controller_authorization:
+                raise ValueError(
+                    "OLED inverse-design controller authorization external binding changed"
+                )
+            controller_authorization = external_controller_authorization
         requested_candidate_count = _effective_requested_candidate_count(
             route=route,
             controller_authorization=controller_authorization,
@@ -678,6 +716,13 @@ def _verified_oled_inverse_design_publication_from_files(
         )
         if not candidates:
             raise ValueError("OLED inverse-design publication has no independent candidates")
+        if (
+            controller_authorization is not None
+            and len(candidates) > requested_candidate_count
+        ):
+            raise ValueError(
+                "controller-authorized inverse design accepted candidate count exceeds authorization"
+            )
         expected_payloads = _inverse_design_payloads(
             design_request_id=design_request_id,
             publication_id=publication_id,
@@ -1198,16 +1243,35 @@ def _controller_authorization_from_frozen_bundle(
     frozen: _FrozenInverseDesignInputs,
     route: _VerifiedInverseDesignRoute,
 ) -> dict[str, Any] | None:
+    return _controller_authorization_from_bundle_paths(
+        controller_request_json=frozen.controller_request_json,
+        controller_json=frozen.controller_json,
+        generation_authorization_json=frozen.generation_authorization_json,
+        controller_report_md=frozen.controller_report_md,
+        route=route,
+    )
+
+
+def _controller_authorization_from_bundle_paths(
+    *,
+    controller_request_json: str | Path | None,
+    controller_json: str | Path | None,
+    generation_authorization_json: str | Path | None,
+    controller_report_md: str | Path | None,
+    route: _VerifiedInverseDesignRoute,
+) -> dict[str, Any] | None:
+    """Exact-replay an optional PR-AU bundle into the PR-AS receipt shape."""
+
     paths = (
-        frozen.controller_request_json,
-        frozen.controller_json,
-        frozen.generation_authorization_json,
-        frozen.controller_report_md,
+        controller_request_json,
+        controller_json,
+        generation_authorization_json,
+        controller_report_md,
     )
     if not any(paths):
         return None
     if not all(paths):
-        raise ValueError("controller authorization frozen-input roster is incomplete")
+        raise ValueError("controller authorization bundle is incomplete")
     # Keep this import local: PR-AU imports PR-AS's descriptor helpers, while
     # PR-AS only needs the controller verifier when this optional narrow route
     # is actually consumed.
@@ -1216,10 +1280,10 @@ def _controller_authorization_from_frozen_bundle(
     )
 
     authorization = validate_oled_bounded_generation_authorization_bundle(
-        controller_request_json=frozen.controller_request_json,
-        controller_json=frozen.controller_json,
-        generation_authorization_json=frozen.generation_authorization_json,
-        controller_report_md=frozen.controller_report_md,
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
     )
     result = {
         "authorization_version": "oled_bounded_generation_authorization.v1",

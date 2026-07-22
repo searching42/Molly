@@ -921,6 +921,24 @@ class RunPlanExecutor:
                 "remote_known_hosts": self._optional_absolute_artifact_path(
                     artifact_paths, "oled_inverse_design_remote_known_hosts"
                 ),
+                "controller_request_json": (
+                    self._optional_absolute_artifact_path(
+                        artifact_paths, "oled_bounded_controller_request_snapshot"
+                    )
+                    or self._optional_absolute_artifact_path(
+                        artifact_paths, "oled_bounded_controller_request"
+                    )
+                ),
+                "controller_json": self._optional_absolute_artifact_path(
+                    artifact_paths, "oled_bounded_controller_receipt"
+                ),
+                "generation_authorization_json": self._optional_absolute_artifact_path(
+                    artifact_paths,
+                    "oled_bounded_controller_generation_authorization",
+                ),
+                "controller_report_md": self._optional_absolute_artifact_path(
+                    artifact_paths, "oled_bounded_controller_report"
+                ),
                 "output_root": str(run_dir / "oled_candidate_decision"),
             }
         if task_id == _GENERATED_EVALUATION_TASK_ID:
@@ -957,6 +975,24 @@ class RunPlanExecutor:
                 ),
                 "remote_known_hosts": self._optional_absolute_artifact_path(
                     artifact_paths, "oled_inverse_design_remote_known_hosts"
+                ),
+                "controller_request_json": (
+                    self._optional_absolute_artifact_path(
+                        artifact_paths, "oled_bounded_controller_request_snapshot"
+                    )
+                    or self._optional_absolute_artifact_path(
+                        artifact_paths, "oled_bounded_controller_request"
+                    )
+                ),
+                "controller_json": self._optional_absolute_artifact_path(
+                    artifact_paths, "oled_bounded_controller_receipt"
+                ),
+                "generation_authorization_json": self._optional_absolute_artifact_path(
+                    artifact_paths,
+                    "oled_bounded_controller_generation_authorization",
+                ),
+                "controller_report_md": self._optional_absolute_artifact_path(
+                    artifact_paths, "oled_bounded_controller_report"
                 ),
                 "output_root": str(run_dir / "oled_candidate_evaluation"),
             }
@@ -1887,6 +1923,18 @@ class RunPlanExecutor:
                     remote_known_hosts=(
                         str(payload.get("remote_known_hosts") or "") or None
                     ),
+                    controller_request_json=(
+                        str(payload.get("controller_request_json") or "") or None
+                    ),
+                    controller_json=(
+                        str(payload.get("controller_json") or "") or None
+                    ),
+                    generation_authorization_json=(
+                        str(payload.get("generation_authorization_json") or "") or None
+                    ),
+                    controller_report_md=(
+                        str(payload.get("controller_report_md") or "") or None
+                    ),
                 ) as bound:
                     output_root = (run_dir / "oled_inverse_design").absolute()
                     if bound.output_dir.parent != output_root:
@@ -1969,6 +2017,18 @@ class RunPlanExecutor:
                     ),
                     remote_known_hosts=(
                         str(payload.get("remote_known_hosts") or "") or None
+                    ),
+                    controller_request_json=(
+                        str(payload.get("controller_request_json") or "") or None
+                    ),
+                    controller_json=(
+                        str(payload.get("controller_json") or "") or None
+                    ),
+                    generation_authorization_json=(
+                        str(payload.get("generation_authorization_json") or "") or None
+                    ),
+                    controller_report_md=(
+                        str(payload.get("controller_report_md") or "") or None
                     ),
                 ) as bound:
                     output_root = (run_dir / "oled_candidate_evaluation").absolute()
@@ -2055,6 +2115,18 @@ class RunPlanExecutor:
                     ),
                     remote_known_hosts=(
                         str(payload.get("remote_known_hosts") or "") or None
+                    ),
+                    controller_request_json=(
+                        str(payload.get("controller_request_json") or "") or None
+                    ),
+                    controller_json=(
+                        str(payload.get("controller_json") or "") or None
+                    ),
+                    generation_authorization_json=(
+                        str(payload.get("generation_authorization_json") or "") or None
+                    ),
+                    controller_report_md=(
+                        str(payload.get("controller_report_md") or "") or None
                     ),
                 ) as bound:
                     output_root = (run_dir / "oled_candidate_decision").absolute()

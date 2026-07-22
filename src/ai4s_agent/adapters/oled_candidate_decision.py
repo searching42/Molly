@@ -56,6 +56,19 @@ def execute_oled_candidate_decision_adapter(payload: dict[str, Any]) -> dict[str
             remote_known_hosts=(
                 str(payload.get("remote_known_hosts") or "").strip() or None
             ),
+            controller_request_json=(
+                str(payload.get("controller_request_json") or "").strip() or None
+            ),
+            controller_json=(
+                str(payload.get("controller_json") or "").strip() or None
+            ),
+            generation_authorization_json=(
+                str(payload.get("generation_authorization_json") or "").strip()
+                or None
+            ),
+            controller_report_md=(
+                str(payload.get("controller_report_md") or "").strip() or None
+            ),
             output_root=required["output_root"],
         )
     except Exception:

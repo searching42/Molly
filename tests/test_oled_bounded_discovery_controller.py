@@ -8,6 +8,7 @@ import pytest
 
 from ai4s_agent.oled_bounded_discovery_controller import (
     _accumulate_chemical_identity_ledger,
+    _validate_iteration_predecessor_authorization,
     _loop_fingerprint_payload,
     _route,
     _verified_oled_bounded_discovery_controller_from_files,
@@ -129,6 +130,61 @@ def test_controller_rejects_limits_above_hard_ceilings(
         run_oled_bounded_discovery_controller_from_files(
             controller_request_json=request,
             output_root=tmp_path / "controllers",
+        )
+
+
+def test_controller_rejects_a_second_legacy_inverse_design_iteration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the first history entry may lack a previous controller grant."""
+
+    request = _request(tmp_path, monkeypatch)
+    payload = json.loads(request.read_text(encoding="utf-8"))
+    payload["iterations"].append(dict(payload["iterations"][0]))
+    request.write_bytes(_json_bytes(payload))
+
+    with pytest.raises(ValueError, match="requires the previous controller authorization"):
+        run_oled_bounded_discovery_controller_from_files(
+            controller_request_json=request,
+            output_root=tmp_path / "controllers",
+            generated_at="2026-07-21T21:00:00+08:00",
+        )
+
+
+def test_controller_rejects_a_second_iteration_with_the_wrong_previous_grant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.test_oled_inverse_design_runplan import (
+        _controller_authorized_input_artifacts,
+    )
+
+    artifacts = _controller_authorized_input_artifacts(tmp_path, monkeypatch)
+    current_request = json.loads(
+        Path(artifacts["oled_bounded_controller_request_snapshot"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    current_request["iterations"].append(dict(current_request["iterations"][0]))
+    paths = {
+        "controller_request_json": artifacts[
+            "oled_bounded_controller_request_snapshot"
+        ],
+        "controller_json": artifacts["oled_bounded_controller_receipt"],
+        "generation_authorization_json": artifacts[
+            "oled_bounded_controller_generation_authorization"
+        ],
+        "controller_report_md": artifacts["oled_bounded_controller_report"],
+    }
+
+    with pytest.raises(ValueError, match="not bound to the previous controller state"):
+        _validate_iteration_predecessor_authorization(
+            current_request=current_request,
+            current_iterations=current_request["iterations"],
+            iteration_index=2,
+            paths=paths,
+            inverse_receipt={"controller_authorization": {}},
         )
 
 

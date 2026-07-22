@@ -144,6 +144,10 @@ def run_oled_generated_candidate_evaluation_from_files(
     output_root: str | Path,
     candidate_cost_manifest_json: str | Path | None = None,
     remote_known_hosts: str | Path | None = None,
+    controller_request_json: str | Path | None = None,
+    controller_json: str | Path | None = None,
+    generation_authorization_json: str | Path | None = None,
+    controller_report_md: str | Path | None = None,
     generated_at: str | None = None,
 ) -> OledGeneratedCandidateEvaluationResult:
     """Publish one immutable global evaluation successor."""
@@ -160,6 +164,10 @@ def run_oled_generated_candidate_evaluation_from_files(
             registry_snapshot_json=registry_snapshot_json,
             candidate_cost_manifest_json=candidate_cost_manifest_json,
             remote_known_hosts=remote_known_hosts,
+            controller_request_json=controller_request_json,
+            controller_json=controller_json,
+            generation_authorization_json=generation_authorization_json,
+            controller_report_md=controller_report_md,
             generated_at=generated_at or now_iso(),
         )
         output_dir = root / built.evaluation_id
@@ -191,6 +199,10 @@ def verify_oled_generated_candidate_evaluation_from_files(
     registry_snapshot_json: str | Path,
     candidate_cost_manifest_json: str | Path | None = None,
     remote_known_hosts: str | Path | None = None,
+    controller_request_json: str | Path | None = None,
+    controller_json: str | Path | None = None,
+    generation_authorization_json: str | Path | None = None,
+    controller_report_md: str | Path | None = None,
 ) -> OledGeneratedCandidateEvaluationVerificationResult:
     """Exact-replay a PR-AT publication from its external trusted anchors."""
 
@@ -205,6 +217,10 @@ def verify_oled_generated_candidate_evaluation_from_files(
         registry_snapshot_json=registry_snapshot_json,
         candidate_cost_manifest_json=candidate_cost_manifest_json,
         remote_known_hosts=remote_known_hosts,
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
     ) as bound:
         return bound.result
 
@@ -222,6 +238,10 @@ def _verified_oled_generated_candidate_evaluation_from_files(
     registry_snapshot_json: str | Path,
     candidate_cost_manifest_json: str | Path | None = None,
     remote_known_hosts: str | Path | None = None,
+    controller_request_json: str | Path | None = None,
+    controller_json: str | Path | None = None,
+    generation_authorization_json: str | Path | None = None,
+    controller_report_md: str | Path | None = None,
 ) -> Iterator[_BoundGeneratedCandidateEvaluation]:
     """Keep the verified publication inode pinned through registration."""
 
@@ -276,6 +296,10 @@ def _verified_oled_generated_candidate_evaluation_from_files(
             registry_snapshot_json=registry_snapshot_json,
             candidate_cost_manifest_json=candidate_cost_manifest_json,
             remote_known_hosts=remote_known_hosts,
+            controller_request_json=controller_request_json,
+            controller_json=controller_json,
+            generation_authorization_json=generation_authorization_json,
+            controller_report_md=controller_report_md,
             generated_at=_required_string(receipt, "generated_at"),
         )
         if (
@@ -325,6 +349,10 @@ def _build_evaluation_from_files(
     registry_snapshot_json: str | Path,
     candidate_cost_manifest_json: str | Path | None,
     remote_known_hosts: str | Path | None,
+    controller_request_json: str | Path | None,
+    controller_json: str | Path | None,
+    generation_authorization_json: str | Path | None,
+    controller_report_md: str | Path | None,
     generated_at: str,
 ) -> _BuiltEvaluation:
     with _verified_oled_inverse_design_publication_from_files(
@@ -337,6 +365,10 @@ def _build_evaluation_from_files(
         registry_snapshot_json=registry_snapshot_json,
         candidate_cost_manifest_json=candidate_cost_manifest_json,
         remote_known_hosts=remote_known_hosts,
+        controller_request_json=controller_request_json,
+        controller_json=controller_json,
+        generation_authorization_json=generation_authorization_json,
+        controller_report_md=controller_report_md,
     ) as inverse_bound:
         inverse_receipt = _parse_json_object(
             inverse_bound.expected_payloads["inverse_design.json"],

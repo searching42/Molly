@@ -40,7 +40,7 @@ from ai4s_agent.oled_supplementary_source_transcription_review import (
 )
 
 
-_CONTROLLER_VERSION = "oled_bounded_discovery_controller.v2"
+_CONTROLLER_VERSION = "oled_bounded_discovery_controller.v3"
 _REQUEST_VERSION = "oled_bounded_discovery_controller_request.v1"
 _GENERATION_AUTHORIZATION_VERSION = "oled_bounded_generation_authorization.v1"
 _GENERATION_TARGET_TASK = "execute_oled_inverse_design"
@@ -48,7 +48,7 @@ _GENERATION_REQUIRED_GATE = "gate_5_final_threshold"
 _MAX_ITERATIONS = 3
 _MAX_GENERATION_ROUNDS = 2
 _MAX_GENERATED_CANDIDATES = 512
-_ITERATION_KEYS = {
+_BASE_ITERATION_KEYS = {
     "decision_json",
     "evaluation_json",
     "inverse_design_json",
@@ -61,6 +61,13 @@ _ITERATION_KEYS = {
     "candidate_cost_manifest_json",
     "remote_known_hosts",
 }
+_CONTROLLER_BUNDLE_ITERATION_KEYS = {
+    "controller_request_json",
+    "controller_json",
+    "generation_authorization_json",
+    "controller_report_md",
+}
+_ITERATION_KEYS = _BASE_ITERATION_KEYS | _CONTROLLER_BUNDLE_ITERATION_KEYS
 
 
 @dataclass(frozen=True)
@@ -284,6 +291,7 @@ def _build_controller(
     generation_publications: dict[str, int] = {}
     for index, raw in enumerate(iterations, 1):
         paths = _iteration_paths(raw)
+        controller_bundle = _controller_bundle_arguments(paths)
         with _verified_oled_candidate_decision_from_files(
             decision_json=paths["decision_json"],
             evaluation_json=paths["evaluation_json"],
@@ -296,6 +304,7 @@ def _build_controller(
             registry_snapshot_json=paths["registry_snapshot_json"],
             candidate_cost_manifest_json=paths["candidate_cost_manifest_json"],
             remote_known_hosts=paths["remote_known_hosts"],
+            **controller_bundle,
         ) as decision_bound:
             decision_payload = _parse_json_object(
                 decision_bound.expected_payloads["candidate_decision.json"],
@@ -316,6 +325,7 @@ def _build_controller(
             registry_snapshot_json=paths["registry_snapshot_json"],
             candidate_cost_manifest_json=paths["candidate_cost_manifest_json"],
             remote_known_hosts=paths["remote_known_hosts"],
+            **controller_bundle,
         ) as evaluation_bound:
             evaluation_payload = _parse_json_object(
                 evaluation_bound.expected_payloads["evaluation.json"],
@@ -342,8 +352,6 @@ def _build_controller(
                 _required_dict(evaluation_payload, "sources"),
                 "pr_as_publication_id",
             )
-            if publication_id in generation_publications:
-                raise ValueError("PR-AU generation publication is duplicated")
             with _verified_oled_inverse_design_publication_from_files(
                 inverse_design_json=paths["inverse_design_json"],
                 batch_selection_json=paths["batch_selection_json"],
@@ -354,9 +362,30 @@ def _build_controller(
                 registry_snapshot_json=paths["registry_snapshot_json"],
                 candidate_cost_manifest_json=paths["candidate_cost_manifest_json"],
                 remote_known_hosts=paths["remote_known_hosts"],
+                **controller_bundle,
             ) as inverse_bound:
                 if inverse_bound.result.publication_id != publication_id:
                     raise ValueError("PR-AU evaluation/inverse-design binding mismatch")
+                inverse_payload = _parse_json_object(
+                    inverse_bound.expected_payloads["inverse_design.json"],
+                    "PR-AS receipt",
+                )
+                controller_authorization_id = None
+                if inverse_payload.get("controller_authorization") is not None:
+                    controller_authorization_id = _required_string(
+                        _required_dict(inverse_payload, "controller_authorization"),
+                        "authorization_id",
+                    )
+                if index > 1:
+                    _validate_iteration_predecessor_authorization(
+                        current_request=request,
+                        current_iterations=iterations,
+                        iteration_index=index,
+                        paths=paths,
+                        inverse_receipt=inverse_payload,
+                    )
+                if publication_id in generation_publications:
+                    raise ValueError("PR-AU generation publication is duplicated")
                 generated_source_count = _nonnegative_int(
                     _required_dict(evaluation_payload, "counts"),
                     "generated_source_count",
@@ -392,6 +421,7 @@ def _build_controller(
             "generation_publication_id": publication_id,
             "candidate_count": len(candidate_ids),
             "generated_source_count": generation_publications[publication_id],
+            "controller_authorization_id": controller_authorization_id,
             "source_bindings": _source_bindings_from_evaluation(
                 evaluation=evaluation_payload,
                 decision=decision_payload,
@@ -889,18 +919,99 @@ def _validate_limits(payload: dict[str, Any]) -> dict[str, int]:
 
 
 def _iteration_paths(value: Any) -> dict[str, str | None]:
-    if not isinstance(value, dict) or set(value) != _ITERATION_KEYS:
+    if not isinstance(value, dict) or (
+        set(value) != _BASE_ITERATION_KEYS and set(value) != _ITERATION_KEYS
+    ):
         raise ValueError("PR-AU iteration entry is invalid")
     result: dict[str, str | None] = {}
-    for key in sorted(_ITERATION_KEYS):
-        raw = value.get(key)
+    for key in sorted(_BASE_ITERATION_KEYS):
+        raw = value[key]
         if key in {"candidate_cost_manifest_json", "remote_known_hosts"}:
             result[key] = str(raw).strip() if raw else None
         elif not isinstance(raw, str) or not raw.strip():
             raise ValueError("PR-AU iteration path is missing")
         else:
             result[key] = raw.strip()
+    for key in sorted(_CONTROLLER_BUNDLE_ITERATION_KEYS):
+        raw = value.get(key)
+        result[key] = str(raw).strip() if raw else None
+    controller_paths = tuple(
+        result[key] for key in sorted(_CONTROLLER_BUNDLE_ITERATION_KEYS)
+    )
+    if any(controller_paths) and not all(controller_paths):
+        raise ValueError("PR-AU iteration controller authorization bundle is incomplete")
     return result
+
+
+def _controller_bundle_arguments(
+    paths: dict[str, str | None],
+) -> dict[str, str | None]:
+    """Pass one optional PR-AU bundle through each exact replay boundary."""
+
+    return {
+        key: paths[key]
+        for key in sorted(_CONTROLLER_BUNDLE_ITERATION_KEYS)
+    }
+
+
+def _validate_iteration_predecessor_authorization(
+    *,
+    current_request: dict[str, Any],
+    current_iterations: list[Any],
+    iteration_index: int,
+    paths: dict[str, str | None],
+    inverse_receipt: dict[str, Any],
+) -> None:
+    """Require round N PR-AS to consume the exact round N-1 controller grant."""
+
+    if iteration_index <= 1:
+        return
+    bundle = _controller_bundle_arguments(paths)
+    if not all(bundle.values()):
+        raise ValueError(
+            "PR-AU iteration after the first requires the previous controller authorization bundle"
+        )
+    previous_request, previous_request_sha256 = _read_bound_json(
+        _absolute_local_path(str(bundle["controller_request_json"])),
+        "PR-AU predecessor controller request",
+        max_bytes=1024 * 1024,
+        reject_symlink_components=True,
+    )
+    if _sha256_bytes(_json_bytes(previous_request)) != previous_request_sha256:
+        raise ValueError("PR-AU predecessor controller request is not canonical")
+    if (
+        previous_request.get("request_version") != _REQUEST_VERSION
+        or set(previous_request) != {"request_version", "limits", "iterations"}
+        or previous_request.get("limits") != current_request.get("limits")
+        or previous_request.get("iterations") != current_iterations[: iteration_index - 1]
+    ):
+        raise ValueError(
+            "PR-AU predecessor controller request is not the exact preceding history"
+        )
+    authorization = validate_oled_bounded_generation_authorization_bundle(
+        controller_request_json=str(bundle["controller_request_json"]),
+        controller_json=str(bundle["controller_json"]),
+        generation_authorization_json=str(bundle["generation_authorization_json"]),
+        controller_report_md=str(bundle["controller_report_md"]),
+    )
+    expected_authorization = {
+        "authorization_version": _GENERATION_AUTHORIZATION_VERSION,
+        "authorization_id": authorization.authorization_id,
+        "controller_id": authorization.controller_id,
+        "loop_fingerprint": authorization.loop_fingerprint,
+        "latest_source_state_fingerprint": authorization.latest_source_state_fingerprint,
+        "target_task": authorization.target_task,
+        "required_gate": authorization.required_gate,
+        "requested_candidate_count": authorization.requested_candidate_count,
+        "source_bindings": dict(authorization.source_bindings),
+    }
+    current_authorization = _required_dict(
+        inverse_receipt, "controller_authorization"
+    )
+    if current_authorization != expected_authorization:
+        raise ValueError(
+            "PR-AU iteration inverse-design authorization is not bound to the previous controller state"
+        )
 
 
 def _parse_jsonl(payload: bytes) -> list[dict[str, Any]]:

@@ -23,9 +23,12 @@ When, and only when, it requests generation, PR-AU emits a narrow
 fingerprint, the exact requested candidate count, the fixed final-threshold
 gate, and the exact PR-ARb/PR-AP/PR-AO/PR-AI/Registry/model source bindings.
 The executor freezes this bundle before writing the PR-AS gate snapshot, then
-replays it again before adapter dispatch. A direct PR-AS invocation remains
-possible, but it cannot claim to be the controller-routed action unless it
-consumes this authorization.
+replays it again before adapter dispatch and again while registering the PR-AS
+publication. A controller-authorized PR-AS receipt is rejected unless its
+full controller request, receipt, authorization, and report bundle exact-replay
+to the same embedded grant. A direct PR-AS invocation remains possible, but it
+cannot claim to be the controller-routed action unless it consumes this
+authorization.
 
 ## Request and exact replay
 
@@ -39,6 +42,13 @@ Each iteration supplies the exact PR-ARb v2, PR-AT, PR-AS, original PR-ARb,
 PR-AP, PR-AO, PR-AI, and Registry paths required by the existing independent
 verifiers. The controller replays every iteration and records the resulting
 decision, evaluation, and generation-publication identities and SHA-256 values.
+
+The first iteration may be a direct legacy PR-AS run. Every later iteration
+must also carry the complete controller bundle that authorized its PR-AS
+publication. That bundle's request must be the exact current-request prefix
+through iteration *N-1*, and the iteration-*N* receipt authorization must
+match the replayed predecessor controller ID, state fingerprint, authorization
+ID, target task, gate, source bindings, and requested count exactly.
 
 Every iteration must have the same immutable loop fingerprint: Top-N target,
 property constraints and directions, budget/currency, diversity threshold,
@@ -67,6 +77,11 @@ using each publication's accepted/source candidate count rather than only the
 subset that later reaches PR-AT prediction. Thus identity overlaps and
 feature/prediction failures still consume the generation budget. The controller
 stops before requesting an action that would exceed a ceiling.
+
+For a controller-routed PR-AS invocation, the authorization count is also an
+in-invocation hard ceiling: if normalized independent candidates exceed it,
+PR-AS fails before publication rather than silently publishing an oversized
+candidate pool.
 
 ## Stop and continuation semantics
 

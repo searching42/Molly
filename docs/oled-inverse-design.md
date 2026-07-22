@@ -28,6 +28,14 @@ Before gate approval, the executor creates run-local immutable copies of every
 input. At resume, it replays the route and rechecks the source-to-frozen binding
 before dispatching the adapter. The adapter receives only frozen paths.
 
+When PR-AU routes the task, the frozen input roster additionally includes the
+exact controller request, controller receipt, generation authorization, and
+controller report. The authorization's requested candidate count replaces the
+ordinary PR-ARb shortfall only for that routed invocation. PR-AS fails closed
+if normalization produces more independent accepted candidates than that grant,
+and executor registration exact-replays the same frozen controller bundle
+against the publication receipt.
+
 `remote` mode is restricted to the checked-in
 `workstation2-node45-reinvent4-v1` transport profile. It requires an
 executor-frozen `oled_inverse_design_remote_known_hosts` artifact and uses
@@ -97,6 +105,9 @@ artifact-registry update and accepts adapter paths only for its four fixed
 registered publication files (receipt, candidates, exclusions, and report).
 For a remote publication, the verifier also requires the same pinned
 known-hosts input so its host-key fingerprint remains bound to the replay.
+For a controller-authorized publication, it also requires the exact four-file
+PR-AU bundle; a receipt's self-declared controller fields are not a sufficient
+replay anchor.
 
 The only permitted next execution step is PR-AT controlled prediction,
 filtering, and ranking of the generated candidates.

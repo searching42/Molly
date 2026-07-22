@@ -21,7 +21,11 @@ from ai4s_agent.oled_generated_candidate_evaluation import (
     run_oled_generated_candidate_evaluation_from_files,
 )
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
-from ai4s_agent.oled_inverse_design import run_oled_inverse_design_from_files
+from ai4s_agent.oled_inverse_design import (
+    run_oled_inverse_design_from_files,
+    verify_oled_inverse_design_publication_from_files,
+)
+from ai4s_agent.oled_real_phase1_execution import _json_bytes
 from ai4s_agent.schemas import GateName, RiskLevel, RunStatus
 from ai4s_agent.storage import ProjectStorage
 from tests.test_oled_inverse_design import _shortfall_inputs, _source_csv
@@ -91,6 +95,8 @@ def _input_artifacts(
 def _controller_authorized_input_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    oversupply: bool = False,
 ) -> dict[str, str]:
     publication, _ = _shortfall_inputs(tmp_path, monkeypatch)
     batch = run_oled_experiment_batch_selection_from_files(
@@ -109,7 +115,14 @@ def _controller_authorized_input_artifacts(
     config.write_text("# exact-bound REINVENT4 input\n", encoding="utf-8")
     raw_output = _source_csv(
         tmp_path / "controller-reinvent-output.csv",
-        [("controller-generated-one", "CCCCC"), ("controller-generated-two", "COC")],
+        [
+            ("controller-generated-one", "CCCCC"),
+            *(
+                [("controller-generated-two", "COC")]
+                if oversupply
+                else []
+            ),
+        ],
     )
     inverse = run_oled_inverse_design_from_files(
         batch_selection_json=batch_receipt,
@@ -398,6 +411,163 @@ def test_controller_authorized_inverse_design_consumes_controller_shortfall(
     assert receipt["design_request"]["candidate_shortfall_count"] == expected_count
     assert receipt["controller_authorization"]["requested_candidate_count"] == expected_count
     assert receipt["controller_authorization"]["target_task"] == TASK_ID
+
+
+def test_controller_authorized_inverse_design_rejects_accepted_candidates_above_grant(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    input_artifacts = _controller_authorized_input_artifacts(
+        tmp_path,
+        monkeypatch,
+        oversupply=True,
+    )
+    storage = ProjectStorage(tmp_path / "workspace")
+    executor = RunPlanExecutor(storage=storage)
+    run_id = "controller-authorized-inverse-oversupply"
+    project_id = "inverse-design-project"
+    run_plan = _run_plan(run_id)
+    assert executor.execute(
+        project_id=project_id,
+        run_plan=run_plan,
+        input_artifacts=input_artifacts,
+        task_options=_options(),
+    )["status"] == RunStatus.WAITING_USER.value
+
+    failed = executor.resume_after_gate(
+        project_id=project_id,
+        run_plan=run_plan,
+        approved_gates=[GateName.FINAL_THRESHOLD.value],
+        actor="reviewer",
+        input_artifacts=input_artifacts,
+        task_options=_options(),
+    )
+    assert failed["status"] == RunStatus.FAILED.value
+    assert failed["result"]["error"]["code"] == "inverse_design_execution_failed"
+    assert storage.read_artifact_registry(project_id, run_id) == {}
+    run_dir = storage.run_dir(project_id, run_id)
+    assert not list((run_dir / "oled_inverse_design").glob("oled-inverse-design:*"))
+
+
+def test_controller_authorized_publication_verifier_requires_the_exact_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    input_artifacts = _controller_authorized_input_artifacts(tmp_path, monkeypatch)
+    result = run_oled_inverse_design_from_files(
+        batch_selection_json=input_artifacts["oled_experiment_batch_receipt"],
+        screening_receipt_json=input_artifacts["oled_registry_screening_receipt"],
+        ranked_shortlist_csv=input_artifacts["oled_registry_screening_shortlist"],
+        phase1_execution_dir=input_artifacts["oled_phase1_execution_dir"],
+        dataset_snapshot_json=input_artifacts["oled_dataset_snapshot"],
+        registry_snapshot_json=input_artifacts["oled_registry_snapshot"],
+        reinvent4_config=input_artifacts["oled_inverse_design_reinvent4_config"],
+        reinvent4_output_csv=input_artifacts["oled_inverse_design_generator_output"],
+        reinvent4_mode="existing_output",
+        output_root=tmp_path / "controlled-inverse-design",
+        seed=17,
+        controller_request_json=input_artifacts[
+            "oled_bounded_controller_request_snapshot"
+        ],
+        controller_json=input_artifacts["oled_bounded_controller_receipt"],
+        generation_authorization_json=input_artifacts[
+            "oled_bounded_controller_generation_authorization"
+        ],
+        controller_report_md=input_artifacts["oled_bounded_controller_report"],
+        generated_at="2026-07-21T22:05:00+08:00",
+    )
+    base = {
+        "inverse_design_json": result.output_dir / "inverse_design.json",
+        "batch_selection_json": input_artifacts["oled_experiment_batch_receipt"],
+        "screening_receipt_json": input_artifacts[
+            "oled_registry_screening_receipt"
+        ],
+        "ranked_shortlist_csv": input_artifacts["oled_registry_screening_shortlist"],
+        "phase1_execution_dir": input_artifacts["oled_phase1_execution_dir"],
+        "dataset_snapshot_json": input_artifacts["oled_dataset_snapshot"],
+        "registry_snapshot_json": input_artifacts["oled_registry_snapshot"],
+    }
+    with pytest.raises(ValueError, match="requires an exact PR-AU bundle"):
+        verify_oled_inverse_design_publication_from_files(**base)
+
+    verified = verify_oled_inverse_design_publication_from_files(
+        **base,
+        controller_request_json=input_artifacts[
+            "oled_bounded_controller_request_snapshot"
+        ],
+        controller_json=input_artifacts["oled_bounded_controller_receipt"],
+        generation_authorization_json=input_artifacts[
+            "oled_bounded_controller_generation_authorization"
+        ],
+        controller_report_md=input_artifacts["oled_bounded_controller_report"],
+    )
+    assert verified.publication_id == result.publication_id
+
+
+def test_executor_rejects_a_valid_publication_bound_to_a_different_controller_grant(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Registration must replay the gate-frozen PR-AU bundle, not receipt claims."""
+
+    input_artifacts = _controller_authorized_input_artifacts(tmp_path, monkeypatch)
+    original_request = json.loads(
+        Path(input_artifacts["oled_bounded_controller_request_snapshot"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    alternate_request = {
+        **original_request,
+        "limits": {**original_request["limits"], "max_iterations": 2},
+    }
+    alternate_request_path = tmp_path / "alternate-controller-request.json"
+    alternate_request_path.write_bytes(_json_bytes(alternate_request))
+    alternate_controller = run_oled_bounded_discovery_controller_from_files(
+        controller_request_json=alternate_request_path,
+        output_root=tmp_path / "alternate-controllers",
+        generated_at="2026-07-21T22:30:00+08:00",
+    )
+
+    storage = ProjectStorage(tmp_path / "workspace")
+    executor = RunPlanExecutor(storage=storage)
+    run_id = "controller-authorization-registration-anchor"
+    project_id = "inverse-design-project"
+    run_plan = _run_plan(run_id)
+    assert executor.execute(
+        project_id=project_id,
+        run_plan=run_plan,
+        input_artifacts=input_artifacts,
+        task_options=_options(),
+    )["status"] == RunStatus.WAITING_USER.value
+
+    real_adapter = getattr(adapters, ADAPTER_NAME)
+
+    def wrong_controller_adapter(payload: dict[str, object]) -> dict[str, object]:
+        forged_payload = {
+            **payload,
+            "controller_request_json": str(
+                alternate_controller.output_dir / "controller_request.json"
+            ),
+            "controller_json": str(alternate_controller.output_dir / "controller.json"),
+            "generation_authorization_json": str(
+                alternate_controller.output_dir / "generation_authorization.json"
+            ),
+            "controller_report_md": str(alternate_controller.output_dir / "report.md"),
+        }
+        return real_adapter(forged_payload)
+
+    monkeypatch.setattr(adapters, ADAPTER_NAME, wrong_controller_adapter)
+    failed = executor.resume_after_gate(
+        project_id=project_id,
+        run_plan=run_plan,
+        approved_gates=[GateName.FINAL_THRESHOLD.value],
+        actor="reviewer",
+        input_artifacts=input_artifacts,
+        task_options=_options(),
+    )
+    assert failed["status"] == RunStatus.FAILED.value
+    assert failed["result"]["error"]["code"] == "artifact_collection_failed"
+    assert storage.read_artifact_registry(project_id, run_id) == {}
 
 
 def test_inverse_design_post_gate_source_swap_fails_before_adapter_dispatch(
