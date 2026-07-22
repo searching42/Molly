@@ -19,6 +19,25 @@ The session requested Top-4 with `s1_ev >= 0.0 eV`,
 `1.0`. The bounded limits remained three iterations, two generation rounds,
 and 512 generated candidates.
 
+### Runtime provenance and exact inputs
+
+The ignored runtime paths are intentionally omitted. The identities and hashes
+below are the canonical values bound by the persisted SessionSpec and its
+upstream receipts, so the run remains auditable after local `runs/` cleanup.
+
+| Input | Exact identity | SHA-256 / digest |
+|---|---|---|
+| Molly code | commit `7db57d1a0ff56a138289da88131f83ae2b0ac139` (merged PR #386) | commit identity |
+| paper016 PR-AO execution | `oled-real-phase1-execution:e161bfedf82a661fef3254e70cdeb9bb21521704348da7fd1020480348fedfd0` | receipt SHA `cb6169ee27d4931f9a222512c0efe5585dc8f4d3fc5899025a5e9c04170941b2`; 8-entry directory manifest `1b28805feb1d7167d3d5dc07c0fa7a92d2973b6af066c8609d13c35bb6b5ad56` |
+| paper016 dataset snapshot | `oled-categorical-dataset-snapshot:97616f119d74cd4c375dcf47e70807b3c90af606ce46f8170174b60f5d9e23fe` | artifact digest `8c93641288c6c1bcdcadb1c6ee7b969c71f3a74ec0e56fdccc6a12aba34b893a`; file SHA `fc1ddbad38dd94e014b8ffd6cd64a6f3cd44cc7f6be96202868bfbd4af9ef8bb` |
+| material Registry snapshot | `molly-material-registry`, version `successor-3cfef8ab0cd6202a08237863` | snapshot digest `649a391e44b3fc7506ca6a5b633861642e62fef910228415417449f52aa1bcb4`; file SHA `17b78ea89066f5e41234d00ed291de3e2562d54de4a0bb74753986dd10f57dab` |
+| `delta_e_st_ev` model | `model__delta_e_st_ev.json` | `f9eb984cc0de640927b21392821d58cf28c7bb5e357ac2bb37a47647bc03227f` |
+| `s1_ev` model | `model__s1_ev.json` | `7bfb3291e7a082d635a2b7357108f38ba6172d996c7a4c73e649714f2ed4440c` |
+| `t1_ev` model | `model__t1_ev.json` | `bafeeb407c092e1afb4bc2ff62357414c6a361abe92c6384f9b9e786c1ccd7e1` |
+| local REINVENT4 template | existing-output-only config, 73 bytes | `56446f8f037767c81ffda48d08af4438e4ce9e0bbf2eb857e53d8746db7432a4` |
+| round-1 existing output | CBP-1 and CCO-1, 224 bytes | `0c49e10eb4a70dd6a4dd7b53948b524ffef8f6e9e3b6651d559b4c2c848cb9e0` |
+| reserved round-2 existing output | CCO-2, 134 bytes | `2500bb4af88de93fb0d1391764feacbb2c7eaa73a867310b1bfd904f843b463c` |
+
 Round one contained the three-way OPSIN/RDKit/reference exact matches already
 reported by the paper018 contextual-alias canary, split as follows:
 
@@ -47,8 +66,11 @@ round and one controller iteration. Its six succeeded children were:
 6. bounded controller decision.
 
 Three user gates were approved: screening, initial decision, and generation.
-The second generation round was not dispatched because the first cumulative
-evaluation formed the complete Top-4.
+The second generation round was not dispatched because the first
+single-round Registry-plus-generated evaluation formed the complete Top-4.
+This path used PR-AT v1 with one PR-AS publication; it did not create a
+generation roster or execute the multi-publication PR-ATb cumulative
+successor.
 
 | Artifact | SHA-256 |
 |---|---|
@@ -82,7 +104,6 @@ false`; these values are model predictions, not measured results.
 
 The local `existing_output` acceptance step is complete. It demonstrates the
 end-to-end path from exact-bound model/dataset/Registry inputs through gated
-candidate import, cumulative prediction, explainable mixed-source Top-N, and a
-durable terminal session result. The next execution acceptance step is the
-same SessionSpec contract with the node45 remote REINVENT4 transport.
-
+candidate import, combined-pool prediction, explainable mixed-source Top-N,
+and a durable terminal session result. The next execution acceptance step is
+the same SessionSpec contract with the node45 remote REINVENT4 transport.
