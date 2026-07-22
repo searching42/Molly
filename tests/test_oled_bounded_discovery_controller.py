@@ -15,6 +15,13 @@ from ai4s_agent.oled_bounded_discovery_controller import (
     run_oled_bounded_discovery_controller_from_files,
     validate_oled_bounded_generation_authorization_bundle,
 )
+from ai4s_agent.oled_candidate_decision import (
+    run_oled_candidate_decision_from_files,
+)
+from ai4s_agent.oled_generated_candidate_evaluation import (
+    run_oled_generated_candidate_evaluation_from_files,
+)
+from ai4s_agent.oled_inverse_design import run_oled_inverse_design_from_files
 from ai4s_agent.oled_real_phase1_execution import _json_bytes
 from tests.test_oled_candidate_decision import _inputs, _run as _run_decision
 
@@ -186,6 +193,103 @@ def test_controller_rejects_a_second_iteration_with_the_wrong_previous_grant(
             paths=paths,
             inverse_receipt={"controller_authorization": {}},
         )
+
+
+def test_controller_rejects_truncated_history_starting_with_authorized_pr_as(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A consumed controller grant cannot become a fresh budget root."""
+
+    from tests.test_oled_inverse_design_runplan import (
+        _controller_authorized_input_artifacts,
+    )
+
+    artifacts = _controller_authorized_input_artifacts(tmp_path, monkeypatch)
+    controller_bundle = {
+        "controller_request_json": artifacts[
+            "oled_bounded_controller_request_snapshot"
+        ],
+        "controller_json": artifacts["oled_bounded_controller_receipt"],
+        "generation_authorization_json": artifacts[
+            "oled_bounded_controller_generation_authorization"
+        ],
+        "controller_report_md": artifacts["oled_bounded_controller_report"],
+    }
+    inverse = run_oled_inverse_design_from_files(
+        batch_selection_json=artifacts["oled_experiment_batch_receipt"],
+        screening_receipt_json=artifacts["oled_registry_screening_receipt"],
+        ranked_shortlist_csv=artifacts["oled_registry_screening_shortlist"],
+        phase1_execution_dir=artifacts["oled_phase1_execution_dir"],
+        dataset_snapshot_json=artifacts["oled_dataset_snapshot"],
+        registry_snapshot_json=artifacts["oled_registry_snapshot"],
+        reinvent4_config=artifacts["oled_inverse_design_reinvent4_config"],
+        reinvent4_output_csv=artifacts["oled_inverse_design_generator_output"],
+        reinvent4_mode="existing_output",
+        output_root=tmp_path / "authorized-inverse",
+        seed=17,
+        generated_at="2026-07-21T22:05:00+08:00",
+        **controller_bundle,
+    )
+    evaluation = run_oled_generated_candidate_evaluation_from_files(
+        inverse_design_json=inverse.output_dir / "inverse_design.json",
+        batch_selection_json=artifacts["oled_experiment_batch_receipt"],
+        screening_receipt_json=artifacts["oled_registry_screening_receipt"],
+        ranked_shortlist_csv=artifacts["oled_registry_screening_shortlist"],
+        phase1_execution_dir=artifacts["oled_phase1_execution_dir"],
+        dataset_snapshot_json=artifacts["oled_dataset_snapshot"],
+        registry_snapshot_json=artifacts["oled_registry_snapshot"],
+        output_root=tmp_path / "authorized-evaluations",
+        generated_at="2026-07-21T22:10:00+08:00",
+        **controller_bundle,
+    )
+    decision = run_oled_candidate_decision_from_files(
+        evaluation_json=evaluation.output_dir / "evaluation.json",
+        inverse_design_json=inverse.output_dir / "inverse_design.json",
+        batch_selection_json=artifacts["oled_experiment_batch_receipt"],
+        screening_receipt_json=artifacts["oled_registry_screening_receipt"],
+        ranked_shortlist_csv=artifacts["oled_registry_screening_shortlist"],
+        phase1_execution_dir=artifacts["oled_phase1_execution_dir"],
+        dataset_snapshot_json=artifacts["oled_dataset_snapshot"],
+        registry_snapshot_json=artifacts["oled_registry_snapshot"],
+        output_root=tmp_path / "authorized-decisions",
+        generated_at="2026-07-21T22:15:00+08:00",
+        **controller_bundle,
+    )
+    predecessor_request = json.loads(
+        Path(controller_bundle["controller_request_json"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    truncated_iteration = dict(predecessor_request["iterations"][0])
+    truncated_iteration.update(
+        {
+            "decision_json": str(decision.output_dir / "candidate_decision.json"),
+            "evaluation_json": str(evaluation.output_dir / "evaluation.json"),
+            "inverse_design_json": str(inverse.output_dir / "inverse_design.json"),
+            **controller_bundle,
+        }
+    )
+    truncated_request = tmp_path / "truncated-controller-request.json"
+    truncated_request.write_bytes(
+        _json_bytes(
+            {
+                "request_version": "oled_bounded_discovery_controller_request.v1",
+                "limits": predecessor_request["limits"],
+                "iterations": [truncated_iteration],
+            }
+        )
+    )
+    output_root = tmp_path / "truncated-controllers"
+
+    with pytest.raises(ValueError, match="root/direct PR-AS"):
+        run_oled_bounded_discovery_controller_from_files(
+            controller_request_json=truncated_request,
+            output_root=output_root,
+            generated_at="2026-07-21T22:20:00+08:00",
+        )
+
+    assert not output_root.exists() or not list(output_root.iterdir())
 
 
 def _incomplete_decision(target: int = 3) -> dict[str, object]:

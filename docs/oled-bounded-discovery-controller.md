@@ -43,12 +43,16 @@ PR-AP, PR-AO, PR-AI, and Registry paths required by the existing independent
 verifiers. The controller replays every iteration and records the resulting
 decision, evaluation, and generation-publication identities and SHA-256 values.
 
-The first iteration may be a direct legacy PR-AS run. Every later iteration
-must also carry the complete controller bundle that authorized its PR-AS
-publication. That bundle's request must be the exact current-request prefix
-through iteration *N-1*, and the iteration-*N* receipt authorization must
-match the replayed predecessor controller ID, state fingerprint, authorization
-ID, target task, gate, source bindings, and requested count exactly.
+The first iteration must be a root/direct PR-AS run: it may carry neither a
+controller authorization in its receipt nor a controller bundle in the
+request. A controller-authorized publication cannot be reused as the first
+iteration of a new request to truncate history and reset budgets; callers must
+submit its complete predecessor history. Every later iteration must carry the
+complete controller bundle that authorized its PR-AS publication. That
+bundle's request must be the exact current-request prefix through iteration
+*N-1*, and the iteration-*N* receipt authorization must match the replayed
+predecessor controller ID, state fingerprint, authorization ID, target task,
+gate, source bindings, and requested count exactly.
 
 Every iteration must have the same immutable loop fingerprint: Top-N target,
 property constraints and directions, budget/currency, diversity threshold,

@@ -40,7 +40,7 @@ from ai4s_agent.oled_supplementary_source_transcription_review import (
 )
 
 
-_CONTROLLER_VERSION = "oled_bounded_discovery_controller.v3"
+_CONTROLLER_VERSION = "oled_bounded_discovery_controller.v4"
 _REQUEST_VERSION = "oled_bounded_discovery_controller_request.v1"
 _GENERATION_AUTHORIZATION_VERSION = "oled_bounded_generation_authorization.v1"
 _GENERATION_TARGET_TASK = "execute_oled_inverse_design"
@@ -376,7 +376,12 @@ def _build_controller(
                         _required_dict(inverse_payload, "controller_authorization"),
                         "authorization_id",
                     )
-                if index > 1:
+                if index == 1:
+                    _validate_root_iteration_authorization(
+                        paths=paths,
+                        inverse_receipt=inverse_payload,
+                    )
+                else:
                     _validate_iteration_predecessor_authorization(
                         current_request=request,
                         current_iterations=iterations,
@@ -952,6 +957,24 @@ def _controller_bundle_arguments(
         key: paths[key]
         for key in sorted(_CONTROLLER_BUNDLE_ITERATION_KEYS)
     }
+
+
+def _validate_root_iteration_authorization(
+    *,
+    paths: dict[str, str | None],
+    inverse_receipt: dict[str, Any],
+) -> None:
+    """Reject a controller-authorized publication as a truncated history root."""
+
+    bundle = _controller_bundle_arguments(paths)
+    if (
+        any(bundle.values())
+        or inverse_receipt.get("controller_authorization") is not None
+    ):
+        raise ValueError(
+            "PR-AU first iteration must be a root/direct PR-AS publication without "
+            "controller authorization; submit the complete predecessor history"
+        )
 
 
 def _validate_iteration_predecessor_authorization(
