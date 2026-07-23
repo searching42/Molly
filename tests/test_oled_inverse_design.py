@@ -249,15 +249,28 @@ def test_all_excluded_rows_fail_without_publishing_directory(
     assert not list((tmp_path / "inverse-designs").glob("oled-inverse-design:*"))
 
 
+@pytest.mark.parametrize(
+    ("profile_id", "ssh_target", "expected_hostname"),
+    [
+        ("workstation2-node45-reinvent4-v2", "workstation2", "node45"),
+        ("workstation1-node221-reinvent4-v1", "workstation1", "node221"),
+    ],
+)
 def test_remote_mode_renders_an_isolated_reinvent4_attempt_without_real_transport(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    profile_id: str,
+    ssh_target: str,
+    expected_hostname: str,
 ) -> None:
     publication, batch_receipt = _shortfall_inputs(tmp_path, monkeypatch)
     config = tmp_path / "reinvent4-template.toml"
     config.write_text(_remote_reinvent4_template(), encoding="utf-8")
     known_hosts = tmp_path / "known_hosts"
-    known_hosts.write_text("workstation2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n", encoding="utf-8")
+    known_hosts.write_text(
+        f"{ssh_target} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
+        encoding="utf-8",
+    )
     payloads: list[dict[str, object]] = []
 
     def fake_transport(
@@ -276,11 +289,11 @@ def test_remote_mode_renders_an_isolated_reinvent4_attempt_without_real_transpor
         assert str(payload["reinvent4_remote_output_csv"]).startswith(
             attempt_dir + "/"
         )
-        assert payload["remote_host"] == "workstation2"
+        assert payload["remote_host"] == ssh_target
         assert payload["remote_repo"] == "/home/lbh/work/wk1/REINVENT4"
         assert payload["remote_python"] == "/home/lbh/miniconda3/envs/reinvent4/bin/python"
         assert payload["reinvent4_remote_known_hosts_file"]
-        assert payload["reinvent4_remote_expected_hostname"] == "node45"
+        assert payload["reinvent4_remote_expected_hostname"] == expected_hostname
         local_output = Path(str(payload["local_output_csv"]))
         local_output.write_text("candidate_id,SMILES\nremote,CCCCC\n", encoding="utf-8")
         return {
@@ -302,7 +315,7 @@ def test_remote_mode_renders_an_isolated_reinvent4_attempt_without_real_transpor
         output_root=tmp_path / "inverse-designs",
         reinvent4_mode="remote",
         seed=19,
-        remote_profile_id="workstation2-node45-reinvent4-v2",
+        remote_profile_id=profile_id,
         remote_known_hosts=known_hosts,
         generated_at="2026-07-21T12:05:00+08:00",
     )
@@ -314,9 +327,7 @@ def test_remote_mode_renders_an_isolated_reinvent4_attempt_without_real_transpor
     assert receipt["claims"]["generation_executed"] is True
     assert receipt["claims"]["existing_generator_output_imported"] is False
     assert receipt["generator"]["provenance"]["remote_transport"]["remote_attempt_isolated"] is True
-    assert receipt["generator"]["provenance"]["remote_transport"]["profile_id"] == (
-        "workstation2-node45-reinvent4-v2"
-    )
+    assert receipt["generator"]["provenance"]["remote_transport"]["profile_id"] == profile_id
     assert receipt["claims"]["requested_inverse_design_objectives_bound_to_remote_config"] is True
     rendered = (result.output_dir / "reinvent4_effective_config.toml").read_text(
         encoding="utf-8"
