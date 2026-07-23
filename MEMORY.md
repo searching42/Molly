@@ -160,7 +160,7 @@ http://127.0.0.1:8792/
 
 ## Documentation Notes
 
-`to do list.md` is currently the most complete roadmap/status file.
+`todo.md` is the unique normative roadmap/status file.
 `README.md` and `docs/architecture-b1.md` are useful but lag the codebase; they
 still read like early B1 documentation while the code and TODO now cover Phase 4.
 
