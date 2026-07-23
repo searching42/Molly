@@ -64,6 +64,7 @@ _REINVENT4_BACKEND = "reinvent4"
 _REINVENT4_MODES = frozenset({"existing_output", "remote"})
 _LEGACY_REMOTE_PROFILE_ID = "workstation2-node45-reinvent4-v1"
 _REMOTE_V2_PROFILE_ID = "workstation2-node45-reinvent4-v2"
+_REMOTE_NODE221_PROFILE_ID = "workstation1-node221-reinvent4-v1"
 _REMOTE_PROFILE_ID = _REMOTE_V2_PROFILE_ID
 _REMOTE_TRANSPORT_PROFILES = {
     _LEGACY_REMOTE_PROFILE_ID: {
@@ -84,7 +85,20 @@ _REMOTE_TRANSPORT_PROFILES = {
         "device_policy": "cpu_only",
         "process_policy": "nice_19_single_thread",
     },
+    _REMOTE_NODE221_PROFILE_ID: {
+        "profile_id": _REMOTE_NODE221_PROFILE_ID,
+        "ssh_target": "workstation1",
+        "expected_hostname": "node221",
+        "repo": "/home/lbh/work/wk1/REINVENT4",
+        "python": "/home/lbh/miniconda3/envs/reinvent4/bin/python",
+        "host_key_policy": "strict_pinned_known_hosts",
+        "device_policy": "cpu_only",
+        "process_policy": "nice_19_single_thread",
+    },
 }
+_EXECUTABLE_REMOTE_PROFILE_IDS = frozenset(
+    {_REMOTE_V2_PROFILE_ID, _REMOTE_NODE221_PROFILE_ID}
+)
 _REMOTE_TRANSPORT_PROFILE = _REMOTE_TRANSPORT_PROFILES[_REMOTE_PROFILE_ID]
 _REMOTE_PROFILE_KEYS = frozenset(_REMOTE_TRANSPORT_PROFILE)
 
@@ -1758,7 +1772,7 @@ def _validate_effective_config_replay(
     profile_id = _required_string(remote_transport, "profile_id")
     if profile_id == _LEGACY_REMOTE_PROFILE_ID:
         renderer = _render_legacy_remote_reinvent4_v1_config
-    elif profile_id == _REMOTE_V2_PROFILE_ID:
+    elif profile_id in _EXECUTABLE_REMOTE_PROFILE_IDS:
         renderer = _render_remote_reinvent4_config
     else:
         raise ValueError("OLED inverse-design remote transport profile is invalid")
@@ -2321,7 +2335,13 @@ def _build_remote_transport_contract(
     """Freeze the only PR-AS remote endpoint contract accepted by this release."""
 
     profile_id = str(remote_profile_id or _REMOTE_PROFILE_ID).strip()
-    if profile_id != _REMOTE_PROFILE_ID:
+    # `_REMOTE_PROFILE_ID` remains a narrow historical-test seam used to
+    # reconstruct immutable v1 receipts; production defaults never point at
+    # that verifier-only profile.
+    if (
+        profile_id not in _EXECUTABLE_REMOTE_PROFILE_IDS
+        and profile_id != _REMOTE_PROFILE_ID
+    ):
         raise ValueError("inverse-design remote profile is not allowed")
     if remote_known_hosts is None:
         raise ValueError("remote mode requires a pinned known-hosts file")
@@ -2333,7 +2353,7 @@ def _build_remote_transport_contract(
     if not known_hosts_bytes:
         raise ValueError("remote known-hosts file is empty")
     contract = {
-        **_REMOTE_TRANSPORT_PROFILE,
+        **_REMOTE_TRANSPORT_PROFILES[profile_id],
         "known_hosts_sha256": known_hosts_sha256,
     }
     return {

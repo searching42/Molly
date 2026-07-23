@@ -37,12 +37,15 @@ and executor registration exact-replays the same frozen controller bundle
 against the publication receipt.
 
 `remote` mode is restricted to the checked-in
-`workstation2-node45-reinvent4-v2` transport profile. It requires an
-executor-frozen `oled_inverse_design_remote_known_hosts` artifact and uses
+`workstation2-node45-reinvent4-v2` and
+`workstation1-node221-reinvent4-v1` transport profiles. Both profiles require an
+executor-frozen `oled_inverse_design_remote_known_hosts` artifact and use
 `StrictHostKeyChecking=yes`. Before it creates a remote work directory, its
-strict SSH session verifies the configured remote short hostname (`node45`).
+strict SSH session verifies the configured remote short hostname (`node45` or
+`node221`).
 Arbitrary SSH hosts, repositories, Python paths, and conda environments are
-not task options. The v2 profile is deliberately CPU-only. It launches one
+not task options. Both executable profiles are deliberately CPU-only and use
+the same fixed repository and environment paths. Each launches one
 low-priority process with `nice -n 19` and fixes the common BLAS/OpenMP thread
 counts to one, so the canary cannot allocate GPU memory or contend with the
 existing GPU workload. The legacy v1 profile remains verifier-only for
