@@ -108,6 +108,19 @@ automatically replayed. Successful action reads revalidate the authoritative
 session and child publications before displaying an explainable Top-N.
 
 This control plane does not change scientific selection semantics and does not
-claim experimental or computational validation. The remaining runtime
-acceptance step is the same bounded session contract with node45's remote
-REINVENT4 transport once non-disruptive GPU capacity is available.
+claim experimental or computational validation.
+
+## PR-AX: local control-plane acceptance
+
+The paper018 `existing_output` flow has also completed the PR-AW HTTP
+control-plane canary; see
+`docs/evidence/oled-paper018-pr-aw-control-plane-canary-20260723.md`. The run
+created and drove the session through project-scoped asynchronous APIs,
+survived an application/service restart at a waiting gate, approved three
+exact-bound gates, and reproduced the same explainable chemical Top-4 as the
+direct PR-AV canary.
+
+PR-AX adds runtime evidence only. It introduces no new schema, scientific
+policy, generator, or validation claim. The remaining runtime acceptance step
+is the same bounded session contract with node45's remote REINVENT4 transport
+once non-disruptive GPU capacity is available.
