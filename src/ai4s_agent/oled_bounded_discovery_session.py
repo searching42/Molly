@@ -1904,6 +1904,7 @@ def _round_base_inputs(
     spec: dict[str, Any],
     state: dict[str, Any],
 ) -> dict[str, str]:
+    remote_known_hosts = spec["inverse_design"]["remote_known_hosts"]
     return {
         **_anchor_inputs(spec),
         "oled_registry_screening_receipt": _child_artifact_path(
@@ -1916,6 +1917,11 @@ def _round_base_inputs(
             storage, project_id, state, "initial_decision", "oled_experiment_batch_receipt"
         ),
         **_optional_cost_input(spec),
+        **(
+            {"oled_inverse_design_remote_known_hosts": remote_known_hosts}
+            if remote_known_hosts
+            else {}
+        ),
     }
 
 
