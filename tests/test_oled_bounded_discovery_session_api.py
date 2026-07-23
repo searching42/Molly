@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+import ai4s_agent.oled_bounded_discovery_session as session_module
 import ai4s_agent.oled_bounded_discovery_session_actions as action_module
 import ai4s_agent.oled_categorical_dataset_execution as dataset_execution_module
 from ai4s_agent.app import create_app
@@ -26,11 +27,16 @@ from ai4s_agent.oled_bounded_discovery_session_view import (
 )
 from ai4s_agent.oled_real_phase1_execution import _stable_hash
 from ai4s_agent.storage import ProjectStorage
-from tests.test_oled_bounded_discovery_session import _spec
+from tests.test_oled_bounded_discovery_session import (
+    _CountingExecutor,
+    _advance_to_second_generation_gate,
+    _approve_with_executor,
+    _spec,
+)
 
 
 def _poll_action(client: Any, project_id: str, action_id: str) -> dict[str, Any]:
-    for _ in range(400):
+    for _ in range(4000):
         response = client.get(
             f"/api/projects/{project_id}/oled-bounded-session-actions/{action_id}"
         )
@@ -218,6 +224,48 @@ def test_interrupted_action_is_reported_recovery_required_and_not_replayed(
     )["revision"] == 0
 
 
+def test_historical_v1_action_telemetry_remains_readable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    project_id = "historical-v1-action"
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=_spec(tmp_path, monkeypatch, target_top_n=1),
+    )
+    root = tmp_path / "actions"
+    first = OledBoundedDiscoverySessionActionService(
+        storage=storage,
+        actions_root=root,
+        executor=_HoldingExecutor(),  # type: ignore[arg-type]
+    )
+    queued = first.enqueue_advance(
+        project_id=project_id,
+        session_id=current.session_id,
+        expected_revision=0,
+    )
+    state_path = root / project_id / queued["action_id"] / "action.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["state_version"] = "oled_bounded_discovery_session_action_state.v1"
+    state_path.write_text(
+        json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    restarted = OledBoundedDiscoverySessionActionService(
+        storage=storage,
+        actions_root=root,
+    )
+    recovered = restarted.get_action(
+        project_id=project_id,
+        action_id=queued["action_id"],
+    )
+    assert recovered["persisted_status"] == "QUEUED"
+    assert recovered["status"] == "RECOVERY_REQUIRED"
+
+
 def test_initial_action_directory_publication_is_atomic_on_mid_build_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -330,6 +378,262 @@ def test_reconciled_revision_is_not_permanently_blocked_by_old_action_record(
         actor="recovery-reviewer",
     )
     assert approval["status"] == "QUEUED"
+
+
+def test_second_generation_interrupted_action_is_recovered_without_rewriting_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    project_id = "second-generation-action-recovery"
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=_spec(tmp_path, monkeypatch, target_top_n=4),
+    )
+    executor = _CountingExecutor(storage)
+    waiting = _advance_to_second_generation_gate(
+        storage, project_id, current, executor
+    )
+    actions_root = tmp_path / "actions"
+    deferred = _DeferredExecutor()
+    first_service = OledBoundedDiscoverySessionActionService(
+        storage=storage,
+        actions_root=actions_root,
+        executor=deferred,  # type: ignore[arg-type]
+    )
+    queued = first_service.enqueue_approval(
+        project_id=project_id,
+        session_id=waiting.session_id,
+        expected_revision=waiting.revision,
+        actor="recovery-reviewer",
+    )
+    action_dir = actions_root / project_id / queued["action_id"]
+    request_bytes = (action_dir / "request.json").read_bytes()
+
+    def crash_before_second_generation_revision(path: Path) -> None:
+        if path.name == "state_000011.json":
+            raise SystemExit("simulated PR-AW exit after second PR-AS publication")
+
+    monkeypatch.setattr(
+        session_module,
+        "_REVISION_PUBLISH_FAULT_HOOK",
+        crash_before_second_generation_revision,
+    )
+    with pytest.raises(SystemExit, match="second PR-AS publication"):
+        deferred.run()
+    interrupted = json.loads(
+        (action_dir / "action.json").read_text(encoding="utf-8")
+    )
+    assert interrupted["status"] == "RUNNING"
+    assert (action_dir / "request.json").read_bytes() == request_bytes
+
+    monkeypatch.setattr(session_module, "_REVISION_PUBLISH_FAULT_HOOK", None)
+    restarted = OledBoundedDiscoverySessionActionService(
+        storage=storage,
+        actions_root=actions_root,
+        executor=_HoldingExecutor(),  # type: ignore[arg-type]
+    )
+    recovered = restarted.recover_interrupted_action(
+        project_id=project_id,
+        action_id=queued["action_id"],
+    )
+    assert (recovered["status"], recovered["completed_revision"]) == (
+        "RECOVERED",
+        11,
+    )
+    assert recovered["result"]["current_step"] == "evaluation"
+    assert (action_dir / "request.json").read_bytes() == request_bytes
+    final_telemetry = json.loads(
+        (action_dir / "action.json").read_text(encoding="utf-8")
+    )
+    assert final_telemetry["status"] == "RECOVERED"
+    assert final_telemetry["completed_revision"] == 11
+
+    next_action = restarted.enqueue_advance(
+        project_id=project_id,
+        session_id=waiting.session_id,
+        expected_revision=11,
+    )
+    assert next_action["status"] == "QUEUED"
+
+
+def test_pr_atb_interrupted_action_is_recovered_through_project_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    base_runs = tmp_path / "runs"
+    actions_root = base_runs / "oled-bounded-session-actions"
+    storage = ProjectStorage(workspace)
+    project_id = "pr-atb-action-recovery"
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=_spec(tmp_path, monkeypatch, target_top_n=4),
+    )
+    executor = _CountingExecutor(storage)
+    waiting = _advance_to_second_generation_gate(
+        storage, project_id, current, executor
+    )
+    current = _approve_with_executor(storage, project_id, waiting, executor)
+    assert (current.revision, current.current_step) == (11, "evaluation")
+
+    deferred = _DeferredExecutor()
+    first_service = OledBoundedDiscoverySessionActionService(
+        storage=storage,
+        actions_root=actions_root,
+        executor=deferred,  # type: ignore[arg-type]
+    )
+    queued = first_service.enqueue_advance(
+        project_id=project_id,
+        session_id=current.session_id,
+        expected_revision=11,
+    )
+    action_dir = actions_root / project_id / queued["action_id"]
+    request_bytes = (action_dir / "request.json").read_bytes()
+
+    def crash_before_pr_atb_revision(path: Path) -> None:
+        if path.name == "state_000012.json":
+            raise SystemExit("simulated PR-AW exit after PR-ATb registration")
+
+    monkeypatch.setattr(
+        session_module,
+        "_REVISION_PUBLISH_FAULT_HOOK",
+        crash_before_pr_atb_revision,
+    )
+    with pytest.raises(SystemExit, match="PR-ATb registration"):
+        deferred.run()
+    assert json.loads(
+        (action_dir / "action.json").read_text(encoding="utf-8")
+    )["status"] == "RUNNING"
+    assert (action_dir / "request.json").read_bytes() == request_bytes
+
+    monkeypatch.setattr(session_module, "_REVISION_PUBLISH_FAULT_HOOK", None)
+    app = create_app(base_runs_dir=base_runs, workspace_dir=workspace)
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    blocked = client.post(
+        f"/api/projects/{project_id}/oled-bounded-sessions/"
+        f"{current.session_id}/actions/advance",
+        json={"expected_revision": 11},
+    )
+    assert blocked.status_code == 409
+    assert "already has an active" in blocked.get_json()["error"]
+
+    response = client.post(
+        f"/api/projects/{project_id}/oled-bounded-session-actions/"
+        f"{queued['action_id']}/recover"
+    )
+    assert response.status_code == 200
+    recovered = response.get_json()["action"]
+    assert (recovered["status"], recovered["completed_revision"]) == (
+        "RECOVERED",
+        12,
+    )
+    assert recovered["result"]["current_step"] == "candidate_decision"
+    assert (action_dir / "request.json").read_bytes() == request_bytes
+    repeated = client.post(
+        f"/api/projects/{project_id}/oled-bounded-session-actions/"
+        f"{queued['action_id']}/recover"
+    )
+    assert repeated.status_code == 200
+    assert repeated.get_json()["action"]["completed_revision"] == 12
+
+    revision = 12
+    terminal: dict[str, Any] | None = None
+    for _ in range(3):
+        submitted = client.post(
+            f"/api/projects/{project_id}/oled-bounded-sessions/"
+            f"{current.session_id}/actions/advance",
+            json={"expected_revision": revision},
+        )
+        assert submitted.status_code == 202
+        completed = _poll_action(
+            client,
+            project_id,
+            submitted.get_json()["action"]["action_id"],
+        )
+        assert completed["status"] == "SUCCEEDED"
+        terminal = completed["result"]
+        revision = terminal["revision"]
+    assert terminal is not None
+    assert terminal["status"] == "COMPLETED_TOP_N"
+    assert terminal["terminal"]["usage"] == {
+        "iterations": 2,
+        "generation_rounds": 2,
+        "generated_candidates": 2,
+    }
+
+
+def test_interrupted_action_without_completed_publication_remains_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    project_id = "unfinished-action-recovery"
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=_spec(tmp_path, monkeypatch, target_top_n=1),
+    )
+    actions_root = tmp_path / "actions"
+    deferred = _DeferredExecutor()
+    first = OledBoundedDiscoverySessionActionService(
+        storage=storage,
+        actions_root=actions_root,
+        executor=deferred,  # type: ignore[arg-type]
+    )
+
+    def exit_before_child_dispatch(**kwargs: Any) -> Any:
+        del kwargs
+        raise SystemExit("simulated exit before child dispatch")
+
+    monkeypatch.setattr(
+        action_module,
+        "advance_oled_bounded_discovery_session",
+        exit_before_child_dispatch,
+    )
+    queued = first.enqueue_advance(
+        project_id=project_id,
+        session_id=current.session_id,
+        expected_revision=0,
+    )
+    with pytest.raises(SystemExit, match="before child dispatch"):
+        deferred.run()
+    action_dir = actions_root / project_id / queued["action_id"]
+    request_bytes = (action_dir / "request.json").read_bytes()
+    state_bytes = (action_dir / "action.json").read_bytes()
+
+    with pytest.raises(ValueError, match="still owned by a live worker"):
+        first.recover_interrupted_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )
+
+    restarted = OledBoundedDiscoverySessionActionService(
+        storage=storage,
+        actions_root=actions_root,
+        executor=_HoldingExecutor(),  # type: ignore[arg-type]
+    )
+    with pytest.raises(ValueError, match="completed publication"):
+        restarted.recover_interrupted_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )
+    assert (action_dir / "request.json").read_bytes() == request_bytes
+    assert (action_dir / "action.json").read_bytes() == state_bytes
+    assert inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,
+    ).revision == 0
+    with pytest.raises(ValueError, match="already has an active"):
+        restarted.enqueue_advance(
+            project_id=project_id,
+            session_id=current.session_id,
+            expected_revision=0,
+        )
 
 
 def test_queued_action_request_rewrite_fails_closed_without_cross_session_action(

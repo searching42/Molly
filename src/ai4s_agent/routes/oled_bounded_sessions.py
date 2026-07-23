@@ -140,6 +140,22 @@ def register_oled_bounded_session_routes(
         except (OSError, ValueError) as exc:
             return _error(exc)
 
+    @app.post(
+        "/api/projects/<project_id>/oled-bounded-session-actions/"
+        "<action_id>/recover"
+    )
+    def recover_oled_bounded_session_action(project_id: str, action_id: str):
+        try:
+            action = actions.recover_interrupted_action(
+                project_id=project_id,
+                action_id=action_id,
+            )
+            return jsonify({"ok": True, "action": action})
+        except FileNotFoundError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 404
+        except (OSError, ValueError) as exc:
+            return _error(exc)
+
 
 def _json_object() -> dict[str, Any]:
     payload = request.get_json(silent=True)
@@ -163,6 +179,9 @@ def _error(exc: Exception):
         "requires gate approval",
         "not waiting for approval",
         "terminal session",
+        "not interrupted and recoverable",
+        "still owned by a live worker",
+        "not backed by a completed publication",
     )
     status = 409 if any(marker in message for marker in conflict_markers) else 400
     if "unavailable" in message:

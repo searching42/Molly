@@ -15,6 +15,7 @@ from ai4s_agent.oled_bounded_discovery_session import (
     _write_mutable_json,
     advance_oled_bounded_discovery_session,
     approve_oled_bounded_discovery_session_gate,
+    reconcile_completed_oled_bounded_discovery_session_action,
 )
 from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_directory
 from ai4s_agent.oled_bounded_discovery_session_view import (
@@ -32,9 +33,11 @@ from ai4s_agent.storage import ProjectStorage
 
 
 _REQUEST_VERSION = "oled_bounded_discovery_session_action_request.v1"
-_STATE_VERSION = "oled_bounded_discovery_session_action_state.v1"
+_STATE_VERSION_V1 = "oled_bounded_discovery_session_action_state.v1"
+_STATE_VERSION = "oled_bounded_discovery_session_action_state.v2"
 _ACTIVE = {"QUEUED", "RUNNING"}
-_STATUSES = _ACTIVE | {"SUCCEEDED", "FAILED"}
+_STATUSES_V1 = _ACTIVE | {"SUCCEEDED", "FAILED"}
+_STATUSES = _STATUSES_V1 | {"RECOVERED"}
 _REQUEST_KEYS = {
     "request_version",
     "action_id",
@@ -149,13 +152,70 @@ class OledBoundedDiscoverySessionActionService:
                 },
             }
         public = _public_record(request, state)
-        if status == "SUCCEEDED":
+        if status in {"SUCCEEDED", "RECOVERED"}:
             public["result"] = build_oled_bounded_discovery_session_view(
                 storage=self.storage,
                 project_id=clean_project,
                 session_id=str(request["session_id"]),
             )
         return public
+
+    def recover_interrupted_action(
+        self, *, project_id: str, action_id: str
+    ) -> dict[str, Any]:
+        """Adopt only an already-complete child for an interrupted action."""
+
+        clean_project = validated_oled_bounded_project_id(project_id)
+        with self._lock:
+            request, state, request_bytes = self._read(clean_project, action_id)
+            if state["status"] == "RECOVERED":
+                public = _public_record(request, state)
+                public["result"] = build_oled_bounded_discovery_session_view(
+                    storage=self.storage,
+                    project_id=clean_project,
+                    session_id=str(request["session_id"]),
+                )
+                return public
+            if state["status"] != "RUNNING":
+                raise ValueError("PR-AW action is not interrupted and recoverable")
+            if self._owned_active_action(state):
+                raise ValueError("PR-AW action is still owned by a live worker")
+
+        result = reconcile_completed_oled_bounded_discovery_session_action(
+            storage=self.storage,
+            project_id=clean_project,
+            session_id=str(request["session_id"]),
+            expected_revision=int(request["expected_revision"]),
+        )
+        if result.revision <= int(request["expected_revision"]):
+            raise ValueError("PR-AW interrupted action did not advance the session")
+
+        with self._lock:
+            current_request, current_state, current_bytes = self._read(
+                clean_project, action_id
+            )
+            if (
+                current_request != request
+                or current_bytes != request_bytes
+                or current_state != state
+            ):
+                raise ValueError("PR-AW interrupted action changed during recovery")
+            recovered = {
+                **state,
+                "state_version": _STATE_VERSION,
+                "status": "RECOVERED",
+                "updated_at": now_iso(),
+                "completed_revision": result.revision,
+                "error": None,
+            }
+            self._write_state(recovered)
+            public = _public_record(request, recovered)
+            public["result"] = build_oled_bounded_discovery_session_view(
+                storage=self.storage,
+                project_id=clean_project,
+                session_id=result.session_id,
+            )
+            return public
 
     def _enqueue(
         self,
@@ -495,11 +555,14 @@ def _validated_state(
 ) -> dict[str, Any]:
     if set(state) != _STATE_KEYS:
         raise ValueError("PR-AW action state fields are invalid")
+    state_version = state["state_version"]
+    allowed_statuses = _STATUSES_V1 if state_version == _STATE_VERSION_V1 else _STATUSES
     if (
-        state["state_version"] != _STATE_VERSION
+        not isinstance(state_version, str)
+        or state_version not in {_STATE_VERSION_V1, _STATE_VERSION}
         or state["project_id"] != project_id
         or state["action_id"] != action_id
-        or state["status"] not in _STATUSES
+        or state["status"] not in allowed_statuses
     ):
         raise ValueError("PR-AW action state identity is invalid")
     if not all(isinstance(state[key], str) for key in ("updated_at", "instance_id")):
@@ -518,10 +581,10 @@ def _validated_state(
         raise ValueError("PR-AW action error is invalid")
     if state["status"] in _ACTIVE and (revision is not None or state["error"] is not None):
         raise ValueError("PR-AW active action state is invalid")
-    if state["status"] == "SUCCEEDED" and (
+    if state["status"] in {"SUCCEEDED", "RECOVERED"} and (
         revision is None or state["error"] is not None
     ):
-        raise ValueError("PR-AW successful action state is invalid")
+        raise ValueError("PR-AW completed action state is invalid")
     if state["status"] == "FAILED" and (
         revision is not None or not isinstance(state["error"], dict)
     ):

@@ -186,6 +186,76 @@ def inspect_oled_bounded_discovery_session(
         return _result_from_state(session_dir, state)
 
 
+def reconcile_completed_oled_bounded_discovery_session_action(
+    *,
+    storage: ProjectStorage,
+    project_id: str,
+    session_id: str,
+    expected_revision: int,
+) -> OledBoundedDiscoverySessionResult:
+    """Adopt an externally complete child without dispatching an adapter."""
+
+    session_dir = _session_dir(storage, project_id, session_id)
+    with _session_lock(session_dir):
+        spec = _read_spec(session_dir)
+        state = _read_state(session_dir)
+        _require_revision(state, expected_revision)
+        if state["status"] == WAITING_USER:
+            _validate_state_child_structure(state)
+            waiting = _child_by_label(state, _waiting_child_label(state))
+            waiting_stage = storage.read_stage_state(
+                project_id, str(waiting["run_id"])
+            )
+            if (
+                waiting_stage is None
+                or waiting_stage.stage != waiting["task_id"]
+                or waiting_stage.status != RunStatus.SUCCEEDED
+            ):
+                raise ValueError(
+                    "PR-AV interrupted action is not backed by a completed publication"
+                )
+        reconciled = _reconcile_waiting_child(
+            storage, project_id, session_dir, spec, state
+        )
+        if reconciled["revision"] != state["revision"]:
+            _validate_external_state(
+                storage, project_id, session_dir, spec, reconciled
+            )
+            return _result_from_state(session_dir, reconciled)
+        _validate_external_state(storage, project_id, session_dir, spec, state)
+        if state["status"] != ACTIVE:
+            raise ValueError("PR-AV interrupted action has no completed child to adopt")
+        action = _next_action(
+            storage=storage,
+            project_id=project_id,
+            session_dir=session_dir,
+            spec=spec,
+            state=state,
+        )
+        if action["kind"] == "terminal":
+            raise ValueError("PR-AV interrupted action has no completed child to adopt")
+        run_id = _child_run_id(str(spec["session_id"]), str(action["label"]))
+        stage = storage.read_stage_state(project_id, run_id)
+        registry = storage.read_artifact_registry(project_id, run_id)
+        if (
+            stage is None
+            or stage.stage != action["task_id"]
+            or stage.status != RunStatus.SUCCEEDED
+            or _EXECUTION_RECORDS[action["task_id"]] not in registry
+        ):
+            raise ValueError(
+                "PR-AV interrupted action is not backed by a completed publication"
+            )
+        return _adopt_registered_child_transition(
+            storage=storage,
+            project_id=project_id,
+            session_dir=session_dir,
+            state=state,
+            action=action,
+            run_id=run_id,
+        )
+
+
 def advance_oled_bounded_discovery_session(
     *,
     storage: ProjectStorage,
@@ -429,41 +499,14 @@ def _execute_child_transition(
         registry = storage.read_artifact_registry(project_id, run_id)
         record_id = _EXECUTION_RECORDS[action["task_id"]]
         if record_id in registry:
-            complete = _complete_child_registry(
-                storage, project_id, run_id, action["task_id"]
-            )
-            _verify_child_publication(
+            return _adopt_registered_child_transition(
                 storage=storage,
                 project_id=project_id,
+                session_dir=session_dir,
+                state=state,
+                action=action,
                 run_id=run_id,
-                task_id=action["task_id"],
-                inputs=action["inputs"],
-                options=action["options"],
-                registry=complete,
             )
-            children = _upsert_child(
-                state,
-                label=label,
-                run_id=run_id,
-                task_id=action["task_id"],
-                status="succeeded",
-                artifacts=complete,
-                artifact_manifest_sha256=_registry_manifest_sha256(
-                    storage, project_id, run_id, complete
-                ),
-            )
-            updated = _transition(
-                storage,
-                session_dir,
-                state,
-                status=ACTIVE,
-                current_step=_success_step(
-                    storage, project_id, {**state, "children": children}, label, action
-                ),
-                children=children,
-                failure=None,
-            )
-            return _result_from_state(session_dir, updated)
         if existing.status == RunStatus.RUNNING:
             children = _upsert_child(
                 state,
@@ -623,6 +666,53 @@ def _execute_child_transition(
             "task_id": action["task_id"],
             "run_id": run_id,
         },
+    )
+    return _result_from_state(session_dir, updated)
+
+
+def _adopt_registered_child_transition(
+    *,
+    storage: ProjectStorage,
+    project_id: str,
+    session_dir: Path,
+    state: dict[str, Any],
+    action: dict[str, Any],
+    run_id: str,
+) -> OledBoundedDiscoverySessionResult:
+    label = str(action["label"])
+    complete = _complete_child_registry(
+        storage, project_id, run_id, str(action["task_id"])
+    )
+    _verify_child_publication(
+        storage=storage,
+        project_id=project_id,
+        run_id=run_id,
+        task_id=action["task_id"],
+        inputs=action["inputs"],
+        options=action["options"],
+        registry=complete,
+    )
+    children = _upsert_child(
+        state,
+        label=label,
+        run_id=run_id,
+        task_id=action["task_id"],
+        status="succeeded",
+        artifacts=complete,
+        artifact_manifest_sha256=_registry_manifest_sha256(
+            storage, project_id, run_id, complete
+        ),
+    )
+    updated = _transition(
+        storage,
+        session_dir,
+        state,
+        status=ACTIVE,
+        current_step=_success_step(
+            storage, project_id, {**state, "children": children}, label, action
+        ),
+        children=children,
+        failure=None,
     )
     return _result_from_state(session_dir, updated)
 
@@ -2683,4 +2773,5 @@ __all__ = [
     "approve_oled_bounded_discovery_session_gate",
     "create_oled_bounded_discovery_session",
     "inspect_oled_bounded_discovery_session",
+    "reconcile_completed_oled_bounded_discovery_session_action",
 ]
