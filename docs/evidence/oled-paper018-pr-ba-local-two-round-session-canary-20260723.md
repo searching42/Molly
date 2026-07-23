@@ -45,7 +45,9 @@ The complete workflow was first exercised through the visible PR-AW web UI. A se
 2. Process 2 reconstructed the Session from immutable revisions, approved the exact second-generation gate, and continued to terminal revision 15.
 3. Process 3 loaded the terminal Session and exact-replayed its externally bound result without dispatching a child again.
 
-The restart canary contains 15 immutable action request/state pairs. Every action finished `SUCCEEDED`; there is exactly one approval at expected revision 10. The sorted request/state manifest SHA-256 is `8deacfc8f28bfdb46d66e867a46bdf183d5d836840281615f52254dbe781948e`.
+The restart canary contains 15 complete action directories. Each directory contains an immutable, no-replace `request.json` envelope and the final snapshot of mutable `action.json` scheduling telemetry. All 15 final telemetry snapshots report `SUCCEEDED`. The workflow contains four gate approvals in total; exactly one of them uses `expected_revision=10` for the second generation gate.
+
+The sorted request/final-telemetry snapshot manifest SHA-256 is `8deacfc8f28bfdb46d66e867a46bdf183d5d836840281615f52254dbe781948e`. This digest records the control-plane telemetry observed for this canary. It does not determine Session causal order, child success, or any scientific result. Those facts are established by the immutable Session revision chain, exact StageState and Artifact Registry consistency checks, and exact replay of the bound scientific publications.
 
 ## Round 1: bounded shortfall
 
