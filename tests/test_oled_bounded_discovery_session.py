@@ -113,6 +113,70 @@ class _CountingExecutor:
         return self.delegate.resume_after_gate(**kwargs)  # type: ignore[arg-type]
 
 
+def _advance_with_executor(
+    storage: ProjectStorage,
+    project_id: str,
+    current: object,
+    executor: _CountingExecutor,
+) -> object:
+    return advance_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,  # type: ignore[attr-defined]
+        expected_revision=current.revision,  # type: ignore[attr-defined]
+        executor=executor,  # type: ignore[arg-type]
+    )
+
+
+def _approve_with_executor(
+    storage: ProjectStorage,
+    project_id: str,
+    current: object,
+    executor: _CountingExecutor,
+) -> object:
+    return approve_oled_bounded_discovery_session_gate(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,  # type: ignore[attr-defined]
+        expected_revision=current.revision,  # type: ignore[attr-defined]
+        actor="session-reviewer",
+        executor=executor,  # type: ignore[arg-type]
+    )
+
+
+def _advance_to_second_generation_gate(
+    storage: ProjectStorage,
+    project_id: str,
+    current: object,
+    executor: _CountingExecutor,
+) -> object:
+    current = _approve_with_executor(
+        storage,
+        project_id,
+        _advance_with_executor(storage, project_id, current, executor),
+        executor,
+    )
+    current = _approve_with_executor(
+        storage,
+        project_id,
+        _advance_with_executor(storage, project_id, current, executor),
+        executor,
+    )
+    current = _approve_with_executor(
+        storage,
+        project_id,
+        _advance_with_executor(storage, project_id, current, executor),
+        executor,
+    )
+    current = _advance_with_executor(storage, project_id, current, executor)
+    current = _advance_with_executor(storage, project_id, current, executor)
+    current = _advance_with_executor(storage, project_id, current, executor)
+    assert (current.status, current.current_step) == (ACTIVE, GENERATION)  # type: ignore[attr-defined]
+    current = _advance_with_executor(storage, project_id, current, executor)
+    assert (current.status, current.current_step) == (WAITING_USER, GENERATION)  # type: ignore[attr-defined]
+    return current
+
+
 def test_registry_supply_completes_without_creating_inverse_design_child(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -309,6 +373,163 @@ def test_second_round_consumes_controller_grant_and_cumulative_roster(
     current = _advance(storage, project_id, current)
     assert current.status == COMPLETED_TOP_N
     result = json.loads(current.result_json.read_text(encoding="utf-8"))  # type: ignore[union-attr]
+    assert result["usage"] == {
+        "iterations": 2,
+        "generation_rounds": 2,
+        "generated_candidates": 2,
+    }
+
+
+def test_second_round_generation_success_is_reconciled_before_session_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    project_id = "second-generation-reconciliation"
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=_spec(tmp_path, monkeypatch, target_top_n=4),
+    )
+    executor = _CountingExecutor(storage)
+    waiting = _advance_to_second_generation_gate(
+        storage, project_id, current, executor
+    )
+    assert waiting.revision == 10  # type: ignore[attr-defined]
+    second_run_id = str(waiting.waiting_run_id)  # type: ignore[attr-defined]
+
+    def crash_before_second_generation_revision(path: Path) -> None:
+        if path.name == "state_000011.json":
+            raise SystemExit("simulated crash after second PR-AS publication")
+
+    monkeypatch.setattr(
+        session_module,
+        "_REVISION_PUBLISH_FAULT_HOOK",
+        crash_before_second_generation_revision,
+    )
+    with pytest.raises(SystemExit, match="second PR-AS publication"):
+        _approve_with_executor(storage, project_id, waiting, executor)
+
+    second_stage = storage.read_stage_state(project_id, second_run_id)
+    assert second_stage is not None
+    assert second_stage.status == RunStatus.SUCCEEDED
+    second_registry = storage.read_artifact_registry(project_id, second_run_id)
+    assert "oled_inverse_design_execution_record" in second_registry
+    second_receipt = (
+        storage.run_dir(project_id, second_run_id)
+        / second_registry["oled_inverse_design_receipt"]
+    )
+    receipt_bytes = second_receipt.read_bytes()
+    assert not (waiting.session_dir / "state_000011.json").exists()  # type: ignore[attr-defined]
+    assert executor.resume_count == 4
+
+    monkeypatch.setattr(session_module, "_REVISION_PUBLISH_FAULT_HOOK", None)
+    recovered = inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=waiting.session_id,  # type: ignore[attr-defined]
+    )
+    assert (recovered.revision, recovered.status, recovered.current_step) == (
+        11,
+        ACTIVE,
+        EVALUATION,
+    )
+    assert executor.resume_count == 4
+    assert second_receipt.read_bytes() == receipt_bytes
+
+    for _ in range(4):
+        recovered = _advance_with_executor(
+            storage, project_id, recovered, executor
+        )  # type: ignore[assignment]
+    assert recovered.status == COMPLETED_TOP_N  # type: ignore[attr-defined]
+    result = json.loads(recovered.result_json.read_text(encoding="utf-8"))  # type: ignore[attr-defined,union-attr]
+    assert result["usage"] == {
+        "iterations": 2,
+        "generation_rounds": 2,
+        "generated_candidates": 2,
+    }
+
+
+def test_second_round_cumulative_evaluation_registration_is_adopted_without_redispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    project_id = "second-evaluation-reconciliation"
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=_spec(tmp_path, monkeypatch, target_top_n=4),
+    )
+    executor = _CountingExecutor(storage)
+    waiting = _advance_to_second_generation_gate(
+        storage, project_id, current, executor
+    )
+    current = _approve_with_executor(storage, project_id, waiting, executor)
+    assert (current.revision, current.status, current.current_step) == (
+        11,
+        ACTIVE,
+        EVALUATION,
+    )
+    evaluation_run_id = f"{current.session_id}-evaluation-02"
+
+    def crash_before_cumulative_evaluation_revision(path: Path) -> None:
+        if path.name == "state_000012.json":
+            raise SystemExit("simulated crash after PR-ATb registration")
+
+    monkeypatch.setattr(
+        session_module,
+        "_REVISION_PUBLISH_FAULT_HOOK",
+        crash_before_cumulative_evaluation_revision,
+    )
+    with pytest.raises(SystemExit, match="PR-ATb registration"):
+        _advance_with_executor(storage, project_id, current, executor)
+
+    evaluation_stage = storage.read_stage_state(project_id, evaluation_run_id)
+    assert evaluation_stage is not None
+    assert evaluation_stage.status == RunStatus.SUCCEEDED
+    evaluation_registry = storage.read_artifact_registry(
+        project_id, evaluation_run_id
+    )
+    assert "oled_candidate_evaluation_execution_record" in evaluation_registry
+    evaluation_receipt = (
+        storage.run_dir(project_id, evaluation_run_id)
+        / evaluation_registry["oled_candidate_evaluation_receipt"]
+    )
+    receipt_bytes = evaluation_receipt.read_bytes()
+    assert not (current.session_dir / "state_000012.json").exists()
+
+    monkeypatch.setattr(session_module, "_REVISION_PUBLISH_FAULT_HOOK", None)
+    restarted = inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,
+    )
+    assert (restarted.revision, restarted.status, restarted.current_step) == (
+        11,
+        ACTIVE,
+        EVALUATION,
+    )
+
+    restarted_executor = _CountingExecutor(storage)
+    adopted = _advance_with_executor(
+        storage, project_id, restarted, restarted_executor
+    )
+    assert (adopted.revision, adopted.status, adopted.current_step) == (
+        12,
+        ACTIVE,
+        CANDIDATE_DECISION,
+    )
+    assert restarted_executor.execute_count == 0
+    assert restarted_executor.resume_count == 0
+    assert evaluation_receipt.read_bytes() == receipt_bytes
+
+    for _ in range(3):
+        adopted = _advance_with_executor(
+            storage, project_id, adopted, restarted_executor
+        )  # type: ignore[assignment]
+    assert adopted.status == COMPLETED_TOP_N  # type: ignore[attr-defined]
+    result = json.loads(adopted.result_json.read_text(encoding="utf-8"))  # type: ignore[attr-defined,union-attr]
     assert result["usage"] == {
         "iterations": 2,
         "generation_rounds": 2,
