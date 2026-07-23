@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import ai4s_agent.oled_bounded_discovery_session as session_module
+import ai4s_agent.oled_inverse_design as inverse_design_module
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.oled_bounded_discovery_session import (
     ACTIVE,
@@ -29,7 +30,7 @@ from ai4s_agent.oled_real_phase1_execution import _json_bytes, _stable_hash
 from ai4s_agent.schemas import RunStatus, StageState
 from ai4s_agent.storage import ProjectStorage
 from tests.test_oled_experiment_batch_selection import _screening_publication
-from tests.test_oled_inverse_design import _source_csv
+from tests.test_oled_inverse_design import _remote_reinvent4_template, _source_csv
 
 
 def _spec(
@@ -195,6 +196,72 @@ def test_one_generation_round_runs_complete_executor_chain_and_stops(
         "generation_rounds": 1,
         "generated_candidates": 1,
     }
+
+
+def test_remote_generation_known_hosts_remains_bound_through_evaluation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    project_id = "remote-one-round-session"
+    spec = _spec(tmp_path, monkeypatch, target_top_n=3)
+    config = tmp_path / "remote-session-reinvent4.toml"
+    config.write_text(_remote_reinvent4_template(), encoding="utf-8")
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        "workstation1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
+        encoding="utf-8",
+    )
+    spec["inverse_design"] = {
+        "reinvent4_config": str(config),
+        "mode": "remote",
+        "existing_output_csv_by_round": [],
+        "remote_known_hosts": str(known_hosts),
+        "remote_profile_id": "workstation1-node221-reinvent4-v1",
+        "seed_base": 17,
+        "timeout_sec": 60,
+    }
+
+    def fake_transport(
+        payload: dict[str, object],
+        *,
+        run_id: str,
+        output_dir: Path,
+        count: int,
+    ) -> dict[str, object]:
+        assert run_id
+        assert count == 1
+        assert payload["remote_host"] == "workstation1"
+        assert payload["reinvent4_remote_known_hosts_file"]
+        local_output = Path(str(payload["local_output_csv"]))
+        local_output.write_text(
+            "candidate_id,SMILES\nremote-session,CCCCC\n",
+            encoding="utf-8",
+        )
+        return {
+            "rows": [{"candidate_id": "remote-session", "SMILES": "CCCCC"}],
+            "source_csv": str(local_output),
+            "mode": "remote",
+            "remote": {"endpoint_hostname_verified": True},
+        }
+
+    monkeypatch.setattr(
+        inverse_design_module,
+        "_generate_candidates_reinvent4_backend",
+        fake_transport,
+    )
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=spec,
+    )
+    current = _approve(storage, project_id, _advance(storage, project_id, current))
+    current = _approve(storage, project_id, _advance(storage, project_id, current))
+    current = _approve(storage, project_id, _advance(storage, project_id, current))
+    assert (current.status, current.current_step) == (ACTIVE, EVALUATION)
+
+    current = _advance(storage, project_id, current)
+    assert (current.status, current.current_step) == (ACTIVE, CANDIDATE_DECISION)
 
 
 def test_second_round_consumes_controller_grant_and_cumulative_roster(

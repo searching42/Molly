@@ -121,6 +121,18 @@ exact-bound gates, and reproduced the same explainable chemical Top-4 as the
 direct PR-AV canary.
 
 PR-AX adds runtime evidence only. It introduces no new schema, scientific
-policy, generator, or validation claim. The remaining runtime acceptance step
-is the same bounded session contract with node45's remote REINVENT4 transport
-once non-disruptive GPU capacity is available.
+policy, generator, or validation claim.
+
+## PR-AY/PR-AZ: remote transport and session acceptance
+
+The executable CPU-only REINVENT4 transport is deployed on node221 through the
+`workstation1-node221-reinvent4-v1` profile. The real paper018 remote session
+canary is complete; see
+`docs/evidence/oled-paper018-node221-remote-session-canary-20260723.md`.
+
+That run exposed and closed one PR-AV provenance-propagation defect: the pinned
+remote known-hosts anchor now remains available to every downstream round child
+that exact-replays PR-AS. A fresh project then completed remote generation,
+single-round Registry-plus-generated prediction, explainable Top-4 selection,
+and bounded controller termination. The result remains recommendation-only and
+adds no computational or experimental validation claim.
