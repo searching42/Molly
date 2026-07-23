@@ -569,7 +569,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 | `M0-007 validation` | #390 | `3301b702399aa7bd60c8865b154a2432b9e003a2` | `docs/evidence/oled-paper018-pr-aw-control-plane-canary-20260723.md` | control-plane validated |
 | `M0-009`～`M0-010` | #392 | `3eb548240a014acb8a9168aa36021a3bcc1c10cc` | `docs/evidence/oled-paper018-node221-remote-session-canary-20260723.md` | remote single-round validated |
 | `M1-001`～`M1-011` | #393 | runtime: `86f554c7510d5c92b7f8cb91cfcb90094d27632f`; evidence introduced: `a939f089e7861ee5fd0fac1a70503261a71c318a`; merge: `3da0dd23aac0d4d4c3f40fa5fee762b100e8e069` | `docs/evidence/oled-paper018-pr-ba-local-two-round-session-canary-20260723.md` | local two-round runtime validated |
-| `M1-012`～`M1-013` | this PR | merge: pending | `tests/test_oled_bounded_discovery_session.py` | second-round fault reconciliation tested |
+| `M1-012`～`M1-013` | #394 | tests introduced: `bbe68d92c4fedcecd13d62c984ea10acab0bc848`; merge: pending | `tests/test_oled_bounded_discovery_session.py` | second-round fault reconciliation tested |
 | `M1R-001`～`M1R-005` | — | — | — | resource-opportunity validation deferred |
 
 ---
