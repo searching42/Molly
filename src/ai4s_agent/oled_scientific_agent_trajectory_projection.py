@@ -83,6 +83,14 @@ class _CapturedFile:
     sha256: str
 
 
+@dataclass(frozen=True)
+class _CapturedDirectoryRoster:
+    path: Path
+    kind: str
+    names: tuple[str, ...]
+    existed: bool
+
+
 class _ReadOnlyProjectStorage(ProjectStorage):
     """Resolve existing project/run paths without creating filesystem state."""
 
@@ -201,6 +209,7 @@ def publish_oled_scientific_agent_trajectory_projection(
         raise ValueError("PR-BD Session is unavailable")
 
     captures: dict[Path, _CapturedFile] = {}
+    directory_rosters: list[_CapturedDirectoryRoster] = []
     spec_capture = _capture_canonical_json(
         session_dir / "session_spec.json", captures=captures
     )
@@ -208,7 +217,11 @@ def publish_oled_scientific_agent_trajectory_projection(
         spec_capture.payload,
         session_dir=session_dir,
     )
-    states = _read_immutable_states(session_dir, captures=captures)
+    states = _read_immutable_states(
+        session_dir,
+        captures=captures,
+        directory_rosters=directory_rosters,
+    )
     terminal_state = states[-1]
     if terminal_state["status"] not in _TERMINAL:
         raise ValueError("PR-BD only projects terminal Sessions")
@@ -255,6 +268,7 @@ def publish_oled_scientific_agent_trajectory_projection(
             session_id=str(session_id),
             terminal_revision=int(terminal_state["revision"]),
             captures=captures,
+            directory_rosters=directory_rosters,
         )
     )
     raw_events.extend(action_events)
@@ -382,6 +396,7 @@ def publish_oled_scientific_agent_trajectory_projection(
         read_only_storage, clean_project, session_dir, spec, terminal_state
     )
     _recheck_captures(captures)
+    _recheck_directory_rosters(directory_rosters)
 
     root = (
         _lexical_absolute(output_root)
@@ -445,13 +460,14 @@ def _validated_captured_spec(
 
 
 def _read_immutable_states(
-    session_dir: Path, *, captures: dict[Path, _CapturedFile]
+    session_dir: Path,
+    *,
+    captures: dict[Path, _CapturedFile],
+    directory_rosters: list[_CapturedDirectoryRoster],
 ) -> list[dict[str, Any]]:
-    names = sorted(
-        path.name
-        for path in session_dir.glob("state_*.json")
-        if path.name[6:-5].isdigit()
-    )
+    roster = _capture_directory_roster(session_dir, kind="session_states")
+    directory_rosters.append(roster)
+    names = list(roster.names)
     if not names or names != [f"state_{index:06d}.json" for index in range(len(names))]:
         raise ValueError("PR-BD immutable Session history is incomplete")
     if len(names) > _MAX_STATE_REVISIONS:
@@ -484,6 +500,7 @@ def _project_actions(
     session_id: str,
     terminal_revision: int,
     captures: dict[Path, _CapturedFile],
+    directory_rosters: list[_CapturedDirectoryRoster],
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
@@ -491,7 +508,13 @@ def _project_actions(
     list[dict[str, Any]],
 ]:
     project_root = _lexical_absolute(actions_root / project_id)
-    if not project_root.exists():
+    roster = _capture_directory_roster(
+        project_root,
+        kind="actions",
+        allow_missing=True,
+    )
+    directory_rosters.append(roster)
+    if not roster.existed:
         return [], [], [], []
     if not project_root.is_dir() or project_root.is_symlink():
         raise ValueError("PR-BD action root is invalid")
@@ -499,7 +522,7 @@ def _project_actions(
     bindings: list[dict[str, Any]] = []
     telemetry_snapshot: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
-    action_dirs = sorted(project_root.glob("oled-session-action-*"))
+    action_dirs = [project_root / name for name in roster.names]
     if len(action_dirs) > _MAX_ACTION_RECORDS:
         raise ValueError("PR-BD action roster exceeds the v1 limit")
     for action_dir in action_dirs:
@@ -864,6 +887,54 @@ def _capture_file(
     return captured
 
 
+def _capture_directory_roster(
+    path: Path,
+    *,
+    kind: str,
+    allow_missing: bool = False,
+) -> _CapturedDirectoryRoster:
+    absolute = _lexical_absolute(path)
+    if not os.path.lexists(absolute):
+        if allow_missing:
+            return _CapturedDirectoryRoster(
+                path=absolute,
+                kind=kind,
+                names=(),
+                existed=False,
+            )
+        raise ValueError("PR-BD authoritative source directory is unavailable")
+    _require_existing_directory(absolute, "PR-BD authoritative source directory")
+    names = _selected_directory_names(absolute, kind=kind)
+    return _CapturedDirectoryRoster(
+        path=absolute,
+        kind=kind,
+        names=names,
+        existed=True,
+    )
+
+
+def _selected_directory_names(path: Path, *, kind: str) -> tuple[str, ...]:
+    if kind == "session_states":
+        return tuple(
+            sorted(
+                name
+                for name in os.listdir(path)
+                if name.startswith("state_")
+                and name.endswith(".json")
+                and name[6:-5].isdigit()
+            )
+        )
+    if kind == "actions":
+        return tuple(
+            sorted(
+                name
+                for name in os.listdir(path)
+                if name.startswith("oled-session-action-")
+            )
+        )
+    raise ValueError("PR-BD source roster kind is unsupported")
+
+
 def _recheck_captures(captures: dict[Path, _CapturedFile]) -> None:
     for path, expected in captures.items():
         payload, sha256 = _read_regular_file_bound(
@@ -874,6 +945,23 @@ def _recheck_captures(captures: dict[Path, _CapturedFile]) -> None:
         )
         if payload != expected.payload or sha256 != expected.sha256:
             raise ValueError("PR-BD source changed before publication")
+
+
+def _recheck_directory_rosters(
+    rosters: list[_CapturedDirectoryRoster],
+) -> None:
+    for expected in rosters:
+        exists = os.path.lexists(expected.path)
+        if exists != expected.existed:
+            raise ValueError("PR-BD authoritative source roster changed")
+        if not exists:
+            continue
+        _require_existing_directory(
+            expected.path,
+            "PR-BD authoritative source directory",
+        )
+        if _selected_directory_names(expected.path, kind=expected.kind) != expected.names:
+            raise ValueError("PR-BD authoritative source roster changed")
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
