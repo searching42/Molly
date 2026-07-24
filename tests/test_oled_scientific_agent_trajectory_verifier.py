@@ -14,6 +14,7 @@ from ai4s_agent.oled_scientific_agent_trajectory_projection import (
     publish_oled_scientific_agent_trajectory_projection,
 )
 from ai4s_agent.oled_scientific_agent_trajectory_verifier import (
+    _verified_oled_scientific_agent_trajectory_projection,
     verify_oled_scientific_agent_trajectory_projection,
 )
 from test_oled_scientific_agent_trajectory_projection import (
@@ -387,3 +388,55 @@ def test_action_roster_addition_during_external_replay_fails_closed(
             actions_root=actions_root,
             publication_dir=publication,
         )
+
+
+def test_post_use_check_runs_and_chains_consumer_error_on_exception_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage, project_id, current, actions_root, publication = _publication(
+        tmp_path, monkeypatch
+    )
+
+    with pytest.raises(ValueError, match="changed during verification") as caught:
+        with _verified_oled_scientific_agent_trajectory_projection(
+            storage=storage,  # type: ignore[arg-type]
+            project_id=project_id,
+            session_id=current.session_id,  # type: ignore[attr-defined]
+            actions_root=actions_root,
+            publication_dir=publication,
+        ) as bound:
+            with pytest.raises(TypeError):
+                bound.payloads["events.jsonl"] = b"forged"  # type: ignore[index]
+            replacement = publication / "replacement.tmp"
+            replacement.write_bytes(b"{}\n")
+            replacement.replace(publication / "events.jsonl")
+            raise RuntimeError("downstream metric computation failed")
+
+    error: BaseException | None = caught.value
+    chain: list[BaseException] = []
+    while error is not None and error not in chain:
+        chain.append(error)
+        error = error.__cause__
+    assert any(
+        isinstance(item, RuntimeError)
+        and str(item) == "downstream metric computation failed"
+        for item in chain
+    )
+
+
+def test_stable_publication_preserves_original_consumer_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage, project_id, current, actions_root, publication = _publication(
+        tmp_path, monkeypatch
+    )
+
+    with pytest.raises(RuntimeError, match="downstream-only failure"):
+        with _verified_oled_scientific_agent_trajectory_projection(
+            storage=storage,  # type: ignore[arg-type]
+            project_id=project_id,
+            session_id=current.session_id,  # type: ignore[attr-defined]
+            actions_root=actions_root,
+            publication_dir=publication,
+        ):
+            raise RuntimeError("downstream-only failure")

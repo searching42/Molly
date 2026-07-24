@@ -8,7 +8,8 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from types import MappingProxyType
+from typing import Callable, Iterator, Mapping
 
 from ai4s_agent.oled_categorical_dataset_execution import (
     _read_exact_published_payload_at,
@@ -83,7 +84,7 @@ class _PinnedPublication:
 @dataclass(frozen=True)
 class _BoundTrajectoryProjection:
     result: OledScientificAgentTrajectoryVerification
-    payloads: dict[str, bytes]
+    payloads: Mapping[str, bytes]
     _publication: _PinnedPublication
 
     def assert_stable(self) -> None:
@@ -174,11 +175,20 @@ def _verified_oled_scientific_agent_trajectory_projection(
             )
             bound = _BoundTrajectoryProjection(
                 result=result,
-                payloads=dict(persisted.payloads),
+                payloads=MappingProxyType(dict(persisted.payloads)),
                 _publication=persisted,
             )
-            yield bound
-            bound.assert_stable()
+            consumer_error: BaseException | None = None
+            try:
+                yield bound
+            except BaseException as exc:
+                consumer_error = exc
+                raise
+            finally:
+                _assert_stable_or_chain(
+                    bound.assert_stable,
+                    consumer_error=consumer_error,
+                )
 
 
 @contextmanager
@@ -221,8 +231,17 @@ def _pinned_publication(path: Path) -> Iterator[_PinnedPublication]:
             directory_stat=opened,
             payloads=payloads,
         )
-        yield bound
-        bound.assert_stable()
+        consumer_error: BaseException | None = None
+        try:
+            yield bound
+        except BaseException as exc:
+            consumer_error = exc
+            raise
+        finally:
+            _assert_stable_or_chain(
+                bound.assert_stable,
+                consumer_error=consumer_error,
+            )
     except ValueError:
         raise
     except OSError as exc:
@@ -262,6 +281,19 @@ def _open_existing_directory(path: Path) -> int:
 
 def _same_inode(left: os.stat_result, right: os.stat_result) -> bool:
     return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _assert_stable_or_chain(
+    check: Callable[[], None],
+    *,
+    consumer_error: BaseException | None,
+) -> None:
+    try:
+        check()
+    except BaseException as integrity_error:
+        if consumer_error is not None:
+            raise integrity_error from consumer_error
+        raise
 
 
 def _directory_flag() -> int:
