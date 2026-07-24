@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import stat
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,6 +83,100 @@ class _CapturedFile:
     sha256: str
 
 
+class _ReadOnlyProjectStorage(ProjectStorage):
+    """Resolve existing project/run paths without creating filesystem state."""
+
+    def __init__(self, source: ProjectStorage) -> None:
+        # Deliberately do not call ProjectStorage.__init__: it creates
+        # ``projects/``.  A projection must fail without changing the source
+        # workspace when any authoritative path is absent.
+        self.workspace_dir = source.workspace_dir
+        self.projects_root = source.projects_root
+
+    def project_dir(self, project_id: str) -> Path:
+        path = _lexical_absolute(self.projects_root / project_id)
+        if not path.is_relative_to(self.projects_root):
+            raise ValueError("PR-BD project path escapes the workspace")
+        return _require_existing_directory(path, "PR-BD project")
+
+    def run_dir(self, project_id: str, run_id: str) -> Path:
+        project = self.project_dir(project_id)
+        runs_root = _require_existing_directory(
+            _lexical_absolute(project / "runs"), "PR-BD runs root"
+        )
+        path = _lexical_absolute(runs_root / run_id)
+        if not path.is_relative_to(runs_root):
+            raise ValueError("PR-BD child run path escapes the runs root")
+        return _require_existing_directory(path, "PR-BD child run")
+
+
+def _lexical_absolute(path: Path) -> Path:
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def _require_existing_directory(path: Path, label: str) -> Path:
+    """Open every existing component with O_NOFOLLOW and create nothing."""
+
+    absolute = _lexical_absolute(path)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory_flag is None:
+        raise ValueError("PR-BD read-only path resolution requires safe dirfd support")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            absolute.anchor,
+            os.O_RDONLY | directory_flag | no_follow,
+        )
+        for component in absolute.parts[1:]:
+            next_descriptor = os.open(
+                component,
+                os.O_RDONLY | directory_flag | no_follow,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        opened = os.fstat(descriptor)
+        named = os.stat(absolute, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(named.st_mode)
+            or opened.st_dev != named.st_dev
+            or opened.st_ino != named.st_ino
+        ):
+            raise ValueError(f"{label} is not a stable existing directory")
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError(f"{label} is unavailable or contains a symlink") from exc
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
+    return absolute
+
+
+def _reject_output_source_overlap(
+    *,
+    root: Path,
+    session_dir: Path,
+    actions_project_root: Path,
+    child_run_dirs: list[Path],
+) -> None:
+    output = _lexical_absolute(root)
+    sources = [
+        _lexical_absolute(session_dir),
+        _lexical_absolute(actions_project_root),
+        *[_lexical_absolute(path) for path in child_run_dirs],
+    ]
+    if any(
+        output == source
+        or output.is_relative_to(source)
+        or source.is_relative_to(output)
+        for source in sources
+    ):
+        raise ValueError("PR-BD output root overlaps an authoritative source tree")
+
+
 def publish_oled_scientific_agent_trajectory_projection(
     *,
     storage: ProjectStorage,
@@ -92,10 +188,11 @@ def publish_oled_scientific_agent_trajectory_projection(
     """Publish a deterministic read-only projection of one terminal Session."""
 
     clean_project = validated_oled_bounded_project_id(project_id)
-    project_dir = storage.project_dir(clean_project)
-    session_dir = (
+    read_only_storage = _ReadOnlyProjectStorage(storage)
+    project_dir = read_only_storage.project_dir(clean_project)
+    session_dir = _lexical_absolute(
         project_dir / "bounded-discovery-sessions" / str(session_id or "")
-    ).absolute()
+    )
     if (
         not session_dir.is_relative_to(project_dir)
         or not session_dir.is_dir()
@@ -116,7 +213,7 @@ def publish_oled_scientific_agent_trajectory_projection(
     if terminal_state["status"] not in _TERMINAL:
         raise ValueError("PR-BD only projects terminal Sessions")
     _validate_external_state(
-        storage, clean_project, session_dir, spec, terminal_state
+        read_only_storage, clean_project, session_dir, spec, terminal_state
     )
 
     source_bindings: list[dict[str, Any]] = [
@@ -164,7 +261,7 @@ def publish_oled_scientific_agent_trajectory_projection(
     source_bindings.extend(action_bindings)
 
     child_events, child_bindings = _project_children(
-        storage=storage,
+        storage=read_only_storage,
         project_id=clean_project,
         states=states,
         captures=captures,
@@ -282,16 +379,24 @@ def publish_oled_scientific_agent_trajectory_projection(
     # binding has been captured, then prove all captured named files still have
     # the same exact bytes before publication.
     _validate_external_state(
-        storage, clean_project, session_dir, spec, terminal_state
+        read_only_storage, clean_project, session_dir, spec, terminal_state
     )
     _recheck_captures(captures)
 
     root = (
-        output_root.absolute()
+        _lexical_absolute(output_root)
         if output_root is not None
-        else (project_dir / "trajectory-projections").absolute()
+        else _lexical_absolute(project_dir / "trajectory-projections")
     )
-    root.mkdir(parents=True, exist_ok=True)
+    _reject_output_source_overlap(
+        root=root,
+        session_dir=session_dir,
+        actions_project_root=_lexical_absolute(actions_root / clean_project),
+        child_run_dirs=[
+            read_only_storage.run_dir(clean_project, str(child["run_id"]))
+            for child in terminal_state["children"]
+        ],
+    )
     output_dir = root / publication_id
     with _pinned_output_parents_without_symlink_components(root) as pinned:
         _publish_payload_directory(
@@ -385,7 +490,7 @@ def _project_actions(
     list[dict[str, Any]],
     list[dict[str, Any]],
 ]:
-    project_root = (actions_root.absolute() / project_id).absolute()
+    project_root = _lexical_absolute(actions_root / project_id)
     if not project_root.exists():
         return [], [], [], []
     if not project_root.is_dir() or project_root.is_symlink():
@@ -744,7 +849,7 @@ def _capture_canonical_json(
 def _capture_file(
     path: Path, *, captures: dict[Path, _CapturedFile]
 ) -> _CapturedFile:
-    absolute = path.absolute()
+    absolute = _lexical_absolute(path)
     payload, sha256 = _read_regular_file_bound(
         absolute,
         max_bytes=_MAX_JSON_BYTES,

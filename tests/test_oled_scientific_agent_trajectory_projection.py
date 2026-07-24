@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,21 @@ from ai4s_agent.oled_scientific_agent_trajectory_projection import (
 from ai4s_agent.oled_real_phase1_execution import _json_bytes, _stable_hash
 from ai4s_agent.storage import ProjectStorage
 from test_oled_bounded_discovery_session import _spec
+
+
+def _tree_snapshot(root: Path) -> dict[str, tuple[str, bytes | None]]:
+    snapshot: dict[str, tuple[str, bytes | None]] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            snapshot[relative] = ("symlink", os.readlink(path).encode())
+        elif path.is_dir():
+            snapshot[relative] = ("directory", None)
+        elif path.is_file():
+            snapshot[relative] = ("file", path.read_bytes())
+        else:
+            snapshot[relative] = ("other", None)
+    return snapshot
 
 
 def _advance(storage: ProjectStorage, project_id: str, current: object) -> object:
@@ -429,3 +445,86 @@ print(json.dumps({"trajectory_id": result.trajectory_id, "publication_id": resul
     assert {
         path.name: path.read_bytes() for path in local.output_dir.iterdir()
     } == {path.name: path.read_bytes() for path in remote_dir.iterdir()}
+
+
+def test_missing_child_run_fails_without_creating_or_changing_workspace_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage, project_id, current = _terminal_single_round(tmp_path, monkeypatch)
+    terminal = json.loads(
+        (current.session_dir / "session_state.json").read_text(encoding="utf-8")  # type: ignore[attr-defined]
+    )
+    missing_run_id = terminal["children"][0]["run_id"]
+    missing_run_dir = storage.run_dir(project_id, missing_run_id)
+    shutil.rmtree(missing_run_dir)
+    before = _tree_snapshot(storage.workspace_dir)
+    output_root = tmp_path / "projection"
+
+    with pytest.raises(ValueError, match="child run"):
+        publish_oled_scientific_agent_trajectory_projection(
+            storage=storage,
+            project_id=project_id,
+            session_id=current.session_id,  # type: ignore[attr-defined]
+            actions_root=tmp_path / "actions",
+            output_root=output_root,
+        )
+
+    assert _tree_snapshot(storage.workspace_dir) == before
+    assert not missing_run_dir.exists()
+    assert not output_root.exists()
+
+
+def test_output_root_cannot_overlap_scientific_or_action_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage, project_id, current = _terminal_single_round(tmp_path, monkeypatch)
+    actions_root = tmp_path / "actions"
+    _write_action_pair(
+        actions_root,
+        project_id=project_id,
+        session_id=current.session_id,  # type: ignore[attr-defined]
+        completed_revision=current.revision,  # type: ignore[attr-defined]
+    )
+    terminal = json.loads(
+        (current.session_dir / "session_state.json").read_text(encoding="utf-8")  # type: ignore[attr-defined]
+    )
+    child_run_dir = storage.run_dir(project_id, terminal["children"][0]["run_id"])
+    sources = [
+        current.session_dir,  # type: ignore[attr-defined]
+        child_run_dir,
+        actions_root / project_id,
+    ]
+    before = _tree_snapshot(tmp_path)
+
+    for source in sources:
+        with pytest.raises(ValueError, match="overlaps"):
+            publish_oled_scientific_agent_trajectory_projection(
+                storage=storage,
+                project_id=project_id,
+                session_id=current.session_id,  # type: ignore[attr-defined]
+                actions_root=actions_root,
+                output_root=source,
+            )
+
+    assert _tree_snapshot(tmp_path) == before
+
+
+def test_output_symlink_redirect_cannot_create_inside_session_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage, project_id, current = _terminal_single_round(tmp_path, monkeypatch)
+    redirected = tmp_path / "redirected-source"
+    redirected.symlink_to(current.session_dir, target_is_directory=True)  # type: ignore[attr-defined]
+    before = _tree_snapshot(tmp_path)
+
+    with pytest.raises(ValueError):
+        publish_oled_scientific_agent_trajectory_projection(
+            storage=storage,
+            project_id=project_id,
+            session_id=current.session_id,  # type: ignore[attr-defined]
+            actions_root=tmp_path / "actions",
+            output_root=redirected / "injected-projection",
+        )
+
+    assert _tree_snapshot(tmp_path) == before
+    assert not (current.session_dir / "injected-projection").exists()  # type: ignore[attr-defined]
