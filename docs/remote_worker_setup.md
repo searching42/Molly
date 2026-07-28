@@ -27,8 +27,24 @@ private key, password, bearer token, or `ProxyCommand` in a Molly JSON file.
 
 ## 2. Register the connection
 
-The Settings page writes a private `connections.json`. A minimal logical
-profile is equivalent to:
+The Settings page provides a guided connection form:
+
+1. choose the GPU or CPU resource role; Molly assigns the stable logical ID;
+2. enter the name after `Host` in `~/.ssh/config`;
+3. run `ssh <alias> -- hostname -s` and enter the exact short hostname;
+4. enter an absolute run directory on the remote machine;
+5. select only workloads whose worker environments are installed remotely.
+
+The optional dedicated `known_hosts` path is under **Advanced security
+options**. Leave it blank to use SSH's normal `known_hosts` resolution. Saving
+also starts the bounded read-only worker probe. The UI reports full readiness
+only when every declared capability is present in the probe's verified
+capabilities; otherwise it lists the missing labels. This comparison never
+rewrites the declaration, and neither a saved profile nor a successful probe
+becomes execution authority.
+
+The page writes a private `connections.json`. A minimal logical profile is
+equivalent to:
 
 ```json
 {

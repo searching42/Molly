@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -448,6 +449,128 @@ def test_execution_profiles_are_fixed_allowlisted_contracts() -> None:
     assert reinvent.resource_limits.gpu_count_max == 0
     assert "command" not in reinvent.model_dump(mode="json")
     assert reinvent.digest().startswith("sha256:")
+
+
+def test_compute_resource_ui_guides_users_through_fixed_connection_roles(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "config",
+    )
+
+    html = app.test_client().get("/").get_data(as_text=True)
+
+    assert 'id="compute-resource-role"' in html
+    assert 'value="gpu-worker-main" data-base-capability="gpu"' in html
+    assert 'value="compute-worker-main" data-base-capability="cpu"' in html
+    assert 'id="compute-connection-id-preview"' in html
+    assert 'id="compute-display-name"' not in html
+    assert 'id="compute-connection-id"' not in html
+    assert 'id="compute-capabilities"' not in html
+    assert html.count('name="compute-workload" type="checkbox"') == 3
+    assert 'data-capabilities="gpu,mineru" data-required-role="gpu-worker-main"' in html
+    assert 'data-capabilities="gpu,unimol" data-required-role="gpu-worker-main"' in html
+    assert 'data-capabilities="cpu,reinvent4"' in html
+    assert "input.disabled = incompatible" in html
+    assert "if (incompatible) input.checked = false" in html
+    assert "display_name: \"\"" in html
+    assert "connection_id: role.value" in html
+    assert "const form = event.currentTarget" in html
+    assert "form.reset()" in html
+    assert "event.currentTarget.reset()" not in html
+    assert "保存并测试连接" in html
+    assert "配置已保存，但连接测试失败" in html
+    assert "computeProbeLabel(connection)" in html
+    assert "computeProbeLabel(connection, response.probe)" in html
+    assert "computeProbeLabel(payload, response.probe)" in html
+
+
+def test_compute_probe_label_distinguishes_reachability_from_workload_readiness(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "config",
+    )
+    html = app.test_client().get("/").get_data(as_text=True)
+    function_start = html.index("function computeProbeLabel(")
+    function_end = html.index("function updateComputeConnectionHints(", function_start)
+    function_source = html[function_start:function_end]
+    node_binary = shutil.which("node")
+    if node_binary is None:
+        pytest.skip("Node.js is unavailable for the executable UI contract test")
+
+    cases = {
+        "not_tested": {
+            "connection": {"declared_capabilities": ["gpu", "unimol"]},
+            "probe": None,
+        },
+        "complete": {
+            "connection": {"declared_capabilities": ["gpu", "unimol"]},
+            "probe": {
+                "status": "available",
+                "verified_capabilities": ["cpu", "gpu", "unimol"],
+            },
+        },
+        "missing_one": {
+            "connection": {"declared_capabilities": ["gpu", "unimol"]},
+            "probe": {
+                "status": "available",
+                "verified_capabilities": ["gpu"],
+            },
+        },
+        "missing_multiple": {
+            "connection": {"declared_capabilities": ["gpu", "mineru", "unimol"]},
+            "probe": {
+                "status": "available",
+                "verified_capabilities": ["mineru"],
+            },
+        },
+        "hostname_mismatch": {
+            "connection": {"declared_capabilities": ["gpu", "unimol"]},
+            "probe": {
+                "status": "mismatch",
+                "verified_capabilities": ["gpu", "unimol"],
+            },
+        },
+        "transport_unavailable": {
+            "connection": {"declared_capabilities": ["gpu", "unimol"]},
+            "probe": {"status": "unavailable", "verified_capabilities": []},
+        },
+    }
+    script = f"""
+{function_source}
+const cases = {json.dumps(cases, ensure_ascii=False)};
+const labels = Object.fromEntries(
+  Object.entries(cases).map(([name, value]) => [
+    name,
+    computeProbeLabel(value.connection, value.probe),
+  ]),
+);
+process.stdout.write(JSON.stringify(labels));
+"""
+    completed = subprocess.run(
+        [node_binary],
+        input=script,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "not_tested": "尚未测试",
+        "complete": "连接及所选工作负载可用",
+        "missing_one": "连接可达，但缺少所选能力：unimol",
+        "missing_multiple": "连接可达，但缺少所选能力：gpu、unimol",
+        "hostname_mismatch": "主机身份不匹配",
+        "transport_unavailable": "暂不可用",
+    }
 
 
 def test_legacy_pinned_profile_resolves_private_connection_and_fixed_execution(
