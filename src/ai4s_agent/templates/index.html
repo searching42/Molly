@@ -37,21 +37,26 @@
       button, input, select, textarea { font: inherit; }
       .app-shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 1rem; min-height: 100vh; width: min(1420px, 100%); margin: 0 auto; padding: 1rem; }
       .project-sidebar, .project-workspace { min-width: 0; }
-      .project-sidebar { position: sticky; top: 1rem; align-self: start; display: grid; gap: 0.85rem; max-height: calc(100vh - 2rem); overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem; background: rgba(255, 255, 255, 0.86); box-shadow: var(--shadow); }
+      .project-sidebar { position: sticky; top: 1rem; align-self: start; display: grid; gap: 0.85rem; max-height: calc(100vh - 2rem); overflow-x: hidden; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem; background: rgba(255, 255, 255, 0.86); box-shadow: var(--shadow); }
       .project-workspace { display: grid; gap: 0.85rem; }
-      .sidebar-header h1 { margin: 0; font-size: 1.05rem; line-height: 1.15; }
-      .sidebar-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; align-items: start; }
-      .sidebar-header p { grid-column: 1 / -1; }
-      .sidebar-header p, .workspace-topbar p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
-      .workspace-topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem 1rem; background: var(--panel); box-shadow: var(--shadow); }
-      .workspace-topbar h2 { font-size: 1.05rem; }
       .project-list { display: grid; gap: 0.45rem; max-height: 34vh; overflow: auto; }
-      .project-row { width: 100%; display: grid; gap: 0.15rem; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.55rem 0.65rem; background: rgba(255, 255, 255, 0.58); color: var(--ink); text-align: left; }
-      .project-row.active { border-color: rgba(20, 92, 114, 0.55); background: rgba(220, 239, 229, 0.75); }
+      .project-row { width: 100%; display: block; border: 1px solid transparent; border-radius: var(--radius); padding: 0.62rem 0.7rem; background: transparent; color: var(--ink); text-align: left; }
+      .project-row:hover { background: rgba(255, 255, 255, 0.66); }
+      .project-row.active { border-color: rgba(12, 42, 52, 0.82); background: #173945; color: #fff; box-shadow: 0 7px 18px rgba(11, 35, 43, 0.32); }
       .project-row strong { font-size: 0.86rem; }
-      .project-row span { color: var(--muted); font-size: 0.74rem; }
-      .sidebar-section { display: grid; gap: 0.55rem; }
+      .sidebar-section { display: grid; min-width: 0; gap: 0.55rem; }
       .sidebar-section h2 { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; }
+      .sidebar-heading { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+      .sidebar-heading h2 { margin: 0; }
+      .conversation-list { display: grid; min-width: 0; max-width: 100%; gap: 0.35rem; overflow: hidden; }
+      .conversation-row { display: block; min-width: 0; max-width: 100%; overflow: hidden; }
+      .conversation-select { display: block; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; padding: 0.5rem 0.58rem; color: var(--ink); background: transparent; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+      .conversation-select.active { background: rgba(20, 92, 114, 0.12); color: var(--blue); }
+      .atomic-task-list { display: grid; gap: 0.4rem; }
+      .atomic-task-button { display: grid; grid-template-columns: 1.7rem minmax(0, 1fr); gap: 0.55rem; align-items: center; padding: 0.58rem 0.65rem; border: 1px solid transparent; color: var(--ink); background: transparent; text-align: left; }
+      .atomic-task-button:hover { border-color: var(--line); background: rgba(255, 255, 255, 0.66); }
+      .atomic-task-icon { color: var(--blue); font-size: 1rem; text-align: center; }
+      .atomic-task-status { margin: 0.1rem 0 0; padding: 0 0.58rem; }
       .pill { display: inline-flex; align-items: center; min-height: 1.75rem; padding: 0.28rem 0.55rem; border: 1px solid var(--line); border-radius: 999px; background: var(--white); color: var(--muted); font-size: 0.74rem; font-weight: 900; white-space: nowrap; }
       .chat-panel { display: grid; grid-template-rows: minmax(260px, 1fr) auto; min-height: 520px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
       .conversation-stream { display: grid; align-content: start; gap: 0.75rem; padding: 1rem; overflow: auto; }
@@ -62,10 +67,13 @@
       .chat-attachments, .pending-attachments { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.55rem; }
       .attachment-chip { display: inline-flex; max-width: 100%; align-items: center; gap: 0.35rem; border: 1px solid var(--line); border-radius: 999px; padding: 0.22rem 0.5rem; color: var(--muted); background: var(--white); font-size: 0.74rem; overflow-wrap: anywhere; }
       .conversation-composer { display: grid; gap: 0.65rem; border-top: 1px solid var(--line); padding: 0.85rem; background: rgba(246, 247, 248, 0.84); }
-      .composer-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; gap: 0.6rem; align-items: center; }
+      .composer-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.6rem; align-items: center; }
       .composer-actions button { width: auto; min-width: 8.5rem; }
+      .attachment-actions { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+      .attachment-actions button { min-width: auto; }
+      .attachment-status { overflow: hidden; color: var(--muted); font-size: 0.78rem; text-overflow: ellipsis; white-space: nowrap; }
       .artifact-tray { margin-top: 0; }
-      .advanced-tools, .console-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; backdrop-filter: blur(10px); }
+      .advanced-tools { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; backdrop-filter: blur(10px); }
       .advanced-tools summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.05rem 1.25rem; cursor: pointer; list-style: none; }
       .advanced-tools summary::-webkit-details-marker { display: none; }
       h2, h3 { margin: 0; letter-spacing: -0.02em; }
@@ -95,7 +103,6 @@
       details.mini-panel summary { cursor: pointer; font-weight: 900; }
       .advanced-tools { margin-top: 1rem; }
       .advanced-body { display: grid; gap: 0.85rem; padding: 0 1.25rem 1.25rem; }
-      .console-card { margin-top: 1rem; padding: 1rem; }
       .output { margin: 0.75rem 0 0; min-height: 150px; max-height: 320px; overflow: auto; border-radius: var(--radius); padding: 0.9rem; background: #111a1f; color: #dbedf3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; line-height: 1.5; }
       .review-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; margin-top: 0.85rem; }
       .review-card-grid[hidden] { display: none; }
@@ -108,11 +115,13 @@
       .sr-status { margin-top: 0.55rem; color: var(--muted); font-size: 0.82rem; }
       .launch-warning { display: none; margin: 0; border: 1px solid rgba(165, 77, 22, 0.35); border-radius: var(--radius); padding: 0.9rem 1rem; background: rgba(244, 216, 189, 0.72); color: #5f2b0e; line-height: 1.45; }
       .launch-warning.visible { display: block; }
-      .icon-button { width: auto; min-width: 0; padding: 0.5rem 0.65rem; border: 1px solid var(--line); color: var(--ink); background: var(--white); }
-      .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 1rem; background: rgba(17, 26, 31, 0.45); }
+      .icon-button { width: auto; min-width: 2rem; padding: 0.38rem 0.55rem; border: 1px solid var(--line); color: var(--ink); background: transparent; }
+      .modal-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 1rem; background: rgba(11, 25, 31, 0.58); backdrop-filter: blur(5px); }
       .modal-backdrop[hidden] { display: none; }
-      .settings-dialog { width: min(560px, 100%); max-height: calc(100vh - 2rem); overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; background: #fff; box-shadow: var(--shadow); }
+      .settings-dialog { width: min(560px, 100%); max-height: calc(100vh - 2rem); overflow: auto; border: 1px solid var(--line); border-radius: 12px; padding: 1.15rem; background: #f8fafb; box-shadow: 0 24px 70px rgba(11, 25, 31, 0.34); }
       .settings-header { display: flex; justify-content: space-between; gap: 1rem; align-items: start; margin-bottom: 0.8rem; }
+      .settings-header .icon-button { flex: 0 0 auto; }
+      .settings-dialog form { gap: 0.72rem; }
       .settings-section { display: grid; gap: 0.65rem; margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 1rem; }
       .field-help { margin: -0.28rem 0 0.1rem; color: var(--muted); font-size: 0.76rem; line-height: 1.45; }
       .field-help code { overflow-wrap: anywhere; }
@@ -129,68 +138,50 @@
       .settings-list { display: grid; gap: 0.5rem; }
       .settings-list-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.5rem; align-items: center; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.65rem; }
       .settings-list-item button { width: auto; min-width: 0; padding: 0.45rem 0.6rem; }
-      @media (max-width: 900px) { .app-shell { grid-template-columns: 1fr; padding: 0.75rem; } .project-sidebar { position: static; max-height: none; } .workspace-topbar, .composer-actions { grid-template-columns: 1fr; display: grid; } .composer-actions button { width: 100%; } .two-column, .split, .tool-grid, .button-row { grid-template-columns: 1fr; } }
+      @media (max-width: 900px) { .app-shell { grid-template-columns: 1fr; padding: 0.75rem; } .project-sidebar { position: static; max-height: none; } .composer-actions { grid-template-columns: 1fr; display: grid; } .composer-actions button { width: 100%; } .two-column, .split, .tool-grid, .button-row { grid-template-columns: 1fr; } }
     </style>
   </head>
   <body>
     <main id="app-shell" class="app-shell">
       <aside id="project-sidebar" class="project-sidebar" aria-label="项目管理">
-        <header class="sidebar-header">
-          <h1>AI4S Agent 控制台</h1>
-          <button id="llm-settings-button" type="button" class="icon-button" aria-label="LLM 设置">⚙ 设置</button>
-          <p>本地项目工作区</p>
-        </header>
-
-        <section class="sidebar-section" aria-label="新建项目">
-          <h2>新建项目</h2>
+        <section class="sidebar-section" aria-label="项目列表">
+          <div class="sidebar-heading">
+            <h2>Projects</h2>
+            <button id="llm-settings-button" type="button" class="icon-button" aria-label="设置" title="设置">⚙ 设置</button>
+          </div>
           <form id="new-project-form">
-            <label for="new-project-name">项目名称</label>
-            <input id="new-project-name" name="name" placeholder="OLED PLQY screening" />
-            <label for="new-project-id">项目 ID</label>
-            <input id="new-project-id" name="project_id" placeholder="proj-oled" />
-            <button type="submit">新建并选择</button>
+            <label class="sr-status" for="new-project-name">项目名称</label>
+            <input id="new-project-name" name="name" placeholder="新项目名称" required />
+            <button type="submit">＋ 新建项目</button>
             <div id="new-project-status" class="sr-status" aria-live="polite"></div>
           </form>
-        </section>
-
-        <section class="sidebar-section" aria-label="项目列表">
-          <h2>项目</h2>
           <div id="project-list" class="project-list" aria-live="polite">
             <p class="small">正在加载项目...</p>
           </div>
         </section>
 
-        <section class="sidebar-section" aria-label="当前项目">
-          <h2>当前项目</h2>
-          <div class="mini-panel">
-            <strong id="active-project-name">proj-oled</strong>
-            <p id="active-project-id" class="small">proj-oled</p>
-            <p id="active-project-run" class="small">尚未生成运行。</p>
+        <section class="sidebar-section" aria-label="项目对话">
+          <div class="sidebar-heading">
+            <h2>对话</h2>
+            <button id="new-conversation-button" type="button" class="icon-button" aria-label="新建对话" title="新建对话">＋</button>
           </div>
+          <div id="conversation-list" class="conversation-list" aria-live="polite"></div>
         </section>
 
-        <section class="sidebar-section" aria-label="OLED 有界发现">
-          <h2>OLED 闭环</h2>
-          <a href="/oled-bounded-sessions">打开有界发现会话</a>
-        </section>
-
-        <section class="sidebar-section" aria-label="原子任务">
+        <section class="sidebar-section" aria-label="常用原子任务">
           <h2>Atomic Tasks</h2>
-          <button id="parse-literature-button" type="button">文献解析</button>
-          <button id="approve-literature-button" type="button" class="ghost" hidden>批准批量解析</button>
-          <p id="literature-task-status" class="small">先在对话中上传并发送 PDF。</p>
+          <div class="atomic-task-list">
+            <button id="atomic-literature-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">⌕</span><span>查找文献</span></button>
+            <button id="parse-literature-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">▤</span><span>文献解析</span></button>
+            <button id="atomic-training-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">△</span><span>生成建模计划</span></button>
+            <button id="atomic-toolbox-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">⋯</span><span>全部任务</span></button>
+            <button id="approve-literature-button" type="button" class="ghost" hidden>批准批量解析</button>
+          </div>
+          <p id="literature-task-status" class="small atomic-task-status">先在对话中上传并发送 PDF。</p>
         </section>
       </aside>
 
       <section id="project-workspace" class="project-workspace" aria-label="当前项目对话工作区">
-        <header class="workspace-topbar">
-          <div>
-            <h2 id="workspace-project-title">proj-oled</h2>
-            <p id="workspace-status">通过对话描述目标、补充证据、审阅结构化计划。</p>
-          </div>
-          <span id="workspace-run-pill" class="pill">等待运行 ID</span>
-        </header>
-
       <aside id="file-launch-warning" class="launch-warning" role="alert">
         当前页面是直接从模板文件打开的，API 请求不会工作。请通过 Flask 服务打开：
         <code>PYTHONPATH=src .venv/bin/python -m flask --app ai4s_agent.app:create_app run --port 5005</code>，
@@ -204,31 +195,32 @@
         <form id="conversation-form" class="conversation-composer">
           <label for="conversation-input">和 Agent 对话</label>
           <textarea id="conversation-input" name="message" placeholder="例如：我想训练 OLED PLQY 模型，优先改善高 PLQY 候选的排序；可以参考 DOI 10.1038/s41597-020-00634-8。"></textarea>
-          <input id="conversation-file-input" type="file" multiple hidden />
+          <input id="conversation-file-input" type="file" multiple hidden accept=".csv,.tsv,.json,.jsonl,.sdf,.mol,.smi,.txt,.md,.pdf,.xls,.xlsx" />
           <div id="pending-conversation-attachments" class="pending-attachments" hidden></div>
+          <p id="conversation-status" class="small">对话会保存到当前项目的本地服务端工作区。</p>
           <div class="composer-actions">
-            <p id="conversation-status" class="small">Enter 换行，点击发送整理结构化计划输入。</p>
-            <button id="conversation-upload-button" type="button" class="ghost">上传文件</button>
+            <div class="attachment-actions">
+              <button id="conversation-upload-button" type="button" class="ghost">＋ 上传文件</button>
+              <span id="conversation-attachment-status" class="attachment-status" aria-live="polite"></span>
+            </div>
             <button id="conversation-submit-button" type="submit">发送</button>
-            <button id="prepare-research-sources-button" type="button" class="ghost">准备文献来源</button>
-            <button id="prepare-modeling-plan-button" type="button" class="ghost">生成建模计划</button>
           </div>
         </form>
       </section>
 
       <section id="chat-review-artifacts" class="review-card-grid artifact-tray" hidden></section>
-
-      <section id="response-console" class="console-card">
-        <h2>当前响应</h2>
-        <p class="small">最近一次操作的成功结果或错误详情会显示在这里，不需要打开高级工具。</p>
-        <pre id="output" class="output">就绪。</pre>
-        <div id="agent-review-card-output" class="review-card-grid" hidden></div>
-      </section>
+      <div id="agent-review-card-output" class="review-card-grid" hidden></div>
 
       <details id="advanced-tools" class="advanced-tools">
         <summary><strong>高级工具</strong><span class="pill">原始 API 工具</span></summary>
         <div class="advanced-body">
           <div class="tool-grid">
+            <article class="mini-panel">
+              <h3>当前响应</h3>
+              <p class="small">最近一次原始 API 响应，仅用于调试。</p>
+              <pre id="output" class="output">就绪。</pre>
+            </article>
+
             <article class="mini-panel">
               <h3>主流程高级参数</h3>
               <p class="small">普通流程会自动推断；只有调试依赖和计划时才需要填写。</p>
@@ -488,6 +480,7 @@
       const output = document.getElementById("output");
       let activeProject = { project_id: "proj-oled", name: "proj-oled" };
       let knownProjects = [];
+      let knownConversations = [];
       let conversationMessages = [];
       let currentConversationId = "";
       let pendingConversationAttachments = [];
@@ -513,18 +506,18 @@
       }
 
       function render(payload) {
-        output.textContent = JSON.stringify(normalizeErrorForRender(payload), null, 2);
+        const normalized = normalizeErrorForRender(payload);
+        output.textContent = JSON.stringify(normalized, null, 2);
         renderAgentReviewCard(null);
+        if (normalized.ok === false || normalized.error) {
+          appendConversationMessage("system", `操作失败：${normalized.error || "未知错误"}`);
+        }
       }
 
       function updateActiveProjectDisplay(project) {
         const projectId = String(project?.project_id || "proj-oled").trim() || "proj-oled";
         const name = String(project?.name || projectId).trim() || projectId;
         activeProject = { project_id: projectId, name };
-        setText("active-project-name", name);
-        setText("active-project-id", projectId);
-        setText("workspace-project-title", name);
-        setText("workspace-status", `当前项目：${projectId}`);
       }
 
       function renderProjectList(projects) {
@@ -547,18 +540,69 @@
           row.className = `project-row${projectId === activeProject.project_id ? " active" : ""}`;
           const title = document.createElement("strong");
           title.textContent = name;
-          const meta = document.createElement("span");
-          meta.textContent = projectId;
           row.appendChild(title);
-          row.appendChild(meta);
           row.addEventListener("click", () => selectProject({ project_id: projectId, name }));
           root.appendChild(row);
         });
       }
 
+      function renderConversationList(conversations = knownConversations) {
+        const root = document.getElementById("conversation-list");
+        if (!root) return;
+        root.innerHTML = "";
+        const items = Array.isArray(conversations) ? conversations : [];
+        if (!items.length) {
+          const empty = document.createElement("p");
+          empty.className = "small";
+          empty.textContent = activeProject.project_id ? "暂无对话。" : "请先选择项目。";
+          root.appendChild(empty);
+          return;
+        }
+        items.forEach((conversation) => {
+          const row = document.createElement("div");
+          row.className = "conversation-row";
+          const select = document.createElement("button");
+          const conversationId = String(conversation.conversation_id || "");
+          select.type = "button";
+          select.className = `conversation-select${conversationId === currentConversationId ? " active" : ""}`;
+          select.textContent = String(conversation.title || "新对话");
+          select.title = select.textContent;
+          select.addEventListener("click", () => {
+            if (conversationId && conversationId !== currentConversationId) {
+              void loadProjectConversation(activeProject.project_id, conversationId);
+            }
+          });
+          row.appendChild(select);
+          root.appendChild(row);
+        });
+      }
+
+      async function createConversation() {
+        if (!activeProject.project_id || !knownProjects.some((item) => item.project_id === activeProject.project_id)) {
+          render({ ok: false, error: "请先新建或选择一个项目。" });
+          return;
+        }
+        setText("conversation-status", "正在创建新对话…");
+        try {
+          const response = await postJSON(
+            `/api/projects/${encodeURIComponent(activeProject.project_id)}/conversations`,
+            { title: "新对话" },
+          );
+          const created = response.conversation || {};
+          const conversationId = String(created.conversation_id || "");
+          if (!conversationId) throw new Error("服务端未返回 conversation_id");
+          await loadProjectConversation(activeProject.project_id, conversationId);
+        } catch (err) {
+          setText("conversation-status", `新建对话失败：${normalizeErrorForRender(err).error}`);
+          render(err);
+        }
+      }
+
       function selectProject(project) {
         updateActiveProjectDisplay(project);
         syncProjectId(activeProject.project_id);
+        knownConversations = [];
+        renderConversationList();
         conversationMessages = [];
         currentConversationId = "";
         pendingConversationAttachments = [];
@@ -593,6 +637,7 @@
             selectProject(selected);
           } else {
             updateActiveProjectDisplay(activeProject);
+            renderConversationList([]);
           }
           return response;
         } catch (err) {
@@ -633,6 +678,10 @@
         if (!root) return;
         root.innerHTML = "";
         root.hidden = !pendingConversationAttachments.length;
+        setText(
+          "conversation-attachment-status",
+          pendingConversationAttachments.length ? `${pendingConversationAttachments.length} 个附件待发送` : "",
+        );
         pendingConversationAttachments.forEach((attachment) => {
           const chip = document.createElement("span");
           chip.className = "attachment-chip";
@@ -863,28 +912,46 @@
         return importedConversationId;
       }
 
-      async function loadProjectConversation(projectId) {
+      async function loadProjectConversation(projectId, preferredConversationId = "") {
         const generation = ++conversationLoadGeneration;
         setText("conversation-status", "正在加载服务端对话…");
         try {
           const importedConversationId = await importLegacyLocalConversation(projectId);
           const listing = await getJSON(`/api/projects/${encodeURIComponent(projectId)}/conversations`);
           const conversations = Array.isArray(listing.conversations) ? listing.conversations : [];
-          let selected = conversations.find((item) => item.conversation_id === importedConversationId) || conversations[0];
+          knownConversations = conversations;
+          let selected = conversations.find((item) => item.conversation_id === preferredConversationId)
+            || conversations.find((item) => item.conversation_id === importedConversationId)
+            || conversations[0];
           if (!selected) {
             const created = await postJSON(
               `/api/projects/${encodeURIComponent(projectId)}/conversations`,
-              { title: "Project conversation" },
+              { title: "新对话" },
             );
             selected = created.conversation;
+            knownConversations = [selected];
           }
           if (generation !== conversationLoadGeneration || projectId !== activeProject.project_id) return;
           currentConversationId = String(selected.conversation_id || "");
+          renderConversationList();
           const detail = await getJSON(
             `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(currentConversationId)}`,
           );
           if (generation !== conversationLoadGeneration || projectId !== activeProject.project_id) return;
           const storedMessages = Array.isArray(detail.messages) ? detail.messages : [];
+          pendingConversationAttachments = [];
+          renderPendingConversationAttachments();
+          currentConversationDecision = null;
+          currentModelingPlanPayload = null;
+          currentResearchSourceProposal = null;
+          currentLiteratureIntake = null;
+          document.getElementById("approve-literature-button").hidden = true;
+          const artifacts = document.getElementById("chat-review-artifacts");
+          if (artifacts) {
+            artifacts.innerHTML = "";
+            artifacts.hidden = true;
+          }
+          renderAgentReviewCard(null);
           const literatureMessage = [...storedMessages].reverse().find((item) =>
             item?.role === "user" && Array.isArray(item.attachments) &&
             item.attachments.some((attachment) =>
@@ -893,6 +960,10 @@
             )
           );
           latestLiteratureMessageId = String(literatureMessage?.message_id || "");
+          setText(
+            "literature-task-status",
+            latestLiteratureMessageId ? "已找到带 PDF 的对话消息，可提交文献解析。" : "先在对话中上传并发送 PDF。",
+          );
           conversationMessages = storedMessages
             .filter((item) => item && item.content)
             .map((item) => ({ role: item.role, content: item.content }));
@@ -904,6 +975,7 @@
           if (!storedMessages.length) {
             appendConversationMessage("assistant", "描述你的目标、数据背景或可引用来源。对话会保存在当前项目中。");
           }
+          renderConversationList();
           setText(
             "conversation-status",
             detail.recovered_tail ? "已恢复崩溃前的完整消息；损坏尾部已安全截断。" : "对话已保存到本地服务端工作区。",
@@ -1207,13 +1279,6 @@
 
       function syncRunId(runId) {
         ["plan-run-id", "expand-run-id", "diff-run-id", "promotion-run-id", "model-promotion-run-id", "timeline-run-id", "preview-run-id"].forEach((id) => setValue(id, runId));
-        if (runId) {
-          setText("active-project-run", `运行：${runId}`);
-          setText("workspace-run-pill", runId);
-        } else {
-          setText("active-project-run", "运行：尚未创建");
-          setText("workspace-run-pill", "未创建");
-        }
       }
 
       function syncProjectId(projectId) {
@@ -1254,16 +1319,17 @@
 
       document.getElementById("new-project-form").addEventListener("submit", async (event) => {
         event.preventDefault();
-        const fd = new FormData(event.currentTarget);
+        const projectForm = event.currentTarget;
+        const fd = new FormData(projectForm);
         const rawName = String(fd.get("name") || "").trim();
-        const rawId = String(fd.get("project_id") || "").trim();
-        const payload = { name: rawName || rawId || "Untitled project", project_id: rawId };
+        const payload = { name: rawName || "Untitled project" };
         try {
           const response = await postJSON("/api/projects", payload);
           const project = { project_id: response.project_id, name: response.name || response.project_id };
           if (!knownProjects.some((item) => item.project_id === project.project_id)) knownProjects.unshift(project);
           selectProject(project);
-          setText("new-project-status", `已选择项目：${project.project_id}`);
+          projectForm.reset();
+          setText("new-project-status", `已创建：${project.name}`);
           render(response);
         } catch (err) {
           setText("new-project-status", "新建项目失败。");
@@ -1425,13 +1491,13 @@
         }
       });
 
-      document.getElementById("prepare-research-sources-button").addEventListener("click", async () => {
+      async function prepareResearchSources() {
         if (!conversationMessages.length) {
           render({ ok: false, error: "请先发送一条对话，让 Agent 识别研究目标和可能的 DOI/URL 来源。" });
           return;
         }
-        const runId = String(document.getElementById("workspace-run-pill")?.textContent || "").trim();
-        if (!runId || runId === "等待运行 ID") {
+        const runId = currentRunId;
+        if (!runId) {
           render({ ok: false, error: "缺少运行 ID，请先发送一条对话。" });
           return;
         }
@@ -1449,11 +1515,14 @@
           appendConversationMessage("system", "文献来源准备失败，详情见当前响应。");
           render(err);
         }
-      });
+      }
 
-      document.getElementById("prepare-modeling-plan-button").addEventListener("click", async () => {
+      async function prepareTrainingTask() {
         if (!currentModelingPlanPayload) {
-          render({ ok: false, error: "请先发送一条对话，让 Agent 通过 next-turn 决策整理 modeling_plan_payload。" });
+          const input = document.getElementById("conversation-input");
+          input.value = "请基于当前项目资料准备一个训练任务，明确目标性质、数据输入、模型后端、验证方案和需要我确认的 Gate。";
+          input.focus();
+          appendConversationMessage("system", "训练任务需要先形成可审阅的建模 payload。已将任务说明放入输入框，请补充目标后发送。");
           return;
         }
         if (currentConversationDecision?.requires_user_response) {
@@ -1474,8 +1543,35 @@
           appendConversationMessage("system", "建模计划生成失败，详情见当前响应。");
           render(err);
         }
-      });
+      }
 
+      async function loadAtomicTasks({ revealResults = false } = {}) {
+        try {
+          const response = await getJSON("/api/atomic-tasks");
+          render(response);
+          if (revealResults) {
+            const tasks = Array.isArray(response.tasks) ? response.tasks : [];
+            const advancedTools = document.getElementById("advanced-tools");
+            if (advancedTools) advancedTools.open = true;
+            appendConversationMessage(
+              "agent",
+              `已加载原子任务工具箱，共 ${tasks.length} 项。完整任务定义已在下方“高级工具”的“当前响应”中展开。`,
+            );
+            output.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+          return response;
+        } catch (err) {
+          render(err);
+          return null;
+        }
+      }
+
+      document.getElementById("new-conversation-button").addEventListener("click", createConversation);
+      document.getElementById("atomic-literature-button").addEventListener("click", prepareResearchSources);
+      document.getElementById("atomic-training-button").addEventListener("click", prepareTrainingTask);
+      document.getElementById("atomic-toolbox-button").addEventListener("click", () => {
+        void loadAtomicTasks({ revealResults: true });
+      });
       document.getElementById("llm-settings-button").addEventListener("click", () => openLLMSettings(false));
       document.getElementById("llm-settings-close").addEventListener("click", closeLLMSettings);
       document.getElementById("llm-api-key-source").addEventListener("change", (event) => {
@@ -1579,8 +1675,8 @@
         try { render(await postJSON("/api/run-plan/diff", payload)); } catch (err) { render(err); }
       });
 
-      document.getElementById("task-toolbox-button").addEventListener("click", async () => {
-        try { render(await getJSON("/api/atomic-tasks")); } catch (err) { render(err); }
+      document.getElementById("task-toolbox-button").addEventListener("click", () => {
+        void loadAtomicTasks();
       });
 
       document.getElementById("asset-promotion-form").addEventListener("submit", async (event) => {
