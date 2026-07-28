@@ -1052,11 +1052,27 @@
         return connection.display_name || connection.connection_id;
       }
 
-      function computeProbeLabel(probe) {
+      function computeProbeLabel(connection, probe = connection?.last_probe) {
         if (!probe) return "尚未测试";
-        if (probe.status === "available") return "连接可用";
         if (probe.status === "mismatch") return "主机身份不匹配";
-        return "暂不可用";
+        if (probe.status !== "available") return "暂不可用";
+        const declaredCapabilities = Array.isArray(connection?.declared_capabilities)
+          ? connection.declared_capabilities
+          : [];
+        const verifiedCapabilities = new Set(
+          (Array.isArray(probe.verified_capabilities) ? probe.verified_capabilities : [])
+            .map((capability) => String(capability || "").trim().toLowerCase())
+            .filter(Boolean),
+        );
+        const missingCapabilities = Array.from(new Set(
+          declaredCapabilities
+            .map((capability) => String(capability || "").trim().toLowerCase())
+            .filter(Boolean),
+        )).filter((capability) => !verifiedCapabilities.has(capability)).sort();
+        if (missingCapabilities.length) {
+          return `连接可达，但缺少所选能力：${missingCapabilities.join("、")}`;
+        }
+        return "连接及所选工作负载可用";
       }
 
       function updateComputeConnectionHints() {
@@ -1086,14 +1102,13 @@
           title.textContent = computeConnectionLabel(connection);
           const detail = document.createElement("p");
           detail.className = "small";
-          const probe = connection.last_probe;
-          detail.textContent = `${connection.ssh_host_alias} · ${computeProbeLabel(probe)}`;
+          detail.textContent = `${connection.ssh_host_alias} · ${computeProbeLabel(connection)}`;
           summary.append(title, detail);
           const probeButton = document.createElement("button");
           probeButton.type = "button";
           probeButton.className = "ghost";
           probeButton.textContent = "探测";
-          probeButton.addEventListener("click", () => probeComputeConnection(connection.connection_id));
+          probeButton.addEventListener("click", () => probeComputeConnection(connection));
           const deleteButton = document.createElement("button");
           deleteButton.type = "button";
           deleteButton.className = "ghost";
@@ -1128,11 +1143,12 @@
         }
       }
 
-      async function probeComputeConnection(connectionId) {
+      async function probeComputeConnection(connection) {
+        const connectionId = connection.connection_id;
         setText("compute-settings-status", `正在只读探测 ${connectionId}…`);
         try {
           const response = await postJSON(`/api/settings/compute/connections/${encodeURIComponent(connectionId)}/probe`, {});
-          await loadComputeSettings(`连接测试结果：${computeProbeLabel(response.probe)}`);
+          await loadComputeSettings(`连接测试结果：${computeProbeLabel(connection, response.probe)}`);
         } catch (err) {
           setText("compute-settings-status", `探测失败：${normalizeErrorForRender(err).error}`);
         }
@@ -1526,7 +1542,7 @@
               `/api/settings/compute/connections/${encodeURIComponent(payload.connection_id)}/probe`,
               {},
             );
-            await loadComputeSettings(`已保存。连接测试结果：${computeProbeLabel(response.probe)}`);
+            await loadComputeSettings(`已保存。连接测试结果：${computeProbeLabel(payload, response.probe)}`);
           } catch (probeError) {
             await loadComputeSettings(`配置已保存，但连接测试失败：${normalizeErrorForRender(probeError).error}`);
           }

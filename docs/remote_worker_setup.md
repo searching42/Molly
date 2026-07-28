@@ -37,8 +37,11 @@ The Settings page provides a guided connection form:
 
 The optional dedicated `known_hosts` path is under **Advanced security
 options**. Leave it blank to use SSH's normal `known_hosts` resolution. Saving
-also starts the bounded read-only worker probe; a saved profile does not become
-execution authority merely because that probe succeeds.
+also starts the bounded read-only worker probe. The UI reports full readiness
+only when every declared capability is present in the probe's verified
+capabilities; otherwise it lists the missing labels. This comparison never
+rewrites the declaration, and neither a saved profile nor a successful probe
+becomes execution authority.
 
 The page writes a private `connections.json`. A minimal logical profile is
 equivalent to:

@@ -64,8 +64,11 @@ The UI Settings dialog maps a GPU/CPU resource choice to Molly's stable logical
 connection IDs, derives declared capability labels from explicit workload
 choices, and keeps the optional dedicated `known_hosts` path under advanced
 settings. It can create and delete connections, run a read-only probe, display
-the last probe status, and inspect the fixed execution profiles. The guided UI
-does not change the stored Connection Profile contract or make probe telemetry
+the last probe status, and inspect the fixed execution profiles. For display
+only, the UI compares declared capabilities with the probe's verified
+capabilities and reports any missing labels instead of presenting SSH
+reachability as workload readiness. The guided UI does not change the stored
+Connection Profile contract, rewrite declarations, or make probe telemetry
 authoritative.
 
 ## Fixed execution profiles
