@@ -94,7 +94,8 @@ def test_index_page_wires_project_chat_to_agent_payload_bridge() -> None:
     assert 'postJSON("/api/agent/conversation/next-turn"' in html
     assert 'postJSON("/api/agent/conversation/research-sources"' in html
     assert 'postJSON("/api/agent/modeling-plan"' in html
-    assert 'id="prepare-research-sources-button"' in html
+    assert 'id="atomic-literature-button"' in html
+    assert 'id="atomic-training-button"' in html
     assert "conversation_turn_decision" in html
     assert "research_source_proposal" in html
     assert "pending_cited_target_evidence" in html
@@ -264,8 +265,9 @@ def test_index_page_hides_artifact_inputs_and_keeps_response_near_workflow() -> 
     assert 'id="run-card-artifacts"' not in html
     assert 'id="advanced-agent-available-artifacts"' in html
     assert 'id="advanced-run-card-artifacts"' in html
-    assert html.index('id="project-chat"') < html.index('id="response-console"')
-    assert html.index('id="response-console"') < html.index('id="advanced-tools"')
+    assert html.index('id="project-chat"') < html.index('id="agent-review-card-output"')
+    assert html.index('id="agent-review-card-output"') < html.index('id="advanced-tools"')
+    assert html.index('id="advanced-tools"') < html.index('id="output"')
 
 
 def test_index_page_warns_when_opened_as_file_url() -> None:
