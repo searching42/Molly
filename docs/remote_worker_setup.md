@@ -35,9 +35,11 @@ The Settings page provides a guided connection form:
 4. enter an absolute run directory on the remote machine;
 5. select only workloads whose worker environments are installed remotely.
 
-The optional dedicated `known_hosts` path is under **Advanced security
-options**. Leave it blank to use SSH's normal `known_hosts` resolution. Saving
-also starts the bounded read-only worker probe. The UI reports full readiness
+The dedicated `known_hosts` path is under **Advanced security options**.
+Literature-only profiles may leave it blank and use SSH's normal host-key
+resolution. Profiles selected for REINVENT4 or Uni-Mol execution must point to
+a local, pinned `known_hosts` file; otherwise model dispatch is rejected before
+transport. Saving also starts the bounded read-only worker probe. The UI reports full readiness
 only when every declared capability is present in the probe's verified
 capabilities; otherwise it lists the missing labels. This comparison never
 rewrites the declaration, and neither a saved profile nor a successful probe
@@ -66,7 +68,17 @@ probe after saving; submission still performs a fresh, read-only preflight.
 ## 3. Register runtime environments
 
 Remote repository and interpreter paths live in private
-`environments.json`, not source code:
+`environments.json`, not source code. After saving the connection in Settings,
+open **运行环境路径（REINVENT4 / Uni-Mol）** and save one logical environment
+per installed backend:
+
+1. choose a stable ID such as `unimol-default` or `reinvent4-default`;
+2. select the connection resource created in step 2;
+3. enter the absolute remote repository root;
+4. enter the absolute remote Python interpreter;
+5. optionally enter the Conda environment name.
+
+The form is equivalent to this private record:
 
 ```json
 {
@@ -89,6 +101,16 @@ payload or set:
 ```bash
 export MOLLY_REINVENT4_ENVIRONMENT_ID=reinvent4-default
 ```
+
+The Uni-Mol training interface resolves the same field. Its optional launcher
+default is:
+
+```bash
+export MOLLY_UNIMOL_ENVIRONMENT_ID=unimol-default
+```
+
+The model-training UI selects the environment explicitly, so these environment
+variables are normally unnecessary for browser-driven runs.
 
 The OLED inverse-design execution policies resolve the following logical
 environment IDs from this same private file:

@@ -1118,6 +1118,30 @@ def test_compute_settings_api_persists_connection_and_lists_execution_contracts(
     assert {item["profile_id"] for item in state.json["execution_profiles"]} == set(
         EXECUTION_PROFILES
     )
+    assert state.json["environments"] == []
+
+    environment = client.put(
+        "/api/settings/compute/environments/reinvent4-cpu-main",
+        json={
+            "connection_id": "compute-worker-main",
+            "repository_root": "/opt/reinvent4",
+            "python_path": "/opt/reinvent4/.venv/bin/python",
+            "conda_environment": "",
+        },
+    )
+    assert environment.status_code == 200
+    assert environment.json["environment"]["environment_id"] == "reinvent4-cpu-main"
+    assert environment.json["environment"]["environment_profile_digest"].startswith("sha256:")
+
+    state_with_environment = client.get("/api/settings/compute")
+    assert state_with_environment.status_code == 200
+    assert state_with_environment.json["environments"][0]["connection_id"] == "compute-worker-main"
+
+    deleted_environment = client.delete(
+        "/api/settings/compute/environments/reinvent4-cpu-main"
+    )
+    assert deleted_environment.status_code == 200
+    assert deleted_environment.json == {"ok": True, "deleted": True}
 
     deleted = client.delete("/api/settings/compute/connections/compute-worker-main")
     assert deleted.status_code == 200

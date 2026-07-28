@@ -61,7 +61,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     AtomicTaskSpec(
         task_id="generate_candidates",
         required_artifacts=["trained_model", "model_metadata"],
-        output_artifacts=["candidate_dataset", "generation_report"],
+        output_artifacts=["candidate_dataset", "generation_report", "generation_publication"],
         risk_level=RiskLevel.MEDIUM,
         gates=[GateName.FINAL_THRESHOLD.value],
         default_adapter="generate_candidates_stub_adapter",

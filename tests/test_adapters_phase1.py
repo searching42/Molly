@@ -482,7 +482,13 @@ def test_generate_candidates_stub_adapter_writes_candidates_report_and_markdown(
     assert result["generation_report"]["novelty"]["novel_smiles_ratio"] >= 0
     assert Path(result["outputs"]["candidate_csv"]).exists()
     assert Path(result["outputs"]["generation_report_json"]).exists()
+    assert Path(result["outputs"]["generation_publication_json"]).exists()
     assert Path(result["outputs"]["markdown"]).exists()
+    publication = json.loads(
+        Path(result["outputs"]["generation_publication_json"]).read_text(encoding="utf-8")
+    )
+    assert publication["publication_kind"] == "deterministic_local_smoke"
+    assert publication["hashes"]["candidate_csv_sha256"]
 
     with Path(result["outputs"]["candidate_csv"]).open(encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -521,6 +527,26 @@ def test_generate_candidates_stub_adapter_records_frontier_targets(tmp_path: Pat
     markdown = Path(result["outputs"]["markdown"]).read_text(encoding="utf-8")
     assert "Frontier Targets" in markdown
     assert "lambda_em" in markdown
+
+
+def test_generate_candidates_stub_adapter_keeps_repeated_candidates_valid_smiles(
+    tmp_path: Path,
+) -> None:
+    chem = pytest.importorskip("rdkit.Chem")
+    result = generate_candidates_stub_adapter(
+        {
+            "run_id": "r-valid-smoke",
+            "output_dir": str(tmp_path / "generation"),
+            "count": 64,
+            "seed": 0,
+        }
+    )
+
+    assert result["status"] == "success"
+    with Path(result["outputs"]["candidate_csv"]).open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len({row["SMILES"] for row in rows}) == 64
+    assert all(chem.MolFromSmiles(row["SMILES"]) is not None for row in rows)
 
 
 def test_generate_candidates_stub_adapter_requires_confirmation_for_expensive_runs(tmp_path: Path) -> None:
@@ -650,6 +676,13 @@ def test_generate_candidates_reinvent4_backend_executes_remote_config_and_normal
     assert result["status"] == "success"
     assert result["generation_report"]["backend"] == "reinvent4"
     assert result["generation_report"]["provenance"]["mode"] == "remote"
+    publication = json.loads(
+        Path(result["outputs"]["generation_publication_json"]).read_text(encoding="utf-8")
+    )
+    assert publication["publication_kind"] == "real_remote_reinvent4"
+    assert publication["approved_by"] == "user"
+    assert publication["execution_binding"]["mode"] == "remote"
+    assert len(publication["execution_binding"]["reinvent4_config_sha256"]) == 64
     assert result["remote"]["host"] == "molly-gpu-main"
     assert result["remote"]["conda_env"] == "reinvent4"
     assert any(
@@ -880,6 +913,12 @@ def test_generate_candidates_reinvent4_backend_uses_private_environment_profile(
 
     assert result["status"] == "success"
     assert result["remote"]["remote_output_csv"].endswith("/openclaw_sampling_project_v1.csv")
+    publication = json.loads(
+        Path(result["outputs"]["generation_publication_json"]).read_text(encoding="utf-8")
+    )
+    assert publication["execution_binding"]["environment_profile_id"] == "reinvent4-default"
+    assert publication["execution_binding"]["environment_profile_digest"].startswith("sha256:")
+    assert publication["execution_binding"]["connection_profile_digest"].startswith("sha256:")
     assert any(
         call[0] == "scp"
         and call[-2].endswith(
@@ -887,6 +926,51 @@ def test_generate_candidates_reinvent4_backend_uses_private_environment_profile(
         )
         for call in calls
     )
+
+
+def test_unimol_training_interface_resolves_private_environment_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    train_csv = tmp_path / "train.csv"
+    _write_small_dataset(train_csv)
+    config_dir = tmp_path / "private-config"
+    ResourceProfileStore(workspace_dir=tmp_path, config_dir=config_dir).save_connection(
+        ConnectionProfile(
+            connection_id="gpu-worker-main",
+            ssh_host_alias="molly-gpu-main",
+            expected_hostname="gpu-worker-main",
+            remote_root="/srv/example-molly/runs",
+            declared_capabilities=["gpu", "unimol"],
+        )
+    )
+    RuntimeEnvironmentStore(config_dir=config_dir).save_environment(
+        RuntimeEnvironmentProfile(
+            environment_id="unimol-default",
+            connection_id="gpu-worker-main",
+            repository_root="/srv/example-molly/unimol",
+            python_path="/srv/example-molly/envs/unimol/bin/python",
+            conda_environment="unimol",
+        )
+    )
+    monkeypatch.setattr(phase1_module, "WORKSPACE", tmp_path)
+    monkeypatch.setenv("MOLLY_CONFIG_DIR", str(config_dir))
+
+    result = train_model_unimol_legacy_adapter(
+        {
+            "run_id": "r-unimol-interface",
+            "property_id": "plqy",
+            "train_csv": str(train_csv),
+            "save_dir": str(tmp_path / "models"),
+            "log_dir": str(tmp_path / "logs"),
+            "environment_profile_id": "unimol-default",
+            "execute": False,
+        }
+    )
+
+    assert result["status"] == "planned"
+    assert result["adapter"] == "train_model_unimol_legacy"
+    assert "set execute=true" in result["note"]
 
 
 def test_generate_candidates_reinvent4_backend_preflight_blocks_unconfirmed_execution(tmp_path: Path) -> None:

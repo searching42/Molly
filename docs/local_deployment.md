@@ -68,6 +68,22 @@ environment variable, and only then the compatibility secret file. The legacy
 workspace file `.ai4s/llm_provider.json` is ignored and should be removed after
 confirming the user-level profile works.
 
+For the recommended macOS setup, select **系统 Keychain / keyring** in Settings,
+enter the key once, and save. If the deployment is launched from a terminal or
+service manager, an environment variable is also supported:
+
+```bash
+export MOLLY_LLM_API_KEY='replace-with-key-from-a-secure-source'
+python -m flask --app 'ai4s_agent.app:create_app' run \
+  --host 127.0.0.1 --port 8792
+```
+
+In Settings, select **环境变量**, keep the variable name as
+`MOLLY_LLM_API_KEY`, and still save the endpoint and model name. The server must
+be started by a process that inherits the variable; setting it in an unrelated
+terminal after the server starts has no effect. Avoid placing the literal key
+in repository files, committed `.env` files, or reusable shell history.
+
 A configured non-loopback LLM endpoint is never used implicitly by an API
 request. The caller must set `external_llm_approved=true` for the specific
 request before Molly sends request data to that endpoint. Supplying

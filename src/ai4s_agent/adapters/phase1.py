@@ -116,6 +116,14 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     return atomic_write_json(path, payload)
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _write_markdown_report(path: Path, title: str, sections: dict[str, Any]) -> Path:
     _ensure_dir(path.parent)
     lines = [f"# {title}", "", f"- Generated at: {_now_iso()}", ""]
@@ -520,7 +528,37 @@ def _private_reinvent4_environment(payload: dict[str, Any]) -> dict[str, str]:
     )
     return {
         "environment_id": environment.environment_id,
+        "environment_profile_digest": environment.digest(),
         "connection_id": connection.connection_id,
+        "connection_profile_digest": connection.digest(),
+        "ssh_host_alias": connection.ssh_host_alias,
+        "expected_hostname": connection.expected_hostname,
+        "remote_root": connection.remote_root,
+        "known_hosts_path": connection.known_hosts_path,
+        "repository_root": environment.repository_root,
+        "python_path": environment.python_path,
+        "conda_environment": environment.conda_environment,
+    }
+
+
+def _private_unimol_environment(payload: dict[str, Any]) -> dict[str, str]:
+    environment_id = str(
+        payload.get("environment_profile_id")
+        or payload.get("unimol_environment_profile_id")
+        or os.environ.get("MOLLY_UNIMOL_ENVIRONMENT_ID")
+        or ""
+    ).strip()
+    if not environment_id:
+        return {}
+    environment = RuntimeEnvironmentStore().get_environment(environment_id)
+    connection = ResourceProfileStore(workspace_dir=WORKSPACE).get_connection(
+        environment.connection_id
+    )
+    return {
+        "environment_id": environment.environment_id,
+        "environment_profile_digest": environment.digest(),
+        "connection_id": connection.connection_id,
+        "connection_profile_digest": connection.digest(),
         "ssh_host_alias": connection.ssh_host_alias,
         "expected_hostname": connection.expected_hostname,
         "remote_root": connection.remote_root,
@@ -640,7 +678,9 @@ def _generate_candidates_reinvent4_backend(
     remote = {
         "host": remote_host,
         "connection_id": private_environment.get("connection_id") or None,
+        "connection_profile_digest": private_environment.get("connection_profile_digest") or None,
         "environment_id": private_environment.get("environment_id") or None,
+        "environment_profile_digest": private_environment.get("environment_profile_digest") or None,
         "repo": remote_repo,
         "python": remote_python,
         "conda_env": remote_conda_env,
@@ -656,6 +696,11 @@ def _generate_candidates_reinvent4_backend(
         "host_key_alias": remote_host_key_alias or None,
         "expected_hostname": remote_expected_hostname or None,
         "endpoint_hostname_verified": False,
+        "reinvent4_config_sha256": (
+            _sha256_file(local_reinvent4_config)
+            if local_reinvent4_config.is_file()
+            else None
+        ),
     }
 
     if mode == "existing_output":
@@ -1446,9 +1491,11 @@ def generate_candidates_stub_adapter(payload: dict[str, Any]) -> dict[str, Any]:
     reference = _read_smiles_set(str(payload.get("reference_csv") or payload.get("reference_dataset") or ""))
     candidate_csv = output_dir / f"{run_id}_generated_candidates.csv"
     report_json = output_dir / f"{run_id}_generation_report.json"
+    publication_json = output_dir / f"{run_id}_generation_publication.json"
     markdown_path = output_dir / f"{run_id}_generation_report.md"
     backend_enum = GenerationBackend(backend) if backend in GenerationBackend._value2member_map_ else GenerationBackend.DETERMINISTIC_STUB
 
+    execution_binding: dict[str, Any] = {}
     if backend_enum == GenerationBackend.REINVENT4:
         try:
             generated = _generate_candidates_reinvent4_backend(payload, run_id=run_id, output_dir=output_dir, count=count)
@@ -1474,6 +1521,15 @@ def generate_candidates_stub_adapter(payload: dict[str, Any]) -> dict[str, Any]:
         }
         if source_csv:
             provenance["source_csv"] = source_csv
+        remote_binding = generated.get("remote") if isinstance(generated.get("remote"), dict) else {}
+        execution_binding = {
+            "mode": mode,
+            "connection_id": remote_binding.get("connection_id"),
+            "connection_profile_digest": remote_binding.get("connection_profile_digest"),
+            "environment_profile_id": remote_binding.get("environment_id"),
+            "environment_profile_digest": remote_binding.get("environment_profile_digest"),
+            "reinvent4_config_sha256": remote_binding.get("reinvent4_config_sha256"),
+        }
     else:
         rows = []
         candidates = []
@@ -1482,7 +1538,10 @@ def generate_candidates_stub_adapter(payload: dict[str, Any]) -> dict[str, Any]:
             smiles = _deterministic_stub_smiles(index, seed)
             if smiles in seen:
                 seen[smiles] += 1
-                smiles = f"{smiles}.C{seen[smiles]}"
+                # Keep repeated smoke candidates syntactically valid.  A token
+                # such as ``.C2`` opens an unmatched ring in SMILES; a neutral
+                # alkane fragment gives us a deterministic, parseable variant.
+                smiles = f"{smiles}.{('C' * seen[smiles])}"
             else:
                 seen[smiles] = 1
             candidate_id = f"gen_{index + 1:04d}"
@@ -1554,6 +1613,33 @@ def generate_candidates_stub_adapter(payload: dict[str, Any]) -> dict[str, Any]:
             "Candidates": [candidate.model_dump(mode="json") for candidate in candidates[:10]],
         },
     )
+    publication = {
+        "schema_version": "molly_generation_publication.v1",
+        "run_id": run_id,
+        "backend": report.backend.value,
+        "publication_kind": (
+            "real_remote_reinvent4"
+            if report.backend == GenerationBackend.REINVENT4 and provenance.get("mode") == "remote"
+            else "normalized_reinvent4_existing_output"
+            if report.backend == GenerationBackend.REINVENT4
+            else "deterministic_local_smoke"
+        ),
+        "requested_count": report.requested_count,
+        "generated_count": report.generated_count,
+        "approved_by": actor,
+        "execution_binding": execution_binding,
+        "claim_boundary": "recommendation_only_not_experimental_validation",
+        "artifacts": {
+            "candidate_csv": candidate_csv.name,
+            "generation_report_json": report_json.name,
+        },
+        "hashes": {
+            "candidate_csv_sha256": _sha256_file(candidate_csv),
+            "generation_report_sha256": _sha256_file(report_json),
+        },
+        "published_at": _now_iso(),
+    }
+    _write_json(publication_json, publication)
 
     response: dict[str, Any] = {
         "status": "success",
@@ -1571,6 +1657,7 @@ def generate_candidates_stub_adapter(payload: dict[str, Any]) -> dict[str, Any]:
         "outputs": {
             "candidate_csv": str(candidate_csv),
             "generation_report_json": str(report_json),
+            "generation_publication_json": str(publication_json),
             "markdown": str(markdown_path),
         },
     }
@@ -1891,9 +1978,35 @@ def train_model_unimol_legacy_adapter(payload: dict[str, Any]) -> dict[str, Any]
     train_csv = str(payload.get("train_csv") or "").strip()
     save_dir = str(payload.get("save_dir") or "").strip()
     log_dir = str(payload.get("log_dir") or "").strip()
-    remote_host = str(payload.get("remote_host") or payload.get("remote_ssh_host") or "").strip()
-    remote_python = str(payload.get("remote_python") or payload.get("remote_py") or "").strip()
-    remote_tmp_base = str(payload.get("remote_tmp_base") or payload.get("remote_tmp_dir") or "").strip()
+    try:
+        private_environment = _private_unimol_environment(payload)
+    except ValueError as exc:
+        return {
+            "status": "failed",
+            "adapter": "train_model_unimol_legacy",
+            "error": {
+                "code": "unimol_environment_profile_unavailable",
+                "message": str(exc),
+            },
+        }
+    remote_host = str(
+        payload.get("remote_host")
+        or payload.get("remote_ssh_host")
+        or private_environment.get("ssh_host_alias")
+        or ""
+    ).strip()
+    remote_python = str(
+        payload.get("remote_python")
+        or payload.get("remote_py")
+        or private_environment.get("python_path")
+        or ""
+    ).strip()
+    remote_tmp_base = str(
+        payload.get("remote_tmp_base")
+        or payload.get("remote_tmp_dir")
+        or private_environment.get("remote_root")
+        or ""
+    ).strip()
     if not run_id or not target_property or not train_csv or not save_dir or not log_dir:
         return {
             "status": "failed",
