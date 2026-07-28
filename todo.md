@@ -4,7 +4,7 @@
 > 当前公开基线：`public-baseline-v1`（单一根提交的隐私审查快照）
 > 历史审计基线：迁移前完整提交、分支与 PR 保留在私有审计仓库
 > 当前主里程碑：M3 — 轨迹完整性、故障归因与指标
-> 最后更新：2026-07-27
+> 最后更新：2026-07-28
 > 适用范围：Molly Agent 执行能力、长程任务轨迹审计及科学有效性验证
 
 `todo.md` 是仓库中里程碑范围、任务状态、验收门槛、风险状态和推进顺序的唯一规范性来源。领域专题文档可以解释实现细节，但不得维护与本文件竞争的路线或状态表。
@@ -348,7 +348,7 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 
 | 范围 | 证据 | 工作状态 | 下一交付 |
 |---|---|---|---|
-| `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `—/—/—` | `READY` | PR-BF |
+| `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/—` | `IN_PROGRESS` | PR-BF：context-bound verified-byte publisher 与对抗测试 |
 | `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `—/—/—` | `DEFERRED` | PR-BG，等待 PR-BF |
 | `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `—/—/—` | `DEFERRED` | PR-BH，等待 PR-BG |
 

@@ -16,7 +16,7 @@ the current state recorded in `todo.md`.
 | Session, recovery, publication, and replay | [Bounded discovery session](oled-bounded-discovery-session.md), [bounded controller](oled-bounded-discovery-controller.md), [remote execution lifecycle](stage6b-remote-execution-lifecycle.md) |
 | Literature intake and parsing | [Literature intake](literature-intake.md), [document parsing providers](document-parsing-providers.md), [real PDF ingestion](real-pdf-ingestion.md) |
 | Remote resources | [Local deployment](local_deployment.md), [remote worker setup](remote_worker_setup.md), [resource profiles](stage6a-resource-profiles.md) |
-| Observation and trajectory integrity | [Control-plane event projection and SSE](control-plane-event-projection.md); current trajectory projection, verification, metrics, and attribution status remains in `todo.md` under M2/M3 |
+| Observation and trajectory integrity | [Control-plane event projection and SSE](control-plane-event-projection.md), [deterministic trajectory audit metrics](oled-scientific-agent-trajectory-audit-metrics.md); current trajectory projection, verification, metrics, and attribution status remains in `todo.md` under M2/M3 |
 | Scientific workflow | [Phase 3 to Phase 1 pipeline](phase-3-to-phase-1-pipeline.md), [OLED bounded discovery session](oled-bounded-discovery-session.md), [OLED inverse design](oled-inverse-design.md) |
 | Acceptance and operations | [OLED MVP quickstart](oled-mvp-demo-quickstart.md), [queued-canary rollback runbook](queued-canary-operational-rollback-runbook.md), [Uni-Mol compatibility acceptance](manual-real-unimol-acceptance.md) |
 
