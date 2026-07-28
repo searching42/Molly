@@ -173,7 +173,7 @@
           <div class="atomic-task-list">
             <button id="atomic-literature-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">⌕</span><span>查找文献</span></button>
             <button id="parse-literature-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">▤</span><span>文献解析</span></button>
-            <button id="atomic-training-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">△</span><span>提交训练任务</span></button>
+            <button id="atomic-training-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">△</span><span>生成建模计划</span></button>
             <button id="atomic-toolbox-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">⋯</span><span>全部任务</span></button>
             <button id="approve-literature-button" type="button" class="ghost" hidden>批准批量解析</button>
           </div>
@@ -1545,11 +1545,32 @@
         }
       }
 
+      async function loadAtomicTasks({ revealResults = false } = {}) {
+        try {
+          const response = await getJSON("/api/atomic-tasks");
+          render(response);
+          if (revealResults) {
+            const tasks = Array.isArray(response.tasks) ? response.tasks : [];
+            const advancedTools = document.getElementById("advanced-tools");
+            if (advancedTools) advancedTools.open = true;
+            appendConversationMessage(
+              "agent",
+              `已加载原子任务工具箱，共 ${tasks.length} 项。完整任务定义已在下方“高级工具”的“当前响应”中展开。`,
+            );
+            output.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+          return response;
+        } catch (err) {
+          render(err);
+          return null;
+        }
+      }
+
       document.getElementById("new-conversation-button").addEventListener("click", createConversation);
       document.getElementById("atomic-literature-button").addEventListener("click", prepareResearchSources);
       document.getElementById("atomic-training-button").addEventListener("click", prepareTrainingTask);
       document.getElementById("atomic-toolbox-button").addEventListener("click", () => {
-        document.getElementById("task-toolbox-button").click();
+        void loadAtomicTasks({ revealResults: true });
       });
       document.getElementById("llm-settings-button").addEventListener("click", () => openLLMSettings(false));
       document.getElementById("llm-settings-close").addEventListener("click", closeLLMSettings);
@@ -1654,8 +1675,8 @@
         try { render(await postJSON("/api/run-plan/diff", payload)); } catch (err) { render(err); }
       });
 
-      document.getElementById("task-toolbox-button").addEventListener("click", async () => {
-        try { render(await getJSON("/api/atomic-tasks")); } catch (err) { render(err); }
+      document.getElementById("task-toolbox-button").addEventListener("click", () => {
+        void loadAtomicTasks();
       });
 
       document.getElementById("asset-promotion-form").addEventListener("submit", async (event) => {
