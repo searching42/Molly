@@ -114,6 +114,18 @@
       .settings-dialog { width: min(560px, 100%); max-height: calc(100vh - 2rem); overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; background: #fff; box-shadow: var(--shadow); }
       .settings-header { display: flex; justify-content: space-between; gap: 1rem; align-items: start; margin-bottom: 0.8rem; }
       .settings-section { display: grid; gap: 0.65rem; margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+      .field-help { margin: -0.28rem 0 0.1rem; color: var(--muted); font-size: 0.76rem; line-height: 1.45; }
+      .field-help code { overflow-wrap: anywhere; }
+      .choice-group { display: grid; gap: 0.45rem; margin: 0; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.7rem 0.75rem; }
+      .choice-group legend { padding: 0 0.25rem; color: #26363e; font-size: 0.78rem; font-weight: 900; }
+      .checkbox-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.55rem; align-items: start; border-radius: calc(var(--radius) - 2px); padding: 0.45rem; background: rgba(245, 246, 247, 0.72); cursor: pointer; }
+      .checkbox-row input { width: auto; margin: 0.2rem 0 0; }
+      .checkbox-row span { display: grid; gap: 0.08rem; font-weight: 800; }
+      .checkbox-row small { color: var(--muted); font-weight: 500; line-height: 1.4; }
+      .checkbox-row.is-disabled { opacity: 0.58; cursor: not-allowed; }
+      .settings-advanced { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.65rem 0.75rem; background: rgba(245, 246, 247, 0.5); }
+      .settings-advanced summary { cursor: pointer; color: #26363e; font-size: 0.78rem; font-weight: 900; }
+      .settings-advanced[open] summary { margin-bottom: 0.65rem; }
       .settings-list { display: grid; gap: 0.5rem; }
       .settings-list-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.5rem; align-items: center; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.65rem; }
       .settings-list-item button { width: auto; min-width: 0; padding: 0.45rem 0.6rem; }
@@ -414,24 +426,52 @@
         <section class="settings-section" aria-labelledby="compute-settings-title">
           <div>
             <h2 id="compute-settings-title">计算资源</h2>
-            <p class="small">连接信息只保存在当前用户配置目录。SSH 凭据由 ~/.ssh/config 与 ssh-agent 管理；此处不接受密码、私钥或任意命令。</p>
+            <p class="small">连接信息只保存在当前用户配置目录。连接一台已在 <code>~/.ssh/config</code> 配好的远端计算机时，只需填写连接别名、主机名和运行目录；密码与私钥仍由 SSH 管理。</p>
           </div>
           <form id="compute-connection-form">
-            <label for="compute-connection-id">逻辑连接 ID</label>
-            <input id="compute-connection-id" placeholder="gpu-node" required pattern="[a-z0-9][a-z0-9_.-]*" />
-            <label for="compute-display-name">显示名称</label>
-            <input id="compute-display-name" placeholder="GPU workstation" />
-            <label for="compute-ssh-alias">SSH config alias</label>
-            <input id="compute-ssh-alias" placeholder="molly-gpu" required />
-            <label for="compute-expected-hostname">预期远端 hostname</label>
-            <input id="compute-expected-hostname" placeholder="compute-worker-main" required />
-            <label for="compute-remote-root">远端运行根目录</label>
-            <input id="compute-remote-root" placeholder="/remote/path/molly-runs" required />
-            <label for="compute-known-hosts">Pinned known_hosts 文件（可选）</label>
-            <input id="compute-known-hosts" placeholder="/local/path/molly_known_hosts" />
-            <label for="compute-capabilities">声明能力（逗号分隔）</label>
-            <input id="compute-capabilities" placeholder="gpu, cuda, mineru, unimol" />
-            <button type="submit">保存连接配置</button>
+            <label for="compute-resource-role">资源类型</label>
+            <select id="compute-resource-role" aria-describedby="compute-resource-role-help">
+              <option value="gpu-worker-main" data-base-capability="gpu">GPU 计算资源（推荐）</option>
+              <option value="compute-worker-main" data-base-capability="cpu">CPU 计算资源</option>
+            </select>
+            <p id="compute-resource-role-help" class="field-help">Molly 会自动使用固定逻辑 ID：<code id="compute-connection-id-preview">gpu-worker-main</code>，无需自行命名。</p>
+
+            <label for="compute-ssh-alias">SSH 别名</label>
+            <input id="compute-ssh-alias" placeholder="例如：molly-gpu" required aria-describedby="compute-ssh-alias-help" autocomplete="off" />
+            <p id="compute-ssh-alias-help" class="field-help">填写 <code>~/.ssh/config</code> 中 <code>Host</code> 后面的名称；不要填写 IP、用户名、密码或私钥路径。</p>
+
+            <label for="compute-expected-hostname">远端短主机名（身份核验）</label>
+            <input id="compute-expected-hostname" placeholder="例如：gpu-worker" required aria-describedby="compute-hostname-help" autocomplete="off" />
+            <p id="compute-hostname-help" class="field-help">在终端运行 <code id="compute-hostname-command">ssh &lt;SSH 别名&gt; -- hostname -s</code>，将输出完整填入这里。</p>
+
+            <label for="compute-remote-root">远端运行目录</label>
+            <input id="compute-remote-root" placeholder="例如：/srv/molly/runs" required aria-describedby="compute-remote-root-help" autocomplete="off" />
+            <p id="compute-remote-root-help" class="field-help">填写远端计算机上的绝对路径，用于存放 Molly 受控运行文件；不要填写本机路径。</p>
+
+            <fieldset class="choice-group" aria-describedby="compute-workloads-help">
+              <legend>计划在这台机器上运行什么？（可多选）</legend>
+              <label class="checkbox-row" for="compute-workload-mineru">
+                <input id="compute-workload-mineru" name="compute-workload" type="checkbox" data-capabilities="gpu,mineru" data-required-role="gpu-worker-main" />
+                <span>文献解析 <small>远端已安装并配置 MinerU 时选择</small></span>
+              </label>
+              <label class="checkbox-row" for="compute-workload-unimol">
+                <input id="compute-workload-unimol" name="compute-workload" type="checkbox" data-capabilities="gpu,unimol" data-required-role="gpu-worker-main" />
+                <span>模型训练 <small>远端已安装并配置 Uni-Mol 时选择</small></span>
+              </label>
+              <label class="checkbox-row" for="compute-workload-reinvent4">
+                <input id="compute-workload-reinvent4" name="compute-workload" type="checkbox" data-capabilities="cpu,reinvent4" />
+                <span>分子生成 <small>远端已安装并配置 REINVENT4 时选择</small></span>
+              </label>
+            </fieldset>
+            <p id="compute-workloads-help" class="field-help">资源类型会自动加入基础 GPU 或 CPU 能力；保存后的只读探测仍会核验远端实际能力。</p>
+
+            <details class="settings-advanced">
+              <summary>高级安全选项（通常无需填写）</summary>
+              <label for="compute-known-hosts">专用 known_hosts 文件</label>
+              <input id="compute-known-hosts" placeholder="例如：/absolute/path/to/molly_known_hosts" aria-describedby="compute-known-hosts-help" autocomplete="off" />
+              <p id="compute-known-hosts-help" class="field-help">留空时使用 SSH 默认的 <code>known_hosts</code>。仅在需要固定到独立主机密钥文件时填写本机绝对路径。</p>
+            </details>
+            <button type="submit">保存并测试连接</button>
           </form>
           <div id="compute-settings-status" class="sr-status" aria-live="polite"></div>
           <div id="compute-connections" class="settings-list" aria-live="polite"></div>
@@ -984,20 +1024,55 @@
       }
 
       function computeConnectionPayload() {
+        const role = document.getElementById("compute-resource-role");
+        const selectedRole = role.options[role.selectedIndex];
+        const capabilities = new Set([selectedRole.dataset.baseCapability]);
+        document.querySelectorAll('input[name="compute-workload"]:checked').forEach((input) => {
+          csvList(input.dataset.capabilities).forEach((capability) => capabilities.add(capability));
+        });
         return {
-          connection_id: String(document.getElementById("compute-connection-id").value || "").trim(),
+          connection_id: role.value,
           transport: "ssh",
-          display_name: String(document.getElementById("compute-display-name").value || "").trim(),
+          display_name: "",
           ssh_host_alias: String(document.getElementById("compute-ssh-alias").value || "").trim(),
           expected_hostname: String(document.getElementById("compute-expected-hostname").value || "").trim(),
           remote_root: String(document.getElementById("compute-remote-root").value || "").trim(),
           scheduler: "direct",
           known_hosts_path: String(document.getElementById("compute-known-hosts").value || "").trim(),
-          declared_capabilities: csvList(document.getElementById("compute-capabilities").value),
+          declared_capabilities: Array.from(capabilities).sort(),
           enabled: true,
           max_concurrent_jobs: 1,
           default_timeout_sec: 3600,
         };
+      }
+
+      function computeConnectionLabel(connection) {
+        if (connection.connection_id === "gpu-worker-main") return "GPU 计算资源";
+        if (connection.connection_id === "compute-worker-main") return "CPU 计算资源";
+        return connection.display_name || connection.connection_id;
+      }
+
+      function computeProbeLabel(probe) {
+        if (!probe) return "尚未测试";
+        if (probe.status === "available") return "连接可用";
+        if (probe.status === "mismatch") return "主机身份不匹配";
+        return "暂不可用";
+      }
+
+      function updateComputeConnectionHints() {
+        const role = document.getElementById("compute-resource-role");
+        document.getElementById("compute-connection-id-preview").textContent = role.value;
+        const alias = String(document.getElementById("compute-ssh-alias").value || "").trim();
+        document.getElementById("compute-hostname-command").textContent = `ssh ${alias || "<SSH 别名>"} -- hostname -s`;
+        document.querySelectorAll('input[name="compute-workload"]').forEach((input) => {
+          const incompatible = Boolean(input.dataset.requiredRole && input.dataset.requiredRole !== role.value);
+          input.disabled = incompatible;
+          if (incompatible) input.checked = false;
+          input.closest("label")?.classList.toggle("is-disabled", incompatible);
+        });
+        document.getElementById("compute-workloads-help").textContent = role.value === "compute-worker-main"
+          ? "CPU 资源仅开放当前固定的 CPU 工作负载；需要 GPU 的选项已自动禁用。保存后的只读探测仍会核验远端实际能力。"
+          : "GPU 资源可声明已安装的工作负载；保存后的只读探测仍会核验远端实际能力。";
       }
 
       function renderComputeSettings(state) {
@@ -1008,11 +1083,11 @@
           row.className = "settings-list-item";
           const summary = document.createElement("div");
           const title = document.createElement("strong");
-          title.textContent = connection.display_name || connection.connection_id;
+          title.textContent = computeConnectionLabel(connection);
           const detail = document.createElement("p");
           detail.className = "small";
           const probe = connection.last_probe;
-          detail.textContent = `${connection.connection_id} · ${connection.ssh_host_alias} · probe: ${probe?.status || "未探测"}`;
+          detail.textContent = `${connection.ssh_host_alias} · ${computeProbeLabel(probe)}`;
           summary.append(title, detail);
           const probeButton = document.createElement("button");
           probeButton.type = "button";
@@ -1043,11 +1118,11 @@
         });
       }
 
-      async function loadComputeSettings() {
+      async function loadComputeSettings(successMessage = "连接配置与探测结果来自当前用户目录。") {
         try {
           const state = await getJSON("/api/settings/compute");
           renderComputeSettings(state);
-          setText("compute-settings-status", "连接配置与探测结果来自当前用户目录。");
+          setText("compute-settings-status", successMessage);
         } catch (err) {
           setText("compute-settings-status", `读取失败：${normalizeErrorForRender(err).error}`);
         }
@@ -1057,8 +1132,7 @@
         setText("compute-settings-status", `正在只读探测 ${connectionId}…`);
         try {
           const response = await postJSON(`/api/settings/compute/connections/${encodeURIComponent(connectionId)}/probe`, {});
-          setText("compute-settings-status", `探测结果：${response.probe.status}`);
-          await loadComputeSettings();
+          await loadComputeSettings(`连接测试结果：${computeProbeLabel(response.probe)}`);
         } catch (err) {
           setText("compute-settings-status", `探测失败：${normalizeErrorForRender(err).error}`);
         }
@@ -1067,8 +1141,7 @@
       async function deleteComputeConnection(connectionId) {
         try {
           await deleteJSON(`/api/settings/compute/connections/${encodeURIComponent(connectionId)}`);
-          setText("compute-settings-status", `已删除连接配置：${connectionId}`);
-          await loadComputeSettings();
+          await loadComputeSettings("已删除连接配置。");
         } catch (err) {
           setText("compute-settings-status", `删除失败：${normalizeErrorForRender(err).error}`);
         }
@@ -1432,8 +1505,12 @@
           setText("llm-settings-status", `删除失败：${normalizeErrorForRender(err).error}`);
         }
       });
+      document.getElementById("compute-resource-role").addEventListener("change", updateComputeConnectionHints);
+      document.getElementById("compute-ssh-alias").addEventListener("input", updateComputeConnectionHints);
+      updateComputeConnectionHints();
       document.getElementById("compute-connection-form").addEventListener("submit", async (event) => {
         event.preventDefault();
+        const form = event.currentTarget;
         const payload = computeConnectionPayload();
         setText("compute-settings-status", "正在保存连接配置…");
         try {
@@ -1441,9 +1518,18 @@
             `/api/settings/compute/connections/${encodeURIComponent(payload.connection_id)}`,
             payload,
           );
-          event.currentTarget.reset();
-          setText("compute-settings-status", `已保存：${payload.connection_id}`);
-          await loadComputeSettings();
+          form.reset();
+          updateComputeConnectionHints();
+          setText("compute-settings-status", "配置已保存，正在进行只读连接测试…");
+          try {
+            const response = await postJSON(
+              `/api/settings/compute/connections/${encodeURIComponent(payload.connection_id)}/probe`,
+              {},
+            );
+            await loadComputeSettings(`已保存。连接测试结果：${computeProbeLabel(response.probe)}`);
+          } catch (probeError) {
+            await loadComputeSettings(`配置已保存，但连接测试失败：${normalizeErrorForRender(probeError).error}`);
+          }
         } catch (err) {
           setText("compute-settings-status", `保存失败：${normalizeErrorForRender(err).error}`);
         }

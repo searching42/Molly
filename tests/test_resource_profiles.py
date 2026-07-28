@@ -450,6 +450,39 @@ def test_execution_profiles_are_fixed_allowlisted_contracts() -> None:
     assert reinvent.digest().startswith("sha256:")
 
 
+def test_compute_resource_ui_guides_users_through_fixed_connection_roles(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "config",
+    )
+
+    html = app.test_client().get("/").get_data(as_text=True)
+
+    assert 'id="compute-resource-role"' in html
+    assert 'value="gpu-worker-main" data-base-capability="gpu"' in html
+    assert 'value="compute-worker-main" data-base-capability="cpu"' in html
+    assert 'id="compute-connection-id-preview"' in html
+    assert 'id="compute-display-name"' not in html
+    assert 'id="compute-connection-id"' not in html
+    assert 'id="compute-capabilities"' not in html
+    assert html.count('name="compute-workload" type="checkbox"') == 3
+    assert 'data-capabilities="gpu,mineru" data-required-role="gpu-worker-main"' in html
+    assert 'data-capabilities="gpu,unimol" data-required-role="gpu-worker-main"' in html
+    assert 'data-capabilities="cpu,reinvent4"' in html
+    assert "input.disabled = incompatible" in html
+    assert "if (incompatible) input.checked = false" in html
+    assert "display_name: \"\"" in html
+    assert "connection_id: role.value" in html
+    assert "const form = event.currentTarget" in html
+    assert "form.reset()" in html
+    assert "event.currentTarget.reset()" not in html
+    assert "保存并测试连接" in html
+    assert "配置已保存，但连接测试失败" in html
+
+
 def test_legacy_pinned_profile_resolves_private_connection_and_fixed_execution(
     tmp_path: Path,
 ) -> None:

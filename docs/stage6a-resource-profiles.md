@@ -60,8 +60,13 @@ POST   /api/settings/compute/connections/<connection_id>/probe
 the body identity. The existing localhost write protections apply to every
 mutating endpoint.
 
-The UI Settings dialog can create and delete connections, run a read-only
-probe, display the last probe status, and inspect the fixed execution profiles.
+The UI Settings dialog maps a GPU/CPU resource choice to Molly's stable logical
+connection IDs, derives declared capability labels from explicit workload
+choices, and keeps the optional dedicated `known_hosts` path under advanced
+settings. It can create and delete connections, run a read-only probe, display
+the last probe status, and inspect the fixed execution profiles. The guided UI
+does not change the stored Connection Profile contract or make probe telemetry
+authoritative.
 
 ## Fixed execution profiles
 
