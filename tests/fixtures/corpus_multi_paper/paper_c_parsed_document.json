@@ -1,0 +1,29 @@
+{
+  "paper_id": "corpus-paper-c",
+  "source_path": "synthetic://corpus-paper-c.pdf",
+  "parser_backend": "pdfplumber_local",
+  "metadata": {
+    "source_document_id": "doc-c",
+    "parser_provider": "pdfplumber",
+    "title": "Synthetic corpus paper C"
+  },
+  "pages": [{"page": 1, "text": "Synthetic OLED table C with invalid rows."}],
+  "elements": [],
+  "tables": [
+    {
+      "table_id": "table_c_001",
+      "caption": "Paper C synthetic OLED properties",
+      "headers": ["molecule_id", "SMILES", "PLQY", "lambda_em_nm", "confidence"],
+      "rows": [
+        {"molecule_id": "c-001", "SMILES": "not-a-smiles", "PLQY": "0.42", "lambda_em_nm": "515", "confidence": "0.88"},
+        {"molecule_id": "c-002", "SMILES": "CCCC", "PLQY": "", "lambda_em_nm": "510", "confidence": "0.86"},
+        {"molecule_id": "c-003", "SMILES": "CCS", "PLQY": "0.57", "lambda_em_nm": "", "confidence": "0.85"},
+        {"molecule_id": "c-004", "SMILES": "CCBr", "PLQY": "0.61", "lambda_em_nm": "545", "confidence": "0.90"}
+      ],
+      "footnotes": ["Synthetic fixture only."],
+      "page": 1,
+      "markdown": "",
+      "source_bbox": {"x0": 70.0, "top": 120.0, "x1": 540.0, "bottom": 390.0}
+    }
+  ]
+}

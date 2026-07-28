@@ -1,0 +1,110 @@
+{
+  "$defs": {
+    "VerificationFinding": {
+      "properties": {
+        "finding_id": {
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "critical"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "continue",
+            "retry",
+            "replan",
+            "ask_user",
+            "abort"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "title": "Evidence",
+          "type": "object"
+        }
+      },
+      "required": [
+        "finding_id",
+        "category",
+        "severity",
+        "message",
+        "decision"
+      ],
+      "title": "VerificationFinding",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    },
+    "observed_stage": {
+      "default": "",
+      "title": "Observed Stage",
+      "type": "string"
+    },
+    "observed_status": {
+      "default": "",
+      "title": "Observed Status",
+      "type": "string"
+    },
+    "overall_decision": {
+      "enum": [
+        "continue",
+        "retry",
+        "replan",
+        "ask_user",
+        "abort"
+      ],
+      "title": "Overall Decision",
+      "type": "string"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/VerificationFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "summary": {
+      "default": "",
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "generated_at",
+    "overall_decision"
+  ],
+  "title": "VerificationReport",
+  "type": "object"
+}

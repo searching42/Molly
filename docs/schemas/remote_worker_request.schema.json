@@ -1,0 +1,53 @@
+{
+  "properties": {
+    "project_id": {
+      "default": "",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "required_capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Required Capabilities",
+      "type": "array"
+    },
+    "preferred_worker_id": {
+      "default": "",
+      "title": "Preferred Worker Id",
+      "type": "string"
+    },
+    "budget_limit_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Budget Limit Sec"
+    },
+    "payload_ref": {
+      "default": "",
+      "title": "Payload Ref",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "task_id"
+  ],
+  "title": "RemoteWorkerRequest",
+  "type": "object"
+}

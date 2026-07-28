@@ -1,0 +1,479 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from ai4s_agent.oled_review_packet_generator import generate_oled_review_packet
+
+
+GENERATED_AT = "2026-07-09T00:00:00Z"
+
+
+def test_generates_review_packet_from_all_candidate_artifacts(tmp_path: Path) -> None:
+    artifacts = _write_candidate_artifacts(tmp_path)
+
+    result = generate_oled_review_packet(
+        run_id="review-run",
+        output_dir=tmp_path / "review",
+        oled_candidates_json=artifacts["oled_candidates_json"],
+        oled_text_evidence_candidates_json=artifacts["oled_text_evidence_candidates_json"],
+        oled_schema_candidates_json=artifacts["oled_schema_candidates_json"],
+        oled_compiled_records_json=artifacts["oled_compiled_records_json"],
+        corpus_extraction_manifest_json=artifacts["corpus_extraction_manifest_json"],
+        generated_at=GENERATED_AT,
+    )
+
+    assert result.review_item_count == 4
+    assert result.high_priority_count == 3
+    assert result.low_priority_count == 1
+    assert result.medium_priority_count == 0
+    assert Path(result.review_packet_json).exists()
+    assert Path(result.review_packet_md).exists()
+    assert Path(result.reviewer_decision_template_json).exists()
+    assert Path(result.review_summary_json).exists()
+    assert Path(result.compiled_admission_packet_json).exists()
+    assert Path(result.compiled_admission_packet_md).exists()
+    assert Path(result.compiled_admission_decision_template_json).exists()
+    assert Path(result.compiled_admission_summary_json).exists()
+    assert result.compiled_admission_item_count == 1
+    assert not (tmp_path / "review" / "candidate_dataset.csv").exists()
+    assert not (tmp_path / "review" / "training_dataset.csv").exists()
+
+    packet = _read_json(Path(result.review_packet_json))
+    item_ids = [item["review_item_id"] for item in packet["review_items"]]
+
+    assert packet["schema_version"] == "oled_review_packet.v1"
+    assert packet["summary"]["review_item_count"] == 4
+    assert [item["candidate_type"] for item in packet["review_items"]] == [
+        "oled_compiled_record",
+        "oled_schema_candidate",
+        "oled_text_evidence",
+        "oled_raw_candidate",
+    ]
+    assert all(item_id.startswith("review:review-run:") for item_id in item_ids)
+    assert all(
+        item["provenance"]["source_payload_digest"].startswith("sha256:")
+        for item in packet["review_items"]
+    )
+
+    text_item = next(item for item in packet["review_items"] if item["candidate_type"] == "oled_text_evidence")
+    assert text_item["priority"] == "high"
+    assert text_item["paper_id"] == "paper001"
+    assert text_item["property_id"] == "plqy"
+    assert text_item["raw_value"] == "94 ± 2%"
+    assert text_item["numeric_value"] == 94.0
+    assert text_item["unit"] == "%"
+    assert text_item["compound_mentions"] == ["4CzIPN"]
+    assert text_item["condition_text"] == "in toluene"
+    assert text_item["evidence_page"] == 1
+    assert text_item["evidence_location"] == "el_p1_0001"
+    assert text_item["provenance"]["source_document_id"] == "paper001-source"
+
+    schema_item = next(item for item in packet["review_items"] if item["candidate_type"] == "oled_schema_candidate")
+    assert schema_item["priority"] == "high"
+    assert schema_item["source_candidate_id"] == "schema-001"
+    assert schema_item["property_id"] == "eqe_percent"
+    assert schema_item["evidence_page"] == 3
+    assert schema_item["provenance"]["source_candidate_hash"] == "raw-hash-001"
+
+    compiled_item = next(item for item in packet["review_items"] if item["candidate_type"] == "oled_compiled_record")
+    assert compiled_item["priority"] == "high"
+    assert compiled_item["source_candidate_id"] == "compiled-001"
+    assert compiled_item["property_id"] == "eqe_percent"
+    assert compiled_item["evidence_page"] == 3
+    assert compiled_item["material_roles"] == [{"role": "emitter", "material": "4CzIPN"}]
+    assert "schema_warning" in compiled_item["warnings"]
+
+    raw_item = next(item for item in packet["review_items"] if item["candidate_type"] == "oled_raw_candidate")
+    assert raw_item["priority"] == "low"
+    assert raw_item["evidence_text"] == "OLED device performance was measured."
+
+    decision_template = _read_json(Path(result.reviewer_decision_template_json))
+    assert decision_template["source_packet_digest"].startswith("sha256:")
+    assert [decision["review_item_id"] for decision in decision_template["decisions"]] == item_ids
+    assert {decision["decision"] for decision in decision_template["decisions"]} == {""}
+    assert {decision["review_status"] for decision in decision_template["decisions"]} == {"pending"}
+
+    summary = _read_json(Path(result.review_summary_json))
+    assert summary["counts_by_candidate_type"] == {
+        "oled_compiled_record": 1,
+        "oled_raw_candidate": 1,
+        "oled_schema_candidate": 1,
+        "oled_text_evidence": 1,
+    }
+    assert summary["counts_by_priority"] == {"high": 3, "low": 1}
+    assert summary["counts_by_paper"] == {"paper001": 4}
+    assert summary["counts_by_property_id"] == {"eqe_percent": 2, "plqy": 1}
+    assert "candidate_only_review_packet" in summary["governance_notes"]
+
+    markdown = Path(result.review_packet_md).read_text(encoding="utf-8")
+    assert "# OLED Evidence Review Packet" in markdown
+    assert "this packet is candidate-only" in markdown
+    assert "oled_reviewer_decision_template.json" in markdown
+    assert "4CzIPN showed a photoluminescence quantum yield" in markdown
+
+    admission_packet = _read_json(Path(result.compiled_admission_packet_json))
+    admission_summary = _read_json(Path(result.compiled_admission_summary_json))
+    admission_decisions = _read_json(Path(result.compiled_admission_decision_template_json))
+    admission_markdown = Path(result.compiled_admission_packet_md).read_text(encoding="utf-8")
+
+    assert admission_packet["schema_version"] == "oled_review_packet.v1"
+    assert admission_packet["summary"]["packet_purpose"] == "compiled_only_admission"
+    assert admission_packet["summary"]["full_qa_review_item_count"] == 4
+    assert admission_packet["summary"]["excluded_quality_review_item_count"] == 3
+    assert [item["candidate_type"] for item in admission_packet["review_items"]] == [
+        "oled_compiled_record"
+    ]
+    admission_item = admission_packet["review_items"][0]
+    record_summary = admission_item["provenance"]["admission_record_summary"]
+    assert record_summary["record_id"] == "compiled-001"
+    assert record_summary["device_stack"] == ["ITO", "TAPC", "emissive layer", "LiF/Al"]
+    assert record_summary["observations"] == [
+        {
+            "condition": {
+                "luminance_cd_m2": 100,
+                "metadata": {
+                    "raw_conditions": [
+                        {
+                            "condition_field": "turn_on_voltage",
+                            "condition_unit": "V",
+                            "condition_value": 2.5,
+                        }
+                    ]
+                },
+            },
+            "layer": "device",
+            "property_id": "eqe_percent",
+            "property_label": "external quantum efficiency",
+            "source_schema_candidate_id": "",
+            "unit": "%",
+            "value": 21.3,
+        }
+    ]
+    assert admission_decisions["source_packet_digest"].startswith("sha256:")
+    assert [item["review_item_id"] for item in admission_decisions["decisions"]] == [
+        admission_item["review_item_id"]
+    ]
+    assert admission_summary["review_item_count"] == 1
+    assert "compiled_only_admission_packet" in admission_summary["governance_notes"]
+    assert "# OLED Compiled-Record Admission Packet" in admission_markdown
+    assert "oled_compiled_admission_decision_template.json" in admission_markdown
+    assert (
+        "luminance_cd_m2=100 cd/m^2; turn_on_voltage=2.5 V"
+        in admission_markdown
+    )
+
+
+def test_review_packet_ids_and_order_are_stable(tmp_path: Path) -> None:
+    artifacts = _write_candidate_artifacts(tmp_path)
+
+    first = generate_oled_review_packet(
+        run_id="review-run",
+        output_dir=tmp_path / "first",
+        generated_at=GENERATED_AT,
+        **artifacts,
+    )
+    second = generate_oled_review_packet(
+        run_id="review-run",
+        output_dir=tmp_path / "second",
+        generated_at=GENERATED_AT,
+        **artifacts,
+    )
+
+    first_packet = _read_json(Path(first.review_packet_json))
+    second_packet = _read_json(Path(second.review_packet_json))
+    first_admission = _read_json(Path(first.compiled_admission_packet_json))
+    second_admission = _read_json(Path(second.compiled_admission_packet_json))
+
+    assert first_packet["review_items"] == second_packet["review_items"]
+    assert first_packet["summary"] == second_packet["summary"]
+    assert first_admission["review_items"] == second_admission["review_items"]
+    assert first_admission["summary"] == second_admission["summary"]
+
+
+def test_compiled_admission_excludes_device_only_records_from_current_dataset_scope(
+    tmp_path: Path,
+) -> None:
+    artifacts = _write_candidate_artifacts(tmp_path)
+    compiled_path = artifacts["oled_compiled_records_json"]
+    compiled_payload = _read_json(compiled_path)
+    compiled_payload["compiled_records"].append(
+        {
+            "record_id": "compiled-device-only",
+            "status": "compiled",
+            "group_key": {
+                "source_paper_id": "paper001",
+                "source_candidate_hashes": ["raw-hash-device"],
+                "row_index": 2,
+                "target_property_ids": [],
+            },
+            "layered_record": {
+                "device": {
+                    "device_stack": ["ITO", "HTL", "EML", "ETL", "LiF", "Al"],
+                    "metadata": {"source_text": "ITO/HTL/EML/ETL/LiF/Al"},
+                }
+            },
+            "source_schema_candidate_ids": ["schema-device-only"],
+            "source_candidate_hashes": ["raw-hash-device"],
+            "source_evidence_anchors": ["paper001:p4:device-structure"],
+            "confidence_score": 0.9,
+        }
+    )
+    _write_json(compiled_path, compiled_payload)
+
+    result = generate_oled_review_packet(
+        run_id="review-run",
+        output_dir=tmp_path / "review-device-policy",
+        generated_at=GENERATED_AT,
+        **artifacts,
+    )
+
+    full_packet = _read_json(Path(result.review_packet_json))
+    admission_packet = _read_json(Path(result.compiled_admission_packet_json))
+    admission_decisions = _read_json(Path(result.compiled_admission_decision_template_json))
+    summary = admission_packet["summary"]
+
+    assert len(
+        [item for item in full_packet["review_items"] if item["candidate_type"] == "oled_compiled_record"]
+    ) == 2
+    assert result.compiled_admission_item_count == 1
+    assert [item["source_candidate_id"] for item in admission_packet["review_items"]] == [
+        "compiled-001"
+    ]
+    assert summary["admission_scope"] == "property_bearing_compiled_records"
+    assert summary["excluded_non_property_compiled_record_count"] == 1
+    assert summary["excluded_non_property_compiled_record_ids"] == ["compiled-device-only"]
+    assert summary["excluded_device_only_record_count"] == 1
+    assert summary["excluded_device_only_record_ids"] == ["compiled-device-only"]
+    assert "device_only_records_retained_as_full_qa_context" in summary["governance_notes"]
+    assert len(admission_decisions["decisions"]) == 1
+    markdown = Path(result.compiled_admission_packet_md).read_text(encoding="utf-8")
+    assert "Device-only compiled records excluded from dataset admission: 1" in markdown
+    assert "Device-only and other non-property compiled records remain QA context" in markdown
+
+
+def test_duplicate_text_evidence_is_merged_with_source_ids_preserved(tmp_path: Path) -> None:
+    artifacts = _write_candidate_artifacts(tmp_path)
+    text_path = artifacts["oled_text_evidence_candidates_json"]
+    payload = _read_json(text_path)
+    duplicate = dict(payload["text_evidence_candidates"][0])
+    duplicate["candidate_id"] = "text-002"
+    payload["text_evidence_candidates"].append(duplicate)
+    _write_json(text_path, payload)
+
+    result = generate_oled_review_packet(
+        run_id="review-run",
+        output_dir=tmp_path / "review",
+        generated_at=GENERATED_AT,
+        **artifacts,
+    )
+
+    assert result.review_item_count == 4
+    packet = _read_json(Path(result.review_packet_json))
+    text_items = [item for item in packet["review_items"] if item["candidate_type"] == "oled_text_evidence"]
+    assert len(text_items) == 1
+    assert text_items[0]["source_candidate_id"] == "text-001"
+    assert text_items[0]["provenance"]["merged_source_candidate_ids"] == ["text-001", "text-002"]
+    assert "merged_duplicate_text_candidates:2" in text_items[0]["warnings"]
+    assert "merged_duplicate_text_candidates_removed:1" in packet["summary"]["warnings"]
+
+
+def test_handles_missing_candidate_artifacts_as_empty_packet_with_warnings(tmp_path: Path) -> None:
+    result = generate_oled_review_packet(
+        run_id="empty-run",
+        output_dir=tmp_path / "review",
+        oled_candidates_json=tmp_path / "missing_oled_candidates.json",
+        oled_text_evidence_candidates_json=tmp_path / "missing_text.json",
+        oled_schema_candidates_json=tmp_path / "missing_schema.json",
+        oled_compiled_records_json=tmp_path / "missing_compiled.json",
+        corpus_extraction_manifest_json=tmp_path / "missing_manifest.json",
+        generated_at=GENERATED_AT,
+    )
+
+    packet = _read_json(Path(result.review_packet_json))
+    summary = _read_json(Path(result.review_summary_json))
+    decisions = _read_json(Path(result.reviewer_decision_template_json))
+
+    assert result.review_item_count == 0
+    assert packet["review_items"] == []
+    assert packet["summary"]["warnings"]
+    assert summary["review_item_count"] == 0
+    assert summary["warnings"]
+    assert decisions["source_packet_digest"].startswith("sha256:")
+    assert decisions["decisions"] == []
+    assert "No review items generated" in Path(result.review_packet_md).read_text(encoding="utf-8")
+    admission_packet = _read_json(Path(result.compiled_admission_packet_json))
+    admission_decisions = _read_json(Path(result.compiled_admission_decision_template_json))
+    assert result.compiled_admission_item_count == 0
+    assert admission_packet["review_items"] == []
+    assert admission_decisions["decisions"] == []
+    assert "No property-bearing compiled records are eligible" in Path(
+        result.compiled_admission_packet_md
+    ).read_text(
+        encoding="utf-8"
+    )
+
+
+def _write_candidate_artifacts(tmp_path: Path) -> dict[str, Path]:
+    extraction = tmp_path / "extraction"
+    extraction.mkdir()
+    artifacts = {
+        "oled_candidates_json": extraction / "oled_candidates.json",
+        "oled_text_evidence_candidates_json": extraction / "oled_text_evidence_candidates.json",
+        "oled_schema_candidates_json": extraction / "oled_schema_candidates.json",
+        "oled_compiled_records_json": extraction / "oled_compiled_records.json",
+        "corpus_extraction_manifest_json": extraction / "corpus_extraction_manifest.json",
+    }
+    _write_json(
+        artifacts["oled_candidates_json"],
+        {
+            "run_id": "review-run",
+            "candidates": [
+                {
+                    "paper_id": "paper001",
+                    "candidate_type": "text",
+                    "page_index": 1,
+                    "block_index": 4,
+                    "block_id": "raw-block-001",
+                    "raw_text": "OLED device performance was measured.",
+                    "evidence_anchor": "paper001:p1:block4",
+                    "candidate_hash": "raw-hash-001",
+                    "matched_terms": ["oled"],
+                    "relevance_signals": ["oled_keyword"],
+                    "source_format": "mineru_like",
+                    "table_parse_status": "not_table",
+                }
+            ],
+        },
+    )
+    _write_json(
+        artifacts["oled_text_evidence_candidates_json"],
+        {
+            "run_id": "review-run",
+            "text_evidence_candidates": [
+                {
+                    "candidate_id": "text-001",
+                    "paper_id": "paper001",
+                    "source_document_id": "paper001-source",
+                    "source_path": "/tmp/paper001.pdf",
+                    "page": 1,
+                    "element_id": "el_p1_0001",
+                    "evidence_text": "4CzIPN showed a photoluminescence quantum yield of 94 ± 2% in toluene.",
+                    "evidence_span": {"start": 14, "end": 65},
+                    "compound_mentions": ["4CzIPN"],
+                    "property_id": "plqy",
+                    "property_label": "photoluminescence quantum yield",
+                    "raw_value": "94 ± 2%",
+                    "numeric_value": 94.0,
+                    "unit": "%",
+                    "condition_text": "in toluene",
+                    "confidence": 0.86,
+                    "extraction_method": "deterministic_oled_text_evidence_v1",
+                    "provenance": {"source_document_id": "paper001-source", "paper_id": "paper001"},
+                }
+            ],
+        },
+    )
+    _write_json(
+        artifacts["oled_schema_candidates_json"],
+        {
+            "run_id": "review-run",
+            "schema_candidates": [
+                {
+                    "candidate_id": "schema-001",
+                    "candidate_type": "property_observation",
+                    "status": "proposed",
+                    "source_paper_id": "paper001",
+                    "source_candidate_hash": "raw-hash-001",
+                    "source_evidence_anchor": "paper001:p3:table1:row1",
+                    "target_layer": "device",
+                    "property_id": "eqe_percent",
+                    "property_label": "external quantum efficiency",
+                    "value": 21.3,
+                    "unit": "%",
+                    "evidence_refs": [
+                        {
+                            "source_candidate_hash": "raw-hash-001",
+                            "source_evidence_anchor": "paper001:p3:table1:row1",
+                            "source_candidate_type": "table",
+                            "row_index": 1,
+                            "column_name": "EQE",
+                            "cell_value": "21.3%",
+                        }
+                    ],
+                    "confidence_score": 0.91,
+                    "metadata": {"page": 3},
+                }
+            ],
+        },
+    )
+    _write_json(
+        artifacts["oled_compiled_records_json"],
+        {
+            "run_id": "review-run",
+            "compiled_records": [
+                {
+                    "record_id": "compiled-001",
+                    "status": "compiled",
+                    "group_key": {
+                        "source_paper_id": "paper001",
+                        "source_candidate_hashes": ["raw-hash-001"],
+                        "row_index": 1,
+                        "target_property_ids": ["eqe_percent"],
+                    },
+                    "layered_record": {
+                        "interaction": {
+                            "metadata": {
+                                "material_roles": [{"role": "emitter", "material": "4CzIPN"}],
+                            }
+                        },
+                        "device": {
+                            "device_stack": ["ITO", "TAPC", "emissive layer", "LiF/Al"],
+                            "properties": [
+                                {
+                                    "property_label": "external quantum efficiency",
+                                    "value": 21.3,
+                                    "unit": "%",
+                                    "condition": {
+                                        "luminance_cd_m2": 100,
+                                        "metadata": {
+                                            "raw_conditions": [
+                                                {
+                                                    "condition_field": "turn_on_voltage",
+                                                    "condition_value": 2.5,
+                                                    "condition_unit": "V",
+                                                }
+                                            ]
+                                        },
+                                    },
+                                    "metadata": {"property_id": "eqe_percent"},
+                                }
+                            ],
+                        },
+                    },
+                    "source_schema_candidate_ids": ["schema-001"],
+                    "source_candidate_hashes": ["raw-hash-001"],
+                    "source_evidence_anchors": ["paper001:p3:table1:row1"],
+                    "schema_warning_codes": ["schema_warning"],
+                    "confidence_score": 0.88,
+                }
+            ],
+        },
+    )
+    _write_json(
+        artifacts["corpus_extraction_manifest_json"],
+        {
+            "run_id": "review-run",
+            "report": {"oled_candidate_count": 1},
+            "artifacts": {key: str(path) for key, path in artifacts.items()},
+        },
+    )
+    return artifacts
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))

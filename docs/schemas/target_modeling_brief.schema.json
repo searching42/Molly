@@ -1,0 +1,408 @@
+{
+  "$defs": {
+    "DomainModelCandidate": {
+      "properties": {
+        "model_id": {
+          "title": "Model Id",
+          "type": "string"
+        },
+        "domain": {
+          "title": "Domain",
+          "type": "string"
+        },
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "intended_use": {
+          "title": "Intended Use",
+          "type": "string"
+        },
+        "backend": {
+          "title": "Backend",
+          "type": "string"
+        },
+        "source_run_id": {
+          "default": "",
+          "title": "Source Run Id",
+          "type": "string"
+        },
+        "source_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Artifacts",
+          "type": "array"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Metrics",
+          "type": "object"
+        },
+        "feature_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Feature Requirements",
+          "type": "array"
+        },
+        "recommended_for": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended For",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "reuse_policy": {
+          "default": "historical_prior",
+          "title": "Reuse Policy",
+          "type": "string"
+        },
+        "status": {
+          "default": "candidate",
+          "title": "Status",
+          "type": "string"
+        },
+        "priority": {
+          "default": 100,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "model_id",
+        "domain",
+        "property_id",
+        "intended_use",
+        "backend"
+      ],
+      "title": "DomainModelCandidate",
+      "type": "object"
+    },
+    "DomainModelSelection": {
+      "properties": {
+        "domain": {
+          "title": "Domain",
+          "type": "string"
+        },
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "normalized_property_id": {
+          "title": "Normalized Property Id",
+          "type": "string"
+        },
+        "use_case": {
+          "title": "Use Case",
+          "type": "string"
+        },
+        "selected_model_id": {
+          "title": "Selected Model Id",
+          "type": "string"
+        },
+        "selected_model": {
+          "$ref": "#/$defs/DomainModelCandidate"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/DomainModelCandidate"
+          },
+          "title": "Candidates",
+          "type": "array"
+        },
+        "selection_role": {
+          "default": "modeling_prior",
+          "title": "Selection Role",
+          "type": "string"
+        },
+        "can_execute_prediction": {
+          "default": false,
+          "title": "Can Execute Prediction",
+          "type": "boolean"
+        },
+        "reuse_requires_user_approval": {
+          "default": true,
+          "title": "Reuse Requires User Approval",
+          "type": "boolean"
+        },
+        "missing_required_inputs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Required Inputs",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "rationale": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rationale",
+          "type": "array"
+        },
+        "requires_user_input": {
+          "default": false,
+          "title": "Requires User Input",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "domain",
+        "property_id",
+        "normalized_property_id",
+        "use_case",
+        "selected_model_id",
+        "selected_model"
+      ],
+      "title": "DomainModelSelection",
+      "type": "object"
+    },
+    "PlanQuestion": {
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "blocks_execution": {
+          "default": true,
+          "title": "Blocks Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    },
+    "TargetEvidenceItem": {
+      "properties": {
+        "evidence_id": {
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "source_type": {
+          "title": "Source Type",
+          "type": "string"
+        },
+        "source_ref": {
+          "default": "",
+          "title": "Source Ref",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "implications": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Implications",
+          "type": "array"
+        },
+        "recommended_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Actions",
+          "type": "array"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "source_type",
+        "summary"
+      ],
+      "title": "TargetEvidenceItem",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "goal": {
+      "title": "Goal",
+      "type": "string"
+    },
+    "property_id": {
+      "title": "Property Id",
+      "type": "string"
+    },
+    "domain": {
+      "default": "general",
+      "title": "Domain",
+      "type": "string"
+    },
+    "status": {
+      "default": "ready_for_confirmation",
+      "title": "Status",
+      "type": "string"
+    },
+    "evidence_sources": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Sources",
+      "type": "array"
+    },
+    "external_search_policy": {
+      "default": "not_used",
+      "title": "External Search Policy",
+      "type": "string"
+    },
+    "risk_flags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Risk Flags",
+      "type": "array"
+    },
+    "preprocessing_steps": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Preprocessing Steps",
+      "type": "array"
+    },
+    "split_strategy": {
+      "title": "Split Strategy",
+      "type": "string"
+    },
+    "target_transform": {
+      "default": "none",
+      "title": "Target Transform",
+      "type": "string"
+    },
+    "recommended_backend": {
+      "title": "Recommended Backend",
+      "type": "string"
+    },
+    "hyperparameters": {
+      "additionalProperties": true,
+      "title": "Hyperparameters",
+      "type": "object"
+    },
+    "acceptance_criteria": {
+      "additionalProperties": true,
+      "title": "Acceptance Criteria",
+      "type": "object"
+    },
+    "dataset_context": {
+      "additionalProperties": true,
+      "title": "Dataset Context",
+      "type": "object"
+    },
+    "evidence_items": {
+      "items": {
+        "$ref": "#/$defs/TargetEvidenceItem"
+      },
+      "title": "Evidence Items",
+      "type": "array"
+    },
+    "model_selection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DomainModelSelection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "goal",
+    "property_id",
+    "split_strategy",
+    "recommended_backend"
+  ],
+  "title": "TargetModelingBrief",
+  "type": "object"
+}

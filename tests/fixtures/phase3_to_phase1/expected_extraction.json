@@ -1,0 +1,35 @@
+{
+  "run_id": "phase3-to-phase1-fixture",
+  "paper_id": "phase3-to-phase1-fixture-paper",
+  "selected_table_count": 1,
+  "extracted_record_count": 15,
+  "rejected_record_count": 3,
+  "duplicate_smiles_count": 2,
+  "expected_rejection_reasons": {
+    "missing_smiles": 1,
+    "low_confidence": 1,
+    "missing_required_properties": 1
+  },
+  "records": [
+    {
+      "record_id": "sci_000001",
+      "smiles": "CCO",
+      "plqy": 0.65,
+      "lambda_em_nm": 512.0,
+      "paper_id": "phase3-to-phase1-fixture-paper",
+      "page": 2,
+      "table_id": "table_oled_001",
+      "row_id": "row_000001"
+    },
+    {
+      "record_id": "sci_000003",
+      "smiles": "CCCO",
+      "plqy": 0.72,
+      "lambda_em_nm": 530.0,
+      "paper_id": "phase3-to-phase1-fixture-paper",
+      "page": 2,
+      "table_id": "table_oled_001",
+      "row_id": "row_000003"
+    }
+  ]
+}

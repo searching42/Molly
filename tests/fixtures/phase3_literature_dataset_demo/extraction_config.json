@@ -1,0 +1,5 @@
+{
+  "confidence_threshold": 0.7,
+  "conflict_tolerance": 0.02,
+  "confirmed_by": "phase3-fixture-reviewer"
+}

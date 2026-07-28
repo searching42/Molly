@@ -1,0 +1,82 @@
+{
+  "goal": "Find OLED emitters with high PLQY and red-shifted emission",
+  "notes": [
+    "Summary-only bundle for OLEDAgentMVPDemoRunner.",
+    "Artifact values are labels/placeholders; they are not opened or read."
+  ],
+  "project_id": "demo-project",
+  "scenarios": [
+    {
+      "description": "Acceptable diagnostics with provenance present.",
+      "name": "local_acceptable",
+      "payload": {
+        "baseline_artifacts": {
+          "metrics": "local_metrics"
+        },
+        "dataset_artifacts": {
+          "dataset_view_rows": "local_dataset_rows"
+        },
+        "dataset_summary": {
+          "property_count": 3,
+          "row_count": 86
+        },
+        "diagnostics_report": {
+          "status": "acceptable"
+        },
+        "provenance_summary": {
+          "evidence_count": 8,
+          "source_count": 2
+        },
+        "training_package_artifacts": {
+          "training_rows": "local_training_rows"
+        }
+      }
+    },
+    {
+      "description": "Weak diagnostics example that should trigger baseline rerun.",
+      "name": "local_weak_diagnostics",
+      "payload": {
+        "baseline_artifacts": {
+          "metrics": "local_metrics"
+        },
+        "dataset_artifacts": {
+          "dataset_view_rows": "local_dataset_rows"
+        },
+        "diagnostics_report": {
+          "status": "weak",
+          "summary": "rerun recommended"
+        },
+        "provenance_summary": {
+          "evidence_count": 8,
+          "source_count": 2
+        },
+        "training_package_artifacts": {
+          "training_rows": "local_training_rows"
+        }
+      }
+    },
+    {
+      "description": "Acceptable diagnostics but empty provenance.",
+      "name": "local_missing_provenance",
+      "payload": {
+        "baseline_artifacts": {
+          "metrics": "local_metrics"
+        },
+        "dataset_artifacts": {
+          "dataset_view_rows": "local_dataset_rows"
+        },
+        "diagnostics_report": {
+          "status": "acceptable"
+        },
+        "provenance_summary": {
+          "evidence_count": 0,
+          "source_count": 0
+        },
+        "training_package_artifacts": {
+          "training_rows": "local_training_rows"
+        }
+      }
+    }
+  ],
+  "schema_version": 1
+}

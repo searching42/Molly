@@ -1,0 +1,119 @@
+{
+  "properties": {
+    "assignment_id": {
+      "title": "Assignment Id",
+      "type": "string"
+    },
+    "project_id": {
+      "default": "",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "worker_id": {
+      "default": "",
+      "title": "Worker Id",
+      "type": "string"
+    },
+    "transport": {
+      "anyOf": [
+        {
+          "enum": [
+            "ssh",
+            "local",
+            "manual"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "default": "",
+      "title": "Transport"
+    },
+    "host": {
+      "default": "",
+      "title": "Host",
+      "type": "string"
+    },
+    "matched_capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Matched Capabilities",
+      "type": "array"
+    },
+    "missing_capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Capabilities",
+      "type": "array"
+    },
+    "status": {
+      "enum": [
+        "needs_confirmation",
+        "no_worker",
+        "disabled"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "requires_confirmation": {
+      "default": true,
+      "title": "Requires Confirmation",
+      "type": "boolean"
+    },
+    "required_permissions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Permissions",
+      "type": "array"
+    },
+    "budget_limit_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Budget Limit Sec"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "assignment_id",
+    "run_id",
+    "task_id",
+    "status"
+  ],
+  "title": "RemoteWorkerAssignment",
+  "type": "object"
+}

@@ -1,0 +1,41 @@
+{
+  "properties": {
+    "original_goal": {
+      "title": "Original Goal",
+      "type": "string"
+    },
+    "expanded_queries": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Expanded Queries",
+      "type": "array"
+    },
+    "included_terms": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Included Terms",
+      "type": "array"
+    },
+    "excluded_terms": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Excluded Terms",
+      "type": "array"
+    },
+    "rationale": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Rationale",
+      "type": "array"
+    }
+  },
+  "required": [
+    "original_goal"
+  ],
+  "title": "ResearchQueryExpansion",
+  "type": "object"
+}

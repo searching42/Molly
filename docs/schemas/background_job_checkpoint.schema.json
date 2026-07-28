@@ -1,0 +1,49 @@
+{
+  "properties": {
+    "checkpoint_id": {
+      "title": "Checkpoint Id",
+      "type": "string"
+    },
+    "stage": {
+      "title": "Stage",
+      "type": "string"
+    },
+    "cursor": {
+      "additionalProperties": true,
+      "title": "Cursor",
+      "type": "object"
+    },
+    "completed_units": {
+      "default": 0,
+      "title": "Completed Units",
+      "type": "integer"
+    },
+    "runtime_sec": {
+      "default": 0,
+      "title": "Runtime Sec",
+      "type": "integer"
+    },
+    "cost_usd": {
+      "default": 0.0,
+      "title": "Cost Usd",
+      "type": "number"
+    },
+    "artifact_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Artifact Refs",
+      "type": "array"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "checkpoint_id",
+    "stage"
+  ],
+  "title": "BackgroundJobCheckpoint",
+  "type": "object"
+}

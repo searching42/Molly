@@ -1,0 +1,51 @@
+{
+  "properties": {
+    "conflict_id": {
+      "title": "Conflict Id",
+      "type": "string"
+    },
+    "smiles": {
+      "title": "Smiles",
+      "type": "string"
+    },
+    "property_id": {
+      "title": "Property Id",
+      "type": "string"
+    },
+    "min_value": {
+      "title": "Min Value",
+      "type": "number"
+    },
+    "max_value": {
+      "title": "Max Value",
+      "type": "number"
+    },
+    "tolerance": {
+      "title": "Tolerance",
+      "type": "number"
+    },
+    "observations": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Observations",
+      "type": "array"
+    },
+    "status": {
+      "default": "needs_review",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "conflict_id",
+    "smiles",
+    "property_id",
+    "min_value",
+    "max_value",
+    "tolerance"
+  ],
+  "title": "ConflictGroup",
+  "type": "object"
+}

@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "PlanQuestion": {
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "blocks_execution": {
+          "default": true,
+          "title": "Blocks Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "project_id": {
+      "default": "",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "needs_clarification",
+        "needs_evidence_approval",
+        "ready_for_modeling_plan"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "needs_clarification",
+        "needs_evidence_approval",
+        "ready_for_modeling_plan"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "modeling_plan_payload": {
+      "additionalProperties": true,
+      "title": "Modeling Plan Payload",
+      "type": "object"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "pending_cited_target_evidence": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Pending Cited Target Evidence",
+      "type": "array"
+    },
+    "next_actions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Next Actions",
+      "type": "array"
+    },
+    "blocked_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocked Reasons",
+      "type": "array"
+    },
+    "requires_user_response": {
+      "default": true,
+      "title": "Requires User Response",
+      "type": "boolean"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "run_id",
+    "status",
+    "decision",
+    "summary"
+  ],
+  "title": "ConversationTurnDecision",
+  "type": "object"
+}

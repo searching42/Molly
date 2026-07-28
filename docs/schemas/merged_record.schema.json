@@ -1,0 +1,70 @@
+{
+  "properties": {
+    "merge_id": {
+      "title": "Merge Id",
+      "type": "string"
+    },
+    "smiles": {
+      "title": "Smiles",
+      "type": "string"
+    },
+    "properties": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Properties"
+    },
+    "property_status": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Property Status",
+      "type": "object"
+    },
+    "source_record_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Record Ids",
+      "type": "array"
+    },
+    "source_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Ids",
+      "type": "array"
+    },
+    "citations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Citations",
+      "type": "array"
+    },
+    "confidence": {
+      "title": "Confidence",
+      "type": "number"
+    },
+    "conflict_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Conflict Ids",
+      "type": "array"
+    },
+    "status": {
+      "default": "merged",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "merge_id",
+    "smiles",
+    "confidence"
+  ],
+  "title": "MergedRecord",
+  "type": "object"
+}

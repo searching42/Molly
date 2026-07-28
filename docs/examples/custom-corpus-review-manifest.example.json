@@ -1,0 +1,32 @@
+{
+  "schema_version": "custom_corpus_review.v1",
+  "review_manifest_id": "review-example-001",
+  "corpus_id": "example-public-corpus",
+  "dry_run_id": "custom-dry-run-example-001",
+  "created_at": "YYYY-MM-DDTHH:MM:SSZ",
+  "created_by": "reviewer-redacted",
+  "source_dry_run_report_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "source_manifest_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "review_policy": "example-manual-review-policy",
+  "review_records": [
+    {
+      "review_id": "review-record-001",
+      "corpus_id": "example-public-corpus",
+      "dry_run_id": "custom-dry-run-example-001",
+      "document_id": "doc-example-001",
+      "record_id": "record-example-001",
+      "field_name": "plqy",
+      "review_scope": "record",
+      "decision": "needs_review",
+      "rejection_reason": "",
+      "reviewer_label": "reviewer-redacted",
+      "reviewed_at": "YYYY-MM-DDTHH:MM:SSZ",
+      "source_artifact_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "extracted_value_summary": "short redacted value summary",
+      "normalized_value_summary": "",
+      "confidence_note": "needs second reviewer",
+      "provenance_note": "placeholder provenance summary only",
+      "notes": "example only"
+    }
+  ]
+}

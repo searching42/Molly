@@ -1,0 +1,274 @@
+{
+  "$defs": {
+    "GenerationBackend": {
+      "enum": [
+        "deterministic_stub",
+        "reinvent4"
+      ],
+      "title": "GenerationBackend",
+      "type": "string"
+    },
+    "GenerationConstraint": {
+      "properties": {
+        "constraint_id": {
+          "title": "Constraint Id",
+          "type": "string"
+        },
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "operator": {
+          "title": "Operator",
+          "type": "string"
+        },
+        "value": {
+          "default": null,
+          "title": "Value"
+        },
+        "hard": {
+          "default": true,
+          "title": "Hard",
+          "type": "boolean"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "source": {
+          "default": "user_goal",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "constraint_id",
+        "property_id",
+        "operator"
+      ],
+      "title": "GenerationConstraint",
+      "type": "object"
+    },
+    "GenerationFrontierTarget": {
+      "properties": {
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "direction": {
+          "title": "Direction",
+          "type": "string"
+        },
+        "target_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Value"
+        },
+        "weight": {
+          "default": 1.0,
+          "title": "Weight",
+          "type": "number"
+        },
+        "tolerance": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tolerance"
+        }
+      },
+      "required": [
+        "property_id",
+        "direction"
+      ],
+      "title": "GenerationFrontierTarget",
+      "type": "object"
+    },
+    "GenerationTradeoff": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "recommendation": {
+          "title": "Recommendation",
+          "type": "string"
+        },
+        "diversity_weight": {
+          "default": 0.4,
+          "title": "Diversity Weight",
+          "type": "number"
+        },
+        "novelty_weight": {
+          "default": 0.4,
+          "title": "Novelty Weight",
+          "type": "number"
+        },
+        "exploitation_weight": {
+          "default": 0.2,
+          "title": "Exploitation Weight",
+          "type": "number"
+        },
+        "risk_flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Risk Flags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "recommendation"
+      ],
+      "title": "GenerationTradeoff",
+      "type": "object"
+    },
+    "PlanQuestion": {
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "blocks_execution": {
+          "default": true,
+          "title": "Blocks Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "goal": {
+      "title": "Goal",
+      "type": "string"
+    },
+    "status": {
+      "default": "needs_confirmation",
+      "title": "Status",
+      "type": "string"
+    },
+    "backend": {
+      "$ref": "#/$defs/GenerationBackend",
+      "default": "deterministic_stub"
+    },
+    "requested_count": {
+      "default": 32,
+      "title": "Requested Count",
+      "type": "integer"
+    },
+    "strategy": {
+      "title": "Strategy",
+      "type": "string"
+    },
+    "frontier_targets": {
+      "items": {
+        "$ref": "#/$defs/GenerationFrontierTarget"
+      },
+      "title": "Frontier Targets",
+      "type": "array"
+    },
+    "constraints": {
+      "items": {
+        "$ref": "#/$defs/GenerationConstraint"
+      },
+      "title": "Constraints",
+      "type": "array"
+    },
+    "tradeoffs": {
+      "items": {
+        "$ref": "#/$defs/GenerationTradeoff"
+      },
+      "title": "Tradeoffs",
+      "type": "array"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
+      "type": "array"
+    },
+    "required_permissions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Permissions",
+      "type": "array"
+    },
+    "adapter_payload": {
+      "additionalProperties": true,
+      "title": "Adapter Payload",
+      "type": "object"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "goal",
+    "strategy"
+  ],
+  "title": "GenerationStrategyProposal",
+  "type": "object"
+}

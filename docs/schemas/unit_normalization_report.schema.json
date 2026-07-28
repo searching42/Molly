@@ -1,0 +1,61 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "input_record_count": {
+      "title": "Input Record Count",
+      "type": "integer"
+    },
+    "normalized_record_count": {
+      "title": "Normalized Record Count",
+      "type": "integer"
+    },
+    "conversion_count": {
+      "title": "Conversion Count",
+      "type": "integer"
+    },
+    "warning_count": {
+      "title": "Warning Count",
+      "type": "integer"
+    },
+    "conversions": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Conversions",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "input_record_count",
+    "normalized_record_count",
+    "conversion_count",
+    "warning_count",
+    "generated_at"
+  ],
+  "title": "UnitNormalizationReport",
+  "type": "object"
+}

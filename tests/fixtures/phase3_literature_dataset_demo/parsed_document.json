@@ -1,0 +1,109 @@
+{
+  "paper_id": "phase3-oled-fixture-paper",
+  "source_path": "fixtures/phase3_literature_dataset_demo/oled_fixture_table.pdf",
+  "parser_backend": "fixture_table_parser",
+  "metadata": {
+    "title": "Fixture OLED emitter property table",
+    "doi": "10.0000/phase3.fixture",
+    "license": "CC-BY-4.0",
+    "citation": "Fixture et al. OLED emitter property table, 2026",
+    "source_hash": "sha256:phase3fixture"
+  },
+  "pages": [
+    {
+      "page": 1,
+      "width": 595.0,
+      "height": 842.0
+    }
+  ],
+  "elements": [
+    {
+      "element_id": "el_title_001",
+      "page": 1,
+      "type": "title",
+      "text": "Fixture OLED emitter property table",
+      "markdown": "# Fixture OLED emitter property table",
+      "source_hash": "sha256:phase3fixture"
+    }
+  ],
+  "tables": [
+    {
+      "table_id": "table_plqy_001",
+      "caption": "Photoluminescence properties for fixture OLED emitters measured in thin film.",
+      "headers": [
+        "molecule",
+        "smiles",
+        "PLQY",
+        "lambda_em_nm",
+        "confidence"
+      ],
+      "rows": [
+        {
+          "molecule": "emitter_a",
+          "smiles": "CCO",
+          "PLQY": "65%",
+          "lambda_em_nm": "520",
+          "confidence": "0.92"
+        },
+        {
+          "molecule": "emitter_b",
+          "smiles": "CCN",
+          "PLQY": "0.58",
+          "lambda_em_nm": "535",
+          "confidence": "0.89"
+        },
+        {
+          "molecule": "emitter_c",
+          "smiles": "c1ccccc1",
+          "PLQY": "72 %",
+          "lambda_em_nm": "545",
+          "confidence": "0.91"
+        },
+        {
+          "molecule": "emitter_d",
+          "smiles": "CC(=O)O",
+          "PLQY": "0.41",
+          "lambda_em_nm": "500",
+          "confidence": "0.84"
+        },
+        {
+          "molecule": "emitter_e",
+          "smiles": "CCOC",
+          "PLQY": "55%",
+          "lambda_em_nm": "560",
+          "confidence": "0.88"
+        },
+        {
+          "molecule": "emitter_f",
+          "smiles": "CC(C)O",
+          "PLQY": "0.49",
+          "lambda_em_nm": "515",
+          "confidence": "0.86"
+        },
+        {
+          "molecule": "emitter_a_repeat",
+          "smiles": "CCO",
+          "PLQY": "66%",
+          "lambda_em_nm": "521",
+          "confidence": "0.90"
+        },
+        {
+          "molecule": "missing_structure",
+          "smiles": "",
+          "PLQY": "50%",
+          "lambda_em_nm": "530",
+          "confidence": "0.93"
+        },
+        {
+          "molecule": "low_confidence_row",
+          "smiles": "CCCl",
+          "PLQY": "80%",
+          "lambda_em_nm": "575",
+          "confidence": "0.35"
+        }
+      ],
+      "page": 1,
+      "markdown": "| molecule | smiles | PLQY | lambda_em_nm | confidence |"
+    }
+  ]
+}

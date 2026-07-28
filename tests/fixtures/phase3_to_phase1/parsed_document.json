@@ -1,0 +1,65 @@
+{
+  "paper_id": "phase3-to-phase1-fixture-paper",
+  "source_path": "synthetic://phase3-to-phase1-fixture.pdf",
+  "parser_backend": "mineru-normalized-fixture",
+  "metadata": {
+    "title": "Synthetic OLED emission table for Phase 3 to Phase 1 workflow",
+    "synthetic": true
+  },
+  "pages": [
+    {
+      "page": 2,
+      "text": "Synthetic table with OLED SMILES, PLQY, and emission wavelength values."
+    }
+  ],
+  "elements": [
+    {
+      "element_id": "el_table_intro_001",
+      "page": 2,
+      "type": "text",
+      "text": "Table 1 lists synthetic OLED emitters and photophysical properties.",
+      "markdown": "",
+      "bbox": [72.0, 90.0, 520.0, 120.0],
+      "source_hash": "synthetic-el-table-intro-001",
+      "metadata": {}
+    }
+  ],
+  "tables": [
+    {
+      "table_id": "table_oled_001",
+      "caption": "Synthetic OLED emitter properties",
+      "headers": ["molecule_id", "SMILES", "PLQY", "lambda_em_nm", "confidence", "note"],
+      "rows": [
+        {"molecule_id": "mol-001", "SMILES": "CCO", "PLQY": "65%", "lambda_em_nm": "512 nm", "confidence": "0.96", "note": "primary"},
+        {"molecule_id": "mol-002", "SMILES": "CCN", "PLQY": "0.58", "lambda_em_nm": "498", "confidence": "0.91", "note": "will-conflict"},
+        {"molecule_id": "mol-003", "SMILES": "CCCO", "PLQY": "72%", "lambda_em_nm": "530", "confidence": "0.93", "note": "valid"},
+        {"molecule_id": "mol-004", "SMILES": "c1ccccc1", "PLQY": "0.44", "lambda_em_nm": "410", "confidence": "0.88", "note": "valid"},
+        {"molecule_id": "mol-005", "SMILES": "CCCl", "PLQY": "36%", "lambda_em_nm": "460", "confidence": "0.86", "note": "valid"},
+        {"molecule_id": "mol-006", "SMILES": "CCO", "PLQY": "66%", "lambda_em_nm": "513", "confidence": "0.94", "note": "consistent-duplicate"},
+        {"molecule_id": "mol-007", "SMILES": "CCBr", "PLQY": "0.61", "lambda_em_nm": "545", "confidence": "0.90", "note": "valid"},
+        {"molecule_id": "mol-008", "SMILES": "CC(C)O", "PLQY": "49%", "lambda_em_nm": "488", "confidence": "0.87", "note": "valid"},
+        {"molecule_id": "mol-009", "SMILES": "C1CCCCC1", "PLQY": "0.52", "lambda_em_nm": "475", "confidence": "0.85", "note": "valid"},
+        {"molecule_id": "mol-010", "SMILES": "CCOC", "PLQY": "68%", "lambda_em_nm": "555", "confidence": "0.89", "note": "valid"},
+        {"molecule_id": "mol-011", "SMILES": "CC(=O)O", "PLQY": "0.33", "lambda_em_nm": "430", "confidence": "0.84", "note": "valid"},
+        {"molecule_id": "mol-012", "SMILES": "CCN", "PLQY": "0.91", "lambda_em_nm": "500", "confidence": "0.92", "note": "conflicting-duplicate"},
+        {"molecule_id": "mol-013", "SMILES": "", "PLQY": "0.50", "lambda_em_nm": "500", "confidence": "0.83", "note": "missing-smiles"},
+        {"molecule_id": "mol-014", "SMILES": "not-a-smiles", "PLQY": "0.42", "lambda_em_nm": "515", "confidence": "0.82", "note": "invalid-smiles"},
+        {"molecule_id": "mol-015", "SMILES": "CCCC", "PLQY": "125%", "lambda_em_nm": "510", "confidence": "0.81", "note": "plqy-out-of-range"},
+        {"molecule_id": "mol-016", "SMILES": "CCS", "PLQY": "0.57", "lambda_em_nm": "1200", "confidence": "0.80", "note": "lambda-out-of-range"},
+        {"molecule_id": "mol-017", "SMILES": "CCF", "PLQY": "0.47", "lambda_em_nm": "505", "confidence": "0.40", "note": "low-confidence"},
+        {"molecule_id": "mol-018", "SMILES": "CNC", "PLQY": "", "lambda_em_nm": "520", "confidence": "0.79", "note": "missing-plqy"}
+      ],
+      "footnotes": [
+        "All values are synthetic and generated for offline deterministic tests."
+      ],
+      "page": 2,
+      "markdown": "",
+      "source_bbox": {
+        "x0": 70.0,
+        "top": 140.0,
+        "x1": 540.0,
+        "bottom": 700.0
+      }
+    }
+  ]
+}

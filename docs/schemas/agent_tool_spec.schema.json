@@ -1,0 +1,89 @@
+{
+  "properties": {
+    "tool_id": {
+      "title": "Tool Id",
+      "type": "string"
+    },
+    "label": {
+      "title": "Label",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "discovery_stages": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Discovery Stages",
+      "type": "array"
+    },
+    "suggested_tasks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Suggested Tasks",
+      "type": "array"
+    },
+    "input_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Artifacts",
+      "type": "array"
+    },
+    "output_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Output Artifacts",
+      "type": "array"
+    },
+    "risk_level": {
+      "default": "low",
+      "title": "Risk Level",
+      "type": "string"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
+      "type": "array"
+    },
+    "required_permissions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Permissions",
+      "type": "array"
+    },
+    "failure_modes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Failure Modes",
+      "type": "array"
+    },
+    "safety_boundary": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Safety Boundary",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "tool_id",
+    "label"
+  ],
+  "title": "AgentToolSpec",
+  "type": "object"
+}

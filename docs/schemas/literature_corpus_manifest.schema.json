@@ -1,0 +1,104 @@
+{
+  "$defs": {
+    "LiteratureCorpusSource": {
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_type": {
+          "title": "Source Type",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        },
+        "doi": {
+          "default": "",
+          "title": "Doi",
+          "type": "string"
+        },
+        "local_path": {
+          "default": "",
+          "title": "Local Path",
+          "type": "string"
+        },
+        "license": {
+          "default": "",
+          "title": "License",
+          "type": "string"
+        },
+        "status": {
+          "default": "pending_acquisition",
+          "title": "Status",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_type",
+        "value"
+      ],
+      "title": "LiteratureCorpusSource",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "source_count": {
+      "title": "Source Count",
+      "type": "integer"
+    },
+    "source_type_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Source Type Counts",
+      "type": "object"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/LiteratureCorpusSource"
+      },
+      "title": "Sources",
+      "type": "array"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "source_count",
+    "created_at"
+  ],
+  "title": "LiteratureCorpusManifest",
+  "type": "object"
+}

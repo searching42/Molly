@@ -1,0 +1,45 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "risk_budget": {
+      "default": "medium",
+      "title": "Risk Budget",
+      "type": "string"
+    },
+    "allow_auto_eligible": {
+      "default": true,
+      "title": "Allow Auto Eligible",
+      "type": "boolean"
+    },
+    "allow_gated": {
+      "default": true,
+      "title": "Allow Gated",
+      "type": "boolean"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "run_id"
+  ],
+  "title": "OLEDDiscoveryExecutionPreviewRequest",
+  "type": "object"
+}

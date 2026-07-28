@@ -1,0 +1,73 @@
+{
+  "properties": {
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "paper_id": {
+      "title": "Paper Id",
+      "type": "string"
+    },
+    "title": {
+      "default": "",
+      "title": "Title",
+      "type": "string"
+    },
+    "source_path": {
+      "default": "",
+      "title": "Source Path",
+      "type": "string"
+    },
+    "source_hash": {
+      "default": "",
+      "title": "Source Hash",
+      "type": "string"
+    },
+    "parser_backend": {
+      "default": "",
+      "title": "Parser Backend",
+      "type": "string"
+    },
+    "citation": {
+      "default": "",
+      "title": "Citation",
+      "type": "string"
+    },
+    "doi": {
+      "default": "",
+      "title": "Doi",
+      "type": "string"
+    },
+    "license": {
+      "default": "unknown",
+      "title": "License",
+      "type": "string"
+    },
+    "license_requires_review": {
+      "default": true,
+      "title": "License Requires Review",
+      "type": "boolean"
+    },
+    "evidence_count": {
+      "default": 0,
+      "title": "Evidence Count",
+      "type": "integer"
+    },
+    "extracted_record_count": {
+      "default": 0,
+      "title": "Extracted Record Count",
+      "type": "integer"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "source_id",
+    "paper_id"
+  ],
+  "title": "LiteratureSourceProvenance",
+  "type": "object"
+}

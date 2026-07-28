@@ -1,0 +1,135 @@
+{
+  "$defs": {
+    "AssetStatus": {
+      "enum": [
+        "candidate",
+        "confirmed",
+        "deprecated"
+      ],
+      "title": "AssetStatus",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "asset_id": {
+      "title": "Asset Id",
+      "type": "string"
+    },
+    "model_id": {
+      "title": "Model Id",
+      "type": "string"
+    },
+    "domain": {
+      "title": "Domain",
+      "type": "string"
+    },
+    "property_id": {
+      "title": "Property Id",
+      "type": "string"
+    },
+    "aliases": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Aliases",
+      "type": "array"
+    },
+    "use_case": {
+      "default": "scalar_prediction",
+      "title": "Use Case",
+      "type": "string"
+    },
+    "backend": {
+      "title": "Backend",
+      "type": "string"
+    },
+    "model_dir": {
+      "title": "Model Dir",
+      "type": "string"
+    },
+    "manifest_path": {
+      "default": "domain_model_manifest.json",
+      "title": "Manifest Path",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/AssetStatus",
+      "default": "confirmed"
+    },
+    "created_from_run_id": {
+      "title": "Created From Run Id",
+      "type": "string"
+    },
+    "source_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Artifacts",
+      "type": "array"
+    },
+    "approved_by": {
+      "title": "Approved By",
+      "type": "string"
+    },
+    "approved_at": {
+      "title": "Approved At",
+      "type": "string"
+    },
+    "metrics": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Metrics",
+      "type": "object"
+    },
+    "applicability": {
+      "additionalProperties": true,
+      "title": "Applicability",
+      "type": "object"
+    },
+    "feature_requirements": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Feature Requirements",
+      "type": "array"
+    },
+    "input_columns": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Input Columns",
+      "type": "object"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "rollback_asset_id": {
+      "default": "",
+      "title": "Rollback Asset Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "asset_id",
+    "model_id",
+    "domain",
+    "property_id",
+    "backend",
+    "model_dir",
+    "created_from_run_id",
+    "approved_by",
+    "approved_at"
+  ],
+  "title": "PromotedModelAsset",
+  "type": "object"
+}

@@ -1,0 +1,35 @@
+{
+  "properties": {
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "risk_level": {
+      "default": "low",
+      "title": "Risk Level",
+      "type": "string"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
+      "type": "array"
+    },
+    "skipped": {
+      "default": false,
+      "title": "Skipped",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "task_id",
+    "reason"
+  ],
+  "title": "PlanRationale",
+  "type": "object"
+}

@@ -1,0 +1,35 @@
+{
+  "properties": {
+    "question_id": {
+      "title": "Question Id",
+      "type": "string"
+    },
+    "prompt": {
+      "title": "Prompt",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "choices": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Choices",
+      "type": "array"
+    },
+    "blocks_execution": {
+      "default": true,
+      "title": "Blocks Execution",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "question_id",
+    "prompt",
+    "reason"
+  ],
+  "title": "PlanQuestion",
+  "type": "object"
+}

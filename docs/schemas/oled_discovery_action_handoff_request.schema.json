@@ -1,0 +1,45 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "action": {
+      "default": "",
+      "title": "Action",
+      "type": "string"
+    },
+    "risk_budget": {
+      "default": "medium",
+      "title": "Risk Budget",
+      "type": "string"
+    },
+    "allow_gated": {
+      "default": true,
+      "title": "Allow Gated",
+      "type": "boolean"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "run_id"
+  ],
+  "title": "OLEDDiscoveryActionHandoffRequest",
+  "type": "object"
+}

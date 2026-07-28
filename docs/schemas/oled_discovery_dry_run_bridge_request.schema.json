@@ -1,0 +1,151 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "goal": {
+      "default": "",
+      "title": "Goal",
+      "type": "string"
+    },
+    "source_packet_id": {
+      "default": "",
+      "title": "Source Packet Id",
+      "type": "string"
+    },
+    "selected_tool_id": {
+      "default": "",
+      "title": "Selected Tool Id",
+      "type": "string"
+    },
+    "resolved_atomic_task_id": {
+      "default": "",
+      "title": "Resolved Atomic Task Id",
+      "type": "string"
+    },
+    "resolved_adapter_name": {
+      "default": "",
+      "title": "Resolved Adapter Name",
+      "type": "string"
+    },
+    "bridge_mode": {
+      "default": "blocked",
+      "title": "Bridge Mode",
+      "type": "string"
+    },
+    "dry_run_mode": {
+      "default": "blocked",
+      "title": "Dry Run Mode",
+      "type": "string"
+    },
+    "approval_mode": {
+      "default": "blocked",
+      "title": "Approval Mode",
+      "type": "string"
+    },
+    "eligible_for_bridge": {
+      "default": false,
+      "title": "Eligible For Bridge",
+      "type": "boolean"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "would_execute": {
+      "default": false,
+      "title": "Would Execute",
+      "type": "boolean"
+    },
+    "adapter_invocation": {
+      "additionalProperties": true,
+      "title": "Adapter Invocation",
+      "type": "object"
+    },
+    "payload_template": {
+      "additionalProperties": true,
+      "title": "Payload Template",
+      "type": "object"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
+      "type": "array"
+    },
+    "required_permissions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Permissions",
+      "type": "array"
+    },
+    "missing_inputs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Inputs",
+      "type": "array"
+    },
+    "blocked_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocked Reasons",
+      "type": "array"
+    },
+    "snapshot_binding_requirements": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Snapshot Binding Requirements",
+      "type": "array"
+    },
+    "reviewer_confirmations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reviewer Confirmations",
+      "type": "array"
+    },
+    "dry_run_snapshot_material": {
+      "additionalProperties": true,
+      "title": "Dry Run Snapshot Material",
+      "type": "object"
+    },
+    "audit_notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Audit Notes",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id"
+  ],
+  "title": "OLEDDiscoveryDryRunBridgeRequest",
+  "type": "object"
+}

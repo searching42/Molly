@@ -1,0 +1,320 @@
+{
+  "$defs": {
+    "LLMInvocationRecord": {
+      "properties": {
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "prompt_version": {
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "response_id": {
+          "default": "",
+          "title": "Response Id",
+          "type": "string"
+        },
+        "raw_response": {
+          "additionalProperties": true,
+          "title": "Raw Response",
+          "type": "object"
+        },
+        "parsed_output": {
+          "additionalProperties": true,
+          "title": "Parsed Output",
+          "type": "object"
+        }
+      },
+      "required": [
+        "provider",
+        "prompt_version"
+      ],
+      "title": "LLMInvocationRecord",
+      "type": "object"
+    },
+    "PlanQuestion": {
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "blocks_execution": {
+          "default": true,
+          "title": "Blocks Execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    },
+    "PlanRationale": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "risk_level": {
+          "default": "low",
+          "title": "Risk Level",
+          "type": "string"
+        },
+        "required_gates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Gates",
+          "type": "array"
+        },
+        "skipped": {
+          "default": false,
+          "title": "Skipped",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "task_id",
+        "reason"
+      ],
+      "title": "PlanRationale",
+      "type": "object"
+    },
+    "PlannedTask": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "required_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Artifacts",
+          "type": "array"
+        },
+        "output_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Output Artifacts",
+          "type": "array"
+        },
+        "unresolved_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unresolved Requirements",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "title": "PlannedTask",
+      "type": "object"
+    },
+    "ProjectMemoryUse": {
+      "properties": {
+        "record_id": {
+          "title": "Record Id",
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "user_preference",
+            "backend_choice",
+            "remote_host",
+            "parser_choice",
+            "property_alias",
+            "risk_policy"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "record_id",
+        "category",
+        "summary",
+        "reason"
+      ],
+      "title": "ProjectMemoryUse",
+      "type": "object"
+    },
+    "RunPlan": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "requested_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requested Tasks",
+          "type": "array"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/PlannedTask"
+          },
+          "title": "Tasks",
+          "type": "array"
+        },
+        "available_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Available Artifacts",
+          "type": "array"
+        },
+        "missing_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Artifacts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "requested_tasks",
+        "tasks"
+      ],
+      "title": "RunPlan",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "goal": {
+      "title": "Goal",
+      "type": "string"
+    },
+    "planner_backend": {
+      "title": "Planner Backend",
+      "type": "string"
+    },
+    "status": {
+      "title": "Status",
+      "type": "string"
+    },
+    "run_plan": {
+      "$ref": "#/$defs/RunPlan"
+    },
+    "rationales": {
+      "items": {
+        "$ref": "#/$defs/PlanRationale"
+      },
+      "title": "Rationales",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "llm_invocation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LLMInvocationRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "memory_references": {
+      "items": {
+        "$ref": "#/$defs/ProjectMemoryUse"
+      },
+      "title": "Memory References",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "goal",
+    "planner_backend",
+    "status",
+    "run_plan"
+  ],
+  "title": "AgentPlanProposal",
+  "type": "object"
+}

@@ -1,0 +1,42 @@
+{
+  "properties": {
+    "constraint_id": {
+      "title": "Constraint Id",
+      "type": "string"
+    },
+    "property_id": {
+      "title": "Property Id",
+      "type": "string"
+    },
+    "operator": {
+      "title": "Operator",
+      "type": "string"
+    },
+    "value": {
+      "default": null,
+      "title": "Value"
+    },
+    "hard": {
+      "default": true,
+      "title": "Hard",
+      "type": "boolean"
+    },
+    "rationale": {
+      "default": "",
+      "title": "Rationale",
+      "type": "string"
+    },
+    "source": {
+      "default": "user_goal",
+      "title": "Source",
+      "type": "string"
+    }
+  },
+  "required": [
+    "constraint_id",
+    "property_id",
+    "operator"
+  ],
+  "title": "GenerationConstraint",
+  "type": "object"
+}

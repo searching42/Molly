@@ -1,0 +1,7 @@
+candidate_id,smiles,name
+oled-cand-001,CCO,ethanol analog
+oled-cand-002,CCN,amine analog
+oled-cand-003,c1ccccc1,aromatic analog
+oled-cand-004,CCOC,ether analog
+oled-cand-005,CCBr,brominated analog
+oled-cand-006,CC(C)(C)N,branched amine analog

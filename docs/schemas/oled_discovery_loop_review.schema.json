@@ -1,0 +1,478 @@
+{
+  "$defs": {
+    "AgentToolRecommendation": {
+      "properties": {
+        "tool_id": {
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "target_stage": {
+          "title": "Target Stage",
+          "type": "string"
+        },
+        "ready": {
+          "title": "Ready",
+          "type": "boolean"
+        },
+        "missing_inputs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Inputs",
+          "type": "array"
+        },
+        "blocked_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Blocked Reasons",
+          "type": "array"
+        },
+        "required_gates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Gates",
+          "type": "array"
+        },
+        "executable": {
+          "default": false,
+          "title": "Executable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "tool_id",
+        "reason",
+        "target_stage",
+        "ready"
+      ],
+      "title": "AgentToolRecommendation",
+      "type": "object"
+    },
+    "CriticDecision": {
+      "properties": {
+        "decision": {
+          "title": "Decision",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "requires_user_approval": {
+          "default": true,
+          "title": "Requires User Approval",
+          "type": "boolean"
+        },
+        "target_stage": {
+          "default": "",
+          "title": "Target Stage",
+          "type": "string"
+        },
+        "suggested_tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Suggested Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "decision",
+        "reason"
+      ],
+      "title": "CriticDecision",
+      "type": "object"
+    },
+    "CriticFinding": {
+      "properties": {
+        "finding_id": {
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "severity": {
+          "title": "Severity",
+          "type": "string"
+        },
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "recommended_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Actions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "finding_id",
+        "severity",
+        "category",
+        "summary"
+      ],
+      "title": "CriticFinding",
+      "type": "object"
+    },
+    "CriticReview": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "goal": {
+          "default": "",
+          "title": "Goal",
+          "type": "string"
+        },
+        "current_stage": {
+          "title": "Current Stage",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/CriticDecision"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/CriticFinding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "risk_flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Risk Flags",
+          "type": "array"
+        },
+        "blocked_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Blocked Reasons",
+          "type": "array"
+        },
+        "recommended_next_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Next Actions",
+          "type": "array"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "executable": {
+          "default": false,
+          "title": "Executable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id",
+        "current_stage",
+        "decision"
+      ],
+      "title": "CriticReview",
+      "type": "object"
+    },
+    "OLEDDiscoveryNextAction": {
+      "properties": {
+        "action_id": {
+          "title": "Action Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "target_stage": {
+          "title": "Target Stage",
+          "type": "string"
+        },
+        "requires_gate": {
+          "title": "Requires Gate",
+          "type": "boolean"
+        },
+        "suggested_task": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suggested Task"
+        }
+      },
+      "required": [
+        "action_id",
+        "label",
+        "reason",
+        "target_stage",
+        "requires_gate"
+      ],
+      "title": "OLEDDiscoveryNextAction",
+      "type": "object"
+    },
+    "OLEDDiscoveryRunCard": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "goal": {
+          "default": "",
+          "title": "Goal",
+          "type": "string"
+        },
+        "current_stage": {
+          "title": "Current Stage",
+          "type": "string"
+        },
+        "stage_statuses": {
+          "items": {
+            "$ref": "#/$defs/OLEDDiscoveryStageStatus"
+          },
+          "title": "Stage Statuses",
+          "type": "array"
+        },
+        "available_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Available Artifacts",
+          "type": "array"
+        },
+        "missing_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Artifacts",
+          "type": "array"
+        },
+        "blocked_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Blocked Reasons",
+          "type": "array"
+        },
+        "risk_flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Risk Flags",
+          "type": "array"
+        },
+        "recommended_next_actions": {
+          "items": {
+            "$ref": "#/$defs/OLEDDiscoveryNextAction"
+          },
+          "title": "Recommended Next Actions",
+          "type": "array"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "executable": {
+          "default": false,
+          "title": "Executable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id",
+        "current_stage"
+      ],
+      "title": "OLEDDiscoveryRunCard",
+      "type": "object"
+    },
+    "OLEDDiscoveryStageStatus": {
+      "properties": {
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "missing": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing",
+          "type": "array"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage",
+        "status",
+        "summary"
+      ],
+      "title": "OLEDDiscoveryStageStatus",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "goal": {
+      "default": "",
+      "title": "Goal",
+      "type": "string"
+    },
+    "run_card": {
+      "$ref": "#/$defs/OLEDDiscoveryRunCard"
+    },
+    "tool_recommendations": {
+      "items": {
+        "$ref": "#/$defs/AgentToolRecommendation"
+      },
+      "title": "Tool Recommendations",
+      "type": "array"
+    },
+    "critic_review": {
+      "$ref": "#/$defs/CriticReview"
+    },
+    "recommended_next_action": {
+      "default": "",
+      "title": "Recommended Next Action",
+      "type": "string"
+    },
+    "ready_tool_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Ready Tool Ids",
+      "type": "array"
+    },
+    "blocked_tool_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocked Tool Ids",
+      "type": "array"
+    },
+    "blocked_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocked Reasons",
+      "type": "array"
+    },
+    "risk_flags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Risk Flags",
+      "type": "array"
+    },
+    "review_summary": {
+      "default": "",
+      "title": "Review Summary",
+      "type": "string"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "executable": {
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "run_id",
+    "run_card",
+    "critic_review"
+  ],
+  "title": "OLEDDiscoveryLoopReview",
+  "type": "object"
+}

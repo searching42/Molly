@@ -1,0 +1,11 @@
+{
+  "_backend": "hybrid-engine",
+  "_version_name": "mineru-fixture-1",
+  "protocol_version": "v1",
+  "pdf_info": [
+    {
+      "page_idx": 0,
+      "page_size": [1000, 1400]
+    }
+  ]
+}

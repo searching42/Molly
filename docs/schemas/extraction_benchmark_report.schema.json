@@ -1,0 +1,85 @@
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "retrieval_recall": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Retrieval Recall"
+    },
+    "extraction_precision": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Extraction Precision"
+    },
+    "conflict_rate": {
+      "title": "Conflict Rate",
+      "type": "number"
+    },
+    "confirmation_workload_count": {
+      "title": "Confirmation Workload Count",
+      "type": "integer"
+    },
+    "trainable_labels_gained": {
+      "title": "Trainable Labels Gained",
+      "type": "integer"
+    },
+    "downstream_model_performance_delta": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Downstream Model Performance Delta",
+      "type": "object"
+    },
+    "metric_statuses": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Metric Statuses",
+      "type": "object"
+    },
+    "counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Counts",
+      "type": "object"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "conflict_rate",
+    "confirmation_workload_count",
+    "trainable_labels_gained",
+    "generated_at"
+  ],
+  "title": "ExtractionBenchmarkReport",
+  "type": "object"
+}

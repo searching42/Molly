@@ -1,0 +1,1561 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="molly-local-token" content="{{ local_session_token }}" />
+    <title>AI4S Agent 控制台</title>
+    <style>
+      :root {
+        --bg-a: #f5f6f7;
+        --bg-b: #e9eef1;
+        --ink: #172027;
+        --muted: #66747b;
+        --line: rgba(23, 32, 39, 0.14);
+        --panel: rgba(255, 255, 255, 0.94);
+        --white: rgba(255, 255, 255, 0.78);
+        --blue: #145c72;
+        --blue-2: #1f7f9b;
+        --rust: #a54d16;
+        --rust-soft: #f4d8bd;
+        --green: #2d6a4f;
+        --green-soft: #dcefe5;
+        --shadow: 0 12px 34px rgba(23, 32, 39, 0.10);
+        --radius: 8px;
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Avenir Next", "Segoe UI", Tahoma, sans-serif;
+        color: var(--ink);
+        background: linear-gradient(135deg, var(--bg-a), var(--bg-b));
+      }
+
+      button, input, select, textarea { font: inherit; }
+      .app-shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 1rem; min-height: 100vh; width: min(1420px, 100%); margin: 0 auto; padding: 1rem; }
+      .project-sidebar, .project-workspace { min-width: 0; }
+      .project-sidebar { position: sticky; top: 1rem; align-self: start; display: grid; gap: 0.85rem; max-height: calc(100vh - 2rem); overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem; background: rgba(255, 255, 255, 0.86); box-shadow: var(--shadow); }
+      .project-workspace { display: grid; gap: 0.85rem; }
+      .sidebar-header h1 { margin: 0; font-size: 1.05rem; line-height: 1.15; }
+      .sidebar-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; align-items: start; }
+      .sidebar-header p { grid-column: 1 / -1; }
+      .sidebar-header p, .workspace-topbar p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
+      .workspace-topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem 1rem; background: var(--panel); box-shadow: var(--shadow); }
+      .workspace-topbar h2 { font-size: 1.05rem; }
+      .project-list { display: grid; gap: 0.45rem; max-height: 34vh; overflow: auto; }
+      .project-row { width: 100%; display: grid; gap: 0.15rem; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.55rem 0.65rem; background: rgba(255, 255, 255, 0.58); color: var(--ink); text-align: left; }
+      .project-row.active { border-color: rgba(20, 92, 114, 0.55); background: rgba(220, 239, 229, 0.75); }
+      .project-row strong { font-size: 0.86rem; }
+      .project-row span { color: var(--muted); font-size: 0.74rem; }
+      .sidebar-section { display: grid; gap: 0.55rem; }
+      .sidebar-section h2 { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; }
+      .pill { display: inline-flex; align-items: center; min-height: 1.75rem; padding: 0.28rem 0.55rem; border: 1px solid var(--line); border-radius: 999px; background: var(--white); color: var(--muted); font-size: 0.74rem; font-weight: 900; white-space: nowrap; }
+      .chat-panel { display: grid; grid-template-rows: minmax(260px, 1fr) auto; min-height: 520px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+      .conversation-stream { display: grid; align-content: start; gap: 0.75rem; padding: 1rem; overflow: auto; }
+      .chat-message { max-width: min(760px, 92%); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.75rem 0.85rem; background: rgba(255, 255, 255, 0.72); line-height: 1.45; white-space: pre-wrap; }
+      .chat-message.user { justify-self: end; background: rgba(220, 239, 229, 0.88); }
+      .chat-message.agent, .chat-message.system { justify-self: start; }
+      .chat-message.system { border-style: dashed; color: var(--muted); }
+      .chat-attachments, .pending-attachments { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.55rem; }
+      .attachment-chip { display: inline-flex; max-width: 100%; align-items: center; gap: 0.35rem; border: 1px solid var(--line); border-radius: 999px; padding: 0.22rem 0.5rem; color: var(--muted); background: var(--white); font-size: 0.74rem; overflow-wrap: anywhere; }
+      .conversation-composer { display: grid; gap: 0.65rem; border-top: 1px solid var(--line); padding: 0.85rem; background: rgba(246, 247, 248, 0.84); }
+      .composer-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; gap: 0.6rem; align-items: center; }
+      .composer-actions button { width: auto; min-width: 8.5rem; }
+      .artifact-tray { margin-top: 0; }
+      .advanced-tools, .console-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; backdrop-filter: blur(10px); }
+      .advanced-tools summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.05rem 1.25rem; cursor: pointer; list-style: none; }
+      .advanced-tools summary::-webkit-details-marker { display: none; }
+      h2, h3 { margin: 0; letter-spacing: -0.02em; }
+      h2 { font-size: 1.05rem; }
+      h3 { font-size: 0.98rem; }
+      .summary-line, .small { color: var(--muted); font-size: 0.84rem; line-height: 1.45; }
+      .summary-line { margin-top: 0.25rem; }
+      .small { margin: 0.45rem 0 0; }
+      .state { color: var(--muted); font-size: 0.72rem; font-weight: 900; letter-spacing: 0.1em; text-transform: uppercase; }
+      .body { padding: 0 1.25rem 1.25rem; }
+      .two-column { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1rem; align-items: start; }
+      .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
+      .tool-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
+      .side-note, .mini-panel { border: 1px dashed var(--line); border-radius: var(--radius); padding: 0.9rem; background: rgba(255, 255, 255, 0.45); }
+      .mini-panel { border-style: solid; }
+      .note-list { display: grid; gap: 0.5rem; margin-top: 0.75rem; }
+      .note-list div { padding: 0.62rem 0.7rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--white); }
+      form { display: grid; gap: 0.6rem; }
+      label { color: #26363e; font-size: 0.78rem; font-weight: 900; }
+      input, select, textarea { width: 100%; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.72rem 0.8rem; background: rgba(255, 255, 255, 0.82); color: var(--ink); }
+      textarea { min-height: 92px; resize: vertical; line-height: 1.45; }
+      .goal-input { min-height: 132px; font-size: 1rem; }
+      button { width: 100%; border: 0; border-radius: var(--radius); padding: 0.75rem 0.85rem; color: #fff; font-weight: 900; cursor: pointer; background: var(--blue); }
+      button.alt { background: var(--rust); }
+      button.ghost { border: 1px solid var(--line); color: var(--ink); background: var(--white); }
+      .button-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+      details.mini-panel summary { cursor: pointer; font-weight: 900; }
+      .advanced-tools { margin-top: 1rem; }
+      .advanced-body { display: grid; gap: 0.85rem; padding: 0 1.25rem 1.25rem; }
+      .console-card { margin-top: 1rem; padding: 1rem; }
+      .output { margin: 0.75rem 0 0; min-height: 150px; max-height: 320px; overflow: auto; border-radius: var(--radius); padding: 0.9rem; background: #111a1f; color: #dbedf3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; line-height: 1.5; }
+      .review-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; margin-top: 0.85rem; }
+      .review-card-grid[hidden] { display: none; }
+      .review-section { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.85rem; background: rgba(255, 255, 255, 0.55); }
+      .review-section dl { display: grid; gap: 0.45rem; margin: 0.65rem 0 0; }
+      .review-section div { min-width: 0; }
+      .review-section dt { color: var(--muted); font-size: 0.72rem; font-weight: 900; text-transform: uppercase; }
+      .review-section dd { margin: 0.1rem 0 0; color: #26363e; font-size: 0.86rem; line-height: 1.42; word-break: break-word; }
+      .review-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.65rem; }
+      .sr-status { margin-top: 0.55rem; color: var(--muted); font-size: 0.82rem; }
+      .launch-warning { display: none; margin: 0; border: 1px solid rgba(165, 77, 22, 0.35); border-radius: var(--radius); padding: 0.9rem 1rem; background: rgba(244, 216, 189, 0.72); color: #5f2b0e; line-height: 1.45; }
+      .launch-warning.visible { display: block; }
+      .icon-button { width: auto; min-width: 0; padding: 0.5rem 0.65rem; border: 1px solid var(--line); color: var(--ink); background: var(--white); }
+      .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 1rem; background: rgba(17, 26, 31, 0.45); }
+      .modal-backdrop[hidden] { display: none; }
+      .settings-dialog { width: min(560px, 100%); max-height: calc(100vh - 2rem); overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; background: #fff; box-shadow: var(--shadow); }
+      .settings-header { display: flex; justify-content: space-between; gap: 1rem; align-items: start; margin-bottom: 0.8rem; }
+      .settings-section { display: grid; gap: 0.65rem; margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+      .settings-list { display: grid; gap: 0.5rem; }
+      .settings-list-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.5rem; align-items: center; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.65rem; }
+      .settings-list-item button { width: auto; min-width: 0; padding: 0.45rem 0.6rem; }
+      @media (max-width: 900px) { .app-shell { grid-template-columns: 1fr; padding: 0.75rem; } .project-sidebar { position: static; max-height: none; } .workspace-topbar, .composer-actions { grid-template-columns: 1fr; display: grid; } .composer-actions button { width: 100%; } .two-column, .split, .tool-grid, .button-row { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main id="app-shell" class="app-shell">
+      <aside id="project-sidebar" class="project-sidebar" aria-label="项目管理">
+        <header class="sidebar-header">
+          <h1>AI4S Agent 控制台</h1>
+          <button id="llm-settings-button" type="button" class="icon-button" aria-label="LLM 设置">⚙ 设置</button>
+          <p>本地项目工作区</p>
+        </header>
+
+        <section class="sidebar-section" aria-label="新建项目">
+          <h2>新建项目</h2>
+          <form id="new-project-form">
+            <label for="new-project-name">项目名称</label>
+            <input id="new-project-name" name="name" placeholder="OLED PLQY screening" />
+            <label for="new-project-id">项目 ID</label>
+            <input id="new-project-id" name="project_id" placeholder="proj-oled" />
+            <button type="submit">新建并选择</button>
+            <div id="new-project-status" class="sr-status" aria-live="polite"></div>
+          </form>
+        </section>
+
+        <section class="sidebar-section" aria-label="项目列表">
+          <h2>项目</h2>
+          <div id="project-list" class="project-list" aria-live="polite">
+            <p class="small">正在加载项目...</p>
+          </div>
+        </section>
+
+        <section class="sidebar-section" aria-label="当前项目">
+          <h2>当前项目</h2>
+          <div class="mini-panel">
+            <strong id="active-project-name">proj-oled</strong>
+            <p id="active-project-id" class="small">proj-oled</p>
+            <p id="active-project-run" class="small">尚未生成运行。</p>
+          </div>
+        </section>
+
+        <section class="sidebar-section" aria-label="OLED 有界发现">
+          <h2>OLED 闭环</h2>
+          <a href="/oled-bounded-sessions">打开有界发现会话</a>
+        </section>
+
+        <section class="sidebar-section" aria-label="原子任务">
+          <h2>Atomic Tasks</h2>
+          <button id="parse-literature-button" type="button">文献解析</button>
+          <button id="approve-literature-button" type="button" class="ghost" hidden>批准批量解析</button>
+          <p id="literature-task-status" class="small">先在对话中上传并发送 PDF。</p>
+        </section>
+      </aside>
+
+      <section id="project-workspace" class="project-workspace" aria-label="当前项目对话工作区">
+        <header class="workspace-topbar">
+          <div>
+            <h2 id="workspace-project-title">proj-oled</h2>
+            <p id="workspace-status">通过对话描述目标、补充证据、审阅结构化计划。</p>
+          </div>
+          <span id="workspace-run-pill" class="pill">等待运行 ID</span>
+        </header>
+
+      <aside id="file-launch-warning" class="launch-warning" role="alert">
+        当前页面是直接从模板文件打开的，API 请求不会工作。请通过 Flask 服务打开：
+        <code>PYTHONPATH=src .venv/bin/python -m flask --app ai4s_agent.app:create_app run --port 5005</code>，
+        然后访问 <code>http://127.0.0.1:5005/</code>。
+      </aside>
+
+      <section id="project-chat" class="chat-panel" aria-label="项目对话">
+        <div id="conversation-stream" class="conversation-stream" aria-live="polite">
+          <article class="chat-message agent">描述你的目标、数据背景或可引用来源。Agent 会先整理可审阅 payload，不会直接执行训练或外部检索。</article>
+        </div>
+        <form id="conversation-form" class="conversation-composer">
+          <label for="conversation-input">和 Agent 对话</label>
+          <textarea id="conversation-input" name="message" placeholder="例如：我想训练 OLED PLQY 模型，优先改善高 PLQY 候选的排序；可以参考 DOI 10.1038/s41597-020-00634-8。"></textarea>
+          <input id="conversation-file-input" type="file" multiple hidden />
+          <div id="pending-conversation-attachments" class="pending-attachments" hidden></div>
+          <div class="composer-actions">
+            <p id="conversation-status" class="small">Enter 换行，点击发送整理结构化计划输入。</p>
+            <button id="conversation-upload-button" type="button" class="ghost">上传文件</button>
+            <button id="conversation-submit-button" type="submit">发送</button>
+            <button id="prepare-research-sources-button" type="button" class="ghost">准备文献来源</button>
+            <button id="prepare-modeling-plan-button" type="button" class="ghost">生成建模计划</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="chat-review-artifacts" class="review-card-grid artifact-tray" hidden></section>
+
+      <section id="response-console" class="console-card">
+        <h2>当前响应</h2>
+        <p class="small">最近一次操作的成功结果或错误详情会显示在这里，不需要打开高级工具。</p>
+        <pre id="output" class="output">就绪。</pre>
+        <div id="agent-review-card-output" class="review-card-grid" hidden></div>
+      </section>
+
+      <details id="advanced-tools" class="advanced-tools">
+        <summary><strong>高级工具</strong><span class="pill">原始 API 工具</span></summary>
+        <div class="advanced-body">
+          <div class="tool-grid">
+            <article class="mini-panel">
+              <h3>主流程高级参数</h3>
+              <p class="small">普通流程会自动推断；只有调试依赖和计划时才需要填写。</p>
+              <form id="advanced-workflow-defaults-form">
+                <label for="advanced-agent-available-artifacts">目标规划可用工件</label>
+                <input id="advanced-agent-available-artifacts" name="available_artifacts" placeholder="cleaned_train_dataset,property_catalog,candidate_dataset" />
+                <label for="advanced-run-card-artifacts">运行确认可用工件</label>
+                <input id="advanced-run-card-artifacts" name="available_artifacts" value="cleaned_train_dataset,trainability_report,candidate_dataset" />
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>创建计划</h3>
+              <form id="plan-form">
+                <label for="plan-run-id">运行 ID</label>
+                <input id="plan-run-id" name="run_id" required />
+                <label for="prompt">提示词</label>
+                <textarea id="prompt" name="prompt" required></textarea>
+                <button type="submit">创建计划</button>
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>依赖计划预览</h3>
+              <form id="expand-form">
+                <label for="expand-run-id">运行 ID</label>
+                <input id="expand-run-id" name="run_id" value="preview" required />
+                <label for="requested-tasks">请求任务（逗号分隔）</label>
+                <input id="requested-tasks" name="requested_tasks" value="render_report" required />
+                <label for="available-artifacts">已有工件（逗号分隔）</label>
+                <input id="available-artifacts" name="available_artifacts" value="candidate_dataset" />
+                <button type="submit">预览依赖</button>
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>运行计划差异预览</h3>
+              <form id="diff-form">
+                <label for="diff-run-id">运行 ID</label>
+                <input id="diff-run-id" name="run_id" value="preview" required />
+                <label for="before-tasks">变更前任务</label>
+                <input id="before-tasks" name="before_tasks" value="run_baseline" required />
+                <label for="after-tasks">变更后任务</label>
+                <input id="after-tasks" name="after_tasks" value="render_report" required />
+                <label for="diff-artifacts">已有工件</label>
+                <input id="diff-artifacts" name="available_artifacts" value="candidate_dataset" />
+                <button type="submit">预览差异</button>
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>原子任务工具箱</h3>
+              <p class="small">查看原子任务、工件、门控和风险等级。</p>
+              <button id="task-toolbox-button" type="button" class="ghost">加载任务工具箱</button>
+            </article>
+
+            <article class="mini-panel">
+              <h3>阶段时间线</h3>
+              <form id="stage-timeline-form">
+                <label for="timeline-project-id">项目 ID</label>
+                <input id="timeline-project-id" name="project_id" value="proj-oled" required />
+                <label for="timeline-run-id">运行 ID</label>
+                <input id="timeline-run-id" name="run_id" required />
+                <button type="submit">加载时间线</button>
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>报告预览</h3>
+              <form id="report-preview-form">
+                <label for="preview-project-id">项目 ID</label>
+                <input id="preview-project-id" name="project_id" value="proj-oled" required />
+                <label for="preview-run-id">运行 ID</label>
+                <input id="preview-run-id" name="run_id" required />
+                <label for="preview-artifact-id">报告工件 ID</label>
+                <input id="preview-artifact-id" name="artifact_id" value="report_markdown" required />
+                <button type="submit">预览报告</button>
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>资产提升</h3>
+              <form id="asset-promotion-form">
+                <label for="promotion-project-id">项目 ID</label>
+                <input id="promotion-project-id" name="project_id" value="proj-oled" required />
+                <label for="promotion-run-id">运行 ID</label>
+                <input id="promotion-run-id" name="run_id" required />
+                <label for="promotion-asset-id">资产 ID</label>
+                <input id="promotion-asset-id" name="asset_id" placeholder="report/final" required />
+                <label for="promotion-asset-type">资产类型</label>
+                <input id="promotion-asset-type" name="asset_type" placeholder="report" required />
+                <label for="promotion-version">版本</label>
+                <input id="promotion-version" name="version" value="v001" required />
+                <label for="promotion-source-artifacts">来源工件</label>
+                <input id="promotion-source-artifacts" name="source_artifacts" placeholder="05_report/final.md" />
+                <label for="promotion-actor">批准人</label>
+                <input id="promotion-actor" name="approved_by" value="user" required />
+                <button type="submit" class="alt">提升资产</button>
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>模型资产提升</h3>
+              <form id="model-asset-promotion-form">
+                <label for="model-promotion-project-id">项目 ID</label>
+                <input id="model-promotion-project-id" name="project_id" value="proj-oled" required />
+                <label for="model-promotion-run-id">运行 ID</label>
+                <input id="model-promotion-run-id" name="run_id" required />
+                <label for="model-promotion-version-dir">模型版本目录</label>
+                <input id="model-promotion-version-dir" name="version_dir" placeholder="projects/proj-oled/assets/models/backend/property/v001" required />
+                <button type="button" id="model-promotion-draft-button">生成草案</button>
+                <label for="model-promotion-model-id">模型 ID</label>
+                <input id="model-promotion-model-id" name="model_id" placeholder="plqy_promoted_v001" required />
+                <label for="model-promotion-domain">领域</label>
+                <input id="model-promotion-domain" name="domain" value="oled" required />
+                <label for="model-promotion-property-id">指标</label>
+                <input id="model-promotion-property-id" name="property_id" value="plqy" required />
+                <label for="model-promotion-use-case">用途</label>
+                <input id="model-promotion-use-case" name="use_case" value="scalar_prediction" required />
+                <label for="model-promotion-backend">后端</label>
+                <input id="model-promotion-backend" name="backend" placeholder="unimol_with_solvent_pca64" required />
+                <label for="model-promotion-feature-requirements">必需输入</label>
+                <input id="model-promotion-feature-requirements" name="feature_requirements" value="canonical_smiles, solvent" />
+                <label for="model-promotion-input-columns">输入列 JSON</label>
+                <input id="model-promotion-input-columns" name="input_columns" value='{"canonical_smiles":"SMILES","solvent":"solvent"}' />
+                <label for="model-promotion-metrics">指标 JSON</label>
+                <input id="model-promotion-metrics" name="metrics" placeholder='{"mae":0.17,"r2":0.41}' />
+                <label for="model-promotion-applicability">适用范围 JSON</label>
+                <input id="model-promotion-applicability" name="applicability" placeholder='{"split":"scaffold"}' />
+                <label for="model-promotion-limitations">限制</label>
+                <input id="model-promotion-limitations" name="limitations" placeholder="high PLQY compression remains monitored" />
+                <label for="model-promotion-rollback-asset-id">回滚资产</label>
+                <input id="model-promotion-rollback-asset-id" name="rollback_asset_id" placeholder="model/backend/property/v000" />
+                <label for="model-promotion-actor">批准人</label>
+                <input id="model-promotion-actor" name="approved_by" value="user" required />
+                <button type="submit" class="alt">提升模型</button>
+              </form>
+            </article>
+
+            <article class="mini-panel">
+              <h3>Agent 审阅卡</h3>
+              <form id="agent-review-form">
+                <label for="agent-review-payload">结构化 Agent 工件 JSON</label>
+                <textarea id="agent-review-payload" name="payload" required>{
+  "plan_proposal": {},
+  "verification_report": {},
+  "run_plan_revision": {}
+}</textarea>
+                <button type="submit">生成 Agent 审阅</button>
+              </form>
+            </article>
+          </div>
+        </div>
+      </details>
+      </section>
+    </main>
+
+    <div id="llm-settings-modal" class="modal-backdrop" hidden>
+      <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="llm-settings-title">
+        <header class="settings-header">
+          <div>
+            <h2 id="llm-settings-title">配置决策层 LLM</h2>
+            <p id="llm-settings-intro" class="small">配置保存在当前用户目录；API Key 不会返回浏览器。</p>
+          </div>
+          <button id="llm-settings-close" type="button" class="icon-button" aria-label="关闭设置">×</button>
+        </header>
+        <form id="llm-settings-form">
+          <label for="llm-endpoint">OpenAI-compatible endpoint</label>
+          <input id="llm-endpoint" name="endpoint" type="url" placeholder="https://example.com/v1" required />
+          <label for="llm-model">Model name</label>
+          <input id="llm-model" name="model" required />
+          <label for="llm-timeout">网络读取超时（秒）</label>
+          <input id="llm-timeout" name="timeout_sec" type="number" min="1" max="300" value="60" required />
+          <label for="llm-api-key-source">密钥来源</label>
+          <select id="llm-api-key-source" name="api_key_source">
+            <option value="keyring">系统 Keychain / keyring</option>
+            <option value="environment">环境变量</option>
+            <option value="file">用户级 secret 文件（兼容模式）</option>
+            <option value="auto">自动回退（显式启用）</option>
+          </select>
+          <p id="llm-resolved-source" class="small">当前实际来源：unavailable</p>
+          <label for="llm-api-key-ref">Keychain / secret 引用</label>
+          <input id="llm-api-key-ref" name="api_key_ref" value="default" />
+          <label for="llm-api-key-env">环境变量名</label>
+          <input id="llm-api-key-env" name="api_key_env" value="MOLLY_LLM_API_KEY" />
+          <label for="llm-api-key">API Key</label>
+          <input id="llm-api-key" name="api_key" type="password" autocomplete="new-password" placeholder="留空则保留现有密钥" />
+          <p class="small">远程 endpoint 必须使用 HTTPS；HTTP 仅允许 localhost/loopback。</p>
+          <div class="button-row">
+            <button id="llm-api-key-delete" type="button" class="ghost">删除已保存密钥</button>
+            <button type="submit">保存设置</button>
+          </div>
+          <div id="llm-settings-status" class="sr-status" aria-live="polite"></div>
+        </form>
+        <section class="settings-section" aria-labelledby="compute-settings-title">
+          <div>
+            <h2 id="compute-settings-title">计算资源</h2>
+            <p class="small">连接信息只保存在当前用户配置目录。SSH 凭据由 ~/.ssh/config 与 ssh-agent 管理；此处不接受密码、私钥或任意命令。</p>
+          </div>
+          <form id="compute-connection-form">
+            <label for="compute-connection-id">逻辑连接 ID</label>
+            <input id="compute-connection-id" placeholder="gpu-node" required pattern="[a-z0-9][a-z0-9_.-]*" />
+            <label for="compute-display-name">显示名称</label>
+            <input id="compute-display-name" placeholder="GPU workstation" />
+            <label for="compute-ssh-alias">SSH config alias</label>
+            <input id="compute-ssh-alias" placeholder="molly-gpu" required />
+            <label for="compute-expected-hostname">预期远端 hostname</label>
+            <input id="compute-expected-hostname" placeholder="compute-worker-main" required />
+            <label for="compute-remote-root">远端运行根目录</label>
+            <input id="compute-remote-root" placeholder="/remote/path/molly-runs" required />
+            <label for="compute-known-hosts">Pinned known_hosts 文件（可选）</label>
+            <input id="compute-known-hosts" placeholder="/local/path/molly_known_hosts" />
+            <label for="compute-capabilities">声明能力（逗号分隔）</label>
+            <input id="compute-capabilities" placeholder="gpu, cuda, mineru, unimol" />
+            <button type="submit">保存连接配置</button>
+          </form>
+          <div id="compute-settings-status" class="sr-status" aria-live="polite"></div>
+          <div id="compute-connections" class="settings-list" aria-live="polite"></div>
+          <details>
+            <summary>查看受约束执行合同</summary>
+            <div id="compute-execution-profiles" class="settings-list"></div>
+          </details>
+        </section>
+      </section>
+    </div>
+
+    <script>
+      const LOCAL_SESSION_TOKEN = document.querySelector('meta[name="molly-local-token"]')?.content || "";
+      const output = document.getElementById("output");
+      let activeProject = { project_id: "proj-oled", name: "proj-oled" };
+      let knownProjects = [];
+      let conversationMessages = [];
+      let currentConversationId = "";
+      let pendingConversationAttachments = [];
+      let conversationLoadGeneration = 0;
+      let currentRunId = "";
+      let currentConversationDecision = null;
+      let currentModelingPlanPayload = null;
+      let currentResearchSourceProposal = null;
+      let latestLiteratureMessageId = "";
+      let currentLiteratureIntake = null;
+      let currentLLMConfig = {};
+      const fileLaunchWarning = document.getElementById("file-launch-warning");
+      if (window.location.protocol === "file:") {
+        fileLaunchWarning.classList.add("visible");
+      }
+
+      function normalizeErrorForRender(err) {
+        if (err instanceof Error) {
+          return { ok: false, error: err.message || String(err), name: err.name || "Error" };
+        }
+        if (err && typeof err === "object") return err;
+        return { ok: false, error: String(err || "Unknown error") };
+      }
+
+      function render(payload) {
+        output.textContent = JSON.stringify(normalizeErrorForRender(payload), null, 2);
+        renderAgentReviewCard(null);
+      }
+
+      function updateActiveProjectDisplay(project) {
+        const projectId = String(project?.project_id || "proj-oled").trim() || "proj-oled";
+        const name = String(project?.name || projectId).trim() || projectId;
+        activeProject = { project_id: projectId, name };
+        setText("active-project-name", name);
+        setText("active-project-id", projectId);
+        setText("workspace-project-title", name);
+        setText("workspace-status", `当前项目：${projectId}`);
+      }
+
+      function renderProjectList(projects) {
+        const root = document.getElementById("project-list");
+        if (!root) return;
+        root.innerHTML = "";
+        const items = Array.isArray(projects) ? projects : [];
+        if (!items.length) {
+          const empty = document.createElement("p");
+          empty.className = "small";
+          empty.textContent = "暂无项目。新建项目后开始对话。";
+          root.appendChild(empty);
+          return;
+        }
+        items.forEach((project) => {
+          const row = document.createElement("button");
+          const projectId = String(project.project_id || "").trim();
+          const name = String(project.name || projectId || "未命名项目");
+          row.type = "button";
+          row.className = `project-row${projectId === activeProject.project_id ? " active" : ""}`;
+          const title = document.createElement("strong");
+          title.textContent = name;
+          const meta = document.createElement("span");
+          meta.textContent = projectId;
+          row.appendChild(title);
+          row.appendChild(meta);
+          row.addEventListener("click", () => selectProject({ project_id: projectId, name }));
+          root.appendChild(row);
+        });
+      }
+
+      function selectProject(project) {
+        updateActiveProjectDisplay(project);
+        syncProjectId(activeProject.project_id);
+        conversationMessages = [];
+        currentConversationId = "";
+        pendingConversationAttachments = [];
+        renderPendingConversationAttachments();
+        currentRunId = "";
+        currentConversationDecision = null;
+        currentModelingPlanPayload = null;
+        currentResearchSourceProposal = null;
+        latestLiteratureMessageId = "";
+        currentLiteratureIntake = null;
+        document.getElementById("approve-literature-button").hidden = true;
+        syncRunId("");
+        const stream = document.getElementById("conversation-stream");
+        if (stream) {
+          stream.innerHTML = "";
+          appendConversationMessage("agent", `正在加载项目 ${activeProject.project_id} 的对话…`);
+        }
+        renderProjectList(knownProjects.length ? knownProjects : [activeProject]);
+        void loadProjectConversation(activeProject.project_id);
+      }
+
+      async function loadProjects() {
+        try {
+          const response = await getJSON("/api/projects");
+          const projects = response.projects || [];
+          knownProjects = projects;
+          renderProjectList(projects);
+          if (projects.length && !projects.some((project) => project.project_id === activeProject.project_id)) {
+            selectProject(projects[0]);
+          } else if (projects.length) {
+            const selected = projects.find((project) => project.project_id === activeProject.project_id) || projects[0];
+            selectProject(selected);
+          } else {
+            updateActiveProjectDisplay(activeProject);
+          }
+          return response;
+        } catch (err) {
+          render(err);
+          const root = document.getElementById("project-list");
+          if (root) root.innerHTML = '<p class="small">项目列表加载失败。</p>';
+          return normalizeErrorForRender(err);
+        }
+      }
+
+      function appendConversationMessage(role, content, attachments = []) {
+        const stream = document.getElementById("conversation-stream");
+        if (!stream) return;
+        const article = document.createElement("article");
+        const displayRole = role === "assistant" ? "agent" : role;
+        article.className = `chat-message ${displayRole}`;
+        const text = document.createElement("div");
+        text.textContent = String(content || "");
+        article.appendChild(text);
+        if (Array.isArray(attachments) && attachments.length) {
+          const tray = document.createElement("div");
+          tray.className = "chat-attachments";
+          attachments.forEach((attachment) => {
+            const chip = document.createElement("span");
+            chip.className = "attachment-chip";
+            chip.textContent = String(attachment.original_name || attachment.artifact_id || "attachment");
+            chip.title = String(attachment.sha256 || "");
+            tray.appendChild(chip);
+          });
+          article.appendChild(tray);
+        }
+        stream.appendChild(article);
+        stream.scrollTop = stream.scrollHeight;
+      }
+
+      function renderPendingConversationAttachments() {
+        const root = document.getElementById("pending-conversation-attachments");
+        if (!root) return;
+        root.innerHTML = "";
+        root.hidden = !pendingConversationAttachments.length;
+        pendingConversationAttachments.forEach((attachment) => {
+          const chip = document.createElement("span");
+          chip.className = "attachment-chip";
+          chip.textContent = String(attachment.original_name || attachment.artifact_id || "attachment");
+          root.appendChild(chip);
+        });
+      }
+
+      function renderConversationArtifact(title, payload) {
+        const root = document.getElementById("chat-review-artifacts");
+        if (!root) return;
+        root.hidden = false;
+        const article = document.createElement("article");
+        article.className = "review-section";
+        const heading = document.createElement("h3");
+        heading.textContent = title;
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        const pre = document.createElement("pre");
+        summary.textContent = "查看 JSON";
+        pre.className = "output";
+        pre.textContent = JSON.stringify(payload || {}, null, 2);
+        details.appendChild(summary);
+        details.appendChild(pre);
+        article.appendChild(heading);
+        article.appendChild(details);
+        root.prepend(article);
+      }
+
+      function renderAgentQuestions(questions) {
+        (questions || []).forEach((question) => {
+          appendConversationMessage("system", `${question.prompt || "需要补充信息"}\n${question.reason || ""}`);
+        });
+      }
+
+      function renderValue(value) {
+        if (Array.isArray(value)) return value.length ? value.join(", ") : "无";
+        if (value && typeof value === "object") return Object.keys(value).length ? JSON.stringify(value) : "无";
+        return value === undefined || value === null || value === "" ? "无" : String(value);
+      }
+
+      function appendReviewSection(root, title, rows, sourceLabels) {
+        const article = document.createElement("article");
+        article.className = "review-section";
+        const heading = document.createElement("h3");
+        heading.textContent = title;
+        article.appendChild(heading);
+        const dl = document.createElement("dl");
+        rows.forEach(([label, value]) => {
+          const wrapper = document.createElement("div");
+          const dt = document.createElement("dt");
+          const dd = document.createElement("dd");
+          dt.textContent = label;
+          dd.textContent = renderValue(value);
+          wrapper.appendChild(dt);
+          wrapper.appendChild(dd);
+          dl.appendChild(wrapper);
+        });
+        article.appendChild(dl);
+        const tags = document.createElement("div");
+        tags.className = "review-tags";
+        (sourceLabels || []).forEach((label) => {
+          const tag = document.createElement("span");
+          tag.className = "pill";
+          tag.textContent = String(label);
+          tags.appendChild(tag);
+        });
+        if (tags.childElementCount) article.appendChild(tags);
+        root.appendChild(article);
+      }
+
+      function renderAgentReviewCard(card) {
+        const root = document.getElementById("agent-review-card-output");
+        if (!root) return;
+        root.innerHTML = "";
+        const sections = card?.sections || {};
+        const brief = sections.target_modeling_brief || {};
+        const diagnostics = sections.model_diagnostics || {};
+        const rerun = sections.rerun_proposal || {};
+        const packageReview = sections.model_package_review || {};
+        const controls = card?.approval_controls || [];
+        const hasContent = Object.keys(brief).length || Object.keys(diagnostics).length || Object.keys(rerun).length || Object.keys(packageReview).length || controls.length;
+        root.hidden = !hasContent;
+        if (!hasContent) return;
+        if (Object.keys(brief).length) {
+          appendReviewSection(root, "TargetModelingBrief", [
+            ["property", brief.property_id],
+            ["backend", brief.recommended_backend],
+            ["split", brief.split_strategy],
+            ["target transform", brief.target_transform],
+            ["risks", brief.risk_flags],
+            ["preprocessing", brief.preprocessing_steps],
+          ], brief.source_labels);
+        }
+        if (Object.keys(diagnostics).length) {
+          appendReviewSection(root, "ModelDiagnosticsReport", [
+            ["model", diagnostics.model_id],
+            ["readiness", diagnostics.readiness],
+            ["decision", diagnostics.decision],
+            ["metrics", diagnostics.metrics],
+            ["risks", diagnostics.risk_flags],
+            ["messages", diagnostics.messages],
+          ], diagnostics.source_labels);
+        }
+        if (Object.keys(rerun).length) {
+          appendReviewSection(root, "RerunProposal", [
+            ["trigger", rerun.trigger],
+            ["candidate changes", rerun.candidate_changes],
+            ["expected impact", rerun.expected_impact],
+            ["required approvals", rerun.required_approvals],
+            ["fallback", rerun.fallback_policy],
+          ], rerun.source_labels);
+        }
+        if (Object.keys(packageReview).length) {
+          appendReviewSection(root, "ModelPackageReview", [
+            ["model", packageReview.model_id],
+            ["decision", packageReview.decision],
+            ["status", packageReview.status],
+            ["metrics", packageReview.metrics],
+            ["risks", packageReview.risk_flags],
+            ["required permissions", packageReview.required_permissions],
+          ], packageReview.source_labels);
+        }
+        if (controls.length) {
+          appendReviewSection(root, "approval_controls", [
+            ["controls", controls.map((control) => `${control.action}:${control.target_id}`)],
+          ], []);
+        }
+      }
+
+      function fileLaunchProblem() {
+        return {
+          ok: false,
+          error: "当前页面通过 file:// 打开，无法调用 Flask API。",
+          fix: "请启动 Flask 服务并访问 http://127.0.0.1:5005/，不要直接打开 templates/index.html。",
+        };
+      }
+
+      async function postJSON(url, payload) {
+        if (window.location.protocol === "file:") throw fileLaunchProblem();
+        const res = await fetch(url, {
+          method: "POST",
+          headers: apiHeaders(true),
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw data;
+        return data;
+      }
+
+      async function getJSON(url) {
+        if (window.location.protocol === "file:") throw fileLaunchProblem();
+        const res = await fetch(url, { headers: apiHeaders(false) });
+        const data = await res.json();
+        if (!res.ok) throw data;
+        return data;
+      }
+
+      async function postForm(url, formData) {
+        if (window.location.protocol === "file:") throw fileLaunchProblem();
+        const res = await fetch(url, {
+          method: "POST",
+          headers: apiHeaders(false),
+          body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok) throw data;
+        return data;
+      }
+
+      function apiHeaders(json = false) {
+        const headers = { "X-Molly-Local-Token": LOCAL_SESSION_TOKEN };
+        if (json) headers["Content-Type"] = "application/json";
+        return headers;
+      }
+
+      function newClientMessageId() {
+        if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+        return `browser-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      }
+
+      async function sha256Text(value) {
+        const bytes = new TextEncoder().encode(String(value || ""));
+        const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+        return Array.from(new Uint8Array(digest)).map((item) => item.toString(16).padStart(2, "0")).join("");
+      }
+
+      function parseLegacyConversation(raw) {
+        const parsed = JSON.parse(raw);
+        const messages = Array.isArray(parsed) ? parsed : parsed?.messages;
+        if (!Array.isArray(messages) || !messages.length) return null;
+        const clean = messages.filter((item) => item && typeof item === "object")
+          .map((item) => ({
+            role: String(item.role || "").trim(),
+            content: String(item.content || ""),
+            created_at: String(item.created_at || ""),
+          }))
+          .filter((item) => item.role && item.content.trim());
+        return clean.length ? clean : null;
+      }
+
+      async function importLegacyLocalConversation(projectId) {
+        const keys = [
+          "molly.conversationMessages",
+          "ai4s_agent.conversationMessages",
+          "conversationMessages",
+        ];
+        let importedConversationId = "";
+        for (const key of keys) {
+          let raw = "";
+          try { raw = String(localStorage.getItem(key) || ""); } catch (_err) { continue; }
+          if (!raw) continue;
+          let messages;
+          try { messages = parseLegacyConversation(raw); } catch (_err) { continue; }
+          if (!messages) continue;
+          const sourceDigest = await sha256Text(raw);
+          const response = await postJSON(
+            `/api/projects/${encodeURIComponent(projectId)}/conversations/import-local-storage`,
+            {
+              import_id: `localstorage:${sourceDigest}`,
+              title: "Imported browser conversation",
+              messages,
+            },
+          );
+          importedConversationId = String(response.conversation_id || importedConversationId);
+          try { localStorage.removeItem(key); } catch (_err) {}
+        }
+        return importedConversationId;
+      }
+
+      async function loadProjectConversation(projectId) {
+        const generation = ++conversationLoadGeneration;
+        setText("conversation-status", "正在加载服务端对话…");
+        try {
+          const importedConversationId = await importLegacyLocalConversation(projectId);
+          const listing = await getJSON(`/api/projects/${encodeURIComponent(projectId)}/conversations`);
+          const conversations = Array.isArray(listing.conversations) ? listing.conversations : [];
+          let selected = conversations.find((item) => item.conversation_id === importedConversationId) || conversations[0];
+          if (!selected) {
+            const created = await postJSON(
+              `/api/projects/${encodeURIComponent(projectId)}/conversations`,
+              { title: "Project conversation" },
+            );
+            selected = created.conversation;
+          }
+          if (generation !== conversationLoadGeneration || projectId !== activeProject.project_id) return;
+          currentConversationId = String(selected.conversation_id || "");
+          const detail = await getJSON(
+            `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(currentConversationId)}`,
+          );
+          if (generation !== conversationLoadGeneration || projectId !== activeProject.project_id) return;
+          const storedMessages = Array.isArray(detail.messages) ? detail.messages : [];
+          const literatureMessage = [...storedMessages].reverse().find((item) =>
+            item?.role === "user" && Array.isArray(item.attachments) &&
+            item.attachments.some((attachment) =>
+              String(attachment.media_type || "").toLowerCase().includes("pdf") ||
+              String(attachment.original_name || "").toLowerCase().endsWith(".pdf")
+            )
+          );
+          latestLiteratureMessageId = String(literatureMessage?.message_id || "");
+          conversationMessages = storedMessages
+            .filter((item) => item && item.content)
+            .map((item) => ({ role: item.role, content: item.content }));
+          currentRunId = `conversation-${currentConversationId}`.slice(0, 96);
+          syncRunId(currentRunId);
+          const stream = document.getElementById("conversation-stream");
+          if (stream) stream.innerHTML = "";
+          storedMessages.forEach((item) => appendConversationMessage(item.role, item.content, item.attachments));
+          if (!storedMessages.length) {
+            appendConversationMessage("assistant", "描述你的目标、数据背景或可引用来源。对话会保存在当前项目中。");
+          }
+          setText(
+            "conversation-status",
+            detail.recovered_tail ? "已恢复崩溃前的完整消息；损坏尾部已安全截断。" : "对话已保存到本地服务端工作区。",
+          );
+          const intakeListing = await getJSON(
+            `/api/projects/${encodeURIComponent(projectId)}/literature-intakes?conversation_id=${encodeURIComponent(currentConversationId)}`,
+          );
+          if (generation !== conversationLoadGeneration || projectId !== activeProject.project_id) return;
+          const waitingIntake = (intakeListing.literature_intakes || []).find(
+            (item) => item?.execution?.status === "WAITING_USER",
+          );
+          currentLiteratureIntake = waitingIntake?.intake || null;
+          document.getElementById("approve-literature-button").hidden = !currentLiteratureIntake;
+          if (currentLiteratureIntake) {
+            setText(
+              "literature-task-status",
+              `已恢复等待 Gate 的 ${currentLiteratureIntake.sources?.length || 0} 篇 PDF corpus。`,
+            );
+          }
+        } catch (err) {
+          if (generation !== conversationLoadGeneration) return;
+          setText("conversation-status", `加载对话失败：${normalizeErrorForRender(err).error}`);
+          render(err);
+        }
+      }
+
+      async function ensureCurrentConversation() {
+        if (!currentConversationId) await loadProjectConversation(activeProject.project_id);
+        if (!currentConversationId) throw new Error("服务端对话尚未就绪");
+        return currentConversationId;
+      }
+
+      async function persistConversationMessage(role, content, attachmentIds = []) {
+        const conversationId = await ensureCurrentConversation();
+        const response = await postJSON(
+          `/api/projects/${encodeURIComponent(activeProject.project_id)}/conversations/${encodeURIComponent(conversationId)}/messages`,
+          {
+            role,
+            content,
+            attachment_ids: attachmentIds,
+            client_message_id: newClientMessageId(),
+          },
+        );
+        return response.message;
+      }
+
+      async function patchJSON(url, payload) {
+        if (window.location.protocol === "file:") throw fileLaunchProblem();
+        const res = await fetch(url, {
+          method: "PATCH",
+          headers: apiHeaders(true),
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw data;
+        return data;
+      }
+
+      async function putJSON(url, payload) {
+        if (window.location.protocol === "file:") throw fileLaunchProblem();
+        const res = await fetch(url, {
+          method: "PUT",
+          headers: apiHeaders(true),
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw data;
+        return data;
+      }
+
+      async function deleteJSON(url) {
+        if (window.location.protocol === "file:") throw fileLaunchProblem();
+        const res = await fetch(url, { method: "DELETE", headers: apiHeaders(false) });
+        const data = await res.json();
+        if (!res.ok) throw data;
+        return data;
+      }
+
+      async function openLLMSettings(force = false) {
+        const modal = document.getElementById("llm-settings-modal");
+        modal.hidden = false;
+        document.getElementById("llm-settings-close").hidden = force;
+        try {
+          const state = await getJSON("/api/settings/llm");
+          const config = state.config || {};
+          currentLLMConfig = config;
+          document.getElementById("llm-endpoint").value = config.endpoint || "";
+          document.getElementById("llm-model").value = config.model || "";
+          document.getElementById("llm-timeout").value = config.timeout_sec || 60;
+          document.getElementById("llm-api-key-source").value = config.api_key_source || "keyring";
+          document.getElementById("llm-api-key-ref").value = config.api_key_ref || "default";
+          document.getElementById("llm-api-key-env").value = config.api_key_env || "MOLLY_LLM_API_KEY";
+          document.getElementById("llm-api-key").value = "";
+          renderSecretState(config);
+          if (!state.configured) setText("llm-settings-status", "首次使用请完成 LLM 配置。");
+        } catch (err) {
+          setText("llm-settings-status", `读取失败：${normalizeErrorForRender(err).error}`);
+        }
+        await loadComputeSettings();
+      }
+
+      function closeLLMSettings() {
+        document.getElementById("llm-settings-modal").hidden = true;
+        setText("llm-settings-status", "");
+      }
+
+      function renderSecretState(config) {
+        const source = config.api_key_source || document.getElementById("llm-api-key-source").value;
+        const resolved = config.resolved_api_key_source || "unavailable";
+        const managedExplicitly = source === "file" || source === "keyring";
+        setText("llm-resolved-source", `当前实际来源：${resolved}`);
+        document.getElementById("llm-api-key-delete").hidden = !config.api_key_configured || !managedExplicitly;
+        const apiKeyInput = document.getElementById("llm-api-key");
+        apiKeyInput.disabled = !managedExplicitly;
+        apiKeyInput.placeholder = managedExplicitly
+          ? "留空则保留或迁移现有密钥"
+          : "environment/auto 为只读来源，请在来源处管理密钥";
+      }
+
+      function computeConnectionPayload() {
+        return {
+          connection_id: String(document.getElementById("compute-connection-id").value || "").trim(),
+          transport: "ssh",
+          display_name: String(document.getElementById("compute-display-name").value || "").trim(),
+          ssh_host_alias: String(document.getElementById("compute-ssh-alias").value || "").trim(),
+          expected_hostname: String(document.getElementById("compute-expected-hostname").value || "").trim(),
+          remote_root: String(document.getElementById("compute-remote-root").value || "").trim(),
+          scheduler: "direct",
+          known_hosts_path: String(document.getElementById("compute-known-hosts").value || "").trim(),
+          declared_capabilities: csvList(document.getElementById("compute-capabilities").value),
+          enabled: true,
+          max_concurrent_jobs: 1,
+          default_timeout_sec: 3600,
+        };
+      }
+
+      function renderComputeSettings(state) {
+        const list = document.getElementById("compute-connections");
+        list.innerHTML = "";
+        (state.connections || []).forEach((connection) => {
+          const row = document.createElement("div");
+          row.className = "settings-list-item";
+          const summary = document.createElement("div");
+          const title = document.createElement("strong");
+          title.textContent = connection.display_name || connection.connection_id;
+          const detail = document.createElement("p");
+          detail.className = "small";
+          const probe = connection.last_probe;
+          detail.textContent = `${connection.connection_id} · ${connection.ssh_host_alias} · probe: ${probe?.status || "未探测"}`;
+          summary.append(title, detail);
+          const probeButton = document.createElement("button");
+          probeButton.type = "button";
+          probeButton.className = "ghost";
+          probeButton.textContent = "探测";
+          probeButton.addEventListener("click", () => probeComputeConnection(connection.connection_id));
+          const deleteButton = document.createElement("button");
+          deleteButton.type = "button";
+          deleteButton.className = "ghost";
+          deleteButton.textContent = "删除";
+          deleteButton.addEventListener("click", () => deleteComputeConnection(connection.connection_id));
+          row.append(summary, probeButton, deleteButton);
+          list.appendChild(row);
+        });
+        if (!(state.connections || []).length) {
+          const empty = document.createElement("p");
+          empty.className = "small";
+          empty.textContent = "尚未配置计算资源。";
+          list.appendChild(empty);
+        }
+        const profiles = document.getElementById("compute-execution-profiles");
+        profiles.innerHTML = "";
+        (state.execution_profiles || []).forEach((profile) => {
+          const item = document.createElement("p");
+          item.className = "small";
+          item.textContent = `${profile.profile_id} · ${profile.task_type} · ${profile.worker_entrypoint} ${profile.worker_action}`;
+          profiles.appendChild(item);
+        });
+      }
+
+      async function loadComputeSettings() {
+        try {
+          const state = await getJSON("/api/settings/compute");
+          renderComputeSettings(state);
+          setText("compute-settings-status", "连接配置与探测结果来自当前用户目录。");
+        } catch (err) {
+          setText("compute-settings-status", `读取失败：${normalizeErrorForRender(err).error}`);
+        }
+      }
+
+      async function probeComputeConnection(connectionId) {
+        setText("compute-settings-status", `正在只读探测 ${connectionId}…`);
+        try {
+          const response = await postJSON(`/api/settings/compute/connections/${encodeURIComponent(connectionId)}/probe`, {});
+          setText("compute-settings-status", `探测结果：${response.probe.status}`);
+          await loadComputeSettings();
+        } catch (err) {
+          setText("compute-settings-status", `探测失败：${normalizeErrorForRender(err).error}`);
+        }
+      }
+
+      async function deleteComputeConnection(connectionId) {
+        try {
+          await deleteJSON(`/api/settings/compute/connections/${encodeURIComponent(connectionId)}`);
+          setText("compute-settings-status", `已删除连接配置：${connectionId}`);
+          await loadComputeSettings();
+        } catch (err) {
+          setText("compute-settings-status", `删除失败：${normalizeErrorForRender(err).error}`);
+        }
+      }
+
+      function csvList(value) {
+        return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+      }
+
+      function jsonObject(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("JSON field must be an object");
+        return parsed;
+      }
+
+      function setValue(id, value) {
+        const el = document.getElementById(id);
+        if (el && value) el.value = value;
+      }
+
+      function setText(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+      }
+
+      function fillModelPromotionDraft(draft) {
+        const mappings = {
+          "model-promotion-model-id": draft.model_id,
+          "model-promotion-domain": draft.domain,
+          "model-promotion-property-id": draft.property_id,
+          "model-promotion-use-case": draft.use_case,
+          "model-promotion-backend": draft.backend,
+          "model-promotion-feature-requirements": (draft.feature_requirements || []).join(", "),
+          "model-promotion-input-columns": JSON.stringify(draft.input_columns || {}),
+          "model-promotion-metrics": JSON.stringify(draft.metrics || {}),
+          "model-promotion-applicability": JSON.stringify(draft.applicability || {}),
+          "model-promotion-limitations": (draft.limitations || []).join(", "),
+          "model-promotion-rollback-asset-id": draft.rollback_asset_id || "",
+        };
+        Object.entries(mappings).forEach(([id, value]) => {
+          const el = document.getElementById(id);
+          if (el) el.value = value == null ? "" : String(value);
+        });
+      }
+
+      function syncRunId(runId) {
+        ["plan-run-id", "expand-run-id", "diff-run-id", "promotion-run-id", "model-promotion-run-id", "timeline-run-id", "preview-run-id"].forEach((id) => setValue(id, runId));
+        if (runId) {
+          setText("active-project-run", `运行：${runId}`);
+          setText("workspace-run-pill", runId);
+        } else {
+          setText("active-project-run", "运行：尚未创建");
+          setText("workspace-run-pill", "未创建");
+        }
+      }
+
+      function syncProjectId(projectId) {
+        ["promotion-project-id", "model-promotion-project-id", "timeline-project-id", "preview-project-id"].forEach((id) => setValue(id, projectId));
+        if (projectId && activeProject.project_id !== projectId) {
+          updateActiveProjectDisplay({ project_id: projectId, name: projectId });
+        }
+      }
+
+      function buildRunId(goal) {
+        const now = new Date();
+        const stamp = [
+          now.getFullYear(),
+          String(now.getMonth() + 1).padStart(2, "0"),
+          String(now.getDate()).padStart(2, "0"),
+          "T",
+          String(now.getHours()).padStart(2, "0"),
+          String(now.getMinutes()).padStart(2, "0"),
+          String(now.getSeconds()).padStart(2, "0"),
+        ].join("");
+        const tokens = (String(goal || "").toLowerCase().match(/[a-z0-9]+/g) || []).slice(0, 5);
+        const slug = tokens.join("-") || "run";
+        return `${stamp}-${slug}`.slice(0, 96);
+      }
+
+      function syncGeneratedRunId(seedText = "") {
+        const input = document.getElementById("conversation-input");
+        const goal = String(seedText || input?.value || activeProject.project_id || "run").trim();
+        if (!currentRunId) {
+          currentRunId = buildRunId(goal);
+        }
+        syncRunId(currentRunId);
+        return currentRunId;
+      }
+
+      syncRunId("");
+      syncProjectId(activeProject.project_id);
+
+      document.getElementById("new-project-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const rawName = String(fd.get("name") || "").trim();
+        const rawId = String(fd.get("project_id") || "").trim();
+        const payload = { name: rawName || rawId || "Untitled project", project_id: rawId };
+        try {
+          const response = await postJSON("/api/projects", payload);
+          const project = { project_id: response.project_id, name: response.name || response.project_id };
+          if (!knownProjects.some((item) => item.project_id === project.project_id)) knownProjects.unshift(project);
+          selectProject(project);
+          setText("new-project-status", `已选择项目：${project.project_id}`);
+          render(response);
+        } catch (err) {
+          setText("new-project-status", "新建项目失败。");
+          render(err);
+        }
+      });
+
+      document.getElementById("conversation-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const input = document.getElementById("conversation-input");
+        const message = String(input.value || "").trim();
+        if (!message) return;
+        try {
+          const projectId = activeProject.project_id;
+          const attachmentIds = pendingConversationAttachments.map((item) => item.artifact_id);
+          const persistedUser = await persistConversationMessage("user", message, attachmentIds);
+          if (Array.isArray(persistedUser.attachments) && persistedUser.attachments.some((attachment) =>
+            String(attachment.media_type || "").toLowerCase().includes("pdf") ||
+            String(attachment.original_name || "").toLowerCase().endsWith(".pdf")
+          )) {
+            latestLiteratureMessageId = String(persistedUser.message_id || "");
+          }
+          pendingConversationAttachments = [];
+          renderPendingConversationAttachments();
+          conversationMessages.push({ role: "user", content: persistedUser.content });
+          appendConversationMessage("user", persistedUser.content, persistedUser.attachments);
+          input.value = "";
+          const runId = syncGeneratedRunId(message);
+          const response = await postJSON("/api/agent/conversation/next-turn", {
+            project_id: projectId,
+            run_id: runId,
+            messages: conversationMessages,
+          });
+          currentConversationDecision = response.decision || null;
+          currentModelingPlanPayload = currentConversationDecision?.modeling_plan_payload || null;
+          const pendingEvidence = currentConversationDecision?.pending_cited_target_evidence || currentModelingPlanPayload?.pending_cited_target_evidence || [];
+          const agentQuestions = currentConversationDecision?.questions || currentModelingPlanPayload?.agent_questions || [];
+          const ready = currentConversationDecision?.decision === "ready_for_modeling_plan";
+          setText("conversation-status", ready ? "已通过 next-turn 决策，可生成建模计划或准备文献来源。" : "需要回答 Agent 追问或批准外部证据。");
+          const summary = currentConversationDecision?.summary || "已整理为可审阅的下一步决策。";
+          const persistedAssistant = await persistConversationMessage("assistant", summary);
+          conversationMessages.push({ role: "assistant", content: persistedAssistant.content });
+          appendConversationMessage("assistant", persistedAssistant.content, persistedAssistant.attachments);
+          if (pendingEvidence.length) appendConversationMessage("system", `检测到 ${pendingEvidence.length} 条 pending_cited_target_evidence，批准前不会进入建模证据。`);
+          renderConversationArtifact("conversation_turn_decision", currentConversationDecision);
+          if (currentModelingPlanPayload) renderConversationArtifact("modeling_plan_payload", currentModelingPlanPayload);
+          renderAgentQuestions(agentQuestions);
+          render(response);
+        } catch (err) {
+          appendConversationMessage("system", "对话整理失败，详情见当前响应。");
+          render(err);
+        }
+      });
+
+      document.getElementById("conversation-upload-button").addEventListener("click", async () => {
+        try {
+          await ensureCurrentConversation();
+          document.getElementById("conversation-file-input").click();
+        } catch (err) {
+          render(err);
+        }
+      });
+
+      document.getElementById("conversation-file-input").addEventListener("change", async (event) => {
+        const files = Array.from(event.currentTarget.files || []);
+        if (!files.length) return;
+        setText("conversation-status", `正在上传 ${files.length} 个文件并注册 artifact…`);
+        const formData = new FormData();
+        files.forEach((file) => formData.append("files", file, file.name));
+        try {
+          const conversationId = await ensureCurrentConversation();
+          const response = await postForm(
+            `/api/projects/${encodeURIComponent(activeProject.project_id)}/conversations/${encodeURIComponent(conversationId)}/attachments`,
+            formData,
+          );
+          const uploaded = Array.isArray(response.attachments) ? response.attachments : [];
+          uploaded.forEach((attachment) => {
+            if (!pendingConversationAttachments.some((item) => item.artifact_id === attachment.artifact_id)) {
+              pendingConversationAttachments.push(attachment);
+            }
+          });
+          renderPendingConversationAttachments();
+          setText("conversation-status", `已注册 ${uploaded.length} 个附件 artifact；发送消息时会绑定其 SHA-256 引用。`);
+        } catch (err) {
+          setText("conversation-status", `附件上传失败：${normalizeErrorForRender(err).error}`);
+          render(err);
+        } finally {
+          event.currentTarget.value = "";
+        }
+      });
+
+      document.getElementById("parse-literature-button").addEventListener("click", async () => {
+        if (!latestLiteratureMessageId) {
+          render({ ok: false, error: "请先上传 PDF，并发送一条绑定这些附件的用户消息。" });
+          return;
+        }
+        try {
+          const conversationId = await ensureCurrentConversation();
+          setText("literature-task-status", "正在冻结附件引用并登记 scientific corpus…");
+          const frozen = await postJSON(
+            `/api/projects/${encodeURIComponent(activeProject.project_id)}/conversations/${encodeURIComponent(conversationId)}/execution-requests`,
+            {
+              selected_message_ids: [latestLiteratureMessageId],
+              task_type: "literature_parse",
+              model_profile_id: "not_applicable",
+              user_parameters: { parser_profile: "pdfplumber_local" },
+              client_request_id: `literature-parse-${latestLiteratureMessageId}`,
+            },
+          );
+          const response = await postJSON(
+            `/api/projects/${encodeURIComponent(activeProject.project_id)}/conversations/${encodeURIComponent(conversationId)}/literature-intakes`,
+            {
+              request_id: frozen.execution_request.request_id,
+              parser_profile: "pdfplumber_local",
+            },
+          );
+          currentLiteratureIntake = response.intake || null;
+          const waiting = response.execution?.status === "WAITING_USER";
+          document.getElementById("approve-literature-button").hidden = !waiting;
+          setText(
+            "literature-task-status",
+            waiting
+              ? `已冻结 ${response.intake?.sources?.length || 0} 篇 PDF；批量解析需要 Gate 批准。`
+              : "本地单篇 PDF 已解析，结果已注册到现有 RunPlan artifact registry。",
+          );
+          appendConversationMessage(
+            "assistant",
+            waiting
+              ? "文献 corpus 已冻结。批量解析尚未执行，等待你的明确批准。"
+              : "文献解析完成，ParsedDocument 与 parser audit 已注册。",
+          );
+          render(response);
+        } catch (err) {
+          setText("literature-task-status", `文献解析提交失败：${normalizeErrorForRender(err).error}`);
+          render(err);
+        }
+      });
+
+      document.getElementById("approve-literature-button").addEventListener("click", async () => {
+        const intakeId = String(currentLiteratureIntake?.intake_id || "");
+        if (!intakeId) {
+          render({ ok: false, error: "没有等待批准的文献 intake。" });
+          return;
+        }
+        try {
+          setText("literature-task-status", "正在批准精确绑定的批量解析请求…");
+          const response = await postJSON(
+            `/api/projects/${encodeURIComponent(activeProject.project_id)}/literature-intakes/${encodeURIComponent(intakeId)}/approve`,
+            { actor: "local-user", note: "Approved from the Molly literature parsing UI." },
+          );
+          currentLiteratureIntake = response.intake || currentLiteratureIntake;
+          document.getElementById("approve-literature-button").hidden = true;
+          setText("literature-task-status", "批量文献解析完成，corpus manifest 已注册。 ");
+          appendConversationMessage("assistant", "已按批准的 immutable corpus roster 完成批量解析。");
+          render(response);
+        } catch (err) {
+          setText("literature-task-status", `批量解析失败：${normalizeErrorForRender(err).error}`);
+          render(err);
+        }
+      });
+
+      document.getElementById("prepare-research-sources-button").addEventListener("click", async () => {
+        if (!conversationMessages.length) {
+          render({ ok: false, error: "请先发送一条对话，让 Agent 识别研究目标和可能的 DOI/URL 来源。" });
+          return;
+        }
+        const runId = String(document.getElementById("workspace-run-pill")?.textContent || "").trim();
+        if (!runId || runId === "等待运行 ID") {
+          render({ ok: false, error: "缺少运行 ID，请先发送一条对话。" });
+          return;
+        }
+        try {
+          const response = await postJSON("/api/agent/conversation/research-sources", {
+            project_id: activeProject.project_id,
+            run_id: runId,
+            messages: conversationMessages,
+          });
+          currentResearchSourceProposal = response.proposal || null;
+          appendConversationMessage("agent", "文献来源 proposal 已生成，仅供审阅，不会执行外部采集。");
+          renderConversationArtifact("research_source_proposal", currentResearchSourceProposal);
+          render(response);
+        } catch (err) {
+          appendConversationMessage("system", "文献来源准备失败，详情见当前响应。");
+          render(err);
+        }
+      });
+
+      document.getElementById("prepare-modeling-plan-button").addEventListener("click", async () => {
+        if (!currentModelingPlanPayload) {
+          render({ ok: false, error: "请先发送一条对话，让 Agent 通过 next-turn 决策整理 modeling_plan_payload。" });
+          return;
+        }
+        if (currentConversationDecision?.requires_user_response) {
+          render({ ok: false, error: "当前 next-turn 决策仍需要用户补充或批准，不能生成建模计划。", decision: currentConversationDecision });
+          return;
+        }
+        if ((currentModelingPlanPayload.agent_questions || []).length) {
+          render({ ok: false, error: "仍有待回答的 agent_questions，不能生成建模计划。", agent_questions: currentModelingPlanPayload.agent_questions });
+          return;
+        }
+        try {
+          const response = await postJSON("/api/agent/modeling-plan", currentModelingPlanPayload);
+          appendConversationMessage("agent", "建模计划草案已生成，请审阅 artifact 后再决定是否执行。");
+          renderConversationArtifact("modeling_plan_proposal", response.proposal || {});
+          if (response.target_modeling_brief) renderConversationArtifact("target_modeling_brief", response.target_modeling_brief);
+          render(response);
+        } catch (err) {
+          appendConversationMessage("system", "建模计划生成失败，详情见当前响应。");
+          render(err);
+        }
+      });
+
+      document.getElementById("llm-settings-button").addEventListener("click", () => openLLMSettings(false));
+      document.getElementById("llm-settings-close").addEventListener("click", closeLLMSettings);
+      document.getElementById("llm-api-key-source").addEventListener("change", (event) => {
+        renderSecretState({
+          ...currentLLMConfig,
+          api_key_source: event.currentTarget.value,
+          resolved_api_key_source: "unavailable",
+          api_key_configured: false,
+        });
+      });
+      document.getElementById("llm-settings-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const apiKey = String(document.getElementById("llm-api-key").value || "").trim();
+        const payload = {
+          endpoint: String(document.getElementById("llm-endpoint").value || "").trim(),
+          model: String(document.getElementById("llm-model").value || "").trim(),
+          timeout_sec: Number(document.getElementById("llm-timeout").value || 60),
+          api_key_source: document.getElementById("llm-api-key-source").value,
+          api_key_ref: String(document.getElementById("llm-api-key-ref").value || "default").trim(),
+          api_key_env: String(document.getElementById("llm-api-key-env").value || "MOLLY_LLM_API_KEY").trim(),
+        };
+        if (apiKey) payload.api_key = apiKey;
+        setText("llm-settings-status", "正在保存...");
+        try {
+          const response = await patchJSON("/api/settings/llm", payload);
+          currentLLMConfig = response.config || {};
+          document.getElementById("llm-api-key").value = "";
+          renderSecretState(currentLLMConfig);
+          setText("llm-settings-status", `已保存：${response.model || payload.model}`);
+          document.getElementById("llm-settings-modal").hidden = true;
+        } catch (err) {
+          setText("llm-settings-status", `保存失败：${normalizeErrorForRender(err).error}`);
+        }
+      });
+      document.getElementById("llm-api-key-delete").addEventListener("click", async () => {
+        setText("llm-settings-status", "正在删除...");
+        try {
+          await deleteJSON("/api/settings/llm/api-key");
+          document.getElementById("llm-api-key").value = "";
+          document.getElementById("llm-api-key-delete").hidden = true;
+          setText("llm-settings-status", "已删除当前来源中保存的密钥。");
+        } catch (err) {
+          setText("llm-settings-status", `删除失败：${normalizeErrorForRender(err).error}`);
+        }
+      });
+      document.getElementById("compute-connection-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = computeConnectionPayload();
+        setText("compute-settings-status", "正在保存连接配置…");
+        try {
+          await putJSON(
+            `/api/settings/compute/connections/${encodeURIComponent(payload.connection_id)}`,
+            payload,
+          );
+          event.currentTarget.reset();
+          setText("compute-settings-status", `已保存：${payload.connection_id}`);
+          await loadComputeSettings();
+        } catch (err) {
+          setText("compute-settings-status", `保存失败：${normalizeErrorForRender(err).error}`);
+        }
+      });
+
+      getJSON("/api/settings/llm")
+        .then((state) => { if (!state.configured) openLLMSettings(true); })
+        .catch(() => {});
+      loadProjects();
+
+      document.getElementById("plan-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const payload = { run_id: String(fd.get("run_id") || "").trim(), prompt: String(fd.get("prompt") || "").trim() };
+        try { syncRunId(payload.run_id); render(await postJSON("/api/plan", payload)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("expand-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const payload = { run_id: String(fd.get("run_id") || "").trim(), requested_tasks: csvList(fd.get("requested_tasks")), available_artifacts: csvList(fd.get("available_artifacts")) };
+        try { render(await postJSON("/api/run-plan/expand", payload)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("diff-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const runId = String(fd.get("run_id") || "").trim();
+        const available = csvList(fd.get("available_artifacts"));
+        const payload = { run_id: runId, before: { requested_tasks: csvList(fd.get("before_tasks")), available_artifacts: available }, after: { requested_tasks: csvList(fd.get("after_tasks")), available_artifacts: available } };
+        try { render(await postJSON("/api/run-plan/diff", payload)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("task-toolbox-button").addEventListener("click", async () => {
+        try { render(await getJSON("/api/atomic-tasks")); } catch (err) { render(err); }
+      });
+
+      document.getElementById("asset-promotion-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
+        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
+        const payload = { asset_id: String(fd.get("asset_id") || "").trim(), asset_type: String(fd.get("asset_type") || "").trim(), version: String(fd.get("version") || "").trim(), source_artifacts: csvList(fd.get("source_artifacts")), approved_by: String(fd.get("approved_by") || "").trim(), confirmed: true };
+        try { render(await postJSON(`/api/projects/${projectId}/runs/${runId}/assets/promote`, payload)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("model-promotion-draft-button").addEventListener("click", async () => {
+        const form = document.getElementById("model-asset-promotion-form");
+        const fd = new FormData(form);
+        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
+        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
+        try {
+          const payload = { version_dir: String(fd.get("version_dir") || "").trim() };
+          const response = await postJSON(`/api/projects/${projectId}/runs/${runId}/models/promote/draft`, payload);
+          fillModelPromotionDraft(response.draft || {});
+          render(response);
+        } catch (err) { render(err); }
+      });
+
+      document.getElementById("model-asset-promotion-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
+        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
+        try {
+          const payload = {
+            version_dir: String(fd.get("version_dir") || "").trim(),
+            model_id: String(fd.get("model_id") || "").trim(),
+            domain: String(fd.get("domain") || "").trim(),
+            property_id: String(fd.get("property_id") || "").trim(),
+            use_case: String(fd.get("use_case") || "").trim(),
+            backend: String(fd.get("backend") || "").trim(),
+            feature_requirements: csvList(fd.get("feature_requirements")),
+            input_columns: jsonObject(fd.get("input_columns")),
+            metrics: jsonObject(fd.get("metrics")),
+            applicability: jsonObject(fd.get("applicability")),
+            limitations: csvList(fd.get("limitations")),
+            rollback_asset_id: String(fd.get("rollback_asset_id") || "").trim(),
+            approved_by: String(fd.get("approved_by") || "").trim(),
+            confirmed: true,
+          };
+          render(await postJSON(`/api/projects/${projectId}/runs/${runId}/models/promote`, payload));
+        } catch (err) { render(err instanceof Error ? { ok: false, error: err.message } : err); }
+      });
+
+      document.getElementById("stage-timeline-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
+        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
+        try { render(await getJSON(`/api/projects/${projectId}/runs/${runId}/stage-timeline`)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("report-preview-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
+        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
+        const artifactId = encodeURIComponent(String(fd.get("artifact_id") || "").trim());
+        try { render(await getJSON(`/api/projects/${projectId}/runs/${runId}/report-preview?artifact_id=${artifactId}`)); } catch (err) { render(err); }
+      });
+
+      document.getElementById("agent-review-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const fd = new FormData(event.currentTarget);
+        try {
+          const payload = JSON.parse(String(fd.get("payload") || "{}"));
+          const response = await postJSON("/api/agent/review-card", payload);
+          render(response);
+          renderAgentReviewCard(response.card || {});
+        } catch (err) { render(err instanceof SyntaxError ? { ok: false, error: err.message } : err); }
+      });
+    </script>
+  </body>
+</html>

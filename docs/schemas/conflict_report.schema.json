@@ -1,0 +1,105 @@
+{
+  "$defs": {
+    "ConflictGroup": {
+      "properties": {
+        "conflict_id": {
+          "title": "Conflict Id",
+          "type": "string"
+        },
+        "smiles": {
+          "title": "Smiles",
+          "type": "string"
+        },
+        "property_id": {
+          "title": "Property Id",
+          "type": "string"
+        },
+        "min_value": {
+          "title": "Min Value",
+          "type": "number"
+        },
+        "max_value": {
+          "title": "Max Value",
+          "type": "number"
+        },
+        "tolerance": {
+          "title": "Tolerance",
+          "type": "number"
+        },
+        "observations": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Observations",
+          "type": "array"
+        },
+        "status": {
+          "default": "needs_review",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "conflict_id",
+        "smiles",
+        "property_id",
+        "min_value",
+        "max_value",
+        "tolerance"
+      ],
+      "title": "ConflictGroup",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "input_record_count": {
+      "title": "Input Record Count",
+      "type": "integer"
+    },
+    "merged_record_count": {
+      "title": "Merged Record Count",
+      "type": "integer"
+    },
+    "conflict_count": {
+      "title": "Conflict Count",
+      "type": "integer"
+    },
+    "non_conflicting_record_count": {
+      "title": "Non Conflicting Record Count",
+      "type": "integer"
+    },
+    "conflicts": {
+      "items": {
+        "$ref": "#/$defs/ConflictGroup"
+      },
+      "title": "Conflicts",
+      "type": "array"
+    },
+    "generated_at": {
+      "title": "Generated At",
+      "type": "string"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "input_record_count",
+    "merged_record_count",
+    "conflict_count",
+    "non_conflicting_record_count",
+    "generated_at"
+  ],
+  "title": "ConflictReport",
+  "type": "object"
+}

@@ -1,0 +1,16 @@
+{
+  "property_id": "plqy",
+  "canonical_unit": "fraction",
+  "aliases": [
+    "PLQY",
+    "photoluminescence quantum yield",
+    "quantum yield"
+  ],
+  "normalization_rules": [
+    {
+      "source_unit": "%",
+      "canonical_unit": "fraction",
+      "rule": "percent_to_fraction"
+    }
+  ]
+}

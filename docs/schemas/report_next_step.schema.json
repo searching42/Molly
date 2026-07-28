@@ -1,0 +1,35 @@
+{
+  "properties": {
+    "action": {
+      "title": "Action",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "priority": {
+      "default": "medium",
+      "title": "Priority",
+      "type": "string"
+    },
+    "required_approval": {
+      "default": false,
+      "title": "Required Approval",
+      "type": "boolean"
+    },
+    "related_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Related Artifacts",
+      "type": "array"
+    }
+  },
+  "required": [
+    "action",
+    "reason"
+  ],
+  "title": "ReportNextStep",
+  "type": "object"
+}

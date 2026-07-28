@@ -1,0 +1,89 @@
+{
+  "properties": {
+    "record_id": {
+      "title": "Record Id",
+      "type": "string"
+    },
+    "smiles": {
+      "title": "Smiles",
+      "type": "string"
+    },
+    "properties": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Properties"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "paper_id": {
+      "title": "Paper Id",
+      "type": "string"
+    },
+    "page": {
+      "title": "Page",
+      "type": "integer"
+    },
+    "table_id": {
+      "default": "",
+      "title": "Table Id",
+      "type": "string"
+    },
+    "row_index": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Row Index"
+    },
+    "evidence_ref": {
+      "title": "Evidence Ref",
+      "type": "string"
+    },
+    "citation_context": {
+      "title": "Citation Context",
+      "type": "string"
+    },
+    "confidence": {
+      "title": "Confidence",
+      "type": "number"
+    },
+    "confidence_factors": {
+      "additionalProperties": true,
+      "title": "Confidence Factors",
+      "type": "object"
+    },
+    "raw_values": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Raw Values",
+      "type": "object"
+    },
+    "status": {
+      "default": "candidate",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "record_id",
+    "smiles",
+    "source_id",
+    "paper_id",
+    "page",
+    "evidence_ref",
+    "citation_context",
+    "confidence"
+  ],
+  "title": "ExtractedRecord",
+  "type": "object"
+}

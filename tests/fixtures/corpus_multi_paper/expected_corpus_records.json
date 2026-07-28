@@ -1,0 +1,14 @@
+{
+  "document_count": 3,
+  "extracted_record_count": 9,
+  "paper_ids": ["corpus-paper-a", "corpus-paper-b", "corpus-paper-c"],
+  "ordered_smiles": ["CCO", "CCN", "CCCO", "c1ccccc1", "CCO", "CCN", "CCCl", "not-a-smiles", "CCBr"],
+  "record_counts_by_paper": {
+    "corpus-paper-a": 4,
+    "corpus-paper-b": 3,
+    "corpus-paper-c": 2
+  },
+  "extraction_rejection_counts_by_paper": {
+    "corpus-paper-c": 2
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "clean_dataset": {
+    "strict_smiles_cleaning": false
+  },
+  "train_model": {
+    "property_id": "plqy",
+    "adapter": "train_model_baseline_adapter"
+  },
+  "filter_rank": {
+    "topn": 3,
+    "score_columns": [
+      "plqy_pred"
+    ],
+    "directions": {
+      "plqy_pred": "maximize"
+    },
+    "weights": {
+      "plqy_pred": 1.0
+    }
+  },
+  "render_report": {
+    "sections": {
+      "Summary": [
+        "Phase 1 queued workflow fixture completed.",
+        "Artifacts include cleaned data, baseline metrics, predictions, ranking, and report outputs."
+      ]
+    }
+  }
+}

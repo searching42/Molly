@@ -1,0 +1,23 @@
+{
+  "properties": {
+    "tool_name": {
+      "enum": [
+        "select_tasks",
+        "request_artifact",
+        "propose_replan"
+      ],
+      "title": "Tool Name",
+      "type": "string"
+    },
+    "arguments": {
+      "additionalProperties": true,
+      "title": "Arguments",
+      "type": "object"
+    }
+  },
+  "required": [
+    "tool_name"
+  ],
+  "title": "AgentToolCall",
+  "type": "object"
+}

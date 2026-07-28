@@ -1,0 +1,37 @@
+{
+  "properties": {
+    "stage": {
+      "title": "Stage",
+      "type": "string"
+    },
+    "status": {
+      "title": "Status",
+      "type": "string"
+    },
+    "evidence": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "missing": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing",
+      "type": "array"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "stage",
+    "status",
+    "summary"
+  ],
+  "title": "OLEDDiscoveryStageStatus",
+  "type": "object"
+}

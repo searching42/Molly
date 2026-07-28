@@ -1,0 +1,10 @@
+dataset_id,SMILES,plqy,lambda_em_nm,split_group,paper_id,page,table_id,row_id,evidence_ref,confidence,n_records_aggregated
+sci_000001,CCO,0.655,512.5,train,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000001,phase3-to-phase1-fixture-paper:table_oled_001:row_000001,0.96,2
+sci_000003,CCCO,0.72,530.0,train,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000003,phase3-to-phase1-fixture-paper:table_oled_001:row_000003,0.93,1
+sci_000004,c1ccccc1,0.44,410.0,train,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000004,phase3-to-phase1-fixture-paper:table_oled_001:row_000004,0.88,1
+sci_000005,CCCl,0.36,460.0,train,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000005,phase3-to-phase1-fixture-paper:table_oled_001:row_000005,0.86,1
+sci_000007,CCBr,0.61,545.0,valid,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000007,phase3-to-phase1-fixture-paper:table_oled_001:row_000007,0.9,1
+sci_000008,CC(C)O,0.49,488.0,train,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000008,phase3-to-phase1-fixture-paper:table_oled_001:row_000008,0.87,1
+sci_000009,C1CCCCC1,0.52,475.0,train,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000009,phase3-to-phase1-fixture-paper:table_oled_001:row_000009,0.85,1
+sci_000010,CCOC,0.68,555.0,train,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000010,phase3-to-phase1-fixture-paper:table_oled_001:row_000010,0.89,1
+sci_000011,CC(=O)O,0.33,430.0,train,phase3-to-phase1-fixture-paper,2,table_oled_001,row_000011,phase3-to-phase1-fixture-paper:table_oled_001:row_000011,0.84,1

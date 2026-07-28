@@ -1,0 +1,13 @@
+{
+  "status": "confirmed",
+  "candidate_record_count": 5,
+  "training_record_count": 5,
+  "rejected_record_count": 5,
+  "corpus": {
+    "document_count": 3,
+    "paper_ids": ["corpus-paper-a", "corpus-paper-b", "corpus-paper-c"],
+    "conflict_count": 1,
+    "unresolved_conflict_count": 1
+  },
+  "provenance_fields": ["paper_id", "page", "table_id", "row_id"]
+}

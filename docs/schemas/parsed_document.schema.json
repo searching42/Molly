@@ -1,0 +1,177 @@
+{
+  "$defs": {
+    "ParsedDocumentElement": {
+      "properties": {
+        "element_id": {
+          "title": "Element Id",
+          "type": "string"
+        },
+        "page": {
+          "title": "Page",
+          "type": "integer"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        },
+        "markdown": {
+          "default": "",
+          "title": "Markdown",
+          "type": "string"
+        },
+        "bbox": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bbox"
+        },
+        "source_hash": {
+          "default": "",
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "element_id",
+        "page",
+        "type"
+      ],
+      "title": "ParsedDocumentElement",
+      "type": "object"
+    },
+    "ParsedTable": {
+      "properties": {
+        "table_id": {
+          "title": "Table Id",
+          "type": "string"
+        },
+        "caption": {
+          "default": "",
+          "title": "Caption",
+          "type": "string"
+        },
+        "headers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Headers",
+          "type": "array"
+        },
+        "rows": {
+          "items": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "title": "Rows",
+          "type": "array"
+        },
+        "footnotes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Footnotes",
+          "type": "array"
+        },
+        "page": {
+          "title": "Page",
+          "type": "integer"
+        },
+        "markdown": {
+          "default": "",
+          "title": "Markdown",
+          "type": "string"
+        },
+        "source_bbox": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Bbox"
+        }
+      },
+      "required": [
+        "table_id",
+        "page"
+      ],
+      "title": "ParsedTable",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "paper_id": {
+      "title": "Paper Id",
+      "type": "string"
+    },
+    "source_path": {
+      "title": "Source Path",
+      "type": "string"
+    },
+    "parser_backend": {
+      "title": "Parser Backend",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "pages": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Pages",
+      "type": "array"
+    },
+    "elements": {
+      "items": {
+        "$ref": "#/$defs/ParsedDocumentElement"
+      },
+      "title": "Elements",
+      "type": "array"
+    },
+    "tables": {
+      "items": {
+        "$ref": "#/$defs/ParsedTable"
+      },
+      "title": "Tables",
+      "type": "array"
+    }
+  },
+  "required": [
+    "paper_id",
+    "source_path",
+    "parser_backend"
+  ],
+  "title": "ParsedDocument",
+  "type": "object"
+}

@@ -1,0 +1,45 @@
+{
+  "$defs": {
+    "GateName": {
+      "enum": [
+        "gate_1_task_parse",
+        "gate_2_data_mining",
+        "gate_3_train_config",
+        "gate_4_post_infer_stats",
+        "gate_5_final_threshold"
+      ],
+      "title": "GateName",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "gate": {
+      "$ref": "#/$defs/GateName"
+    },
+    "approved": {
+      "title": "Approved",
+      "type": "boolean"
+    },
+    "actor": {
+      "title": "Actor",
+      "type": "string"
+    },
+    "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+    },
+    "approved_at": {
+      "default": "",
+      "title": "Approved At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "gate",
+    "approved",
+    "actor"
+  ],
+  "title": "GateDecision",
+  "type": "object"
+}

@@ -1,0 +1,93 @@
+{
+  "run_id": "oled-multiobjective-demo-run",
+  "requested_tasks": [
+    "render_report"
+  ],
+  "tasks": [
+    {
+      "task_id": "inspect_dataset",
+      "depends_on": [],
+      "required_artifacts": [
+        "train_dataset"
+      ],
+      "output_artifacts": [
+        "dataset_profile",
+        "property_profile_report"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "check_trainability",
+      "depends_on": [
+        "inspect_dataset"
+      ],
+      "required_artifacts": [
+        "property_profile_report"
+      ],
+      "output_artifacts": [
+        "trainability_report"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "train_property_models",
+      "depends_on": [
+        "check_trainability"
+      ],
+      "required_artifacts": [
+        "train_dataset"
+      ],
+      "output_artifacts": [
+        "model_metadata"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "predict_candidates",
+      "depends_on": [
+        "train_property_models"
+      ],
+      "required_artifacts": [
+        "candidate_dataset",
+        "model_metadata"
+      ],
+      "output_artifacts": [
+        "multi_property_predictions"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "filter_rank",
+      "depends_on": [
+        "predict_candidates"
+      ],
+      "required_artifacts": [
+        "multi_property_predictions"
+      ],
+      "output_artifacts": [
+        "multiobjective_ranked_candidates"
+      ],
+      "unresolved_requirements": []
+    },
+    {
+      "task_id": "render_report",
+      "depends_on": [
+        "filter_rank"
+      ],
+      "required_artifacts": [
+        "multiobjective_ranked_candidates"
+      ],
+      "output_artifacts": [
+        "report_markdown",
+        "report_json"
+      ],
+      "unresolved_requirements": []
+    }
+  ],
+  "available_artifacts": [
+    "train_dataset",
+    "candidate_dataset",
+    "property_profile"
+  ],
+  "missing_artifacts": []
+}

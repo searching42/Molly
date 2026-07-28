@@ -1,0 +1,955 @@
+# Phase 1-4 Milestone Status
+
+> **Non-normative historical snapshot.** This document preserves implementation
+> and acceptance context for contracts that still have code and test coverage.
+> It is not the current roadmap or status source; use `todo.md`. Unlinked PR
+> numbers refer to the pre-migration private audit archive.
+
+Date: 2026-06-27
+
+This document consolidates the current AI4Science/OLED workflow milestone
+status after the Phase 1-4 fixture and review-loop work. It is a status and
+boundary document only. It does not introduce execution behavior.
+
+## Summary
+
+The project now has a low-risk, local, auditable fixture path that demonstrates
+the shape of the intended workflow:
+
+```text
+Phase 1 baseline workflow
+-> Phase 2 deterministic generation-to-screening
+-> Phase 3 literature/table-to-dataset
+-> OLED property profile and multi-objective ranking
+-> Phase 4 observer-verifier, reviewable replan proposal, review artifacts,
+   review card, and project-memory summary
+```
+
+This is not yet a production autonomous science system. The fixtures prove
+control-plane wiring, artifact provenance, and review-loop contracts around
+small local examples. Heavy model training, remote execution, large-scale
+literature acquisition, and default-route migration remain future work.
+
+The current property training dataset writer boundary tail is:
+
+```text
+property training dataset controlled writer value resolution dry-run
+-> property training dataset controlled writer value resolution dry-run precheck
+-> small public quarantine materialization evidence
+-> property training dataset quarantined candidate admission boundary
+-> property training dataset domain validation boundary
+-> property training dataset controlled writer design plan
+-> property training dataset controlled writer design plan preflight
+-> property training dataset controlled writer dry-run design
+-> property training dataset controlled writer dry-run
+-> property training dataset controlled writer dry-run precheck
+-> property training dataset controlled writer execution request design
+-> property training dataset controlled writer execution request
+-> property training dataset controlled writer execution request preflight
+-> future explicitly confirmed controlled writer execution
+```
+
+The current real-literature read-only acceptance branch is:
+
+```text
+real literature local manifest
+-> local parsed-output presence check
+-> redacted paper-level aggregate scan
+-> candidate table aggregate detection
+-> property field coverage aggregate
+-> failure taxonomy aggregate
+-> real literature read-only acceptance evidence
+-> future real candidate quarantine dry-run
+```
+
+## Current Status
+
+| Area | Status | Main evidence |
+| --- | --- | --- |
+| Phase 1 queued workflow fixture | Completed for local lightweight fixture | `tests/test_phase1_queued_workflow_demo.py` |
+| Phase 2 deterministic generation screening fixture | Completed for deterministic local generation bridge | `tests/test_phase2_generation_screening_demo.py` |
+| Phase 3 literature-to-dataset fixture | Completed for parsed-table fixture to confirmed dataset | `tests/test_phase3_literature_dataset_demo.py` |
+| Phase 3 document parsing provider layer | Completed as provider/API/normalizer/baseline infrastructure plus opt-in live acceptance evidence, not yet the full scientific closed loop | `src/ai4s_agent/document_parse_service.py`, `src/ai4s_agent/document_parse_live_acceptance.py`, `docs/document-parsing-providers.md` |
+| Phase 3 to Phase 1 scientific dataset pipeline | Completed for deterministic `ParsedDocument` consumption, explicit dataset confirmation, Phase 1 baseline execution, and candidate ranking | `src/ai4s_agent/phase3_scientific_extractor.py`, `src/ai4s_agent/scientific_dataset_builder.py`, `src/ai4s_agent/phase3_to_phase1_bridge.py`, `src/ai4s_agent/workflows/phase3_to_phase1_workflow.py`, `tests/test_phase3_to_phase1_workflow.py`, `docs/phase-3-to-phase-1-pipeline.md` |
+| Phase 1 training and ranking stabilization | Completed for confirmed-dataset-only training orchestration, deterministic model-based candidate ranking, and scientific report generation | `src/ai4s_agent/phase1_training_orchestrator.py`, `src/ai4s_agent/phase1_candidate_ranker.py`, `src/ai4s_agent/phase1_report_generator.py`, `src/ai4s_agent/workflows/phase1_full_pipeline.py`, `tests/test_phase1_full_pipeline.py`, `docs/phase-1-training-and-ranking-pipeline.md` |
+| Multi-paper corpus evaluation and reproducibility audit | Completed for offline multi-document `ParsedDocument` fixtures, cross-paper conflict rejection, corpus replay manifests, and confirmed Phase 1 execution | `src/ai4s_agent/phase3_corpus_extractor.py`, `src/ai4s_agent/corpus_conflict_auditor.py`, `src/ai4s_agent/corpus_reproducibility_auditor.py`, `src/ai4s_agent/workflows/corpus_to_phase1_workflow.py`, `tests/test_corpus_to_phase1_workflow.py`, `docs/corpus-evaluation-and-reproducibility-audit.md` |
+| MinerU live corpus acceptance bridge | Completed as a manual opt-in bridge and reusable operator gate from self-hosted MinerU parsing to the corpus workflow, with offline-tested endpoint profile/routing policy resolution, endpoint preflight diagnostics, optional preflight-report binding, and no CI live-service dependency | `src/ai4s_agent/document_parse_corpus_live_acceptance.py`, `src/ai4s_agent/corpus_live_acceptance_fixtures.py`, `src/ai4s_agent/mineru_endpoint_profiles.py`, `src/ai4s_agent/mineru_endpoint_preflight.py`, `tests/test_document_parse_corpus_live_acceptance.py`, `tests/test_mineru_endpoint_profiles.py`, `tests/test_mineru_endpoint_preflight.py`, `docs/mineru-live-corpus-acceptance.md`, `docs/mineru-endpoint-preflight.md`, `docs/mineru-manual-live-acceptance-gate.md` |
+| Custom corpus dry-run runner | Implemented as a controlled manifest-described local PDF dry-run path; preserves `DatasetConfirmation.confirmed=false`, verifies Phase 1 remains `not_run`, and produces redacted dry-run evidence without production dataset admission | `src/ai4s_agent/custom_corpus_manifest.py`, `src/ai4s_agent/custom_corpus_dry_run.py`, `tests/test_custom_corpus_manifest.py`, `tests/test_custom_corpus_dry_run.py`, `docs/custom-corpus-dry-run.md`, `docs/custom-corpus-intake-contract.md` |
+| Custom corpus property candidate schema | Added `custom_corpus_property_candidate.v1` and an offline validator for open-ended numeric property candidates before human review; no property extraction runner, LLM/agent call, materialization, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_candidate.py`, `tests/test_custom_corpus_property_candidate.py`, `docs/custom-corpus-property-candidate-schema.md`, `docs/examples/custom-corpus-property-candidates.example.json` |
+| Custom corpus property candidate planner | Added an offline planner for validated property candidate manifests that emits safe review-planning summaries; no property extraction runner, LLM/agent call, human review manifest generation, materialization, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_candidate_planner.py`, `tests/test_custom_corpus_property_candidate_planner.py`, `docs/custom-corpus-property-candidate-planner.md`, `docs/evidence/templates/custom-corpus-property-candidate-planner-evidence-template.md` |
+| Custom corpus property candidate review queue builder | Added an offline builder for review-preparation artifacts from validated property candidate manifests; no human review manifest generation, review decisions, admission, materialization, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_candidate_review_queue.py`, `tests/test_custom_corpus_property_candidate_review_queue.py`, `docs/custom-corpus-property-candidate-review-queue.md`, `docs/evidence/templates/custom-corpus-property-candidate-review-queue-evidence-template.md` |
+| Custom corpus property review binding validator | Added an offline validator that checks manually-created `custom_corpus_review.v1` manifests against property candidate review queues; no human review manifest generation, review decisions, admission, materialization, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_review_binding.py`, `tests/test_custom_corpus_property_review_binding.py`, `docs/custom-corpus-property-review-binding.md`, `docs/evidence/templates/custom-corpus-property-review-binding-evidence-template.md` |
+| Custom corpus property admission readiness planner | Added an offline planner that summarizes queue-bound human review manifests into future admission-readiness evidence; no admission request generation, admission action creation, materialization, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_admission_readiness.py`, `tests/test_custom_corpus_property_admission_readiness.py`, `docs/custom-corpus-property-admission-readiness.md`, `docs/evidence/templates/custom-corpus-property-admission-readiness-evidence-template.md` |
+| Custom corpus property admission request planner | Added an offline planner that turns readiness summaries and review manifests into safe future admission request plans; no `custom_corpus_admission.v1` generation, admission action creation, materialization, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_admission_request_planner.py`, `tests/test_custom_corpus_property_admission_request_planner.py`, `docs/custom-corpus-property-admission-request-planner.md`, `docs/evidence/templates/custom-corpus-property-admission-request-plan-evidence-template.md` |
+| Custom corpus property admission draft builder | Added an offline builder that generates reviewable `custom_corpus_admission.v1` draft artifacts from reviewed and planned property records; no package binding execution, materialization, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_admission_draft_builder.py`, `tests/test_custom_corpus_property_admission_draft_builder.py`, `docs/custom-corpus-property-admission-draft-builder.md`, `docs/evidence/templates/custom-corpus-property-admission-draft-evidence-template.md` |
+| Custom corpus property admission draft package precheck | Added an offline precheck that checks admission drafts against upstream property evidence before formal package binding; no package binding execution, package validation artifact, materialization, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_admission_draft_package_precheck.py`, `tests/test_custom_corpus_property_admission_draft_package_precheck.py`, `docs/custom-corpus-property-admission-draft-package-precheck.md`, `docs/evidence/templates/custom-corpus-property-admission-draft-package-precheck-evidence-template.md` |
+| Custom corpus property-aware package binding runner | Added an offline runner that gates formal package binding on property precheck evidence and writes `custom_corpus_admission_package_validation.v1` plus a property wrapper summary; no materialization, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_package_binding.py`, `tests/test_custom_corpus_property_package_binding.py`, `docs/custom-corpus-property-package-binding.md`, `docs/evidence/templates/custom-corpus-property-package-binding-evidence-template.md` |
+| Custom corpus property materialization plan draft builder | Added an offline builder that maps formal package-validated property admissions into reviewable `custom_corpus_materialization.v1` drafts; no materialization execution, offline materialization planner execution, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_materialization_plan_draft.py`, `tests/test_custom_corpus_property_materialization_plan_draft.py`, `docs/custom-corpus-property-materialization-plan-draft.md`, `docs/evidence/templates/custom-corpus-property-materialization-plan-draft-evidence-template.md` |
+| Custom corpus property materialization plan preflight | Added an offline preflight that checks reviewable materialization plan drafts before offline planner submission; no materialization execution, offline materialization planner execution, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_materialization_plan_preflight.py`, `tests/test_custom_corpus_property_materialization_plan_preflight.py`, `docs/custom-corpus-property-materialization-plan-preflight.md`, `docs/evidence/templates/custom-corpus-property-materialization-plan-preflight-evidence-template.md` |
+| Custom corpus property-aware materialization planner runner | Added an offline runner that gates the existing materialization planner on property preflight evidence and writes planner output plus property wrapper evidence; no materializer execution, materialization execution, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_materialization_planner_runner.py`, `tests/test_custom_corpus_property_materialization_planner_runner.py`, `docs/custom-corpus-property-materialization-planner-runner.md`, `docs/evidence/templates/custom-corpus-property-materialization-planner-evidence-template.md` |
+| Custom corpus property materialization dry-run runner | Added a no-data dry-run runner that validates offline planner outputs against upstream property governance evidence; no real materializer execution, materialization execution, candidate/training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_materialization_dry_run.py`, `tests/test_custom_corpus_property_materialization_dry_run.py`, `docs/custom-corpus-property-materialization-dry-run.md`, `docs/evidence/templates/custom-corpus-property-materialization-dry-run-evidence-template.md` |
+| Custom corpus property materializer execution request builder | Added an offline builder that turns passed property materialization dry-run packages into request-only future-materializer handoff artifacts; no real materializer execution, materialization execution, candidate/training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_materializer_execution_request.py`, `tests/test_custom_corpus_property_materializer_execution_request.py`, `docs/custom-corpus-property-materializer-execution-request.md`, `docs/evidence/templates/custom-corpus-property-materializer-execution-request-evidence-template.md` |
+| Custom corpus property materializer execution request preflight | Added an offline preflight that checks request-only future-materializer handoff artifacts before future materializer submission; no real materializer execution, materialization execution, candidate/training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_materializer_execution_preflight.py`, `tests/test_custom_corpus_property_materializer_execution_preflight.py`, `docs/custom-corpus-property-materializer-execution-preflight.md`, `docs/evidence/templates/custom-corpus-property-materializer-execution-preflight-evidence-template.md` |
+| Custom corpus property quarantine materializer | Added a candidate-only quarantine materializer that writes quarantined property candidate records after execution preflight; no training data admission, training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_quarantine_materializer.py`, `tests/test_custom_corpus_property_quarantine_materializer.py`, `docs/custom-corpus-property-quarantine-materializer.md`, `docs/evidence/templates/custom-corpus-property-quarantine-materializer-evidence-template.md` |
+| Custom corpus property quarantine candidate preflight | Added an offline preflight that checks candidate-only quarantine artifacts before future training admission requests; no training admission, training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_quarantine_candidate_preflight.py`, `tests/test_custom_corpus_property_quarantine_candidate_preflight.py`, `docs/custom-corpus-property-quarantine-candidate-preflight.md`, `docs/evidence/templates/custom-corpus-property-quarantine-candidate-preflight-evidence-template.md` |
+| Custom corpus property training admission readiness planner | Added an offline readiness planner that checks candidate-only quarantine artifacts after quarantine candidate preflight for future training admission readiness; no training admission, training artifact creation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_admission_readiness.py`, `tests/test_custom_corpus_property_training_admission_readiness.py`, `docs/custom-corpus-property-training-admission-readiness.md`, `docs/evidence/templates/custom-corpus-property-training-admission-readiness-evidence-template.md` |
+| Custom corpus property training admission request planner | Added an offline request planner that checks training-admission-readiness-ready artifacts and emits safe future training admission request planning evidence; no training admission request generation, training admission action creation, training artifact creation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_admission_request_planner.py`, `tests/test_custom_corpus_property_training_admission_request_planner.py`, `docs/custom-corpus-property-training-admission-request-planner.md`, `docs/evidence/templates/custom-corpus-property-training-admission-request-plan-evidence-template.md` |
+| Custom corpus property training admission request preflight | Added an offline preflight that checks request-plan, readiness, and quarantine candidate preflight consistency before future training admission execution; no training admission request generation or execution, training artifact creation, dataset materialization, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_admission_request_preflight.py`, `tests/test_custom_corpus_property_training_admission_request_preflight.py`, `docs/custom-corpus-property-training-admission-request-preflight.md`, `docs/evidence/templates/custom-corpus-property-training-admission-request-preflight-evidence-template.md` |
+| Custom corpus property training admission request draft builder | Added an offline builder that turns preflight-passed request plans into reviewable draft requests; no training admission execution, training data admission, training artifact creation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_admission_request_draft.py`, `tests/test_custom_corpus_property_training_admission_request_draft.py`, `docs/custom-corpus-property-training-admission-request-draft.md`, `docs/evidence/templates/custom-corpus-property-training-admission-request-draft-evidence-template.md` |
+| Custom corpus property training admission request draft precheck | Added an offline precheck that validates draft request packages before future training admission execution; no training admission execution, training data admission, training artifacts, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_admission_request_draft_precheck.py`, `tests/test_custom_corpus_property_training_admission_request_draft_precheck.py`, `docs/custom-corpus-property-training-admission-request-draft-precheck.md`, `docs/evidence/templates/custom-corpus-property-training-admission-request-draft-precheck-evidence-template.md` |
+| Custom corpus property training admission execution request builder | Added an offline builder that turns draft-precheck-passed packages into reviewable execution requests for a future training admission gate; no training admission execution, training data admission, training artifacts, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_admission_execution_request.py`, `tests/test_custom_corpus_property_training_admission_execution_request.py`, `docs/custom-corpus-property-training-admission-execution-request.md`, `docs/evidence/templates/custom-corpus-property-training-admission-execution-request-evidence-template.md` |
+| Custom corpus property training admission execution request preflight | Added an offline preflight that checks execution request packages before future training admission execution; no training admission execution, training data admission, training artifacts, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_admission_execution_request_preflight.py`, `tests/test_custom_corpus_property_training_admission_execution_request_preflight.py`, `docs/custom-corpus-property-training-admission-execution-request-preflight.md`, `docs/evidence/templates/custom-corpus-property-training-admission-execution-request-preflight-evidence-template.md` |
+| Custom corpus property training admission execution dry-run | Added an offline dry-run that simulates execution-request-preflight-passed packages before future training admission execution; no training admission execution, training data admission, training artifacts, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_admission_execution_dry_run.py`, `tests/test_custom_corpus_property_training_admission_execution_dry_run.py`, `docs/custom-corpus-property-training-admission-execution-dry-run.md`, `docs/evidence/templates/custom-corpus-property-training-admission-execution-dry-run-evidence-template.md` |
+| Custom corpus property training admission execution dry-run precheck | Added an offline precheck that validates execution dry-run reports before future training admission execution; no dry-run execution, training admission execution, training data admission, training artifacts, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_admission_execution_dry_run_precheck.py`, `tests/test_custom_corpus_property_training_admission_execution_dry_run_precheck.py`, `docs/custom-corpus-property-training-admission-execution-dry-run-precheck.md`, `docs/evidence/templates/custom-corpus-property-training-admission-execution-dry-run-precheck-evidence-template.md` |
+| Custom corpus property training admission execution ledger | Added an offline ledger writer that commits dry-run-precheck-passed admission decisions into a safe ledger; no training dataset materialization, training CSV/JSONL/Parquet/LMDB creation, candidate CSV/JSONL/Parquet/LMDB creation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_admission_execution_ledger.py`, `tests/test_custom_corpus_property_training_admission_execution_ledger.py`, `docs/custom-corpus-property-training-admission-execution-ledger.md`, `docs/evidence/templates/custom-corpus-property-training-admission-execution-ledger-evidence-template.md` |
+| Custom corpus property training admission execution ledger precheck | Added an offline precheck that validates committed execution ledgers against upstream request, dry-run, readiness, and quarantine evidence before future training dataset materialization; no training dataset materialization, training/candidate CSV/JSONL/Parquet/LMDB creation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_admission_execution_ledger_precheck.py`, `tests/test_custom_corpus_property_training_admission_execution_ledger_precheck.py`, `docs/custom-corpus-property-training-admission-execution-ledger-precheck.md`, `docs/evidence/templates/custom-corpus-property-training-admission-execution-ledger-precheck-evidence-template.md` |
+| Custom corpus property training dataset materialization planner | Added an offline planner that turns ledger-precheck-passed packages into safe future training dataset materialization plans; no training dataset artifact creation, training/candidate CSV/JSONL/Parquet/LMDB creation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_materialization_planner.py`, `tests/test_custom_corpus_property_training_dataset_materialization_planner.py`, `docs/custom-corpus-property-training-dataset-materialization-planner.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-materialization-plan-evidence-template.md` |
+| Custom corpus property training dataset materialization plan precheck | Added an offline precheck that validates materialization plans before future row contract and dataset writer work; no training dataset artifacts, training/candidate CSV/JSONL/Parquet/LMDB creation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_materialization_plan_precheck.py`, `tests/test_custom_corpus_property_training_dataset_materialization_plan_precheck.py`, `docs/custom-corpus-property-training-dataset-materialization-plan-precheck.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-materialization-plan-precheck-evidence-template.md` |
+| Custom corpus property training dataset row contract | Added an offline row contract builder that defines future property training row semantics before dataset writer work; no training dataset artifacts, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_row_contract.py`, `tests/test_custom_corpus_property_training_dataset_row_contract.py`, `docs/custom-corpus-property-training-dataset-row-contract.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-row-contract-evidence-template.md` |
+| Custom corpus property training dataset row contract precheck | Added an offline precheck that validates row contract packages before future materialization dry-run or dataset writer work; no training dataset artifacts, row previews, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_row_contract_precheck.py`, `tests/test_custom_corpus_property_training_dataset_row_contract_precheck.py`, `docs/custom-corpus-property-training-dataset-row-contract-precheck.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-row-contract-precheck-evidence-template.md` |
+| Custom corpus property training dataset materialization dry-run | Added an offline dry-run that emits safe row preview summaries from row-contract-precheck-passed packages before future dataset writer work; no serialized training rows, training dataset artifacts, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_materialization_dry_run.py`, `tests/test_custom_corpus_property_training_dataset_materialization_dry_run.py`, `docs/custom-corpus-property-training-dataset-materialization-dry-run.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-materialization-dry-run-evidence-template.md` |
+| Custom corpus property training dataset materialization dry-run precheck | Added an offline precheck that validates dry-run packages and row preview summaries before future dataset writer work; no serialized training rows, training dataset artifacts, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_materialization_dry_run_precheck.py`, `tests/test_custom_corpus_property_training_dataset_materialization_dry_run_precheck.py`, `docs/custom-corpus-property-training-dataset-materialization-dry-run-precheck.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-materialization-dry-run-precheck-evidence-template.md` |
+| Custom corpus property training dataset writer execution request | Added an offline builder that turns dry-run-precheck-passed row previews into safe future dataset writer execution requests; no writer execution, serialized training rows, training dataset artifacts, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_writer_execution_request.py`, `tests/test_custom_corpus_property_training_dataset_writer_execution_request.py`, `docs/custom-corpus-property-training-dataset-writer-execution-request.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-writer-execution-request-evidence-template.md` |
+| Custom corpus property training dataset writer execution request preflight | Added an offline preflight that validates future writer request packages before controlled writer work; no serialized training rows, training dataset artifacts, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_writer_execution_request_preflight.py`, `tests/test_custom_corpus_property_training_dataset_writer_execution_request_preflight.py`, `docs/custom-corpus-property-training-dataset-writer-execution-request-preflight.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-writer-execution-request-preflight-evidence-template.md` |
+| Custom corpus property training dataset writer input binding planner | Added an offline planner that turns writer-request-preflight-passed packages into safe future row field source binding plans; no writer execution, value materialization, serialized training rows, training dataset artifacts, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_writer_input_binding_planner.py`, `tests/test_custom_corpus_property_training_dataset_writer_input_binding_planner.py`, `docs/custom-corpus-property-training-dataset-writer-input-binding-planner.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-writer-input-binding-plan-evidence-template.md` |
+| Custom corpus property training dataset writer input binding plan preflight | Added an offline preflight that validates writer input binding plan packages before future controlled writer work; no writer execution, value materialization, serialized training rows, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_writer_input_binding_plan_preflight.py`, `tests/test_custom_corpus_property_training_dataset_writer_input_binding_plan_preflight.py`, `docs/custom-corpus-property-training-dataset-writer-input-binding-plan-preflight.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-writer-input-binding-plan-preflight-evidence-template.md` |
+| Custom corpus property training dataset writer value source manifest planner | Added an offline planner that turns input-binding-preflight-passed packages into safe future writer value-source authorization metadata; no source payload reading, value materialization, serialized training rows, training dataset artifacts, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_writer_value_source_manifest_planner.py`, `tests/test_custom_corpus_property_training_dataset_writer_value_source_manifest_planner.py`, `docs/custom-corpus-property-training-dataset-writer-value-source-manifest-planner.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-writer-value-source-manifest-evidence-template.md` |
+| Custom corpus property training dataset writer value source manifest preflight | Added an offline preflight that validates value-source manifest packages before future controlled writer work; no writer execution, source payload reading, value materialization, serialized training rows, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_writer_value_source_manifest_preflight.py`, `tests/test_custom_corpus_property_training_dataset_writer_value_source_manifest_preflight.py`, `docs/custom-corpus-property-training-dataset-writer-value-source-manifest-preflight.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-writer-value-source-manifest-preflight-evidence-template.md` |
+| Custom corpus property training dataset controlled writer execution plan | Added an offline planner that turns value-source-manifest-preflight-passed packages into safe future controlled writer execution plans; no writer execution, source payload reading, value materialization, serialized training rows, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_controlled_writer_execution_plan.py`, `tests/test_custom_corpus_property_training_dataset_controlled_writer_execution_plan.py`, `docs/custom-corpus-property-training-dataset-controlled-writer-execution-plan.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-execution-plan-evidence-template.md` |
+| Custom corpus property training dataset controlled writer execution plan preflight | Added an offline preflight that validates controlled writer execution plan packages before future controlled writer work; no writer execution, source payload reading, value materialization, serialized training rows, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight.py`, `tests/test_custom_corpus_property_training_dataset_controlled_writer_execution_plan_preflight.py`, `docs/custom-corpus-property-training-dataset-controlled-writer-execution-plan-preflight.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-execution-plan-preflight-evidence-template.md` |
+| Custom corpus property training dataset controlled writer value resolution dry-run | Added an offline dry-run that checks required field resolution from authorized local JSON source payloads before future controlled writer work; no writer execution, emitted raw values, value materialization into rows, serialized training rows, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run.py`, `tests/test_custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run.py`, `docs/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run-evidence-template.md` |
+| Custom corpus property training dataset controlled writer value resolution dry-run precheck | Added an offline precheck that validates value-resolution dry-run report/summary packages before future controlled writer work; no source payload rereads, writer execution, emitted raw values, value materialization into rows, serialized training rows, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run_precheck.py`, `tests/test_custom_corpus_property_training_dataset_controlled_writer_value_resolution_dry_run_precheck.py`, `docs/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run-precheck.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-value-resolution-dry-run-precheck-evidence-template.md` |
+| Small public quarantine materialization evidence | Added a redacted public/synthetic-public quarantine materialization evidence packet and reusable template; docs/evidence only, with no source payload reading, controlled writer execution, raw value emission, row serialization, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `docs/evidence/custom-corpus-small-public-quarantine-materialization-evidence-20260701.md`, `docs/evidence/templates/custom-corpus-small-public-quarantine-materialization-evidence-template.md`, `tests/test_custom_corpus_small_public_quarantine_materialization_evidence.py` |
+| Custom corpus property training dataset quarantined candidate admission boundary | Added docs/test boundary design between small public quarantine evidence and domain validation; defines required quarantined candidate evidence, acceptable statuses, value-resolution evidence, and disallowed outputs, with no writer execution, source payload reading, value materialization, row serialization, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `docs/custom-corpus-property-training-dataset-quarantined-candidate-admission-boundary.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-quarantined-candidate-admission-boundary-evidence-template.md`, `tests/test_custom_corpus_property_training_dataset_quarantined_candidate_admission_boundary.py` |
+| Custom corpus property training dataset domain validation boundary | Added docs/test boundary design for scientific/domain checks before any future controlled writer; defines property-unit compatibility, numeric plausibility labels, provenance labels, condition labels, compound/alias association, and duplicate/conflict status, with no raw value inspection, chemistry calculation, writer execution, value materialization, row serialization, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `docs/custom-corpus-property-training-dataset-domain-validation-boundary.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-domain-validation-boundary-evidence-template.md`, `tests/test_custom_corpus_property_training_dataset_domain_validation_boundary.py` |
+| Custom corpus property training dataset controlled writer design plan | Added docs/test design plan for the future controlled writer contract before implementation; defines input package requirements, admission/domain validation requirements, value resolution requirements, output artifact policy, dry-run-first staging, confirmation concepts, redaction requirements, and implementation blockers, with no writer implementation, writer execution, source payload reading, raw value emission, chemistry calculation, value materialization, row serialization, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `docs/custom-corpus-property-training-dataset-controlled-writer-design-plan.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-design-plan-evidence-template.md`, `tests/test_custom_corpus_property_training_dataset_controlled_writer_design_plan.py` |
+| Custom corpus property training dataset controlled writer design plan preflight | Added offline deterministic preflight for controlled writer design plan packages; validates schema, status, ids, candidate counts, source package refs, value resolution contract, boundary flags, and redaction, with no writer implementation, writer execution, writer dry-run, source payload reading, raw value emission, chemistry calculation, value materialization, row serialization, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_controlled_writer_design_plan_preflight.py`, `tests/test_custom_corpus_property_training_dataset_controlled_writer_design_plan_preflight.py`, `docs/custom-corpus-property-training-dataset-controlled-writer-design-plan-preflight.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-design-plan-preflight-evidence-template.md` |
+| Custom corpus property training dataset controlled writer dry-run design | Added docs/test design for the future controlled writer dry-run contract before implementation; defines allowed future inputs, report/summary schema labels, side-effect boundaries, redaction rules, status semantics, and controlled writer dry-run precheck expectations, with no dry-run implementation, writer implementation, writer execution, source payload reading, raw value emission, chemistry calculation, value materialization, row serialization, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `docs/custom-corpus-property-training-dataset-controlled-writer-dry-run-design.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-dry-run-design-evidence-template.md`, `tests/test_custom_corpus_property_training_dataset_controlled_writer_dry_run_design.py` |
+| Custom corpus property training dataset controlled writer dry-run | Added an offline aggregate-only controlled writer dry-run that validates safe input packages and writes redacted report/summary/evidence outputs before the controlled writer dry-run precheck; no controlled writer execution, dry-run precheck implementation, source payload reading, raw value emission, chemistry calculation, value materialization, row serialization, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_controlled_writer_dry_run.py`, `tests/test_custom_corpus_property_training_dataset_controlled_writer_dry_run.py`, `docs/custom-corpus-property-training-dataset-controlled-writer-dry-run.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-dry-run-evidence-template.md` |
+| Custom corpus property training dataset controlled writer dry-run precheck | Added an offline precheck that validates controlled writer dry-run report/summary/evidence packages before controlled writer execution request design/request gates; no dry-run rerun, controlled writer execution, source payload reading, raw value emission, chemistry calculation, value materialization, row serialization, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_controlled_writer_dry_run_precheck.py`, `tests/test_custom_corpus_property_training_dataset_controlled_writer_dry_run_precheck.py`, `docs/custom-corpus-property-training-dataset-controlled-writer-dry-run-precheck.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-dry-run-precheck-evidence-template.md` |
+| Custom corpus property training dataset controlled writer execution request design | Added docs/test design for the future controlled writer execution request contract before any request artifact exists; defines safe fields, upstream evidence requirements, authorization and explicit confirmation boundaries, future schema labels, request status semantics, and request preflight expectations, with no request creation, request preflight implementation, explicit confirmation, writer execution, source payload reading, raw value emission, chemistry calculation, value materialization, row serialization, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `tests/test_custom_corpus_property_training_dataset_controlled_writer_execution_request_design.py`, `docs/custom-corpus-property-training-dataset-controlled-writer-execution-request-design.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-execution-request-design-evidence-template.md` |
+| Custom corpus property training dataset controlled writer execution request | Added an offline controlled writer execution request artifact creator that reads only the dry-run precheck summary and writes redacted request JSON, summary JSON, and Markdown evidence for future preflight; no request preflight implementation, explicit confirmation, writer execution, source payload reading, raw value emission, chemistry calculation, value materialization, row serialization, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_controlled_writer_execution_request.py`, `tests/test_custom_corpus_property_training_dataset_controlled_writer_execution_request.py`, `docs/custom-corpus-property-training-dataset-controlled-writer-execution-request.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-execution-request-evidence-template.md` |
+| Custom corpus property training dataset controlled writer execution request preflight | Added an offline preflight that validates controlled writer execution request/summary/evidence packages before any future explicit confirmation gate; no request creator rerun, explicit confirmation, writer execution, source payload reading, raw value emission, chemistry calculation, value materialization, row serialization, training/candidate CSV/JSONL/Parquet/LMDB creation, conformer or DPA3 structure generation, model training/evaluation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_property_training_dataset_controlled_writer_execution_request_preflight.py`, `tests/test_custom_corpus_property_training_dataset_controlled_writer_execution_request_preflight.py`, `docs/custom-corpus-property-training-dataset-controlled-writer-execution-request-preflight.md`, `docs/evidence/templates/custom-corpus-property-training-dataset-controlled-writer-execution-request-preflight-evidence-template.md` |
+| Custom corpus real literature read-only acceptance harness | Added a local-only read-only acceptance harness for safe real-literature manifests and aggregate parsed-output summaries; emits redacted aggregate report/summary/evidence only, with no PDF commits, raw MinerU output commits, raw text/table/value emission, writer execution, execution request creation, request preflight, explicit confirmation, dataset materialization, row serialization, CSV/JSONL/Parquet/LMDB artifact creation, conformer or DPA3 generation, Phase 1 execution, `DatasetConfirmation` change, model training/evaluation, LLM/agent calls, MinerU calls, PDF reading, corpus workflow execution, or chemistry calculation | `src/ai4s_agent/custom_corpus_real_literature_read_only_acceptance.py`, `tests/test_custom_corpus_real_literature_read_only_acceptance.py`, `docs/custom-corpus-real-literature-read-only-acceptance.md`, `docs/evidence/templates/custom-corpus-real-literature-read-only-acceptance-evidence-template.md` |
+| Custom corpus human review schema | Introduced an offline review artifact schema and validator for custom corpus records; review artifacts still do not admit training data and do not change Phase 1 or `DatasetConfirmation` behavior | `src/ai4s_agent/custom_corpus_review.py`, `tests/test_custom_corpus_review.py`, `docs/custom-corpus-human-review.md`, `docs/examples/custom-corpus-review-manifest.example.json` |
+| Custom corpus admission gate contract | Introduced an offline admission request schema and validator for structurally checking reviewed custom corpus packages; no dataset materialization, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_admission.py`, `tests/test_custom_corpus_admission.py`, `docs/custom-corpus-dataset-admission-gate.md`, `docs/examples/custom-corpus-admission-request.example.json` |
+| Custom corpus admission package binding validator | Added offline package validation across manifest, dry-run report, review manifest, and admission request; validates hash, id, review/action, and dry-run boundary consistency without dataset materialization, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_admission_package.py`, `tests/test_custom_corpus_admission_package.py`, `docs/custom-corpus-admission-package-binding.md`, `docs/evidence/templates/custom-corpus-admission-package-validation-template.md` |
+| Custom corpus governance runbook | Added an operator-facing runbook and #155-#160 stage summary for the custom corpus path through package validation; training materialization remains intentionally unimplemented, with Phase 1 and `DatasetConfirmation` unchanged | `docs/custom-corpus-governance-runbook.md`, `docs/custom-corpus-governance-stage-summary-20260628.md` |
+| Custom corpus materialization boundary design | Added a docs-only design for package-validated custom corpus materialization boundaries; no training materializer, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `docs/custom-corpus-dataset-materialization-boundary.md`, `docs/evidence/templates/custom-corpus-materialization-evidence-template.md` |
+| Custom corpus materialization plan schema | Added `custom_corpus_materialization.v1` and an offline validator for candidate-only materialization intent; no training materializer, candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_materialization.py`, `tests/test_custom_corpus_materialization.py`, `docs/custom-corpus-materialization-schema.md`, `docs/examples/custom-corpus-materialization-plan.example.json` |
+| Custom corpus offline materialization planner | Added an offline planner that reads valid materialization plans and emits safe JSON/Markdown planning summaries; no candidate/training artifact creation, Phase 1 execution, or `DatasetConfirmation` change | `src/ai4s_agent/custom_corpus_materialization_planner.py`, `tests/test_custom_corpus_materialization_planner.py`, `docs/custom-corpus-materialization-planner.md`, `docs/evidence/templates/custom-corpus-materialization-planner-evidence-template.md` |
+| OLED property profile + multi-objective screening | Completed for data-configured OLED fixture and weighted ranking | `tests/test_oled_multiobjective_screening_demo.py` |
+| Phase 4 observer-verifier | Completed as read-only fixed schema | `src/ai4s_agent/run_plan_artifact_verifier.py` |
+| Phase 4 reviewable replan proposal | Completed as deterministic non-executable proposal | `src/ai4s_agent/run_plan_replan_proposal.py` |
+| Phase 4 review artifacts | Completed as review-only artifact materialization | `src/ai4s_agent/run_plan_review_artifacts.py` |
+| Phase 4 review card | Completed as read-only UI/API aggregation schema | `src/ai4s_agent/run_plan_review_card.py` |
+| Phase 4 project memory summary | Completed as compact memory record, summary only | `src/ai4s_agent/run_plan_review_memory.py` |
+| Phase 4 replan application review artifacts | Completed as non-executing user-confirmed application drafts | `src/ai4s_agent/run_plan_replan_application_artifacts.py` |
+| Phase 4 replan application audit/memory summary | Completed as append-only audit and compact memory refs only | `src/ai4s_agent/run_plan_replan_application_audit_memory.py` |
+| Phase 4 internal replan application route | Completed as feature-flagged review-only route | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
+| Phase 4 resume intent validation semantics | Completed as docs-only validation contract | `docs/resume-intent-validation-semantics.md` |
+| Phase 4 resume intent state binding | Completed as validation-only integrity hardening | `src/ai4s_agent/run_plan_state_fingerprint.py` |
+| Phase 4 strict resume stage/gate validation | Completed as validation-only waiting-stage and executor-gate hardening | `src/ai4s_agent/run_plan_resume_stage_gate.py` |
+| Phase 4 internal resume intent execution bridge | Completed as feature-flagged one-time internal bridge | `src/ai4s_agent/routes/internal_run_plan_queue.py` |
+| Phase 4 user-confirmed resume loop | Completed as review → application → validation → actual resume → post-resume review (PR #118) | `tests/test_user_confirmed_resume_loop_e2e.py` |
+| Phase 4 queued execute canary | Completed as feature-flagged, allowlisted, rollout-policy documented, first and second chain parity started, artifact registry parity fixture started, failure classification parity fixture started, repeated-run stability coverage started, queue recovery/stale lease coverage started, cancellation coverage started, retry/requeue semantics documented, atomic one-shot explicit retry-child creation implemented for eligible allowlisted local queue jobs, operational rollback drill and runbook documented, production-sized fixture boundary documented, optional nightly production-sized fixture lane designed, telemetry/observability checklist documented, minimal structured telemetry implemented, optional manual/nightly workflow skeleton added, and default-migration readiness checklist documented; not default migrated | `tests/test_run_plan_executor.py`, `tests/test_queued_execute_canary_artifact_parity.py`, `tests/test_queued_execute_canary_failure_parity.py`, `tests/test_queued_execute_canary_second_chain_parity.py`, `tests/test_queued_execute_canary_cancellation_retry.py`, `tests/test_queued_execute_canary_retry_requeue_semantics_docs.py`, `tests/test_queued_execute_canary_explicit_retry.py`, `tests/test_worker_queue_explicit_retry.py`, `tests/test_queued_execute_canary_operational_rollback.py`, `tests/test_queued_canary_operational_rollback_runbook_docs.py`, `tests/test_queued_execute_canary_minimal_telemetry.py`, `tests/test_queued_execute_canary_production_sized_boundary.py`, `tests/test_queued_execute_canary_nightly_fixture_lane_docs.py`, `tests/test_queued_execute_canary_observability_checklist_docs.py`, `tests/test_queued_execute_canary_repeated_run_stability.py`, `tests/test_queued_execute_canary_queue_recovery.py`, `tests/test_queued_execute_canary_default_migration_readiness_docs.py`, `tests/test_queued_canary_manual_nightly_workflow_skeleton.py`, `.github/workflows/queued-canary-manual-nightly.yml`, `docs/queued-execute-canary-rollout-policy.md`, `docs/queued-canary-retry-requeue-semantics.md`, `docs/queued-canary-operational-rollback-runbook.md` |
+
+## Phase 1: Queued Workflow Fixture
+
+Phase 1 productizes the existing baseline workflow through the internal queued
+execution bridge in a small, local fixture.
+
+Completed behavior:
+
+- Uses `tests/fixtures/phase1_queued_workflow_demo/`.
+- Invokes the feature-flagged internal queued execution route.
+- Requires actor identity and a `run_plan_queue_execute` server grant.
+- Runs a lightweight Phase 1 chain through existing local adapters.
+- Writes real fixture artifacts:
+  - cleaned dataset
+  - baseline metrics
+  - lightweight baseline model metadata
+  - candidate predictions
+  - ranked candidates
+  - report files
+  - artifact registry entries
+  - queue status
+  - requested/succeeded audit records
+
+Boundaries:
+
+- Does not replace `/api/run-plan/execute`.
+- Does not connect remote workers.
+- Does not use SQLite.
+- Does not run heavy Uni-Mol, DPA-3, or GPU training.
+- Does not prove production model quality.
+
+## Phase 2: Deterministic Generation Screening Fixture
+
+Phase 2 verifies the minimum bridge from generated candidates into the Phase 1
+screening chain. The generator is deterministic and local.
+
+Completed behavior:
+
+- Uses `tests/fixtures/phase2_generation_screening_demo/`.
+- Runs deterministic candidate generation.
+- Registers `generated_candidates.csv` as the candidate dataset.
+- Feeds generated candidates into Phase 1 prediction.
+- Runs filtering/ranking and report rendering.
+- Writes real fixture artifacts:
+  - `generation_report.json`
+  - `generated_candidates.csv`
+  - `candidate_predictions.csv`
+  - `ranked_candidates.csv`
+  - `report.md`
+  - `report.json`
+  - queue status and audit records
+
+Boundaries:
+
+- Does not execute REINVENT4.
+- Does not use external generation backends.
+- Does not let an LLM generate executable code.
+- Does not claim full inverse-design automation.
+- Does not replace the default synchronous run-plan execution route.
+
+## Phase 3: Literature-To-Dataset Fixture
+
+Phase 3 verifies that structured literature/table records can become a
+provenance-backed, trainability-ready dataset without doing live web or PDF
+mining.
+
+Completed behavior:
+
+- Uses `tests/fixtures/phase3_literature_dataset_demo/`.
+- Loads a parsed document/table fixture.
+- Extracts table rows into structured records.
+- Normalizes PLQY percent values to fractions.
+- Preserves provenance fields such as paper/source/table/row context.
+- Merges duplicate molecule/property records.
+- Writes conflict and benchmark reports.
+- Exports a confirmed dataset CSV.
+- Feeds the confirmed dataset into Phase 1 dataset inspection and
+  trainability checks.
+- Writes real fixture artifacts:
+  - `extracted_records.jsonl`
+  - `extracted_records.json`
+  - `unit_normalization_report.json`
+  - `conflict_report.json`
+  - `merged_records.json`
+  - `confirmed_dataset.csv`
+  - `extraction_benchmark_report.json`
+  - `report.md`
+  - `report.json`
+
+Boundaries:
+
+- Does not perform Web Search.
+- Does not download papers or crawl PDFs.
+- Does not run real MinerU large-model parsing.
+- Does not process large literature corpora.
+- Does not run heavy training on the confirmed dataset.
+
+Supporting infrastructure now exists for the next parsing step:
+
+- a stable document parsing provider contract
+- a direct MinerU task-API client
+- safe output-bundle extraction
+- official-style MinerU output normalization into `ParsedDocument`
+- a deterministic pdfplumber baseline provider
+- a manual CLI and benchmark fixture
+- an opt-in live MinerU API acceptance runner that writes redacted
+  service/protocol, normalization, benchmark, and comparison evidence
+
+That provider layer is not yet wired into the full Phase 3 scientific closed
+loop by default and does not change current route defaults.
+
+## Phase 3 To Phase 1 Scientific Dataset Pipeline
+
+The first deterministic bridge from parsed scientific documents into the Phase
+1 baseline stack is now available as a local workflow.
+
+Completed behavior:
+
+- Consumes `ParsedDocument` only; MinerU and pdfplumber remain upstream parser
+  providers.
+- Extracts structured scientific records from parsed tables without LLM calls,
+  external APIs, MinerU calls, or PDF parsing.
+- Extracts and normalizes:
+  - `SMILES`
+  - `PLQY`
+  - `lambda_em_nm`
+- Preserves mandatory training-data provenance:
+  - `paper_id`
+  - `page`
+  - `table_id`
+  - `row_id`
+- Detects duplicate SMILES and conflicting property values.
+- Builds candidate and training datasets through RDKit SMILES validation,
+  numeric sanity checks, duplicate resolution, and rejection reason tracking.
+- Requires explicit `DatasetConfirmation` before Phase 1 is invoked.
+- Reuses existing Phase 1 adapters for inspection, cleaning, trainability,
+  baseline evaluation, baseline training, prediction, ranking, and report
+  rendering.
+- Writes deterministic workflow artifacts:
+  - `full_pipeline_report.json`
+  - `scientific_dataset_manifest.json`
+  - `phase1_baseline_report.json`
+  - `candidate_ranking.json`
+
+Evidence:
+
+- `tests/test_phase3_scientific_extractor.py`
+- `tests/test_scientific_dataset_builder.py`
+- `tests/test_phase3_to_phase1_bridge.py`
+- `tests/test_phase3_to_phase1_workflow.py`
+- `tests/fixtures/phase3_to_phase1/`
+- `docs/phase-3-to-phase-1-pipeline.md`
+
+Boundaries:
+
+- Does not modify MinerU providers or the document parsing layer.
+- Does not add APIs, routes, queued-canary behavior, retry behavior, rollback
+  behavior, or worker queue behavior.
+- Does not use LLM-based extraction.
+- Does not call live services.
+- Does not modify Phase 1 model implementations or add ML frameworks.
+- Does not trust extraction output automatically; `DatasetConfirmation` is the
+  required boundary before model training.
+
+## Phase 1 Training And Ranking Stabilization
+
+Phase 1 now has a deterministic local pipeline for confirmed scientific
+datasets.
+
+Completed behavior:
+
+- Accepts only datasets with explicit `DatasetConfirmation.confirmed=True`.
+- Also checks the dataset manifest confirmation/status before training.
+- Raises `DatasetNotConfirmedError` for unconfirmed input and does not fallback
+  into training.
+- Uses existing Phase 1 adapters for dataset inspection, cleaning,
+  trainability, baseline evaluation, model training, candidate prediction,
+  ranking, and reporting.
+- Keeps baseline evaluation outputs separate from trained model outputs.
+- Enforces RDKit Morgan fingerprints for the stabilized feature pipeline.
+- Writes reproducibility hashes for:
+  - confirmed dataset bytes
+  - training configuration
+  - trained model artifacts
+  - ranking outputs
+- Produces:
+  - `training_metadata.json`
+  - `feature_config.json`
+  - model package artifacts
+  - `ranked_candidates.csv`
+  - `ranking_metadata.json`
+  - `report.json`
+  - `report.md`
+  - `report_summary.json`
+  - `full_phase1_pipeline.json`
+
+Evidence:
+
+- `tests/test_phase1_training_orchestrator.py`
+- `tests/test_phase1_candidate_ranker.py`
+- `tests/test_phase1_report_generator.py`
+- `tests/test_phase1_full_pipeline.py`
+- `tests/fixtures/phase1_training_and_ranking/`
+- `docs/phase-1-training-and-ranking-pipeline.md`
+
+Boundaries:
+
+- Does not modify MinerU providers or parsing.
+- Does not modify Phase 3 extraction or dataset building.
+- Does not introduce LLM calls, external APIs, new ML frameworks, remote
+  training services, or GPU requirements.
+- Does not change queued-canary, retry, rollback, or worker queue behavior.
+
+## Multi-Paper Corpus Evaluation And Reproducibility Audit
+
+The corpus layer proves deterministic behavior across multiple parsed
+scientific documents before any confirmed corpus dataset reaches Phase 1.
+
+Completed behavior:
+
+- Consumes multiple `ParsedDocument` fixtures offline.
+- Reuses the single-document Phase 3 scientific extractor without modifying
+  parsing providers or extraction semantics.
+- Preserves corpus-level provenance:
+  - `paper_id`
+  - `source_document_id`
+  - `parsed_document_path`
+  - `parser_provider`
+  - `parser_backend`
+- Detects consistent duplicates and unresolved cross-paper conflicts.
+- Rejects unresolved conflicts before dataset confirmation and training.
+- Carries invalid SMILES and missing-property rows into rejected-record audit
+  output with deterministic reason codes.
+- Builds corpus candidate/training/rejected dataset artifacts through the
+  existing dataset builder.
+- Keeps `DatasetConfirmation` mandatory before Phase 1.
+- Preserves the Phase 1 manifest-to-training-CSV binding.
+- Runs the stabilized Phase 1 full pipeline only on confirmed, non-conflicting
+  corpus training data.
+- Writes lineage, replay, reproducibility, and corpus summary reports.
+
+Evidence:
+
+- `tests/test_phase3_corpus_extractor.py`
+- `tests/test_corpus_conflict_auditor.py`
+- `tests/test_corpus_reproducibility_auditor.py`
+- `tests/test_corpus_report_generator.py`
+- `tests/test_corpus_to_phase1_workflow.py`
+- `tests/fixtures/corpus_multi_paper/`
+- `docs/corpus-evaluation-and-reproducibility-audit.md`
+
+Boundaries:
+
+- Does not modify MinerU providers or document parsing infrastructure.
+- Does not call live MinerU, LLMs, or external APIs.
+- Does not modify Phase 1 model internals or introduce new ML frameworks.
+- Does not weaken `DatasetConfirmation`.
+- Does not bypass manifest-to-training-CSV binding.
+- Does not change queued-canary, retry, rollback, or worker queue behavior.
+
+## MinerU Live Corpus Acceptance Bridge
+
+The live corpus bridge is a manual acceptance runner that connects real
+self-hosted MinerU parsing to the corpus workflow without adding live CI
+dependencies.
+
+Completed behavior:
+
+- Generates a deterministic three-document synthetic PDF corpus locally.
+- Parses each PDF through the existing `DocumentParseService` and
+  `MinerUApiDocumentParseProvider`.
+- Optionally parses each PDF with `PdfPlumberDocumentParseProvider` as a local
+  baseline.
+- Copies MinerU `ParsedDocument` outputs into a corpus acceptance directory.
+- Runs `corpus_to_phase1_workflow` on those parsed documents.
+- Preserves the explicit `DatasetConfirmation` boundary:
+  - without `--confirm-synthetic-dataset`, the decision is
+    `awaiting_confirmation` and Phase 1 does not run
+  - with `--confirm-synthetic-dataset --confirmed-by ...`, the synthetic
+    dataset may reach Phase 1
+- Resolves optional MinerU endpoint profiles and declarative manual routing
+  policies from local JSON without reading tokens from profile files.
+- Records only redacted endpoint profile metadata in acceptance reports.
+- Provides a manual endpoint preflight that checks `/health`, protocol version
+  2, response schema, redacted endpoint metadata, and gpu_worker_main-oriented
+  CUDA/vLLM environment diagnostics before parsing.
+- Optionally binds a prior `preflight_report.json` before corpus parsing:
+  mismatches are warnings by default, while `--require-preflight-match` makes
+  endpoint/profile/protocol/health mismatches fail before parse submission.
+- Documents the self-hosted MinerU live acceptance path as a reusable manual
+  operator gate, with artifact packaging, SHA-256 recording, pass/fail
+  criteria, and a generic redacted evidence template.
+- Implements the next custom corpus dry-run boundary:
+  custom/private dry-runs keep `DatasetConfirmation.confirmed` set to `false`,
+  verify Phase 1 remains `not_run`, and preserve redaction requirements before
+  any real/custom records can be considered for future training admission.
+- Adds the custom corpus property candidate schema:
+  open-ended numeric property candidates can be validated before human review
+  without a fixed property whitelist, but no property extraction runner,
+  LLM/agent call, evaluation/RL, materialization, candidate/training CSV
+  creation, Phase 1 execution, or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property candidate planner:
+  validated property candidate manifests can produce safe review-planning
+  summaries, but no property extraction runner, LLM/agent call, human review
+  manifest generation, materialization, candidate/training CSV creation, Phase
+  1 execution, or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property candidate review queue builder:
+  validated property candidate manifests can produce safe review-preparation
+  artifacts, but no human review manifest generation, review decision,
+  admission, materialization, candidate/training CSV creation, Phase 1
+  execution, or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property review binding validator:
+  manually-created `custom_corpus_review.v1` manifests can be checked against
+  property candidate review queues, but no human review manifest generation,
+  review decision, admission, materialization, candidate/training CSV creation,
+  Phase 1 execution, or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property admission readiness planner:
+  queue-bound human review manifests can be summarized into future
+  admission-readiness evidence, but no admission request generation, admission
+  action creation, materialization, candidate/training CSV creation, Phase 1
+  execution, or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property admission request planner:
+  readiness summaries and review manifests can produce safe future admission
+  request plans, but no `custom_corpus_admission.v1` generation, admission
+  action creation, materialization, candidate/training CSV creation, Phase 1
+  execution, or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property admission draft builder:
+  reviewed and planned property records can generate reviewable
+  `custom_corpus_admission.v1` draft artifacts, but no package binding
+  execution, materialization, candidate/training CSV creation, Phase 1
+  execution, or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property admission draft package precheck:
+  admission drafts can be checked against upstream property evidence before
+  formal package binding, but no package binding execution, package validation
+  artifact, materialization, candidate/training CSV creation, Phase 1
+  execution, or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property-aware package binding runner:
+  property admission drafts can produce formal
+  `custom_corpus_admission_package_validation.v1` summaries with property
+  precheck gating, but no materialization, candidate/training CSV creation,
+  Phase 1 execution, or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property materialization plan draft builder:
+  formal package-validated property admissions can produce reviewable
+  `custom_corpus_materialization.v1` draft plans, but no materialization
+  execution, offline materialization planner execution, candidate/training CSV
+  creation, Phase 1 execution, or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property materialization plan preflight:
+  reviewable materialization plan drafts can be checked before offline
+  materialization planner submission, but no materialization execution,
+  candidate/training CSV creation, Phase 1 execution, or
+  `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property-aware materialization planner runner:
+  preflighted materialization plan drafts can invoke the existing offline
+  materialization planner with property wrapper evidence, but no materializer,
+  materialization execution, candidate/training CSV creation, Phase 1
+  execution, or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property materialization dry-run runner:
+  offline planner outputs can be validated through no-data dry-run evidence,
+  but no real materializer, materialization execution, candidate/training
+  artifact creation, Phase 1 execution, or `DatasetConfirmation` change is
+  implemented.
+- Adds the custom corpus property materializer execution request builder:
+  passed dry-run packages can produce request-only future-materializer handoff
+  artifacts, but no real materializer, materialization execution,
+  candidate/training artifact creation, Phase 1 execution, or
+  `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property materializer execution request preflight:
+  execution requests can now be checked before future materializer submission,
+  but no real materializer, materialization execution, candidate/training
+  artifact creation, Phase 1 execution, or `DatasetConfirmation` change is
+  implemented.
+- Adds the custom corpus property quarantine materializer:
+  execution-preflight-passed requests can now produce candidate-only
+  quarantine materialization artifacts plus safe evidence, but no training
+  data admission, training CSV/JSONL/Parquet/LMDB creation, Phase 1 execution,
+  or `DatasetConfirmation` change is implemented.
+- Adds the custom corpus property quarantine candidate preflight:
+  candidate-only quarantine artifacts can now be checked before future
+  training admission requests, but no training admission, training artifact
+  creation, Phase 1 execution, or `DatasetConfirmation` change is implemented.
+- Introduces the custom corpus human review artifact boundary:
+  review manifests are validated offline, but they do not admit training data,
+  do not set `DatasetConfirmation.confirmed=true`, and do not run Phase 1.
+- Introduces the custom corpus admission gate contract:
+  admission requests can be structurally validated offline, but no dataset is
+  materialized, Phase 1 is not run, and `DatasetConfirmation` is unchanged.
+- Adds the custom corpus admission package binding validator:
+  package validation checks artifact hash, id, review/action, and dry-run
+  boundary consistency across manifest, dry-run report, review manifest, and
+  admission request without materializing datasets.
+- Adds the custom corpus governance runbook and stage summary:
+  the custom corpus path is documented through package validation, while
+  training materialization remains intentionally unimplemented and Phase 1 plus
+  `DatasetConfirmation` remain unchanged.
+- Adds the custom corpus materialization boundary design:
+  materialization requirements are documented, but no training materializer,
+  candidate/training CSV creation, Phase 1 execution, or `DatasetConfirmation`
+  change is implemented.
+- Adds the custom corpus materialization plan schema:
+  candidate-only materialization intent can be validated offline, but no
+  training materializer, candidate/training CSV creation, Phase 1 execution, or
+  `DatasetConfirmation` change is implemented.
+- Adds the custom corpus offline materialization planner:
+  a valid materialization plan can produce safe JSON/Markdown planning
+  summaries with planned output labels, rollback labels, and candidate/excluded
+  counts, but no candidate/training artifacts are created and Phase 1 plus
+  `DatasetConfirmation` remain unchanged.
+- Writes corpus-level acceptance evidence:
+  - `acceptance_report.json`
+  - `acceptance_summary.md`
+  - generated PDFs
+  - parsed documents
+  - MinerU bundles
+  - optional pdfplumber baselines
+  - corpus workflow outputs
+  - corpus report and replay/reproducibility manifests
+
+Evidence:
+
+- `src/ai4s_agent/document_parse_corpus_live_acceptance.py`
+- `src/ai4s_agent/corpus_live_acceptance_fixtures.py`
+- `src/ai4s_agent/mineru_endpoint_profiles.py`
+- `src/ai4s_agent/mineru_endpoint_preflight.py`
+- `tests/test_document_parse_corpus_live_acceptance.py`
+- `tests/test_mineru_endpoint_profiles.py`
+- `tests/test_mineru_endpoint_preflight.py`
+- `docs/mineru-live-corpus-acceptance.md`
+- `docs/mineru-endpoint-preflight.md`
+- `docs/mineru-manual-live-acceptance-gate.md`
+- `docs/evidence/templates/mineru-preflight-bound-live-corpus-evidence-template.md`
+- `src/ai4s_agent/custom_corpus_manifest.py`
+- `src/ai4s_agent/custom_corpus_dry_run.py`
+- `tests/test_custom_corpus_manifest.py`
+- `tests/test_custom_corpus_dry_run.py`
+- `docs/custom-corpus-dry-run.md`
+- `docs/custom-corpus-intake-contract.md`
+- `docs/examples/custom-corpus-manifest.example.json`
+- `docs/evidence/templates/custom-corpus-dry-run-evidence-template.md`
+- `src/ai4s_agent/custom_corpus_property_candidate.py`
+- `tests/test_custom_corpus_property_candidate.py`
+- `docs/custom-corpus-property-candidate-schema.md`
+- `docs/examples/custom-corpus-property-candidates.example.json`
+- `docs/evidence/templates/custom-corpus-property-candidates-evidence-template.md`
+- `src/ai4s_agent/custom_corpus_property_candidate_planner.py`
+- `tests/test_custom_corpus_property_candidate_planner.py`
+- `docs/custom-corpus-property-candidate-planner.md`
+- `docs/evidence/templates/custom-corpus-property-candidate-planner-evidence-template.md`
+- `src/ai4s_agent/custom_corpus_review.py`
+- `tests/test_custom_corpus_review.py`
+- `docs/custom-corpus-human-review.md`
+- `docs/examples/custom-corpus-review-manifest.example.json`
+- `docs/evidence/templates/custom-corpus-human-review-evidence-template.md`
+- `src/ai4s_agent/custom_corpus_admission.py`
+- `tests/test_custom_corpus_admission.py`
+- `docs/custom-corpus-dataset-admission-gate.md`
+- `docs/examples/custom-corpus-admission-request.example.json`
+- `docs/evidence/templates/custom-corpus-admission-gate-evidence-template.md`
+- `src/ai4s_agent/custom_corpus_admission_package.py`
+- `tests/test_custom_corpus_admission_package.py`
+- `docs/custom-corpus-admission-package-binding.md`
+- `docs/evidence/templates/custom-corpus-admission-package-validation-template.md`
+- `docs/custom-corpus-governance-runbook.md`
+- `docs/custom-corpus-governance-stage-summary-20260628.md`
+- `docs/custom-corpus-dataset-materialization-boundary.md`
+- `docs/evidence/templates/custom-corpus-materialization-evidence-template.md`
+- `src/ai4s_agent/custom_corpus_materialization.py`
+- `tests/test_custom_corpus_materialization.py`
+- `docs/custom-corpus-materialization-schema.md`
+- `docs/examples/custom-corpus-materialization-plan.example.json`
+- `src/ai4s_agent/custom_corpus_materialization_planner.py`
+- `tests/test_custom_corpus_materialization_planner.py`
+- `docs/custom-corpus-materialization-planner.md`
+- `docs/evidence/templates/custom-corpus-materialization-planner-evidence-template.md`
+- `docs/evidence/templates/custom-corpus-materialization-plan-evidence-template.md`
+
+Boundaries:
+
+- Does not add a MinerU Cloud API provider.
+- Does not change MinerU provider protocol, ZIP extraction, output
+  normalization, document parsing schema, Phase 3 extraction, dataset builder,
+  or Phase 1 model internals.
+- Does not implement automatic live fallback, retry orchestration, canary
+  routing, rollback, scheduling, or worker-pool dispatch.
+- The reusable manual gate remains outside CI and does not add Cloud API
+  support, automatic deployment, fallback, queues, rollback, or scheduling.
+- Does not call live MinerU in tests or CI.
+- Does not use LLMs or external APIs.
+- Does not weaken `DatasetConfirmation`.
+- Does not bypass manifest-to-training-CSV binding.
+- Does not change queued-canary, retry, rollback, or worker queue behavior.
+- Does not admit custom/private corpora to Phase 1 automatically.
+- Does not implement human review or production dataset admission for custom
+  corpora.
+- Human review artifacts do not change `DatasetConfirmation`, do not create
+  training datasets, and do not implement admission.
+- Admission gate validation does not materialize datasets, create
+  candidate/training CSVs, run Phase 1, or admit training data.
+- Admission package binding validation still does not materialize datasets,
+  create candidate/training CSVs, run Phase 1, change `DatasetConfirmation`, or
+  admit training data.
+- The governance runbook is documentation only and does not implement dataset
+  materialization, Phase 1 execution, or `DatasetConfirmation` changes.
+- The materialization boundary design is documentation only and does not add a
+  materializer, create candidate/training CSVs, run Phase 1, or change
+  `DatasetConfirmation`.
+- Materialization plan validation does not implement a materializer, create
+  candidate/training CSVs, run Phase 1, change `DatasetConfirmation`, or admit
+  training data.
+- Does not commit real PDFs or private artifacts.
+
+## OLED Property Profile And Multi-Objective Screening
+
+The OLED fixture moves property configuration out of hardcoded core logic and
+proves a small multi-objective screening flow.
+
+Completed behavior:
+
+- Uses `tests/fixtures/oled_property_profiles/oled_properties.json`.
+- Defines OLED property metadata as data:
+  - `plqy`
+  - `lambda_em_nm`
+  - `homo_ev`
+  - `lumo_ev`
+  - `delta_e_st_ev`
+- Captures aliases, canonical units, optimization direction, ranking defaults,
+  risk notes, and recommended task types.
+- Uses `tests/fixtures/oled_multiobjective_screening_demo/`.
+- Trains/predicts multiple single-property lightweight baselines.
+- Merges predictions into `multi_property_predictions.csv`.
+- Computes profile-driven objective score contributions.
+- Ranks candidates using weighted multi-objective scores.
+- Renders a report.
+
+Boundaries:
+
+- Does not implement full multi-task model training.
+- Does not guarantee OLED-only scope in the core schema.
+- Does not prevent future non-OLED domains or arbitrary property IDs.
+- Does not execute external generation, Web Search, MinerU, remote workers, or
+  heavy training.
+
+## Phase 4: Observer, Replan, Review, And Memory Loop
+
+Phase 4 is a review loop around artifacts. It is intentionally not an automatic
+execution loop.
+
+Completed layers:
+
+1. Observer-Verifier
+   - Module: `src/ai4s_agent/run_plan_artifact_verifier.py`
+   - Reads queue summary/status, audit records, artifact registry, and known
+     reports.
+   - Evaluates trainability, model metrics, generation reports, extraction
+     benchmarks, and multi-objective ranking outputs.
+   - Produces `RunPlanArtifactVerification`.
+   - Decision set: `continue`, `needs_review`, `rerun_recommended`, `blocked`.
+
+2. Reviewable Replan Proposal
+   - Module: `src/ai4s_agent/run_plan_replan_proposal.py`
+   - Consumes only `RunPlanArtifactVerification`.
+   - Produces `RunPlanReplanProposal`.
+   - Uses deterministic rule-based mapping.
+   - Keeps `executable=false`.
+   - Produces an advisory, unapplied `proposed_run_plan_patch`.
+
+3. Review Artifacts
+   - Module: `src/ai4s_agent/run_plan_review_artifacts.py`
+   - Writes:
+     - `review/observer_verification.json`
+     - `review/replan_proposal.json`
+     - `review/replan_review.md`
+   - Registers these files in the artifact registry.
+
+4. Review Card
+   - Module: `src/ai4s_agent/run_plan_review_card.py`
+   - Reads the review artifacts.
+   - Returns one `RunPlanReviewCard` schema for UI, report, or memory
+     consumers.
+   - Internal route:
+     `GET /api/internal/run-plan/review-card?project_id=...&run_id=...`
+   - Route is feature-flagged and requires actor identity plus
+     `run_plan_queue_execute` permission.
+
+5. Project Memory Summary
+   - Module: `src/ai4s_agent/run_plan_review_memory.py`
+   - Saves a compact `ProjectMemoryRecord` with category `run_plan_review`.
+   - Stores only:
+     - verifier decision
+     - proposed action
+     - affected tasks
+     - required user decisions
+     - artifact references
+   - Avoids raw data, full artifact contents, markdown bodies, and full
+     verifier/proposal payloads.
+
+6. Replan Application Review Artifacts
+   - Module: `src/ai4s_agent/run_plan_replan_application_artifacts.py`
+   - Reads a user-confirmed application request and proposal artifact.
+   - Verifies `proposal_hash` and selected `operation_id` values.
+   - Writes review-only application artifacts:
+     - `review/replan_application_record.json`
+     - `review/replan_resume_intent.json`, `review/run_plan_revision.json`, or
+       `review/blocked_acknowledgement.json`
+   - Keeps `executable=false` and does not apply the advisory patch.
+
+7. Replan Application Audit And Memory Summary
+   - Module: `src/ai4s_agent/run_plan_replan_application_audit_memory.py`
+   - Appends compact `replan_application_requested`,
+     `replan_application_completed`, or `replan_application_failed` audit
+     records.
+   - Saves compact project memory records with category
+     `run_plan_replan_application`.
+   - Stores only summary fields, selected operation ids, artifact references,
+     and audit references.
+
+8. Internal Replan Application Review Route
+   - Route: `POST /api/internal/run-plan/replan/apply-review`
+   - Requires the internal feature flag, actor identity, and
+     `run_plan_replan_apply` permission grant.
+   - Accepts a `ReplanApplicationRequest`, writes requested/completed/failed
+     audit records, materializes review-only application artifacts, and saves a
+     compact memory summary.
+   - Does not execute, enqueue, auto-resume, apply patches, call LLMs, mutate
+     `RunPlan`, or replace `/api/run-plan/execute`.
+
+9. Resume Intent Validation Semantics
+   - Document: `docs/resume-intent-validation-semantics.md`
+   - Defines how future gate/resume paths should validate
+     `review/replan_resume_intent.json`.
+   - Covers source application id, proposal hash, artifact refs, current
+     `RunPlan` compatibility, rerun task presence, stale-intent detection,
+     gate checks, resume audit, and default-route compatibility.
+   - Does not add a resume route, enqueue work, execute adapters, write gate
+     decisions, mutate `RunPlan`, call LLMs, or replace `/api/run-plan/resume`
+     or `/api/run-plan/execute`.
+
+10. Strict Resume Stage/Gate Compatibility
+   - Module: `src/ai4s_agent/run_plan_resume_stage_gate.py`
+   - Validates that resume intents bind to the current `WAITING_USER` stage,
+     a known atomic task, a complete execution snapshot, and executor gates from
+     `AtomicTaskRegistry`.
+   - Separates application gates from executor gates and rejects embedded
+     executor approvals in resume intent artifacts.
+   - Does not call `RunPlanExecutor.resume_after_gate(...)`, write gate
+     decisions, enqueue work, execute adapters, mutate `RunPlan`, call LLMs, or
+     replace default routes.
+
+11. Internal Resume Intent Execution Bridge
+   - Route: `POST /api/internal/run-plan/resume-intent/execute`
+   - Requires `AI4S_ENABLE_INTERNAL_RESUME_INTENT_EXECUTE_ROUTE`, actor
+     identity, and `run_plan_resume_execute` permission.
+   - Server-loads artifacts and current state, reruns strict validation, writes
+     `resume_intent_consumed` before execution, calls the existing
+     `RunPlanExecutor.resume_after_gate(...)`, and records completed/failed
+     audit plus compact memory.
+   - Consumes each intent once. It does not enqueue work, call LLMs, mutate
+     `RunPlan`, write custom gate decisions, or replace default routes.
+
+12. User-confirmed resume loop e2e
+   - `tests/test_user_confirmed_resume_loop_e2e.py` connects verifier findings,
+     replan application, resume-intent validation, one-time resume execution,
+     and post-resume review artifacts.
+   - Confirms `resume_intent` can be consumed once, stage transitions to success,
+     and post-resume artifacts/review card can be refreshed.
+
+Phase 4 boundaries:
+
+- Does not execute proposals.
+- Does not apply patches.
+- Does not call LLMs.
+- Does not enqueue jobs.
+- Does not mutate `RunPlan`.
+- Does not automatically rerun tasks.
+- Does not replace `/api/run-plan/execute`.
+
+## Cross-Cutting Controls Now In Place
+
+- Internal run-plan queue execute route is feature-flagged.
+- Internal execute/status/review-card routes require actor identity.
+- Internal routes require explicit server grant for `run_plan_queue_execute`.
+- Requested and terminal audit records are written for queued execution.
+- Queue paths are internal to the workspace and safe path components are
+  required.
+- Review/replan layers are non-executable by schema and contract.
+- Project memory integration stores only compact review summaries and artifact
+  references.
+
+## Still Not Complete
+
+The following items remain explicitly out of scope and should not be implied by
+the completed fixtures:
+
+- Default route migration:
+  `/api/run-plan/execute` remains synchronous and is not replaced.
+- Full queued resume:
+  `WAITING_USER` remains terminal-compatible in the queue for now; resumable
+  queued WAITING_USER resume remains future work.
+- Remote worker:
+  no remote worker contract, lease handoff, heartbeat service, or remote GPU
+  execution is connected.
+- SQLite:
+  queue/job/project state remains file-backed; no SQLite migration has
+  started.
+- Real MinerU and Web Search:
+  Phase 3 uses local parsed-table fixtures, not live search, downloads, or
+  full PDF/miner parsing.
+- REINVENT4 or external generation:
+  Phase 2 uses deterministic local generation only.
+- Heavy Uni-Mol/DPA-3:
+  fixtures use lightweight local baselines, not production-grade heavy model
+  training.
+- Multi-task model training:
+  OLED multi-objective screening uses multiple single-property lightweight
+  baselines and weighted ranking, not a trained multi-task model.
+- Autonomous replanning:
+  verifier and proposal outputs are reviewable only. User confirmation and a
+  future gate/resume or modified-run-plan path are still required before
+  execution. The first design contract for that path is documented in
+  `docs/user-confirmed-replan-application-semantics.md`.
+
+## Suggested Next Milestones
+
+Recommended next work should keep the same safety posture:
+
+1. Add review-card or review-memory consumption tests in Planner/Observer
+   without allowing automatic execution.
+2. Implement user-confirmed proposal application schemas and tests from
+   `docs/user-confirmed-replan-application-semantics.md`, still without
+   automatic execution.
+3. Decide whether queued `WAITING_USER` should remain terminal-compatible or
+   move to a resumable non-terminal state.
+4. Only after local controls stay green, revisit remote worker contracts and
+  storage migration design.
+5. Target-job acquisition is implemented at the queue/poller layer, while the
+   run-plan service helper is constrained to the job it just enqueued. A
+   feature-flagged `/api/run-plan/execute` queued canary can exercise that path,
+   and rollback evidence shows disabling the flag returns to the sync response
+   shape. Synchronous execution remains the default until the migration gates
+   are green.
+6. The queued execute canary is now restricted to selected low-risk task chains:
+   `inspect_dataset`, `clean_dataset`, `check_trainability`, `run_baseline`,
+   and `render_report`. Non-allowlisted tasks, including `train_model`,
+   generation, literature/mining, and unknown tasks, fall back to synchronous
+   execution without queued response fields.
+7. The queued execute canary rollout policy and decision matrix are documented
+   in `docs/queued-execute-canary-rollout-policy.md`. The policy requires
+   response parity, artifact registry parity, failure classification parity,
+   queue safety, rollback evidence, and no hidden scope expansion before the
+   allowlist can grow.
+8. Artifact registry parity fixture coverage has started for an existing
+   allowlisted chain. The fixture compares sync and queued canary logical
+   artifact ids plus artifact file existence, without requiring run-specific
+   paths or hashes to match.
+9. Failure classification parity fixture coverage has started for an existing
+   allowlisted chain. The fixture compares sync and queued canary failed status,
+   failed task, and useful error message fields without moving `train_model` or
+   other excluded tasks into the queued canary.
+10. A second allowlisted chain parity fixture has started. Because the current
+    planner expansion for `render_report` still reaches non-allowlisted tasks,
+    the second real all-allowlisted chain is currently
+    `inspect_dataset -> clean_dataset -> check_trainability`. The fixture uses
+    that actual second chain without expanding the allowlist.
+11. Cancellation coverage has started for existing allowlisted queued execute
+    chains. Cancelled queued jobs are not treated as the target job, and sync
+    fallback does not process or mutate cancelled queued jobs.
+12. Retry/requeue semantics are now documented explicitly and partially
+    implemented. Lease attempts, stale recovery, explicit retry, and rerun/new
+    execution are separate concepts. Stale recovery keeps the same `job_id`;
+    PR #138 adds atomic one-shot explicit retry-child creation with a new
+    `job_id`, preserved source-job immutability, and no public retry/requeue
+    API.
+13. Production-sized fixture boundary documentation has started. Current
+    parity fixtures remain small and deterministic; they are useful for
+    control-plane confidence, but they are not production-sized proof. A
+    larger nightly or offline fixture policy is still future work.
+14. Telemetry/observability checklist documentation has started, and the
+    queued canary now emits a minimal structured telemetry log line for local
+    review/tests. This still does not mean production telemetry, dashboards,
+    alerting, or centralized sinks are implemented.
+15. Optional nightly production-sized fixture lane design has started. The
+    design remains docs-only: no nightly workflow is enabled, no large fixture
+    data is committed, and no default presubmit test is made slower by this
+    work.
+16. Optional manual/nightly workflow skeleton has started. The workflow is
+    manual-only via `workflow_dispatch`, uploads bounded pytest evidence, and
+    does not run on `pull_request`, `push`, or a schedule.
+17. Repeated-run stability coverage has started for existing allowlisted queued
+    execute chains. The fixture checks project/run queue isolation, stable
+    response shape, stable logical artifact ids, and rollback-to-sync behavior
+    that does not touch existing queued jobs.
+18. Operational rollback drill evidence has started. PR #139 proves that
+    disabling `AI4S_ENABLE_RUN_PLAN_EXECUTE_QUEUED_CANARY` returns new requests
+    to sync while leaving existing queued jobs, retry children, and lease
+    records unchanged.
+19. Remaining canary migration work includes broader observability wiring if
+    needed, optional scheduled/nightly enablement only after policy gates are
+    satisfied, any future actor/audit/public-route hardening for retry if
+    queued execution needs it, the default migration decision, remote worker
+    contract, SQLite or storage migration decision, and production scientific
+    adapter validation.

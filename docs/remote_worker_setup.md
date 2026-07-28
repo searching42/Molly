@@ -1,0 +1,139 @@
+# Private remote worker setup
+
+Molly addresses remote resources through logical IDs and SSH config aliases.
+The repository must not contain a real hostname, IP address, username, home
+directory, scheduler account, or environment path.
+
+## 1. Define an SSH alias
+
+Add the real endpoint only to `~/.ssh/config`:
+
+```sshconfig
+Host molly-gpu-main
+    HostName gpu-host.example.internal
+    User your-account
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+```
+
+Verify it outside Molly:
+
+```bash
+ssh molly-gpu-main -- hostname -s
+```
+
+Use `ssh-agent` or the operating-system Keychain for key material. Never put a
+private key, password, bearer token, or `ProxyCommand` in a Molly JSON file.
+
+## 2. Register the connection
+
+The Settings page writes a private `connections.json`. A minimal logical
+profile is equivalent to:
+
+```json
+{
+  "connection_id": "gpu-worker-main",
+  "transport": "ssh",
+  "ssh_host_alias": "molly-gpu-main",
+  "expected_hostname": "gpu-host-short-name",
+  "remote_root": "/private/path/chosen/by/the/user",
+  "known_hosts_path": "/private/local/path/to/known_hosts",
+  "scheduler": "direct",
+  "declared_capabilities": ["gpu", "unimol"]
+}
+```
+
+This file is local-only. Public plans, documentation, and repository-owned
+execution profiles should refer only to `gpu-worker-main`. Run the capability
+probe after saving; submission still performs a fresh, read-only preflight.
+
+## 3. Register runtime environments
+
+Remote repository and interpreter paths live in private
+`environments.json`, not source code:
+
+```json
+{
+  "schema_version": "molly_environment_profiles.v1",
+  "environments": [
+    {
+      "environment_id": "unimol-default",
+      "connection_id": "gpu-worker-main",
+      "repository_root": "/private/remote/path/to/unimol",
+      "python_path": "/private/remote/environment/bin/python",
+      "conda_environment": "unimol"
+    }
+  ]
+}
+```
+
+For the legacy REINVENT4 adapter, select `environment_profile_id` in the task
+payload or set:
+
+```bash
+export MOLLY_REINVENT4_ENVIRONMENT_ID=reinvent4-default
+```
+
+The OLED inverse-design execution policies resolve the following logical
+environment IDs from this same private file:
+
+```text
+reinvent4-gpu-main
+reinvent4-compute-main
+```
+
+Their linked connection profiles are `gpu-worker-main` and
+`compute-worker-main`. The resulting publication stores only those logical
+IDs, the connection/environment profile digests, and the pinned known-hosts
+digest. SSH aliases, hostnames, repository roots, interpreter paths, and the
+local known-hosts path are used in memory for transport and are not written to
+the scientific publication.
+
+Stage 6B requests still bind repository-owned execution profiles, immutable
+input manifests, approvals, and output contracts. Private connection and
+environment records only resolve how that fixed contract reaches a machine.
+
+## 4. Replay retired publications
+
+Retired v1 publications are never rewritten and retired transport profiles
+cannot start new work. If exact replay is required, place the original static
+transport contract in the private `legacy_transport_profiles.json`:
+
+```json
+{
+  "schema_version": "molly_legacy_transport_profiles.v1",
+  "profiles": [
+    {
+      "legacy_profile_id": "retired-profile-id-from-the-publication",
+      "ssh_target": "private-ssh-alias-used-at-publication-time",
+      "expected_hostname": "private-hostname-used-at-publication-time",
+      "repository_root": "/private/historical/repository/path",
+      "python_path": "/private/historical/environment/bin/python",
+      "host_key_policy": "strict_pinned_known_hosts",
+      "config_renderer": "reinvent4_v1"
+    }
+  ]
+}
+```
+
+This file is verifier-only. It reconstructs the historical content-bound
+contract locally without reintroducing private values into source code.
+
+## 5. Scheduler information
+
+The first private connection format supports direct execution. Do not add
+Slurm/PBS partitions, accounts, reservations, or arbitrary submit command
+templates to repository files. A future scheduler adapter should store those
+values in user-level configuration and expose only a logical scheduler profile
+ID to execution contracts.
+
+## 6. Safe evidence and support bundles
+
+Before publishing evidence:
+
+- omit SSH aliases when they reveal an internal naming scheme;
+- omit usernames, absolute paths, scheduler accounts, and IPs;
+- include artifact SHA-256 values and contract IDs instead of paths;
+- never attach `connections.json`, `environments.json`, `llm_profiles.json`,
+  `capability_probes.json`, `legacy_transport_profiles.json`, known-hosts
+  files, lock files, or `secrets/`.

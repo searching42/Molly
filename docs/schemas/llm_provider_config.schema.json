@@ -1,0 +1,36 @@
+{
+  "properties": {
+    "provider": {
+      "default": "stub",
+      "title": "Provider",
+      "type": "string"
+    },
+    "endpoint": {
+      "default": "",
+      "title": "Endpoint",
+      "type": "string"
+    },
+    "api_key": {
+      "default": "",
+      "title": "Api Key",
+      "type": "string"
+    },
+    "model": {
+      "default": "",
+      "title": "Model",
+      "type": "string"
+    },
+    "timeout_sec": {
+      "default": 60,
+      "title": "Timeout Sec",
+      "type": "integer"
+    },
+    "stub_response": {
+      "additionalProperties": true,
+      "title": "Stub Response",
+      "type": "object"
+    }
+  },
+  "title": "LLMProviderConfig",
+  "type": "object"
+}
