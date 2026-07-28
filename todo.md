@@ -348,8 +348,8 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 
 | 范围 | 证据 | 工作状态 | 下一交付 |
 |---|---|---|---|
-| `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/—` | `IN_PROGRESS` | PR-BF：context-bound verified-byte publisher 与对抗测试 |
-| `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `—/—/—` | `DEFERRED` | PR-BG，等待 PR-BF |
+| `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/—` | `DONE` | PR-BF 已完成；等待后续真实/代表性验收补 `V` |
+| `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `—/—/—` | `READY` | PR-BG |
 | `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `—/—/—` | `DEFERRED` | PR-BH，等待 PR-BG |
 
 目标：从可重放 projection 计算确定性 auditor findings；不得直接改变 Session 或 PR-AU 状态。
@@ -665,26 +665,28 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 唯一当前动作：PR-BF deterministic trajectory audit metrics v1
+### 唯一当前动作：PR-BG failure taxonomy 与 first-cause attribution
 
-范围：只在 PR-BE context-bound verified bytes 上计算 provenance coverage 与确定性核心指标；发布 observer-only audit artifact，不读取未验证 projection，不写回 Session、PR-AU 或科学 publication。
+任务：`M3-018`～`M3-022`。
+
+范围：只在 PR-BF deterministic audit artifact 上定义 failure taxonomy、first cause 与 downstream symptom；保持 observer-only，不写回 Session、PR-AU、projection 或科学 publication。
 
 必须验证：
 
-1. 输入必须由 PR-BE 外部锚定并在同一 pinned publication inode 内消费。
-2. v1 冻结 action、evidence、authorization、terminal provenance coverage，以及 trajectory length、gate、budget、Top-N completion 等无歧义指标。
-3. 相同 verified projection 跨进程生成逐字节一致结果。
-4. 缺失或不一致 evidence 只能形成 source-backed finding，不得事后虚构原因或 alternative。
-5. audit metrics publication 只读、immutable、no-replace，且不成为科学 trust anchor。
+1. taxonomy 覆盖 input integrity、authorization mismatch、transport、tool runtime、model inadequacy、candidate supply、policy constraint、recovery 和 audit integrity。
+2. finding 只使用 M3 冻结的允许集合，且不得写回状态机。
+3. first cause 与 downstream symptom 必须分离，并绑定具体 source evidence。
+4. known-hosts propagation、history truncation、duplicate dispatch 和 stale state 标准案例可确定性重放。
+5. 无充分 evidence 时不得虚构原因或 alternative，不引入 LLM auditor。
 
 ### 主线队列
 
 ```text
-PR-BD  observer-only trajectory projection v1（本 PR 完成）
-PR-BE  external-anchor trajectory verifier 与对抗测试（本 PR 完成）
-PR-BF  deterministic trajectory audit metrics v1（下一项）
-PR-BG  failure taxonomy 与 first-cause attribution
-PR-BH  read-only inspect API 与最小时间线
+PR-BD  observer-only trajectory projection v1（已完成）
+PR-BE  external-anchor trajectory verifier 与对抗测试（已完成）
+PR-BF  deterministic trajectory audit metrics v1（已完成）
+PR-BG  failure taxonomy 与 first-cause attribution（下一项）
+PR-BH  read-only inspect API 与最小时间线（等待 PR-BG）
 ```
 
 ### 资源机会队列
@@ -692,7 +694,7 @@ PR-BH  read-only inspect API 与最小时间线
 ```text
 PR-BC  logical compute-worker-main remote 两轮 canary
        M1 完成且资源安全时随时执行
-       不阻塞 PR-BF / PR-BG / PR-BH
+       不阻塞 PR-BG / PR-BH
 ```
 
 任何后续 PR 如果不能直接推进上述队列、关闭真实 blocker 或产出 benchmark evidence，默认暂缓。
