@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,77 @@ def test_patch_omission_retains_key_and_delete_is_explicit(tmp_path: Path) -> No
     assert secret_path.read_text(encoding="utf-8") == "keep-me"
     assert client.delete("/api/settings/llm/api-key").status_code == 200
     assert not secret_path.exists()
+
+
+def test_saved_llm_settings_can_be_verified_with_minimal_safe_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _app(tmp_path)
+    client = app.test_client()
+    assert client.patch(
+        "/api/settings/llm",
+        json={
+            "endpoint": "https://llm.example.test/v1",
+            "model": "decision-model",
+            "api_key_source": "file",
+            "api_key": "server-only-secret",
+        },
+    ).status_code == 200
+    calls: list[tuple[list[dict[str, str]], str]] = []
+
+    class ProbeProvider:
+        def complete_text(self, *, messages, prompt_version):
+            calls.append((messages, prompt_version))
+            return "OK"
+
+    @contextmanager
+    def fake_lease(config):
+        assert config.api_key == "server-only-secret"
+        yield ProbeProvider()
+
+    monkeypatch.setattr(app.extensions["llm_provider_manager"], "lease", fake_lease)
+    response = client.post("/api/settings/llm/probe", json={})
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.json["probe"] == {
+        "model": "decision-model",
+        "provider": "openai_compatible",
+        "request_kind": "minimal_chat_completion",
+        "status": "available",
+    }
+    assert calls == [
+        (
+            [{"role": "user", "content": "Reply only with OK."}],
+            "llm-settings-connection-probe.v1",
+        )
+    ]
+    assert "server-only-secret" not in response.get_data(as_text=True)
+
+
+def test_llm_probe_failure_is_redacted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(tmp_path)
+    client = app.test_client()
+    assert client.patch(
+        "/api/settings/llm",
+        json={
+            "endpoint": "https://llm.example.test/v1",
+            "model": "decision-model",
+            "api_key_source": "file",
+            "api_key": "server-only-secret",
+        },
+    ).status_code == 200
+
+    @contextmanager
+    def failing_lease(_config):
+        raise RuntimeError("/private/secret/path server-only-secret")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(app.extensions["llm_provider_manager"], "lease", failing_lease)
+    response = client.post("/api/settings/llm/probe", json={})
+    assert response.status_code == 409
+    assert response.json["error_code"] == "llm_connection_failed"
+    assert "/private/secret/path" not in response.get_data(as_text=True)
+    assert "server-only-secret" not in response.get_data(as_text=True)
 
 
 def test_environment_source_is_explicit(tmp_path: Path) -> None:
@@ -474,3 +546,5 @@ def test_ui_exposes_explicit_secret_source_and_delete_controls(tmp_path: Path) -
     assert 'type="password"' in html
     assert 'patchJSON("/api/settings/llm", payload)' in html
     assert 'deleteJSON("/api/settings/llm/api-key")' in html
+    assert 'postJSON("/api/settings/llm/probe", {})' in html
+    assert "保存并测试 API 连接" in html
