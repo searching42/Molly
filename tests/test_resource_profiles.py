@@ -475,7 +475,8 @@ def test_compute_resource_ui_guides_users_through_fixed_connection_roles(
     assert 'data-capabilities="cpu,reinvent4"' in html
     assert "input.disabled = incompatible" in html
     assert "if (incompatible) input.checked = false" in html
-    assert "display_name: \"\"" in html
+    assert "display_name: \"\"" not in html
+    assert "if (knownHostsPath) payload.known_hosts_path = knownHostsPath" in html
     assert "connection_id: role.value" in html
     assert "const form = event.currentTarget" in html
     assert "form.reset()" in html
@@ -487,6 +488,7 @@ def test_compute_resource_ui_guides_users_through_fixed_connection_roles(
     assert "computeProbeLabel(payload, response.probe)" in html
 
 
+@pytest.mark.pr_fast
 def test_compute_probe_label_distinguishes_reachability_from_workload_readiness(
     tmp_path: Path,
 ) -> None:
@@ -533,12 +535,41 @@ def test_compute_probe_label_distinguishes_reachability_from_workload_readiness(
             "connection": {"declared_capabilities": ["gpu", "unimol"]},
             "probe": {
                 "status": "mismatch",
+                "error_code": "hostname_mismatch",
                 "verified_capabilities": ["gpu", "unimol"],
             },
         },
-        "transport_unavailable": {
+        "transport_failed": {
             "connection": {"declared_capabilities": ["gpu", "unimol"]},
-            "probe": {"status": "unavailable", "verified_capabilities": []},
+            "probe": {
+                "status": "unavailable",
+                "error_code": "probe_transport_failed",
+                "verified_capabilities": [],
+            },
+        },
+        "response_unavailable": {
+            "connection": {"declared_capabilities": ["gpu", "unimol"]},
+            "probe": {
+                "status": "unavailable",
+                "error_code": "probe_response_unavailable",
+                "verified_capabilities": [],
+            },
+        },
+        "response_invalid": {
+            "connection": {"declared_capabilities": ["gpu", "unimol"]},
+            "probe": {
+                "status": "unavailable",
+                "error_code": "probe_response_invalid",
+                "verified_capabilities": [],
+            },
+        },
+        "unknown_failure": {
+            "connection": {"declared_capabilities": ["gpu", "unimol"]},
+            "probe": {
+                "status": "unavailable",
+                "error_code": "private.compute.invalid",
+                "verified_capabilities": [],
+            },
         },
     }
     script = f"""
@@ -568,9 +599,13 @@ process.stdout.write(JSON.stringify(labels));
         "complete": "连接及所选工作负载可用",
         "missing_one": "连接可达，但缺少所选能力：unimol",
         "missing_multiple": "连接可达，但缺少所选能力：gpu、unimol",
-        "hostname_mismatch": "主机身份不匹配",
-        "transport_unavailable": "暂不可用",
+        "hostname_mismatch": "主机身份不匹配：请核对 hostname -s 与预期主机名",
+        "transport_failed": "SSH 连接未建立：请检查 SSH 别名、网络、密钥代理与连接超时",
+        "response_unavailable": "远端未返回探测结果：请确认可免交互 SSH 登录，且远端可运行 molly-worker probe --json",
+        "response_invalid": "远端探测响应格式无效：请检查或升级远端 molly-worker",
+        "unknown_failure": "连接探测失败：服务端未提供可公开的原因",
     }
+    assert "private.compute.invalid" not in completed.stdout
 
 
 def test_legacy_pinned_profile_resolves_private_connection_and_fixed_execution(
@@ -1161,6 +1196,93 @@ def test_compute_settings_api_rejects_url_identity_mismatch(tmp_path: Path) -> N
 
     assert response.status_code == 400
     assert "does not match URL" in response.json["error"]
+
+
+@pytest.mark.pr_fast
+def test_literature_only_connection_accepts_default_ssh_trust_and_short_hostname(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "config",
+    )
+    response = app.test_client().put(
+        "/api/settings/compute/connections/gpu-worker-main",
+        json={
+            "ssh_host_alias": "literature_gpu",
+            "expected_hostname": "mineru_worker_01",
+            "remote_root": "/srv/molly/literature",
+            "declared_capabilities": ["gpu", "mineru"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json["connection"]["known_hosts_path"] == ""
+    assert response.json["connection"]["expected_hostname"] == "mineru_worker_01"
+
+
+@pytest.mark.pr_fast
+def test_connection_validation_returns_only_frozen_safe_field_names(tmp_path: Path) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "config",
+    )
+    client = app.test_client()
+    invalid_alias = client.put(
+        "/api/settings/compute/connections/gpu-worker-main",
+        json={
+            "ssh_host_alias": "user@private-host",
+            "expected_hostname": "valid-host",
+            "remote_root": "/srv/molly/runs",
+            "declared_capabilities": ["gpu", "mineru"],
+        },
+    )
+    hostile_extra = client.put(
+        "/api/settings/compute/connections/gpu-worker-main",
+        json={
+            "ssh_host_alias": "valid-alias",
+            "expected_hostname": "valid-host",
+            "remote_root": "/srv/molly/runs",
+            "declared_capabilities": ["gpu", "mineru"],
+            "/private/secret/path": "secret-value",
+        },
+    )
+
+    assert invalid_alias.status_code == 400
+    assert invalid_alias.json["error_code"] == "connection_profile_invalid"
+    assert invalid_alias.json["invalid_fields"] == ["ssh_host_alias"]
+    assert "user@private-host" not in invalid_alias.get_data(as_text=True)
+    assert hostile_extra.status_code == 400
+    assert hostile_extra.json["invalid_fields"] == ["payload"]
+    assert "/private/secret/path" not in hostile_extra.get_data(as_text=True)
+    assert "secret-value" not in hostile_extra.get_data(as_text=True)
+
+
+@pytest.mark.pr_fast
+def test_probe_route_redacts_internal_store_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "config",
+    )
+    secret = "/private/internal/connections.json"
+
+    def fail(_connection_id: str):
+        raise ValueError(secret)
+
+    monkeypatch.setattr(app.extensions["capability_probe_service"], "probe", fail)
+    response = app.test_client().post(
+        "/api/settings/compute/connections/gpu-worker-main/probe",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert response.json["error_code"] == "compute_probe_unavailable"
+    assert secret not in response.get_data(as_text=True)
 
 
 def test_compute_settings_api_does_not_echo_rejected_credentials(tmp_path: Path) -> None:

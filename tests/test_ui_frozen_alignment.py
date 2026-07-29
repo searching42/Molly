@@ -79,3 +79,7 @@ def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html:
     assert 'id="compute-environments"' in html
     assert 'getJSON("/api/settings/compute")' in html
     assert "REINVENT4 / Uni-Mol 远程执行需要专用 known_hosts 文件。" in html
+    assert "OpenSSH 保存远端主机公钥指纹的信任文件" in html
+    assert "probe_transport_failed" in html
+    assert "probe_response_unavailable" in html
+    assert "probe_response_invalid" in html
