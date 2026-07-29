@@ -29,7 +29,11 @@ CAPABILITY_PROBE_SCHEMA_VERSION = "molly_capability_probe.v1"
 TRANSFER_MANIFEST_SCHEMA_VERSION = "molly_transfer_manifest.v1"
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,95}$")
 _SAFE_SSH_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
-_SAFE_HOSTNAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}[A-Za-z0-9]$|^[A-Za-z0-9]$")
+# ``hostname -s`` is an operating-system identity, not necessarily a DNS name.
+# Some managed clusters legitimately use underscores in their short hostname.
+# The value is still argv-separated and exact-compared; shell metacharacters,
+# whitespace, paths, usernames, and endpoint syntax remain forbidden.
+_SAFE_HOSTNAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,252}[A-Za-z0-9]$|^[A-Za-z0-9]$")
 _SAFE_CAPABILITY = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,95}$")
 _MAX_PROBE_BYTES = 1024 * 1024
 _MAX_TRANSFER_FILE_BYTES = 100 * 1024 * 1024 * 1024
@@ -158,7 +162,7 @@ class ConnectionProfile(BaseModel):
     def validate_expected_hostname(cls, value: Any) -> str:
         clean = str(value or "").strip().lower()
         if not _SAFE_HOSTNAME.fullmatch(clean):
-            raise ValueError("expected_hostname must be a safe DNS hostname")
+            raise ValueError("expected_hostname must be a safe short hostname")
         return clean
 
     @field_validator("remote_root", mode="before")
@@ -984,6 +988,15 @@ class CapabilityProbeService:
             )
             return self.store.save_probe(result)
         stdout = bytes(completed.stdout or b"")
+        if completed.returncode == 255:
+            result = CapabilityProbeResult(
+                connection_id=profile.connection_id,
+                connection_profile_digest=profile.digest(),
+                status="unavailable",
+                checked_at=checked_at,
+                error_code="probe_transport_failed",
+            )
+            return self.store.save_probe(result)
         if completed.returncode != 0 or not stdout or len(stdout) > _MAX_PROBE_BYTES:
             result = CapabilityProbeResult(
                 connection_id=profile.connection_id,

@@ -561,7 +561,7 @@
               <summary>高级安全选项（远程模型任务需要）</summary>
               <label for="compute-known-hosts">专用 known_hosts 文件</label>
               <input id="compute-known-hosts" placeholder="例如：/absolute/path/to/molly_known_hosts" aria-describedby="compute-known-hosts-help" autocomplete="off" />
-              <p id="compute-known-hosts-help" class="field-help">文献解析可使用 SSH 默认配置；选择 REINVENT4 或 Uni-Mol 时，请填写本机绝对路径，以便执行前固定并核验远端主机密钥。</p>
+              <p id="compute-known-hosts-help" class="field-help"><code>known_hosts</code> 是本机 OpenSSH 保存远端主机公钥指纹的信任文件，用来防止连接被冒充；它不是私钥、密码或 API Key。文献解析可使用 SSH 默认配置；选择 REINVENT4 或 Uni-Mol 时必须填写专用文件的本机绝对路径，以便执行前固定并核验远端身份。</p>
             </details>
             <button type="submit">保存并测试连接</button>
           </form>
@@ -1415,7 +1415,10 @@
       function computeConnectionPayload() {
         const role = document.getElementById("compute-resource-role");
         const selectedRole = role.options[role.selectedIndex];
-        const capabilities = new Set([selectedRole.dataset.baseCapability]);
+        const baseCapability = selectedRole.dataset.baseCapability
+          || ({"gpu-worker-main": "gpu", "compute-worker-main": "cpu"})[role.value];
+        if (!baseCapability) throw new Error("请选择有效的计算资源类型。");
+        const capabilities = new Set([baseCapability]);
         const selectedWorkloads = Array.from(document.querySelectorAll('input[name="compute-workload"]:checked'));
         selectedWorkloads.forEach((input) => {
           csvList(input.dataset.capabilities).forEach((capability) => capabilities.add(capability));
@@ -1424,20 +1427,35 @@
         if (selectedWorkloads.some((input) => ["compute-workload-unimol", "compute-workload-reinvent4"].includes(input.id)) && !knownHostsPath) {
           throw new Error("REINVENT4 / Uni-Mol 远程执行需要专用 known_hosts 文件。");
         }
-        return {
+        const alias = String(document.getElementById("compute-ssh-alias").value || "").trim();
+        const hostname = String(document.getElementById("compute-expected-hostname").value || "").trim().toLowerCase();
+        const remoteRoot = String(document.getElementById("compute-remote-root").value || "").trim();
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$/.test(alias)) {
+          throw new Error("SSH 别名只能使用字母、数字、点、下划线和短横线；不要填写 user@host。");
+        }
+        if (!/^(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9._-]{0,252}[A-Za-z0-9])$/.test(hostname)) {
+          throw new Error("远端短主机名格式无效；请完整复制 hostname -s 的输出。");
+        }
+        if (!remoteRoot.startsWith("/") || remoteRoot.split("/").includes("..")) {
+          throw new Error("远端运行目录必须是无 .. 的 POSIX 绝对路径。");
+        }
+        if (knownHostsPath && !knownHostsPath.startsWith("/")) {
+          throw new Error("known_hosts 必须填写本机绝对路径。");
+        }
+        const payload = {
           connection_id: role.value,
           transport: "ssh",
-          display_name: "",
-          ssh_host_alias: String(document.getElementById("compute-ssh-alias").value || "").trim(),
-          expected_hostname: String(document.getElementById("compute-expected-hostname").value || "").trim(),
-          remote_root: String(document.getElementById("compute-remote-root").value || "").trim(),
+          ssh_host_alias: alias,
+          expected_hostname: hostname,
+          remote_root: remoteRoot,
           scheduler: "direct",
-          known_hosts_path: knownHostsPath,
           declared_capabilities: Array.from(capabilities).sort(),
           enabled: true,
           max_concurrent_jobs: 1,
           default_timeout_sec: 3600,
         };
+        if (knownHostsPath) payload.known_hosts_path = knownHostsPath;
+        return payload;
       }
 
       function computeConnectionLabel(connection) {
@@ -1448,8 +1466,17 @@
 
       function computeProbeLabel(connection, probe = connection?.last_probe) {
         if (!probe) return "尚未测试";
-        if (probe.status === "mismatch") return "主机身份不匹配";
-        if (probe.status !== "available") return "暂不可用";
+        const safeFailureLabels = {
+          hostname_mismatch: "主机身份不匹配：请核对 hostname -s 与预期主机名",
+          probe_transport_failed: "SSH 连接未建立：请检查 SSH 别名、网络、密钥代理与连接超时",
+          probe_response_unavailable: "远端未返回探测结果：请确认可免交互 SSH 登录，且远端可运行 molly-worker probe --json",
+          probe_response_invalid: "远端探测响应格式无效：请检查或升级远端 molly-worker",
+        };
+        if (probe.status !== "available") {
+          return safeFailureLabels[String(probe.error_code || "")]
+            || (probe.status === "mismatch" ? safeFailureLabels.hostname_mismatch : "")
+            || "连接探测失败：服务端未提供可公开的原因";
+        }
         const declaredCapabilities = Array.isArray(connection?.declared_capabilities)
           ? connection.declared_capabilities
           : [];
