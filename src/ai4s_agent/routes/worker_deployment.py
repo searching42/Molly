@@ -78,11 +78,20 @@ def register_worker_deployment_routes(
             connection = resource_profiles.save_connection(
                 ConnectionProfile.model_validate({**payload, "connection_id": connection_id})
             )
-        except ValidationError:
+        except ValidationError as exc:
+            invalid_fields = sorted(
+                {
+                    str((detail.get("loc") or ("payload",))[0])
+                    for detail in exc.errors(include_input=False, include_url=False)
+                }
+            )
             return _compute_error(
                 "connection_profile_invalid",
-                "Connection profile fields are invalid.",
+                "Connection profile fields are invalid: "
+                + ", ".join(invalid_fields)
+                + ".",
                 400,
+                invalid_fields=invalid_fields,
             )
         except ValueError:
             app.logger.warning("connection profile save failed", exc_info=True)
@@ -244,5 +253,14 @@ def _safe_validation_error(error: ValidationError) -> str:
     return f"invalid {location}: {message}"
 
 
-def _compute_error(code: str, message: str, status: int):
-    return jsonify({"ok": False, "error": message, "error_code": code}), status
+def _compute_error(
+    code: str,
+    message: str,
+    status: int,
+    *,
+    invalid_fields: list[str] | None = None,
+):
+    payload = {"ok": False, "error": message, "error_code": code}
+    if invalid_fields is not None:
+        payload["invalid_fields"] = invalid_fields
+    return jsonify(payload), status

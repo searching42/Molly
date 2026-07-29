@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from flask import Flask, after_this_request, jsonify, request
 
+from ai4s_agent.llm_provider import LLMProviderManager
 from ai4s_agent.llm_settings import LLMSettingsStore
 
 
@@ -11,6 +12,7 @@ def register_llm_settings_routes(
     app: Flask,
     *,
     settings: LLMSettingsStore,
+    providers: LLMProviderManager,
     on_change: Callable[[], None] | None = None,
 ) -> None:
     def no_store() -> None:
@@ -57,3 +59,49 @@ def register_llm_settings_routes(
         if on_change is not None:
             on_change()
         return jsonify({"ok": True, **settings.public_state()})
+
+    @app.post("/api/settings/llm/probe")
+    def probe_llm_settings():
+        """Send one minimal OpenAI-compatible request without exposing secrets."""
+
+        no_store()
+        config = settings.read()
+        if config is None:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error_code": "llm_settings_unavailable",
+                    "error": "LLM settings or the selected API key source are unavailable.",
+                }
+            ), 400
+        try:
+            with providers.lease(config) as provider:
+                provider.complete_text(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": "Reply only with OK.",
+                        }
+                    ],
+                    prompt_version="llm-settings-connection-probe.v1",
+                )
+        except Exception:
+            app.logger.warning("LLM settings connection probe failed", exc_info=True)
+            return jsonify(
+                {
+                    "ok": False,
+                    "error_code": "llm_connection_failed",
+                    "error": "The configured LLM endpoint, model, or API key could not be verified.",
+                }
+            ), 409
+        return jsonify(
+            {
+                "ok": True,
+                "probe": {
+                    "status": "available",
+                    "provider": config.provider,
+                    "model": config.model,
+                    "request_kind": "minimal_chat_completion",
+                },
+            }
+        )
