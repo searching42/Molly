@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from _m3_inspection_validation import (  # noqa: E402
     CASE_ROSTER,
+    CASE_FILENAME_BY_ID,
     EVIDENCE_VERSION,
     INSPECTION_VERSION,
     SOURCE_CLASS_BY_CASE,
@@ -242,4 +243,6 @@ def _run_runner(private: Path, public: Path, *extra: str) -> subprocess.Complete
 
 
 def _case(root: Path, case_id: str) -> dict[str, object]:
-    return parse_canonical_json((root / "cases" / f"{case_id}.json").read_bytes())
+    return parse_canonical_json(
+        (root / "cases" / CASE_FILENAME_BY_ID[case_id]).read_bytes()
+    )

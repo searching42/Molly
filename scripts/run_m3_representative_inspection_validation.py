@@ -13,6 +13,7 @@ from typing import Any, Sequence
 
 from _m3_inspection_validation import (
     CASE_CONTRACT_VERSION,
+    CASE_FILENAME_BY_ID,
     CASE_ROSTER,
     EVIDENCE_VERSION,
     INSPECTION_VERSION,
@@ -266,7 +267,7 @@ def _publish_public_package(root: Path, records: list[dict[str, Any]], *, runner
         violations = public_privacy_violations(payload)
         if violations:
             raise RuntimeError("public evidence privacy scan failed")
-        path = cases_dir / f"{record['case_id']}.json"
+        path = cases_dir / CASE_FILENAME_BY_ID[record["case_id"]]
         path.write_bytes(payload)
         manifest_cases.append(
             {

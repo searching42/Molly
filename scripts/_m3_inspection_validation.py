@@ -96,6 +96,12 @@ CASE_ROSTER = (
     "multiple_equal_first_cause_candidates",
     "causal_link_not_proven",
 )
+CASE_FILENAME_BY_ID = {
+    **{case_id: f"{case_id}.json" for case_id in CASE_ROSTER},
+    # The repository privacy policy treats any tracked filename containing
+    # ``known_hosts`` as private infrastructure, even when its bytes are safe.
+    "known_hosts_propagation": "transport_identity_propagation.json",
+}
 SOURCE_CLASSES = frozenset(
     {
         "captured_real_runtime",

@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _m3_inspection_validation import (  # noqa: E402
     CASE_ROSTER,
+    CASE_FILENAME_BY_ID,
     EVIDENCE_VERSION,
     INSPECTION_VERSION,
     SOURCE_CLASSES,
@@ -33,7 +34,7 @@ def verify_evidence(root: Path, *, require_complete: bool = False) -> dict[str, 
     if not root.is_dir() or {path.name for path in root.iterdir()} != expected_top:
         raise ValueError("evidence package roster is invalid")
     case_dir = root / "cases"
-    if {path.name for path in case_dir.iterdir()} != {f"{case}.json" for case in CASE_ROSTER}:
+    if {path.name for path in case_dir.iterdir()} != set(CASE_FILENAME_BY_ID.values()):
         raise ValueError("evidence case roster is invalid")
     package = b"".join(path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file())
     if public_privacy_violations(package):
