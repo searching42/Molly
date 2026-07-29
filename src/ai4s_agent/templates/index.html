@@ -702,6 +702,11 @@
         });
       }
 
+      function resetExternalLLMApproval() {
+        const approval = document.getElementById("conversation-external-llm-approved");
+        if (approval) approval.checked = false;
+      }
+
       async function createConversation() {
         if (!activeProject.project_id || !knownProjects.some((item) => item.project_id === activeProject.project_id)) {
           render({ ok: false, error: "请先新建或选择一个项目。" });
@@ -724,6 +729,7 @@
       }
 
       function selectProject(project) {
+        resetExternalLLMApproval();
         updateActiveProjectDisplay(project);
         syncProjectId(activeProject.project_id);
         knownConversations = [];
@@ -1230,7 +1236,9 @@
             knownConversations = [selected];
           }
           if (generation !== conversationLoadGeneration || projectId !== activeProject.project_id) return;
-          currentConversationId = String(selected.conversation_id || "");
+          const nextConversationId = String(selected.conversation_id || "");
+          if (nextConversationId !== currentConversationId) resetExternalLLMApproval();
+          currentConversationId = nextConversationId;
           renderConversationList();
           const detail = await getJSON(
             `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(currentConversationId)}`,

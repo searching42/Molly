@@ -83,7 +83,7 @@ def register_llm_settings_routes(
                 if not str(reply or "").strip():
                     raise ValueError("empty probe response")
         except Exception:
-            app.logger.warning("LLM settings connection probe failed", exc_info=True)
+            app.logger.warning("llm_connection_failed")
             return jsonify(
                 {
                     "ok": False,

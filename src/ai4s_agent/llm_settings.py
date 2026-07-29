@@ -16,6 +16,9 @@ from ai4s_agent.schemas import LLMProviderConfig
 
 _KEYRING_SERVICE = "Molly"
 _SECRET_SOURCES = {"environment", "keyring", "file", "auto"}
+LLM_SETTINGS_TRULY_UNCONFIGURED = "truly_unconfigured"
+LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE = "configured_but_unavailable"
+LLM_SETTINGS_AVAILABLE = "available"
 
 
 class LLMSettingsStore:
@@ -47,15 +50,29 @@ class LLMSettingsStore:
             raise ValueError("LLM settings path escapes user config directory")
 
     def read(self) -> LLMProviderConfig | None:
+        _status, config = self.resolve()
+        return config
+
+    def resolve(self) -> tuple[str, LLMProviderConfig | None]:
+        """Resolve the active profile without conflating absence with failure."""
+
         profile = self._read_profile()
         if profile is None:
-            return None
+            status = (
+                LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE
+                if self.path.exists() or self.legacy_path.exists()
+                else LLM_SETTINGS_TRULY_UNCONFIGURED
+            )
+            return status, None
         resolved = dict(profile)
-        resolved["api_key"] = self._resolve_secret(profile)
+        resolved_secret = self._resolve_secret(profile)
+        if not resolved_secret:
+            return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
+        resolved["api_key"] = resolved_secret
         try:
-            return self._validated_config(resolved)
+            return LLM_SETTINGS_AVAILABLE, self._validated_config(resolved)
         except ValueError:
-            return None
+            return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
 
     def patch(self, payload: dict[str, Any]) -> LLMProviderConfig:
         if "api_key" in payload and not str(payload.get("api_key") or "").strip():
@@ -118,10 +135,9 @@ class LLMSettingsStore:
                 message += f"; rollback failed: {'; '.join(rollback_errors)}"
             raise ValueError(message) from exc
 
-        config = self.read()
-        if config is None:
-            raise ValueError("LLM profile is incomplete or its selected secret source is unavailable")
-        return config
+        saved_config = dict(profile)
+        saved_config["api_key"] = self._resolve_secret(profile)
+        return self._validated_config(saved_config)
 
     def delete_api_key(self) -> None:
         profile = self._read_profile()

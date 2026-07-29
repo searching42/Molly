@@ -24,7 +24,10 @@ from ai4s_agent.llm_provider import (
     LLMProviderManager,
     create_llm_provider,
 )
-from ai4s_agent.llm_settings import LLMSettingsStore
+from ai4s_agent.llm_settings import (
+    LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE,
+    LLMSettingsStore,
+)
 from ai4s_agent.memory import ProjectMemory
 from ai4s_agent.routes.run_plans import run_plan_from_payload
 from ai4s_agent.schemas import (
@@ -307,7 +310,7 @@ def register_agent_routes(
                         "error": "Approve sending this conversation to the configured external LLM endpoint.",
                     }
                 ), 400
-            app.logger.warning("conversation LLM configuration failed", exc_info=True)
+            app.logger.warning("llm_conversation_unavailable")
             return jsonify(
                 {
                     "ok": False,
@@ -328,7 +331,7 @@ def register_agent_routes(
                     )
                     llm_used = True
         except Exception:
-            app.logger.warning("conversation LLM invocation failed", exc_info=True)
+            app.logger.warning("llm_conversation_failed")
             return jsonify(
                 {
                     "ok": False,
@@ -824,8 +827,10 @@ def _llm_provider_from_payload(
             raise ValueError("llm_provider must be an object when provided")
         config = LLMProviderConfig.model_validate(raw)
     else:
-        config = settings.read()
+        settings_status, config = settings.resolve()
         if config is None:
+            if settings_status == LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE:
+                raise ValueError("configured LLM settings are unavailable")
             return nullcontext(None)
     if _is_external_llm_config(config) and payload.get("external_llm_approved") is not True:
         raise ValueError(
