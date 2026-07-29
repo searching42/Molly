@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,16 @@ from ai4s_agent.storage import ProjectStorage
 RAW_DATASET_SCHEMA = "molly_raw_dataset.v1"
 CONFIRMED_DATASET_SCHEMA = "molly_confirmed_dataset.v1"
 _SAFE_PROPERTY_ID = re.compile(r"[a-z][a-z0-9_]{0,95}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_CONFIRMATION_ID = re.compile(r"confirmed_[0-9a-f]{64}")
+_CONFIRMED_ARTIFACTS = {
+    "cleaned_train_dataset": "confirmed_dataset.csv",
+    "confirmed_training_dataset": "confirmed_dataset.csv",
+    "property_catalog": "property_catalog.json",
+}
+_MAX_CONFIRMATION_MANIFEST_BYTES = 4 * 1024 * 1024
+_MAX_RAW_MANIFEST_BYTES = 4 * 1024 * 1024
+_MAX_CONFIRMED_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024
 
 
 class DatasetWorkflowService:
@@ -71,7 +82,11 @@ class DatasetWorkflowService:
             "inspected_at": now_iso(),
         }
         if manifest_path.exists():
-            existing = self._read_json(manifest_path)
+            existing = self._read_bound_json(
+                manifest_path,
+                max_bytes=_MAX_RAW_MANIFEST_BYTES,
+                label="raw dataset manifest",
+            )
             self._verify_raw_manifest(existing, project_id=project_id, dataset_id=dataset_id)
             return self._public_raw_dataset(existing)
         write_json(manifest_path, payload)
@@ -81,11 +96,20 @@ class DatasetWorkflowService:
         root = self._datasets_root(project_id)
         result: list[dict[str, Any]] = []
         for directory in sorted(root.iterdir()) if root.exists() else []:
-            if not directory.is_dir() or not directory.name.startswith("dataset_"):
+            if (
+                not directory.is_dir()
+                or directory.is_symlink()
+                or not directory.name.startswith("dataset_")
+            ):
                 continue
-            manifest = self._read_json(directory / "raw_dataset.json")
-            if not manifest:
+            manifest_path = directory / "raw_dataset.json"
+            if not manifest_path.exists():
                 continue
+            manifest = self._read_bound_json(
+                manifest_path,
+                max_bytes=_MAX_RAW_MANIFEST_BYTES,
+                label="raw dataset manifest",
+            )
             try:
                 self._verify_raw_manifest(
                     manifest,
@@ -97,10 +121,28 @@ class DatasetWorkflowService:
             item = self._public_raw_dataset(manifest)
             confirmation_payloads: list[dict[str, Any]] = []
             confirmation_root = directory / "confirmations"
+            if confirmation_root.is_symlink():
+                raise ValueError("confirmed dataset root is unsafe")
             for child in sorted(confirmation_root.iterdir()) if confirmation_root.exists() else []:
-                confirmed = self._read_json(child / "confirmed_dataset_manifest.json")
-                if confirmed:
-                    confirmation_payloads.append(confirmed)
+                if (
+                    not child.is_dir()
+                    or child.is_symlink()
+                    or not _CONFIRMATION_ID.fullmatch(child.name)
+                ):
+                    raise ValueError("confirmed dataset directory is unsafe")
+                confirmed = self._read_bound_json(
+                    child / "confirmed_dataset_manifest.json",
+                    max_bytes=_MAX_CONFIRMATION_MANIFEST_BYTES,
+                    label="confirmed dataset manifest",
+                )
+                self._verify_confirmed_manifest(
+                    confirmed,
+                    project_id=project_id,
+                    dataset_id=directory.name,
+                    confirmation_id=child.name,
+                    raw=manifest,
+                )
+                confirmation_payloads.append(confirmed)
             confirmation_payloads.sort(
                 key=lambda payload: (
                     str(payload.get("confirmed_at") or ""),
@@ -135,7 +177,11 @@ class DatasetWorkflowService:
         if not actor:
             raise ValueError("confirmed_by is required")
         raw_manifest_path = self._dataset_dir(project_id, dataset_id) / "raw_dataset.json"
-        raw = self._read_json(raw_manifest_path)
+        raw = self._read_bound_json(
+            raw_manifest_path,
+            max_bytes=_MAX_RAW_MANIFEST_BYTES,
+            label="raw dataset manifest",
+        )
         self._verify_raw_manifest(raw, project_id=project_id, dataset_id=dataset_id)
 
         headers = [str(item) for item in (raw.get("dataset_profile") or {}).get("headers", [])]
@@ -168,16 +214,34 @@ class DatasetWorkflowService:
         request_sha256 = self._sha256_json(request_material)
         confirmation_id = f"confirmed_{request_sha256}"
         confirmation_root = self._dataset_dir(project_id, dataset_id) / "confirmations"
+        if confirmation_root.is_symlink():
+            raise ValueError("confirmed dataset root is unsafe")
         confirmation_root.mkdir(parents=True, exist_ok=True)
-        final_dir = (confirmation_root / confirmation_id).resolve()
+        final_dir_path = confirmation_root / confirmation_id
+        if final_dir_path.is_symlink():
+            raise ValueError("confirmed dataset directory is unsafe")
+        final_dir = final_dir_path.resolve()
         if not final_dir.is_relative_to(confirmation_root.resolve()):
             raise ValueError("confirmation_id escapes dataset directory")
         manifest_path = final_dir / "confirmed_dataset_manifest.json"
         if manifest_path.exists():
-            existing = self._read_json(manifest_path)
+            existing = self._read_bound_json(
+                manifest_path,
+                max_bytes=_MAX_CONFIRMATION_MANIFEST_BYTES,
+                label="confirmed dataset manifest",
+            )
+            self._verify_confirmed_manifest(
+                existing,
+                project_id=project_id,
+                dataset_id=dataset_id,
+                confirmation_id=confirmation_id,
+                raw=raw,
+            )
             if existing.get("request_sha256") != request_sha256:
                 raise ValueError("confirmed dataset identity conflict")
             return self._public_confirmed_dataset(existing) | {"idempotent": True}
+        if final_dir.exists():
+            raise ValueError("confirmed dataset directory is incomplete")
 
         staging = Path(tempfile.mkdtemp(prefix=".confirming-", dir=confirmation_root))
         try:
@@ -277,18 +341,27 @@ class DatasetWorkflowService:
                 },
                 "hashes": {
                     "source_sha256": reference.sha256,
-                    "confirmed_dataset_sha256": self._sha256_file(confirmed_csv),
-                    "property_catalog_sha256": self._sha256_file(normalized_catalog),
+                    "confirmed_dataset_sha256": self._sha256_regular_file_bound(
+                        confirmed_csv
+                    ),
+                    "property_catalog_sha256": self._sha256_regular_file_bound(
+                        normalized_catalog
+                    ),
                 },
                 "confirmed_at": confirmed_at,
             }
+            manifest["manifest_sha256"] = self._sha256_json(manifest)
             write_json(staging / "confirmed_dataset_manifest.json", manifest)
             os.replace(staging, final_dir)
         finally:
             if staging.exists():
                 shutil.rmtree(staging)
         return self._public_confirmed_dataset(
-            self._read_json(final_dir / "confirmed_dataset_manifest.json")
+            self._read_bound_json(
+                final_dir / "confirmed_dataset_manifest.json",
+                max_bytes=_MAX_CONFIRMATION_MANIFEST_BYTES,
+                label="confirmed dataset manifest",
+            )
         ) | {"idempotent": False}
 
     def _public_raw_dataset(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -313,7 +386,12 @@ class DatasetWorkflowService:
         confirmation_id = str(payload.get("confirmation_id") or "")
         base = self._dataset_dir(str(payload.get("project_id") or ""), dataset_id)
         directory = (base / "confirmations" / confirmation_id).resolve()
-        artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
+        artifacts = self._verify_confirmed_manifest(
+            payload,
+            project_id=str(payload.get("project_id") or ""),
+            dataset_id=dataset_id,
+            confirmation_id=confirmation_id,
+        )
         resolved_artifacts = {
             str(key): str((directory / str(value)).resolve())
             for key, value in artifacts.items()
@@ -336,8 +414,146 @@ class DatasetWorkflowService:
                 "summary",
                 "hashes",
                 "confirmed_at",
+                "manifest_sha256",
             )
         } | {"artifacts": resolved_artifacts}
+
+    def _verify_confirmed_manifest(
+        self,
+        payload: dict[str, Any],
+        *,
+        project_id: str,
+        dataset_id: str,
+        confirmation_id: str,
+        raw: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        """Exact-replay one confirmed dataset before exposing any artifact path."""
+
+        if payload.get("schema_version") != CONFIRMED_DATASET_SCHEMA:
+            raise ValueError("confirmed dataset manifest schema is invalid")
+        if (
+            payload.get("project_id") != str(project_id)
+            or payload.get("dataset_id") != dataset_id
+            or payload.get("confirmation_id") != confirmation_id
+            or not _CONFIRMATION_ID.fullmatch(confirmation_id)
+        ):
+            raise ValueError("confirmed dataset manifest identity mismatch")
+        request_sha256 = str(payload.get("request_sha256") or "")
+        if (
+            not _SHA256.fullmatch(request_sha256)
+            or confirmation_id != f"confirmed_{request_sha256}"
+        ):
+            raise ValueError("confirmed dataset request identity mismatch")
+        manifest_sha256 = str(payload.get("manifest_sha256") or "")
+        unsigned = {key: value for key, value in payload.items() if key != "manifest_sha256"}
+        if (
+            not _SHA256.fullmatch(manifest_sha256)
+            or manifest_sha256 != self._sha256_json(unsigned)
+        ):
+            raise ValueError("confirmed dataset manifest digest mismatch")
+
+        raw_payload = raw
+        if raw_payload is None:
+            raw_payload = self._read_bound_json(
+                self._dataset_dir(project_id, dataset_id) / "raw_dataset.json",
+                max_bytes=_MAX_RAW_MANIFEST_BYTES,
+                label="raw dataset manifest",
+            )
+        self._verify_raw_manifest(
+            raw_payload,
+            project_id=project_id,
+            dataset_id=dataset_id,
+        )
+        source = payload.get("source_attachment")
+        if not isinstance(source, dict) or source != raw_payload.get("source_attachment"):
+            raise ValueError("confirmed dataset source attachment binding mismatch")
+        reference = self.conversations.resolve_attachment(
+            project_id,
+            str(source.get("artifact_id") or ""),
+        )
+        if reference.sha256 != str(source.get("sha256") or ""):
+            raise ValueError("confirmed dataset source attachment changed")
+
+        mapping = payload.get("mapping")
+        summary = payload.get("summary")
+        hashes = payload.get("hashes")
+        artifacts = payload.get("artifacts")
+        if not all(isinstance(item, dict) for item in (mapping, summary, hashes, artifacts)):
+            raise ValueError("confirmed dataset manifest structure is invalid")
+        assert isinstance(mapping, dict)
+        assert isinstance(summary, dict)
+        assert isinstance(hashes, dict)
+        assert isinstance(artifacts, dict)
+        clean_property = self._property_id(str(mapping.get("property_id") or ""))
+        headers = {
+            str(item)
+            for item in (raw_payload.get("dataset_profile") or {}).get("headers", [])
+        }
+        if (
+            str(mapping.get("smiles_column") or "") not in headers
+            or str(mapping.get("target_column") or "") not in headers
+        ):
+            raise ValueError("confirmed dataset mapping is not bound to the raw dataset")
+        if (
+            type(summary.get("strict_smiles_cleaning")) is not bool
+            or type(summary.get("drop_empty_target_rows")) is not bool
+        ):
+            raise ValueError("confirmed dataset cleaning flags are invalid")
+        request_material = {
+            "dataset_id": dataset_id,
+            "source_sha256": reference.sha256,
+            "smiles_column": str(mapping.get("smiles_column") or ""),
+            "target_column": str(mapping.get("target_column") or ""),
+            "property_id": clean_property,
+            "strict_smiles_cleaning": summary.get("strict_smiles_cleaning"),
+            "drop_empty_target_rows": summary.get("drop_empty_target_rows"),
+        }
+        if request_sha256 != self._sha256_json(request_material):
+            raise ValueError("confirmed dataset request replay mismatch")
+        if artifacts != _CONFIRMED_ARTIFACTS:
+            raise ValueError("confirmed dataset artifact roster mismatch")
+        expected_hash_keys = {
+            "source_sha256",
+            "confirmed_dataset_sha256",
+            "property_catalog_sha256",
+        }
+        if set(hashes) != expected_hash_keys or hashes.get("source_sha256") != reference.sha256:
+            raise ValueError("confirmed dataset artifact hash roster mismatch")
+
+        base = self._dataset_dir(project_id, dataset_id)
+        confirmation_root = (base / "confirmations").resolve()
+        directory_path = base / "confirmations" / confirmation_id
+        if directory_path.is_symlink():
+            raise ValueError("confirmed dataset directory is unsafe")
+        try:
+            directory = directory_path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError("confirmed dataset directory is unavailable") from exc
+        if not directory.is_relative_to(confirmation_root):
+            raise ValueError("confirmed dataset directory escapes confirmation root")
+
+        checked: dict[str, str] = {}
+        for artifact_id, relative in _CONFIRMED_ARTIFACTS.items():
+            relative_path = Path(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ValueError("confirmed dataset artifact path is unsafe")
+            candidate = directory / relative_path
+            try:
+                resolved = candidate.resolve(strict=True)
+            except OSError as exc:
+                raise ValueError("confirmed dataset artifact is unavailable") from exc
+            if not resolved.is_relative_to(directory) or candidate.is_symlink():
+                raise ValueError("confirmed dataset artifact escapes confirmation directory")
+            checked[artifact_id] = str(relative_path)
+        if self._sha256_regular_file_bound(directory / "confirmed_dataset.csv") != hashes.get(
+            "confirmed_dataset_sha256"
+        ):
+            raise ValueError("confirmed dataset CSV digest mismatch")
+        if self._sha256_regular_file_bound(directory / "property_catalog.json") != hashes.get(
+            "property_catalog_sha256"
+        ):
+            raise ValueError("confirmed dataset property catalog digest mismatch")
+        return checked
 
     def _verify_raw_manifest(
         self,
@@ -357,12 +573,19 @@ class DatasetWorkflowService:
             project_id,
             str(source.get("artifact_id") or ""),
         )
-        if reference.sha256 != str(source.get("sha256") or ""):
+        if (
+            source != reference.model_dump(mode="json")
+            or reference.sha256 != str(source.get("sha256") or "")
+            or dataset_id != f"dataset_{reference.sha256}"
+        ):
             raise ValueError("raw dataset source attachment changed")
 
     def _datasets_root(self, project_id: str) -> Path:
         project = self.projects.project_dir(project_id)
-        root = (project / "datasets").resolve()
+        root_path = project / "datasets"
+        if root_path.is_symlink():
+            raise ValueError("datasets directory is unsafe")
+        root = root_path.resolve()
         if not root.is_relative_to(project):
             raise ValueError("datasets directory escapes project")
         root.mkdir(parents=True, exist_ok=True)
@@ -373,7 +596,10 @@ class DatasetWorkflowService:
         if not re.fullmatch(r"dataset_[0-9a-f]{64}", clean_id):
             raise ValueError("invalid dataset_id")
         root = self._datasets_root(project_id)
-        directory = (root / clean_id).resolve()
+        directory_path = root / clean_id
+        if directory_path.is_symlink():
+            raise ValueError("dataset directory is unsafe")
+        directory = directory_path.resolve()
         if not directory.is_relative_to(root):
             raise ValueError("dataset_id escapes datasets directory")
         directory.mkdir(parents=True, exist_ok=True)
@@ -443,6 +669,104 @@ class DatasetWorkflowService:
         except (OSError, json.JSONDecodeError):
             return {}
         return payload if isinstance(payload, dict) else {}
+
+    @classmethod
+    def _read_bound_json(
+        cls,
+        path: Path,
+        *,
+        max_bytes: int,
+        label: str,
+    ) -> dict[str, Any]:
+        payload_bytes = cls._read_regular_file_bound(path, max_bytes=max_bytes)
+        try:
+            payload = json.loads(payload_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{label} is invalid") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"{label} must be an object")
+        return payload
+
+    @classmethod
+    def _sha256_regular_file_bound(cls, path: Path) -> str:
+        _, digest = cls._verify_regular_file_bound(
+            path,
+            max_bytes=_MAX_CONFIRMED_ARTIFACT_BYTES,
+            capture=False,
+        )
+        return digest
+
+    @staticmethod
+    def _read_regular_file_bound(path: Path, *, max_bytes: int) -> bytes:
+        payload, _ = DatasetWorkflowService._verify_regular_file_bound(
+            path,
+            max_bytes=max_bytes,
+            capture=True,
+        )
+        return payload
+
+    @staticmethod
+    def _verify_regular_file_bound(
+        path: Path,
+        *,
+        max_bytes: int,
+        capture: bool,
+    ) -> tuple[bytes, str]:
+        no_follow = getattr(os, "O_NOFOLLOW", None)
+        if no_follow is None:
+            raise ValueError("confirmed dataset verification requires O_NOFOLLOW")
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY | no_follow | getattr(os, "O_NONBLOCK", 0),
+            )
+            initial = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(initial.st_mode)
+                or initial.st_size < 0
+                or initial.st_size > max_bytes
+            ):
+                raise ValueError("confirmed dataset artifact is not a bounded regular file")
+            chunks: list[bytes] = []
+            total = 0
+            digest = hashlib.sha256()
+            while True:
+                chunk = os.read(descriptor, min(1024 * 1024, max_bytes - total + 1))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError("confirmed dataset artifact exceeds the size limit")
+                digest.update(chunk)
+                if capture:
+                    chunks.append(chunk)
+            final = os.fstat(descriptor)
+            named = os.stat(path, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(named.st_mode)
+                or (initial.st_dev, initial.st_ino) != (named.st_dev, named.st_ino)
+                or (
+                    initial.st_size,
+                    initial.st_mtime_ns,
+                    initial.st_ctime_ns,
+                )
+                != (
+                    final.st_size,
+                    final.st_mtime_ns,
+                    final.st_ctime_ns,
+                )
+                or total != initial.st_size
+            ):
+                raise ValueError("confirmed dataset artifact changed while being verified")
+            return (b"".join(chunks) if capture else b""), digest.hexdigest()
+        except ValueError:
+            raise
+        except OSError as exc:
+            raise ValueError("confirmed dataset artifact is unavailable") from exc
+        finally:
+            if descriptor != -1:
+                os.close(descriptor)
 
     @staticmethod
     def _sha256_file(path: Path) -> str:

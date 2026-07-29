@@ -280,7 +280,8 @@
             </div>
           </div>
           <label for="reinvent4-config-path">REINVENT4 本地配置模板</label>
-          <input id="reinvent4-config-path" placeholder="/absolute/local/path/to/reinvent4_config.toml" />
+          <input id="reinvent4-config-path" placeholder="/absolute/local/path/to/reinvent4_config.toml" aria-describedby="reinvent4-config-help" />
+          <p id="reinvent4-config-help" class="field-help">{% raw %}模板须保留完整的 sampling 配置，并包含 <code>{{molly_output_csv}}</code>、<code>{{molly_design_request_id}}</code>、<code>{{molly_seed}}</code>、<code>{{molly_design_request_sha256}}</code>。每次运行会冻结有效配置，并自动创建独立的远端 attempt 目录。{% endraw %}</p>
           <div class="split">
             <div>
               <label for="generation-count">生成数量</label>

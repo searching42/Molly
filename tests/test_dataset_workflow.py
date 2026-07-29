@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 from pathlib import Path
+
+import pytest
 
 from ai4s_agent.app import create_app
 from ai4s_agent.schemas import GateName, RunStatus
@@ -117,6 +120,15 @@ def test_dataset_routes_bind_raw_attachment_and_publish_confirmed_dataset(
     assert rows[0]["plqy"]
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["hashes"]["source_sha256"] == confirmed["source_attachment"]["sha256"]
+    unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    assert manifest["manifest_sha256"] == hashlib.sha256(
+        json.dumps(
+            unsigned,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
     listing = client.get("/api/projects/dataset-workflow/datasets")
     assert listing.status_code == 200
@@ -210,3 +222,149 @@ def test_confirmed_dataset_runs_model_package_generation_publication_and_topn(
     assert publication["claim_boundary"] == "recommendation_only_not_experimental_validation"
     with (run_dir / artifacts["topn_export"]).open("r", encoding="utf-8", newline="") as handle:
         assert len(list(csv.DictReader(handle))) == 3
+
+    candidate_path = run_dir / artifacts["candidate_dataset"]
+    candidate_path.write_text(
+        candidate_path.read_text(encoding="utf-8") + "tampered,CC,generated,stub,99\n",
+        encoding="utf-8",
+    )
+    rejected = client.get(f"/api/runs/{run_id}?project_id={project_id}")
+    assert rejected.status_code == 400
+    assert rejected.get_json()["error"] == (
+        "generation publication failed integrity verification"
+    )
+
+
+@pytest.mark.parametrize(
+    "artifact_id",
+    ["cleaned_train_dataset", "property_catalog"],
+)
+def test_confirmed_dataset_rejects_replaced_artifact_bytes(
+    tmp_path: Path,
+    artifact_id: str,
+) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "config",
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    project_id = f"tamper-{artifact_id.replace('_', '-')}"
+    confirmed = _upload_inspect_confirm(client, project_id)
+    artifact_path = Path(confirmed["artifacts"][artifact_id])
+    artifact_path.write_bytes(artifact_path.read_bytes() + b"\nreplaced\n")
+
+    listing = client.get(f"/api/projects/{project_id}/datasets")
+    assert listing.status_code == 409
+    body = listing.get_json()
+    assert body["error_code"] == "dataset_verification_failed"
+    assert str(tmp_path) not in json.dumps(body)
+
+    replay = client.post(
+        f"/api/projects/{project_id}/datasets/{confirmed['dataset_id']}/confirm",
+        json={
+            **confirmed["mapping"],
+            "confirmed_by": "dataset-reviewer",
+            "strict_smiles_cleaning": False,
+            "drop_empty_target_rows": True,
+        },
+    )
+    assert replay.status_code == 400
+    assert replay.get_json()["error_code"] == "dataset_confirmation_failed"
+    assert str(tmp_path) not in json.dumps(replay.get_json())
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("schema_version", "molly_confirmed_dataset.invalid"),
+        ("project_id", "another-project"),
+        ("source_attachment", {"artifact_id": "artifact_forged"}),
+        (
+            "artifacts",
+            {
+                "cleaned_train_dataset": "../../outside.csv",
+                "confirmed_training_dataset": "../../outside.csv",
+                "property_catalog": "property_catalog.json",
+            },
+        ),
+    ],
+)
+def test_confirmed_dataset_rejects_manifest_identity_and_path_tampering(
+    tmp_path: Path,
+    field: str,
+    replacement: object,
+) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "config",
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    project_id = f"manifest-tamper-{field.replace('_', '-')}"
+    confirmed = _upload_inspect_confirm(client, project_id)
+    manifest_path = Path(confirmed["artifacts"]["confirmed_dataset_manifest"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest[field] = replacement
+    unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    manifest["manifest_sha256"] = hashlib.sha256(
+        json.dumps(
+            unsigned,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    rejected = client.get(f"/api/projects/{project_id}/datasets")
+    assert rejected.status_code == 409
+    assert rejected.get_json()["error_code"] == "dataset_verification_failed"
+
+
+def test_dataset_routes_do_not_echo_internal_exception_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "config",
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    service = app.extensions["dataset_workflow_service"]
+    secret = "/private/internal/datasets/secret.csv"
+
+    def fail(*args, **kwargs):
+        raise ValueError(secret)
+
+    monkeypatch.setattr(service, "list_datasets", fail)
+    listed = client.get("/api/projects/safe-errors/datasets")
+    assert listed.status_code == 409
+    assert secret not in json.dumps(listed.get_json())
+
+    monkeypatch.setattr(service, "inspect_attachment", fail)
+    inspected = client.post(
+        "/api/projects/safe-errors/datasets/inspect-attachment",
+        json={"artifact_id": "artifact_test"},
+    )
+    assert inspected.status_code == 400
+    assert secret not in json.dumps(inspected.get_json())
+
+    monkeypatch.setattr(service, "confirm_dataset", fail)
+    confirmed = client.post(
+        "/api/projects/safe-errors/datasets/dataset_"
+        + "a" * 64
+        + "/confirm",
+        json={
+            "smiles_column": "SMILES",
+            "target_column": "target",
+            "property_id": "target",
+            "confirmed_by": "reviewer",
+        },
+    )
+    assert confirmed.status_code == 400
+    assert secret not in json.dumps(confirmed.get_json())

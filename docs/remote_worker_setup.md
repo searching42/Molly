@@ -112,6 +112,32 @@ export MOLLY_UNIMOL_ENVIRONMENT_ID=unimol-default
 The model-training UI selects the environment explicitly, so these environment
 variables are normally unnecessary for browser-driven runs.
 
+### REINVENT4 config template contract
+
+The browser accepts a local REINVENT4 sampling **template**, not a reusable
+effective config. Keep the complete model and sampling settings in that file and
+bind these four values exactly where REINVENT4 expects them:
+
+```toml
+run_type = "sampling"
+device = "cpu"
+seed = {{molly_seed}}
+json_out_config = "{{molly_output_csv}}.{{molly_design_request_id}}.{{molly_design_request_sha256}}.json"
+
+[parameters]
+output_file = "{{molly_output_csv}}"
+# retain the rest of the validated REINVENT4 parameters here
+```
+
+Required placeholders are `{{molly_output_csv}}`,
+`{{molly_design_request_id}}`, `{{molly_seed}}`, and
+`{{molly_design_request_sha256}}`. Molly renders them only after allocating a
+fresh attempt ID and a run-owned remote directory. It then freezes the rendered
+bytes locally, transfers that already-open inode, imports the raw CSV bytes into
+the same local attempt, and binds the request, effective config, raw output, and
+profile digests in the generation publication. The UI does not accept or reuse
+a fixed remote config/output path.
+
 The OLED inverse-design execution policies resolve the following logical
 environment IDs from this same private file:
 

@@ -59,6 +59,10 @@ def test_model_training_action_exposes_confirmed_dataset_and_gated_execution() -
     assert 'postJSON("/api/run-plan/resume"' in html
     assert "train_model_unimol_legacy_adapter" in html
     assert 'generation.reinvent4_mode = "remote"' in html
+    assert 'id="reinvent4-config-help"' in html
+    assert "{{molly_output_csv}}" in html
+    assert "{{molly_design_request_sha256}}" in html
+    assert "自动创建独立的远端 attempt 目录" in html
     assert "function persistModelWorkflowState()" in html
     assert "function restoreModelWorkflowState()" in html
     assert "sessionStorage.setItem(key" in html
