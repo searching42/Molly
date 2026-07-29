@@ -35,9 +35,11 @@ The Settings page provides a guided connection form:
 4. enter an absolute run directory on the remote machine;
 5. select only workloads whose worker environments are installed remotely.
 
-The optional dedicated `known_hosts` path is under **Advanced security
-options**. Leave it blank to use SSH's normal `known_hosts` resolution. Saving
-also starts the bounded read-only worker probe. The UI reports full readiness
+The dedicated `known_hosts` path is under **Advanced security options**.
+Literature-only profiles may leave it blank and use SSH's normal host-key
+resolution. Profiles selected for REINVENT4 or Uni-Mol execution must point to
+a local, pinned `known_hosts` file; otherwise model dispatch is rejected before
+transport. Saving also starts the bounded read-only worker probe. The UI reports full readiness
 only when every declared capability is present in the probe's verified
 capabilities; otherwise it lists the missing labels. This comparison never
 rewrites the declaration, and neither a saved profile nor a successful probe
@@ -66,7 +68,17 @@ probe after saving; submission still performs a fresh, read-only preflight.
 ## 3. Register runtime environments
 
 Remote repository and interpreter paths live in private
-`environments.json`, not source code:
+`environments.json`, not source code. After saving the connection in Settings,
+open **运行环境路径（REINVENT4 / Uni-Mol）** and save one logical environment
+per installed backend:
+
+1. choose a stable ID such as `unimol-default` or `reinvent4-default`;
+2. select the connection resource created in step 2;
+3. enter the absolute remote repository root;
+4. enter the absolute remote Python interpreter;
+5. optionally enter the Conda environment name.
+
+The form is equivalent to this private record:
 
 ```json
 {
@@ -89,6 +101,42 @@ payload or set:
 ```bash
 export MOLLY_REINVENT4_ENVIRONMENT_ID=reinvent4-default
 ```
+
+The Uni-Mol training interface resolves the same field. Its optional launcher
+default is:
+
+```bash
+export MOLLY_UNIMOL_ENVIRONMENT_ID=unimol-default
+```
+
+The model-training UI selects the environment explicitly, so these environment
+variables are normally unnecessary for browser-driven runs.
+
+### REINVENT4 config template contract
+
+The browser accepts a local REINVENT4 sampling **template**, not a reusable
+effective config. Keep the complete model and sampling settings in that file and
+bind these four values exactly where REINVENT4 expects them:
+
+```toml
+run_type = "sampling"
+device = "cpu"
+seed = {{molly_seed}}
+json_out_config = "{{molly_output_csv}}.{{molly_design_request_id}}.{{molly_design_request_sha256}}.json"
+
+[parameters]
+output_file = "{{molly_output_csv}}"
+# retain the rest of the validated REINVENT4 parameters here
+```
+
+Required placeholders are `{{molly_output_csv}}`,
+`{{molly_design_request_id}}`, `{{molly_seed}}`, and
+`{{molly_design_request_sha256}}`. Molly renders them only after allocating a
+fresh attempt ID and a run-owned remote directory. It then freezes the rendered
+bytes locally, transfers that already-open inode, imports the raw CSV bytes into
+the same local attempt, and binds the request, effective config, raw output, and
+profile digests in the generation publication. The UI does not accept or reuse
+a fixed remote config/output path.
 
 The OLED inverse-design execution policies resolve the following logical
 environment IDs from this same private file:

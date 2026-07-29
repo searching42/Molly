@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -70,6 +72,17 @@ def _write_candidate_dataset(path: Path) -> None:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _reinvent4_template() -> str:
+    return """run_type = \"sampling\"
+device = \"cpu\"
+seed = {{molly_seed}}
+json_out_config = \"{{molly_output_csv}}.{{molly_design_request_id}}.{{molly_design_request_sha256}}.json\"
+
+[parameters]
+output_file = \"{{molly_output_csv}}\"
+"""
 
 
 def _write_custom_smiles_training_dataset(path: Path) -> None:
@@ -482,7 +495,13 @@ def test_generate_candidates_stub_adapter_writes_candidates_report_and_markdown(
     assert result["generation_report"]["novelty"]["novel_smiles_ratio"] >= 0
     assert Path(result["outputs"]["candidate_csv"]).exists()
     assert Path(result["outputs"]["generation_report_json"]).exists()
+    assert Path(result["outputs"]["generation_publication_json"]).exists()
     assert Path(result["outputs"]["markdown"]).exists()
+    publication = json.loads(
+        Path(result["outputs"]["generation_publication_json"]).read_text(encoding="utf-8")
+    )
+    assert publication["publication_kind"] == "deterministic_local_smoke"
+    assert publication["hashes"]["candidate_csv_sha256"]
 
     with Path(result["outputs"]["candidate_csv"]).open(encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -521,6 +540,26 @@ def test_generate_candidates_stub_adapter_records_frontier_targets(tmp_path: Pat
     markdown = Path(result["outputs"]["markdown"]).read_text(encoding="utf-8")
     assert "Frontier Targets" in markdown
     assert "lambda_em" in markdown
+
+
+def test_generate_candidates_stub_adapter_keeps_repeated_candidates_valid_smiles(
+    tmp_path: Path,
+) -> None:
+    chem = pytest.importorskip("rdkit.Chem")
+    result = generate_candidates_stub_adapter(
+        {
+            "run_id": "r-valid-smoke",
+            "output_dir": str(tmp_path / "generation"),
+            "count": 64,
+            "seed": 0,
+        }
+    )
+
+    assert result["status"] == "success"
+    with Path(result["outputs"]["candidate_csv"]).open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len({row["SMILES"] for row in rows}) == 64
+    assert all(chem.MolFromSmiles(row["SMILES"]) is not None for row in rows)
 
 
 def test_generate_candidates_stub_adapter_requires_confirmation_for_expensive_runs(tmp_path: Path) -> None:
@@ -607,6 +646,21 @@ def test_generate_candidates_reinvent4_backend_normalizes_existing_output(tmp_pa
         rows = list(csv.DictReader(f))
     assert [row["SMILES"] for row in rows] == ["CCO", "CCN"]
     assert {row["generator_backend"] for row in rows} == {"reinvent4"}
+    publication_path = Path(result["outputs"]["generation_publication_json"])
+    publication = json.loads(publication_path.read_text(encoding="utf-8"))
+    assert publication["publication_kind"] == "normalized_reinvent4_existing_output"
+    assert set(publication["artifacts"]) == {
+        "candidate_csv",
+        "generation_report_json",
+        "raw_output_csv",
+    }
+    frozen_raw = publication_path.parent / publication["artifacts"]["raw_output_csv"]
+    assert frozen_raw != raw_output
+    phase1_module.verify_generation_publication_from_files(publication_path)
+    frozen_raw.chmod(0o600)
+    frozen_raw.write_bytes(frozen_raw.read_bytes() + b"CCCl\n")
+    with pytest.raises(ValueError, match="artifact digest mismatch"):
+        phase1_module.verify_generation_publication_from_files(publication_path)
 
 
 def test_generate_candidates_reinvent4_backend_executes_remote_config_and_normalizes_output(
@@ -615,6 +669,11 @@ def test_generate_candidates_reinvent4_backend_executes_remote_config_and_normal
 ) -> None:
     config = tmp_path / "sampling.toml"
     config.write_text("# minimal test config\n", encoding="utf-8")
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        "molly-gpu-main ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
+        encoding="utf-8",
+    )
     remote_raw = tmp_path / "remote_raw.csv"
     with remote_raw.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["SMILES"])
@@ -630,6 +689,12 @@ def test_generate_candidates_reinvent4_backend_executes_remote_config_and_normal
         return {"argv": argv, "returncode": 0, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(phase1_module, "run_argv_cmd", fake_run_argv_cmd)
+    monkeypatch.setattr(
+        phase1_module,
+        "_run_pinned_config_scp",
+        lambda **kwargs: {"returncode": 0, "stdout": "", "stderr": ""},
+    )
+    attempt_dir = "/srv/example-molly/runs/reinvent4/test-attempt"
 
     result = generate_candidates_stub_adapter(
         {
@@ -643,13 +708,24 @@ def test_generate_candidates_reinvent4_backend_executes_remote_config_and_normal
             "reinvent4_config": str(config),
             "remote_repo": "/srv/example-molly/reinvent4",
             "remote_python": "/srv/example-molly/envs/reinvent4/bin/python",
-            "remote_output_csv": "/srv/example-molly/runs/reinvent4/sampling.csv",
+            "reinvent4_remote_attempt_dir": attempt_dir,
+            "reinvent4_remote_config": f"{attempt_dir}/config.toml",
+            "reinvent4_remote_output_csv": f"{attempt_dir}/sampling.csv",
+            "reinvent4_remote_known_hosts_file": str(known_hosts),
+            "reinvent4_remote_expected_hostname": "gpu-worker-main",
         }
     )
 
     assert result["status"] == "success"
     assert result["generation_report"]["backend"] == "reinvent4"
     assert result["generation_report"]["provenance"]["mode"] == "remote"
+    publication = json.loads(
+        Path(result["outputs"]["generation_publication_json"]).read_text(encoding="utf-8")
+    )
+    assert publication["publication_kind"] == "remote_reinvent4_compatibility"
+    assert publication["approved_by"] == "user"
+    assert publication["execution_binding"]["mode"] == "remote"
+    assert len(publication["execution_binding"]["effective_config_sha256"]) == 64
     assert result["remote"]["host"] == "molly-gpu-main"
     assert result["remote"]["conda_env"] == "reinvent4"
     assert any(
@@ -697,6 +773,11 @@ def test_reinvent4_remote_attempt_directory_is_created_before_transport(
         return {"argv": argv, "returncode": 0, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(phase1_module, "run_argv_cmd", fake_run_argv_cmd)
+    monkeypatch.setattr(
+        phase1_module,
+        "_run_pinned_config_scp",
+        lambda **kwargs: {"returncode": 0, "stdout": "", "stderr": ""},
+    )
     result = phase1_module._generate_candidates_reinvent4_backend(
         {
             "execute": True,
@@ -705,11 +786,12 @@ def test_reinvent4_remote_attempt_directory_is_created_before_transport(
             "remote_repo": "/srv/example-molly/reinvent4",
             "remote_python": "/srv/example-molly/envs/reinvent4/bin/python",
             "reinvent4_remote_attempt_dir": attempt_dir,
-                "reinvent4_remote_config": f"{attempt_dir}/config.toml",
-                "reinvent4_remote_output_csv": f"{attempt_dir}/output.csv",
-                "reinvent4_remote_known_hosts_file": str(known_hosts),
-                "reinvent4_remote_host_key_alias": "gpu-worker-main",
-                "local_output_csv": str(tmp_path / "local-output.csv"),
+            "reinvent4_remote_config": f"{attempt_dir}/config.toml",
+            "reinvent4_remote_output_csv": f"{attempt_dir}/output.csv",
+            "reinvent4_remote_known_hosts_file": str(known_hosts),
+            "reinvent4_remote_host_key_alias": "gpu-worker-main",
+            "reinvent4_remote_expected_hostname": "gpu-worker-main",
+            "local_output_csv": str(tmp_path / "local-output.csv"),
         },
         run_id="isolated-attempt",
         output_dir=tmp_path,
@@ -717,11 +799,12 @@ def test_reinvent4_remote_attempt_directory_is_created_before_transport(
     )
 
     assert result["mode"] == "remote"
-    assert calls[0][0] == "ssh"
-    assert calls[0][-1] == f"mkdir -m 700 -- {attempt_dir}"
-    assert "StrictHostKeyChecking=yes" in calls[0]
-    assert f"UserKnownHostsFile={known_hosts}" in calls[0]
-    assert "HostKeyAlias=gpu-worker-main" in calls[0]
+    assert calls[0][-1] == 'test "$(hostname -s)" = gpu-worker-main'
+    assert calls[1][0] == "ssh"
+    assert calls[1][-1] == f"mkdir -m 700 -- {attempt_dir}"
+    assert "StrictHostKeyChecking=yes" in calls[1]
+    assert f"UserKnownHostsFile={known_hosts}" in calls[1]
+    assert "HostKeyAlias=gpu-worker-main" in calls[1]
     assert result["remote"]["attempt_dir"] == attempt_dir
     with pytest.raises(ValueError, match="isolated remote path is invalid"):
         phase1_module._generate_candidates_reinvent4_backend(
@@ -734,6 +817,8 @@ def test_reinvent4_remote_attempt_directory_is_created_before_transport(
                 "reinvent4_remote_attempt_dir": attempt_dir,
                 "reinvent4_remote_config": f"{attempt_dir}/config.toml",
                 "reinvent4_remote_output_csv": f"{attempt_dir}/../outside.csv",
+                "reinvent4_remote_known_hosts_file": str(known_hosts),
+                "reinvent4_remote_expected_hostname": "gpu-worker-main",
             },
             run_id="unsafe-attempt",
             output_dir=tmp_path,
@@ -764,6 +849,11 @@ def test_reinvent4_pinned_endpoint_hostname_is_checked_before_workspace_creation
         return {"argv": argv, "returncode": 0, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(phase1_module, "run_argv_cmd", fake_run_argv_cmd)
+    monkeypatch.setattr(
+        phase1_module,
+        "_run_pinned_config_scp",
+        lambda **kwargs: {"returncode": 0, "stdout": "", "stderr": ""},
+    )
     result = phase1_module._generate_candidates_reinvent4_backend(
         {
             "execute": True,
@@ -825,7 +915,7 @@ def test_generate_candidates_reinvent4_backend_uses_private_environment_profile(
     config_root = tmp_path / "reports" / "end2end"
     config_root.mkdir(parents=True)
     config = config_root / "reinvent4_sampling_project_v1.toml"
-    config.write_text("output_file = \"openclaw_sampling_project_v1.csv\"\n", encoding="utf-8")
+    config.write_text(_reinvent4_template(), encoding="utf-8")
     remote_raw = tmp_path / "remote_raw.csv"
     remote_raw.write_text("SMILES\nCCO\n", encoding="utf-8")
     calls: list[list[str]] = []
@@ -838,6 +928,11 @@ def test_generate_candidates_reinvent4_backend_uses_private_environment_profile(
 
     monkeypatch.setattr(phase1_module, "WORKSPACE", tmp_path)
     monkeypatch.setattr(phase1_module, "run_argv_cmd", fake_run_argv_cmd)
+    monkeypatch.setattr(
+        phase1_module,
+        "_run_pinned_config_scp",
+        lambda **kwargs: {"returncode": 0, "stdout": "", "stderr": ""},
+    )
     config_dir = tmp_path / "private-config"
     known_hosts = tmp_path / "known_hosts"
     known_hosts.write_text(
@@ -879,14 +974,121 @@ def test_generate_candidates_reinvent4_backend_uses_private_environment_profile(
     )
 
     assert result["status"] == "success"
-    assert result["remote"]["remote_output_csv"].endswith("/openclaw_sampling_project_v1.csv")
+    assert result["remote"]["remote_output_csv"].endswith("/candidates.csv")
+    assert result["remote"]["attempt_id"] in result["remote"]["attempt_dir"]
+    publication = json.loads(
+        Path(result["outputs"]["generation_publication_json"]).read_text(encoding="utf-8")
+    )
+    assert publication["execution_binding"]["environment_profile_id"] == "reinvent4-default"
+    assert publication["execution_binding"]["environment_profile_digest"].startswith("sha256:")
+    assert publication["execution_binding"]["connection_profile_digest"].startswith("sha256:")
+    assert publication["publication_kind"] == "real_remote_reinvent4"
+    assert publication["execution_binding"]["attempt_isolated"] is True
+    assert publication["execution_binding"]["generation_request_sha256"]
+    assert set(publication["artifacts"]) == {
+        "candidate_csv",
+        "generation_report_json",
+        "effective_config",
+        "raw_output_csv",
+    }
+    phase1_module.verify_generation_publication_from_files(
+        result["outputs"]["generation_publication_json"]
+    )
     assert any(
         call[0] == "scp"
-        and call[-2].endswith(
-            ":/srv/example-molly/reinvent4/openclaw_sampling_project_v1.csv"
-        )
+        and call[-2].endswith("/candidates.csv")
         for call in calls
     )
+
+    publication_path = Path(result["outputs"]["generation_publication_json"])
+    effective_config = publication_path.parent / publication["artifacts"][
+        "effective_config"
+    ]
+    effective_config.chmod(0o600)
+    effective_config.write_bytes(effective_config.read_bytes() + b"\n# replaced\n")
+    with pytest.raises(ValueError, match="artifact digest mismatch"):
+        phase1_module.verify_generation_publication_from_files(publication_path)
+
+
+def test_reinvent4_frozen_config_descriptor_rejects_named_inode_replacement(
+    tmp_path: Path,
+) -> None:
+    frozen = tmp_path / "effective_config.toml"
+    original = b"run_type = \"sampling\"\n"
+    frozen.write_bytes(original)
+    expected = hashlib.sha256(original).hexdigest()
+    descriptor = phase1_module._open_verified_config_descriptor(
+        frozen,
+        expected_sha256=expected,
+    )
+    try:
+        replacement = tmp_path / "replacement.toml"
+        replacement.write_bytes(b"run_type = \"stale\"\n")
+        os.replace(replacement, frozen)
+        assert os.read(descriptor, len(original)) == original
+        with pytest.raises(ValueError, match="binding changed"):
+            phase1_module._verify_open_config_descriptor(
+                descriptor,
+                path=frozen,
+                expected_sha256=expected,
+            )
+    finally:
+        os.close(descriptor)
+
+
+def test_reinvent4_attempt_ids_are_unique_and_run_scoped() -> None:
+    first = phase1_module._model_reinvent4_attempt_id("Run 42")
+    second = phase1_module._model_reinvent4_attempt_id("Run 42")
+
+    assert first != second
+    assert first.startswith("run-42-")
+    assert second.startswith("run-42-")
+    assert len(first.rsplit("-", 1)[-1]) == 32
+
+
+def test_unimol_training_interface_resolves_private_environment_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    train_csv = tmp_path / "train.csv"
+    _write_small_dataset(train_csv)
+    config_dir = tmp_path / "private-config"
+    ResourceProfileStore(workspace_dir=tmp_path, config_dir=config_dir).save_connection(
+        ConnectionProfile(
+            connection_id="gpu-worker-main",
+            ssh_host_alias="molly-gpu-main",
+            expected_hostname="gpu-worker-main",
+            remote_root="/srv/example-molly/runs",
+            declared_capabilities=["gpu", "unimol"],
+        )
+    )
+    RuntimeEnvironmentStore(config_dir=config_dir).save_environment(
+        RuntimeEnvironmentProfile(
+            environment_id="unimol-default",
+            connection_id="gpu-worker-main",
+            repository_root="/srv/example-molly/unimol",
+            python_path="/srv/example-molly/envs/unimol/bin/python",
+            conda_environment="unimol",
+        )
+    )
+    monkeypatch.setattr(phase1_module, "WORKSPACE", tmp_path)
+    monkeypatch.setenv("MOLLY_CONFIG_DIR", str(config_dir))
+
+    result = train_model_unimol_legacy_adapter(
+        {
+            "run_id": "r-unimol-interface",
+            "property_id": "plqy",
+            "train_csv": str(train_csv),
+            "save_dir": str(tmp_path / "models"),
+            "log_dir": str(tmp_path / "logs"),
+            "environment_profile_id": "unimol-default",
+            "execute": False,
+        }
+    )
+
+    assert result["status"] == "planned"
+    assert result["adapter"] == "train_model_unimol_legacy"
+    assert "set execute=true" in result["note"]
 
 
 def test_generate_candidates_reinvent4_backend_preflight_blocks_unconfirmed_execution(tmp_path: Path) -> None:

@@ -7,6 +7,9 @@ from flask import Flask, jsonify, request
 
 import ai4s_agent.adapters as adapter_exports
 from ai4s_agent._utils import strict_bool
+from ai4s_agent.generation_publication import (
+    verify_generation_publication_from_files,
+)
 from ai4s_agent.job_manager import JobManager
 from ai4s_agent.memory import PermissionPolicy
 from ai4s_agent.orchestrator import Orchestrator
@@ -256,6 +259,18 @@ def _read_project_run_status(projects: ProjectStorage, project_id: str, run_id: 
     artifacts = artifact_payload.get("artifacts", {})
     if not isinstance(artifacts, dict):
         artifacts = {}
+    publication_relative = str(artifacts.get("generation_publication") or "")
+    if publication_relative:
+        publication_path = run_path / publication_relative
+        try:
+            resolved_publication = publication_path.resolve(strict=True)
+            if not resolved_publication.is_relative_to(run_path.resolve(strict=True)):
+                raise ValueError("generation publication escapes the run directory")
+            verify_generation_publication_from_files(publication_path)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                "generation publication failed integrity verification"
+            ) from exc
 
     status: dict[str, object] = {
         "run_id": run_id,

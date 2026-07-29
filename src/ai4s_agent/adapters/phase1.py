@@ -8,11 +8,14 @@ import json
 import math
 import os
 import re
+import secrets
 import shlex
+import stat
 import subprocess
 import statistics
 import sys
 import tempfile
+import tomllib
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
@@ -22,6 +25,15 @@ from ai4s_agent.adapters.claude_scripts import CLAUDE_SCRIPTS, WORKSPACE, build_
 from ai4s_agent.adapters.runtime import run_argv_cmd, run_argv_cmd_with_env
 from ai4s_agent.resource_profiles import ResourceProfileStore
 from ai4s_agent.runtime_environments import RuntimeEnvironmentStore
+from ai4s_agent.generation_publication import (
+    GENERATION_PUBLICATION_SCHEMA,
+    GENERATION_REQUEST_SCHEMA,
+    canonical_json_sha256,
+    publish_fresh_bytes,
+    publish_fresh_file,
+    read_regular_file_bound,
+    verify_generation_publication_from_files,
+)
 from ai4s_agent._utils import (
     read_csv_dict_rows,
     strict_bool,
@@ -114,6 +126,14 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) ->
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     return atomic_write_json(path, payload)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _write_markdown_report(path: Path, title: str, sections: dict[str, Any]) -> Path:
@@ -262,6 +282,45 @@ _SAFE_SSH_TARGET_RE = re.compile(
     r"^(?:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}@)?"
     r"(?:[A-Za-z0-9][A-Za-z0-9.-]{0,253}|\[[0-9A-Fa-f:.]+\])$"
 )
+_MODEL_REINVENT_REQUIRED_PLACEHOLDERS = {
+    "{{molly_output_csv}}",
+    "{{molly_design_request_id}}",
+    "{{molly_seed}}",
+    "{{molly_design_request_sha256}}",
+}
+
+
+def _run_pinned_config_scp(
+    *,
+    descriptor: int,
+    remote_target: str,
+    ssh_options: list[str],
+    cwd: Path,
+    timeout_sec: int,
+) -> dict[str, Any]:
+    """Transfer the exact already-open config inode, not a mutable named path."""
+
+    fd_root = Path("/proc/self/fd") if sys.platform.startswith("linux") else Path("/dev/fd")
+    source = str(fd_root / str(descriptor))
+    argv = ["scp", *ssh_options, "--", source, remote_target]
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=str(cwd),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout_sec,
+            pass_fds=(descriptor,),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError("failed to transfer the frozen REINVENT4 config") from exc
+    return {
+        "argv": argv,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout or "",
+        "stderr": completed.stderr or "",
+    }
 
 
 def _validate_remote_ssh_target(value: str) -> str:
@@ -518,9 +577,17 @@ def _private_reinvent4_environment(payload: dict[str, Any]) -> dict[str, str]:
     connection = ResourceProfileStore(workspace_dir=WORKSPACE).get_connection(
         environment.connection_id
     )
+    if not connection.enabled:
+        raise ValueError("REINVENT4 connection profile is disabled")
+    if "reinvent4" not in connection.declared_capabilities:
+        raise ValueError("REINVENT4 connection profile lacks required capabilities")
+    if not connection.known_hosts_path:
+        raise ValueError("REINVENT4 connection profile requires pinned known-hosts")
     return {
         "environment_id": environment.environment_id,
+        "environment_profile_digest": environment.digest(),
         "connection_id": connection.connection_id,
+        "connection_profile_digest": connection.digest(),
         "ssh_host_alias": connection.ssh_host_alias,
         "expected_hostname": connection.expected_hostname,
         "remote_root": connection.remote_root,
@@ -529,6 +596,166 @@ def _private_reinvent4_environment(payload: dict[str, Any]) -> dict[str, str]:
         "python_path": environment.python_path,
         "conda_environment": environment.conda_environment,
     }
+
+
+def _private_unimol_environment(payload: dict[str, Any]) -> dict[str, str]:
+    environment_id = str(
+        payload.get("environment_profile_id")
+        or payload.get("unimol_environment_profile_id")
+        or os.environ.get("MOLLY_UNIMOL_ENVIRONMENT_ID")
+        or ""
+    ).strip()
+    if not environment_id:
+        return {}
+    environment = RuntimeEnvironmentStore().get_environment(environment_id)
+    connection = ResourceProfileStore(workspace_dir=WORKSPACE).get_connection(
+        environment.connection_id
+    )
+    return {
+        "environment_id": environment.environment_id,
+        "environment_profile_digest": environment.digest(),
+        "connection_id": connection.connection_id,
+        "connection_profile_digest": connection.digest(),
+        "ssh_host_alias": connection.ssh_host_alias,
+        "expected_hostname": connection.expected_hostname,
+        "remote_root": connection.remote_root,
+        "known_hosts_path": connection.known_hosts_path,
+        "repository_root": environment.repository_root,
+        "python_path": environment.python_path,
+        "conda_environment": environment.conda_environment,
+    }
+
+
+def _model_reinvent4_attempt_id(run_id: str) -> str:
+    namespace = re.sub(r"[^a-z0-9.-]+", "-", str(run_id or "").strip().lower()).strip("-.")
+    if not namespace:
+        raise ValueError("REINVENT4 run ID cannot form a safe attempt namespace")
+    return f"{namespace[:48]}-{secrets.token_hex(16)}"
+
+
+def _model_reinvent4_request(
+    *,
+    run_id: str,
+    attempt_id: str,
+    requested_count: int,
+    seed: int,
+    config_template_sha256: str,
+    private_environment: dict[str, str],
+) -> dict[str, Any]:
+    return {
+        "schema_version": GENERATION_REQUEST_SCHEMA,
+        "request_id": f"reinvent4-{attempt_id}",
+        "run_id": str(run_id),
+        "attempt_id": attempt_id,
+        "requested_count": requested_count,
+        "seed": seed,
+        "config_template_sha256": config_template_sha256,
+        "connection_id": private_environment.get("connection_id"),
+        "connection_profile_digest": private_environment.get("connection_profile_digest"),
+        "environment_profile_id": private_environment.get("environment_id"),
+        "environment_profile_digest": private_environment.get("environment_profile_digest"),
+    }
+
+
+def _render_model_reinvent4_config(
+    *,
+    template_bytes: bytes,
+    generation_request: dict[str, Any],
+    remote_output_csv: str,
+) -> bytes:
+    try:
+        template = template_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("REINVENT4 config template must be UTF-8 text") from exc
+    if any(token not in template for token in _MODEL_REINVENT_REQUIRED_PLACEHOLDERS):
+        raise ValueError(
+            "REINVENT4 config template must bind Molly output, request ID, seed, and request digest"
+        )
+    request_id = str(generation_request["request_id"])
+    seed = int(generation_request["seed"])
+    request_sha256 = canonical_json_sha256(generation_request)
+    rendered = (
+        template.replace("{{molly_output_csv}}", remote_output_csv)
+        .replace("{{molly_design_request_id}}", request_id)
+        .replace("{{molly_seed}}", str(seed))
+        .replace("{{molly_design_request_sha256}}", request_sha256)
+    )
+    if "{{molly_" in rendered:
+        raise ValueError("REINVENT4 config contains an unresolved Molly placeholder")
+    try:
+        parsed = tomllib.loads(rendered)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError("rendered REINVENT4 config is invalid") from exc
+    if parsed.get("run_type") != "sampling" or parsed.get("device") != "cpu":
+        raise ValueError("REINVENT4 model workflow requires CPU sampling mode")
+    if parsed.get("seed") != seed:
+        raise ValueError("REINVENT4 config seed binding is invalid")
+    parameters = parsed.get("parameters")
+    if not isinstance(parameters, dict) or parameters.get("output_file") != remote_output_csv:
+        raise ValueError("REINVENT4 config output binding is invalid")
+    json_out_config = parsed.get("json_out_config")
+    if (
+        not isinstance(json_out_config, str)
+        or request_id not in json_out_config
+        or request_sha256 not in json_out_config
+        or PurePosixPath(json_out_config).parent != PurePosixPath(remote_output_csv).parent
+    ):
+        raise ValueError("REINVENT4 config request audit binding is invalid")
+    return rendered.encode("utf-8")
+
+
+def _open_verified_config_descriptor(path: Path, *, expected_sha256: str) -> int:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise ValueError("REINVENT4 frozen config requires O_NOFOLLOW")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | no_follow)
+        _verify_open_config_descriptor(
+            descriptor,
+            path=path,
+            expected_sha256=expected_sha256,
+        )
+        return descriptor
+    except Exception:
+        if "descriptor" in locals():
+            os.close(descriptor)
+        raise
+
+
+def _verify_open_config_descriptor(
+    descriptor: int,
+    *,
+    path: Path,
+    expected_sha256: str,
+) -> None:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    initial = os.fstat(descriptor)
+    if not stat.S_ISREG(initial.st_mode):
+        raise ValueError("REINVENT4 frozen config is not a regular file")
+    digest = hashlib.sha256()
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            break
+        digest.update(chunk)
+    final = os.fstat(descriptor)
+    named = os.stat(path, follow_symlinks=False)
+    if (
+        digest.hexdigest() != expected_sha256
+        or (initial.st_dev, initial.st_ino) != (named.st_dev, named.st_ino)
+        or (
+            initial.st_size,
+            initial.st_mtime_ns,
+            initial.st_ctime_ns,
+        )
+        != (
+            final.st_size,
+            final.st_mtime_ns,
+            final.st_ctime_ns,
+        )
+    ):
+        raise ValueError("REINVENT4 frozen config binding changed")
+    os.lseek(descriptor, 0, os.SEEK_SET)
 
 
 def _generate_candidates_reinvent4_backend(
@@ -581,17 +808,13 @@ def _generate_candidates_reinvent4_backend(
         local_reinvent4_config_raw or (WORKSPACE / "reports/end2end/reinvent4_sampling_project_v1.toml"),
         base=WORKSPACE,
     )
-    remote_reinvent4_config = str(
-        payload.get("reinvent4_remote_config")
-        or payload.get("remote_config")
-        or (f"{remote_repo}/configs/openclaw_sampling_project_v1.toml" if remote_repo else "")
+    supplied_remote_config = str(
+        payload.get("reinvent4_remote_config") or payload.get("remote_config") or ""
     ).strip()
-    remote_output_csv = str(
-        payload.get("remote_output_csv")
-        or payload.get("reinvent4_remote_output_csv")
-        or (f"{remote_repo}/openclaw_sampling_project_v1.csv" if remote_repo else "")
+    supplied_remote_output = str(
+        payload.get("remote_output_csv") or payload.get("reinvent4_remote_output_csv") or ""
     ).strip()
-    remote_attempt_dir = str(
+    supplied_remote_attempt = str(
         payload.get("reinvent4_remote_attempt_dir")
         or payload.get("remote_attempt_dir")
         or ""
@@ -630,41 +853,38 @@ def _generate_candidates_reinvent4_backend(
         or remote_expected_hostname.startswith("-")
     ):
         raise ValueError("REINVENT4 expected remote hostname is invalid")
-    if remote_expected_hostname and not remote_known_hosts_file:
+    if mode == "remote" and (not remote_expected_hostname or not remote_known_hosts_file):
         raise ValueError(
-            "REINVENT4 expected remote hostname requires a pinned known-hosts file"
+            "REINVENT4 remote execution requires hostname verification and pinned known-hosts"
         )
-    local_output_csv = str(payload.get("local_output_csv") or payload.get("reinvent4_local_output_csv") or output_dir / f"{run_id}_reinvent4_raw.csv").strip()
-    local_source_csv = _resolve_path(local_output_csv, base=WORKSPACE)
-
-    remote = {
-        "host": remote_host,
-        "connection_id": private_environment.get("connection_id") or None,
-        "environment_id": private_environment.get("environment_id") or None,
-        "repo": remote_repo,
-        "python": remote_python,
-        "conda_env": remote_conda_env,
-        "local_config": str(local_reinvent4_config),
-        "remote_config": remote_reinvent4_config,
-        "remote_output_csv": remote_output_csv,
-        "attempt_dir": remote_attempt_dir or None,
-        "host_key_policy": (
-            "strict_known_hosts"
-            if remote_known_hosts_file
-            else "legacy_unpinned_compatibility"
-        ),
-        "host_key_alias": remote_host_key_alias or None,
-        "expected_hostname": remote_expected_hostname or None,
-        "endpoint_hostname_verified": False,
-    }
 
     if mode == "existing_output":
         source_csv_raw = str(payload.get("reinvent4_output_csv") or payload.get("source_csv") or payload.get("source_output_csv") or "").strip()
         if not source_csv_raw:
             raise ValueError("reinvent4_output_csv required for existing_output mode")
         source_csv = _resolve_path(source_csv_raw, base=WORKSPACE)
-        rows, candidates = _read_generated_candidate_csv(source_csv, backend=GenerationBackend.REINVENT4.value, count=count)
-        return {"rows": rows, "candidates": candidates, "source_csv": str(source_csv), "mode": mode, "remote": remote}
+        import_id = f"import-{secrets.token_hex(16)}"
+        import_dir = output_dir / "remote_attempts" / import_id
+        import_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.mkdir(import_dir, mode=0o700)
+        frozen_raw = import_dir / "raw_output.csv"
+        raw_sha256 = publish_fresh_file(source_csv, frozen_raw)
+        rows, candidates = _read_generated_candidate_csv(
+            frozen_raw,
+            backend=GenerationBackend.REINVENT4.value,
+            count=count,
+        )
+        return {
+            "rows": rows,
+            "candidates": candidates,
+            # Existing hardened callers validate their invocation-local source
+            # path independently; publication code consumes raw_output_path.
+            "source_csv": str(source_csv),
+            "raw_output_path": str(frozen_raw),
+            "raw_output_sha256": raw_sha256,
+            "mode": mode,
+            "remote": {"endpoint_hostname_verified": False},
+        }
 
     if mode == "preflight":
         raise ValueError(
@@ -672,60 +892,135 @@ def _generate_candidates_reinvent4_backend(
             "Set reinvent4_mode=remote to execute against molly-gpu-main or reinvent4_mode=existing_output to normalize an existing CSV."
         )
 
-    if not remote_host or not remote_repo or not remote_python or not remote_reinvent4_config:
+    if not remote_host or not remote_repo or not remote_python:
         raise ValueError(
             "remote execution requires a private Molly environment profile or "
             "explicit remote_host/remote_repo/remote_python/reinvent4_config values"
         )
-    if not local_reinvent4_config.exists():
-        raise FileNotFoundError(f"REINVENT4 local config not found: {local_reinvent4_config}")
+    template_bytes, template_sha256 = read_regular_file_bound(
+        local_reinvent4_config,
+        max_bytes=16 * 1024 * 1024,
+    )
+    supplied_attempt_fields = [
+        supplied_remote_attempt,
+        supplied_remote_config,
+        supplied_remote_output,
+    ]
+    if any(supplied_attempt_fields) and not all(supplied_attempt_fields):
+        raise ValueError("REINVENT4 isolated remote attempt paths must be supplied together")
+    caller_owned_attempt = all(supplied_attempt_fields)
+    if not caller_owned_attempt and not private_environment:
+        raise ValueError("REINVENT4 UI execution requires a private runtime environment profile")
 
-    if remote_expected_hostname:
-        endpoint_check = run_argv_cmd(
-            argv=[
-                "ssh",
-                *_ssh_scp_options(
-                    known_hosts_file=remote_known_hosts_file,
-                    host_key_alias=remote_host_key_alias or None,
-                ),
-                "--",
-                remote_host,
-                "test \"$(hostname -s)\" = " + shlex.quote(remote_expected_hostname),
-            ],
-            cwd=WORKSPACE,
-            timeout_sec=int(payload.get("timeout_sec", 7200)),
+    attempt_id = _model_reinvent4_attempt_id(run_id)
+    if caller_owned_attempt:
+        remote_attempt_dir = supplied_remote_attempt
+        remote_reinvent4_config = supplied_remote_config
+        remote_output_csv = supplied_remote_output
+        generation_request: dict[str, Any] | None = None
+        effective_config_bytes = template_bytes
+    else:
+        remote_root = str(private_environment.get("remote_root") or "").rstrip("/")
+        if not remote_root:
+            raise ValueError("REINVENT4 runtime environment has no remote run root")
+        remote_attempt_dir = f"{remote_root}/molly-reinvent4-{attempt_id}"
+        remote_reinvent4_config = f"{remote_attempt_dir}/effective_config.toml"
+        remote_output_csv = f"{remote_attempt_dir}/candidates.csv"
+        generation_request = _model_reinvent4_request(
+            run_id=run_id,
+            attempt_id=attempt_id,
+            requested_count=count,
+            seed=int(payload.get("seed") or 0),
+            config_template_sha256=template_sha256,
+            private_environment=private_environment,
         )
-        if int(endpoint_check.get("returncode", 1)) != 0:
-            raise RuntimeError(
-                f"REINVENT4 remote endpoint hostname check failed: {endpoint_check}"
-            )
-        remote["endpoint_hostname_verified"] = True
-
-    remote_attempt_create: dict[str, Any] | None = None
-    if remote_attempt_dir:
-        _validate_reinvent4_remote_attempt_paths(
-            remote_attempt_dir=remote_attempt_dir,
-            remote_config=remote_reinvent4_config,
+        effective_config_bytes = _render_model_reinvent4_config(
+            template_bytes=template_bytes,
+            generation_request=generation_request,
             remote_output_csv=remote_output_csv,
         )
-        remote_attempt_create = run_argv_cmd(
-            argv=[
-                "ssh",
-                *_ssh_scp_options(
-                    known_hosts_file=remote_known_hosts_file or None,
-                    host_key_alias=remote_host_key_alias or None,
-                ),
-                "--",
-                remote_host,
-                "mkdir -m 700 -- " + shlex.quote(remote_attempt_dir),
-            ],
-            cwd=WORKSPACE,
-            timeout_sec=int(payload.get("timeout_sec", 7200)),
-        )
-        if int(remote_attempt_create.get("returncode", 1)) != 0:
-            raise RuntimeError(
-                f"failed to allocate isolated REINVENT4 remote workspace: {remote_attempt_create}"
-            )
+    _validate_reinvent4_remote_attempt_paths(
+        remote_attempt_dir=remote_attempt_dir,
+        remote_config=remote_reinvent4_config,
+        remote_output_csv=remote_output_csv,
+    )
+
+    local_attempt_dir = output_dir / "remote_attempts" / attempt_id
+    local_attempt_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.mkdir(local_attempt_dir, mode=0o700)
+    effective_config_path = local_attempt_dir / "effective_config.toml"
+    effective_config_sha256 = publish_fresh_bytes(
+        effective_config_path,
+        effective_config_bytes,
+    )
+    requested_local_output = str(
+        payload.get("local_output_csv") or payload.get("reinvent4_local_output_csv") or ""
+    ).strip()
+    local_download = (
+        _resolve_path(requested_local_output, base=WORKSPACE)
+        if requested_local_output
+        else local_attempt_dir / "downloaded_output.csv"
+    )
+    if local_download.exists() or local_download.is_symlink():
+        raise ValueError("REINVENT4 local output target must be fresh")
+    local_download.parent.mkdir(parents=True, exist_ok=True)
+    frozen_raw_output = local_attempt_dir / "raw_output.csv"
+
+    remote = {
+        "host": remote_host,
+        "connection_id": private_environment.get("connection_id") or None,
+        "connection_profile_digest": private_environment.get("connection_profile_digest") or None,
+        "environment_id": private_environment.get("environment_id") or None,
+        "environment_profile_digest": private_environment.get("environment_profile_digest") or None,
+        "repo": remote_repo,
+        "python": remote_python,
+        "conda_env": remote_conda_env,
+        "remote_config": remote_reinvent4_config,
+        "remote_output_csv": remote_output_csv,
+        "attempt_dir": remote_attempt_dir,
+        "attempt_id": attempt_id,
+        "attempt_isolated": True,
+        "host_key_policy": "strict_known_hosts",
+        "host_key_alias": remote_host_key_alias or None,
+        "expected_hostname": remote_expected_hostname,
+        "endpoint_hostname_verified": False,
+        "config_template_sha256": template_sha256,
+        "effective_config_sha256": effective_config_sha256,
+    }
+
+    timeout_sec = int(payload.get("timeout_sec", 7200))
+    ssh_options = _ssh_scp_options(
+        known_hosts_file=remote_known_hosts_file,
+        host_key_alias=remote_host_key_alias or None,
+    )
+    endpoint_check = run_argv_cmd(
+        argv=[
+            "ssh",
+            *ssh_options,
+            "--",
+            remote_host,
+            "test \"$(hostname -s)\" = " + shlex.quote(remote_expected_hostname),
+        ],
+        cwd=WORKSPACE,
+        timeout_sec=timeout_sec,
+    )
+    if int(endpoint_check.get("returncode", 1)) != 0:
+        raise RuntimeError("REINVENT4 remote endpoint hostname check failed")
+    remote["endpoint_hostname_verified"] = True
+
+    remote_attempt_create = run_argv_cmd(
+        argv=[
+            "ssh",
+            *ssh_options,
+            "--",
+            remote_host,
+            "mkdir -m 700 -- " + shlex.quote(remote_attempt_dir),
+        ],
+        cwd=WORKSPACE,
+        timeout_sec=timeout_sec,
+    )
+    if int(remote_attempt_create.get("returncode", 1)) != 0:
+        raise RuntimeError("failed to allocate isolated REINVENT4 remote workspace")
 
     remote_output_file = str(Path(remote_output_csv))
     remote_command = " ".join(
@@ -747,64 +1042,85 @@ def _generate_candidates_reinvent4_backend(
         ]
     )
 
-    scp_config = run_argv_cmd(
-        argv=[
-            "scp",
-            *_ssh_scp_options(
-                known_hosts_file=remote_known_hosts_file or None,
-                host_key_alias=remote_host_key_alias or None,
-            ),
-            "--",
-            str(local_reinvent4_config),
-            f"{remote_host}:{remote_reinvent4_config}",
-        ],
-        cwd=WORKSPACE,
-        timeout_sec=int(payload.get("timeout_sec", 7200)),
+    config_descriptor = _open_verified_config_descriptor(
+        effective_config_path,
+        expected_sha256=effective_config_sha256,
     )
+    try:
+        scp_config = _run_pinned_config_scp(
+            descriptor=config_descriptor,
+            remote_target=f"{remote_host}:{remote_reinvent4_config}",
+            ssh_options=ssh_options,
+            cwd=WORKSPACE,
+            timeout_sec=timeout_sec,
+        )
+        _verify_open_config_descriptor(
+            config_descriptor,
+            path=effective_config_path,
+            expected_sha256=effective_config_sha256,
+        )
+    finally:
+        os.close(config_descriptor)
     if int(scp_config.get("returncode", 1)) != 0:
-        raise RuntimeError(f"failed to copy REINVENT4 config: {scp_config}")
+        raise RuntimeError("failed to copy frozen REINVENT4 config")
 
     ssh_result = run_argv_cmd(
         argv=[
             "ssh",
-            *_ssh_scp_options(
-                known_hosts_file=remote_known_hosts_file or None,
-                host_key_alias=remote_host_key_alias or None,
-            ),
+            *ssh_options,
             "--",
             remote_host,
             remote_command,
         ],
         cwd=WORKSPACE,
-        timeout_sec=int(payload.get("timeout_sec", 7200)),
+        timeout_sec=timeout_sec,
     )
     if int(ssh_result.get("returncode", 1)) != 0:
-        raise RuntimeError(f"REINVENT4 remote execution failed: {ssh_result}")
+        raise RuntimeError("REINVENT4 remote execution failed")
 
     fetch_output = run_argv_cmd(
         argv=[
             "scp",
-            *_ssh_scp_options(
-                known_hosts_file=remote_known_hosts_file or None,
-                host_key_alias=remote_host_key_alias or None,
-            ),
+            *ssh_options,
             "--",
             f"{remote_host}:{remote_output_file}",
-            str(local_source_csv),
+            str(local_download),
         ],
         cwd=WORKSPACE,
-        timeout_sec=int(payload.get("timeout_sec", 7200)),
+        timeout_sec=timeout_sec,
     )
     if int(fetch_output.get("returncode", 1)) != 0:
-        raise RuntimeError(f"failed to fetch REINVENT4 output csv: {fetch_output}")
+        raise RuntimeError("failed to fetch REINVENT4 output CSV")
 
-    rows, candidates = _read_generated_candidate_csv(local_source_csv, backend=GenerationBackend.REINVENT4.value, count=count)
+    raw_output_sha256 = publish_fresh_file(local_download, frozen_raw_output)
+    rows, candidates = _read_generated_candidate_csv(
+        frozen_raw_output,
+        backend=GenerationBackend.REINVENT4.value,
+        count=count,
+    )
     if not rows:
-        raise RuntimeError(f"REINVENT4 output produced no candidate rows: {local_source_csv}")
+        raise RuntimeError("REINVENT4 output produced no candidate rows")
+    _, replayed_raw_sha256 = read_regular_file_bound(
+        frozen_raw_output,
+        capture=False,
+    )
+    if replayed_raw_sha256 != raw_output_sha256:
+        raise ValueError("REINVENT4 raw output replay mismatch")
     return {
         "rows": rows,
         "candidates": candidates,
-        "source_csv": str(local_source_csv),
+        # Compatibility handle for the existing hardened OLED lifecycle.  The
+        # v2 generation publication deliberately binds raw_output_path below.
+        "source_csv": str(local_download),
+        "raw_output_path": str(frozen_raw_output),
+        "raw_output_sha256": raw_output_sha256,
+        "effective_config_path": str(effective_config_path),
+        "effective_config_sha256": effective_config_sha256,
+        "config_template_sha256": template_sha256,
+        "generation_request": generation_request,
+        "generation_request_sha256": (
+            canonical_json_sha256(generation_request) if generation_request else None
+        ),
         "mode": "remote",
         "remote": remote,
         "execution": {
@@ -1446,19 +1762,43 @@ def generate_candidates_stub_adapter(payload: dict[str, Any]) -> dict[str, Any]:
     reference = _read_smiles_set(str(payload.get("reference_csv") or payload.get("reference_dataset") or ""))
     candidate_csv = output_dir / f"{run_id}_generated_candidates.csv"
     report_json = output_dir / f"{run_id}_generation_report.json"
+    publication_json = output_dir / f"{run_id}_generation_publication.json"
     markdown_path = output_dir / f"{run_id}_generation_report.md"
     backend_enum = GenerationBackend(backend) if backend in GenerationBackend._value2member_map_ else GenerationBackend.DETERMINISTIC_STUB
 
+    execution_binding: dict[str, Any] = {}
+    publication_kind = "deterministic_local_smoke"
+    generated: dict[str, Any] = {}
     if backend_enum == GenerationBackend.REINVENT4:
         try:
             generated = _generate_candidates_reinvent4_backend(payload, run_id=run_id, output_dir=output_dir, count=count)
-        except Exception as exc:
+        except Exception:
+            requested_mode = str(
+                payload.get("reinvent4_mode") or payload.get("mode") or ""
+            ).strip().lower()
+            has_existing_output = bool(
+                str(
+                    payload.get("reinvent4_output_csv")
+                    or payload.get("source_csv")
+                    or payload.get("source_output_csv")
+                    or ""
+                ).strip()
+            )
+            execute_requested = payload.get("execute") is True or str(
+                payload.get("execute") or ""
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            message = (
+                "REINVENT4 execution mode is preflight; select an explicit execution mode."
+                if requested_mode == "preflight"
+                or (not requested_mode and not execute_requested and not has_existing_output)
+                else "REINVENT4 generation failed verification or execution."
+            )
             return {
                 "status": "failed",
                 "adapter": "generate_candidates_reinvent4",
                 "error": {
                     "code": "reinvent4_generation_failed",
-                    "message": str(exc),
+                    "message": message,
                 },
             }
         rows = generated["rows"]
@@ -1473,7 +1813,64 @@ def generate_candidates_stub_adapter(payload: dict[str, Any]) -> dict[str, Any]:
             "note": "REINVENT4-backed generation normalized into Phase 2 candidate dataset contract.",
         }
         if source_csv:
-            provenance["source_csv"] = source_csv
+            provenance["source_artifact"] = "raw_output_csv"
+        remote_binding = generated.get("remote") if isinstance(generated.get("remote"), dict) else {}
+        request_payload = (
+            generated.get("generation_request")
+            if isinstance(generated.get("generation_request"), dict)
+            else None
+        )
+        if mode == "existing_output":
+            publication_kind = "normalized_reinvent4_existing_output"
+            execution_binding = {
+                "mode": mode,
+                "raw_output_sha256": generated.get("raw_output_sha256"),
+            }
+        elif request_payload is None:
+            # Explicit caller-owned attempt paths remain available to the older
+            # hardened OLED lifecycle, but this compatibility path must never
+            # make the stronger UI publication claim.
+            publication_kind = "remote_reinvent4_compatibility"
+            execution_binding = {
+                "mode": mode,
+                "attempt_id": remote_binding.get("attempt_id"),
+                "attempt_isolated": remote_binding.get("attempt_isolated") is True,
+                "endpoint_hostname_verified": remote_binding.get(
+                    "endpoint_hostname_verified"
+                )
+                is True,
+                "effective_config_sha256": generated.get(
+                    "effective_config_sha256"
+                ),
+                "raw_output_sha256": generated.get("raw_output_sha256"),
+            }
+        else:
+            publication_kind = "real_remote_reinvent4"
+            execution_binding = {
+                "mode": mode,
+                "attempt_id": remote_binding.get("attempt_id"),
+                "attempt_isolated": remote_binding.get("attempt_isolated") is True,
+                "endpoint_hostname_verified": remote_binding.get(
+                    "endpoint_hostname_verified"
+                )
+                is True,
+                "connection_id": remote_binding.get("connection_id"),
+                "connection_profile_digest": remote_binding.get(
+                    "connection_profile_digest"
+                ),
+                "environment_profile_id": remote_binding.get("environment_id"),
+                "environment_profile_digest": remote_binding.get(
+                    "environment_profile_digest"
+                ),
+                "generation_request": request_payload,
+                "generation_request_sha256": generated.get(
+                    "generation_request_sha256"
+                ),
+                "effective_config_sha256": generated.get(
+                    "effective_config_sha256"
+                ),
+                "raw_output_sha256": generated.get("raw_output_sha256"),
+            }
     else:
         rows = []
         candidates = []
@@ -1482,7 +1879,10 @@ def generate_candidates_stub_adapter(payload: dict[str, Any]) -> dict[str, Any]:
             smiles = _deterministic_stub_smiles(index, seed)
             if smiles in seen:
                 seen[smiles] += 1
-                smiles = f"{smiles}.C{seen[smiles]}"
+                # Keep repeated smoke candidates syntactically valid.  A token
+                # such as ``.C2`` opens an unmatched ring in SMILES; a neutral
+                # alkane fragment gives us a deterministic, parseable variant.
+                smiles = f"{smiles}.{('C' * seen[smiles])}"
             else:
                 seen[smiles] = 1
             candidate_id = f"gen_{index + 1:04d}"
@@ -1554,6 +1954,63 @@ def generate_candidates_stub_adapter(payload: dict[str, Any]) -> dict[str, Any]:
             "Candidates": [candidate.model_dump(mode="json") for candidate in candidates[:10]],
         },
     )
+    publication_root = output_dir.resolve(strict=True)
+
+    def publication_relative(path: Path) -> str:
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError("generation publication artifact is unavailable") from exc
+        if not resolved.is_relative_to(publication_root):
+            raise ValueError("generation publication artifact is outside the run directory")
+        return resolved.relative_to(publication_root).as_posix()
+
+    publication_artifacts = {
+        "candidate_csv": publication_relative(candidate_csv),
+        "generation_report_json": publication_relative(report_json),
+    }
+    publication_hashes = {
+        "candidate_csv_sha256": _sha256_file(candidate_csv),
+        "generation_report_sha256": _sha256_file(report_json),
+    }
+    if backend_enum == GenerationBackend.REINVENT4:
+        raw_output_path = Path(str(generated.get("raw_output_path") or ""))
+        publication_artifacts["raw_output_csv"] = publication_relative(raw_output_path)
+        publication_hashes["raw_output_sha256"] = _sha256_file(raw_output_path)
+        if publication_kind in {
+            "real_remote_reinvent4",
+            "remote_reinvent4_compatibility",
+        }:
+            effective_config_path = Path(
+                str(generated.get("effective_config_path") or "")
+            )
+            publication_artifacts["effective_config"] = publication_relative(
+                effective_config_path
+            )
+            publication_hashes["effective_config_sha256"] = _sha256_file(
+                effective_config_path
+            )
+
+    publication = {
+        "schema_version": GENERATION_PUBLICATION_SCHEMA,
+        "run_id": run_id,
+        "backend": report.backend.value,
+        "publication_kind": publication_kind,
+        "requested_count": report.requested_count,
+        "generated_count": report.generated_count,
+        "approved_by": actor,
+        "execution_binding": execution_binding,
+        "claim_boundary": "recommendation_only_not_experimental_validation",
+        "artifacts": publication_artifacts,
+        "hashes": publication_hashes,
+        "published_at": _now_iso(),
+    }
+    publication["publication_sha256"] = canonical_json_sha256(publication)
+    publication_bytes = (
+        json.dumps(publication, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    publish_fresh_bytes(publication_json, publication_bytes)
+    verify_generation_publication_from_files(publication_json)
 
     response: dict[str, Any] = {
         "status": "success",
@@ -1571,6 +2028,7 @@ def generate_candidates_stub_adapter(payload: dict[str, Any]) -> dict[str, Any]:
         "outputs": {
             "candidate_csv": str(candidate_csv),
             "generation_report_json": str(report_json),
+            "generation_publication_json": str(publication_json),
             "markdown": str(markdown_path),
         },
     }
@@ -1891,9 +2349,35 @@ def train_model_unimol_legacy_adapter(payload: dict[str, Any]) -> dict[str, Any]
     train_csv = str(payload.get("train_csv") or "").strip()
     save_dir = str(payload.get("save_dir") or "").strip()
     log_dir = str(payload.get("log_dir") or "").strip()
-    remote_host = str(payload.get("remote_host") or payload.get("remote_ssh_host") or "").strip()
-    remote_python = str(payload.get("remote_python") or payload.get("remote_py") or "").strip()
-    remote_tmp_base = str(payload.get("remote_tmp_base") or payload.get("remote_tmp_dir") or "").strip()
+    try:
+        private_environment = _private_unimol_environment(payload)
+    except ValueError as exc:
+        return {
+            "status": "failed",
+            "adapter": "train_model_unimol_legacy",
+            "error": {
+                "code": "unimol_environment_profile_unavailable",
+                "message": str(exc),
+            },
+        }
+    remote_host = str(
+        payload.get("remote_host")
+        or payload.get("remote_ssh_host")
+        or private_environment.get("ssh_host_alias")
+        or ""
+    ).strip()
+    remote_python = str(
+        payload.get("remote_python")
+        or payload.get("remote_py")
+        or private_environment.get("python_path")
+        or ""
+    ).strip()
+    remote_tmp_base = str(
+        payload.get("remote_tmp_base")
+        or payload.get("remote_tmp_dir")
+        or private_environment.get("remote_root")
+        or ""
+    ).strip()
     if not run_id or not target_property or not train_csv or not save_dir or not log_dir:
         return {
             "status": "failed",

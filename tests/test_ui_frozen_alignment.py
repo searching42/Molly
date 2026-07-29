@@ -46,12 +46,26 @@ def test_all_tasks_entry_loads_shared_toolbox_with_visible_results() -> None:
     assert 'document.getElementById("task-toolbox-button").click();' not in html
 
 
-def test_modeling_plan_action_does_not_claim_training_was_submitted() -> None:
+def test_model_training_action_exposes_confirmed_dataset_and_gated_execution() -> None:
     html = _template()
 
-    assert "<span>生成建模计划</span>" in html
+    assert "<span>模型训练</span>" in html
     assert "<span>提交训练任务</span>" not in html
-    assert 'postJSON("/api/agent/modeling-plan", currentModelingPlanPayload)' in html
+    assert 'id="model-training-workflow"' in html
+    assert 'id="dataset-confirmation-form"' in html
+    assert 'id="training-backend"' in html
+    assert 'id="generation-backend"' in html
+    assert 'postJSON("/api/run-plan/execute"' in html
+    assert 'postJSON("/api/run-plan/resume"' in html
+    assert "train_model_unimol_legacy_adapter" in html
+    assert 'generation.reinvent4_mode = "remote"' in html
+    assert 'id="reinvent4-config-help"' in html
+    assert "{{molly_output_csv}}" in html
+    assert "{{molly_design_request_sha256}}" in html
+    assert "自动创建独立的远端 attempt 目录" in html
+    assert "function persistModelWorkflowState()" in html
+    assert "function restoreModelWorkflowState()" in html
+    assert "sessionStorage.setItem(key" in html
 
 
 def test_settings_keep_llm_and_remote_compute_configuration() -> None:
@@ -65,4 +79,7 @@ def test_settings_keep_llm_and_remote_compute_configuration() -> None:
     assert 'id="compute-workload-mineru"' in html
     assert 'id="compute-workload-unimol"' in html
     assert 'id="compute-workload-reinvent4"' in html
+    assert 'id="compute-environment-form"' in html
+    assert 'id="compute-environments"' in html
     assert 'getJSON("/api/settings/compute")' in html
+    assert "REINVENT4 / Uni-Mol 远程执行需要专用 known_hosts 文件。" in html

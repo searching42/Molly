@@ -1118,6 +1118,30 @@ def test_compute_settings_api_persists_connection_and_lists_execution_contracts(
     assert {item["profile_id"] for item in state.json["execution_profiles"]} == set(
         EXECUTION_PROFILES
     )
+    assert state.json["environments"] == []
+
+    environment = client.put(
+        "/api/settings/compute/environments/reinvent4-cpu-main",
+        json={
+            "connection_id": "compute-worker-main",
+            "repository_root": "/opt/reinvent4",
+            "python_path": "/opt/reinvent4/.venv/bin/python",
+            "conda_environment": "",
+        },
+    )
+    assert environment.status_code == 200
+    assert environment.json["environment"]["environment_id"] == "reinvent4-cpu-main"
+    assert environment.json["environment"]["environment_profile_digest"].startswith("sha256:")
+
+    state_with_environment = client.get("/api/settings/compute")
+    assert state_with_environment.status_code == 200
+    assert state_with_environment.json["environments"][0]["connection_id"] == "compute-worker-main"
+
+    deleted_environment = client.delete(
+        "/api/settings/compute/environments/reinvent4-cpu-main"
+    )
+    assert deleted_environment.status_code == 200
+    assert deleted_environment.json == {"ok": True, "deleted": True}
 
     deleted = client.delete("/api/settings/compute/connections/compute-worker-main")
     assert deleted.status_code == 200
@@ -1152,3 +1176,49 @@ def test_compute_settings_api_does_not_echo_rejected_credentials(tmp_path: Path)
 
     assert response.status_code == 400
     assert "super-secret-value" not in response.get_data(as_text=True)
+
+
+def test_runtime_environment_routes_do_not_echo_internal_exception_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "config",
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    saved_connection = client.put(
+        "/api/settings/compute/connections/compute-worker-main",
+        json=_connection().model_dump(mode="json"),
+    )
+    assert saved_connection.status_code == 200
+
+    store = app.extensions["runtime_environment_store"]
+    secret = "/private/internal/runtime/environments.json"
+
+    def fail(*args, **kwargs):
+        raise ValueError(secret)
+
+    monkeypatch.setattr(store, "save_environment", fail)
+    saved = client.put(
+        "/api/settings/compute/environments/reinvent4-default",
+        json={
+            "connection_id": "compute-worker-main",
+            "repository_root": "/opt/reinvent4",
+            "python_path": "/opt/reinvent4/.venv/bin/python",
+            "conda_environment": "reinvent4",
+        },
+    )
+    assert saved.status_code == 400
+    assert saved.json["error_code"] == "runtime_environment_unavailable"
+    assert secret not in saved.get_data(as_text=True)
+
+    monkeypatch.setattr(store, "delete_environment", fail)
+    deleted = client.delete(
+        "/api/settings/compute/environments/reinvent4-default"
+    )
+    assert deleted.status_code == 400
+    assert deleted.json["error_code"] == "runtime_environment_delete_failed"
+    assert secret not in deleted.get_data(as_text=True)

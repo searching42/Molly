@@ -13,6 +13,10 @@ from ai4s_agent.resource_profiles import (
     ConnectionProfile,
     ResourceProfileStore,
 )
+from ai4s_agent.runtime_environments import (
+    RuntimeEnvironmentProfile,
+    RuntimeEnvironmentStore,
+)
 from ai4s_agent.schemas import RemoteWorkerConfig, RemoteWorkerRequest
 
 
@@ -28,20 +32,40 @@ def register_worker_deployment_routes(
         workspace_dir=workspace, config_dir=user_config_dir
     )
     capability_probe = CapabilityProbeService(store=resource_profiles)
+    runtime_environments = RuntimeEnvironmentStore(config_dir=user_config_dir)
     remote_workers = RemoteWorkerRegistry(
         workspace_dir=workspace,
         resource_profiles=resource_profiles,
     )
     app.extensions["resource_profile_store"] = resource_profiles
     app.extensions["capability_probe_service"] = capability_probe
+    app.extensions["runtime_environment_store"] = runtime_environments
 
     @app.get("/api/settings/compute")
     def get_compute_settings():
         try:
             state = resource_profiles.public_state()
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 409
-        return jsonify({"ok": True, **state})
+            environments = runtime_environments.list_environments()
+        except ValueError:
+            app.logger.warning("compute settings verification failed", exc_info=True)
+            return _compute_error(
+                "compute_settings_unavailable",
+                "Compute settings failed integrity verification.",
+                409,
+            )
+        return jsonify(
+            {
+                "ok": True,
+                **state,
+                "environments": [
+                    {
+                        **environment.model_dump(mode="json"),
+                        "environment_profile_digest": environment.digest(),
+                    }
+                    for environment in environments
+                ],
+            }
+        )
 
     @app.put("/api/settings/compute/connections/<connection_id>")
     def save_connection_profile(connection_id: str):
@@ -54,10 +78,19 @@ def register_worker_deployment_routes(
             connection = resource_profiles.save_connection(
                 ConnectionProfile.model_validate({**payload, "connection_id": connection_id})
             )
-        except ValidationError as exc:
-            return jsonify({"ok": False, "error": _safe_validation_error(exc)}), 400
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
+        except ValidationError:
+            return _compute_error(
+                "connection_profile_invalid",
+                "Connection profile fields are invalid.",
+                400,
+            )
+        except ValueError:
+            app.logger.warning("connection profile save failed", exc_info=True)
+            return _compute_error(
+                "connection_profile_unavailable",
+                "The connection profile could not be saved.",
+                400,
+            )
         return jsonify(
             {
                 "ok": True,
@@ -72,8 +105,64 @@ def register_worker_deployment_routes(
     def delete_connection_profile(connection_id: str):
         try:
             deleted = resource_profiles.delete_connection(connection_id)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
+        except ValueError:
+            app.logger.warning("connection profile delete failed", exc_info=True)
+            return _compute_error(
+                "connection_profile_delete_failed",
+                "The connection profile could not be deleted.",
+                400,
+            )
+        return jsonify({"ok": True, "deleted": deleted})
+
+    @app.put("/api/settings/compute/environments/<environment_id>")
+    def save_runtime_environment_profile(environment_id: str):
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"ok": False, "error": "payload must be an object"}), 400
+        if payload.get("environment_id") not in {None, "", environment_id}:
+            return jsonify({"ok": False, "error": "environment_id does not match URL"}), 400
+        try:
+            environment = RuntimeEnvironmentProfile.model_validate(
+                {**payload, "environment_id": environment_id}
+            )
+            connection = resource_profiles.get_connection(environment.connection_id)
+            if not connection.enabled:
+                raise ValueError("runtime environment connection profile is disabled")
+            saved = runtime_environments.save_environment(environment)
+        except ValidationError:
+            return _compute_error(
+                "runtime_environment_invalid",
+                "Runtime environment fields are invalid.",
+                400,
+            )
+        except ValueError:
+            app.logger.warning("runtime environment save failed", exc_info=True)
+            return _compute_error(
+                "runtime_environment_unavailable",
+                "The runtime environment could not be saved.",
+                400,
+            )
+        return jsonify(
+            {
+                "ok": True,
+                "environment": {
+                    **saved.model_dump(mode="json"),
+                    "environment_profile_digest": saved.digest(),
+                },
+            }
+        )
+
+    @app.delete("/api/settings/compute/environments/<environment_id>")
+    def delete_runtime_environment_profile(environment_id: str):
+        try:
+            deleted = runtime_environments.delete_environment(environment_id)
+        except ValueError:
+            app.logger.warning("runtime environment delete failed", exc_info=True)
+            return _compute_error(
+                "runtime_environment_delete_failed",
+                "The runtime environment could not be deleted.",
+                400,
+            )
         return jsonify({"ok": True, "deleted": deleted})
 
     @app.post("/api/settings/compute/connections/<connection_id>/probe")
@@ -153,3 +242,7 @@ def _safe_validation_error(error: ValidationError) -> str:
     location = ".".join(str(item) for item in first.get("loc", ())) or "payload"
     message = str(first.get("msg") or "is invalid")
     return f"invalid {location}: {message}"
+
+
+def _compute_error(code: str, message: str, status: int):
+    return jsonify({"ok": False, "error": message, "error_code": code}), status

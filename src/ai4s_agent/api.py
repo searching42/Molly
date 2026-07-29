@@ -7,6 +7,7 @@ from flask import Flask
 
 from ai4s_agent.conversation_store import ConversationStore
 from ai4s_agent.control_plane_events import ControlPlaneEventProjector
+from ai4s_agent.dataset_workflow import DatasetWorkflowService
 from ai4s_agent.job_manager import JobManager
 from ai4s_agent.llm_provider import LLMProviderManager
 from ai4s_agent.llm_settings import LLMSettingsStore
@@ -22,6 +23,7 @@ from ai4s_agent.routes import run_control as run_control_routes
 from ai4s_agent.routes.agents import _as_bool, register_agent_routes
 from ai4s_agent.routes.conversations import register_conversation_routes
 from ai4s_agent.routes.control_plane_events import register_control_plane_event_routes
+from ai4s_agent.routes.datasets import register_dataset_routes
 from ai4s_agent.routes.core import register_core_routes
 from ai4s_agent.routes.internal_run_plan_queue import register_internal_run_plan_queue_routes
 from ai4s_agent.routes.jobs import register_job_routes
@@ -89,6 +91,7 @@ def register_routes(
     jobs = JobManager(runs_dir=runs)
     projects = ProjectStorage(workspace_dir=workspace)
     conversations = ConversationStore(projects=projects)
+    datasets = DatasetWorkflowService(projects=projects, conversations=conversations)
     literature_intakes = LiteratureIntakeService(
         projects=projects,
         conversations=conversations,
@@ -118,6 +121,7 @@ def register_routes(
     app.extensions["control_plane_event_projector"] = control_plane_events
     app.extensions["llm_provider_manager"] = llm_providers
     app.extensions["conversation_store"] = conversations
+    app.extensions["dataset_workflow_service"] = datasets
     app.extensions["literature_intake_service"] = literature_intakes
     app.extensions["remote_execution_lifecycle"] = remote_executions
 
@@ -143,6 +147,7 @@ def register_routes(
         conversations=conversations,
         max_attachment_bytes_default=MAX_CONVERSATION_ATTACHMENT_BYTES,
     )
+    register_dataset_routes(app, datasets=datasets)
     register_literature_intake_routes(app, intakes=literature_intakes)
     register_worker_deployment_routes(
         app,

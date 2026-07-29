@@ -1594,7 +1594,7 @@ class RunPlanExecutor:
             return payload
         if task_id == "filter_rank":
             property_id = self._infer_property_id(artifact_paths)
-            return {
+            payload = {
                 "run_id": run_id,
                 "prediction_csv": self._require_artifact(artifact_paths, "candidate_predictions"),
                 "output_csv": str(run_dir / "07_rank" / f"{run_id}_ranked_candidates.csv"),
@@ -1604,6 +1604,8 @@ class RunPlanExecutor:
                 "weights": {f"{property_id}_pred": 1.0},
                 "hard_constraints": {},
             }
+            payload.update(task_options)
+            return payload
         if task_id == "render_report":
             return {
                 "run_id": run_id,
@@ -2171,12 +2173,21 @@ class RunPlanExecutor:
             outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
             candidate_csv = str(outputs.get("candidate_csv") or "")
             report_json = str(outputs.get("generation_report_json") or "")
+            publication_json = str(outputs.get("generation_publication_json") or "")
             if candidate_csv:
                 self._register(project_id, run_id, "candidate_dataset", self._relative(run_dir, Path(candidate_csv)))
                 artifact_paths["candidate_dataset"] = candidate_csv
             if report_json:
                 self._register(project_id, run_id, "generation_report", self._relative(run_dir, Path(report_json)))
                 artifact_paths["generation_report"] = report_json
+            if publication_json:
+                self._register(
+                    project_id,
+                    run_id,
+                    "generation_publication",
+                    self._relative(run_dir, Path(publication_json)),
+                )
+                artifact_paths["generation_publication"] = publication_json
             return
         if task_id == "predict_candidates":
             output_csv = str(result.get("output_csv") or "")
