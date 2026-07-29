@@ -125,6 +125,55 @@ Potential duplication deliberately left alone:
 
 ## Post-change evidence
 
-Final counts, marker timings, PR Fast timing, Full-suite timing, changed-line
-totals, and GitHub Actions wall time are recorded here before the Draft PR is
-marked ready for review.
+All figures below were collected on the same local host as the baseline. The
+GitHub-hosted PR Fast wall time is recorded in the Draft PR description after
+its first run; local and GitHub runner times are not presented as directly
+interchangeable.
+
+| Measure | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Full pytest tests | 5,998 | 5,996 | -2 net |
+| Full pytest runtime | 1,166.36 s | 1,057.75 s | -108.61 s (-9.3%) |
+| Local PR validation runtime | 1,166.36 s full suite | 20.90 s PR Fast | -98.2% |
+| `test_*.py` files | 378 | 378 | unchanged |
+| `create_app(...)` test call sites | 308 | 290 | -18 |
+| Production Python lines | 226,983 | 226,938 | -45 |
+| Test Python lines | 148,182 | 148,224 | +42 net for marker and CI-policy enforcement |
+
+The test-count change is intentionally transparent: ten duplicate AST contract
+cases were consolidated into six parameterized cases with stable IDs (-4), and
+two new tests enforce CI workflow and shard completeness (+2). Across the full
+diff, 423 pre-existing test lines and 45 production lines were deleted; 465
+test lines were added, primarily the semantic marker policy and CI invariants.
+No test file was added or removed.
+
+Final marker results:
+
+| Selection | Selected | Result | Runtime |
+| --- | ---: | --- | ---: |
+| `unit` | 805 | passed | 34.56 s |
+| `integration` | 4,761 | passed | 1,011.85 s |
+| `acceptance` | 430 | passed | 28.23 s |
+| `adversarial` | 1,471 | passed | 312.29 s |
+| `remote_mock` | 105 | passed | 2.39 s |
+| `slow` | 641 | collected for Full/Scheduled | not separately timed |
+| `(unit and not slow) or pr_fast` | 798 | passed | 20.90 s |
+| unfiltered full suite | 5,996 | passed | 1,057.75 s |
+
+`unit`, `integration`, and `acceptance` are mutually exclusive primary layers.
+`adversarial`, `remote_mock`, `slow`, and `pr_fast` are secondary and overlap
+the primary layers, so their selected counts must not be summed.
+
+The original odd/even filename assignment produced JUnit aggregate weights of
+546.36 s and 508.31 s (38.05 s difference). The measured LPT assignment covers
+all 378 files exactly once and produces 525.66 s and 529.02 s (3.36 s
+difference). This is an aggregate scheduling estimate, not a claim that
+parallel local pytest was run. Full CI still executes every test from scratch.
+
+Final static validation also passed:
+
+```text
+python -m compileall -q src tests
+git diff --check
+python scripts/select_test_shard.py --shards 2 --validate
+```
