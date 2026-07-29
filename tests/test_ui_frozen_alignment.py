@@ -1,15 +1,5 @@
-from pathlib import Path
-
-
-TEMPLATE = Path(__file__).resolve().parents[1] / "src" / "ai4s_agent" / "templates" / "index.html"
-
-
-def _template() -> str:
-    return TEMPLATE.read_text(encoding="utf-8")
-
-
-def test_sidebar_matches_frozen_project_conversation_layout() -> None:
-    html = _template()
+def test_sidebar_matches_frozen_project_conversation_layout(rendered_index_html: str) -> None:
+    html = rendered_index_html
 
     assert "<h2>Projects</h2>" in html
     assert 'id="new-conversation-button"' in html
@@ -19,8 +9,10 @@ def test_sidebar_matches_frozen_project_conversation_layout() -> None:
     assert 'class="workspace-topbar"' not in html
 
 
-def test_sidebar_exposes_literature_parse_without_bounded_oled_entry() -> None:
-    html = _template()
+def test_sidebar_exposes_literature_parse_without_bounded_oled_entry(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
 
     assert 'id="atomic-literature-button"' in html
     assert 'id="parse-literature-button"' in html
@@ -33,8 +25,10 @@ def test_sidebar_exposes_literature_parse_without_bounded_oled_entry() -> None:
     assert "OLED 有界闭环" not in html
 
 
-def test_all_tasks_entry_loads_shared_toolbox_with_visible_results() -> None:
-    html = _template()
+def test_all_tasks_entry_loads_shared_toolbox_with_visible_results(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
 
     assert "async function loadAtomicTasks({ revealResults = false } = {})" in html
     assert html.count('getJSON("/api/atomic-tasks")') == 1
@@ -46,8 +40,10 @@ def test_all_tasks_entry_loads_shared_toolbox_with_visible_results() -> None:
     assert 'document.getElementById("task-toolbox-button").click();' not in html
 
 
-def test_model_training_action_exposes_confirmed_dataset_and_gated_execution() -> None:
-    html = _template()
+def test_model_training_action_exposes_confirmed_dataset_and_gated_execution(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
 
     assert "<span>模型训练</span>" in html
     assert "<span>提交训练任务</span>" not in html
@@ -68,8 +64,8 @@ def test_model_training_action_exposes_confirmed_dataset_and_gated_execution() -
     assert "sessionStorage.setItem(key" in html
 
 
-def test_settings_keep_llm_and_remote_compute_configuration() -> None:
-    html = _template()
+def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html: str) -> None:
+    html = rendered_index_html
 
     assert 'id="llm-settings-form"' in html
     assert 'id="llm-api-key-source"' in html

@@ -890,12 +890,6 @@ def _approved_gates(approved_gates: list[str] | None) -> list[str]:
     return _clean_string_list(approved_gates)
 
 
-def _first_task(tasks: list[str], run_plan: RunPlan) -> str:
-    if tasks:
-        return tasks[0]
-    return run_plan.tasks[0].task_id if run_plan.tasks else ""
-
-
 def _failure_from_context(
     context: _ValidationContext,
     *,

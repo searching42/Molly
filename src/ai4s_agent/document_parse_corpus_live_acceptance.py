@@ -37,7 +37,6 @@ from ai4s_agent.mineru_preflight_binding import (
     PreflightBindingSummary as CorpusLivePreflightBinding,
     contains_credential_marker,
     load_and_bind_preflight_report,
-    safe_path_label,
     safe_sha256,
 )
 from ai4s_agent.scientific_dataset_builder import DatasetConfirmation
@@ -696,10 +695,6 @@ def _configuration_errors(
     if attempts <= 0:
         errors.append(_error("configuration_error", "max_poll_attempts must be positive"))
     return errors
-
-
-def _safe_path_label(path: Path) -> str:
-    return safe_path_label(path)
 
 
 def _safe_sha256(value: str) -> str:

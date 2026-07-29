@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import ast
-import inspect
 import json
 from pathlib import Path
 
@@ -121,7 +119,6 @@ def test_generic_queue_executes_source_manifest_task(tmp_path: Path) -> None:
     assert not any("training" in name for name in created_files)
     assert not any("prediction" in name for name in created_files)
 
-
 def test_missing_source_inputs_fail_clearly(tmp_path: Path) -> None:
     queue_root = tmp_path / "queue"
     storage = ProjectStorage(tmp_path / "projects")
@@ -151,44 +148,3 @@ def test_missing_source_inputs_fail_clearly(tmp_path: Path) -> None:
     assert not any("parsed_document" in name for name in created_files)
     assert not any("training" in name for name in created_files)
     assert not any("prediction" in name for name in created_files)
-
-
-def test_acceptance_test_has_no_network_pdf_or_subprocess_imports() -> None:
-    import tests.test_generic_run_plan_source_manifest_acceptance as acceptance
-
-    source = inspect.getsource(acceptance)
-    tree = ast.parse(source)
-    imported_modules: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported_modules.extend(alias.name for alias in node.names)
-        if isinstance(node, ast.ImportFrom) and node.module:
-            imported_modules.append(node.module)
-
-    forbidden_imports = ("requests", "urllib", "openai", "mineru", "pdfplumber", "subprocess")
-    forbidden_call_names = {"urlopen", "Popen", "run", "call", "check_call", "check_output"}
-    assert not any(any(token in module for token in forbidden_imports) for module in imported_modules)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name):
-                assert node.func.id not in forbidden_call_names
-            if isinstance(node.func, ast.Attribute):
-                assert node.func.attr not in forbidden_call_names
-                if isinstance(node.func.value, ast.Name):
-                    assert node.func.value.id != "requests"
-
-
-def test_phase3_executor_has_no_network_pdf_or_subprocess_imports() -> None:
-    import ai4s_agent.phase3_executor as phase3_executor
-
-    source = inspect.getsource(phase3_executor)
-    tree = ast.parse(source)
-    imported_modules: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported_modules.extend(alias.name for alias in node.names)
-        if isinstance(node, ast.ImportFrom) and node.module:
-            imported_modules.append(node.module)
-
-    forbidden_imports = ("requests", "urllib", "openai", "mineru", "pdfplumber", "subprocess")
-    assert not any(any(token in module for token in forbidden_imports) for module in imported_modules)

@@ -2879,13 +2879,6 @@ def _optional_nonnegative_int(value: Any, key: str) -> int | None:
     return None if value is None else _nonnegative_int(value, key)
 
 
-def _bounded_positive_int(value: Any, maximum: int, key: str) -> int:
-    parsed = _positive_int(value, key)
-    if parsed > maximum:
-        raise ValueError(f"PR-AV {key} exceeds the controller ceiling")
-    return parsed
-
-
 def _optional_probability(value: Any, key: str) -> float | None:
     if value is None:
         return None

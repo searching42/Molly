@@ -31,24 +31,17 @@ def test_api_run_plan_error_logging_does_not_use_locals_guard() -> None:
     assert "locals()" not in source
 
 
-def test_index_page_available() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert "AI4S Agent 控制台".encode() in resp.data
-    assert "依赖计划预览".encode() in resp.data
-    assert "运行计划差异预览".encode() in resp.data
-    assert "Agent 审阅卡".encode() in resp.data
+def test_index_page_available(rendered_index_html: str) -> None:
+    assert "AI4S Agent 控制台" in rendered_index_html
+    assert "依赖计划预览" in rendered_index_html
+    assert "运行计划差异预览" in rendered_index_html
+    assert "Agent 审阅卡" in rendered_index_html
 
 
-def test_index_page_prioritizes_chat_workspace_before_advanced_tools() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_prioritizes_chat_workspace_before_advanced_tools(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
     assert 'id="primary-workflow"' not in html
     assert 'id="workflow-tools"' not in html
     assert 'class="wizard-card' not in html
@@ -58,13 +51,8 @@ def test_index_page_prioritizes_chat_workspace_before_advanced_tools() -> None:
     assert html.index('id="project-chat"') < html.index('id="advanced-tools"')
 
 
-def test_index_page_uses_project_sidebar_and_chat_workspace() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_uses_project_sidebar_and_chat_workspace(rendered_index_html: str) -> None:
+    html = rendered_index_html
     assert 'id="app-shell"' in html
     assert 'id="project-sidebar"' in html
     assert 'id="project-list"' in html
@@ -77,13 +65,10 @@ def test_index_page_uses_project_sidebar_and_chat_workspace() -> None:
     assert 'id="chat-review-artifacts"' in html
 
 
-def test_index_page_wires_project_chat_to_agent_payload_bridge() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_wires_project_chat_to_agent_payload_bridge(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
     assert "async function loadProjects" in html
     assert 'getJSON("/api/projects")' in html
     assert 'postJSON("/api/projects"' in html
@@ -103,13 +88,8 @@ def test_index_page_wires_project_chat_to_agent_payload_bridge() -> None:
     assert 'postJSON("/api/run-plan/execute"' in html
 
 
-def test_index_page_removes_legacy_wizard_cards() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_removes_legacy_wizard_cards(rendered_index_html: str) -> None:
+    html = rendered_index_html
     assert "wizard-card" not in html
     assert "advanceWizard" not in html
     for card_id in [
@@ -123,39 +103,28 @@ def test_index_page_removes_legacy_wizard_cards() -> None:
         assert f'id="{card_id}"' not in html
 
 
-def test_index_page_removes_wizard_file_upload_surface() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_removes_wizard_file_upload_surface(rendered_index_html: str) -> None:
+    html = rendered_index_html
     assert 'id="dataset-upload-form"' not in html
     assert 'id="dataset-file"' not in html
     assert 'id="dataset-path"' not in html
     assert "手动路径备用" not in html
 
 
-def test_index_page_surfaces_upload_errors_and_serializes_js_errors() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_surfaces_upload_errors_and_serializes_js_errors(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
     assert "function normalizeErrorForRender" in html
     assert "err instanceof Error" in html
     assert "请查看响应控制台" not in html
     assert "请查看高级工具中的响应" not in html
 
 
-def test_index_page_generates_run_id_for_chat_and_advanced_tools() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_generates_run_id_for_chat_and_advanced_tools(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
     assert "function buildRunId" in html
     assert "function syncGeneratedRunId" in html
     for field_id in [
@@ -168,26 +137,18 @@ def test_index_page_generates_run_id_for_chat_and_advanced_tools() -> None:
         assert f'id="{field_id}"' in html
 
 
-def test_index_page_keeps_chat_run_id_stable_across_turns() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_keeps_chat_run_id_stable_across_turns(rendered_index_html: str) -> None:
+    html = rendered_index_html
     assert 'let currentRunId = "";' in html
     assert "if (!currentRunId)" in html
     assert "currentRunId = buildRunId(goal);" in html
     assert "currentRunId = \"\";" in html
 
 
-def test_index_page_replaces_wizard_submit_with_confirmed_dataset_execution_path() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_replaces_wizard_submit_with_confirmed_dataset_execution_path(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
     assert 'id="submit-run-form"' not in html
     assert 'id="run-confirmation-form"' not in html
     assert 'id="data-confirmation-form"' not in html
@@ -197,13 +158,10 @@ def test_index_page_replaces_wizard_submit_with_confirmed_dataset_execution_path
     assert "input_artifacts: { uploaded_dataset: datasetPath }" not in html
 
 
-def test_index_page_replaces_wizard_gate_controls_with_model_workflow_controls() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_replaces_wizard_gate_controls_with_model_workflow_controls(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
     assert 'id="gate-form"' not in html
     assert 'id="agent-approve-button"' not in html
     assert 'id="model-run-approve"' in html
@@ -211,13 +169,8 @@ def test_index_page_replaces_wizard_gate_controls_with_model_workflow_controls()
     assert "gate approval fell back to legacy orchestrator" not in html
 
 
-def test_index_page_removes_wizard_decision_card_surface() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_removes_wizard_decision_card_surface(rendered_index_html: str) -> None:
+    html = rendered_index_html
     assert 'id="agent-decision-card"' not in html
     assert 'id="agent-gate-question"' not in html
     assert 'id="run-log-tail"' not in html
@@ -225,13 +178,10 @@ def test_index_page_removes_wizard_decision_card_surface() -> None:
     assert "function refreshRunLogs" not in html
 
 
-def test_index_page_renders_modeling_agent_review_card_sections() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_renders_modeling_agent_review_card_sections(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
     assert 'id="agent-review-card-output"' in html
     assert "function renderAgentReviewCard" in html
     assert "target_modeling_brief" in html
@@ -241,13 +191,10 @@ def test_index_page_renders_modeling_agent_review_card_sections() -> None:
     assert "approval_controls" in html
 
 
-def test_index_page_exposes_only_supported_model_workflow_backends() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_exposes_only_supported_model_workflow_backends(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
     assert 'id="run-card-training-backend"' not in html
     assert 'id="run-card-prediction-backend"' not in html
     assert "function buildTaskOptions" not in html
@@ -257,13 +204,10 @@ def test_index_page_exposes_only_supported_model_workflow_backends() -> None:
     assert "molly-gpu-main" not in html
 
 
-def test_index_page_hides_artifact_inputs_and_keeps_response_near_workflow() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_hides_artifact_inputs_and_keeps_response_near_workflow(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
     assert 'id="agent-available-artifacts"' not in html
     assert 'id="run-card-artifacts"' not in html
     assert 'id="advanced-agent-available-artifacts"' in html
@@ -273,13 +217,8 @@ def test_index_page_hides_artifact_inputs_and_keeps_response_near_workflow() -> 
     assert html.index('id="advanced-tools"') < html.index('id="output"')
 
 
-def test_index_page_warns_when_opened_as_file_url() -> None:
-    app = create_app()
-    client = app.test_client()
-    resp = client.get("/")
-
-    assert resp.status_code == 200
-    html = resp.data.decode("utf-8")
+def test_index_page_warns_when_opened_as_file_url(rendered_index_html: str) -> None:
+    html = rendered_index_html
     assert 'id="file-launch-warning"' in html
     assert "请通过 Flask 服务打开" in html
     assert 'window.location.protocol === "file:"' in html

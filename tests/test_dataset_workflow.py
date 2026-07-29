@@ -12,6 +12,17 @@ from ai4s_agent.app import create_app
 from ai4s_agent.schemas import GateName, RunStatus
 
 
+@pytest.fixture
+def dataset_app_client(tmp_path: Path):
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path / "workspace",
+        user_config_dir=tmp_path / "config",
+    )
+    app.config.update(TESTING=True)
+    return app, app.test_client()
+
+
 def _dataset_bytes(row_count: int = 48) -> bytes:
     stream = io.StringIO(newline="")
     writer = csv.DictWriter(
@@ -80,15 +91,9 @@ def _upload_inspect_confirm(client, project_id: str = "dataset-workflow") -> dic
 
 
 def test_dataset_routes_bind_raw_attachment_and_publish_confirmed_dataset(
-    tmp_path: Path,
+    dataset_app_client,
 ) -> None:
-    app = create_app(
-        base_runs_dir=tmp_path / "runs",
-        workspace_dir=tmp_path / "workspace",
-        user_config_dir=tmp_path / "config",
-    )
-    app.config.update(TESTING=True)
-    client = app.test_client()
+    _app, client = dataset_app_client
 
     confirmed = _upload_inspect_confirm(client)
 
@@ -137,14 +142,9 @@ def test_dataset_routes_bind_raw_attachment_and_publish_confirmed_dataset(
 
 def test_confirmed_dataset_runs_model_package_generation_publication_and_topn(
     tmp_path: Path,
+    dataset_app_client,
 ) -> None:
-    app = create_app(
-        base_runs_dir=tmp_path / "runs",
-        workspace_dir=tmp_path / "workspace",
-        user_config_dir=tmp_path / "config",
-    )
-    app.config.update(TESTING=True)
-    client = app.test_client()
+    _app, client = dataset_app_client
     project_id = "dataset-chain"
     confirmed = _upload_inspect_confirm(client, project_id)
     run_id = "dataset-chain-local-001"
@@ -242,14 +242,9 @@ def test_confirmed_dataset_runs_model_package_generation_publication_and_topn(
 def test_confirmed_dataset_rejects_replaced_artifact_bytes(
     tmp_path: Path,
     artifact_id: str,
+    dataset_app_client,
 ) -> None:
-    app = create_app(
-        base_runs_dir=tmp_path / "runs",
-        workspace_dir=tmp_path / "workspace",
-        user_config_dir=tmp_path / "config",
-    )
-    app.config.update(TESTING=True)
-    client = app.test_client()
+    _app, client = dataset_app_client
     project_id = f"tamper-{artifact_id.replace('_', '-')}"
     confirmed = _upload_inspect_confirm(client, project_id)
     artifact_path = Path(confirmed["artifacts"][artifact_id])
@@ -292,17 +287,11 @@ def test_confirmed_dataset_rejects_replaced_artifact_bytes(
     ],
 )
 def test_confirmed_dataset_rejects_manifest_identity_and_path_tampering(
-    tmp_path: Path,
     field: str,
     replacement: object,
+    dataset_app_client,
 ) -> None:
-    app = create_app(
-        base_runs_dir=tmp_path / "runs",
-        workspace_dir=tmp_path / "workspace",
-        user_config_dir=tmp_path / "config",
-    )
-    app.config.update(TESTING=True)
-    client = app.test_client()
+    _app, client = dataset_app_client
     project_id = f"manifest-tamper-{field.replace('_', '-')}"
     confirmed = _upload_inspect_confirm(client, project_id)
     manifest_path = Path(confirmed["artifacts"]["confirmed_dataset_manifest"])
@@ -325,16 +314,10 @@ def test_confirmed_dataset_rejects_manifest_identity_and_path_tampering(
 
 
 def test_dataset_routes_do_not_echo_internal_exception_details(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    dataset_app_client,
 ) -> None:
-    app = create_app(
-        base_runs_dir=tmp_path / "runs",
-        workspace_dir=tmp_path / "workspace",
-        user_config_dir=tmp_path / "config",
-    )
-    app.config.update(TESTING=True)
-    client = app.test_client()
+    app, client = dataset_app_client
     service = app.extensions["dataset_workflow_service"]
     secret = "/private/internal/datasets/secret.csv"
 

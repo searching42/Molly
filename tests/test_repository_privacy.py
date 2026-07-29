@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+import importlib
+import inspect
 import ipaddress
 import re
 import shutil
@@ -84,6 +87,25 @@ FORBIDDEN_PRIVATE_LOCK_NAMES = frozenset(
         ".legacy_transport_profiles.lock",
     }
 )
+LOW_RISK_EXECUTION_BOUNDARY_MODULES = (
+    "tests.test_generic_run_plan_source_manifest_acceptance",
+    "tests.test_generic_run_plan_corpus_index_acceptance",
+    "tests.test_generic_run_plan_multi_index_acceptance",
+    "tests.test_generic_run_plan_dense_index_acceptance",
+    "tests.test_generic_run_plan_retrieve_evidence_acceptance",
+)
+FORBIDDEN_LOW_RISK_IMPORTS = (
+    "requests",
+    "urllib",
+    "openai",
+    "mineru",
+    "pdfplumber",
+    "subprocess",
+    "sentence_transformers",
+)
+FORBIDDEN_LOW_RISK_CALLS = frozenset(
+    {"urlopen", "Popen", "run", "call", "check_call", "check_output"}
+)
 
 
 def _tracked_paths() -> list[Path]:
@@ -153,6 +175,50 @@ def _private_tracked_path_reason(relative: Path) -> str | None:
     if parts[:1] in {("runs",), ("projects",)}:
         return "runtime state"
     return None
+
+
+def _external_execution_findings(module_name: str, *, inspect_calls: bool) -> list[str]:
+    module = importlib.import_module(module_name)
+    tree = ast.parse(inspect.getsource(module))
+    findings: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported = [node.module]
+        else:
+            imported = []
+        for imported_module in imported:
+            if any(token in imported_module for token in FORBIDDEN_LOW_RISK_IMPORTS):
+                findings.append(f"forbidden import: {imported_module}")
+
+        if not inspect_calls or not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_LOW_RISK_CALLS:
+            findings.append(f"forbidden call: {node.func.id}")
+        if isinstance(node.func, ast.Attribute):
+            if node.func.attr in FORBIDDEN_LOW_RISK_CALLS:
+                findings.append(f"forbidden call: {node.func.attr}")
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "requests":
+                findings.append(f"forbidden requests call: {node.func.attr}")
+    return sorted(set(findings))
+
+
+@pytest.mark.parametrize(
+    ("module_name", "inspect_calls"),
+    [
+        *[
+            pytest.param(module_name, True, id=module_name.rsplit("_", 1)[0].rsplit(".", 1)[-1])
+            for module_name in LOW_RISK_EXECUTION_BOUNDARY_MODULES
+        ],
+        pytest.param("ai4s_agent.phase3_executor", False, id="phase3-executor"),
+    ],
+)
+def test_low_risk_execution_modules_have_no_network_or_external_program_path(
+    module_name: str,
+    inspect_calls: bool,
+) -> None:
+    assert _external_execution_findings(module_name, inspect_calls=inspect_calls) == []
 
 
 def test_tracked_repository_has_no_generic_private_infrastructure_markers() -> None:
