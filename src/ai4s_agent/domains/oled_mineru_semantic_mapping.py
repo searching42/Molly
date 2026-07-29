@@ -1136,11 +1136,6 @@ def _device_context_for_paper(candidates: list[OledMineruCandidate]) -> dict[str
     }
 
 
-def _device_stack_from_text(text: str) -> list[str]:
-    stack, _ = _device_stack_from_text_with_metadata(text)
-    return stack
-
-
 def _device_stack_from_text_with_metadata(
     text: str,
     *,

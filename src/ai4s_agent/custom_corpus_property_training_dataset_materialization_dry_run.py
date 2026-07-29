@@ -976,10 +976,6 @@ def _markdown(summary: dict[str, Any]) -> str:
     )
 
 
-def _schema_status_label(status: str) -> str:
-    return status
-
-
 def _read_safe_json_dict(path: str | Path, label: str) -> dict[str, Any]:
     try:
         payload = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))

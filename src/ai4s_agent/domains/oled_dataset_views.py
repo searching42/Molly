@@ -687,16 +687,6 @@ def _finding(
     )
 
 
-def _is_numeric(value: float | int | str | None) -> bool:
-    if value is None or isinstance(value, bool):
-        return False
-    try:
-        float(value)
-    except (TypeError, ValueError):
-        return False
-    return True
-
-
 __all__ = [
     "OledDatasetViewFinding",
     "OledDatasetViewKind",
