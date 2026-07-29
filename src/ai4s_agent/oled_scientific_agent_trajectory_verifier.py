@@ -27,12 +27,14 @@ from ai4s_agent.oled_bounded_discovery_session_view import (
 from ai4s_agent.storage import ProjectStorage
 
 
-_PUBLICATION_NAMES = {
-    "events.jsonl",
-    "source_bindings.json",
-    "telemetry_findings.jsonl",
-    "trajectory.json",
-}
+_PUBLICATION_NAMES = frozenset(
+    {
+        "events.jsonl",
+        "source_bindings.json",
+        "telemetry_findings.jsonl",
+        "trajectory.json",
+    }
+)
 _MAX_PUBLICATION_FILE_BYTES = 64 * 1024 * 1024
 
 
@@ -55,6 +57,9 @@ class _PinnedPublication:
     directory_descriptor: int
     directory_stat: os.stat_result
     payloads: dict[str, bytes]
+    expected_names: frozenset[str] = _PUBLICATION_NAMES
+    artifact_label: str = "PR-BE trajectory publication"
+    max_file_bytes: int = _MAX_PUBLICATION_FILE_BYTES
 
     def assert_stable(self) -> None:
         opened = os.fstat(self.directory_descriptor)
@@ -68,17 +73,17 @@ class _PinnedPublication:
             or not _same_inode(named, self.directory_stat)
             or opened.st_mtime_ns != self.directory_stat.st_mtime_ns
             or opened.st_ctime_ns != self.directory_stat.st_ctime_ns
-            or set(os.listdir(self.directory_descriptor)) != _PUBLICATION_NAMES
+            or set(os.listdir(self.directory_descriptor)) != self.expected_names
         ):
-            raise ValueError("PR-BE trajectory publication changed during verification")
+            raise ValueError(f"{self.artifact_label} changed during verification")
         for name, expected in self.payloads.items():
             actual = _read_exact_published_payload_at(
                 self.directory_descriptor,
                 name,
-                max_bytes=_MAX_PUBLICATION_FILE_BYTES,
+                max_bytes=self.max_file_bytes,
             )
             if actual != expected:
-                raise ValueError("PR-BE trajectory publication changed during verification")
+                raise ValueError(f"{self.artifact_label} changed during verification")
 
 
 @dataclass(frozen=True)
@@ -192,7 +197,17 @@ def _verified_oled_scientific_agent_trajectory_projection(
 
 
 @contextmanager
-def _pinned_publication(path: Path) -> Iterator[_PinnedPublication]:
+def _pinned_publication(
+    path: Path,
+    *,
+    expected_names: frozenset[str] = _PUBLICATION_NAMES,
+    artifact_label: str = "PR-BE trajectory publication",
+    max_file_bytes: int = _MAX_PUBLICATION_FILE_BYTES,
+) -> Iterator[_PinnedPublication]:
+    """Pin an immutable publication using PR-BE's existing dirfd seam."""
+
+    if not expected_names or max_file_bytes <= 0:
+        raise ValueError(f"{artifact_label} verifier contract is invalid")
     parent_descriptor = -1
     directory_descriptor = -1
     try:
@@ -213,16 +228,16 @@ def _pinned_publication(path: Path) -> Iterator[_PinnedPublication]:
             or not stat.S_ISDIR(named.st_mode)
             or not _same_inode(opened, named)
         ):
-            raise ValueError("PR-BE trajectory publication directory is unsafe")
-        if set(os.listdir(directory_descriptor)) != _PUBLICATION_NAMES:
-            raise ValueError("PR-BE trajectory publication roster is invalid")
+            raise ValueError(f"{artifact_label} directory is unsafe")
+        if set(os.listdir(directory_descriptor)) != expected_names:
+            raise ValueError(f"{artifact_label} roster is invalid")
         payloads = {
             name: _read_exact_published_payload_at(
                 directory_descriptor,
                 name,
-                max_bytes=_MAX_PUBLICATION_FILE_BYTES,
+                max_bytes=max_file_bytes,
             )
-            for name in sorted(_PUBLICATION_NAMES)
+            for name in sorted(expected_names)
         }
         bound = _PinnedPublication(
             path=path,
@@ -230,6 +245,9 @@ def _pinned_publication(path: Path) -> Iterator[_PinnedPublication]:
             directory_descriptor=directory_descriptor,
             directory_stat=opened,
             payloads=payloads,
+            expected_names=expected_names,
+            artifact_label=artifact_label,
+            max_file_bytes=max_file_bytes,
         )
         consumer_error: BaseException | None = None
         try:
@@ -245,7 +263,7 @@ def _pinned_publication(path: Path) -> Iterator[_PinnedPublication]:
     except ValueError:
         raise
     except OSError as exc:
-        raise ValueError("PR-BE trajectory publication is unavailable") from exc
+        raise ValueError(f"{artifact_label} is unavailable") from exc
     finally:
         if directory_descriptor != -1:
             os.close(directory_descriptor)
