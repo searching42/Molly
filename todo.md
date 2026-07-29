@@ -348,9 +348,9 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 
 | 范围 | 证据 | 工作状态 | 下一交付 |
 |---|---|---|---|
-| `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/—` | `DONE` | PR-BF 已完成；等待后续真实/代表性验收补 `V` |
-| `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `I/T/—` | `DONE` | PR-BG 已实现并通过正常、对抗、确定性与完整 suite；等待后续 evidence PR 补 `V` |
-| `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `I/T/—` | `DONE` | PR-BH 已完成；下一 PR 采集代表性 runtime inspection evidence 后补 `V` |
+| `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/—` | `DONE` | PR-BF 已完成；PR-BI machine evidence 尚不完整且人工复核 pending，不补 `V` |
+| `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `I/T/—` | `DONE` | PR-BG 已实现并通过正常、对抗、确定性与完整 suite；PR-BJ 已关闭四类 source-evidence gap，等待 PR-BI 重生 evidence，不补 `V` |
+| `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `I/T/—` | `DONE` | PR-BH 已完成；PR-BI 的四个 exact-replayed case 通过，完整 machine/human evidence 尚未完成 |
 | `M3-SRC-001`～`M3-SRC-008` authoritative failure source evidence | `I/T/—` | `DONE` | PR-BJ 已实现并通过 source、projection、attribution、recovery、隐私与 legacy byte replay；等待 PR-BI 补 `V` |
 
 目标：从可重放 projection 计算确定性 auditor findings；不得直接改变 Session 或 PR-AU 状态。
@@ -677,6 +677,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：projection v1 可能留下 unattached finding；API 需要调用方明确提供三层 publication ID；最小时间线不是通用 causal graph；M4 前不得宣称 attribution accuracy。
 - 批准人：repository owner。
 
+### 2026-07-29：PR-BI 冻结代表性 evidence runner，但 M3 暂不补 V
+
+- 决策：接受 production-backed Process A/B/C runner、八案例固定 roster、脱敏 public evidence schema 和 repository-owner checklist 作为 PR-BI 的 evidence 基础；当前只记录 machine evidence，不自行完成 human review。
+- 原计划：八个案例均通过同一 `scientific_agent_trajectory_inspection.v1` GET route，机器 evidence 完整后由 repository owner 复核并补 M3 `V`。
+- 新计划：单轮成功、多轮成功、history truncation fail-closed 和 stale telemetry 四项按生产链通过；known-hosts propagation、duplicate dispatch、multiple-family ambiguity 和 causal-link-not-proven 明确记录为 `design_analysis_blocked`，PR-BI 保持 Draft，M3 保持 `I/T/—`，M4 不解锁。
+- 依据：当时 PR-BD exact replay 未持久化 transport reason、distinct duplicate-dispatch proof、同 revision multi-family reason 或 recovered-failure causal link；通过修改 PR-BD～PR-BH、放宽 replay 或使用 test-only bytes 制造 evidence 均违反 PR-BI 停止条件。
+- 影响任务：`M3-001`～`M3-028` 的 `I/T/— / DONE` 不变；`M3-GATE-001`～`M3-GATE-004` 不标记完成；PR-BI 状态为 machine evidence incomplete / human review pending。
+- 新增风险：v1 source-evidence seam 不足以通过 inspection route 验收四个标准归因案例；需要独立兼容 source-contract PR。
+- 批准人：repository owner。
+
 ### 2026-07-30：PR-BI 暴露 PR-BD source-evidence gap
 
 - 决策：PR-BI 保持 Draft 和 `I/T/—`，在其前插入独立 PR-BJ source-contract 实现。
@@ -709,6 +719,8 @@ RL 是最后的探索路线，不是当前产品承诺。
 任务：完成 `M3-SRC-001`～`M3-SRC-008`，为 PR-BI 当前四个 design-analysis blocker 提供可 exact replay 的权威 source facts。
 
 范围：增加 typed stage failure evidence、immutable dispatch/recovery receipts，以及 PR-BD/PR-BG 的最小 source-driven 消费；不得修改 PR-BI evidence、observer HTTP contract、科学结果或控制行为。
+
+当前状态：PR-BI runner 和固定八案例 evidence package 已生成；四项 machine pass、四项因 PR-BD v1 未持久化所需 source evidence 而 blocked；human review pending，M3 不补 `V`。
 
 必须验证：
 
