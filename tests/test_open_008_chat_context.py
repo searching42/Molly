@@ -37,6 +37,7 @@ def test_conversation_next_turn_infers_available_inputs_from_project_property_ca
                     "content": "Train a model for delayed fluorescence lifetime using my project data.",
                 }
             ],
+            "llm_provider": None,
         },
     )
 

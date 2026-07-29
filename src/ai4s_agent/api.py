@@ -140,6 +140,7 @@ def register_routes(
     register_llm_settings_routes(
         app,
         settings=llm_settings,
+        providers=llm_providers,
         on_change=llm_providers.invalidate,
     )
     register_conversation_routes(
