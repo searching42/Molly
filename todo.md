@@ -4,7 +4,7 @@
 > 当前公开基线：`public-baseline-v1`（单一根提交的隐私审查快照）
 > 历史审计基线：迁移前完整提交、分支与 PR 保留在私有审计仓库
 > 当前主里程碑：M3 — 轨迹完整性、故障归因与指标
-> 最后更新：2026-07-28
+> 最后更新：2026-07-29
 > 适用范围：Molly Agent 执行能力、长程任务轨迹审计及科学有效性验证
 
 `todo.md` 是仓库中里程碑范围、任务状态、验收门槛、风险状态和推进顺序的唯一规范性来源。领域专题文档可以解释实现细节，但不得维护与本文件竞争的路线或状态表。
@@ -349,8 +349,8 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 | 范围 | 证据 | 工作状态 | 下一交付 |
 |---|---|---|---|
 | `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/—` | `DONE` | PR-BF 已完成；等待后续真实/代表性验收补 `V` |
-| `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `—/—/—` | `READY` | PR-BG |
-| `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `—/—/—` | `DEFERRED` | PR-BH，等待 PR-BG |
+| `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `I/T/—` | `DONE` | PR-BG 已实现并通过正常、对抗、确定性与完整 suite；等待后续 evidence PR 补 `V` |
+| `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `—/—/—` | `READY` | PR-BH |
 
 目标：从可重放 projection 计算确定性 auditor findings；不得直接改变 Session 或 PR-AU 状态。
 
@@ -648,6 +648,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：公开文档中的历史引用无法供未授权用户直接复核；必须明确标记为私有审计引用，并持续提供公开可运行测试和脱敏 evidence。
 - 批准人：repository owner。
 
+### 2026-07-29：公开仓库维护 PR 不改变 M3 主里程碑
+
+- 决策：public PR #3 是冻结 prototype 的 UI 对齐维护；public PR #4 是 dataset 到模型训练与生成的用户工作流桥接和 M5 前置能力维护；public PR #5 是非阻塞 CI 维护并关闭迭代速度问题。这三项均不改变 M3 主里程碑状态。
+- 原计划：PR-BF 后直接执行 PR-BG；期间 UI、用户工作流和 CI 问题作为非阻塞维护处理。
+- 新计划：public PR #6 正式返回 M3 主线并完成 PR-BG failure taxonomy 与 first-cause attribution；下一执行项为 PR-BH read-only inspect API 与最小时间线。
+- 依据：PR #3～#5 未修改 M3 trajectory/audit contract；PR #6 的实现、正常/对抗/确定性测试及完整 `6053 passed` suite 支持 M3-018～M3-022 达到 `I/T/—`，但尚无代表性 runtime 或 M4 benchmark，不能标记 `V`。PR #4 的模型结果只证明用户工作流桥接，不是科学验证证据。
+- 影响任务：`M3-018`～`M3-022` 更新为 `I/T/— / DONE`；`M3-023`～`M3-028` 从 `DEFERRED` 更新为 `READY`；M3 仍是当前主里程碑。
+- 新增风险：带 `full-ci` 标签的 PR 目前只在 `labeled` 事件启动 Full CI；标签添加后若再推送提交，需要重新添加标签或手动触发 Full CI。该维护点非阻塞，后续独立 CI 维护处理。
+- 批准人：repository owner。
+
 后续路线调整必须追加：
 
 ```text
@@ -665,19 +675,18 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 唯一当前动作：PR-BG failure taxonomy 与 first-cause attribution
+### 唯一当前动作：PR-BH read-only inspect API 与最小时间线
 
-任务：`M3-018`～`M3-022`。
+任务：`M3-023`～`M3-028`。
 
-范围：只在 PR-BF deterministic audit artifact 上定义 failure taxonomy、first cause 与 downstream symptom；保持 observer-only，不写回 Session、PR-AU、projection 或科学 publication。
+范围：只读展示 PR-BG attribution、PR-BF audit 和 M2 projection 的最小可审计时间线；不得增加控制动作、修改 Session 或改变科学 publication。
 
 必须验证：
 
-1. taxonomy 覆盖 input integrity、authorization mismatch、transport、tool runtime、model inadequacy、candidate supply、policy constraint、recovery 和 audit integrity。
-2. finding 只使用 M3 冻结的允许集合，且不得写回状态机。
-3. first cause 与 downstream symptom 必须分离，并绑定具体 source evidence。
-4. known-hosts propagation、history truncation、duplicate dispatch 和 stale state 标准案例可确定性重放。
-5. 无充分 evidence 时不得虚构原因或 alternative，不引入 LLM auditor。
+1. API 和时间线只读取 exact-verified observer publication，不读取 mutable telemetry 作为权威科学事实。
+2. 查询、筛选和 evidence 展示保持 source binding、claim boundary 与敏感字段策略。
+3. inspect on/off 时 Session、Gate、StageState、action、projection、audit 和 attribution bytes 不变。
+4. 不增加恢复、重试、批准、拒绝或其他控制动作。
 
 ### 主线队列
 
@@ -685,8 +694,8 @@ RL 是最后的探索路线，不是当前产品承诺。
 PR-BD  observer-only trajectory projection v1（已完成）
 PR-BE  external-anchor trajectory verifier 与对抗测试（已完成）
 PR-BF  deterministic trajectory audit metrics v1（已完成）
-PR-BG  failure taxonomy 与 first-cause attribution（下一项）
-PR-BH  read-only inspect API 与最小时间线（等待 PR-BG）
+PR-BG  failure taxonomy 与 first-cause attribution（已完成）
+PR-BH  read-only inspect API 与最小时间线（下一项）
 ```
 
 ### 资源机会队列
