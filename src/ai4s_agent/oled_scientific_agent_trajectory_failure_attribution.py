@@ -41,6 +41,7 @@ from ai4s_agent.storage import ProjectStorage
 
 _TAXONOMY_VERSION = "scientific_agent_failure_taxonomy.v1"
 _ATTRIBUTION_VERSION = "scientific_agent_failure_attribution.v1"
+_CAUSAL_LINK_VERSION = "scientific_agent_failure_causal_link.v1"
 _SOURCE_BINDING_VERSION = "scientific_agent_failure_attribution_sources.v1"
 _PUBLICATION_VERSION = "scientific_agent_failure_attribution_publication.v1"
 _TRAJECTORY_NAMES = frozenset(
@@ -742,19 +743,21 @@ def _observations(
                 )
             continue
         if kind == "stage_failed":
-            family, code, reason, sufficient = _stage_failure_classification(event)
-            observations.append(
-                _event_observation(
-                    event=event,
-                    position=position,
-                    family=family,
-                    finding_code=code,
-                    reason=reason,
-                    sufficient=sufficient,
-                    cause_candidate=sufficient,
-                    trajectory_digests=trajectory_digests,
+            for family, code, reason, sufficient in _stage_failure_classifications(
+                event
+            ):
+                observations.append(
+                    _event_observation(
+                        event=event,
+                        position=position,
+                        family=family,
+                        finding_code=code,
+                        reason=reason,
+                        sufficient=sufficient,
+                        cause_candidate=sufficient,
+                        trajectory_digests=trajectory_digests,
+                    )
                 )
-            )
             continue
         if kind == "terminal_result_committed":
             terminal = _terminal_observation(
@@ -855,80 +858,85 @@ def _observations(
     return observations
 
 
-def _stage_failure_classification(
+def _stage_failure_classifications(
     event: dict[str, Any],
-) -> tuple[str, str, str, bool]:
+) -> tuple[tuple[str, str, str, bool], ...]:
     reasons = _reason_codes(event)
     child_status = _outcome_value(event, "child_status")
+    matches: dict[str, tuple[str, str, str, bool]] = {}
     if child_status == "integrity_failed" or reasons & _INPUT_INTEGRITY_REASONS:
-        return (
+        matches["input_integrity"] = (
             "input_integrity",
             "INTEGRITY_FAILURE",
             "scientific_input_integrity_failure_persisted",
             True,
         )
     if reasons & _AUTHORIZATION_REASONS:
-        return (
+        matches["authorization_mismatch"] = (
             "authorization_mismatch",
             "REVIEW_RECOMMENDED",
             "authorization_mismatch_persisted",
             True,
         )
     if reasons & _TRANSPORT_REASONS:
-        return (
+        matches["transport"] = (
             "transport",
             "REVIEW_RECOMMENDED",
             "transport_verification_or_transfer_failure_persisted",
             True,
         )
     if reasons & _MODEL_INADEQUACY_REASONS:
-        return (
+        matches["model_inadequacy"] = (
             "model_inadequacy",
             "MODEL_INADEQUACY_DETECTED",
             "model_inadequacy_evidence_persisted",
             True,
         )
     if reasons & _CANDIDATE_SUPPLY_REASONS:
-        return (
+        matches["candidate_supply"] = (
             "candidate_supply",
             "BOUNDED_SEARCH_NO_COMPLETE_TOP_N",
             "candidate_supply_exhaustion_persisted",
             True,
         )
     if reasons & _BUDGET_REASONS:
-        return (
+        matches["policy_constraint"] = (
             "policy_constraint",
             "BUDGET_LIMIT_REACHED",
             "frozen_budget_limit_reached",
             True,
         )
-    if reasons & _POLICY_REASONS:
-        return (
+    elif reasons & _POLICY_REASONS:
+        matches["policy_constraint"] = (
             "policy_constraint",
             "BOUNDED_SEARCH_NO_COMPLETE_TOP_N",
             "policy_constraint_prevented_complete_top_n",
             True,
         )
     if reasons & _RECOVERY_REASONS:
-        return (
+        matches["recovery"] = (
             "recovery",
             "REVIEW_RECOMMENDED",
             "recovery_failure_persisted",
             True,
         )
     if reasons & _TOOL_RUNTIME_REASONS:
-        return (
+        matches["tool_runtime"] = (
             "tool_runtime",
             "REVIEW_RECOMMENDED",
             "tool_runtime_failure_persisted",
             True,
         )
-    return (
-        "tool_runtime",
-        "REVIEW_RECOMMENDED",
-        "generic_stage_failure_without_specific_cause",
-        False,
-    )
+    if not matches:
+        return (
+            (
+                "tool_runtime",
+                "REVIEW_RECOMMENDED",
+                "generic_stage_failure_without_specific_cause",
+                False,
+            ),
+        )
+    return tuple(matches[family] for family in sorted(matches))
 
 
 def _terminal_observation(
@@ -1064,7 +1072,23 @@ def _event_observation(
             }
         ],
         "link_id": child_id,
+        "causal_links": _persisted_causal_links(event),
         "rationale_summary": _RATIONALES[reason],
+    }
+
+
+def _persisted_causal_links(event: dict[str, Any]) -> dict[str, tuple[str, ...]]:
+    outcome = event.get("outcome")
+    if not isinstance(outcome, dict):
+        return {"event_ids": (), "child_run_ids": ()}
+    link = outcome.get("causal_link")
+    if not isinstance(link, dict) or link.get("version") != _CAUSAL_LINK_VERSION:
+        return {"event_ids": (), "child_run_ids": ()}
+    event_id = _safe_identifier(link.get("cause_event_id"))
+    child_id = _safe_identifier(link.get("cause_child_run_id"))
+    return {
+        "event_ids": (event_id,) if event_id is not None else (),
+        "child_run_ids": (child_id,) if child_id is not None else (),
     }
 
 
@@ -1215,32 +1239,26 @@ def _causally_linked(
 ) -> bool:
     if primary is observation:
         return True
+    if observation["sort_key"] < primary["sort_key"]:
+        return False
     primary_affected = primary["affected"]
-    affected = observation["affected"]
     if (
         primary.get("link_id") is not None
         and primary.get("link_id") == observation.get("link_id")
     ):
         return True
-    if affected.get("event_kind") == "terminal_result_committed":
-        first_revision = primary_affected.get("session_revision")
-        symptom_revision = affected.get("session_revision")
-        return (
-            isinstance(first_revision, int)
-            and isinstance(symptom_revision, int)
-            and first_revision <= symptom_revision
-        )
-    if affected.get("event_kind") == "state_committed":
-        first_revision = primary_affected.get("session_revision")
-        symptom_revision = affected.get("session_revision")
-        return (
-            isinstance(first_revision, int)
-            and isinstance(symptom_revision, int)
-            and first_revision <= symptom_revision
-            and observation["deterministic_reason_code"]
-            == "recovery_required_state_persisted"
-        )
-    return False
+    causal_links = observation.get("causal_links")
+    if not isinstance(causal_links, dict):
+        return False
+    primary_event_id = primary_affected.get("event_id")
+    primary_child_id = primary_affected.get("child_run_id")
+    return (
+        primary_event_id is not None
+        and primary_event_id in causal_links.get("event_ids", ())
+    ) or (
+        primary_child_id is not None
+        and primary_child_id in causal_links.get("child_run_ids", ())
+    )
 
 
 def _reject_attribution_overlap(

@@ -85,14 +85,16 @@ A `first_cause` requires all of the following:
 - a concrete source reference and exact source SHA-256;
 - an explicit frozen reason or structural fact sufficient for its family;
 - a position in canonical causal order before any linked symptom;
-- a typed-authority link, such as the same immutable child ID or the Session's
-  terminal result following the bound child failure;
+- a typed-authority link, such as the same immutable child ID or a persisted
+  `scientific_agent_failure_causal_link.v1` reference to the cause event/child;
 - no dependence on mutable telemetry overriding an authoritative source.
 
 A `downstream_symptom` is a persisted later manifestation whose link is proven,
-such as the terminal failure following a source-bound child failure. Temporal
-adjacency alone is not a causal link. An unrelated later observation remains
-`undetermined`, even when another primary first cause exists.
+such as a later event for the same immutable child or a terminal/state event
+with a versioned persisted cause reference. Revision order, a generic terminal
+reason, or temporal adjacency alone is not a causal link. An unrelated later
+observation remains `undetermined` with `causal_link_not_proven`, even when
+another primary first cause exists.
 
 At most one primary first cause is published. Candidates at the same earliest
 Session revision are equal causal candidates: event-kind or lexicographic order
@@ -102,6 +104,14 @@ findings request review. If no sufficiently evidenced candidate exists, the
 result is `insufficient_causal_evidence`. It uses `REVIEW_RECOMMENDED`, except
 that the factual bounded-search symptom may retain
 `BOUNDED_SEARCH_NO_COMPLETE_TOP_N` without claiming a cause.
+
+A single `stage_failed` event can persist reasons from more than one taxonomy
+family. Attribution first collects every matching family; it never uses family
+implementation order as causal priority. Multiple families from that one event
+therefore become equal candidates at the same revision and produce
+`multiple_equal_first_cause_candidates`. Reordering the reason list leaves this
+semantic classification unchanged, while the upstream verified-byte identity
+continues to bind the exact serialized source order.
 
 Clean successful trajectories publish `no_failure` and an empty JSONL file.
 An explicitly recovered trajectory that completes Top-N does not acquire a

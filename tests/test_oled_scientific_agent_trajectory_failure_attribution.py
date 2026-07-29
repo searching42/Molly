@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -183,7 +184,7 @@ def _prepared_manifest(prepared: object) -> dict[str, object]:
 def _failure_payloads(
     base: dict[str, bytes],
     *,
-    reason_code: str,
+    reason_code: str | tuple[str, ...],
     sensitive_outcome: dict[str, object] | None = None,
     telemetry_findings: list[dict[str, object]] | None = None,
 ) -> dict[str, bytes]:
@@ -198,7 +199,9 @@ def _failure_payloads(
         "child_status": "failed",
         **(sensitive_outcome or {}),
     }
-    completed["reason_codes"] = [reason_code]
+    completed["reason_codes"] = (
+        [reason_code] if isinstance(reason_code, str) else list(reason_code)
+    )
     events = [
         event
         for event in events
@@ -239,6 +242,40 @@ def _failure_payloads(
 def _bounded_payloads(base: dict[str, bytes], stop_reason: str) -> dict[str, bytes]:
     receipt = json.loads(base["trajectory.json"])
     events = [json.loads(line) for line in base["events.jsonl"].splitlines()]
+    terminal = next(
+        event
+        for event in events
+        if event["event_kind"] == "terminal_result_committed"
+    )
+    terminal["outcome"].update(
+        {
+            "status": "STOPPED_BOUNDED_NO_SOLUTION",
+            "stop_reason": stop_reason,
+            "has_complete_top_n": False,
+        }
+    )
+    terminal["reason_codes"] = [stop_reason]
+    receipt["terminal_status"] = "STOPPED_BOUNDED_NO_SOLUTION"
+    result = dict(base)
+    result["trajectory.json"] = _canonical_json_bytes(receipt)
+    return _refresh_trajectory(result, events=events)
+
+
+def _recovered_then_bounded_payloads(
+    base: dict[str, bytes], stop_reason: str
+) -> dict[str, bytes]:
+    receipt = json.loads(base["trajectory.json"])
+    events = [json.loads(line) for line in base["events.jsonl"].splitlines()]
+    completed_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["event_kind"] == "stage_completed"
+    )
+    failed = deepcopy(events[completed_index])
+    failed["event_kind"] = "stage_failed"
+    failed["outcome"] = {"child_status": "failed"}
+    failed["reason_codes"] = ["tool_runtime_failure"]
+    events.insert(completed_index, failed)
     terminal = next(
         event
         for event in events
@@ -399,6 +436,80 @@ def test_standard_failure_cases_freeze_first_cause_symptoms_and_sources(
         stale = next(row for row in rows if row["taxonomy_family"] == "recovery")
         assert stale["attribution_status"] == "undetermined"
         assert stale["evidence_sufficiency"] == "insufficient"
+
+
+@pytest.mark.pr_fast
+def test_multi_family_stage_failure_publishes_ambiguity_without_priority(
+    verified_source_bundle: _SourceBundle,
+) -> None:
+    base = _trajectory_payloads(verified_source_bundle)
+    prepared_by_order = []
+    for reasons in (
+        ("gate_snapshot_mismatch", "ssh_connection_failed"),
+        ("ssh_connection_failed", "gate_snapshot_mismatch"),
+    ):
+        prepared_by_order.append(
+            _prepare_direct(_failure_payloads(base, reason_code=reasons))
+        )
+
+    for prepared in prepared_by_order:
+        manifest = _prepared_manifest(prepared)
+        rows = _prepared_rows(prepared)
+        assert manifest["result"] == {
+            "ambiguity_reason": "multiple_equal_first_cause_candidates",
+            "attribution_status": "undetermined",
+            "primary_first_cause_id": None,
+        }
+        candidates = [
+            row
+            for row in rows
+            if row["taxonomy_family"]
+            in {"authorization_mismatch", "transport"}
+        ]
+        assert {row["taxonomy_family"] for row in candidates} == {
+            "authorization_mismatch",
+            "transport",
+        }
+        assert all(
+            row["deterministic_reason_code"]
+            == "ambiguous_equal_first_cause_candidates"
+            and row["attribution_status"] == "undetermined"
+            for row in candidates
+        )
+
+
+@pytest.mark.pr_fast
+@pytest.mark.parametrize(
+    ("stop_reason", "family"),
+    (
+        ("max_generation_rounds_reached", "policy_constraint"),
+        ("candidate_supply_exhausted", "candidate_supply"),
+    ),
+)
+def test_recovered_early_failure_is_not_linked_to_independent_terminal_stop(
+    verified_source_bundle: _SourceBundle,
+    stop_reason: str,
+    family: str,
+) -> None:
+    prepared = _prepare_direct(
+        _recovered_then_bounded_payloads(
+            _trajectory_payloads(verified_source_bundle), stop_reason
+        )
+    )
+    rows = _prepared_rows(prepared)
+    first = next(row for row in rows if row["attribution_role"] == "first_cause")
+    terminal = next(
+        row
+        for row in rows
+        if row["affected"]["event_kind"] == "terminal_result_committed"
+    )
+
+    assert first["taxonomy_family"] == "tool_runtime"
+    assert terminal["taxonomy_family"] == family
+    assert terminal["attribution_role"] == "downstream_symptom"
+    assert terminal["attribution_status"] == "undetermined"
+    assert terminal["deterministic_reason_code"] == "causal_link_not_proven"
+    assert terminal["finding_code"] == "REVIEW_RECOMMENDED"
 
 
 @pytest.mark.parametrize(
@@ -874,7 +985,7 @@ def test_cross_process_and_hash_seed_attribution_is_byte_identical(
 ) -> None:
     trajectory = _failure_payloads(
         _trajectory_payloads(verified_source_bundle),
-        reason_code="known_hosts_verification_failed",
+        reason_code=("gate_snapshot_mismatch", "ssh_connection_failed"),
     )
     receipt = json.loads(trajectory["trajectory.json"])
     audit = _prepare_audit_publication_from_verified_bytes(
