@@ -29,3 +29,15 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+markers = [
+  "unit: isolated pure-function, schema, contract, or lightweight verifier coverage",
+  "integration: collaboration across API, storage, executor, adapter, or filesystem components",
+  "acceptance: user-visible workflow or end-to-end behavior",
+  "adversarial: tampering, path, inode, TOCTOU, replay, or fail-closed security coverage",
+  "slow: measured high-duration coverage retained for full and scheduled CI",
+  "remote_mock: simulated SSH, SCP, remote worker, or external-program execution",
+  "pr_fast: curated integration, acceptance, UI, and security canary for pull requests",
+]
