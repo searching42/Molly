@@ -29,11 +29,7 @@ CAPABILITY_PROBE_SCHEMA_VERSION = "molly_capability_probe.v1"
 TRANSFER_MANIFEST_SCHEMA_VERSION = "molly_transfer_manifest.v1"
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,95}$")
 _SAFE_SSH_ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
-# ``hostname -s`` is an operating-system identity, not necessarily a DNS name.
-# Some managed clusters legitimately use underscores in their short hostname.
-# The value is still argv-separated and exact-compared; shell metacharacters,
-# whitespace, paths, usernames, and endpoint syntax remain forbidden.
-_SAFE_HOSTNAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,252}[A-Za-z0-9]$|^[A-Za-z0-9]$")
+_SAFE_HOSTNAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}[A-Za-z0-9]$|^[A-Za-z0-9]$")
 _SAFE_CAPABILITY = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,95}$")
 _MAX_PROBE_BYTES = 1024 * 1024
 _MAX_TRANSFER_FILE_BYTES = 100 * 1024 * 1024 * 1024
@@ -162,7 +158,7 @@ class ConnectionProfile(BaseModel):
     def validate_expected_hostname(cls, value: Any) -> str:
         clean = str(value or "").strip().lower()
         if not _SAFE_HOSTNAME.fullmatch(clean):
-            raise ValueError("expected_hostname must be a safe short hostname")
+            raise ValueError("expected_hostname must be a safe DNS hostname")
         return clean
 
     @field_validator("remote_root", mode="before")

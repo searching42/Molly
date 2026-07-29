@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from ai4s_agent.oled_scientific_agent_trajectory_failure_attribution import (
@@ -62,6 +62,179 @@ _SAFE_OUTCOME_FIELDS = frozenset(
         "stop_reason",
         "selected_candidate_count",
     }
+)
+_SAFE_STATUS_VALUES = frozenset(
+    {
+        "ACTIVE",
+        "WAITING_USER",
+        "COMPLETED_TOP_N",
+        "STOPPED_BOUNDED_NO_SOLUTION",
+        "RECOVERY_REQUIRED",
+        "FAILED",
+    }
+)
+_SAFE_STEP_VALUES = frozenset(
+    {
+        "screening",
+        "initial_decision",
+        "generation",
+        "evaluation",
+        "candidate_decision",
+        "controller",
+    }
+)
+_SAFE_GATE_VALUES = frozenset(
+    {
+        "gate_1_task_parse",
+        "gate_2_data_mining",
+        "gate_3_train_config",
+        "gate_4_post_infer_stats",
+        "gate_5_final_threshold",
+    }
+)
+_SAFE_TASK_VALUES = frozenset(
+    {
+        "execute_oled_registry_candidate_screening",
+        "execute_oled_experiment_batch_selection",
+        "execute_oled_inverse_design",
+        "execute_oled_generated_candidate_evaluation",
+        "execute_oled_candidate_decision",
+        "execute_oled_bounded_discovery_controller",
+    }
+)
+_SAFE_STOP_REASONS = frozenset(
+    {
+        "target_top_n_complete",
+        "non_supply_policy_prevented_complete_top_n",
+        "max_iterations_reached",
+        "max_generation_rounds_reached",
+        "max_generated_candidates_would_be_exceeded",
+        "candidate_supply_exhausted",
+        "insufficient_property_qualified_candidates",
+        "property_qualified_candidate_pool_exhausted",
+        "pareto_shortlist_policy_prevented_complete_batch",
+        "candidate_quantity_sufficient_no_generation_requested",
+        "stage_failure",
+        "duplicate_dispatch",
+    }
+)
+_SAFE_REASON_CODES = frozenset(
+    {
+        "exact_gate_snapshot_approved",
+        "external_anchor_exact_replay",
+        "succeeded",
+        "failed",
+        "integrity_failed",
+        "artifact_hash_mismatch",
+        "artifact_roster_mismatch",
+        "input_integrity_failed",
+        "input_manifest_mismatch",
+        "input_source_binding_mismatch",
+        "actor_scope_mismatch",
+        "authorization_mismatch",
+        "controller_authorization_mismatch",
+        "gate_snapshot_mismatch",
+        "predecessor_authorization_mismatch",
+        "known_hosts_verification_failed",
+        "expected_hostname_mismatch",
+        "remote_endpoint_verification_failed",
+        "remote_output_retrieval_failed",
+        "scp_transfer_failed",
+        "ssh_connection_failed",
+        "transport_failure",
+        "adapter_runtime_failed",
+        "output_parse_failed",
+        "tool_runtime_failure",
+        "model_applicability_failed",
+        "model_inadequacy_detected",
+        "model_out_of_domain",
+        "candidate_supply_exhausted",
+        "insufficient_property_qualified_candidates",
+        "property_qualified_candidate_pool_exhausted",
+        "non_supply_policy_prevented_complete_top_n",
+        "policy_constraint_rejected",
+        "max_iterations_reached",
+        "max_generation_rounds_reached",
+        "max_generated_candidates_would_be_exceeded",
+        "budget_limit_reached",
+        "duplicate_dispatch_detected",
+        "reconciliation_failed",
+        "stale_ownership_detected",
+        "stale_state_detected",
+        "stage_failure",
+        "duplicate_dispatch",
+        "unspecified_stage_failure",
+        "recovered_existing_publication",
+        "terminal_exact_replay",
+    }
+) | _SAFE_STOP_REASONS
+_SAFE_LOGICAL_ROLES = frozenset(
+    {
+        "session_spec",
+        "session_revision",
+        "action_request",
+        "child_stage",
+        "gate_decision",
+        "child_publication",
+        "terminal_result",
+    }
+)
+_SAFE_AUDIT_REASON_CODES = frozenset(
+    {
+        "verified_trajectory_identity_mismatch",
+        "verified_publication_identity_mismatch",
+        "source_binding_trajectory_identity_mismatch",
+        "source_artifact_manifest_missing",
+        "source_artifact_digest_mismatch",
+        "event_count_mismatch",
+        "source_count_mismatch",
+        "telemetry_finding_count_mismatch",
+        "source_manifest_digest_mismatch",
+        "duplicate_source_binding",
+        "duplicate_event_id",
+        "event_sequence_mismatch",
+        "event_trajectory_identity_mismatch",
+        "event_source_binding_missing",
+        "terminal_anchor_count_mismatch",
+        "terminal_status_mismatch",
+    }
+)
+_SAFE_TELEMETRY_REASON_CODES = frozenset(
+    {
+        "telemetry_conflicts_with_session_history",
+        "telemetry_missing_or_invalid",
+        "stale_state_detected",
+    }
+)
+_SAFE_ATTRIBUTION_REASON_CODES = frozenset(
+    {
+        "audit_integrity_findings_present",
+        "authorization_mismatch_persisted",
+        "authorization_status_not_approved",
+        "scientific_input_integrity_failure_persisted",
+        "transport_verification_or_transfer_failure_persisted",
+        "model_inadequacy_evidence_persisted",
+        "candidate_supply_exhaustion_persisted",
+        "frozen_budget_limit_reached",
+        "policy_constraint_prevented_complete_top_n",
+        "recovery_failure_persisted",
+        "tool_runtime_failure_persisted",
+        "generic_stage_failure_without_specific_cause",
+        "bounded_search_incomplete_without_specific_cause",
+        "terminal_recovery_required",
+        "terminal_failure_without_specific_cause",
+        "recovery_required_state_persisted",
+        "duplicate_dispatch_persisted",
+        "repeated_dispatch_without_execution_proof",
+        "stale_mutable_telemetry_observed",
+        "mutable_telemetry_unavailable",
+        "ambiguous_equal_first_cause_candidates",
+        "causal_link_not_proven",
+    }
+)
+_SAFE_EVIDENCE_SUFFICIENCY = frozenset({"sufficient", "insufficient"})
+_SAFE_AMBIGUITY_REASONS = frozenset(
+    {"multiple_equal_first_cause_candidates", "insufficient_causal_evidence"}
 )
 
 
@@ -182,6 +355,17 @@ def build_oled_scientific_agent_trajectory_inspection(
         attribution_binding=attribution_binding,
         bound=bound,
     )
+    attribution_result = attribution_manifest.get("result")
+    if not isinstance(attribution_result, dict):
+        raise ValueError("inspection attribution result is invalid")
+    publication_attribution_status = _safe_required_enum(
+        attribution_result.get("attribution_status"), _ATTRIBUTION_STATUSES
+    )
+    effective_filters = (
+        replace(selected, attribution_status=None)
+        if selected.attribution_status == "no_failure"
+        else selected
+    )
     timeline, unattached = _join_timeline(
         events=events,
         audit_findings=audit_findings,
@@ -189,10 +373,19 @@ def build_oled_scientific_agent_trajectory_inspection(
         telemetry=telemetry,
         events_sha256=_digest(bound.trajectory_payloads["events.jsonl"]),
     )
-    matching_timeline = [item for item in timeline if _timeline_matches(item, selected)]
-    matching_unattached = [
-        item for item in unattached if _finding_matches(item, selected)
-    ]
+    if (
+        selected.attribution_status == "no_failure"
+        and publication_attribution_status != "no_failure"
+    ):
+        matching_timeline = []
+        matching_unattached = []
+    else:
+        matching_timeline = [
+            item for item in timeline if _timeline_matches(item, effective_filters)
+        ]
+        matching_unattached = [
+            item for item in unattached if _finding_matches(item, effective_filters)
+        ]
     combined: list[tuple[str, dict[str, Any]]] = [
         ("timeline", item) for item in matching_timeline
     ] + [("unattached", item) for item in matching_unattached]
@@ -200,14 +393,13 @@ def build_oled_scientific_agent_trajectory_inspection(
     returned_timeline = [item for kind, item in returned if kind == "timeline"]
     returned_unattached = [item for kind, item in returned if kind == "unattached"]
 
-    attribution_result = attribution_manifest.get("result")
-    if not isinstance(attribution_result, dict):
-        raise ValueError("inspection attribution result is invalid")
     counts = attribution_manifest.get("counts")
     if not isinstance(counts, dict):
         raise ValueError("inspection attribution counts are invalid")
     primary_id = _safe_optional_id(attribution_result.get("primary_first_cause_id"))
-    ambiguity = _safe_optional_id(attribution_result.get("ambiguity_reason"))
+    ambiguity = _safe_optional_enum(
+        attribution_result.get("ambiguity_reason"), _SAFE_AMBIGUITY_REASONS
+    )
 
     return {
         "ok": True,
@@ -233,7 +425,9 @@ def build_oled_scientific_agent_trajectory_inspection(
             "observer_only": True,
         },
         "summary": {
-            "terminal_status": _safe_scalar(trajectory.get("terminal_status")),
+            "terminal_status": _safe_required_enum(
+                trajectory.get("terminal_status"), _SAFE_STATUS_VALUES
+            ),
             "terminal_revision": _nonnegative_int(trajectory.get("terminal_revision")),
             "event_count": len(events),
             "audit_finding_count": len(audit_findings),
@@ -242,9 +436,7 @@ def build_oled_scientific_agent_trajectory_inspection(
             "downstream_symptom_count": _nonnegative_int(
                 counts.get("downstream_symptom_count")
             ),
-            "attribution_status": _safe_required_id(
-                attribution_result.get("attribution_status")
-            ),
+            "attribution_status": publication_attribution_status,
             "primary_first_cause_id": primary_id,
             "ambiguity_reason": ambiguity,
             "total_timeline_count": len(timeline),
@@ -292,7 +484,9 @@ def _join_timeline(
             raise ValueError("inspection event order is not canonical")
         event_id = _safe_required_id(event.get("event_id"))
         source = event.get("source") if isinstance(event.get("source"), dict) else {}
-        logical_role = _safe_optional_id(source.get("logical_role"))
+        logical_role = _safe_optional_enum(
+            source.get("logical_role"), _SAFE_LOGICAL_ROLES
+        )
         source_id = _safe_optional_id(source.get("source_artifact_id"))
         action_id = source_id if logical_role == "action_request" else None
         evidence = {
@@ -307,8 +501,10 @@ def _join_timeline(
             "sequence_index": sequence,
             "session_revision": _nonnegative_int(event.get("session_revision")),
             "event_id": event_id,
-            "event_kind": _safe_required_id(event.get("event_kind")),
-            "task_id": _safe_optional_id(event.get("task_id")),
+            "event_kind": _safe_required_enum(
+                event.get("event_kind"), frozenset(_EVENT_ORDER)
+            ),
+            "task_id": _safe_optional_enum(event.get("task_id"), _SAFE_TASK_VALUES),
             "action_id": action_id,
             "child_run_id": _safe_optional_id(event.get("child_run_id")),
             "outcome": _safe_outcome(event.get("outcome")),
@@ -360,7 +556,9 @@ def _join_timeline(
 def _safe_audit_finding(value: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "finding_id": _safe_required_id(value.get("finding_id")),
-        "reason_code": _safe_required_id(value.get("reason_code")),
+        "reason_code": _safe_required_enum(
+            value.get("reason_code"), _SAFE_AUDIT_REASON_CODES
+        ),
         "source_references": _safe_refs(value.get("source_refs")),
         "authority": "audit_metrics_only",
     }
@@ -381,9 +579,12 @@ def _safe_attribution(value: Mapping[str, Any]) -> dict[str, Any]:
         "attribution_role": role,
         "finding_code": code,
         "attribution_status": status,
-        "evidence_sufficiency": _safe_required_id(value.get("evidence_sufficiency")),
-        "deterministic_reason_code": _safe_required_id(
-            value.get("deterministic_reason_code")
+        "evidence_sufficiency": _safe_required_enum(
+            value.get("evidence_sufficiency"), _SAFE_EVIDENCE_SUFFICIENCY
+        ),
+        "deterministic_reason_code": _safe_required_enum(
+            value.get("deterministic_reason_code"),
+            _SAFE_ATTRIBUTION_REASON_CODES,
         ),
         "source_references": _safe_refs(value.get("source_refs")),
         "authority": "source_backed_failure_attribution",
@@ -393,7 +594,9 @@ def _safe_attribution(value: Mapping[str, Any]) -> dict[str, Any]:
 def _safe_telemetry_finding(value: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "finding_id": _safe_required_id(value.get("finding_id")),
-        "reason_code": _safe_required_id(value.get("reason_code")),
+        "reason_code": _safe_required_enum(
+            value.get("reason_code"), _SAFE_TELEMETRY_REASON_CODES
+        ),
         "action_id": _safe_required_id(value.get("action_id")),
         "source_references": [],
         "authority": "non_authoritative_telemetry",
@@ -412,10 +615,14 @@ def _safe_refs(value: Any) -> list[dict[str, Any]]:
         if artifact not in _OBSERVER_ARTIFACTS or not _DIGEST.fullmatch(sha256):
             raise ValueError("inspection source reference binding is invalid")
         ref: dict[str, Any] = {"artifact_name": artifact, "sha256": sha256}
-        for key in ("record_id", "logical_role"):
-            clean = _safe_optional_id(raw.get(key))
-            if clean is not None:
-                ref[key] = clean
+        record_id = _safe_optional_id(raw.get("record_id"))
+        if record_id is not None:
+            ref["record_id"] = record_id
+        logical_role = _safe_optional_enum(
+            raw.get("logical_role"), _SAFE_LOGICAL_ROLES
+        )
+        if logical_role is not None:
+            ref["logical_role"] = logical_role
         for key in ("record_digest", "source_binding_sha256"):
             clean = str(raw.get(key) or "")
             if clean:
@@ -456,8 +663,6 @@ def _timeline_matches(item: Mapping[str, Any], selected: InspectionFilters) -> b
             selected.attribution_status,
         )
     )
-    if selected.attribution_status == "no_failure":
-        return not item.get("failure_attributions")
     if has_finding_filter and not any(_finding_matches(value, selected) for value in findings):
         return False
     if selected.source_artifact is not None:
@@ -530,11 +735,32 @@ def _require_chain(
 def _safe_outcome(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
-    return {
-        key: _safe_scalar(value[key])
-        for key in sorted(_SAFE_OUTCOME_FIELDS & set(value))
-        if _safe_scalar(value[key]) is not None
-    }
+    result: dict[str, Any] = {}
+    for key in sorted(_SAFE_OUTCOME_FIELDS & set(value)):
+        raw = value[key]
+        if key == "status":
+            clean = _safe_optional_enum(raw, _SAFE_STATUS_VALUES)
+        elif key == "current_step":
+            clean = _safe_optional_enum(raw, _SAFE_STEP_VALUES)
+        elif key == "gate":
+            clean = _safe_optional_enum(raw, _SAFE_GATE_VALUES)
+        elif key == "task_id":
+            clean = _safe_optional_enum(raw, _SAFE_TASK_VALUES)
+        elif key == "stop_reason":
+            clean = _safe_optional_enum(raw, _SAFE_STOP_REASONS)
+        elif key in {"approved", "has_complete_top_n"}:
+            clean = raw if isinstance(raw, bool) else None
+        elif key == "selected_candidate_count":
+            clean = (
+                raw
+                if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0
+                else None
+            )
+        else:  # pragma: no cover - guarded by the frozen field allowlist
+            clean = None
+        if clean is not None:
+            result[key] = clean
+    return result
 
 
 def _safe_reason_codes(value: Any) -> list[str]:
@@ -544,21 +770,9 @@ def _safe_reason_codes(value: Any) -> list[str]:
         {
             clean
             for raw in value
-            if (clean := _safe_optional_id(raw)) is not None
+            if (clean := _safe_optional_enum(raw, _SAFE_REASON_CODES)) is not None
         }
     )
-
-
-def _safe_scalar(value: Any) -> str | int | float | bool | None:
-    if value is None or isinstance(value, bool):
-        return value
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value == value and value not in {float("inf"), float("-inf")}:
-        return value
-    if isinstance(value, str) and _SAFE_ID.fullmatch(value):
-        return value
-    return None
 
 
 def _safe_required_id(value: Any) -> str:
@@ -575,6 +789,19 @@ def _safe_optional_id(value: Any) -> str | None:
     if not _SAFE_ID.fullmatch(clean):
         return None
     return clean
+
+
+def _safe_required_enum(value: Any, allowed: frozenset[str]) -> str:
+    clean = _safe_optional_enum(value, allowed)
+    if clean is None:
+        raise ValueError("inspection semantic value is invalid")
+    return clean
+
+
+def _safe_optional_enum(value: Any, allowed: frozenset[str]) -> str | None:
+    if not isinstance(value, str) or value not in allowed:
+        return None
+    return value
 
 
 def _nonnegative_int(value: Any) -> int:

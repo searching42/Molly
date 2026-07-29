@@ -128,6 +128,13 @@ stop_reason
 selected_candidate_count
 ```
 
+The field name allowlist is not sufficient by itself. String values for
+`status`, `current_step`, `gate`, `task_id`, `stop_reason`, and projected
+`reason_codes` must also belong to the frozen M2/M3 semantic enums. An unknown
+safe-looking identifier is omitted; it is never exposed merely because it
+matches an identifier regular expression. This includes hostname-shaped
+values such as dotted names and internal node labels.
+
 Evidence uses only persisted safe reference fields:
 
 ```text
@@ -159,6 +166,12 @@ Filters use exact equality. Regular expressions, arbitrary sorting, unknown
 fields, and free-form source names are forbidden. Limit truncation affects the
 returned page only, not `verified_chain` or the total summary.
 
+`attribution_status=no_failure` is a publication-level predicate. It matches
+only when `attribution_manifest.result.attribution_status` is exactly
+`no_failure`; it does not mean that an individual timeline event happens to
+have no attached failure finding. A determined or undetermined failure
+publication therefore returns zero matching items for this filter.
+
 ## Alternatives policy
 
 Projection, audit, and attribution v1 do not persist real alternatives.
@@ -179,9 +192,9 @@ Long-lived or returned inspection identity never contains an absolute path,
 workspace path, actions root, known-hosts bytes or path, SSH alias, hostname,
 username, IP address, email-like account, remote repository path, interpreter
 path, raw exception, shell command, credential, API key, or private paper path.
-The builder is allowlist-based rather than redaction-based. The UI renders all
-dynamic inspection text with `textContent` and does not insert source content
-through `innerHTML`.
+The builder uses both field and semantic allowlists rather than redaction or
+format-only identifier checks. The UI renders all dynamic inspection text with
+`textContent` and does not insert source content through `innerHTML`.
 
 ## Error contract
 

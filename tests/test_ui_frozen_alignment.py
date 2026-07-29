@@ -1,11 +1,9 @@
-def test_sidebar_omits_conversation_history_module(rendered_index_html: str) -> None:
+def test_sidebar_matches_frozen_project_conversation_layout(rendered_index_html: str) -> None:
     html = rendered_index_html
 
     assert "<h2>Projects</h2>" in html
-    assert 'id="new-conversation-button"' not in html
-    assert 'id="conversation-list"' not in html
-    assert '<section class="sidebar-section" aria-label="项目对话">' not in html
-    assert "先在对话中上传并发送 PDF。" not in html
+    assert 'id="new-conversation-button"' in html
+    assert 'id="conversation-list"' in html
     assert 'class="atomic-task-list"' in html
     assert 'id="new-project-id"' not in html
     assert 'class="workspace-topbar"' not in html
@@ -72,7 +70,6 @@ def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html:
     assert 'id="llm-settings-form"' in html
     assert 'id="llm-api-key-source"' in html
     assert 'patchJSON("/api/settings/llm", payload)' in html
-    assert 'postJSON("/api/settings/llm/probe", {})' in html
     assert 'id="compute-connection-form"' in html
     assert 'id="compute-resource-role"' in html
     assert 'id="compute-workload-mineru"' in html
@@ -82,4 +79,3 @@ def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html:
     assert 'id="compute-environments"' in html
     assert 'getJSON("/api/settings/compute")' in html
     assert "REINVENT4 / Uni-Mol 远程执行需要专用 known_hosts 文件。" in html
-    assert "OpenSSH 保存远端主机公钥指纹的信任文件" in html

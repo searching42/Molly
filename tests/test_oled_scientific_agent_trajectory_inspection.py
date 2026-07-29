@@ -316,6 +316,60 @@ def test_filters_limits_and_summary_are_deterministic(
     assert filtered["applied_filters"] == {"event_kind": "state_committed", "limit": 1}
 
 
+@pytest.mark.pr_fast
+def test_clean_success_no_failure_filter_uses_publication_result(
+    inspection_bundle: InspectionBundle,
+) -> None:
+    bound = _bound_from_trajectory_payloads(_payloads(inspection_bundle.trajectory_dir))
+    unfiltered = _build(bound)
+    filtered = _build(
+        bound,
+        filters=InspectionFilters(attribution_status="no_failure"),
+    )
+    assert filtered["summary"]["attribution_status"] == "no_failure"
+    assert filtered["timeline"] == unfiltered["timeline"]
+    assert filtered["unattached_findings"] == unfiltered["unattached_findings"]
+    assert filtered["page"]["total_matching_count"] == unfiltered["page"][
+        "total_matching_count"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "expected_status"),
+    [
+        pytest.param("ssh_connection_failed", "determined", id="determined-failure"),
+        pytest.param(
+            "unspecified_stage_failure",
+            "undetermined",
+            id="undetermined-failure",
+        ),
+    ],
+)
+@pytest.mark.pr_fast
+def test_failure_publication_no_failure_filter_returns_no_items(
+    inspection_bundle: InspectionBundle,
+    reason_code: str,
+    expected_status: str,
+) -> None:
+    payloads = _failure_payloads(
+        _payloads(inspection_bundle.trajectory_dir),
+        reason_code=reason_code,
+    )
+    filtered = _build(
+        _bound_from_trajectory_payloads(payloads),
+        filters=InspectionFilters(attribution_status="no_failure"),
+    )
+    assert filtered["summary"]["attribution_status"] == expected_status
+    assert filtered["timeline"] == []
+    assert filtered["unattached_findings"] == []
+    assert filtered["page"] == {
+        "limit": 200,
+        "truncated": False,
+        "returned_count": 0,
+        "total_matching_count": 0,
+    }
+
+
 def test_stale_telemetry_is_visible_only_as_non_authoritative(
     inspection_bundle: InspectionBundle,
 ) -> None:
@@ -458,13 +512,21 @@ def test_response_allowlist_excludes_sensitive_runtime_fields(
         "remote_repository_path": "/srv/private/repository",
         "python_path": "/opt/private/bin/python",
     }
+    sensitive_allowed_field_values = {
+        "private.compute.invalid",
+        "internal-node_42",
+    }
     payloads = _failure_payloads(
         _payloads(inspection_bundle.trajectory_dir),
-        reason_code="tool_runtime_failure",
-        sensitive_outcome=sensitive,
+        reason_code=tuple(sorted(sensitive_allowed_field_values)),
+        sensitive_outcome={
+            **sensitive,
+            "status": "private.compute.invalid",
+            "stop_reason": "internal-node_42",
+        },
     )
     rendered = json.dumps(_build(_bound_from_trajectory_payloads(payloads)), sort_keys=True)
-    for secret in sensitive.values():
+    for secret in {*sensitive.values(), *sensitive_allowed_field_values}:
         assert secret not in rendered
     assert "non_authoritative_telemetry" not in rendered or "telemetry_findings" in rendered
 

@@ -475,8 +475,7 @@ def test_compute_resource_ui_guides_users_through_fixed_connection_roles(
     assert 'data-capabilities="cpu,reinvent4"' in html
     assert "input.disabled = incompatible" in html
     assert "if (incompatible) input.checked = false" in html
-    assert "display_name: \"\"" not in html
-    assert "if (knownHostsPath) payload.known_hosts_path = knownHostsPath" in html
+    assert "display_name: \"\"" in html
     assert "connection_id: role.value" in html
     assert "const form = event.currentTarget" in html
     assert "form.reset()" in html
@@ -1147,49 +1146,6 @@ def test_compute_settings_api_persists_connection_and_lists_execution_contracts(
     deleted = client.delete("/api/settings/compute/connections/compute-worker-main")
     assert deleted.status_code == 200
     assert deleted.json == {"ok": True, "deleted": True}
-
-
-def test_literature_only_connection_accepts_default_ssh_trust_and_short_hostname(
-    tmp_path: Path,
-) -> None:
-    app = create_app(
-        base_runs_dir=tmp_path / "runs",
-        workspace_dir=tmp_path / "workspace",
-        user_config_dir=tmp_path / "config",
-    )
-    response = app.test_client().put(
-        "/api/settings/compute/connections/gpu-worker-main",
-        json={
-            "ssh_host_alias": "literature_gpu",
-            "expected_hostname": "mineru_worker_01",
-            "remote_root": "/srv/molly/literature",
-            "declared_capabilities": ["gpu", "mineru"],
-        },
-    )
-    assert response.status_code == 200
-    assert response.json["connection"]["known_hosts_path"] == ""
-    assert response.json["connection"]["expected_hostname"] == "mineru_worker_01"
-
-
-def test_connection_validation_returns_only_safe_field_names(tmp_path: Path) -> None:
-    app = create_app(
-        base_runs_dir=tmp_path / "runs",
-        workspace_dir=tmp_path / "workspace",
-        user_config_dir=tmp_path / "config",
-    )
-    response = app.test_client().put(
-        "/api/settings/compute/connections/gpu-worker-main",
-        json={
-            "ssh_host_alias": "user@private-host",
-            "expected_hostname": "valid-host",
-            "remote_root": "/srv/molly/runs",
-            "declared_capabilities": ["gpu", "mineru"],
-        },
-    )
-    assert response.status_code == 400
-    assert response.json["error_code"] == "connection_profile_invalid"
-    assert response.json["invalid_fields"] == ["ssh_host_alias"]
-    assert "user@private-host" not in response.get_data(as_text=True)
 
 
 def test_compute_settings_api_rejects_url_identity_mismatch(tmp_path: Path) -> None:

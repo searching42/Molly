@@ -663,7 +663,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 决策：接受 `scientific_agent_trajectory_inspection.v1` 的 project-scoped GET API 和现有 OLED bounded-session 页内最小时间线作为 `M3-023`～`M3-028` 的实现与测试证据。
 - 原计划：直接从 observer publication 路径读取 manifest 和 JSONL，或为 inspection 建立独立 verifier/publication。
 - 新计划：在 PR-BG 中增加最小 context-bound seam，嵌套并复用 PR-BE/PR-BF/PR-BG exact replay；只在三个目录仍 pinned 时从只读 bytes 构建临时响应，退出 context 后才 `jsonify()`，不持久化 inspection。
-- 依据：targeted `159 passed`、PR Fast `845 passed`、完整 suite `6077 passed`；覆盖单轮/多轮成功、first-cause join、ambiguity、insufficient evidence、筛选、隐私、source replacement、observer-only snapshot 和跨进程 hash-seed 一致性。
+- 依据：targeted `162 passed`、PR Fast `848 passed`、完整 suite `6076 passed`；覆盖单轮/多轮成功、first-cause join、ambiguity、insufficient evidence、publication-level `no_failure`、语义隐私 allowlist、source replacement、observer-only snapshot 和跨进程 hash-seed 一致性。
 - 影响任务：`M3-023`～`M3-028` 更新为 `I/T/— / DONE`；M3 仍未标记 `V`，M4 benchmark 仍未解锁。
 - 新增风险：projection v1 可能留下 unattached finding；API 需要调用方明确提供三层 publication ID；最小时间线不是通用 causal graph；M4 前不得宣称 attribution accuracy。
 - 批准人：repository owner。
