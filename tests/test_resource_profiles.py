@@ -539,6 +539,14 @@ def test_compute_probe_label_distinguishes_reachability_from_workload_readiness(
                 "verified_capabilities": ["gpu", "unimol"],
             },
         },
+        "legacy_hostname_mismatch": {
+            "connection": {"declared_capabilities": ["gpu", "unimol"]},
+            "probe": {
+                "status": "mismatch",
+                "error_code": "",
+                "verified_capabilities": ["gpu", "unimol"],
+            },
+        },
         "transport_failed": {
             "connection": {"declared_capabilities": ["gpu", "unimol"]},
             "probe": {
@@ -600,6 +608,7 @@ process.stdout.write(JSON.stringify(labels));
         "missing_one": "连接可达，但缺少所选能力：unimol",
         "missing_multiple": "连接可达，但缺少所选能力：gpu、unimol",
         "hostname_mismatch": "主机身份不匹配：请核对 hostname -s 与预期主机名",
+        "legacy_hostname_mismatch": "主机身份不匹配：请核对 hostname -s 与预期主机名",
         "transport_failed": "SSH 连接未建立：请检查 SSH 别名、网络、密钥代理与连接超时",
         "response_unavailable": "远端未返回探测结果：请确认可免交互 SSH 登录，且远端可运行 molly-worker probe --json",
         "response_invalid": "远端探测响应格式无效：请检查或升级远端 molly-worker",
@@ -703,6 +712,44 @@ def test_capability_probe_fails_closed_on_hostname_mismatch_and_redacts_stderr(
     assert result.status == "mismatch"
     assert result.error_code == "hostname_mismatch"
     assert "secret-token" not in json.dumps(result.model_dump(mode="json"))
+
+
+@pytest.mark.parametrize(
+    ("returncode", "expected_error_code"),
+    [
+        pytest.param(255, "probe_transport_failed", id="ssh-transport-failure"),
+        pytest.param(1, "probe_response_unavailable", id="remote-command-failure"),
+    ],
+)
+@pytest.mark.pr_fast
+def test_capability_probe_classifies_ssh_transport_and_remote_command_failures(
+    tmp_path: Path,
+    returncode: int,
+    expected_error_code: str,
+) -> None:
+    store = ResourceProfileStore(
+        workspace_dir=tmp_path / "workspace",
+        config_dir=tmp_path / "config",
+    )
+    store.save_connection(_connection())
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(
+            command,
+            returncode,
+            stdout=b"",
+            stderr=b"private-host.example Authorization: Bearer secret-token",
+        )
+
+    result = CapabilityProbeService(store=store, runner=runner).probe("compute-worker-main")
+
+    assert result.status == "unavailable"
+    assert result.error_code == expected_error_code
+    persisted = (tmp_path / "config" / "capability_probes.json").read_text(
+        encoding="utf-8"
+    )
+    assert "private-host.example" not in persisted
+    assert "secret-token" not in persisted
 
 
 def test_capability_probe_rejects_unstructured_upstream_debug_output(tmp_path: Path) -> None:

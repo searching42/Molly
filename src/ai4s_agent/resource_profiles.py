@@ -988,6 +988,15 @@ class CapabilityProbeService:
             )
             return self.store.save_probe(result)
         stdout = bytes(completed.stdout or b"")
+        if completed.returncode == 255:
+            result = CapabilityProbeResult(
+                connection_id=profile.connection_id,
+                connection_profile_digest=profile.digest(),
+                status="unavailable",
+                checked_at=checked_at,
+                error_code="probe_transport_failed",
+            )
+            return self.store.save_probe(result)
         if completed.returncode != 0 or not stdout or len(stdout) > _MAX_PROBE_BYTES:
             result = CapabilityProbeResult(
                 connection_id=profile.connection_id,
