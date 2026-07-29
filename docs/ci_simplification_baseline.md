@@ -134,7 +134,7 @@ interchangeable.
 | --- | ---: | ---: | ---: |
 | Full pytest tests | 5,998 | 5,996 | -2 net |
 | Full pytest runtime | 1,166.36 s | 1,057.75 s | -108.61 s (-9.3%) |
-| Local PR validation runtime | 1,166.36 s full suite | 20.90 s PR Fast | -98.2% |
+| Local PR validation runtime | 1,166.36 s full suite | 21.06 s PR Fast | -98.2% |
 | `test_*.py` files | 378 | 378 | unchanged |
 | `create_app(...)` test call sites | 308 | 290 | -18 |
 | Production Python lines | 226,983 | 226,938 | -45 |
@@ -157,7 +157,7 @@ Final marker results:
 | `adversarial` | 1,471 | passed | 312.29 s |
 | `remote_mock` | 105 | passed | 2.39 s |
 | `slow` | 641 | collected for Full/Scheduled | not separately timed |
-| `(unit and not slow) or pr_fast` | 798 | passed | 20.90 s |
+| `(unit and not slow) or pr_fast` | 801 | passed | 21.06 s |
 | unfiltered full suite | 5,996 | passed | 1,057.75 s |
 
 `unit`, `integration`, and `acceptance` are mutually exclusive primary layers.
