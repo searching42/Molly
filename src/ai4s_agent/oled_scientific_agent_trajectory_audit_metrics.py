@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from types import MappingProxyType
+from typing import Any, Iterator, Mapping
 
 from ai4s_agent.oled_bounded_discovery_session_view import (
     validated_oled_bounded_project_id,
@@ -27,6 +29,8 @@ from ai4s_agent.oled_scientific_agent_trajectory_projection import (
 )
 from ai4s_agent.oled_scientific_agent_trajectory_verifier import (
     _BoundTrajectoryProjection,
+    _PinnedPublication,
+    _pinned_publication,
     _verified_oled_scientific_agent_trajectory_projection,
 )
 from ai4s_agent.oled_supplementary_material_identity_review import (
@@ -49,13 +53,15 @@ _SOURCE_PUBLICATION_NAMES = {
     "telemetry_findings.jsonl",
     "trajectory.json",
 }
-_AUDIT_PUBLICATION_NAMES = {
-    "audit_findings.jsonl",
-    "audit_manifest.json",
-    "audit_metrics.json",
-    "report.md",
-    "source_binding.json",
-}
+_AUDIT_PUBLICATION_NAMES = frozenset(
+    {
+        "audit_findings.jsonl",
+        "audit_manifest.json",
+        "audit_metrics.json",
+        "report.md",
+        "source_binding.json",
+    }
+)
 _COVERAGE_EVENT_KINDS = {
     "action": {
         "action_requested",
@@ -96,10 +102,35 @@ class OledScientificAgentTrajectoryAuditMetricsPublication:
 
 
 @dataclass(frozen=True)
+class OledScientificAgentTrajectoryAuditMetricsVerification:
+    audit_id: str
+    publication_id: str
+    publication_dir: Path
+    source_trajectory_id: str
+    source_trajectory_publication_id: str
+    exact_external_replay: bool = True
+    exact_file_roster_verified: bool = True
+    exact_bytes_verified: bool = True
+    scientific_source_modified: bool = False
+    scientific_trust_anchor_created: bool = False
+
+
+@dataclass(frozen=True)
 class _PreparedAuditPublication:
     audit_id: str
     publication_id: str
     payloads: Mapping[str, bytes]
+
+
+@dataclass(frozen=True)
+class _BoundTrajectoryAuditMetrics:
+    result: OledScientificAgentTrajectoryAuditMetricsVerification
+    trajectory_payloads: Mapping[str, bytes]
+    audit_payloads: Mapping[str, bytes]
+    _audit_publication: _PinnedPublication
+
+    def assert_stable(self) -> None:
+        self._audit_publication.assert_stable()
 
 
 def publish_oled_scientific_agent_trajectory_audit_metrics(
@@ -171,6 +202,95 @@ def publish_oled_scientific_agent_trajectory_audit_metrics(
         audit_manifest_json=output_dir / "audit_manifest.json",
         report_md=output_dir / "report.md",
     )
+
+
+def verify_oled_scientific_agent_trajectory_audit_metrics(
+    *,
+    storage: ProjectStorage,
+    project_id: str,
+    session_id: str,
+    actions_root: Path,
+    trajectory_publication_dir: Path,
+    audit_publication_dir: Path,
+) -> OledScientificAgentTrajectoryAuditMetricsVerification:
+    """Exact-replay PR-BF while both PR-BE and PR-BF bytes remain pinned."""
+
+    with _verified_oled_scientific_agent_trajectory_audit_metrics(
+        storage=storage,
+        project_id=project_id,
+        session_id=session_id,
+        actions_root=actions_root,
+        trajectory_publication_dir=trajectory_publication_dir,
+        audit_publication_dir=audit_publication_dir,
+    ) as bound:
+        return bound.result
+
+
+@contextmanager
+def _verified_oled_scientific_agent_trajectory_audit_metrics(
+    *,
+    storage: ProjectStorage,
+    project_id: str,
+    session_id: str,
+    actions_root: Path,
+    trajectory_publication_dir: Path,
+    audit_publication_dir: Path,
+) -> Iterator[_BoundTrajectoryAuditMetrics]:
+    """Yield one context-bound mapping of exact PR-BE and PR-BF bytes."""
+
+    clean_project = validated_oled_bounded_project_id(project_id)
+    with _verified_oled_scientific_agent_trajectory_projection(
+        storage=storage,
+        project_id=clean_project,
+        session_id=session_id,
+        actions_root=actions_root,
+        publication_dir=trajectory_publication_dir,
+    ) as trajectory:
+        prepared = _prepare_audit_publication(trajectory)
+        read_only_storage = _ReadOnlyProjectStorage(storage)
+        project_dir = read_only_storage.project_dir(clean_project)
+        session_dir = _require_existing_directory(
+            _lexical_absolute(
+                project_dir / "bounded-discovery-sessions" / str(session_id or "")
+            ),
+            "PR-BF Session",
+        )
+        runs_root = _require_existing_directory(
+            _lexical_absolute(project_dir / "runs"),
+            "PR-BF runs root",
+        )
+        target = _lexical_absolute(audit_publication_dir)
+        trajectory_target = _lexical_absolute(trajectory_publication_dir)
+        _reject_output_source_overlap(
+            root=target,
+            session_dir=session_dir,
+            actions_project_root=_lexical_absolute(actions_root / clean_project),
+            child_run_dirs=[runs_root, trajectory_target],
+        )
+        with _pinned_publication(
+            target,
+            expected_names=_AUDIT_PUBLICATION_NAMES,
+            artifact_label="PR-BF audit publication",
+        ) as persisted:
+            if target.name != prepared.publication_id:
+                raise ValueError("PR-BF audit publication directory identity mismatch")
+            if persisted.payloads != dict(prepared.payloads):
+                raise ValueError("PR-BF audit publication exact replay mismatch")
+            persisted.assert_stable()
+            result = OledScientificAgentTrajectoryAuditMetricsVerification(
+                audit_id=prepared.audit_id,
+                publication_id=prepared.publication_id,
+                publication_dir=target,
+                source_trajectory_id=trajectory.result.trajectory_id,
+                source_trajectory_publication_id=trajectory.result.publication_id,
+            )
+            bound = _BoundTrajectoryAuditMetrics(
+                result=result,
+                trajectory_payloads=MappingProxyType(dict(trajectory.payloads)),
+                audit_payloads=MappingProxyType(dict(persisted.payloads)),
+                _audit_publication=persisted,
+            )
+            yield bound
 
 
 def _prepare_audit_publication(
@@ -963,5 +1083,7 @@ def _report_bytes(
 
 __all__ = [
     "OledScientificAgentTrajectoryAuditMetricsPublication",
+    "OledScientificAgentTrajectoryAuditMetricsVerification",
     "publish_oled_scientific_agent_trajectory_audit_metrics",
+    "verify_oled_scientific_agent_trajectory_audit_metrics",
 ]

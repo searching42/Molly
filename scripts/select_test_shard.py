@@ -21,6 +21,7 @@ HISTORICAL_FILE_SECONDS = {
     "tests/test_oled_bounded_discovery_session_api.py": 54.0,
     "tests/test_oled_gold_successor_preflight.py": 53.0,
     "tests/test_oled_categorical_gold_dataset_admission.py": 51.0,
+    "tests/test_oled_scientific_agent_trajectory_failure_attribution.py": 49.0,
     "tests/test_oled_scientific_agent_trajectory_audit_metrics.py": 40.0,
     "tests/test_oled_categorical_dataset_execution.py": 40.0,
     "tests/test_oled_scientific_agent_trajectory_verifier.py": 37.0,

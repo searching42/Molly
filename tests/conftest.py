@@ -77,6 +77,8 @@ _INTEGRATION_SOURCE_SIGNALS = (
 _ACCEPTANCE_NODE_IDS = frozenset(
     {
         "tests/test_dataset_workflow.py::test_confirmed_dataset_runs_model_package_generation_publication_and_topn",
+        "tests/test_oled_scientific_agent_trajectory_failure_attribution.py::test_exact_verifier_replays_publication_and_observer_only_bytes",
+        "tests/test_oled_scientific_agent_trajectory_failure_attribution.py::test_multi_round_success_has_no_invented_failure_attribution",
         "tests/test_run_plan_executor.py::test_training_review_promotion_and_prediction_preparation_acceptance",
         "tests/test_run_plan_executor.py::test_run_plan_executor_resume_pauses_at_next_gate_then_completes_stub_screening",
     }
