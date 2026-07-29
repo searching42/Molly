@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from scripts.select_test_shard import assign_test_files, discover_test_files, file_weight
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 HISTORICAL_STATUS_DOCS = (
@@ -160,3 +162,42 @@ def test_repository_path_references_in_markdown_exist() -> None:
                     f"{path.relative_to(REPOSITORY_ROOT)}:{line}: missing: {target}"
                 )
     assert findings == []
+
+
+def test_full_ci_sharding_is_complete_nonoverlapping_balanced_and_deterministic() -> None:
+    files = discover_test_files(REPOSITORY_ROOT / "tests")
+    first_shards, first_totals = assign_test_files(files, 2)
+    second_shards, second_totals = assign_test_files(reversed(files), 2)
+
+    flattened = [path for shard in first_shards for path in shard]
+    assert first_shards == second_shards
+    assert first_totals == second_totals
+    assert len(flattened) == len(set(flattened))
+    assert sorted(flattened) == files
+    assert max(first_totals) - min(first_totals) <= max(file_weight(path) for path in files)
+
+
+def test_ci_layers_keep_fast_feedback_and_complete_main_and_scheduled_coverage() -> None:
+    workflows = REPOSITORY_ROOT / ".github" / "workflows"
+    pr_fast = (workflows / "ci.yml").read_text(encoding="utf-8")
+    full = (workflows / "full-ci.yml").read_text(encoding="utf-8")
+    scheduled = (workflows / "scheduled-ci.yml").read_text(encoding="utf-8")
+
+    assert "pull_request:" in pr_fast
+    assert '-m "(unit and not slow) or pr_fast"' in pr_fast
+    assert "python -m compileall -q src tests" in pr_fast
+    assert "git diff --check" in pr_fast
+
+    assert "push:" in full and "- main" in full
+    assert "workflow_dispatch:" in full
+    assert "workflow_call:" in full
+    assert "github.event.label.name == 'full-ci'" in full
+    assert "scripts/select_test_shard.py" in full
+    assert "python -m pytest -q" in full
+    assert "--durations=50" in full
+    assert '-m "' not in full
+
+    assert "schedule:" in scheduled
+    assert "uses: ./.github/workflows/full-ci.yml" in scheduled
+    assert '-m "adversarial or remote_mock or slow"' in scheduled
+    assert "PYTHONHASHSEED: random" in scheduled

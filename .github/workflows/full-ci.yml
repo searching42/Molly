@@ -1,19 +1,26 @@
-name: PR Fast CI
+name: Full CI
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
+    types:
+      - labeled
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr-fast-${{ github.workflow }}-${{ github.ref }}
+  group: full-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   static:
-    name: compile and diff
+    name: compile and shard policy
+    if: github.event_name != 'pull_request' || github.event.label.name == 'full-ci'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -30,7 +37,7 @@ jobs:
       - name: Compile Python sources and tests
         run: python -m compileall -q src tests
 
-      - name: Validate complete Full CI shard assignment
+      - name: Validate complete, non-overlapping shard assignment
         run: python scripts/select_test_shard.py --shards 2 --validate
 
       - name: Check whitespace errors
@@ -43,10 +50,15 @@ jobs:
           fi
 
   test:
-    name: pytest (PR fast)
+    name: pytest full (weighted shard ${{ matrix.shard }})
+    if: github.event_name != 'pull_request' || github.event.label.name == 'full-ci'
     needs: static
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
     env:
       PYTHONHASHSEED: "0"
       PYTHONPATH: src
@@ -61,34 +73,48 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      - name: Install Poppler runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends poppler-utils
+
       - name: Install package and test dependencies
         run: python -m pip install -e ".[dev]"
 
-      - name: Run unit layer and reviewed PR canaries
+      - name: Run complete weighted test shard
         id: pytest
         shell: bash
         run: |
           set +e
-          python -m pytest -q \
-            -m "(unit and not slow) or pr_fast" \
-            --durations=20 \
-            --junitxml=pytest-pr-fast.xml \
-            > pytest-pr-fast.log 2>&1
+          mapfile -t selected_tests < <(
+            python scripts/select_test_shard.py \
+              --shards 2 \
+              --shard "${{ matrix.shard }}" \
+              --validate
+          )
+          printf 'weighted shard %s selected %s files\n' \
+            "${{ matrix.shard }}" "${#selected_tests[@]}" > pytest-full.log
+          printf '%s\n' "${selected_tests[@]}" >> pytest-full.log
+          timeout --signal=TERM --kill-after=30s 40m \
+            python -m pytest -q \
+              --durations=50 \
+              --junitxml=pytest-full.xml \
+              "${selected_tests[@]}" >> pytest-full.log 2>&1
           status=$?
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
-          tail -n 100 pytest-pr-fast.log
+          tail -n 120 pytest-full.log
           exit 0
 
-      - name: Upload PR Fast evidence
+      - name: Upload Full CI evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-pr-fast-${{ github.run_id }}-${{ github.run_attempt }}
+          name: pytest-full-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
           path: |
-            pytest-pr-fast.log
-            pytest-pr-fast.xml
+            pytest-full.log
+            pytest-full.xml
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 21
 
       - name: Enforce pytest result
         if: always()

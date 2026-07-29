@@ -1,0 +1,57 @@
+name: Scheduled CI
+
+on:
+  schedule:
+    - cron: "17 18 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full:
+    name: complete suite
+    uses: ./.github/workflows/full-ci.yml
+
+  security-replay:
+    name: randomized security and remote replay
+    needs: full
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONHASHSEED: random
+      PYTHONPATH: src
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python with dependency cache
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install Poppler runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends poppler-utils
+
+      - name: Install package and test dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Repeat adversarial, remote-mock, and slow layers
+        run: |
+          python -m pytest -q \
+            -m "adversarial or remote_mock or slow" \
+            --durations=100 \
+            --junitxml=pytest-security-replay.xml
+
+      - name: Upload scheduled replay evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-security-replay-${{ github.run_id }}-${{ github.run_attempt }}
+          path: pytest-security-replay.xml
+          if-no-files-found: error
+          retention-days: 30
