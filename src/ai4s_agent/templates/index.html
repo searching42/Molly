@@ -204,6 +204,10 @@
           <input id="conversation-file-input" type="file" multiple hidden accept=".csv,.tsv,.json,.jsonl,.sdf,.mol,.smi,.txt,.md,.pdf,.xls,.xlsx" />
           <div id="pending-conversation-attachments" class="pending-attachments" hidden></div>
           <p id="conversation-status" class="small">对话会保存到当前项目的本地服务端工作区。</p>
+          <label class="checkbox-row" for="conversation-external-llm-approved">
+            <input id="conversation-external-llm-approved" type="checkbox" />
+            <span>允许将本次项目对话发送到已配置的外部 LLM <small>远程 endpoint 必须显式授权；结构化决策与 Gate 仍由 Molly 的确定性逻辑控制</small></span>
+          </label>
           <div class="composer-actions">
             <div class="attachment-actions">
               <button id="conversation-upload-button" type="button" class="ghost">＋ 上传文件</button>
@@ -478,7 +482,7 @@
         <header class="settings-header">
           <div>
             <h2 id="llm-settings-title">配置决策层 LLM</h2>
-            <p id="llm-settings-intro" class="small">配置保存在当前用户目录；API Key 不会返回浏览器。</p>
+            <p id="llm-settings-intro" class="small">配置保存在当前用户目录；API Key 不会返回浏览器。保存后会发送一次最小的 <code>/chat/completions</code> 请求，等价于用 curl 验证 endpoint、model 与 Bearer API Key。</p>
           </div>
           <button id="llm-settings-close" type="button" class="icon-button" aria-label="关闭设置">×</button>
         </header>
@@ -501,12 +505,13 @@
           <input id="llm-api-key-ref" name="api_key_ref" value="default" />
           <label for="llm-api-key-env">环境变量名</label>
           <input id="llm-api-key-env" name="api_key_env" value="MOLLY_LLM_API_KEY" />
+          <p class="small">选择“环境变量”时，请在启动 Molly 服务的同一个终端中先设置该变量；浏览器不会读取本机终端环境。</p>
           <label for="llm-api-key">API Key</label>
           <input id="llm-api-key" name="api_key" type="password" autocomplete="new-password" placeholder="留空则保留现有密钥" />
           <p class="small">远程 endpoint 必须使用 HTTPS；HTTP 仅允许 localhost/loopback。</p>
           <div class="button-row">
             <button id="llm-api-key-delete" type="button" class="ghost">删除已保存密钥</button>
-            <button type="submit">保存设置</button>
+            <button type="submit">保存并测试 API 连接</button>
           </div>
           <div id="llm-settings-status" class="sr-status" aria-live="polite"></div>
         </form>
@@ -1733,14 +1738,16 @@
             run_id: runId,
             messages: conversationMessages,
             available_inputs: datasetAvailableInputs(),
+            external_llm_approved: document.getElementById("conversation-external-llm-approved").checked,
           });
           currentConversationDecision = response.decision || null;
           currentModelingPlanPayload = currentConversationDecision?.modeling_plan_payload || null;
           const pendingEvidence = currentConversationDecision?.pending_cited_target_evidence || currentModelingPlanPayload?.pending_cited_target_evidence || [];
           const agentQuestions = currentConversationDecision?.questions || currentModelingPlanPayload?.agent_questions || [];
           const ready = currentConversationDecision?.decision === "ready_for_modeling_plan";
-          setText("conversation-status", ready ? "已通过 next-turn 决策，可进入模型训练或准备文献来源。" : "需要回答 Agent 追问或批准外部证据。");
-          const summary = currentConversationDecision?.summary || "已整理为可审阅的下一步决策。";
+          const assistantSource = response.llm_used ? "已配置 LLM 已响应；" : "未配置可用 LLM，已使用确定性决策摘要；";
+          setText("conversation-status", assistantSource + (ready ? "可进入模型训练或准备文献来源。" : "需要回答 Agent 追问或批准外部证据。"));
+          const summary = response.assistant_message || currentConversationDecision?.summary || "已整理为可审阅的下一步决策。";
           const persistedAssistant = await persistConversationMessage("assistant", summary);
           conversationMessages.push({ role: "assistant", content: persistedAssistant.content });
           appendConversationMessage("assistant", persistedAssistant.content, persistedAssistant.attachments);
@@ -2234,16 +2241,26 @@
           api_key_env: String(document.getElementById("llm-api-key-env").value || "MOLLY_LLM_API_KEY").trim(),
         };
         if (apiKey) payload.api_key = apiKey;
-        setText("llm-settings-status", "正在保存...");
+        setText("llm-settings-status", "正在保存设置…");
+        let response;
         try {
-          const response = await patchJSON("/api/settings/llm", payload);
+          response = await patchJSON("/api/settings/llm", payload);
           currentLLMConfig = response.config || {};
           document.getElementById("llm-api-key").value = "";
           renderSecretState(currentLLMConfig);
-          setText("llm-settings-status", `已保存：${response.model || payload.model}`);
-          document.getElementById("llm-settings-modal").hidden = true;
         } catch (err) {
           setText("llm-settings-status", `保存失败：${normalizeErrorForRender(err).error}`);
+          return;
+        }
+        setText("llm-settings-status", "已保存，正在发送最小 API 验证请求…");
+        try {
+          const probe = await postJSON("/api/settings/llm/probe", {});
+          setText(
+            "llm-settings-status",
+            `连接验证成功：${probe.probe?.model || response.model || payload.model}`,
+          );
+        } catch (err) {
+          setText("llm-settings-status", `设置已保存，但连接验证失败：${normalizeErrorForRender(err).error}`);
         }
       });
       document.getElementById("llm-api-key-delete").addEventListener("click", async () => {

@@ -962,6 +962,7 @@ def test_agent_conversation_next_turn_endpoint_returns_decision(tmp_path) -> Non
             "project_memory": {"backend_preference": "baseline-first"},
             "previous_diagnostics": [{"property_id": "plqy", "decision": "rerun_recommended"}],
             "available_inputs": ["SMILES", "solvent"],
+            "llm_provider": None,
         },
     )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from typing import Any
@@ -291,7 +292,59 @@ def register_agent_routes(
             )
         except (ValidationError, ValueError) as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, "decision": decision.model_dump(mode="json")})
+        try:
+            provider_context = _llm_provider_from_payload(
+                payload,
+                settings=llm_settings,
+                providers=llm_providers,
+            )
+        except (LLMProviderError, ValidationError, ValueError) as exc:
+            if "external_llm_approved=true" in str(exc):
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error_code": "external_llm_approval_required",
+                        "error": "Approve sending this conversation to the configured external LLM endpoint.",
+                    }
+                ), 400
+            app.logger.warning("conversation LLM configuration failed", exc_info=True)
+            return jsonify(
+                {
+                    "ok": False,
+                    "error_code": "llm_conversation_unavailable",
+                    "error": "The configured LLM could not be prepared for this conversation.",
+                }
+            ), 409
+
+        assistant_message = decision.summary
+        llm_used = False
+        try:
+            with provider_context as provider:
+                if provider is not None:
+                    assistant_message = _conversation_assistant_message(
+                        provider=provider,
+                        messages=messages,
+                        decision=decision.model_dump(mode="json"),
+                    )
+                    llm_used = True
+        except Exception:
+            app.logger.warning("conversation LLM invocation failed", exc_info=True)
+            return jsonify(
+                {
+                    "ok": False,
+                    "error_code": "llm_conversation_failed",
+                    "error": "The configured LLM did not return a usable conversation response.",
+                }
+            ), 409
+        return jsonify(
+            {
+                "ok": True,
+                "decision": decision.model_dump(mode="json"),
+                "assistant_message": assistant_message,
+                "assistant_source": "configured_llm" if llm_used else "deterministic_rules",
+                "llm_used": llm_used,
+            }
+        )
 
     @app.post("/api/agent/modeling-plan")
     def agent_modeling_plan():
@@ -782,6 +835,64 @@ def _llm_provider_from_payload(
     if "llm_provider" in payload:
         return _temporary_provider(config)
     return providers.lease(config)
+
+
+def _conversation_assistant_message(
+    *,
+    provider: LLMProvider,
+    messages: object,
+    decision: dict[str, Any],
+) -> str:
+    if not isinstance(messages, list):
+        raise ValueError("messages must be a list")
+    provider_messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": (
+                "You are Molly's user-facing conversation assistant. Reply concisely in the "
+                "language used by the latest user. The deterministic decision below is "
+                "authoritative: explain it and ask its persisted questions, but do not change "
+                "the target property, approvals, evidence, gates, or execution state. Do not "
+                "claim that training or external execution has started. Deterministic decision: "
+                + json.dumps(
+                    {
+                        "status": decision.get("status"),
+                        "summary": decision.get("summary"),
+                        "questions": decision.get("questions"),
+                        "blocked_reasons": decision.get("blocked_reasons"),
+                        "property_id": (
+                            decision.get("modeling_plan_payload", {}).get("property_id")
+                            if isinstance(decision.get("modeling_plan_payload"), dict)
+                            else ""
+                        ),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            ),
+        }
+    ]
+    for item in messages:
+        if not isinstance(item, dict):
+            raise ValueError("messages entries must be objects")
+        role = str(item.get("role") or "").strip().lower()
+        content = str(item.get("content") or "").strip()
+        if not content:
+            raise ValueError("message content is required")
+        provider_messages.append(
+            {"role": role if role in {"user", "assistant"} else "user", "content": content}
+        )
+    reply = str(
+        provider.complete_text(
+            messages=provider_messages,
+            prompt_version="conversation-assistant-response.v1",
+        )
+        or ""
+    ).strip()
+    if not reply or len(reply) > 20_000:
+        raise LLMProviderError("conversation assistant response is empty or too large")
+    return reply
 
 
 def _is_external_llm_config(config: LLMProviderConfig) -> bool:
