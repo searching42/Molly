@@ -453,7 +453,7 @@ def test_response_allowlist_excludes_sensitive_runtime_fields(
         "exception": "failed at /private/operator/project",
         "command": "ssh private-user@private.compute.invalid",
         "hostname": "private.compute.invalid",
-        "known_hosts_path": "/Users/private/.ssh/known_hosts",
+        "known_hosts_path": "/Users/example/.ssh/known_hosts",
         "username": "private-user@example.invalid",
         "remote_repository_path": "/srv/private/repository",
         "python_path": "/opt/private/bin/python",
