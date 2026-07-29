@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from types import MappingProxyType
+from typing import Any, Iterator, Mapping
 
 from ai4s_agent.oled_bounded_discovery_session_view import (
     validated_oled_bounded_project_id,
@@ -31,6 +33,7 @@ from ai4s_agent.oled_scientific_agent_trajectory_projection import (
     _unique_object,
 )
 from ai4s_agent.oled_scientific_agent_trajectory_verifier import (
+    _PinnedPublication,
     _pinned_publication,
 )
 from ai4s_agent.oled_supplementary_material_identity_review import (
@@ -289,6 +292,20 @@ class _PreparedAttributionPublication:
     payloads: Mapping[str, bytes]
 
 
+@dataclass(frozen=True)
+class _BoundFailureAttribution:
+    """Three exact-replayed observer publications held by open dirfds."""
+
+    result: OledScientificAgentFailureAttributionVerification
+    trajectory_payloads: Mapping[str, bytes]
+    audit_payloads: Mapping[str, bytes]
+    attribution_payloads: Mapping[str, bytes]
+    _attribution_publication: _PinnedPublication
+
+    def assert_stable(self) -> None:
+        self._attribution_publication.assert_stable()
+
+
 def publish_oled_scientific_agent_failure_attribution(
     *,
     storage: ProjectStorage,
@@ -360,6 +377,37 @@ def verify_oled_scientific_agent_failure_attribution(
 ) -> OledScientificAgentFailureAttributionVerification:
     """Rebuild attribution from pinned verified sources and compare every byte."""
 
+    with _verified_oled_scientific_agent_failure_attribution(
+        storage=storage,
+        project_id=project_id,
+        session_id=session_id,
+        actions_root=actions_root,
+        trajectory_publication_dir=trajectory_publication_dir,
+        audit_publication_dir=audit_publication_dir,
+        attribution_publication_dir=attribution_publication_dir,
+    ) as bound:
+        return bound.result
+
+
+@contextmanager
+def _verified_oled_scientific_agent_failure_attribution(
+    *,
+    storage: ProjectStorage,
+    project_id: str,
+    session_id: str,
+    actions_root: Path,
+    trajectory_publication_dir: Path,
+    audit_publication_dir: Path,
+    attribution_publication_dir: Path,
+) -> Iterator[_BoundFailureAttribution]:
+    """Yield PR-BD, PR-BF, and PR-BG bytes while all sources stay pinned.
+
+    Consumers must build their complete in-memory result inside this context.
+    The nested verifier seams perform their existing post-consumer stability
+    checks, including cause-chain preservation when both the consumer and a
+    source fail.
+    """
+
     clean_project = validated_oled_bounded_project_id(project_id)
     with _verified_oled_scientific_agent_trajectory_audit_metrics(
         storage=storage,
@@ -368,8 +416,8 @@ def verify_oled_scientific_agent_failure_attribution(
         actions_root=actions_root,
         trajectory_publication_dir=trajectory_publication_dir,
         audit_publication_dir=audit_publication_dir,
-    ) as bound:
-        prepared = _prepare_failure_attribution(bound)
+    ) as audit:
+        prepared = _prepare_failure_attribution(audit)
         target = _lexical_absolute(attribution_publication_dir)
         _reject_attribution_overlap(
             root=target,
@@ -391,12 +439,19 @@ def verify_oled_scientific_agent_failure_attribution(
                 directory_name=target.name,
             )
             persisted.assert_stable()
-            return OledScientificAgentFailureAttributionVerification(
+            result = OledScientificAgentFailureAttributionVerification(
                 attribution_id=prepared.attribution_id,
                 publication_id=prepared.publication_id,
                 publication_dir=target,
-                source_trajectory_id=bound.result.source_trajectory_id,
-                source_audit_id=bound.result.audit_id,
+                source_trajectory_id=audit.result.source_trajectory_id,
+                source_audit_id=audit.result.audit_id,
+            )
+            yield _BoundFailureAttribution(
+                result=result,
+                trajectory_payloads=MappingProxyType(dict(audit.trajectory_payloads)),
+                audit_payloads=MappingProxyType(dict(audit.audit_payloads)),
+                attribution_payloads=MappingProxyType(dict(persisted.payloads)),
+                _attribution_publication=persisted,
             )
 
 

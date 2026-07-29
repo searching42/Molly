@@ -350,7 +350,7 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 |---|---|---|---|
 | `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/—` | `DONE` | PR-BF 已完成；等待后续真实/代表性验收补 `V` |
 | `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `I/T/—` | `DONE` | PR-BG 已实现并通过正常、对抗、确定性与完整 suite；等待后续 evidence PR 补 `V` |
-| `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `—/—/—` | `READY` | PR-BH |
+| `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `I/T/—` | `DONE` | PR-BH 已完成；下一 PR 采集代表性 runtime inspection evidence 后补 `V` |
 
 目标：从可重放 projection 计算确定性 auditor findings；不得直接改变 Session 或 PR-AU 状态。
 
@@ -658,6 +658,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：带 `full-ci` 标签的 PR 目前只在 `labeled` 事件启动 Full CI；标签添加后若再推送提交，需要重新添加标签或手动触发 Full CI。该维护点非阻塞，后续独立 CI 维护处理。
 - 批准人：repository owner。
 
+### 2026-07-29：PR-BH 完成 exact-verified read-only inspection v1
+
+- 决策：接受 `scientific_agent_trajectory_inspection.v1` 的 project-scoped GET API 和现有 OLED bounded-session 页内最小时间线作为 `M3-023`～`M3-028` 的实现与测试证据。
+- 原计划：直接从 observer publication 路径读取 manifest 和 JSONL，或为 inspection 建立独立 verifier/publication。
+- 新计划：在 PR-BG 中增加最小 context-bound seam，嵌套并复用 PR-BE/PR-BF/PR-BG exact replay；只在三个目录仍 pinned 时从只读 bytes 构建临时响应，退出 context 后才 `jsonify()`，不持久化 inspection。
+- 依据：targeted `162 passed`、PR Fast `848 passed`、完整 suite `6076 passed`；覆盖单轮/多轮成功、first-cause join、ambiguity、insufficient evidence、publication-level `no_failure`、语义隐私 allowlist、source replacement、observer-only snapshot 和跨进程 hash-seed 一致性。
+- 影响任务：`M3-023`～`M3-028` 更新为 `I/T/— / DONE`；M3 仍未标记 `V`，M4 benchmark 仍未解锁。
+- 新增风险：projection v1 可能留下 unattached finding；API 需要调用方明确提供三层 publication ID；最小时间线不是通用 causal graph；M4 前不得宣称 attribution accuracy。
+- 批准人：repository owner。
+
 后续路线调整必须追加：
 
 ```text
@@ -675,18 +685,18 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 唯一当前动作：PR-BH read-only inspect API 与最小时间线
+### 唯一当前动作：M3 representative validation evidence PR
 
-任务：`M3-023`～`M3-028`。
+任务：补充 `M3-GATE-001`～`M3-GATE-004` 的代表性 runtime `V` 证据。
 
-范围：只读展示 PR-BG attribution、PR-BF audit 和 M2 projection 的最小可审计时间线；不得增加控制动作、修改 Session 或改变科学 publication。
+范围：冻结单轮成功、多轮成功和至少一个真实或代表性失败，通过同一版本 inspect API 在新进程 exact replay，并由人工核对 first cause、symptom 与 evidence；不得新增控制动作、修改 observer contract 或提前进入 M4。
 
 必须验证：
 
-1. API 和时间线只读取 exact-verified observer publication，不读取 mutable telemetry 作为权威科学事实。
-2. 查询、筛选和 evidence 展示保持 source binding、claim boundary 与敏感字段策略。
-3. inspect on/off 时 Session、Gate、StageState、action、projection、audit 和 attribution bytes 不变。
-4. 不增加恢复、重试、批准、拒绝或其他控制动作。
+1. 单轮成功、多轮成功和失败 case 使用同一 `scientific_agent_trajectory_inspection.v1` contract。
+2. 全部 case 在新进程完成 exact replay，并保存可审查的脱敏 evidence。
+3. 人工核对 first cause、downstream symptom、ambiguity/undetermined 和 source reference。
+4. inspection on/off 保持全部 scientific 与 observer bytes 不变；只有 evidence PR 可以补 `V`。
 
 ### 主线队列
 
@@ -695,7 +705,8 @@ PR-BD  observer-only trajectory projection v1（已完成）
 PR-BE  external-anchor trajectory verifier 与对抗测试（已完成）
 PR-BF  deterministic trajectory audit metrics v1（已完成）
 PR-BG  failure taxonomy 与 first-cause attribution（已完成）
-PR-BH  read-only inspect API 与最小时间线（下一项）
+PR-BH  read-only inspect API 与最小时间线（已完成）
+PR-BI  M3 representative inspection validation evidence（下一项）
 ```
 
 ### 资源机会队列
@@ -703,7 +714,7 @@ PR-BH  read-only inspect API 与最小时间线（下一项）
 ```text
 PR-BC  logical compute-worker-main remote 两轮 canary
        M1 完成且资源安全时随时执行
-       不阻塞 PR-BG / PR-BH
+       不阻塞 PR-BI
 ```
 
 任何后续 PR 如果不能直接推进上述队列、关闭真实 blocker 或产出 benchmark evidence，默认暂缓。
