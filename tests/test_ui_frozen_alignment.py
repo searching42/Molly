@@ -68,7 +68,7 @@ def test_sidebar_exposes_literature_parse_without_bounded_oled_entry(
     assert "OLED 有界闭环" not in html
 
 
-def test_all_tasks_entry_loads_shared_toolbox_with_visible_results(
+def test_all_tasks_entry_loads_shared_toolbox_without_raw_response_panel(
     rendered_index_html: str,
 ) -> None:
     html = rendered_index_html
@@ -77,10 +77,31 @@ def test_all_tasks_entry_loads_shared_toolbox_with_visible_results(
     assert html.count('getJSON("/api/atomic-tasks")') == 1
     assert 'void loadAtomicTasks({ revealResults: true });' in html
     assert "void loadAtomicTasks();" in html
-    assert "if (advancedTools) advancedTools.open = true;" in html
-    assert 'output.scrollIntoView({ behavior: "smooth", block: "start" });' in html
     assert "已加载原子任务工具箱" in html
+    assert "<h3>当前响应</h3>" not in html
+    assert 'id="output"' not in html
+    assert "最近一次原始 API 响应" not in html
     assert 'document.getElementById("task-toolbox-button").click();' not in html
+
+
+def test_chat_keyboard_delete_and_safe_bold_markdown_contract(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
+
+    assert 'id="conversation-input" name="message" aria-describedby="conversation-keyboard-help"' in html
+    assert "Enter 发送，Shift + Enter 换行。" in html
+    assert 'event.key !== "Enter" || event.shiftKey || event.isComposing' in html
+    assert "event.currentTarget.form?.requestSubmit();" in html
+    assert 'id="conversation-input" name="message" placeholder=' not in html
+    assert "描述你的目标、数据背景或可引用来源" not in html
+    assert 'remove.className = "conversation-delete";' in html
+    assert "async function deleteConversation(projectId, conversationId, title)" in html
+    assert "await deleteJSON(" in html
+    assert "function appendSafeBoldMarkdown(root, content)" in html
+    assert 'const strong = document.createElement("strong");' in html
+    assert "strong.textContent = value.slice(opening + 2, closing);" in html
+    assert "root.innerHTML" not in html[html.index("function appendSafeBoldMarkdown"):html.index("async function recordTaskStateInConversation")]
 
 
 def test_model_training_action_exposes_confirmed_dataset_and_gated_execution(
@@ -126,4 +147,8 @@ def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html:
     assert "probe_transport_failed" in html
     assert "probe_response_unavailable" in html
     assert "probe_response_invalid" in html
+    assert 'id="molly-worker-protocol-help"' in html
+    assert "当前仓库没有可直接从 PyPI 安装的 molly-worker 服务端包" in html
+    assert "molly-worker probe --json" in html
+    assert "stage</code>、<code>verify-inputs</code>、<code>execute</code>、<code>status</code> 和 <code>cancel" in html
 from pathlib import Path

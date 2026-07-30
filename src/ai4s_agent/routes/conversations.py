@@ -74,6 +74,23 @@ def register_conversation_routes(
             }
         )
 
+    @app.delete("/api/projects/<project_id>/conversations/<conversation_id>")
+    def delete_conversation(project_id: str, conversation_id: str):
+        no_store()
+        try:
+            metadata = conversations.delete_conversation(project_id, conversation_id)
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "conversation not found"}), 404
+        except (ValidationError, ValueError):
+            return jsonify({"ok": False, "error": "invalid conversation identifier"}), 400
+        return jsonify(
+            {
+                "ok": True,
+                "deleted": True,
+                "conversation_id": metadata.conversation_id,
+            }
+        )
+
     @app.post("/api/projects/<project_id>/conversations/<conversation_id>/messages")
     def append_conversation_message(project_id: str, conversation_id: str):
         no_store()

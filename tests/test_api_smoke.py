@@ -206,7 +206,7 @@ def test_index_page_exposes_only_supported_model_workflow_backends(
     assert "molly-gpu-main" not in html
 
 
-def test_index_page_hides_artifact_inputs_and_keeps_response_near_workflow(
+def test_index_page_hides_artifact_inputs_and_raw_response_panel(
     rendered_index_html: str,
 ) -> None:
     html = rendered_index_html
@@ -216,7 +216,7 @@ def test_index_page_hides_artifact_inputs_and_keeps_response_near_workflow(
     assert 'id="advanced-run-card-artifacts"' in html
     assert html.index('id="project-chat"') < html.index('id="agent-review-card-output"')
     assert html.index('id="agent-review-card-output"') < html.index('id="advanced-tools"')
-    assert html.index('id="advanced-tools"') < html.index('id="output"')
+    assert 'id="output"' not in html
 
 
 def test_index_page_warns_when_opened_as_file_url(rendered_index_html: str) -> None:

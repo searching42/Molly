@@ -543,6 +543,59 @@ def test_conversation_api_supports_batch_attachments_import_and_freeze(tmp_path)
     assert repeated.json["idempotent"] is True
 
 
+def test_conversation_delete_archives_record_and_api_removes_it_from_active_list(
+    tmp_path,
+) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path,
+        user_config_dir=tmp_path / "config",
+    )
+    client = app.test_client()
+    created = client.post(
+        "/api/projects/project-a/conversations",
+        json={"conversation_id": "conversation-delete", "title": "Delete me"},
+    )
+    assert created.status_code == 201
+    appended = client.post(
+        "/api/projects/project-a/conversations/conversation-delete/messages",
+        json={"role": "user", "content": "retained in recoverable archive"},
+    )
+    assert appended.status_code == 201
+
+    deleted = client.delete(
+        "/api/projects/project-a/conversations/conversation-delete"
+    )
+
+    assert deleted.status_code == 200
+    assert deleted.json == {
+        "ok": True,
+        "deleted": True,
+        "conversation_id": "conversation-delete",
+    }
+    assert deleted.headers["Cache-Control"] == "no-store"
+    listing = client.get("/api/projects/project-a/conversations")
+    assert listing.json["conversations"] == []
+    assert client.get(
+        "/api/projects/project-a/conversations/conversation-delete"
+    ).status_code == 404
+    archived = list(
+        (tmp_path / "projects" / "project-a" / "conversations" / ".deleted").glob(
+            "conversation-delete.*"
+        )
+    )
+    assert len(archived) == 1
+    assert b"retained in recoverable archive" in (
+        archived[0] / "messages.jsonl"
+    ).read_bytes()
+
+    repeated = client.delete(
+        "/api/projects/project-a/conversations/conversation-delete"
+    )
+    assert repeated.status_code == 404
+    assert repeated.json == {"ok": False, "error": "conversation not found"}
+
+
 def test_batch_attachment_limit_rejects_file_after_budget_is_exhausted(tmp_path) -> None:
     app = create_app(
         base_runs_dir=tmp_path / "runs",
@@ -585,6 +638,8 @@ def test_browser_ui_uses_server_conversations_and_idempotent_local_storage_impor
     assert "localStorage.removeItem(key)" in html
     assert "/conversations/${encodeURIComponent(conversationId)}/messages" in html
     assert "attachment_ids: attachmentIds" in html
+    assert "async function deleteConversation(projectId, conversationId, title)" in html
+    assert 'method: "DELETE"' in html
 
 
 @pytest.mark.parametrize("project_id,conversation_id", [("../escape", "safe"), ("safe", "../escape")])

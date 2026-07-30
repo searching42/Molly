@@ -100,6 +100,33 @@ class ConversationStore:
             expected_conversation_id=self._clean_id(conversation_id, "conversation_id"),
         )
 
+    def delete_conversation(
+        self,
+        project_id: str,
+        conversation_id: str,
+    ) -> ConversationMetadata:
+        """Remove a conversation from the active list via a recoverable rename."""
+
+        clean_id = self._clean_id(conversation_id, "conversation_id")
+        root = self._conversations_root(project_id)
+        with self._directory_lock(root, lock_name=".conversations.lock"):
+            directory = self._existing_conversation_dir(project_id, clean_id)
+            with self._directory_lock(directory):
+                metadata = self._read_metadata(
+                    directory / "metadata.json",
+                    expected_project_id=project_id,
+                    expected_conversation_id=clean_id,
+                )
+                trash = (root / ".deleted").resolve()
+                self._ensure_relative(root, trash, "deleted conversations")
+                self._ensure_private_directory(trash)
+                target = (trash / f"{clean_id}.{uuid.uuid4().hex}").resolve()
+                self._ensure_relative(trash, target, "deleted conversation")
+                os.rename(directory, target)
+                self._fsync_directory(root)
+                self._fsync_directory(trash)
+                return metadata
+
     def list_messages(
         self,
         project_id: str,
