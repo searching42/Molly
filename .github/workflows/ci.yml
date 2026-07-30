@@ -53,6 +53,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # The committed M3 evidence binds the immediately preceding runner
+          # commit and verifies those exact bytes during pytest.
+          fetch-depth: 2
 
       - name: Set up Python with dependency cache
         uses: actions/setup-python@v5

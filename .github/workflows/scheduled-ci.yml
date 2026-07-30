@@ -24,6 +24,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # Keep the evidence-generating runner commit available for exact
+          # runner-code binding verification in the complete suite.
+          fetch-depth: 2
 
       - name: Set up Python with dependency cache
         uses: actions/setup-python@v5
