@@ -16,6 +16,7 @@ from ai4s_agent.orchestrator import Orchestrator
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import GateName
 from ai4s_agent.storage import ProjectStorage
+from ai4s_agent.task_state_projection import build_task_state_projection
 
 
 def register_run_control_routes(
@@ -272,6 +273,13 @@ def _read_project_run_status(projects: ProjectStorage, project_id: str, run_id: 
                 "generation publication failed integrity verification"
             ) from exc
 
+    task_state = build_task_state_projection(
+        run_path=run_path,
+        project_id=project_id,
+        run_id=run_id,
+        stage_payload=stage,
+        artifact_payload=artifact_payload,
+    )
     status: dict[str, object] = {
         "run_id": run_id,
         "project_id": project_id,
@@ -279,6 +287,8 @@ def _read_project_run_status(projects: ProjectStorage, project_id: str, run_id: 
         "plan_exists": bool(_read_json(run_path / "run_plan.json") or _read_json(run_path / "plan.json")),
         "gate_decisions": [decision for decision in decisions if isinstance(decision, dict)],
         "artifacts": {str(key): str(value) for key, value in artifacts.items()},
+        "state_files": task_state["state_files"],
+        "task_state": task_state,
     }
     if stage:
         status["stage"] = stage

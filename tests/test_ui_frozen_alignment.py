@@ -31,16 +31,24 @@ def test_task_intermediate_state_files_are_persisted_in_conversation(
     rendered_index_html: str,
 ) -> None:
     html = rendered_index_html
+    module = Path("src/ai4s_agent/static/task_state.js").read_text(encoding="utf-8")
 
-    assert "async function recordTaskStateInConversation(payload, options = {})" in html
-    assert 'persistConversationMessage("system", content)' in html
-    assert 'item.content === content' in html
-    assert '"run_plan.json", "stage.json", "gate_decisions.json", "job.json", "artifact_registry.json"' in html
-    assert "中间状态文件：" in html
-    assert "状态已显示，但未能写入持久化对话。" in html
-    assert "conversationDecisionMessages()" in html
+    assert 'src="/static/task_state.js"' in html
+    assert "async function recordTaskStateInConversation(payload," in html
+    assert "persistConversationMessageToContext" in html
+    assert "captureConversationContext()" in html
+    assert "isConversationContextCurrent" in html
+    assert "MollyTaskState.persistTaskStateRecord" in html
+    assert "MollyTaskState.conversationDecisionMessages(conversationMessages)" in html
+    assert "中间状态文件：" in module
+    assert "状态读取成功，但未能写入持久化对话。" in html
     assert "recordConversation: true" in html
-    assert 'stateFiles: ["stage.json"]' in html
+    assert '"job_state.json"' in module
+    assert '"background_job_state.json"' in module
+    assert '"job.json"' not in module
+    assert "safeTaskStateToken" not in html
+    assert "safeTaskStateToken" not in module
+    assert "stateFiles:" not in html
     assert 'text.textContent = String(content || "");' in html
 
 
@@ -118,3 +126,4 @@ def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html:
     assert "probe_transport_failed" in html
     assert "probe_response_unavailable" in html
     assert "probe_response_invalid" in html
+from pathlib import Path

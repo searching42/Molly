@@ -600,6 +600,7 @@
       </section>
     </div>
 
+    <script src="{{ url_for('static', filename='task_state.js') }}"></script>
     <script>
       const LOCAL_SESSION_TOKEN = document.querySelector('meta[name="molly-local-token"]')?.content || "";
       const output = document.getElementById("output");
@@ -610,6 +611,7 @@
       let currentConversationId = "";
       let pendingConversationAttachments = [];
       let conversationLoadGeneration = 0;
+      let conversationContextGeneration = 0;
       let currentRunId = "";
       let currentConversationDecision = null;
       let currentModelingPlanPayload = null;
@@ -647,6 +649,27 @@
         const projectId = String(project?.project_id || "proj-oled").trim() || "proj-oled";
         const name = String(project?.name || projectId).trim() || projectId;
         activeProject = { project_id: projectId, name };
+      }
+
+      function invalidateConversationContext() {
+        conversationContextGeneration += 1;
+      }
+
+      function currentConversationContext() {
+        return {
+          projectId: String(activeProject.project_id || ""),
+          conversationId: String(currentConversationId || ""),
+          generation: conversationContextGeneration,
+        };
+      }
+
+      function captureConversationContext() {
+        const context = currentConversationContext();
+        return context.projectId && context.conversationId ? Object.freeze(context) : null;
+      }
+
+      function isConversationContextCurrent(context) {
+        return MollyTaskState.sameConversationContext(context, currentConversationContext());
       }
 
       function renderProjectList(projects) {
@@ -734,6 +757,7 @@
 
       function selectProject(project) {
         resetExternalLLMApproval();
+        invalidateConversationContext();
         updateActiveProjectDisplay(project);
         syncProjectId(activeProject.project_id);
         knownConversations = [];
@@ -815,95 +839,30 @@
         stream.scrollTop = stream.scrollHeight;
       }
 
-      function safeTaskStateToken(value, fallback = "unavailable") {
-        const clean = String(value || "").trim();
-        return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(clean) ? clean : fallback;
-      }
-
-      function taskStateSnapshot(payload, { runId = "", stateFiles = [] } = {}) {
-        const response = payload && typeof payload === "object" ? payload : {};
-        const timeline = response.timeline && typeof response.timeline === "object" ? response.timeline : null;
-        const stage = response.stage && typeof response.stage === "object" ? response.stage : timeline;
-        const status = safeTaskStateToken(response.stage_status || stage?.status);
-        const currentStage = safeTaskStateToken(stage?.stage || stage?.current_stage);
-        const cleanRunId = safeTaskStateToken(response.run_id || runId);
-        const historySource = Array.isArray(stage?.history)
-          ? stage.history
-          : Array.isArray(stage?.events)
-          ? stage.events
-          : [];
-        const history = historySource.slice(-8).map((item) => ({
-          stage: safeTaskStateToken(item?.stage),
-          status: safeTaskStateToken(item?.status),
-        }));
-        const artifactIds = new Set();
-        let artifactRegistryObserved = false;
-        if (response.artifacts && typeof response.artifacts === "object" && !Array.isArray(response.artifacts)) {
-          artifactRegistryObserved = true;
-          Object.keys(response.artifacts).forEach((artifactId) => artifactIds.add(safeTaskStateToken(artifactId)));
-        }
-        if (Array.isArray(stage?.artifacts)) {
-          stage.artifacts.forEach((artifact) => artifactIds.add(safeTaskStateToken(artifact?.artifact_id)));
-        }
-        artifactIds.delete("unavailable");
-        const files = new Set(
-          stateFiles.filter((name) => ["run_plan.json", "stage.json", "gate_decisions.json", "job.json", "artifact_registry.json"].includes(name)),
-        );
-        if (response.plan_exists) files.add("run_plan.json");
-        if (stage) files.add("stage.json");
-        if (Array.isArray(response.gate_decisions) && response.gate_decisions.length) files.add("gate_decisions.json");
-        if (response.job && typeof response.job === "object") files.add("job.json");
-        if (artifactRegistryObserved) files.add("artifact_registry.json");
-        return {
-          runId: cleanRunId,
-          currentStage,
-          status,
-          history,
-          artifactIds: Array.from(artifactIds).sort(),
-          stateFiles: Array.from(files).sort(),
-        };
-      }
-
-      function taskStateConversationContent(snapshot) {
-        const lines = [
-          `运行状态 · ${snapshot.runId}`,
-          `当前阶段：${snapshot.currentStage}`,
-          `状态：${snapshot.status}`,
-          `中间状态文件：${snapshot.stateFiles.length ? snapshot.stateFiles.join("、") : "尚无可展示的已持久化状态文件"}`,
-        ];
-        if (snapshot.history.length) {
-          lines.push(`阶段记录：${snapshot.history.map((item) => `${item.stage} (${item.status})`).join(" → ")}`);
-        }
-        if (snapshot.artifactIds.length) lines.push(`已登记工件：${snapshot.artifactIds.join("、")}`);
-        return lines.join("\n");
-      }
-
-      async function recordTaskStateInConversation(payload, options = {}) {
-        const snapshot = taskStateSnapshot(payload, options);
-        if (snapshot.runId === "unavailable" || (snapshot.status === "unavailable" && snapshot.currentStage === "unavailable")) return false;
-        const content = taskStateConversationContent(snapshot);
-        if (conversationMessages.some((item) => item.role === "system" && item.content === content)) return false;
-        const chips = snapshot.stateFiles.map((name) => ({ original_name: name, artifact_id: name }));
-        const projectId = String(options.projectId || activeProject.project_id || "").trim();
-        if (projectId !== activeProject.project_id) {
-          appendConversationMessage("system", `${content}\n该运行不属于当前项目，因此未写入当前项目的持久化对话。`, chips);
-          return false;
-        }
+      async function recordTaskStateInConversation(payload, { runId = "", projectId = "", context = null } = {}) {
+        if (!context) return false;
         try {
-          const persisted = await persistConversationMessage("system", content);
-          conversationMessages.push({ role: "system", content: persisted.content });
-          appendConversationMessage("system", persisted.content, chips);
-          return true;
+          const result = await MollyTaskState.persistTaskStateRecord({
+            payload,
+            runId,
+            projectId,
+            context,
+            getContext: currentConversationContext,
+            messages: conversationMessages,
+            persistMessage: persistConversationMessageToContext,
+            appendMessage: appendConversationMessage,
+          });
+          return result.status === "persisted";
         } catch (_err) {
-          appendConversationMessage("system", `${content}\n状态已显示，但未能写入持久化对话。`, chips);
+          if (isConversationContextCurrent(context)) {
+            appendConversationMessage("system", `运行状态 · ${runId}\n状态读取成功，但未能写入持久化对话。`);
+          }
           return false;
         }
       }
 
       function conversationDecisionMessages() {
-        return conversationMessages.filter(
-          (item) => !(item.role === "system" && String(item.content || "").startsWith("运行状态 · ")),
-        );
+        return MollyTaskState.conversationDecisionMessages(conversationMessages);
       }
 
       function renderPendingConversationAttachments() {
@@ -1315,6 +1274,7 @@
       }
 
       async function loadProjectConversation(projectId, preferredConversationId = "") {
+        invalidateConversationContext();
         const generation = ++conversationLoadGeneration;
         setText("conversation-status", "正在加载服务端对话…");
         try {
@@ -1434,6 +1394,22 @@
             client_message_id: newClientMessageId(),
           },
         );
+        return response.message;
+      }
+
+      async function persistConversationMessageToContext({ projectId, conversationId, generation, role, content }) {
+        const context = { projectId, conversationId, generation };
+        if (!isConversationContextCurrent(context)) throw new Error("stale_conversation_context");
+        const response = await postJSON(
+          `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
+          {
+            role,
+            content,
+            attachment_ids: [],
+            client_message_id: newClientMessageId(),
+          },
+        );
+        if (!isConversationContextCurrent(context)) throw new Error("stale_conversation_context");
         return response.message;
       }
 
@@ -2163,33 +2139,49 @@
         setText("model-workflow-status", `${currentModelWorkflow.runId} 当前状态：${status}`);
       }
 
-      async function refreshModelWorkflow({ renderRaw = true, recordConversation = false } = {}) {
-        if (!currentModelWorkflow?.runId) return null;
+      async function refreshModelWorkflow({ renderRaw = true, recordConversation = false, context = null } = {}) {
+        const workflow = currentModelWorkflow;
+        const runId = String(workflow?.runId || "");
+        const frozenContext = context || captureConversationContext();
+        if (!runId || !frozenContext || !isConversationContextCurrent(frozenContext)) return null;
+        const projectId = frozenContext.projectId;
         const response = await getJSON(
-          `/api/runs/${encodeURIComponent(currentModelWorkflow.runId)}?project_id=${encodeURIComponent(activeProject.project_id)}`,
+          `/api/runs/${encodeURIComponent(runId)}?project_id=${encodeURIComponent(projectId)}`,
         );
+        if (!isConversationContextCurrent(frozenContext) || currentModelWorkflow !== workflow || workflow.runId !== runId) return null;
+        if (!MollyTaskState.taskStateResponseSnapshot(response, {
+          runId,
+          projectId,
+          context: frozenContext,
+          getContext: currentConversationContext,
+        })) {
+          throw new Error("invalid_task_state_response");
+        }
         const stage = response.stage || {};
         const planned = stage.details?.planned_adapter ? stage.stage : "";
         const execution = {
           status: response.stage_status || stage.status || "UNKNOWN",
           waiting_task: (response.stage_status || stage.status) === "WAITING_USER" && !planned ? stage.stage : "",
           planned_task: planned,
-          executed_tasks: stage.details?.executed_tasks || currentModelWorkflow.lastExecution?.executed_tasks || [],
+          executed_tasks: stage.details?.executed_tasks || workflow.lastExecution?.executed_tasks || [],
         };
-        currentModelWorkflow.lastExecution = execution;
+        workflow.lastExecution = execution;
         persistModelWorkflowState();
         renderModelExecution(execution, response);
         if (renderRaw) render(response);
         if (recordConversation) {
           await recordTaskStateInConversation(response, {
-            runId: currentModelWorkflow.runId,
-            projectId: activeProject.project_id,
+            runId,
+            projectId,
+            context: frozenContext,
           });
         }
         return response;
       }
 
       async function startModelRun() {
+        const context = captureConversationContext();
+        if (!context) throw new Error("服务端对话尚未就绪");
         const taskOptions = modelTaskOptions();
         validateModelRunConfiguration(taskOptions);
         const trainingBackend = document.getElementById("training-backend").value;
@@ -2205,10 +2197,11 @@
           requested_tasks: requestedTasks,
           available_artifacts: ["cleaned_train_dataset", "property_catalog"],
         });
+        if (!isConversationContextCurrent(context)) return null;
         const inputArtifacts = modelWorkflowInputArtifacts();
         currentRunId = runId;
         syncRunId(runId);
-        currentModelWorkflow = {
+        const workflow = {
           runId,
           runPlan: expanded.run_plan,
           inputArtifacts,
@@ -2217,13 +2210,15 @@
           generationBackend,
           lastExecution: null,
         };
+        currentModelWorkflow = workflow;
         const response = await postJSON("/api/run-plan/execute", {
-          project_id: activeProject.project_id,
-          run_plan: currentModelWorkflow.runPlan,
+          project_id: context.projectId,
+          run_plan: workflow.runPlan,
           input_artifacts: inputArtifacts,
           task_options: taskOptions,
         });
-        currentModelWorkflow.lastExecution = response.execution || null;
+        if (!isConversationContextCurrent(context) || currentModelWorkflow !== workflow) return null;
+        workflow.lastExecution = response.execution || null;
         persistModelWorkflowState();
         renderModelExecution(response.execution || null);
         appendConversationMessage(
@@ -2232,15 +2227,21 @@
         );
         render(response);
         try {
-          await refreshModelWorkflow({ renderRaw: false, recordConversation: true });
+          await refreshModelWorkflow({ renderRaw: false, recordConversation: true, context });
         } catch (_err) {
-          appendConversationMessage("system", `${runId} 已启动，但暂时无法读取持久化状态文件。`);
+          if (isConversationContextCurrent(context)) {
+            appendConversationMessage("system", `${runId} 已启动，但暂时无法读取持久化状态文件。`);
+          }
         }
+        return response;
       }
 
       async function approveCurrentModelGate() {
-        if (!currentModelWorkflow?.lastExecution) throw new Error("没有等待批准的模型运行。");
-        const waitingTask = modelWaitingTask(currentModelWorkflow.lastExecution);
+        const context = captureConversationContext();
+        const workflow = currentModelWorkflow;
+        if (!context) throw new Error("服务端对话尚未就绪");
+        if (!workflow?.lastExecution) throw new Error("没有等待批准的模型运行。");
+        const waitingTask = modelWaitingTask(workflow.lastExecution);
         const gate = waitingTask === "train_model"
           ? "gate_3_train_config"
           : waitingTask === "generate_candidates"
@@ -2251,26 +2252,30 @@
         if (!actor) throw new Error("Gate 批准人不能为空。");
         setText("model-workflow-status", `正在以 ${actor} 批准 ${gate}…`);
         const response = await postJSON("/api/run-plan/resume", {
-          project_id: activeProject.project_id,
-          run_plan: currentModelWorkflow.runPlan,
+          project_id: context.projectId,
+          run_plan: workflow.runPlan,
           approved_gates: [gate],
           actor,
           note: `Approved from Molly model training UI for ${waitingTask}.`,
-          input_artifacts: currentModelWorkflow.inputArtifacts,
-          task_options: currentModelWorkflow.taskOptions,
+          input_artifacts: workflow.inputArtifacts,
+          task_options: workflow.taskOptions,
         });
-        currentModelWorkflow.lastExecution = response.execution || null;
+        if (!isConversationContextCurrent(context) || currentModelWorkflow !== workflow) return null;
+        workflow.lastExecution = response.execution || null;
         persistModelWorkflowState();
         renderModelExecution(response.execution || null);
         try {
-          await refreshModelWorkflow({ renderRaw: false, recordConversation: true });
+          await refreshModelWorkflow({ renderRaw: false, recordConversation: true, context });
         } catch (_err) {
-          appendConversationMessage("system", `${currentModelWorkflow.runId} 已继续执行，但暂时无法读取持久化状态文件。`);
+          if (isConversationContextCurrent(context)) {
+            appendConversationMessage("system", `${workflow.runId} 已继续执行，但暂时无法读取持久化状态文件。`);
+          }
         }
         if (["SUCCEEDED", "DONE"].includes(String(response.execution?.status || ""))) {
-          appendConversationMessage("assistant", `${currentModelWorkflow.runId} 已完成，可在运行 artifact registry 中审阅 model package、generation publication 与 Top-N。`);
+          appendConversationMessage("assistant", `${workflow.runId} 已完成，可在运行 artifact registry 中审阅 model package、generation publication 与 Top-N。`);
         }
         render(response);
+        return response;
       }
 
       async function loadAtomicTasks({ revealResults = false } = {}) {
@@ -2525,7 +2530,9 @@
           const response = await postJSON(`/api/projects/${projectId}/runs/${runId}/models/promote/draft`, payload);
           fillModelPromotionDraft(response.draft || {});
           render(response);
-        } catch (err) { render(err); }
+        } catch (err) {
+          render(err);
+        }
       });
 
       document.getElementById("model-asset-promotion-form").addEventListener("submit", async (event) => {
@@ -2556,6 +2563,7 @@
 
       document.getElementById("stage-timeline-form").addEventListener("submit", async (event) => {
         event.preventDefault();
+        const context = captureConversationContext();
         const fd = new FormData(event.currentTarget);
         const projectValue = String(fd.get("project_id") || "").trim();
         const runValue = String(fd.get("run_id") || "").trim();
@@ -2563,13 +2571,16 @@
         const runId = encodeURIComponent(runValue);
         try {
           const response = await getJSON(`/api/projects/${projectId}/runs/${runId}/stage-timeline`);
+          if (!context || !isConversationContextCurrent(context)) return;
           render(response);
           await recordTaskStateInConversation(response, {
             runId: runValue,
             projectId: projectValue,
-            stateFiles: ["stage.json"],
+            context,
           });
-        } catch (err) { render(err); }
+        } catch (err) {
+          if (!context || isConversationContextCurrent(context)) render(err);
+        }
       });
 
       document.getElementById("report-preview-form").addEventListener("submit", async (event) => {
