@@ -1060,6 +1060,7 @@ def _validate_projected_recovery_receipt(
             captures=captures,
             directory_rosters=directory_rosters,
         )
+        if payload["dispatch_kind"] in {"initial", "retry", "duplicate_rejected"}
     )
     if dispatch_ids != receipt["source_dispatch_receipt_ids"]:
         raise ValueError("PR-BD recovery receipt dispatch binding is invalid")

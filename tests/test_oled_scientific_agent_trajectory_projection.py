@@ -535,8 +535,8 @@ def test_recovery_receipt_is_exact_bound_projection_source(
     run_dir = storage.run_dir(project_id, child["run_id"])
     stage_bytes = (run_dir / "stage.json").read_bytes()
     dispatch_ids = [
-        str(item.payload["receipt_id"])
-        for item in read_dispatch_receipts(run_dir=run_dir)
+        str(item["receipt_id"])
+        for item in dispatch_authority_roster(run_dir=run_dir)
     ]
     receipt = publish_recovery_receipt(
         action_dir=action_dir,
@@ -575,6 +575,44 @@ def test_recovery_receipt_is_exact_bound_projection_source(
             "manifest_sha256": receipt.sha256,
         }
     ]
+
+    for dispatch_kind, attempt_id, digest_char in (
+        ("idempotent_replay", "d" * 32, "d"),
+        ("recovery_adoption", "e" * 32, "e"),
+    ):
+        publish_dispatch_receipt(
+            run_dir=run_dir,
+            child_run_id=child["run_id"],
+            task_id=child["task_id"],
+            dispatch_kind=dispatch_kind,
+            request_or_stage_digest="sha256:" + digest_char * 64,
+            attempt_id=attempt_id,
+        )
+    replayed = publish_oled_scientific_agent_trajectory_projection(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,  # type: ignore[attr-defined]
+        actions_root=actions_root,
+        output_root=tmp_path / "projection-recovery-after-observation-replay",
+    )
+    assert replayed.receipt_json.exists()
+
+    publish_dispatch_receipt(
+        run_dir=run_dir,
+        child_run_id=child["run_id"],
+        task_id=child["task_id"],
+        dispatch_kind="duplicate_rejected",
+        request_or_stage_digest="sha256:" + "f" * 64,
+        attempt_id="f" * 32,
+    )
+    with pytest.raises(ValueError, match="recovery receipt dispatch binding"):
+        publish_oled_scientific_agent_trajectory_projection(
+            storage=storage,
+            project_id=project_id,
+            session_id=current.session_id,  # type: ignore[attr-defined]
+            actions_root=actions_root,
+            output_root=tmp_path / "projection-recovery-after-new-authority",
+        )
 
 
 def test_immutable_action_request_tamper_fails_before_publication(

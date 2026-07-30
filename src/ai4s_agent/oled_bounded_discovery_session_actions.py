@@ -32,8 +32,8 @@ from ai4s_agent.oled_supplementary_material_identity_review import (
 )
 from ai4s_agent.oled_scientific_agent_source_evidence import (
     BoundSourceReceipt,
+    dispatch_authority_roster,
     publish_recovery_receipt,
-    read_dispatch_receipts,
     read_recovery_receipts,
 )
 from ai4s_agent.storage import ProjectStorage
@@ -309,7 +309,7 @@ class OledBoundedDiscoverySessionActionService:
             max_bytes=1024 * 1024,
             reject_symlink_components=True,
         )
-        dispatch_receipts = read_dispatch_receipts(
+        dispatch_roster = dispatch_authority_roster(
             run_dir=run_dir,
             allow_missing=True,
         )
@@ -320,7 +320,7 @@ class OledBoundedDiscoverySessionActionService:
             recovered_child_run_id=str(recovered_child["run_id"]),
             recovered_stage_sha256=recovered_stage_sha256,
             source_dispatch_receipt_ids=[
-                str(item.payload["receipt_id"]) for item in dispatch_receipts
+                str(item["receipt_id"]) for item in dispatch_roster
             ],
             expected_revision=expected_revision,
             completed_revision=completed_revision,
@@ -420,8 +420,8 @@ class OledBoundedDiscoverySessionActionService:
         if stage_sha256 != payload["recovered_stage_sha256"]:
             raise ValueError("PR-AW recovery receipt StageState binding mismatch")
         dispatch_ids = sorted(
-            str(item.payload["receipt_id"])
-            for item in read_dispatch_receipts(
+            str(item["receipt_id"])
+            for item in dispatch_authority_roster(
                 run_dir=run_dir,
                 allow_missing=True,
             )

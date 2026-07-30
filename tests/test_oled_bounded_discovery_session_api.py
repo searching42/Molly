@@ -27,6 +27,8 @@ from ai4s_agent.oled_bounded_discovery_session_view import (
 )
 from ai4s_agent.oled_real_phase1_execution import _stable_hash
 from ai4s_agent.oled_scientific_agent_source_evidence import (
+    publish_dispatch_receipt,
+    read_dispatch_receipts,
     read_recovery_receipts,
 )
 from ai4s_agent.storage import ProjectStorage
@@ -526,6 +528,46 @@ def test_second_generation_interrupted_action_is_recovered_without_rewriting_req
     assert repeated["status"] == "RECOVERED"
     assert len(read_recovery_receipts(action_dir=action_dir)) == 1
     assert reconcile_calls == 1
+
+    recovered_run_id = str(receipts[0].payload["recovered_child_run_id"])
+    recovered_run_dir = storage.run_dir(project_id, recovered_run_id)
+    recovered_task_id = str(
+        read_dispatch_receipts(run_dir=recovered_run_dir)[0].payload["task_id"]
+    )
+    for dispatch_kind, attempt_id, digest_char in (
+        ("idempotent_replay", "a" * 32, "a"),
+        ("recovery_adoption", "b" * 32, "b"),
+    ):
+        publish_dispatch_receipt(
+            run_dir=recovered_run_dir,
+            child_run_id=recovered_run_id,
+            task_id=recovered_task_id,
+            dispatch_kind=dispatch_kind,
+            request_or_stage_digest="sha256:" + digest_char * 64,
+            attempt_id=attempt_id,
+        )
+        assert restarted.get_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )["status"] == "RECOVERED"
+        assert restarted.recover_interrupted_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )["status"] == "RECOVERED"
+
+    publish_dispatch_receipt(
+        run_dir=recovered_run_dir,
+        child_run_id=recovered_run_id,
+        task_id=recovered_task_id,
+        dispatch_kind="duplicate_rejected",
+        request_or_stage_digest="sha256:" + "c" * 64,
+        attempt_id="c" * 32,
+    )
+    with pytest.raises(ValueError, match="dispatch roster mismatch"):
+        restarted.recover_interrupted_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )
 
     next_action = restarted.enqueue_advance(
         project_id=project_id,

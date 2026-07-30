@@ -105,6 +105,11 @@ file contains no identity or infrastructure data. `initial` versus `retry` is
 also selected within that critical section; `idempotent_replay` and
 `recovery_adoption` remain non-dispatch facts.
 
+A recovery receipt freezes only the projectable dispatch-authority roster:
+`initial`, `retry`, and `duplicate_rejected`. Later `idempotent_replay` or
+`recovery_adoption` receipts do not invalidate an already-proven recovery,
+while any later projectable authority changes that roster and fails closed.
+
 PR-AW recovery also covers the crash window where reconciliation committed
 `expected_revision + 1` but the recovery receipt was not yet published. A
 later invocation exact-replays the predecessor and current Session revisions,
