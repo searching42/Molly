@@ -244,8 +244,8 @@ def test_committed_evidence_is_canonical_private_safe_and_human_gated(
     assert result["case_count"] == 8
     assert result["machine_evidence_complete"] is True
     assert result["design_analysis_blocked_count"] == 0
-    assert result["human_review_status"] == "pending"
-    assert result["m3_v_eligible"] is False
+    assert result["human_review_status"] == "approved"
+    assert result["m3_v_eligible"] is True
     package = b"".join(
         path.read_bytes()
         for path in sorted(COMMITTED_EVIDENCE.rglob("*"))
@@ -257,11 +257,11 @@ def test_committed_evidence_is_canonical_private_safe_and_human_gated(
         path.name.encode() for path in COMMITTED_EVIDENCE.rglob("*")
     }
 
-    copied = tmp_path / "claimed-without-owner-review"
+    copied = tmp_path / "approved-without-reviewer"
     shutil.copytree(COMMITTED_EVIDENCE, copied)
     review_path = copied / "owner_review.json"
     review = parse_canonical_json(review_path.read_bytes())
-    review["decision"] = "approved"
+    review["reviewer"] = None
     review_path.write_bytes(canonical_json_bytes(review))
     with pytest.raises(ValueError, match="reviewer|metadata"):
         verify_evidence(copied)

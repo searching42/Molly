@@ -4,7 +4,7 @@
 > 当前公开基线：`public-baseline-v1`（单一根提交的隐私审查快照）
 > 历史审计基线：迁移前完整提交、分支与 PR 保留在私有审计仓库
 > 当前主里程碑：M3 — 轨迹完整性、故障归因与指标
-> 最后更新：2026-07-29
+> 最后更新：2026-07-30
 > 适用范围：Molly Agent 执行能力、长程任务轨迹审计及科学有效性验证
 
 `todo.md` 是仓库中里程碑范围、任务状态、验收门槛、风险状态和推进顺序的唯一规范性来源。领域专题文档可以解释实现细节，但不得维护与本文件竞争的路线或状态表。
@@ -346,12 +346,14 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 
 优先级：`P1`
 
-| 范围 | 证据 | 工作状态 | 下一交付 |
+范围状态：`DONE`。PR-BI 八个 production-backed representative cases 已完成机器验证，并由 repository owner 对 evidence commit `b2e254217aba52858f7a8cea0209afbf08fa3af9` 及 manifest `sha256:0e7c8531bb12f07768baa371c8e508259844c438c4534db91e3c6ea839423f3f` 完成人工复核。M3 仅获得轨迹完整性、确定性审计、故障归因和 read-only inspection 的代表性 runtime validation；不声明 M4 benchmark 准确率或科学性能验证。
+
+| 范围 | 证据 | 工作状态 | 结论 |
 |---|---|---|---|
-| `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/—` | `DONE` | PR-BF 已完成；PR-BI 八案例 machine evidence 已完整，人工复核 pending，不补 `V` |
-| `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `I/T/—` | `DONE` | PR-BG 已实现；PR-BJ 已关闭四类 source-evidence gap，PR-BI 八案例 machine pass，等待人工复核 |
-| `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `I/T/—` | `DONE` | PR-BH 已完成；PR-BI 八案例均经同一 exact-replayed GET contract，人工复核前不补 `V` |
-| `M3-SRC-001`～`M3-SRC-008` authoritative failure source evidence | `I/T/—` | `DONE` | PR-BJ 已实现并通过 source、projection、attribution、recovery、隐私与 legacy byte replay；等待 PR-BI 补 `V` |
+| `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/V` | `DONE` | 单轮、多轮及故障案例通过同版本审计指标；跨进程与不同 hash seed 结果一致 |
+| `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `I/T/V` | `DONE` | transport、history truncation、duplicate rejection、stale state、equal-first-cause ambiguity 和 unlinked symptom 已通过代表性验收 |
+| `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `I/T/V` | `DONE` | 八案例均经同一 exact-replayed GET contract；inspection 未修改 observer 或 scientific bytes |
+| `M3-SRC-001`～`M3-SRC-008` authoritative failure source evidence | `I/T/V` | `DONE` | typed failure、dispatch authority、recovery receipt 和 causal-link source 已在 PR-BI 代表性案例中完成验证 |
 
 目标：从可重放 projection 计算确定性 auditor findings；不得直接改变 Session 或 PR-AU 状态。
 
@@ -375,16 +377,18 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 
 ### 5.2 M3 退出条件
 
-- `M3-GATE-001`：单轮成功、多轮成功和真实失败轨迹生成同一版本审计指标。
-- `M3-GATE-002`：相同 projection 重复计算得到逐字节一致结果。
-- `M3-GATE-003`：标准案例中 first cause 与 downstream symptom 可区分。
-- `M3-GATE-004`：read-only API 不修改 projection 或 scientific Session。
+- `[I/T/V] [DONE] M3-GATE-001`：单轮成功、多轮成功和代表性失败轨迹生成同一版本审计指标。
+- `[I/T/V] [DONE] M3-GATE-002`：相同 projection 在独立进程和不同 `PYTHONHASHSEED` 下得到逐字节一致结果。
+- `[I/T/V] [DONE] M3-GATE-003`：标准案例中 first cause、downstream symptom、equal-first-cause ambiguity 和 causal-link-not-proven 可区分。
+- `[I/T/V] [DONE] M3-GATE-004`：read-only API 不修改 projection、observer publication 或 scientific Session bytes。
 
 ---
 
 ## 6. M4：轨迹审计 Benchmark
 
 优先级：`P1`
+
+范围状态：`READY`。M3 已完成并获得 `I/T/V`。下一交付为 PR-BK：冻结 M4 benchmark v1 的语料边界、任务定义、label/adjudication 规则、split、防泄漏规则、baseline 和预注册指标；在 protocol 冻结前不得读取或使用 hidden-test 结果。
 
 ### 6.1 语料、任务与 baseline
 
@@ -707,6 +711,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：representative fault injection 不代表真实失败分布；duplicate rejection 不等于重复科学计算；无显式 link 的后续 symptom 必须继续保持 undetermined。
 - 批准人：repository owner。
 
+### 2026-07-30：PR-BI owner review approved，M3 完成并解锁 M4
+
+- 决策：repository owner 批准 PR-BI 八个 production-backed representative inspection cases，接受其作为 `M3-GATE-001`～`M3-GATE-004` 的代表性 runtime validation。
+- 原计划：八案例 machine evidence 完整后保持 human review pending，M3 维持 `I/T/—`，M4 locked。
+- 新计划：将 M3 范围和四个退出条件更新为 `I/T/V / DONE`；M4 更新为 `READY`，下一主线交付为 PR-BK benchmark protocol。
+- 依据：reviewed evidence commit 为 `b2e254217aba52858f7a8cea0209afbf08fa3af9`；evidence manifest SHA-256 为 `sha256:0e7c8531bb12f07768baa371c8e508259844c438c4534db91e3c6ea839423f3f`；八案例均 machine passed，fresh-process、不同 `PYTHONHASHSEED`、exact replay、隐私扫描、observer-only snapshot、commit binding、PR Fast、4-shard Full CI 和 CodeQL 均通过；owner review 的每个案例及检查项均 approved。
+- 影响任务：`M3-001`～`M3-028`、`M3-SRC-001`～`M3-SRC-008` 和 `M3-GATE-001`～`M3-GATE-004` 更新为 `I/T/V / DONE`；PR-BI 可进入 Ready/merge；PR-BK 更新为下一当前动作。
+- 新增风险：代表性 fault injection 不能代表真实失败分布；M3 validation 不等于 attribution benchmark accuracy；duplicate rejection 不等于重复科学计算；M4 必须使用独立 reviewed labels、严格 split 和 leakage control。
+- 批准人：searching42（repository owner）。
+
 后续路线调整必须追加：
 
 ```text
@@ -724,20 +738,20 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 唯一当前动作：M3 representative inspection validation owner review
+### 唯一当前动作：PR-BK M4 benchmark protocol
 
-任务：复核 PR-BI 的八个 production-backed、fresh-process、exact-replayed case，决定是否为 `M3-GATE-001`～`M3-GATE-004` 补 `V`。
+任务：冻结 M4 benchmark v1 的研究问题、轨迹语料边界、标注与 adjudication contract、train/dev/hidden-test split、防泄漏规则、baseline、指标和预注册阈值。
 
-范围：核对 source class、terminal result、first cause、downstream symptom、ambiguity、undetermined、source references、digest、隐私与 observer-only snapshot；不得由 Codex 自行批准。
+范围：只定义和冻结 benchmark protocol；不得提前查看 hidden-test 结果，不得宣称 attribution accuracy，不得在 M4 前将 Critic 接入控制面。
 
-当前状态：PR-BI 八案例均已执行并 machine pass；human review pending，M3 维持 `I/T/—`，M4 locked。
+当前状态：PR-BI 八案例 machine evidence 与 repository-owner review 已完成；M3 为 `I/T/V / DONE`；M4 为 `READY`。
 
 必须验证：
 
-1. 八个 case 的 source class 与冻结 expected contract 一致。
-2. first cause 没有被任意强选，downstream symptom 只在有显式 link 时 determined。
-3. committed evidence digest、隐私边界和 inspection 前后 byte snapshot 一致。
-4. owner review 通过前不得补 `V`、不得将 PR 标为 Ready、不得启动 M4。
+1. benchmark case、failure family、source variant 和时间切分边界明确；
+2. 同一 Session、template 或同源变体不得跨 split；
+3. label revision、annotator、adjudication 和一致性记录 contract 冻结；
+4. baseline、指标和数值阈值必须在 hidden-test evaluation 前冻结。
 
 ### 主线队列
 
@@ -748,8 +762,8 @@ PR-BF  deterministic trajectory audit metrics v1（已完成）
 PR-BG  failure taxonomy 与 first-cause attribution（已完成）
 PR-BH  read-only inspect API 与最小时间线（已完成）
 PR-BJ  authoritative M3 failure source evidence contract v1（已完成）
-PR-BI  representative inspection validation evidence（machine complete，human review pending）
-PR-BK  M4 benchmark protocol（仅在 PR-BI 完成并获得 V 后启动）
+PR-BI  representative inspection validation evidence（machine + owner review complete）
+PR-BK  M4 benchmark protocol（下一当前动作）
 ```
 
 ### 资源机会队列
