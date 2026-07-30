@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from _m3_inspection_validation import (
+    BLOCKER_REQUIREMENTS,
     CASE_CONTRACT_VERSION,
     CASE_FILENAME_BY_ID,
     CASE_ROSTER,
     EVIDENCE_VERSION,
     INSPECTION_VERSION,
     SOURCE_CLASS_BY_CASE,
-    UNREPRESENTABLE_CASES,
     build_source_chain,
     call_inspection_route,
     canonical_json_bytes,
@@ -26,7 +26,11 @@ from _m3_inspection_validation import (
     locator_for_chain,
     parse_canonical_json,
     public_privacy_violations,
+    pending_owner_review,
+    require_runner_checkout_binding,
+    runner_code_binding,
     sha256_bytes,
+    source_contract_preflight,
     source_artifact_digests,
     tree_snapshot,
     write_canonical_json,
@@ -53,6 +57,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("--output and --public-evidence-dir are required")
     if args.output.exists() or args.public_evidence_dir.exists():
         raise SystemExit("private output and public evidence directories must not exist")
+    runner_commit = args.runner_commit or _git_head()
+    try:
+        require_runner_checkout_binding(runner_commit)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     args.output.mkdir(parents=True, mode=0o700)
     args.public_evidence_dir.mkdir(parents=True)
     selected = tuple(args.selected or CASE_ROSTER)
@@ -65,7 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _publish_public_package(
             args.public_evidence_dir,
             records,
-            runner_commit=args.runner_commit or _git_head(),
+            runner_commit=runner_commit,
         )
     finally:
         if not args.keep_private_source_bundle:
@@ -92,12 +101,18 @@ def _run_case(private_root: Path, case_id: str) -> dict[str, Any]:
         "case_contract_version": CASE_CONTRACT_VERSION,
         "human_review_status": "pending",
     }
-    blocker = UNREPRESENTABLE_CASES.get(case_id)
-    if blocker:
+    if case_id in BLOCKER_REQUIREMENTS:
+        blocker_evidence = source_contract_preflight(case_id)
+        if blocker_evidence["preflight_status"] != "design_analysis_blocked":
+            raise RuntimeError("source-contract blocker preflight no longer blocks")
         return {
             **base,
             "expected_result": _expected_result(case_id),
-            "observed_result": {"status": "not_observed", "reason": blocker},
+            "observed_result": {
+                "status": "design_analysis_blocked",
+                "reason_codes": blocker_evidence["missing_capabilities"],
+            },
+            "blocker_evidence": blocker_evidence,
             "project_id": None,
             "session_id": None,
             "trajectory_id": None,
@@ -112,15 +127,17 @@ def _run_case(private_root: Path, case_id: str) -> dict[str, Any]:
             "inspection_response": None,
             "inspection_response_sha256": None,
             "fresh_process_run_count": 0,
-            "fresh_process_bytes_equal": False,
-            "hash_seed_bytes_equal": False,
+            "fresh_process_bytes_equal": None,
+            "hash_seed_bytes_equal": None,
+            "fresh_process_distinct_pids": None,
             "workspace_before_sha256": None,
             "workspace_after_sha256": None,
             "observer_bytes_modified": None,
             "scientific_bytes_modified": None,
             "durable_files_created_by_inspection": None,
-            "privacy_scan_passed": True,
-            "machine_validation_status": "blocked",
+            "privacy_scan_passed": None,
+            "machine_validation_status": "not_executed",
+            "case_status": "design_analysis_blocked",
         }
 
     chain = build_source_chain(private_root / "sources" / case_id, case_id)
@@ -159,6 +176,7 @@ def _run_case(private_root: Path, case_id: str) -> dict[str, Any]:
         unchanged = unchanged and original_before == original_after
     return {
         **base,
+        "blocker_evidence": None,
         "expected_result": expected,
         "observed_result": _observed_result(status, first_response),
         "project_id": chain.project_id,
@@ -189,6 +207,7 @@ def _run_case(private_root: Path, case_id: str) -> dict[str, Any]:
             if semantics_ok and response_equal and unchanged and privacy_ok and first["pid"] != second["pid"]
             else "failed"
         ),
+        "case_status": "executed",
     }
 
 
@@ -280,6 +299,7 @@ def _publish_public_package(root: Path, records: list[dict[str, Any]], *, runner
             }
         )
     machine_complete = all(item["machine_validation_status"] == "passed" for item in records)
+    runner_binding = runner_code_binding(runner_commit)
     manifest = {
         "evidence_version": EVIDENCE_VERSION,
         "inspection_version": INSPECTION_VERSION,
@@ -289,18 +309,28 @@ def _publish_public_package(root: Path, records: list[dict[str, Any]], *, runner
             "attribution": "scientific_agent_failure_attribution.v1",
         },
         "runner_commit": runner_commit,
+        "runner_code_binding": runner_binding,
         "cases": manifest_cases,
         "summary": {
             "case_count": len(records),
             "passed_count": sum(item["machine_validation_status"] == "passed" for item in records),
-            "blocked_count": sum(item["machine_validation_status"] == "blocked" for item in records),
+            "design_analysis_blocked_count": sum(
+                item["case_status"] == "design_analysis_blocked" for item in records
+            ),
+            "not_executed_count": sum(
+                item["machine_validation_status"] == "not_executed"
+                for item in records
+            ),
             "failed_count": sum(item["machine_validation_status"] == "failed" for item in records),
             "machine_evidence_complete": machine_complete,
             "human_review_status": "pending",
             "m3_v_status": "not_yet_claimed",
         },
         "claims": {
-            "runtime_evidence_only": True,
+            "evidence_only": True,
+            "runtime_case_evidence_included": True,
+            "all_cases_runtime_executed": machine_complete,
+            "design_analysis_blockers_included": not machine_complete,
             "observer_only": True,
             "scientific_validation_claimed": False,
             "benchmark_result_claimed": False,
@@ -308,7 +338,13 @@ def _publish_public_package(root: Path, records: list[dict[str, Any]], *, runner
             "human_review_required": True,
         },
     }
+    manifest_bytes = canonical_json_bytes(manifest)
     write_canonical_json(root / "evidence_manifest.json", manifest, no_replace=True)
+    write_canonical_json(
+        root / "owner_review.json",
+        pending_owner_review(sha256_bytes(manifest_bytes)),
+        no_replace=True,
+    )
     (root / "README.md").write_text(_readme(machine_complete), encoding="utf-8")
     (root / "evidence_summary.md").write_text(_summary(records), encoding="utf-8")
     (root / "review_checklist.md").write_text(_checklist(records), encoding="utf-8")
@@ -345,7 +381,7 @@ def _summary(records: list[dict[str, Any]]) -> str:
     lines.extend(
         [
             "",
-            "The blocked cases expose a v1 source-evidence gap: exact-replayed PR-BD bytes do not persist the required transport, duplicate-dispatch, multi-family, or recovered-failure linkage facts. The runner does not weaken replay or modify PR-BD–PR-BH to manufacture them.",
+            "Four source-contract preflights are design-analysis blocked: exact PR-BD production module bytes and inspected symbol digests show that v1 does not persist the required transport, duplicate-dispatch, multi-family, or recovered-failure linkage facts. They are not described as executed runtime validations. The runner does not weaken replay or modify PR-BD–PR-BH to manufacture them.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -364,22 +400,33 @@ def _checklist(records: list[dict[str, Any]]) -> str:
         "Allowed decisions: `approved`, `changes_requested`, `inconclusive`.",
     ]
     for record in records:
+        if record["case_status"] == "design_analysis_blocked":
+            checks = (
+                "case source_class 标注准确",
+                "required evidence 与冻结 case contract 一致",
+                "production contract/version/digest 绑定正确",
+                "observed fields 与 PR-BD v1 source bytes 一致",
+                "missing capability 结论准确",
+                "该 case 未声称 runtime 或 inspection validation",
+                "blocker evidence 不含敏感信息",
+            )
+        else:
+            checks = (
+                "case source_class 标注准确",
+                "expected 与 frozen contract 一致",
+                "terminal result 与 source Session 一致",
+                "first cause、symptom 或 undetermined 具有持久化证据",
+                "source references 指向真实持久化 record",
+                "digest 与 case evidence 一致",
+                "response 不含敏感信息",
+                "inspection 未修改 scientific 或 observer bytes",
+            )
         sections.extend(
             [
                 "",
                 f"## {record['case_id']}",
                 "",
-                "- [ ] case source_class 标注准确",
-                "- [ ] expected 与 frozen contract 一致",
-                "- [ ] terminal result 与 source Session 一致",
-                "- [ ] first cause 没有被任意强选",
-                "- [ ] downstream symptom 有持久化 causal linkage",
-                "- [ ] ambiguity/undetermined 没有被渲染成确定原因",
-                "- [ ] telemetry authority 标记正确",
-                "- [ ] source references 指向真实持久化 record",
-                "- [ ] digest 与 case evidence 一致",
-                "- [ ] response 不含敏感信息",
-                "- [ ] inspection 未修改 scientific 或 observer bytes",
+                *(f"- [ ] {check}" for check in checks),
             ]
         )
     return "\n".join(sections) + "\n"

@@ -9,7 +9,9 @@ production code, publishes the three observer artifacts, and invokes the
 project-scoped `scientific_agent_trajectory_inspection.v1` GET route from two
 new Python interpreters.
 
-The package is trajectory/audit runtime evidence only. It is not experimental
+The package is evidence-only: it contains trajectory/audit runtime evidence for
+the executable cases and source-contract design analysis for the non-executable
+cases. It is not experimental
 validation, high-fidelity-computation validation, remote-backend evidence,
 attribution-accuracy benchmark evidence, or an M4 result. Representative fault
 injection is never described as captured real runtime.
@@ -36,8 +38,13 @@ The frozen v1 roster is:
 | `causal_link_not_proven` | `representative_fault_injection` | independent later stop remains undetermined without a persisted link |
 
 Every case remains in the manifest even when the current source contract cannot
-represent its required evidence. Such a case is `blocked`, never silently
-omitted, downgraded, or declared passed from a test-only projection.
+represent its required evidence. Such a case is `design_analysis_blocked`, never
+silently omitted, downgraded, or declared passed from a test-only projection.
+That status comes from a deterministic preflight over the shipped PR-BD module:
+the evidence records the contract version, production module SHA-256, inspected
+symbol SHA-256, required evidence, observed event fields, and exact missing
+capability. It is machine-reproducible design analysis, not an executed runtime
+case or successful machine validation.
 
 ## Production and fresh-process protocol
 
@@ -70,18 +77,23 @@ Raw Session trees and observer publications remain outside Git. The public
 package contains only canonical inspection JSON, fixed error responses, safe
 IDs, SHA-256 digests, expected/observed comparisons, and review metadata.
 
-All writes are no-replace at package scope. JSON is UTF-8, sorted-key canonical,
-uses fixed separators and a single trailing newline, rejects duplicate keys,
-and rejects NaN and Infinity.
+All writes are no-replace at package scope. The manifest binds a full Git SHA
+and the SHA-256 of each runner/verifier source file at that commit; generation
+refuses a working tree whose runner bytes differ from the bound commit. JSON is
+UTF-8, sorted-key canonical, uses fixed separators and a single trailing
+newline, rejects duplicate keys, and rejects NaN and Infinity.
 
 ## Privacy policy
 
-Public evidence and process output are scanned for absolute paths, home or
-workspace locators, hostnames, usernames, email-like accounts, SSH aliases,
-known-hosts paths or bytes, remote repository paths, interpreter paths, raw
-exceptions, commands, environment variables, credentials, cookies, signed
-URLs, and private scientific text. The semantic canary values specified by
-PR-BI are rejected even when placed in an otherwise allowed field.
+Public evidence and process output use a structural field denylist plus bounded
+lexical detectors for Unix/Windows/UNC absolute paths, email-like accounts,
+IPv4 addresses, SSH/SCP/URL locators, credential/header shapes, environment
+assignments, and infrastructure-host shapes. The semantic canary values
+specified by PR-BI are rejected even when placed in an otherwise allowed field.
+This scanner is a fail-closed package guard for those frozen classes; it does
+not claim to recognize arbitrary unpublished scientific prose or every possible
+secret encoding. Raw source publications and free-form private text are never
+eligible for the public package in the first place.
 
 The history-truncation case commits only the fixed 409 response and digests;
 it never commits the truncated bytes. Application exception logging is disabled
@@ -92,11 +104,17 @@ public stdout or stderr.
 
 Machine evidence and owner review are separate states. The generated checklist
 is intentionally blank, `human_review_status` is `pending`, and Codex cannot
-self-approve. A repository-owner approval must identify the reviewed commit and
-decision before any M3 task or gate may change from `I/T/—` to `I/T/V`.
+self-approve. `owner_review.json` freezes reviewer, review date, decision,
+reviewed commit, evidence-manifest SHA-256, per-case decisions, typed checks,
+and notes. Executed cases and design-blocker diagnoses have different check
+sets. The verifier accepts `approved`, `changes_requested`, or `inconclusive`,
+binds the reviewed commit to the committed manifest bytes, and requires every
+check to be true before an overall approval is valid. A repository-owner
+approval must exist before any M3 task or gate may change from `I/T/—` to
+`I/T/V`.
 
 The verifier rejects a human approval or M3 V claim that lacks a matching owner
-review record. While any machine case is failed or blocked, or owner review is
+review record. While any machine case is failed or not executed, or owner review is
 pending, PR-BI remains Draft, M3 remains `I/T/—`, and M4 stays locked.
 
 ## Current v1 evidence gap
@@ -108,8 +126,11 @@ a recovered-failure causal link. Consequently those four requested semantics
 cannot be produced through the PR-BH GET route without changing PR-BD–PR-BH,
 weakening exact replay, or substituting test-only bytes.
 
-PR-BI records these cases as explicit machine blockers. It does not modify the
-projection or attribution contracts merely to manufacture acceptance evidence.
+PR-BI records these cases as source-bound `design_analysis_blocked` preflights
+with all non-executed comparison results represented as `null`. It does not
+claim runtime validation or privacy-scan success for them, and it does not
+modify the projection or attribution contracts merely to manufacture
+acceptance evidence.
 Resolving that source-evidence gap requires repository-owner scope direction in
 a separate contract PR before PR-BI can become machine-complete.
 

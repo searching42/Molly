@@ -8,10 +8,12 @@ of Molly's scientific or observer contracts.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,6 +71,7 @@ from ai4s_agent.oled_scientific_agent_trajectory_failure_attribution import (
 from ai4s_agent.oled_scientific_agent_trajectory_projection import (
     publish_oled_scientific_agent_trajectory_projection,
 )
+from ai4s_agent import oled_scientific_agent_trajectory_projection as projection_module
 from ai4s_agent.routes.oled_bounded_sessions import (
     register_oled_bounded_session_routes,
 )
@@ -86,6 +89,9 @@ except ImportError:  # pragma: no cover - the dev/CI environment includes RDKit.
 EVIDENCE_VERSION = "m3_representative_inspection_validation.v1"
 INSPECTION_VERSION = "scientific_agent_trajectory_inspection.v1"
 CASE_CONTRACT_VERSION = "m3_representative_inspection_case.v1"
+SOURCE_PREFLIGHT_VERSION = "m3_projection_source_contract_preflight.v1"
+OWNER_REVIEW_VERSION = "m3_representative_inspection_owner_review.v1"
+RUNNER_BINDING_VERSION = "m3_representative_inspection_runner_binding.v1"
 CASE_ROSTER = (
     "single_round_success",
     "multi_round_success",
@@ -119,20 +125,46 @@ SOURCE_CLASS_BY_CASE = {
     "multiple_equal_first_cause_candidates": "representative_fault_injection",
     "causal_link_not_proven": "representative_fault_injection",
 }
-UNREPRESENTABLE_CASES = {
-    "known_hosts_propagation": (
-        "projection_v1_does_not_persist_transport_reason_codes"
-    ),
-    "duplicate_dispatch": (
-        "projection_v1_does_not_persist_distinct_duplicate_dispatch_evidence"
-    ),
-    "multiple_equal_first_cause_candidates": (
-        "projection_v1_does_not_persist_multiple_stage_failure_families"
-    ),
-    "causal_link_not_proven": (
-        "projection_v1_does_not_persist_recovered_failure_causal_links"
-    ),
+BLOCKER_REQUIREMENTS = {
+    "known_hosts_propagation": {
+        "required_event_kind": "stage_failed",
+        "required_reason_codes": ["known_hosts_verification_failed"],
+        "required_outcome_fields": [],
+        "required_distinct_dispatch_count": None,
+        "required_family_count": 1,
+        "missing_reason_code": "projection_v1_missing_transport_reason_code",
+    },
+    "duplicate_dispatch": {
+        "required_event_kind": "task_dispatched",
+        "required_reason_codes": ["duplicate_dispatch_detected"],
+        "required_outcome_fields": [],
+        "required_distinct_dispatch_count": 2,
+        "required_family_count": 1,
+        "missing_reason_code": "projection_v1_missing_distinct_duplicate_dispatch_proof",
+    },
+    "multiple_equal_first_cause_candidates": {
+        "required_event_kind": "stage_failed",
+        "required_reason_codes": ["gate_snapshot_mismatch", "ssh_connection_failed"],
+        "required_outcome_fields": [],
+        "required_distinct_dispatch_count": None,
+        "required_family_count": 2,
+        "missing_reason_code": "projection_v1_missing_multiple_failure_family_reasons",
+    },
+    "causal_link_not_proven": {
+        "required_event_kind": "stage_failed",
+        "required_reason_codes": ["tool_runtime_failure"],
+        "required_outcome_fields": ["causal_link"],
+        "required_distinct_dispatch_count": None,
+        "required_family_count": 1,
+        "missing_reason_code": "projection_v1_missing_recovered_failure_causal_link",
+    },
 }
+
+RUNNER_FILES = (
+    "scripts/_m3_inspection_validation.py",
+    "scripts/run_m3_representative_inspection_validation.py",
+    "scripts/verify_m3_representative_inspection_evidence.py",
+)
 
 _FORBIDDEN_PUBLIC_VALUES = (
     "/private/operator/project",
@@ -142,8 +174,40 @@ _FORBIDDEN_PUBLIC_VALUES = (
     "Authorization: Bearer secret-token",
     "/private/.ssh/known_hosts",
 )
-_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9])/(?:Users|home|private|var|tmp)/")
+_ABSOLUTE_PATH = re.compile(
+    r"(?<![A-Za-z0-9])(?:/(?:Users|home|private|var|tmp|opt|etc|srv|mnt)/|[A-Za-z]:[\\/]|\\\\[A-Za-z0-9])"
+)
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+_IPV4 = re.compile(r"(?<![0-9])(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}(?![0-9])")
+_NETWORK_LOCATOR = re.compile(r"(?i)\b(?:ssh|scp|sftp|file|https?)://[^\s]+|\b[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:")
+_CREDENTIAL = re.compile(
+    r"(?i)\b(?:authorization\s*:\s*(?:bearer|basic)|api[_-]?key\s*[:=]|access[_-]?token\s*[:=]|secret[_-]?token\s*[:=]|cookie\s*:)"
+)
+_ENV_ASSIGNMENT = re.compile(r"(?m)(?:^|\s)[A-Z][A-Z0-9_]{2,}\s*=\s*[^\s]+")
+_INFRASTRUCTURE_HOST = re.compile(
+    r"(?i)\b(?:private\.[A-Za-z0-9.-]+|internal(?:\.[A-Za-z0-9.-]+|[-_]node[-_][A-Za-z0-9.-]+)|(?:compute|worker|node|host)[-_](?:node[-_]?)?[0-9][A-Za-z0-9._-]*)\b"
+)
+_FORBIDDEN_PUBLIC_KEYS = frozenset(
+    {
+        "absolute_path",
+        "actions_root",
+        "api_key",
+        "authorization",
+        "command",
+        "cookie",
+        "environment_variables",
+        "exception",
+        "hostname",
+        "interpreter_path",
+        "known_hosts_path",
+        "private_paper_path",
+        "remote_repository_path",
+        "signed_url",
+        "ssh_alias",
+        "username",
+        "workspace_path",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -234,7 +298,233 @@ def public_privacy_violations(payload: bytes) -> list[str]:
         violations.append("absolute_path")
     if _EMAIL.search(text):
         violations.append("email_like_account")
+    if _IPV4.search(text):
+        violations.append("ip_address")
+    if _NETWORK_LOCATOR.search(text):
+        violations.append("network_locator")
+    if _CREDENTIAL.search(text):
+        violations.append("credential_like_value")
+    if _ENV_ASSIGNMENT.search(text):
+        violations.append("environment_assignment")
+    if _INFRASTRUCTURE_HOST.search(text):
+        violations.append("infrastructure_hostname")
+    try:
+        value = json.loads(text)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        value = None
+    if value is not None:
+        _scan_public_structure(value, violations)
     return sorted(set(violations))
+
+
+def _scan_public_structure(value: Any, violations: list[str]) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = str(key).strip().lower()
+            if normalized in _FORBIDDEN_PUBLIC_KEYS:
+                violations.append(f"forbidden_public_field:{normalized}")
+            _scan_public_structure(child, violations)
+        return
+    if isinstance(value, list):
+        for child in value:
+            _scan_public_structure(child, violations)
+        return
+    if not isinstance(value, str):
+        return
+    stripped = value.strip()
+    if stripped.startswith(("/", "\\\\")) or re.match(r"^[A-Za-z]:[\\/]", stripped):
+        violations.append("absolute_path_value")
+    if re.fullmatch(r"(?i)[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:.+", stripped):
+        violations.append("scp_locator_value")
+    if _CREDENTIAL.search(stripped):
+        violations.append("credential_like_value")
+    if _ENV_ASSIGNMENT.search(stripped):
+        violations.append("environment_assignment")
+    if _INFRASTRUCTURE_HOST.fullmatch(stripped):
+        violations.append("hostname_value")
+
+
+def source_contract_preflight(case_id: str) -> dict[str, Any]:
+    """Inspect the shipped PR-BD v1 contract before classifying a blocker.
+
+    This is intentionally a source-contract preflight, not runtime evidence.
+    It invokes the production event constructor and binds the conclusion to the
+    exact production module and inspected-symbol bytes.
+    """
+
+    requirement = BLOCKER_REQUIREMENTS.get(case_id)
+    if requirement is None:
+        raise ValueError("case does not require source-contract preflight")
+    module_path = Path(str(projection_module.__file__ or ""))
+    module_bytes = module_path.read_bytes()
+    project_children_source = inspect.getsource(projection_module._project_children)
+    event_source = inspect.getsource(projection_module._event)
+    sample_source = {
+        "logical_role": "child_stage",
+        "source_artifact_id": "preflight-child",
+        "source_publication_id": None,
+        "sha256": "sha256:" + "0" * 64,
+        "manifest_sha256": None,
+    }
+    failed = projection_module._event(
+        kind="stage_failed",
+        revision=1,
+        child={"run_id": "preflight-child", "task_id": "preflight-task"},
+        source=sample_source,
+        outcome={"child_status": "failed"},
+        reason_codes=["failed"],
+    )
+    dispatched = projection_module._event(
+        kind="task_dispatched",
+        revision=1,
+        child={"run_id": "preflight-child", "task_id": "preflight-task"},
+        source=sample_source,
+        outcome={"child_status": "failed"},
+        reason_codes=[],
+    )
+    status_only = 'reason_codes=[str(child["status"])]' in project_children_source
+    one_dispatch_per_new_child = "if previous is None:" in project_children_source
+    observed = {
+        "event_fields": sorted(failed),
+        "stage_failed_reason_codes": list(failed["reason_codes"]),
+        "stage_failed_outcome_fields": sorted(failed["outcome"]),
+        "task_dispatched_reason_codes": list(dispatched["reason_codes"]),
+        "task_dispatched_outcome_fields": sorted(dispatched["outcome"]),
+        "stage_failure_reason_source": "child.status" if status_only else "unrecognized",
+        "dispatch_cardinality": (
+            "one_per_new_child_label"
+            if one_dispatch_per_new_child
+            else "unrecognized"
+        ),
+        "persisted_causal_link_versions": [],
+        "maximum_explicit_failure_family_count": 1 if status_only else None,
+    }
+    missing: list[str] = []
+    required_reasons = set(requirement["required_reason_codes"])
+    observed_reasons = set(failed["reason_codes"]) | set(dispatched["reason_codes"])
+    if not required_reasons.issubset(observed_reasons):
+        missing.append(str(requirement["missing_reason_code"]))
+    if not set(requirement["required_outcome_fields"]).issubset(failed["outcome"]):
+        if str(requirement["missing_reason_code"]) not in missing:
+            missing.append(str(requirement["missing_reason_code"]))
+    required_dispatches = requirement["required_distinct_dispatch_count"]
+    if required_dispatches is not None and (
+        not one_dispatch_per_new_child or int(required_dispatches) > 1
+    ):
+        if str(requirement["missing_reason_code"]) not in missing:
+            missing.append(str(requirement["missing_reason_code"]))
+    required_families = int(requirement["required_family_count"])
+    if status_only and required_families > 1:
+        if str(requirement["missing_reason_code"]) not in missing:
+            missing.append(str(requirement["missing_reason_code"]))
+    return {
+        "preflight_version": SOURCE_PREFLIGHT_VERSION,
+        "preflight_status": (
+            "design_analysis_blocked" if missing else "representable"
+        ),
+        "inspected_contract": {
+            "artifact_name": "oled_scientific_agent_trajectory_projection.py",
+            "contract_version": str(projection_module._PROJECTION_VERSION),
+            "artifact_sha256": sha256_bytes(module_bytes),
+            "inspected_symbols": ["_event", "_project_children"],
+            "inspected_symbols_sha256": sha256_bytes(
+                (event_source + "\n" + project_children_source).encode("utf-8")
+            ),
+        },
+        "required_evidence": dict(requirement),
+        "observed_contract": observed,
+        "missing_capabilities": sorted(missing),
+        "claim_boundary": {
+            "runtime_case_executed": False,
+            "inspection_response_observed": False,
+            "machine_validation_claimed": False,
+            "source_contract_preflight_executed": True,
+        },
+    }
+
+
+def runner_code_binding(commit: str) -> dict[str, Any]:
+    clean_commit = str(commit or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", clean_commit):
+        raise ValueError("runner commit must be a full Git SHA")
+    files: dict[str, str] = {}
+    for relative in RUNNER_FILES:
+        completed = subprocess.run(
+            ["git", "show", f"{clean_commit}:{relative}"],
+            cwd=_REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+        )
+        files[relative] = sha256_bytes(completed.stdout)
+    identity = {
+        "binding_version": RUNNER_BINDING_VERSION,
+        "runner_commit": clean_commit,
+        "files": files,
+    }
+    return {**identity, "aggregate_sha256": sha256_bytes(canonical_json_bytes(identity))}
+
+
+def require_runner_checkout_binding(commit: str) -> dict[str, Any]:
+    binding = runner_code_binding(commit)
+    current = {
+        relative: sha256_bytes((_REPOSITORY_ROOT / relative).read_bytes())
+        for relative in RUNNER_FILES
+    }
+    if current != binding["files"]:
+        raise ValueError("runner checkout does not match the bound runner commit")
+    return binding
+
+
+def pending_owner_review(manifest_sha256: str) -> dict[str, Any]:
+    return {
+        "review_version": OWNER_REVIEW_VERSION,
+        "reviewer": None,
+        "review_date": None,
+        "decision": None,
+        "reviewed_commit": None,
+        "reviewed_evidence_manifest_sha256": manifest_sha256,
+        "per_case_decisions": [
+            {
+                "case_id": case_id,
+                "review_kind": (
+                    "blocker_diagnosis"
+                    if case_id in BLOCKER_REQUIREMENTS
+                    else "executable_case"
+                ),
+                "decision": None,
+                "checks": _pending_review_checks(case_id),
+                "notes": None,
+            }
+            for case_id in CASE_ROSTER
+        ],
+        "notes": None,
+    }
+
+
+def _pending_review_checks(case_id: str) -> dict[str, None]:
+    names = (
+        (
+            "source_class_accurate",
+            "required_evidence_correct",
+            "inspected_contract_binding_correct",
+            "observed_contract_fields_correct",
+            "missing_capability_correct",
+            "no_runtime_claim",
+            "privacy_passed",
+        )
+        if case_id in BLOCKER_REQUIREMENTS
+        else (
+            "source_class_accurate",
+            "expected_contract_matches",
+            "terminal_source_consistent",
+            "causal_semantics_supported",
+            "source_references_persisted",
+            "digest_consistent",
+            "privacy_passed",
+            "observer_only",
+        )
+    )
+    return {name: None for name in names}
 
 
 def write_canonical_json(path: Path, value: Any, *, no_replace: bool = False) -> None:

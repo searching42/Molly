@@ -681,8 +681,8 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 - 决策：接受 production-backed Process A/B/C runner、八案例固定 roster、脱敏 public evidence schema 和 repository-owner checklist 作为 PR-BI 的 evidence 基础；当前只记录 machine evidence，不自行完成 human review。
 - 原计划：八个案例均通过同一 `scientific_agent_trajectory_inspection.v1` GET route，机器 evidence 完整后由 repository owner 复核并补 M3 `V`。
-- 新计划：单轮成功、多轮成功、history truncation fail-closed 和 stale telemetry 四项按生产链通过；known-hosts propagation、duplicate dispatch、multiple-family ambiguity 和 causal-link-not-proven 明确记录为 `design_analysis_blocked`，PR-BI 保持 Draft，M3 保持 `I/T/—`，M4 不解锁。
-- 依据：当时 PR-BD exact replay 未持久化 transport reason、distinct duplicate-dispatch proof、同 revision multi-family reason 或 recovered-failure causal link；通过修改 PR-BD～PR-BH、放宽 replay 或使用 test-only bytes 制造 evidence 均违反 PR-BI 停止条件。
+- 新计划：单轮成功、多轮成功、history truncation fail-closed 和 stale telemetry 四项按生产链通过；known-hosts propagation、duplicate dispatch、multiple-family ambiguity 和 causal-link-not-proven 通过生产 PR-BD module/contract digest preflight 记录为 `design_analysis_blocked`，不是已执行 runtime validation；PR-BI 保持 Draft，M3 保持 `I/T/—`，M4 不解锁。
+- 依据：当时 PR-BD exact replay 只把 failed child 投影为 `failed` / `integrity_failed`，没有持久化 transport reason、distinct duplicate-dispatch proof、同 revision multi-family reason 或 recovered-failure causal link；通过修改 PR-BD～PR-BH、放宽 replay 或使用 test-only bytes 制造 evidence 均违反 PR-BI 停止条件。
 - 影响任务：`M3-001`～`M3-028` 的 `I/T/— / DONE` 不变；`M3-GATE-001`～`M3-GATE-004` 不标记完成；PR-BI 状态为 machine evidence incomplete / human review pending。
 - 新增风险：v1 source-evidence seam 不足以通过 inspection route 验收四个标准归因案例；需要独立兼容 source-contract PR。
 - 批准人：repository owner。
@@ -720,7 +720,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 范围：增加 typed stage failure evidence、immutable dispatch/recovery receipts，以及 PR-BD/PR-BG 的最小 source-driven 消费；不得修改 PR-BI evidence、observer HTTP contract、科学结果或控制行为。
 
-当前状态：PR-BI runner 和固定八案例 evidence package 已生成；四项 machine pass、四项因 PR-BD v1 未持久化所需 source evidence 而 blocked；human review pending，M3 不补 `V`。
+当前状态：PR-BI runner 和固定八案例 evidence package 已生成；四项 machine pass、四项因 PR-BD v1 未持久化所需 source evidence 而 `design_analysis_blocked`（未执行字段为 `null`）；human review pending，M3 不补 `V`。
 
 必须验证：
 
