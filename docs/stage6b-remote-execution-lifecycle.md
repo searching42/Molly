@@ -83,13 +83,17 @@ interpolated.
 
 ```text
 molly-worker stage --json
+molly-worker stage-input --request-id <safe-id> --path <safe-relative-path> --size <bytes> --sha256 <digest> --json
 molly-worker verify-inputs --request-id <safe-id> --json
 molly-worker execute --json
 molly-worker status --request-id <safe-id> --json
 molly-worker cancel --request-id <safe-id> --json
+molly-worker fetch-output --request-id <safe-id> --path <safe-relative-path> --size <bytes> --sha256 <digest>
 ```
 
 Request, approval, and digest bindings travel as JSON on stdin. The remote
+`stage-input` command receives only the declared raw input bytes, while
+`fetch-output` emits only the publication-bound raw output bytes on stdout. The
 deployment supplies task-specific adapters behind this protocol (for example
 REINVENT4, MinerU, or UniMol); the browser and LLM cannot select an executable,
 environment activation, command argument, output path, or Shell fragment.

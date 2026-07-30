@@ -25,7 +25,56 @@ ssh molly-gpu-main -- hostname -s
 Use `ssh-agent` or the operating-system Keychain for key material. Never put a
 private key, password, bearer token, or `ProxyCommand` in a Molly JSON file.
 
-## 2. Register the connection
+## 2. Install the fixed worker protocol
+
+Build an `ai4s-agent` wheel from the same reviewed commit as the control plane,
+copy that wheel to the remote machine, and install it into a dedicated virtual
+environment. The package exposes the fixed `molly-worker` console entrypoint;
+do not replace it with a probe-only success shim.
+
+```bash
+python -m build
+python3 -m venv /srv/molly/worker-venv
+/srv/molly/worker-venv/bin/python -m pip install /path/to/ai4s_agent-0.1.0-py3-none-any.whl
+```
+
+The non-interactive SSH PATH must resolve `molly-worker`. Install a fixed
+wrapper or symlink in a system PATH directory such as `/usr/local/bin`, or
+configure the remote account's non-interactive PATH explicitly. Verify the
+same command shape Molly will use:
+
+```bash
+ssh molly-gpu-main -- command -v molly-worker
+ssh molly-gpu-main -- molly-worker probe --json
+```
+
+The worker reads a mode-`0600` private config from
+`~/.config/Molly/worker.json` by default. Paths stay on the remote machine and
+must never be committed:
+
+```json
+{
+  "schema_version": "molly_worker_config.v1",
+  "root": "/srv/molly/worker-state",
+  "reinvent4_repository": "/srv/molly/repositories/reinvent4",
+  "reinvent4_python": "/srv/molly/envs/reinvent4/bin/python",
+  "unimol_repository": "/srv/molly/repositories/unimol",
+  "unimol_python": "/srv/molly/envs/unimol/bin/python"
+}
+```
+
+`probe` is read-only and reports a workload only when its configured repository
+exists and its configured interpreter can import the expected distribution.
+The initial adapters implement `reinvent4-cpu-v1` and `unimol-train-v1` only;
+they never accept a browser-provided command, interpreter, working directory,
+or output path. The Uni-Mol v1 publication contains one model, so the initial
+adapter accepts `kfold=1` and fails closed on multi-model configurations.
+
+Worker state is private, request-scoped, content-bound, and stored below the
+configured root. Keep that root outside source checkouts and back it with
+enough space for the bounded output contracts.
+
+## 3. Register the connection
 
 The Settings page provides a guided connection form:
 
@@ -65,7 +114,7 @@ This file is local-only. Public plans, documentation, and repository-owned
 execution profiles should refer only to `gpu-worker-main`. Run the capability
 probe after saving; submission still performs a fresh, read-only preflight.
 
-## 3. Register runtime environments
+## 4. Register runtime environments
 
 Remote repository and interpreter paths live in private
 `environments.json`, not source code. After saving the connection in Settings,
@@ -157,7 +206,7 @@ Stage 6B requests still bind repository-owned execution profiles, immutable
 input manifests, approvals, and output contracts. Private connection and
 environment records only resolve how that fixed contract reaches a machine.
 
-## 4. Replay retired publications
+## 5. Replay retired publications
 
 Retired v1 publications are never rewritten and retired transport profiles
 cannot start new work. If exact replay is required, place the original static
@@ -183,7 +232,7 @@ transport contract in the private `legacy_transport_profiles.json`:
 This file is verifier-only. It reconstructs the historical content-bound
 contract locally without reintroducing private values into source code.
 
-## 5. Scheduler information
+## 6. Scheduler information
 
 The first private connection format supports direct execution. Do not add
 Slurm/PBS partitions, accounts, reservations, or arbitrary submit command
@@ -191,7 +240,7 @@ templates to repository files. A future scheduler adapter should store those
 values in user-level configuration and expose only a logical scheduler profile
 ID to execution contracts.
 
-## 6. Safe evidence and support bundles
+## 7. Safe evidence and support bundles
 
 Before publishing evidence:
 

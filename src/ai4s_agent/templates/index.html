@@ -521,10 +521,10 @@
           </div>
           <details id="molly-worker-protocol-help" class="settings-advanced">
             <summary>远端还没有 molly-worker？查看安装 / 实现要求</summary>
-            <p class="field-help"><strong>当前仓库没有可直接从 PyPI 安装的 molly-worker 服务端包。</strong>计算资源探测与受控执行要求远端提供一个名为 <code>molly-worker</code> 的兼容可执行文件，并确保非交互 SSH 会话也能从 <code>PATH</code> 找到它。</p>
+            <p class="field-help"><strong>当前仓库已提供固定的 <code>molly-worker</code> 入口。</strong>请从与控制端相同的已审查提交构建 wheel，并安装到远端专用虚拟环境；同时确保非交互 SSH 会话能从 <code>PATH</code> 找到它。</p>
             <ol class="field-help">
-              <li>最小探测接口：实现 <code>molly-worker probe --json</code>，成功时只向 stdout 输出包含 <code>hostname</code>、<code>capabilities</code> 和 <code>details</code> 的 JSON 对象。</li>
-              <li>模型任务还必须按固定协议实现 <code>stage</code>、<code>verify-inputs</code>、<code>execute</code>、<code>status</code> 和 <code>cancel</code>；不要让 UI 拼接任意远端命令。</li>
+              <li>安装后运行 <code>molly-worker probe --json</code>；成功时 stdout 只包含带有 <code>hostname</code>、<code>capabilities</code> 和 <code>details</code> 的 JSON 对象。</li>
+              <li>模型任务使用固定的 <code>stage</code>、<code>stage-input</code>、<code>verify-inputs</code>、<code>execute</code>、<code>status</code>、<code>cancel</code> 和 <code>fetch-output</code> 协议；UI 不会拼接任意远端命令。</li>
               <li>部署后先运行 <code>ssh &lt;SSH 别名&gt; -- molly-worker probe --json</code>，确认可免交互执行，再在这里保存并测试连接。</li>
             </ol>
             <p class="field-help">完整安全边界与请求/响应约定见 <a href="https://github.com/searching42/Molly/blob/main/docs/remote_worker_setup.md" target="_blank" rel="noreferrer">remote worker setup</a> 和 <a href="https://github.com/searching42/Molly/blob/main/docs/stage6b-remote-execution-lifecycle.md" target="_blank" rel="noreferrer">Stage 6B protocol</a>。</p>
