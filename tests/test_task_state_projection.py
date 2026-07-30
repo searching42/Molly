@@ -19,7 +19,7 @@ def test_task_state_projection_uses_semantic_values_and_actual_regular_files(tmp
         run_id="run-a",
         stage_payload={
             "status": "private.compute.invalid",
-            "stage": "10.0.0.1",
+            "stage": "192.0.2.1",
             "history": [
                 {"stage": "inspect_dataset", "status": "SUCCEEDED"},
                 {"stage": "internal-node_42", "status": "RUNNING"},

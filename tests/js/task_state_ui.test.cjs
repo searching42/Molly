@@ -111,12 +111,12 @@ test("semantic allowlists remove hostname and IP shaped values", () => {
   const snapshot = taskState.taskStateSnapshot(
     payload({
       status: "private.compute.invalid",
-      current_stage: "10.0.0.1",
+      current_stage: "192.0.2.1",
       history: [
         { stage: "internal-node_42", status: "RUNNING" },
         { stage: "train_model", status: "internal-node_42" },
       ],
-      artifact_ids: ["model_metadata", "private.compute.invalid", "10.0.0.1"],
+      artifact_ids: ["model_metadata", "private.compute.invalid", "192.0.2.1"],
       state_files: ["stage.json", "internal-node_42", "job.json"],
     }),
     { runId: "run-a", projectId: "proj-a" },
