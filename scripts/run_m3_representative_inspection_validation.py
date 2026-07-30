@@ -55,30 +55,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _inspection_child(args.inspect_private_locator)
     if args.output is None or args.public_evidence_dir is None:
         raise SystemExit("--output and --public-evidence-dir are required")
-    if args.output.exists() or args.public_evidence_dir.exists():
+    private_output = args.output.absolute()
+    public_evidence_dir = args.public_evidence_dir.absolute()
+    if private_output.exists() or public_evidence_dir.exists():
         raise SystemExit("private output and public evidence directories must not exist")
     runner_commit = args.runner_commit or _git_head()
     try:
         require_runner_checkout_binding(runner_commit)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
-    args.output.mkdir(parents=True, mode=0o700)
-    args.public_evidence_dir.mkdir(parents=True)
+    private_output.mkdir(parents=True, mode=0o700)
+    public_evidence_dir.mkdir(parents=True)
     selected = tuple(args.selected or CASE_ROSTER)
     if len(selected) != len(set(selected)):
         raise SystemExit("case IDs must be unique")
     records = []
     try:
         for case_id in selected:
-            records.append(_run_case(args.output, case_id))
+            records.append(_run_case(private_output, case_id))
         _publish_public_package(
-            args.public_evidence_dir,
+            public_evidence_dir,
             records,
             runner_commit=runner_commit,
         )
     finally:
         if not args.keep_private_source_bundle:
-            _remove_private_tree(args.output)
+            _remove_private_tree(private_output)
     status = "complete" if _machine_complete(records) else "incomplete"
     print(f"machine_evidence={status}; human_review=pending; cases={len(records)}")
     return 0
