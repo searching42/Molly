@@ -438,6 +438,51 @@ def test_second_generation_interrupted_action_is_recovered_without_rewriting_req
         executor=_HoldingExecutor(),  # type: ignore[arg-type]
     )
     original_write_state = restarted._write_state
+    original_publish_recovery_receipt = action_module.publish_recovery_receipt
+    original_reconcile = (
+        action_module.reconcile_completed_oled_bounded_discovery_session_action
+    )
+    reconcile_calls = 0
+
+    def counted_reconcile(**kwargs: Any) -> Any:
+        nonlocal reconcile_calls
+        reconcile_calls += 1
+        return original_reconcile(**kwargs)
+
+    monkeypatch.setattr(
+        action_module,
+        "reconcile_completed_oled_bounded_discovery_session_action",
+        counted_reconcile,
+    )
+
+    def fail_recovery_receipt_publication(**_: Any) -> None:
+        raise RuntimeError("simulated recovery receipt publication failure")
+
+    monkeypatch.setattr(
+        action_module,
+        "publish_recovery_receipt",
+        fail_recovery_receipt_publication,
+    )
+    with pytest.raises(RuntimeError, match="receipt publication failure"):
+        restarted.recover_interrupted_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )
+    assert inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=waiting.session_id,
+    ).revision == 11
+    assert json.loads(
+        (action_dir / "action.json").read_text(encoding="utf-8")
+    )["status"] == "RUNNING"
+    assert read_recovery_receipts(action_dir=action_dir, allow_missing=True) == []
+    assert reconcile_calls == 1
+    monkeypatch.setattr(
+        action_module,
+        "publish_recovery_receipt",
+        original_publish_recovery_receipt,
+    )
 
     def fail_recovered_telemetry(_: dict[str, Any]) -> None:
         raise RuntimeError("simulated mutable telemetry write failure")
@@ -452,6 +497,7 @@ def test_second_generation_interrupted_action_is_recovered_without_rewriting_req
         (action_dir / "action.json").read_text(encoding="utf-8")
     )["status"] == "RUNNING"
     assert len(read_recovery_receipts(action_dir=action_dir)) == 1
+    assert reconcile_calls == 1
     monkeypatch.setattr(restarted, "_write_state", original_write_state)
     recovered = restarted.recover_interrupted_action(
         project_id=project_id,
@@ -479,6 +525,7 @@ def test_second_generation_interrupted_action_is_recovered_without_rewriting_req
     )
     assert repeated["status"] == "RECOVERED"
     assert len(read_recovery_receipts(action_dir=action_dir)) == 1
+    assert reconcile_calls == 1
 
     next_action = restarted.enqueue_advance(
         project_id=project_id,

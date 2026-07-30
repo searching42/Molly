@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,7 +14,9 @@ from ai4s_agent.oled_scientific_agent_source_evidence import (
     RECOVERY_RECEIPT_VERSION,
     ScientificAgentTypedFailure,
     build_failure_evidence,
+    dispatch_authority_roster,
     failure_reason_codes_for_error_code,
+    publish_actual_dispatch_receipt,
     publish_dispatch_receipt,
     publish_recovery_receipt,
     read_dispatch_receipts,
@@ -26,6 +30,26 @@ from ai4s_agent.oled_scientific_agent_source_evidence import (
 _CHILD_ID = "oled-bounded-session-" + "a" * 64 + "-generation-01"
 _TASK_ID = "execute_oled_inverse_design"
 _SOURCE_SHA = "sha256:" + "1" * 64
+
+
+def _publish_dispatch_after_barrier(
+    run_dir: str,
+    attempt_id: str,
+    barrier: Any,
+    results: Any,
+) -> None:
+    barrier.wait()
+    try:
+        receipt = publish_actual_dispatch_receipt(
+            run_dir=Path(run_dir),
+            child_run_id=_CHILD_ID,
+            task_id=_TASK_ID,
+            request_or_stage_digest=_SOURCE_SHA,
+            attempt_id=attempt_id,
+        )
+        results.put(("ok", dict(receipt.payload)))
+    except Exception as exc:  # pragma: no cover - surfaced by the parent assertion
+        results.put(("error", type(exc).__name__))
 
 
 @pytest.mark.pr_fast
@@ -151,6 +175,53 @@ def test_dispatch_receipts_distinguish_real_duplicate_and_replay(tmp_path: Path)
     assert duplicate.payload["predecessor_receipt_id"] == initial.payload["receipt_id"]
     assert replay.payload["predecessor_receipt_id"] == duplicate.payload["receipt_id"]
     assert all(item.payload["receipt_version"] == DISPATCH_RECEIPT_VERSION for item in receipts)
+    assert all(item.authority_payload is not None for item in receipts)
+    assert all(item.authority_sha256 is not None for item in receipts)
+
+
+@pytest.mark.adversarial
+def test_dispatch_ordinal_and_predecessor_allocation_is_cross_process_atomic(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_publish_dispatch_after_barrier,
+            args=(str(run_dir), str(index) * 32, barrier, results),
+        )
+        for index in (1, 2)
+    ]
+    for process in processes:
+        process.start()
+    observed = [results.get(timeout=15) for _ in processes]
+    for process in processes:
+        process.join(timeout=15)
+        assert process.exitcode == 0
+
+    assert [status for status, _ in observed] == ["ok", "ok"], observed
+    receipts = read_dispatch_receipts(run_dir=run_dir)
+    assert [item.payload["dispatch_ordinal"] for item in receipts] == [1, 2]
+    assert [item.payload["dispatch_kind"] for item in receipts] == [
+        "initial",
+        "retry",
+    ]
+    assert receipts[0].payload["predecessor_receipt_id"] is None
+    assert (
+        receipts[1].payload["predecessor_receipt_id"]
+        == receipts[0].payload["receipt_id"]
+    )
+    assert dispatch_authority_roster(run_dir=run_dir) == [
+        {
+            "receipt_id": str(item.payload["receipt_id"]),
+            "dispatch_authority_id": str(item.payload["dispatch_authority_id"]),
+            "authority_sha256": str(item.authority_sha256),
+        }
+        for item in receipts
+    ]
 
 
 @pytest.mark.adversarial
@@ -210,7 +281,7 @@ def test_recovery_receipt_is_content_bound_and_idempotent(tmp_path: Path) -> Non
 
 @pytest.mark.adversarial
 @pytest.mark.pr_fast
-@pytest.mark.parametrize("attack", ("content", "roster", "symlink"))
+@pytest.mark.parametrize("attack", ("content", "authority", "roster", "symlink"))
 def test_dispatch_receipt_tampering_fails_closed(
     tmp_path: Path, attack: str
 ) -> None:
@@ -229,6 +300,14 @@ def test_dispatch_receipt_tampering_fails_closed(
         payload["dispatch_ordinal"] = 2
         receipt.receipt_json.write_text(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    elif attack == "authority":
+        assert receipt.authority_json is not None
+        authority = json.loads(receipt.authority_json.read_text(encoding="utf-8"))
+        authority["boundary_material_sha256"] = "sha256:" + "9" * 64
+        receipt.authority_json.write_text(
+            json.dumps(authority, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
             encoding="utf-8",
         )
     elif attack == "roster":
@@ -254,6 +333,7 @@ def test_receipt_validators_reject_resigned_identity_and_invalid_recovery() -> N
         "execution_started": True,
         "reason_codes": [],
         "predecessor_receipt_id": None,
+        "dispatch_authority_id": "scientific-agent-dispatch-authority:" + "1" * 64,
         "request_or_stage_digest": _SOURCE_SHA,
     }
     with pytest.raises(ValueError, match="identity"):

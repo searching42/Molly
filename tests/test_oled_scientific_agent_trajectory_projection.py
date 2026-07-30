@@ -24,6 +24,7 @@ from ai4s_agent.oled_scientific_agent_trajectory_projection import (
 from ai4s_agent.oled_scientific_agent_source_evidence import (
     ScientificAgentTypedFailure,
     build_failure_evidence,
+    dispatch_authority_roster,
     publish_dispatch_receipt,
     publish_recovery_receipt,
     read_dispatch_receipts,
@@ -431,6 +432,12 @@ def test_distinct_dispatch_receipts_and_causal_link_are_representable(
         request_or_stage_digest="sha256:" + "6" * 64,
         attempt_id="6" * 32,
     )
+    stage_path = run_dir / "stage.json"
+    stage_payload = json.loads(stage_path.read_text(encoding="utf-8"))
+    stage_payload.setdefault("details", {})["dispatch_authority_roster"] = (
+        dispatch_authority_roster(run_dir=run_dir)
+    )
+    stage_path.write_bytes(_json_bytes(stage_payload))
     result = publish_oled_scientific_agent_trajectory_projection(
         storage=storage,
         project_id=project_id,
@@ -687,6 +694,42 @@ def test_dispatch_receipt_tampering_fails_before_projection_publication(
             project_id=project_id,
             session_id=current.session_id,  # type: ignore[attr-defined]
             actions_root=tmp_path / "actions-receipt-tamper",
+            output_root=output_root,
+        )
+    assert not output_root.exists()
+
+
+@pytest.mark.adversarial
+@pytest.mark.pr_fast
+def test_fully_resigned_second_dispatch_receipt_lacks_terminal_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, project_id, current = _terminal_single_round(tmp_path, monkeypatch)
+    terminal = json.loads(
+        (current.session_dir / "session_state.json").read_text(encoding="utf-8")  # type: ignore[attr-defined]
+    )
+    child = terminal["children"][0]
+    run_dir = storage.run_dir(project_id, child["run_id"])
+    publish_dispatch_receipt(
+        run_dir=run_dir,
+        child_run_id=child["run_id"],
+        task_id=child["task_id"],
+        dispatch_kind="duplicate_rejected",
+        request_or_stage_digest="sha256:" + "5" * 64,
+        attempt_id="4" * 32,
+    )
+    receipts = read_dispatch_receipts(run_dir=run_dir)
+    assert len(receipts) == 2
+    assert receipts[1].authority_payload is not None
+
+    output_root = tmp_path / "projection-resigned-second-receipt"
+    with pytest.raises(ValueError, match="StageState authority roster"):
+        publish_oled_scientific_agent_trajectory_projection(
+            storage=storage,
+            project_id=project_id,
+            session_id=current.session_id,  # type: ignore[attr-defined]
+            actions_root=tmp_path / "actions-resigned-second-receipt",
             output_root=output_root,
         )
     assert not output_root.exists()

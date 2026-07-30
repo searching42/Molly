@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import re
 import stat
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from ai4s_agent.oled_categorical_dataset_execution import (
     _publish_payload_directory,
@@ -23,6 +25,7 @@ from ai4s_agent.oled_supplementary_material_identity_review import (
 FAILURE_EVIDENCE_VERSION = "scientific_agent_failure_source_evidence.v1"
 CAUSAL_LINK_VERSION = "scientific_agent_failure_causal_link.v1"
 DISPATCH_RECEIPT_VERSION = "scientific_agent_dispatch_receipt.v1"
+DISPATCH_AUTHORITY_VERSION = "scientific_agent_dispatch_authority.v1"
 RECOVERY_RECEIPT_VERSION = "scientific_agent_recovery_receipt.v1"
 
 FAILURE_REASON_CODES = frozenset(
@@ -78,7 +81,9 @@ _BOUNDED_TASK_IDS = frozenset(
     }
 )
 _DISPATCH_RECEIPT_PREFIX = "scientific-agent-dispatch-receipt:"
+_DISPATCH_AUTHORITY_PREFIX = "scientific-agent-dispatch-authority:"
 _RECOVERY_RECEIPT_PREFIX = "scientific-agent-recovery-receipt:"
+_DISPATCH_LOCK_FILENAME = ".scientific-agent-dispatch-receipts.lock"
 
 
 class ScientificAgentTypedFailure(Exception):
@@ -95,6 +100,9 @@ class BoundSourceReceipt:
     sha256: str
     receipt_dir: Path
     receipt_json: Path
+    authority_payload: Mapping[str, Any] | None = None
+    authority_sha256: str | None = None
+    authority_json: Path | None = None
 
 
 def canonical_failure_reason_codes(values: Iterable[str]) -> tuple[str, ...]:
@@ -230,6 +238,106 @@ def validate_failure_evidence(value: Any) -> dict[str, Any]:
     }
 
 
+@contextmanager
+def _locked_dispatch_roster(run_dir: Path) -> Iterator[None]:
+    absolute_run_dir = Path(os.path.abspath(os.fspath(run_dir)))
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise ValueError("dispatch receipt locking requires safe dirfd support")
+    descriptor = -1
+    with _pinned_output_parents_without_symlink_components(
+        absolute_run_dir
+    ) as pinned:
+        parent_descriptor = pinned[absolute_run_dir]
+        try:
+            for _ in range(16):
+                try:
+                    descriptor = os.open(
+                        _DISPATCH_LOCK_FILENAME,
+                        os.O_RDWR | os.O_CREAT | os.O_EXCL | no_follow,
+                        0o600,
+                        dir_fd=parent_descriptor,
+                    )
+                    os.fsync(parent_descriptor)
+                    break
+                except FileExistsError:
+                    try:
+                        descriptor = os.open(
+                            _DISPATCH_LOCK_FILENAME,
+                            os.O_RDWR | no_follow,
+                            dir_fd=parent_descriptor,
+                        )
+                        break
+                    except FileNotFoundError:
+                        continue
+                except FileNotFoundError:
+                    continue
+            if descriptor == -1:
+                raise ValueError("dispatch receipt roster lock cannot be acquired")
+            opened = os.fstat(descriptor)
+            named = os.stat(
+                _DISPATCH_LOCK_FILENAME,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            _require_same_stable_entry(
+                named,
+                opened,
+                label="dispatch receipt roster lock",
+                require_directory=False,
+            )
+            if opened.st_size != 0:
+                raise ValueError("dispatch receipt roster lock is invalid")
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            locked_opened = os.fstat(descriptor)
+            locked_named = os.stat(
+                _DISPATCH_LOCK_FILENAME,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            _require_same_stable_entry(
+                opened,
+                locked_opened,
+                label="dispatch receipt roster lock",
+                require_directory=False,
+            )
+            _require_same_stable_entry(
+                named,
+                locked_named,
+                label="dispatch receipt roster lock",
+                require_directory=False,
+            )
+            yield
+            final_opened = os.fstat(descriptor)
+            final_named = os.stat(
+                _DISPATCH_LOCK_FILENAME,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            _require_same_stable_entry(
+                locked_opened,
+                final_opened,
+                label="dispatch receipt roster lock",
+                require_directory=False,
+            )
+            _require_same_stable_entry(
+                locked_named,
+                final_named,
+                label="dispatch receipt roster lock",
+                require_directory=False,
+            )
+        except ValueError:
+            raise
+        except OSError as exc:
+            raise ValueError("dispatch receipt roster lock is unavailable") from exc
+        finally:
+            if descriptor != -1:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+
+
 def publish_dispatch_receipt(
     *,
     run_dir: Path,
@@ -239,6 +347,59 @@ def publish_dispatch_receipt(
     request_or_stage_digest: str,
     attempt_id: str | None = None,
     reason_codes: Iterable[str] = (),
+) -> BoundSourceReceipt:
+    with _locked_dispatch_roster(run_dir):
+        return _publish_dispatch_receipt_locked(
+            run_dir=run_dir,
+            child_run_id=child_run_id,
+            task_id=task_id,
+            dispatch_kind=dispatch_kind,
+            request_or_stage_digest=request_or_stage_digest,
+            attempt_id=attempt_id,
+            reason_codes=reason_codes,
+        )
+
+
+def publish_actual_dispatch_receipt(
+    *,
+    run_dir: Path,
+    child_run_id: str,
+    task_id: str,
+    request_or_stage_digest: str,
+    attempt_id: str | None = None,
+) -> BoundSourceReceipt:
+    """Publish one actual adapter-boundary receipt under the roster lock."""
+
+    with _locked_dispatch_roster(run_dir):
+        existing = read_dispatch_receipts(run_dir=run_dir, allow_missing=True)
+        kind = (
+            "retry"
+            if any(
+                item.payload["dispatch_kind"] in _REAL_DISPATCH_KINDS
+                for item in existing
+            )
+            else "initial"
+        )
+        return _publish_dispatch_receipt_locked(
+            run_dir=run_dir,
+            child_run_id=child_run_id,
+            task_id=task_id,
+            dispatch_kind=kind,
+            request_or_stage_digest=request_or_stage_digest,
+            attempt_id=attempt_id,
+            reason_codes=(),
+        )
+
+
+def _publish_dispatch_receipt_locked(
+    *,
+    run_dir: Path,
+    child_run_id: str,
+    task_id: str,
+    dispatch_kind: str,
+    request_or_stage_digest: str,
+    attempt_id: str | None,
+    reason_codes: Iterable[str],
 ) -> BoundSourceReceipt:
     clean_child = _child_run_id(child_run_id)
     clean_task = _task_id(task_id)
@@ -266,6 +427,21 @@ def publish_dispatch_receipt(
     if codes:
         codes = canonical_failure_reason_codes(codes)
     execution_started = dispatch_kind in _REAL_DISPATCH_KINDS
+    authority_identity = {
+        "authority_version": DISPATCH_AUTHORITY_VERSION,
+        "child_run_id": clean_child,
+        "task_id": clean_task,
+        "attempt_id": clean_attempt,
+        "dispatch_kind": dispatch_kind,
+        "execution_started": execution_started,
+        "boundary_material_sha256": request_or_stage_digest,
+    }
+    authority_id = _DISPATCH_AUTHORITY_PREFIX + _stable_hash(authority_identity)
+    authority = validate_dispatch_authority(
+        {**authority_identity, "authority_id": authority_id}
+    )
+    authority_bytes = _canonical_json_bytes(authority)
+    authority_sha256 = "sha256:" + hashlib.sha256(authority_bytes).hexdigest()
     identity = {
         "receipt_version": DISPATCH_RECEIPT_VERSION,
         "child_run_id": clean_child,
@@ -276,7 +452,8 @@ def publish_dispatch_receipt(
         "execution_started": execution_started,
         "reason_codes": list(codes),
         "predecessor_receipt_id": predecessor,
-        "request_or_stage_digest": request_or_stage_digest,
+        "dispatch_authority_id": authority_id,
+        "request_or_stage_digest": authority_sha256,
     }
     receipt_id = _DISPATCH_RECEIPT_PREFIX + _stable_hash(identity)
     payload = validate_dispatch_receipt({**identity, "receipt_id": receipt_id})
@@ -285,6 +462,8 @@ def publish_dispatch_receipt(
         receipt_id=receipt_id,
         payload=payload,
         label="scientific-agent dispatch receipt",
+        authority_payload=authority,
+        authority_bytes=authority_bytes,
     )
 
 
@@ -297,6 +476,7 @@ def read_dispatch_receipts(
         prefix=_DISPATCH_RECEIPT_PREFIX,
         validator=validate_dispatch_receipt,
         allow_missing=allow_missing,
+        dispatch_authority_required=True,
     )
     ordinals = [int(item.payload["dispatch_ordinal"]) for item in receipts]
     if ordinals != list(range(1, len(receipts) + 1)):
@@ -309,7 +489,76 @@ def read_dispatch_receipts(
         if item.payload["predecessor_receipt_id"] != previous:
             raise ValueError("dispatch receipt predecessor chain is invalid")
         previous = str(item.payload["receipt_id"])
+        authority = item.authority_payload
+        if authority is None or item.authority_sha256 is None:
+            raise ValueError("dispatch receipt authority is unavailable")
+        if (
+            item.payload["dispatch_authority_id"] != authority["authority_id"]
+            or item.payload["request_or_stage_digest"] != item.authority_sha256
+            or item.payload["child_run_id"] != authority["child_run_id"]
+            or item.payload["task_id"] != authority["task_id"]
+            or item.payload["attempt_id"] != authority["attempt_id"]
+            or item.payload["dispatch_kind"] != authority["dispatch_kind"]
+            or item.payload["execution_started"] is not authority["execution_started"]
+        ):
+            raise ValueError("dispatch receipt authority binding is invalid")
     return receipts
+
+
+def dispatch_authority_roster(
+    *, run_dir: Path, allow_missing: bool = False
+) -> list[dict[str, str]]:
+    return [
+        {
+            "receipt_id": str(item.payload["receipt_id"]),
+            "dispatch_authority_id": str(item.payload["dispatch_authority_id"]),
+            "authority_sha256": str(item.authority_sha256),
+        }
+        for item in read_dispatch_receipts(
+            run_dir=run_dir,
+            allow_missing=allow_missing,
+        )
+        if item.payload["dispatch_kind"]
+        in {"initial", "retry", "duplicate_rejected"}
+    ]
+
+
+def validate_dispatch_authority(value: Any) -> dict[str, Any]:
+    keys = {
+        "authority_version",
+        "authority_id",
+        "child_run_id",
+        "task_id",
+        "attempt_id",
+        "dispatch_kind",
+        "execution_started",
+        "boundary_material_sha256",
+    }
+    if not isinstance(value, dict) or set(value) != keys:
+        raise ValueError("dispatch authority fields are invalid")
+    if value["authority_version"] != DISPATCH_AUTHORITY_VERSION:
+        raise ValueError("dispatch authority version is invalid")
+    authority_id = _receipt_id(
+        value["authority_id"], prefix=_DISPATCH_AUTHORITY_PREFIX
+    )
+    _child_run_id(value["child_run_id"])
+    _task_id(value["task_id"])
+    if (
+        not isinstance(value["attempt_id"], str)
+        or _HEX_32.fullmatch(value["attempt_id"]) is None
+    ):
+        raise ValueError("dispatch authority attempt ID is invalid")
+    kind = value["dispatch_kind"]
+    if kind not in DISPATCH_KINDS:
+        raise ValueError("dispatch authority kind is invalid")
+    if value["execution_started"] is not (kind in _REAL_DISPATCH_KINDS):
+        raise ValueError("dispatch authority execution boundary is invalid")
+    if not _valid_sha256(value["boundary_material_sha256"]):
+        raise ValueError("dispatch authority boundary digest is invalid")
+    identity = {key: value[key] for key in keys if key != "authority_id"}
+    if authority_id != _DISPATCH_AUTHORITY_PREFIX + _stable_hash(identity):
+        raise ValueError("dispatch authority identity is invalid")
+    return dict(value)
 
 
 def validate_dispatch_receipt(value: Any) -> dict[str, Any]:
@@ -324,6 +573,7 @@ def validate_dispatch_receipt(value: Any) -> dict[str, Any]:
         "execution_started",
         "reason_codes",
         "predecessor_receipt_id",
+        "dispatch_authority_id",
         "request_or_stage_digest",
     }
     if not isinstance(value, dict) or set(value) != keys:
@@ -361,6 +611,9 @@ def validate_dispatch_receipt(value: Any) -> dict[str, Any]:
         raise ValueError("initial dispatch receipt has a predecessor")
     if ordinal > 1 and predecessor is None:
         raise ValueError("later dispatch receipt lacks a predecessor")
+    _receipt_id(
+        value["dispatch_authority_id"], prefix=_DISPATCH_AUTHORITY_PREFIX
+    )
     if not _valid_sha256(value["request_or_stage_digest"]):
         raise ValueError("dispatch receipt source digest is invalid")
     identity = {key: value[key] for key in keys if key != "receipt_id"}
@@ -419,6 +672,7 @@ def read_recovery_receipts(
         prefix=_RECOVERY_RECEIPT_PREFIX,
         validator=validate_recovery_receipt,
         allow_missing=allow_missing,
+        dispatch_authority_required=False,
     )
     if len(receipts) > 1:
         raise ValueError("recovery receipt roster is invalid")
@@ -481,15 +735,26 @@ def validate_recovery_receipt(value: Any) -> dict[str, Any]:
 
 
 def _publish_receipt(
-    *, root: Path, receipt_id: str, payload: dict[str, Any], label: str
+    *,
+    root: Path,
+    receipt_id: str,
+    payload: dict[str, Any],
+    label: str,
+    authority_payload: dict[str, Any] | None = None,
+    authority_bytes: bytes | None = None,
 ) -> BoundSourceReceipt:
     receipt_dir = root / receipt_id
     payload_bytes = _canonical_json_bytes(payload)
     with _pinned_output_parents_without_symlink_components(root) as pinned:
+        payloads = {"receipt.json": payload_bytes}
+        if authority_payload is not None:
+            if authority_bytes is None:
+                raise ValueError("dispatch authority bytes are unavailable")
+            payloads["authority.json"] = authority_bytes
         _publish_payload_directory(
             output_dir=receipt_dir,
             parent_descriptor=pinned[root],
-            payloads={"receipt.json": payload_bytes},
+            payloads=payloads,
             artifact_label=label,
         )
     return BoundSourceReceipt(
@@ -497,6 +762,17 @@ def _publish_receipt(
         sha256="sha256:" + hashlib.sha256(payload_bytes).hexdigest(),
         receipt_dir=receipt_dir,
         receipt_json=receipt_dir / "receipt.json",
+        authority_payload=authority_payload,
+        authority_sha256=(
+            "sha256:" + hashlib.sha256(authority_bytes).hexdigest()
+            if authority_bytes is not None
+            else None
+        ),
+        authority_json=(
+            receipt_dir / "authority.json"
+            if authority_payload is not None
+            else None
+        ),
     )
 
 
@@ -507,6 +783,7 @@ def _read_receipts(
     prefix: str,
     validator: Any,
     allow_missing: bool,
+    dispatch_authority_required: bool,
 ) -> list[BoundSourceReceipt]:
     if receipt_directory_name not in {"dispatch-receipts", "recovery-receipts"}:
         raise ValueError("source receipt directory role is invalid")
@@ -554,6 +831,7 @@ def _read_receipts(
                     validator=validator,
                     no_follow=no_follow,
                     directory_flag=directory_flag,
+                    dispatch_authority_required=dispatch_authority_required,
                 )
                 for name in names
             ]
@@ -597,6 +875,7 @@ def _read_receipt_at(
     validator: Any,
     no_follow: int,
     directory_flag: int,
+    dispatch_authority_required: bool,
 ) -> BoundSourceReceipt:
     _receipt_id(name, prefix=prefix)
     named_directory = os.stat(name, dir_fd=root_descriptor, follow_symlinks=False)
@@ -615,11 +894,17 @@ def _read_receipt_at(
             label="source receipt entry",
             require_directory=True,
         )
-        if sorted(os.listdir(receipt_descriptor)) != ["receipt.json"]:
+        expected_roster = (
+            ["authority.json", "receipt.json"]
+            if dispatch_authority_required
+            else ["receipt.json"]
+        )
+        if sorted(os.listdir(receipt_descriptor)) != expected_roster:
             raise ValueError("source receipt file roster is invalid")
         payload_bytes, sha256 = _read_regular_receipt_at(
             directory_descriptor=receipt_descriptor,
             no_follow=no_follow,
+            filename="receipt.json",
         )
         payload = validator(_parse_json(payload_bytes))
         if payload["receipt_id"] != name or _canonical_json_bytes(payload) != payload_bytes:
@@ -642,7 +927,20 @@ def _read_receipt_at(
             label="source receipt entry",
             require_directory=True,
         )
-        if sorted(os.listdir(receipt_descriptor)) != ["receipt.json"]:
+        authority_payload: dict[str, Any] | None = None
+        authority_sha256: str | None = None
+        if dispatch_authority_required:
+            authority_bytes, authority_sha256 = _read_regular_receipt_at(
+                directory_descriptor=receipt_descriptor,
+                no_follow=no_follow,
+                filename="authority.json",
+            )
+            authority_payload = validate_dispatch_authority(
+                _parse_json(authority_bytes)
+            )
+            if _canonical_json_bytes(authority_payload) != authority_bytes:
+                raise ValueError("dispatch authority canonical bytes are invalid")
+        if sorted(os.listdir(receipt_descriptor)) != expected_roster:
             raise ValueError("source receipt file roster changed during verification")
     finally:
         os.close(receipt_descriptor)
@@ -652,13 +950,21 @@ def _read_receipt_at(
         sha256=sha256,
         receipt_dir=receipt_dir,
         receipt_json=receipt_dir / "receipt.json",
+        authority_payload=authority_payload,
+        authority_sha256=authority_sha256,
+        authority_json=(
+            receipt_dir / "authority.json"
+            if dispatch_authority_required
+            else None
+        ),
     )
 
 
 def _read_regular_receipt_at(
-    *, directory_descriptor: int, no_follow: int
+    *, directory_descriptor: int, no_follow: int, filename: str
 ) -> tuple[bytes, str]:
-    filename = "receipt.json"
+    if filename not in {"receipt.json", "authority.json"}:
+        raise ValueError("source receipt file role is invalid")
     named = os.stat(filename, dir_fd=directory_descriptor, follow_symlinks=False)
     if not stat.S_ISREG(named.st_mode) or named.st_size > _MAX_RECEIPT_BYTES:
         raise ValueError("source receipt file is invalid")
@@ -833,6 +1139,7 @@ def _stable_hash(value: Mapping[str, Any]) -> str:
 __all__ = [
     "BoundSourceReceipt",
     "CAUSAL_LINK_VERSION",
+    "DISPATCH_AUTHORITY_VERSION",
     "DISPATCH_KINDS",
     "DISPATCH_RECEIPT_VERSION",
     "FAILURE_EVIDENCE_VERSION",
@@ -841,12 +1148,15 @@ __all__ = [
     "ScientificAgentTypedFailure",
     "build_failure_evidence",
     "canonical_failure_reason_codes",
+    "dispatch_authority_roster",
     "failure_reason_codes_for_error_code",
+    "publish_actual_dispatch_receipt",
     "publish_dispatch_receipt",
     "publish_recovery_receipt",
     "read_dispatch_receipts",
     "read_recovery_receipts",
     "validate_dispatch_receipt",
+    "validate_dispatch_authority",
     "validate_failure_evidence",
     "validate_recovery_receipt",
 ]

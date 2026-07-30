@@ -44,6 +44,7 @@ from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _read_regular_file_bound,
 )
 from ai4s_agent.oled_scientific_agent_source_evidence import (
+    validate_dispatch_authority,
     validate_dispatch_receipt,
     validate_failure_evidence,
     validate_recovery_receipt,
@@ -720,12 +721,18 @@ def _project_children(
                     "manifest_sha256": None,
                 }
                 bindings.append(stage_binding)
+                stage_payload = StageState.model_validate(
+                    _read_action_json_bytes(stage_capture.payload)
+                )
                 dispatch_events, dispatch_bindings = _project_dispatch_receipts(
                     run_dir=storage.run_dir(project_id, str(child["run_id"])),
                     child=child,
                     revision=revision,
                     captures=captures,
                     directory_rosters=directory_rosters,
+                    expected_authority_roster=stage_payload.details.get(
+                        "dispatch_authority_roster"
+                    ),
                 )
                 bindings.extend(dispatch_bindings)
                 if dispatch_events:
@@ -876,7 +883,7 @@ def _captured_dispatch_receipts(
     run_dir: Path,
     captures: dict[Path, _CapturedFile],
     directory_rosters: list[_CapturedDirectoryRoster],
-) -> list[tuple[dict[str, Any], _CapturedFile]]:
+) -> list[tuple[dict[str, Any], _CapturedFile, _CapturedFile]]:
     root = run_dir / "dispatch-receipts"
     roster = _capture_directory_roster(
         root,
@@ -884,7 +891,7 @@ def _captured_dispatch_receipts(
         allow_missing=True,
     )
     directory_rosters.append(roster)
-    receipts: list[tuple[dict[str, Any], _CapturedFile]] = []
+    receipts: list[tuple[dict[str, Any], _CapturedFile, _CapturedFile]] = []
     for receipt_name in roster.names:
         receipt_dir = root / receipt_name
         payload_roster = _capture_directory_roster(
@@ -892,8 +899,15 @@ def _captured_dispatch_receipts(
             kind="receipt_payloads",
         )
         directory_rosters.append(payload_roster)
-        if payload_roster.names != ("receipt.json",):
+        if payload_roster.names != ("authority.json", "receipt.json"):
             raise ValueError("PR-BD dispatch receipt file roster is invalid")
+        authority_capture = _capture_canonical_json(
+            receipt_dir / "authority.json",
+            captures=captures,
+        )
+        authority = validate_dispatch_authority(
+            _read_action_json_bytes(authority_capture.payload)
+        )
         receipt_capture = _capture_canonical_json(
             receipt_dir / "receipt.json",
             captures=captures,
@@ -903,7 +917,17 @@ def _captured_dispatch_receipts(
         )
         if receipt["receipt_id"] != receipt_name:
             raise ValueError("PR-BD dispatch receipt path identity is invalid")
-        receipts.append((receipt, receipt_capture))
+        if (
+            receipt["dispatch_authority_id"] != authority["authority_id"]
+            or receipt["request_or_stage_digest"] != authority_capture.sha256
+            or receipt["child_run_id"] != authority["child_run_id"]
+            or receipt["task_id"] != authority["task_id"]
+            or receipt["attempt_id"] != authority["attempt_id"]
+            or receipt["dispatch_kind"] != authority["dispatch_kind"]
+            or receipt["execution_started"] is not authority["execution_started"]
+        ):
+            raise ValueError("PR-BD dispatch authority binding is invalid")
+        receipts.append((receipt, receipt_capture, authority_capture))
     receipts.sort(
         key=lambda item: (
             int(item[0]["dispatch_ordinal"]),
@@ -918,7 +942,7 @@ def _captured_dispatch_receipts(
     if len(attempt_ids) != len(set(attempt_ids)):
         raise ValueError("PR-BD dispatch receipt attempt roster is invalid")
     predecessor = None
-    for receipt, _ in receipts:
+    for receipt, _, _ in receipts:
         if receipt["predecessor_receipt_id"] != predecessor:
             raise ValueError("PR-BD dispatch receipt predecessor chain is invalid")
         predecessor = receipt["receipt_id"]
@@ -932,6 +956,7 @@ def _project_dispatch_receipts(
     revision: int,
     captures: dict[Path, _CapturedFile],
     directory_rosters: list[_CapturedDirectoryRoster],
+    expected_authority_roster: Any,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     events: list[dict[str, Any]] = []
     bindings: list[dict[str, Any]] = []
@@ -940,7 +965,21 @@ def _project_dispatch_receipts(
         captures=captures,
         directory_rosters=directory_rosters,
     )
-    for receipt, receipt_capture in receipts:
+    observed_authority_roster = [
+        {
+            "receipt_id": str(receipt["receipt_id"]),
+            "dispatch_authority_id": str(receipt["dispatch_authority_id"]),
+            "authority_sha256": authority_capture.sha256,
+        }
+        for receipt, _, authority_capture in receipts
+        if receipt["dispatch_kind"] in {"initial", "retry", "duplicate_rejected"}
+    ]
+    if observed_authority_roster:
+        if expected_authority_roster != observed_authority_roster:
+            raise ValueError("PR-BD dispatch StageState authority roster is invalid")
+    elif expected_authority_roster is not None:
+        raise ValueError("PR-BD dispatch StageState authority roster is invalid")
+    for receipt, receipt_capture, authority_capture in receipts:
         if (
             receipt["child_run_id"] != child["run_id"]
             or receipt["task_id"] != child["task_id"]
@@ -951,7 +990,7 @@ def _project_dispatch_receipts(
             "source_artifact_id": str(receipt["receipt_id"]),
             "source_publication_id": str(receipt["receipt_version"]),
             "sha256": receipt_capture.sha256,
-            "manifest_sha256": receipt_capture.sha256,
+            "manifest_sha256": authority_capture.sha256,
         }
         bindings.append(binding)
         if receipt["dispatch_kind"] not in {
@@ -1016,7 +1055,7 @@ def _validate_projected_recovery_receipt(
         raise ValueError("PR-BD recovery receipt StageState binding is invalid")
     dispatch_ids = sorted(
         str(payload["receipt_id"])
-        for payload, _ in _captured_dispatch_receipts(
+        for payload, _, _ in _captured_dispatch_receipts(
             run_dir=run_dir,
             captures=captures,
             directory_rosters=directory_rosters,

@@ -270,26 +270,37 @@ class OledBoundedDiscoverySessionActionService:
                 )
                 return public
 
-        before_view, _, _ = replay_oled_bounded_discovery_projection_source(
+        current_view, current_states, _ = replay_oled_bounded_discovery_projection_source(
             storage=self.storage,
             project_id=clean_project,
             session_id=str(request["session_id"]),
         )
-
-        result = reconcile_completed_oled_bounded_discovery_session_action(
-            storage=self.storage,
-            project_id=clean_project,
-            session_id=str(request["session_id"]),
-            expected_revision=int(request["expected_revision"]),
-        )
-        if result.revision <= int(request["expected_revision"]):
-            raise ValueError("PR-AW interrupted action did not advance the session")
-
-        after_view, _, _ = replay_oled_bounded_discovery_projection_source(
-            storage=self.storage,
-            project_id=clean_project,
-            session_id=str(request["session_id"]),
-        )
+        expected_revision = int(request["expected_revision"])
+        current_revision = int(current_view["revision"])
+        if current_revision == expected_revision:
+            before_view = current_view
+            result = reconcile_completed_oled_bounded_discovery_session_action(
+                storage=self.storage,
+                project_id=clean_project,
+                session_id=str(request["session_id"]),
+                expected_revision=expected_revision,
+            )
+            if result.revision != expected_revision + 1:
+                raise ValueError("PR-AW interrupted action advanced unexpectedly")
+            after_view, _, _ = replay_oled_bounded_discovery_projection_source(
+                storage=self.storage,
+                project_id=clean_project,
+                session_id=str(request["session_id"]),
+            )
+            completed_revision = result.revision
+        elif current_revision == expected_revision + 1:
+            if expected_revision >= len(current_states):
+                raise ValueError("PR-AW recovery predecessor revision is unavailable")
+            before_view = current_states[expected_revision]
+            after_view = current_view
+            completed_revision = current_revision
+        else:
+            raise ValueError("PR-AW interrupted action revision is not recoverable")
         recovered_child = _recovered_child(before_view, after_view)
         run_dir = self.storage.run_dir(clean_project, recovered_child["run_id"])
         stage_path = run_dir / "stage.json"
@@ -311,8 +322,8 @@ class OledBoundedDiscoverySessionActionService:
             source_dispatch_receipt_ids=[
                 str(item.payload["receipt_id"]) for item in dispatch_receipts
             ],
-            expected_revision=int(request["expected_revision"]),
-            completed_revision=result.revision,
+            expected_revision=expected_revision,
+            completed_revision=completed_revision,
         )
         self._verify_recovery_receipt(
             project_id=clean_project,
@@ -335,7 +346,7 @@ class OledBoundedDiscoverySessionActionService:
                 "state_version": _STATE_VERSION,
                 "status": "RECOVERED",
                 "updated_at": now_iso(),
-                "completed_revision": result.revision,
+                "completed_revision": completed_revision,
                 "error": None,
             }
             self._write_state(recovered)
@@ -343,7 +354,7 @@ class OledBoundedDiscoverySessionActionService:
             public["result"] = build_oled_bounded_discovery_session_view(
                 storage=self.storage,
                 project_id=clean_project,
-                session_id=result.session_id,
+                session_id=str(request["session_id"]),
             )
             return public
 

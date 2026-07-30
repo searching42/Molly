@@ -38,6 +38,7 @@ from ai4s_agent.oled_scientific_agent_trajectory_projection import (
 )
 from ai4s_agent.oled_scientific_agent_source_evidence import (
     ScientificAgentTypedFailure,
+    dispatch_authority_roster,
     publish_dispatch_receipt,
 )
 from ai4s_agent.storage import ProjectStorage
@@ -599,6 +600,12 @@ def test_exact_bound_duplicate_rejection_is_recovery_not_duplicate_computation(
         request_or_stage_digest="sha256:" + "d" * 64,
         attempt_id="e" * 32,
     )
+    stage_path = run_dir / "stage.json"
+    stage_payload = json.loads(stage_path.read_text(encoding="utf-8"))
+    stage_payload.setdefault("details", {})["dispatch_authority_roster"] = (
+        dispatch_authority_roster(run_dir=run_dir)
+    )
+    stage_path.write_bytes(_canonical_json_bytes(stage_payload))
     actions_root = tmp_path / "duplicate-actions"
     trajectory = publish_oled_scientific_agent_trajectory_projection(
         storage=storage,

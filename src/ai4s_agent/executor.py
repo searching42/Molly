@@ -40,9 +40,10 @@ from ai4s_agent.oled_registry_candidate_screening import _load_screening_inputs
 from ai4s_agent.oled_scientific_agent_source_evidence import (
     ScientificAgentTypedFailure,
     build_failure_evidence,
+    dispatch_authority_roster,
     failure_reason_codes_for_error_code,
+    publish_actual_dispatch_receipt,
     publish_dispatch_receipt,
-    read_dispatch_receipts,
 )
 from ai4s_agent.oled_supplementary_material_identity_review import (
     _pinned_output_parents_without_symlink_components,
@@ -4018,6 +4019,15 @@ class RunPlanExecutor:
             and "failure_evidence" in previous.details
         ):
             next_details["failure_evidence"] = previous.details["failure_evidence"]
+        if self._source_evidence_enabled(run_id):
+            authority_roster = dispatch_authority_roster(
+                run_dir=self.storage.run_dir(project_id, run_id),
+                allow_missing=True,
+            )
+            if authority_roster:
+                next_details["dispatch_authority_roster"] = authority_roster
+            else:
+                next_details.pop("dispatch_authority_roster", None)
         state = StageState(
             stage=stage,
             next_stage=next_stage,
@@ -4085,17 +4095,10 @@ class RunPlanExecutor:
     ) -> None:
         if not self._source_evidence_enabled(run_id):
             return
-        existing = read_dispatch_receipts(run_dir=run_dir, allow_missing=True)
-        actual = [
-            item
-            for item in existing
-            if item.payload["dispatch_kind"] in {"initial", "retry"}
-        ]
-        publish_dispatch_receipt(
+        publish_actual_dispatch_receipt(
             run_dir=run_dir,
             child_run_id=run_id,
             task_id=task_id,
-            dispatch_kind="initial" if not actual else "retry",
             request_or_stage_digest=self._dispatch_source_digest(
                 run_id=run_id,
                 task_id=task_id,

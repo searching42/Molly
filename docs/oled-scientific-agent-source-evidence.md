@@ -40,7 +40,7 @@ it does not rewrite an old publication or alter any previously accepted input.
 
 ## Source contracts
 
-The source layer separates three immutable contracts:
+The source layer separates four immutable contracts:
 
 - `scientific_agent_failure_source_evidence.v1` records bounded, typed failure
   reason codes in `StageState.details.failure_evidence` only when the facts are
@@ -48,6 +48,12 @@ The source layer separates three immutable contracts:
 - `scientific_agent_dispatch_receipt.v1` records an actual dispatch-boundary
   observation under the child run. It distinguishes real dispatch from
   duplicate rejection, idempotent replay, and recovery adoption.
+- `scientific_agent_dispatch_authority.v1` is published atomically beside each
+  dispatch receipt. The receipt binds the exact `authority.json` SHA-256, while
+  terminal `StageState.details.dispatch_authority_roster` freezes the complete
+  projectable receipt/authority roster. PR-BD recomputes both files and rejects
+  an otherwise self-consistent appended receipt that is absent from that
+  terminal authority roster.
 - `scientific_agent_recovery_receipt.v1` records only the adoption of an
   already-completed child by PR-AW. It is not evidence of a new dispatch.
 
@@ -82,8 +88,8 @@ these semantic codes after exact replay.
 | Fact | Authoritative source |
 |---|---|
 | failure reason | validated `StageState.details.failure_evidence` |
-| dispatch attempt | immutable dispatch receipt |
-| duplicate dispatch | two distinct exact-bound receipts, with the latter explicitly marked duplicate |
+| dispatch attempt | immutable dispatch authority plus its exact-bound receipt and terminal StageState roster |
+| duplicate dispatch | two distinct authority-bound receipts in the terminal roster, with the latter explicitly marked duplicate |
 | successful recovery | immutable recovery receipt |
 | causal link | validated failure evidence with an explicit typed link; a recovery receipt alone cannot invent one |
 | mutable action status | telemetry only |
@@ -91,6 +97,21 @@ these semantic codes after exact replay.
 PR-BD remains post-hoc and observer-only. Executor, adapter, coordinator, and
 action-service code may record the fact at the boundary where it becomes
 known, but none of them may invoke PR-BD, PR-BF, PR-BG, or inspection.
+
+Dispatch ordinal allocation is serialized by a per-run cross-process lock.
+Roster verification, ordinal allocation, predecessor selection, authority
+construction, and no-replace publication are one critical section. The lock
+file contains no identity or infrastructure data. `initial` versus `retry` is
+also selected within that critical section; `idempotent_replay` and
+`recovery_adoption` remain non-dispatch facts.
+
+PR-AW recovery also covers the crash window where reconciliation committed
+`expected_revision + 1` but the recovery receipt was not yet published. A
+later invocation exact-replays the predecessor and current Session revisions,
+requires the same single completed child transition and verified StageState,
+then deterministically reconstructs the same receipt without invoking
+reconciliation or scientific execution again. Other revision shapes fail
+closed.
 
 ## Privacy boundary
 
@@ -127,13 +148,16 @@ local path, user name, hostname, or temporary locator is committed as evidence.
 The final local targeted validation comprised:
 
 ```text
-source evidence + PR-BD + PR-BE + PR-BG: 117 passed
-PR-AW action/recovery API:                 14 passed
-RunPlanExecutor failure regression:         1 passed
-REINVENT4 typed remote boundaries:          9 passed
-repository documentation/privacy:          45 passed
-PR Fast:                                   897 passed, 5,241 deselected
+source + PR-BD/BE/BF/BG + PR-AW: 134 passed
+RunPlanExecutor + docs/privacy:      89 passed
+PR Fast:                            900 passed, 5,241 deselected
 ```
+
+The source suite includes a barrier-released two-process dispatch test, a
+fully re-signed appended-receipt rejection test, and a recovery test that
+crashes after Session commit but before receipt publication. The latter
+proves the next invocation reconstructs the receipt without a second
+reconciliation call.
 
 These are implementation and test results (`I/T/—`), not representative
 runtime validation. PR #10 remains Draft, M3 remains without `V`, and M4 stays
