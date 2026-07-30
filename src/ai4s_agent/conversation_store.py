@@ -46,9 +46,9 @@ class ConversationStore:
         conversation_id: str = "",
     ) -> tuple[ConversationMetadata, bool]:
         clean_id = self._clean_id(conversation_id or f"conv_{uuid.uuid4().hex}", "conversation_id")
-        directory = self._conversation_dir(project_id, clean_id)
-        self._ensure_private_directory(directory)
-        with self._directory_lock(directory):
+        root = self._conversations_root(project_id)
+        with self._directory_lock(root, lock_name=".conversations.lock"):
+            directory = self._conversation_dir(project_id, clean_id)
             metadata_path = directory / "metadata.json"
             if metadata_path.exists():
                 metadata = self._read_metadata(
@@ -57,19 +57,23 @@ class ConversationStore:
                     expected_conversation_id=clean_id,
                 )
                 return metadata, False
-            timestamp = now_iso()
-            metadata = ConversationMetadata(
-                project_id=project_id,
-                conversation_id=clean_id,
-                title=self._clean_title(title),
-                created_at=timestamp,
-                updated_at=timestamp,
-            )
-            write_json(metadata_path, metadata.model_dump(mode="json"))
-            messages_path = self._messages_path(directory)
-            messages_path.touch(mode=0o600, exist_ok=True)
-            os.chmod(messages_path, 0o600)
-            return metadata, True
+            if self._conversation_id_was_deleted(root, clean_id):
+                raise ValueError("deleted conversation_id cannot be reused")
+            self._ensure_private_directory(directory)
+            with self._directory_lock(directory):
+                timestamp = now_iso()
+                metadata = ConversationMetadata(
+                    project_id=project_id,
+                    conversation_id=clean_id,
+                    title=self._clean_title(title),
+                    created_at=timestamp,
+                    updated_at=timestamp,
+                )
+                write_json(metadata_path, metadata.model_dump(mode="json"))
+                messages_path = self._messages_path(directory)
+                messages_path.touch(mode=0o600, exist_ok=True)
+                os.chmod(messages_path, 0o600)
+                return metadata, True
 
     def list_conversations(self, project_id: str) -> list[ConversationMetadata]:
         root = self._conversations_root(project_id)
@@ -151,55 +155,57 @@ class ConversationStore:
         import_id: str = "",
         created_at: str = "",
     ) -> tuple[ConversationMessage, bool, bool]:
-        directory = self._existing_conversation_dir(project_id, conversation_id)
         attachments = [
             self.resolve_attachment(project_id, artifact_id)
             for artifact_id in self._dedupe_strings(attachment_ids or [])
         ]
         clean_client_id = str(client_message_id or "").strip()
-        with self._directory_lock(directory):
-            messages, recovered_tail = self._read_messages_locked(
-                self._messages_path(directory),
-                expected_conversation_id=self._clean_id(conversation_id, "conversation_id"),
-            )
-            if clean_client_id:
-                existing = next(
-                    (item for item in messages if item.client_message_id == clean_client_id),
-                    None,
+        root = self._conversations_root(project_id)
+        with self._directory_lock(root, lock_name=".conversations.lock"):
+            directory = self._existing_conversation_dir(project_id, conversation_id)
+            with self._directory_lock(directory):
+                messages, recovered_tail = self._read_messages_locked(
+                    self._messages_path(directory),
+                    expected_conversation_id=self._clean_id(conversation_id, "conversation_id"),
                 )
-                if existing is not None:
-                    expected_ids = [item.artifact_id for item in attachments]
-                    actual_ids = [item.artifact_id for item in existing.attachments]
-                    if (
-                        existing.role != role
-                        or existing.content != str(content or "")
-                        or actual_ids != expected_ids
-                    ):
-                        raise ValueError("client_message_id already belongs to different content")
-                    return existing, True, recovered_tail
-            message = ConversationMessage(
-                message_id=f"msg_{uuid.uuid4().hex}",
-                conversation_id=conversation_id,
-                sequence=len(messages) + 1,
-                role=role,
-                content=str(content or ""),
-                attachments=attachments,
-                created_at=str(created_at or "").strip() or now_iso(),
-                client_message_id=clean_client_id,
-                import_id=str(import_id or "").strip(),
-            )
-            self._append_json_line(
-                self._messages_path(directory),
-                message.model_dump(mode="json"),
-            )
-            metadata = self._read_metadata(
-                directory / "metadata.json",
-                expected_project_id=project_id,
-                expected_conversation_id=self._clean_id(conversation_id, "conversation_id"),
-            )
-            updated = metadata.model_copy(update={"updated_at": now_iso()})
-            write_json(directory / "metadata.json", updated.model_dump(mode="json"))
-            return message, False, recovered_tail
+                if clean_client_id:
+                    existing = next(
+                        (item for item in messages if item.client_message_id == clean_client_id),
+                        None,
+                    )
+                    if existing is not None:
+                        expected_ids = [item.artifact_id for item in attachments]
+                        actual_ids = [item.artifact_id for item in existing.attachments]
+                        if (
+                            existing.role != role
+                            or existing.content != str(content or "")
+                            or actual_ids != expected_ids
+                        ):
+                            raise ValueError("client_message_id already belongs to different content")
+                        return existing, True, recovered_tail
+                message = ConversationMessage(
+                    message_id=f"msg_{uuid.uuid4().hex}",
+                    conversation_id=conversation_id,
+                    sequence=len(messages) + 1,
+                    role=role,
+                    content=str(content or ""),
+                    attachments=attachments,
+                    created_at=str(created_at or "").strip() or now_iso(),
+                    client_message_id=clean_client_id,
+                    import_id=str(import_id or "").strip(),
+                )
+                self._append_json_line(
+                    self._messages_path(directory),
+                    message.model_dump(mode="json"),
+                )
+                metadata = self._read_metadata(
+                    directory / "metadata.json",
+                    expected_project_id=project_id,
+                    expected_conversation_id=self._clean_id(conversation_id, "conversation_id"),
+                )
+                updated = metadata.model_copy(update={"updated_at": now_iso()})
+                write_json(directory / "metadata.json", updated.model_dump(mode="json"))
+                return message, False, recovered_tail
 
     def register_attachment(
         self,
@@ -689,6 +695,16 @@ class ConversationStore:
         root = (project / "conversations").resolve()
         self._ensure_relative(project, root, "conversations")
         return root
+
+    def _conversation_id_was_deleted(self, root: Path, conversation_id: str) -> bool:
+        trash = (root / ".deleted").resolve()
+        self._ensure_relative(root, trash, "deleted conversations")
+        if not trash.exists():
+            return False
+        if not trash.is_dir():
+            raise ValueError("deleted conversations archive is invalid")
+        prefix = f"{conversation_id}."
+        return any(child.name.startswith(prefix) for child in trash.iterdir())
 
     def _artifacts_root(self, project_id: str) -> Path:
         project = self.projects.project_dir(project_id)

@@ -616,6 +616,8 @@
       let currentConversationId = "";
       let pendingConversationAttachments = [];
       let conversationLoadGeneration = 0;
+      let pendingConversationLoad = null;
+      const deletedConversationKeys = new Set();
       let conversationContextGeneration = 0;
       let currentRunId = "";
       let currentConversationDecision = null;
@@ -674,6 +676,28 @@
 
       function isConversationContextCurrent(context) {
         return MollyTaskState.sameConversationContext(context, currentConversationContext());
+      }
+
+      function conversationIdentityKey(projectId, conversationId) {
+        return `${String(projectId || "")}\u0000${String(conversationId || "")}`;
+      }
+
+      function conversationDeletionDecision(
+        projectId,
+        conversationId,
+        activeProjectId,
+        activeConversationId,
+        pendingLoad,
+      ) {
+        const sameProject = projectId === activeProjectId;
+        return {
+          sameProject,
+          deletedIsCurrent: sameProject && conversationId === activeConversationId,
+          cancelPendingLoad: Boolean(
+            sameProject && pendingLoad && pendingLoad.projectId === projectId &&
+            pendingLoad.conversationId === conversationId
+          ),
+        };
       }
 
       function renderProjectList(projects) {
@@ -773,16 +797,28 @@
       async function deleteConversation(projectId, conversationId, title) {
         if (!projectId || !conversationId) return;
         if (!window.confirm(`删除对话“${String(title || "新对话")}”？`)) return;
-        const deletingCurrent = conversationId === currentConversationId;
         try {
           await deleteJSON(
             `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}`,
           );
-          if (projectId !== activeProject.project_id) return;
+          const deletedKey = conversationIdentityKey(projectId, conversationId);
+          deletedConversationKeys.add(deletedKey);
+          const decision = conversationDeletionDecision(
+            projectId,
+            conversationId,
+            activeProject.project_id,
+            currentConversationId,
+            pendingConversationLoad,
+          );
+          if (!decision.sameProject) return;
+          if (decision.cancelPendingLoad) {
+            conversationLoadGeneration += 1;
+            pendingConversationLoad = null;
+          }
           knownConversations = knownConversations.filter(
             (item) => String(item.conversation_id || "") !== conversationId,
           );
-          if (!deletingCurrent) {
+          if (!decision.deletedIsCurrent) {
             renderConversationList();
             return;
           }
@@ -1348,6 +1384,11 @@
       async function loadProjectConversation(projectId, preferredConversationId = "") {
         invalidateConversationContext();
         const generation = ++conversationLoadGeneration;
+        pendingConversationLoad = Object.freeze({
+          projectId,
+          conversationId: preferredConversationId,
+          generation,
+        });
         setText("conversation-status", "正在加载服务端对话…");
         try {
           const importedConversationId = await importLegacyLocalConversation(projectId);
@@ -1367,6 +1408,12 @@
           }
           if (generation !== conversationLoadGeneration || projectId !== activeProject.project_id) return;
           const nextConversationId = String(selected.conversation_id || "");
+          pendingConversationLoad = Object.freeze({
+            projectId,
+            conversationId: nextConversationId,
+            generation,
+          });
+          if (deletedConversationKeys.has(conversationIdentityKey(projectId, nextConversationId))) return;
           if (nextConversationId !== currentConversationId) resetExternalLLMApproval();
           currentConversationId = nextConversationId;
           renderConversationList();
@@ -1443,6 +1490,8 @@
           if (generation !== conversationLoadGeneration) return;
           setText("conversation-status", `加载对话失败：${normalizeErrorForRender(err).error}`);
           render(err);
+        } finally {
+          if (pendingConversationLoad?.generation === generation) pendingConversationLoad = null;
         }
       }
 
