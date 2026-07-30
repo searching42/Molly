@@ -16,20 +16,19 @@ SCRIPTS_ROOT = REPOSITORY_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from _m3_inspection_validation import (  # noqa: E402
-    BLOCKER_REQUIREMENTS,
     CASE_ROSTER,
     CASE_FILENAME_BY_ID,
     EVIDENCE_VERSION,
     INSPECTION_VERSION,
     OWNER_REVIEW_VERSION,
-    SOURCE_PREFLIGHT_VERSION,
+    RUNTIME_SOURCE_REQUIREMENTS,
     SOURCE_CLASS_BY_CASE,
     canonical_json_bytes,
     create_private_locator,
     parse_canonical_json,
     public_privacy_violations,
+    require_runtime_source_capability,
     sha256_bytes,
-    source_contract_preflight,
 )
 from verify_m3_representative_inspection_evidence import (  # noqa: E402
     verify_evidence,
@@ -62,13 +61,12 @@ def test_evidence_contract_freezes_case_roster_and_source_classes() -> None:
         SOURCE_CLASS_BY_CASE[case] == "representative_fault_injection"
         for case in CASE_ROSTER[2:]
     )
-    assert set(BLOCKER_REQUIREMENTS) == {
+    assert set(RUNTIME_SOURCE_REQUIREMENTS) == {
         "known_hosts_propagation",
         "duplicate_dispatch",
         "multiple_equal_first_cause_candidates",
         "causal_link_not_proven",
     }
-    assert SOURCE_PREFLIGHT_VERSION == "m3_projection_source_contract_preflight.v1"
     assert OWNER_REVIEW_VERSION == "m3_representative_inspection_owner_review.v1"
 
 
@@ -115,25 +113,9 @@ def test_semantic_privacy_scan_rejects_forbidden_field_even_with_safe_value() ->
 
 
 @pytest.mark.pr_fast
-@pytest.mark.parametrize("case_id", tuple(BLOCKER_REQUIREMENTS))
-def test_blocker_preflight_binds_production_projection_contract(case_id: str) -> None:
-    result = source_contract_preflight(case_id)
-    assert result["preflight_version"] == SOURCE_PREFLIGHT_VERSION
-    assert result["preflight_status"] == "design_analysis_blocked"
-    assert result["inspected_contract"]["contract_version"] == (
-        "scientific_agent_trajectory_projection.v1"
-    )
-    assert result["inspected_contract"]["artifact_sha256"].startswith("sha256:")
-    assert result["observed_contract"]["stage_failed_reason_codes"] == ["failed"]
-    assert result["missing_capabilities"] == [
-        BLOCKER_REQUIREMENTS[case_id]["missing_reason_code"]
-    ]
-    assert result["claim_boundary"] == {
-        "inspection_response_observed": False,
-        "machine_validation_claimed": False,
-        "runtime_case_executed": False,
-        "source_contract_preflight_executed": True,
-    }
+@pytest.mark.parametrize("case_id", tuple(RUNTIME_SOURCE_REQUIREMENTS))
+def test_runtime_cases_fail_closed_if_source_capability_drifts(case_id: str) -> None:
+    assert require_runtime_source_capability(case_id) is None
 
 
 @pytest.mark.pr_fast
@@ -161,6 +143,7 @@ def test_formal_runner_does_not_import_test_helpers() -> None:
 
 
 @pytest.mark.pr_fast
+@pytest.mark.integration
 def test_single_round_uses_fresh_get_processes_and_deletes_private_bundle(
     tmp_path: Path,
 ) -> None:
@@ -198,7 +181,7 @@ def test_single_round_uses_fresh_get_processes_and_deletes_private_bundle(
 
 @pytest.mark.adversarial
 @pytest.mark.slow
-def test_full_runtime_roster_records_passes_and_explicit_contract_blockers(
+def test_full_runtime_roster_executes_and_passes_all_cases(
     tmp_path: Path,
 ) -> None:
     private = tmp_path / "private"
@@ -206,45 +189,48 @@ def test_full_runtime_roster_records_passes_and_explicit_contract_blockers(
     completed = _run_runner(private, public)
     assert completed.returncode == 0, completed.stderr
     results = {case: _case(public, case) for case in CASE_ROSTER}
-    assert {
-        case for case, record in results.items() if record["machine_validation_status"] == "passed"
-    } == {
-        "single_round_success",
-        "multi_round_success",
-        "history_truncation",
-        "stale_state",
-    }
-    blocked = {
-        case
-        for case, record in results.items()
-        if record["case_status"] == "design_analysis_blocked"
-    }
-    assert blocked == {
-        "known_hosts_propagation",
-        "duplicate_dispatch",
-        "multiple_equal_first_cause_candidates",
-        "causal_link_not_proven",
-    }
-    for case in blocked:
-        record = results[case]
-        assert record["machine_validation_status"] == "not_executed"
-        assert record["fresh_process_run_count"] == 0
-        assert record["fresh_process_bytes_equal"] is None
-        assert record["hash_seed_bytes_equal"] is None
-        assert record["privacy_scan_passed"] is None
-        assert record["blocker_evidence"] == source_contract_preflight(case)
+    assert all(
+        record["machine_validation_status"] == "passed"
+        and record["case_status"] == "executed"
+        and record["fresh_process_run_count"] == 2
+        and record["fresh_process_bytes_equal"] is True
+        and record["hash_seed_bytes_equal"] is True
+        and record["privacy_scan_passed"] is True
+        and record["blocker_evidence"] is None
+        for record in results.values()
+    )
     history = results["history_truncation"]
     assert history["inspection_http_status"] == 409
     assert history["inspection_error_code"] == "observer_publication_integrity_failure"
     assert "timeline" not in history["inspection_response"]
+    assert history["tampering_evidence"]["original_source_sha256"] != (
+        history["tampering_evidence"]["tampered_source_sha256"]
+    )
     stale = results["stale_state"]
     assert stale["inspection_response"]["summary"]["attribution_status"] == "undetermined"
     assert "non_authoritative_telemetry" in json.dumps(stale["inspection_response"])
+    transport = results["known_hosts_propagation"]
+    assert "known_hosts_verification_failed" in json.dumps(
+        transport["inspection_response"]
+    )
+    duplicate = results["duplicate_dispatch"]
+    assert any(
+        item["dispatch_kind"] == "duplicate_rejected"
+        and item["execution_started"] is False
+        for item in duplicate["runtime_source_evidence"]["dispatch_receipts"]
+    )
+    ambiguity = results["multiple_equal_first_cause_candidates"]
+    assert ambiguity["inspection_response"]["summary"]["ambiguity_reason"] == (
+        "multiple_equal_first_cause_candidates"
+    )
+    causal = results["causal_link_not_proven"]
+    assert len(causal["runtime_source_evidence"]["recovery_receipts"]) == 1
+    assert "causal_link_not_proven" in json.dumps(causal["inspection_response"])
     verified = verify_evidence(public)
     assert verified == {
         "case_count": 8,
-        "machine_evidence_complete": False,
-        "design_analysis_blocked_count": 4,
+        "machine_evidence_complete": True,
+        "design_analysis_blocked_count": 0,
         "human_review_status": "pending",
         "m3_v_eligible": False,
     }
@@ -256,8 +242,8 @@ def test_committed_evidence_is_canonical_private_safe_and_human_gated(
 ) -> None:
     result = verify_evidence(COMMITTED_EVIDENCE)
     assert result["case_count"] == 8
-    assert result["machine_evidence_complete"] is False
-    assert result["design_analysis_blocked_count"] == 4
+    assert result["machine_evidence_complete"] is True
+    assert result["design_analysis_blocked_count"] == 0
     assert result["human_review_status"] == "pending"
     assert result["m3_v_eligible"] is False
     package = b"".join(
@@ -282,7 +268,7 @@ def test_committed_evidence_is_canonical_private_safe_and_human_gated(
 
 
 @pytest.mark.integration
-def test_owner_review_record_supports_approval_but_does_not_unlock_incomplete_m3(
+def test_owner_review_record_supports_approval_only_for_complete_machine_evidence(
     tmp_path: Path,
 ) -> None:
     copied = tmp_path / "owner-reviewed"
@@ -299,7 +285,7 @@ def test_owner_review_record_supports_approval_but_does_not_unlock_incomplete_m3
             "decision": "approved",
             "reviewed_commit": reviewed_commit,
             "reviewed_evidence_manifest_sha256": sha256_bytes(manifest_bytes),
-            "notes": "Reviewed the executable and blocker-diagnosis evidence separately.",
+            "notes": "Reviewed all eight executable evidence cases.",
         }
     )
     for item in review["per_case_decisions"]:
@@ -309,8 +295,8 @@ def test_owner_review_record_supports_approval_but_does_not_unlock_incomplete_m3
     review_path.write_bytes(canonical_json_bytes(review))
     result = verify_evidence(copied)
     assert result["human_review_status"] == "approved"
-    assert result["machine_evidence_complete"] is False
-    assert result["m3_v_eligible"] is False
+    assert result["machine_evidence_complete"] is True
+    assert result["m3_v_eligible"] is True
 
     review["reviewed_commit"] = "0" * 40
     review_path.write_bytes(canonical_json_bytes(review))

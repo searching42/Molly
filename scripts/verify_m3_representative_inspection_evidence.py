@@ -14,12 +14,12 @@ from typing import Any, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _m3_inspection_validation import (  # noqa: E402
-    BLOCKER_REQUIREMENTS,
     CASE_FILENAME_BY_ID,
     CASE_ROSTER,
     EVIDENCE_VERSION,
     INSPECTION_VERSION,
     OWNER_REVIEW_VERSION,
+    SOURCE_CONTRACTS,
     SOURCE_CLASSES,
     _pending_review_checks,
     canonical_json_bytes,
@@ -27,7 +27,6 @@ from _m3_inspection_validation import (  # noqa: E402
     public_privacy_violations,
     runner_code_binding,
     sha256_bytes,
-    source_contract_preflight,
 )
 
 
@@ -74,11 +73,7 @@ def verify_evidence(
         or manifest.get("inspection_version") != INSPECTION_VERSION
     ):
         raise ValueError("evidence contract version is invalid")
-    if manifest.get("source_contracts") != {
-        "trajectory": "scientific_agent_trajectory_projection.v1",
-        "audit": "scientific_agent_trajectory_audit_metrics.v1",
-        "attribution": "scientific_agent_failure_attribution.v1",
-    }:
+    if manifest.get("source_contracts") != SOURCE_CONTRACTS:
         raise ValueError("evidence source contracts are invalid")
     runner_commit = manifest.get("runner_commit")
     if expected_runner_commit is not None and runner_commit != expected_runner_commit:
@@ -136,7 +131,7 @@ def verify_evidence(
         "evidence_only": True,
         "runtime_case_evidence_included": True,
         "all_cases_runtime_executed": complete,
-        "design_analysis_blockers_included": not complete,
+        "design_analysis_blockers_included": False,
         "observer_only": True,
         "scientific_validation_claimed": False,
         "benchmark_result_claimed": False,
@@ -168,27 +163,29 @@ def _verify_case_record(record: dict[str, Any], item: dict[str, Any]) -> None:
     case_id = str(record["case_id"])
     if record.get("machine_validation_status") != item.get("machine_validation_status"):
         raise ValueError("evidence case status mismatch")
-    if case_id in BLOCKER_REQUIREMENTS:
-        if record.get("case_status") != "design_analysis_blocked":
-            raise ValueError("source-contract blocker status is invalid")
-        if record.get("machine_validation_status") != "not_executed":
-            raise ValueError("source-contract blocker cannot claim machine validation")
-        nullable = (
-            "fresh_process_bytes_equal",
-            "hash_seed_bytes_equal",
-            "fresh_process_distinct_pids",
-            "privacy_scan_passed",
-            "inspection_http_status",
-            "inspection_response",
-        )
-        if any(record.get(key) is not None for key in nullable):
-            raise ValueError("non-executed comparison fields must be null")
-        expected = source_contract_preflight(case_id)
-        if record.get("blocker_evidence") != expected:
-            raise ValueError("source-contract blocker evidence mismatch")
-        return
     if record.get("case_status") != "executed" or record.get("blocker_evidence") is not None:
         raise ValueError("executed evidence case status is invalid")
+    if record.get("machine_validation_status") not in {"passed", "failed"}:
+        raise ValueError("executed evidence machine status is invalid")
+    source_evidence = record.get("runtime_source_evidence")
+    if not isinstance(source_evidence, dict) or set(source_evidence) != {
+        "dispatch_receipts",
+        "recovery_receipts",
+    }:
+        raise ValueError("runtime source evidence summary is invalid")
+    tampering = record.get("tampering_evidence")
+    if case_id == "history_truncation":
+        if (
+            not isinstance(tampering, dict)
+            or tampering.get("tampering_kind")
+            != "required_event_removed_and_outer_manifest_resigned"
+            or tampering.get("partial_timeline_returned") is not False
+            or tampering.get("original_source_sha256")
+            == tampering.get("tampered_source_sha256")
+        ):
+            raise ValueError("history tampering evidence is invalid")
+    elif tampering is not None:
+        raise ValueError("unexpected tampering evidence is invalid")
     response = record.get("inspection_response")
     if response is not None and sha256_bytes(canonical_json_bytes(response)) != record.get(
         "inspection_response_sha256"
@@ -250,9 +247,7 @@ def _verify_review_item(item: Any, *, pending: bool) -> None:
     if not isinstance(item, dict):
         raise ValueError("owner review case entry is invalid")
     case_id = str(item.get("case_id") or "")
-    expected_kind = (
-        "blocker_diagnosis" if case_id in BLOCKER_REQUIREMENTS else "executable_case"
-    )
+    expected_kind = "executable_case"
     if item.get("review_kind") != expected_kind:
         raise ValueError("owner review kind is invalid")
     expected_checks = set(_pending_review_checks(case_id))

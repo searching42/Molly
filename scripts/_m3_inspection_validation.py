@@ -8,7 +8,6 @@ of Molly's scientific or observer contracts.
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import os
 import re
@@ -24,6 +23,7 @@ from flask import Flask
 _REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPOSITORY_ROOT / "src"))
 
+from ai4s_agent import adapters
 from ai4s_agent.domains.oled_categorical_dataset_execution import (
     OledCategoricalDatasetExecutionArtifact,
     OledCategoricalDatasetExecutionStatus,
@@ -71,7 +71,20 @@ from ai4s_agent.oled_scientific_agent_trajectory_failure_attribution import (
 from ai4s_agent.oled_scientific_agent_trajectory_projection import (
     publish_oled_scientific_agent_trajectory_projection,
 )
-from ai4s_agent import oled_scientific_agent_trajectory_projection as projection_module
+from ai4s_agent.oled_scientific_agent_source_evidence import (
+    CAUSAL_LINK_VERSION,
+    DISPATCH_RECEIPT_VERSION,
+    DISPATCH_KINDS,
+    FAILURE_EVIDENCE_VERSION,
+    FAILURE_REASON_CODES,
+    RECOVERY_RECEIPT_VERSION,
+    ScientificAgentTypedFailure,
+    dispatch_authority_roster,
+    publish_dispatch_receipt,
+    publish_recovery_receipt,
+    read_dispatch_receipts,
+    read_recovery_receipts,
+)
 from ai4s_agent.routes.oled_bounded_sessions import (
     register_oled_bounded_session_routes,
 )
@@ -89,7 +102,6 @@ except ImportError:  # pragma: no cover - the dev/CI environment includes RDKit.
 EVIDENCE_VERSION = "m3_representative_inspection_validation.v1"
 INSPECTION_VERSION = "scientific_agent_trajectory_inspection.v1"
 CASE_CONTRACT_VERSION = "m3_representative_inspection_case.v1"
-SOURCE_PREFLIGHT_VERSION = "m3_projection_source_contract_preflight.v1"
 OWNER_REVIEW_VERSION = "m3_representative_inspection_owner_review.v1"
 RUNNER_BINDING_VERSION = "m3_representative_inspection_runner_binding.v1"
 CASE_ROSTER = (
@@ -115,6 +127,15 @@ SOURCE_CLASSES = frozenset(
         "representative_fault_injection",
     }
 )
+SOURCE_CONTRACTS = {
+    "trajectory": "scientific_agent_trajectory_projection.v1",
+    "audit": "scientific_agent_trajectory_audit_metrics.v1",
+    "attribution": "scientific_agent_failure_attribution.v1",
+    "failure_source_evidence": FAILURE_EVIDENCE_VERSION,
+    "dispatch_receipt": DISPATCH_RECEIPT_VERSION,
+    "recovery_receipt": RECOVERY_RECEIPT_VERSION,
+    "causal_link": CAUSAL_LINK_VERSION,
+}
 SOURCE_CLASS_BY_CASE = {
     "single_round_success": "representative_local_runtime",
     "multi_round_success": "representative_local_runtime",
@@ -125,38 +146,30 @@ SOURCE_CLASS_BY_CASE = {
     "multiple_equal_first_cause_candidates": "representative_fault_injection",
     "causal_link_not_proven": "representative_fault_injection",
 }
-BLOCKER_REQUIREMENTS = {
+RUNTIME_SOURCE_REQUIREMENTS = {
     "known_hosts_propagation": {
-        "required_event_kind": "stage_failed",
-        "required_reason_codes": ["known_hosts_verification_failed"],
-        "required_outcome_fields": [],
-        "required_distinct_dispatch_count": None,
-        "required_family_count": 1,
-        "missing_reason_code": "projection_v1_missing_transport_reason_code",
+        "reason_codes": frozenset({"known_hosts_verification_failed"}),
+        "dispatch_kinds": frozenset(),
+        "causal_link_version": None,
     },
     "duplicate_dispatch": {
-        "required_event_kind": "task_dispatched",
-        "required_reason_codes": ["duplicate_dispatch_detected"],
-        "required_outcome_fields": [],
-        "required_distinct_dispatch_count": 2,
-        "required_family_count": 1,
-        "missing_reason_code": "projection_v1_missing_distinct_duplicate_dispatch_proof",
+        "reason_codes": frozenset({"duplicate_dispatch_detected"}),
+        "dispatch_kinds": frozenset({"initial", "duplicate_rejected"}),
+        "causal_link_version": None,
     },
     "multiple_equal_first_cause_candidates": {
-        "required_event_kind": "stage_failed",
-        "required_reason_codes": ["gate_snapshot_mismatch", "ssh_connection_failed"],
-        "required_outcome_fields": [],
-        "required_distinct_dispatch_count": None,
-        "required_family_count": 2,
-        "missing_reason_code": "projection_v1_missing_multiple_failure_family_reasons",
+        "reason_codes": frozenset(
+            {"gate_snapshot_mismatch", "ssh_connection_failed"}
+        ),
+        "dispatch_kinds": frozenset(),
+        "causal_link_version": None,
     },
     "causal_link_not_proven": {
-        "required_event_kind": "stage_failed",
-        "required_reason_codes": ["tool_runtime_failure"],
-        "required_outcome_fields": ["causal_link"],
-        "required_distinct_dispatch_count": None,
-        "required_family_count": 1,
-        "missing_reason_code": "projection_v1_missing_recovered_failure_causal_link",
+        "reason_codes": frozenset({"duplicate_dispatch_detected"}),
+        "dispatch_kinds": frozenset(
+            {"initial", "duplicate_rejected", "recovery_adoption"}
+        ),
+        "causal_link_version": "scientific_agent_failure_causal_link.v1",
     },
 }
 
@@ -259,6 +272,24 @@ def parse_canonical_json(payload: bytes) -> Any:
     return value
 
 
+def parse_unique_json(payload: bytes) -> Any:
+    def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    return json.loads(
+        payload.decode("utf-8"),
+        object_pairs_hook=unique,
+        parse_constant=lambda token: (_ for _ in ()).throw(
+            ValueError(f"invalid JSON constant: {token}")
+        ),
+    )
+
+
 def sha256_bytes(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
@@ -344,103 +375,19 @@ def _scan_public_structure(value: Any, violations: list[str]) -> None:
         violations.append("hostname_value")
 
 
-def source_contract_preflight(case_id: str) -> dict[str, Any]:
-    """Inspect the shipped PR-BD v1 contract before classifying a blocker.
+def require_runtime_source_capability(case_id: str) -> None:
+    """Fail closed if a PR-BI runtime case outlives its production contract."""
 
-    This is intentionally a source-contract preflight, not runtime evidence.
-    It invokes the production event constructor and binds the conclusion to the
-    exact production module and inspected-symbol bytes.
-    """
-
-    requirement = BLOCKER_REQUIREMENTS.get(case_id)
+    requirement = RUNTIME_SOURCE_REQUIREMENTS.get(case_id)
     if requirement is None:
-        raise ValueError("case does not require source-contract preflight")
-    module_path = Path(str(projection_module.__file__ or ""))
-    module_bytes = module_path.read_bytes()
-    project_children_source = inspect.getsource(projection_module._project_children)
-    event_source = inspect.getsource(projection_module._event)
-    sample_source = {
-        "logical_role": "child_stage",
-        "source_artifact_id": "preflight-child",
-        "source_publication_id": None,
-        "sha256": "sha256:" + "0" * 64,
-        "manifest_sha256": None,
-    }
-    failed = projection_module._event(
-        kind="stage_failed",
-        revision=1,
-        child={"run_id": "preflight-child", "task_id": "preflight-task"},
-        source=sample_source,
-        outcome={"child_status": "failed"},
-        reason_codes=["failed"],
-    )
-    dispatched = projection_module._event(
-        kind="task_dispatched",
-        revision=1,
-        child={"run_id": "preflight-child", "task_id": "preflight-task"},
-        source=sample_source,
-        outcome={"child_status": "failed"},
-        reason_codes=[],
-    )
-    status_only = 'reason_codes=[str(child["status"])]' in project_children_source
-    one_dispatch_per_new_child = "if previous is None:" in project_children_source
-    observed = {
-        "event_fields": sorted(failed),
-        "stage_failed_reason_codes": list(failed["reason_codes"]),
-        "stage_failed_outcome_fields": sorted(failed["outcome"]),
-        "task_dispatched_reason_codes": list(dispatched["reason_codes"]),
-        "task_dispatched_outcome_fields": sorted(dispatched["outcome"]),
-        "stage_failure_reason_source": "child.status" if status_only else "unrecognized",
-        "dispatch_cardinality": (
-            "one_per_new_child_label"
-            if one_dispatch_per_new_child
-            else "unrecognized"
-        ),
-        "persisted_causal_link_versions": [],
-        "maximum_explicit_failure_family_count": 1 if status_only else None,
-    }
-    missing: list[str] = []
-    required_reasons = set(requirement["required_reason_codes"])
-    observed_reasons = set(failed["reason_codes"]) | set(dispatched["reason_codes"])
-    if not required_reasons.issubset(observed_reasons):
-        missing.append(str(requirement["missing_reason_code"]))
-    if not set(requirement["required_outcome_fields"]).issubset(failed["outcome"]):
-        if str(requirement["missing_reason_code"]) not in missing:
-            missing.append(str(requirement["missing_reason_code"]))
-    required_dispatches = requirement["required_distinct_dispatch_count"]
-    if required_dispatches is not None and (
-        not one_dispatch_per_new_child or int(required_dispatches) > 1
-    ):
-        if str(requirement["missing_reason_code"]) not in missing:
-            missing.append(str(requirement["missing_reason_code"]))
-    required_families = int(requirement["required_family_count"])
-    if status_only and required_families > 1:
-        if str(requirement["missing_reason_code"]) not in missing:
-            missing.append(str(requirement["missing_reason_code"]))
-    return {
-        "preflight_version": SOURCE_PREFLIGHT_VERSION,
-        "preflight_status": (
-            "design_analysis_blocked" if missing else "representable"
-        ),
-        "inspected_contract": {
-            "artifact_name": "oled_scientific_agent_trajectory_projection.py",
-            "contract_version": str(projection_module._PROJECTION_VERSION),
-            "artifact_sha256": sha256_bytes(module_bytes),
-            "inspected_symbols": ["_event", "_project_children"],
-            "inspected_symbols_sha256": sha256_bytes(
-                (event_source + "\n" + project_children_source).encode("utf-8")
-            ),
-        },
-        "required_evidence": dict(requirement),
-        "observed_contract": observed,
-        "missing_capabilities": sorted(missing),
-        "claim_boundary": {
-            "runtime_case_executed": False,
-            "inspection_response_observed": False,
-            "machine_validation_claimed": False,
-            "source_contract_preflight_executed": True,
-        },
-    }
+        return
+    if not requirement["reason_codes"].issubset(FAILURE_REASON_CODES):
+        raise RuntimeError("required failure source reason is unavailable")
+    if not requirement["dispatch_kinds"].issubset(DISPATCH_KINDS):
+        raise RuntimeError("required dispatch source kind is unavailable")
+    expected_link = requirement["causal_link_version"]
+    if expected_link is not None and expected_link != CAUSAL_LINK_VERSION:
+        raise RuntimeError("required causal-link source version is unavailable")
 
 
 def runner_code_binding(commit: str) -> dict[str, Any]:
@@ -486,11 +433,7 @@ def pending_owner_review(manifest_sha256: str) -> dict[str, Any]:
         "per_case_decisions": [
             {
                 "case_id": case_id,
-                "review_kind": (
-                    "blocker_diagnosis"
-                    if case_id in BLOCKER_REQUIREMENTS
-                    else "executable_case"
-                ),
+                "review_kind": "executable_case",
                 "decision": None,
                 "checks": _pending_review_checks(case_id),
                 "notes": None,
@@ -502,27 +445,17 @@ def pending_owner_review(manifest_sha256: str) -> dict[str, Any]:
 
 
 def _pending_review_checks(case_id: str) -> dict[str, None]:
+    if case_id not in CASE_ROSTER:
+        raise ValueError("owner-review case is unknown")
     names = (
-        (
-            "source_class_accurate",
-            "required_evidence_correct",
-            "inspected_contract_binding_correct",
-            "observed_contract_fields_correct",
-            "missing_capability_correct",
-            "no_runtime_claim",
-            "privacy_passed",
-        )
-        if case_id in BLOCKER_REQUIREMENTS
-        else (
-            "source_class_accurate",
-            "expected_contract_matches",
-            "terminal_source_consistent",
-            "causal_semantics_supported",
-            "source_references_persisted",
-            "digest_consistent",
-            "privacy_passed",
-            "observer_only",
-        )
+        "source_class_accurate",
+        "expected_contract_matches",
+        "terminal_source_consistent",
+        "causal_semantics_supported",
+        "source_references_persisted",
+        "digest_consistent",
+        "privacy_passed",
+        "observer_only",
     )
     return {name: None for name in names}
 
@@ -546,8 +479,9 @@ def create_private_locator(path: Path, payload: dict[str, Any]) -> None:
 
 
 def build_source_chain(root: Path, case_id: str) -> SourceChain:
-    if case_id not in {"single_round_success", "multi_round_success", "history_truncation", "stale_state"}:
-        raise ValueError("case has no exact-replayable v1 source construction")
+    if case_id not in CASE_ROSTER:
+        raise ValueError("case has no exact-replayable source construction")
+    require_runtime_source_capability(case_id)
     if root.exists():
         raise FileExistsError("private case source already exists")
     root.mkdir(parents=True)
@@ -556,29 +490,58 @@ def build_source_chain(root: Path, case_id: str) -> SourceChain:
     storage = ProjectStorage(workspace)
     multi = case_id == "multi_round_success"
     project_id = "m3-evidence-" + case_id.replace("_", "-")
-    spec = _session_spec(root / "inputs", target_top_n=4 if multi else 1)
-    current = create_oled_bounded_discovery_session(
-        storage=storage,
-        project_id=project_id,
-        session_spec=spec,
-        created_at="2026-07-29T00:00:00Z",
-    )
-    current = _approve(storage, project_id, _advance(storage, project_id, current))
-    current = _approve(storage, project_id, _advance(storage, project_id, current))
-    if multi:
-        current = _approve(storage, project_id, _advance(storage, project_id, current))
-        current = _advance(storage, project_id, current)
-        current = _advance(storage, project_id, current)
-        current = _advance(storage, project_id, current)
-        current = _approve(storage, project_id, _advance(storage, project_id, current))
-        current = _advance(storage, project_id, current)
-        current = _advance(storage, project_id, current)
-        current = _advance(storage, project_id, current)
-        current = _advance(storage, project_id, current)
+    failure_reasons = {
+        "known_hosts_propagation": ("known_hosts_verification_failed",),
+        "multiple_equal_first_cause_candidates": (
+            "ssh_connection_failed",
+            "gate_snapshot_mismatch",
+        ),
+    }.get(case_id)
+    target_top_n = 10 if case_id == "causal_link_not_proven" else (4 if multi else 1)
+    spec = _session_spec(root / "inputs", target_top_n=target_top_n)
+    if failure_reasons is not None:
+        current = _typed_failure_session(
+            storage=storage,
+            project_id=project_id,
+            spec=spec,
+            reason_codes=failure_reasons,
+        )
     else:
-        current = _advance(storage, project_id, current)
-    if current.status != COMPLETED_TOP_N:
-        raise RuntimeError("representative Session did not reach COMPLETED_TOP_N")
+        current = create_oled_bounded_discovery_session(
+            storage=storage,
+            project_id=project_id,
+            session_spec=spec,
+            created_at="2026-07-29T00:00:00Z",
+        )
+        current = _drive_session(storage, project_id, current)
+
+    expected_status = (
+        "FAILED"
+        if failure_reasons is not None
+        else (
+            "STOPPED_BOUNDED_NO_SOLUTION"
+            if case_id == "causal_link_not_proven"
+            else COMPLETED_TOP_N
+        )
+    )
+    if current.status != expected_status:
+        raise RuntimeError("representative Session terminal status is unexpected")
+
+    if case_id in {"duplicate_dispatch", "causal_link_not_proven"}:
+        child, run_dir, stage_path = _publish_duplicate_rejection(
+            storage=storage,
+            project_id=project_id,
+            current=current,
+        )
+        if case_id == "causal_link_not_proven":
+            _publish_recovery_adoption(
+                actions_root=actions_root,
+                project_id=project_id,
+                current=current,
+                child=child,
+                run_dir=run_dir,
+                stage_path=stage_path,
+            )
 
     if case_id == "stale_state":
         _write_stale_action_pair(
@@ -624,6 +587,140 @@ def build_source_chain(root: Path, case_id: str) -> SourceChain:
     if case_id == "history_truncation":
         _tamper_history_and_resign(chain)
     return chain
+
+
+def _drive_session(storage: ProjectStorage, project_id: str, current: Any) -> Any:
+    terminal = {COMPLETED_TOP_N, "STOPPED_BOUNDED_NO_SOLUTION", "FAILED"}
+    for _ in range(64):
+        if current.status in terminal:
+            return current
+        current = (
+            _approve(storage, project_id, current)
+            if current.status == "WAITING_USER"
+            else _advance(storage, project_id, current)
+        )
+    raise RuntimeError("representative Session did not terminate within the v1 bound")
+
+
+def _typed_failure_session(
+    *,
+    storage: ProjectStorage,
+    project_id: str,
+    spec: dict[str, Any],
+    reason_codes: tuple[str, ...],
+) -> Any:
+    original = adapters.execute_oled_registry_candidate_screening_adapter
+
+    def fail_with_typed_source(*_: Any, **__: Any) -> dict[str, Any]:
+        raise ScientificAgentTypedFailure(*reason_codes)
+
+    adapters.execute_oled_registry_candidate_screening_adapter = fail_with_typed_source
+    try:
+        current = create_oled_bounded_discovery_session(
+            storage=storage,
+            project_id=project_id,
+            session_spec=spec,
+            created_at="2026-07-29T00:00:00Z",
+        )
+        return _drive_session(storage, project_id, current)
+    finally:
+        adapters.execute_oled_registry_candidate_screening_adapter = original
+
+
+def _terminal_state(current: Any) -> dict[str, Any]:
+    payload = parse_unique_json(
+        current.session_dir.joinpath("session_state.json").read_bytes()
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("children"), list):
+        raise RuntimeError("representative Session source is invalid")
+    return payload
+
+
+def _publish_duplicate_rejection(
+    *, storage: ProjectStorage, project_id: str, current: Any
+) -> tuple[dict[str, Any], Path, Path]:
+    terminal = _terminal_state(current)
+    child = terminal["children"][0]
+    run_dir = storage.run_dir(project_id, str(child["run_id"]))
+    stage_path = run_dir / "stage.json"
+    publish_dispatch_receipt(
+        run_dir=run_dir,
+        child_run_id=str(child["run_id"]),
+        task_id=str(child["task_id"]),
+        dispatch_kind="duplicate_rejected",
+        request_or_stage_digest=sha256_bytes(stage_path.read_bytes()),
+        attempt_id="2" * 32,
+    )
+    stage = parse_unique_json(stage_path.read_bytes())
+    if not isinstance(stage, dict):
+        raise RuntimeError("representative child StageState is invalid")
+    stage.setdefault("details", {})["dispatch_authority_roster"] = (
+        dispatch_authority_roster(run_dir=run_dir)
+    )
+    stage_path.write_bytes(_json_bytes(stage))
+    return child, run_dir, stage_path
+
+
+def _publish_recovery_adoption(
+    *,
+    actions_root: Path,
+    project_id: str,
+    current: Any,
+    child: dict[str, Any],
+    run_dir: Path,
+    stage_path: Path,
+) -> None:
+    completed_revision = _child_completion_revision(
+        current=current,
+        child_run_id=str(child["run_id"]),
+    )
+    action_dir, request = _write_action_pair(
+        actions_root,
+        project_id=project_id,
+        session_id=current.session_id,
+        expected_revision=completed_revision - 1,
+        completed_revision=completed_revision,
+        status="RECOVERED",
+    )
+    receipt = publish_recovery_receipt(
+        action_dir=action_dir,
+        action_id=str(request["action_id"]),
+        request_digest=str(request["request_digest"]),
+        recovered_child_run_id=str(child["run_id"]),
+        recovered_stage_sha256=sha256_bytes(stage_path.read_bytes()),
+        source_dispatch_receipt_ids=[
+            str(item["receipt_id"])
+            for item in dispatch_authority_roster(run_dir=run_dir)
+        ],
+        expected_revision=int(request["expected_revision"]),
+        completed_revision=completed_revision,
+    )
+    publish_dispatch_receipt(
+        run_dir=run_dir,
+        child_run_id=str(child["run_id"]),
+        task_id=str(child["task_id"]),
+        dispatch_kind="recovery_adoption",
+        request_or_stage_digest=receipt.sha256,
+        attempt_id="3" * 32,
+    )
+
+
+def _child_completion_revision(*, current: Any, child_run_id: str) -> int:
+    for revision in range(int(current.revision) + 1):
+        state = parse_unique_json(
+            current.session_dir.joinpath(f"state_{revision:06d}.json").read_bytes()
+        )
+        if not isinstance(state, dict):
+            raise RuntimeError("representative Session revision is invalid")
+        if any(
+            child.get("run_id") == child_run_id and child.get("status") == "succeeded"
+            for child in state.get("children", [])
+            if isinstance(child, dict)
+        ):
+            if revision < 1:
+                raise RuntimeError("representative child completion revision is invalid")
+            return revision
+    raise RuntimeError("representative recovered child is not complete")
 
 
 def call_inspection_route(locator: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -687,6 +784,82 @@ def source_artifact_digests(chain: SourceChain) -> dict[str, str]:
         ),
     }
     return {name: tree_snapshot([path])["sha256"] for name, path in roots.items()}
+
+
+def runtime_source_evidence(chain: SourceChain) -> dict[str, Any]:
+    """Return a privacy-safe receipt summary from exact-validated source files."""
+
+    session_dir = (
+        chain.workspace
+        / "projects"
+        / chain.project_id
+        / "bounded-discovery-sessions"
+        / chain.session_id
+    )
+    terminal = parse_unique_json(
+        session_dir.joinpath("session_state.json").read_bytes()
+    )
+    if not isinstance(terminal, dict) or not isinstance(terminal.get("children"), list):
+        raise RuntimeError("representative Session source is invalid")
+    dispatches: list[dict[str, Any]] = []
+    for child in terminal["children"]:
+        run_dir = (
+            chain.workspace
+            / "projects"
+            / chain.project_id
+            / "runs"
+            / str(child["run_id"])
+        )
+        for item in read_dispatch_receipts(run_dir=run_dir, allow_missing=True):
+            dispatches.append(
+                {
+                    "receipt_id": item.payload["receipt_id"],
+                    "receipt_sha256": item.sha256,
+                    "authority_sha256": item.authority_sha256,
+                    "child_run_id": item.payload["child_run_id"],
+                    "task_id": item.payload["task_id"],
+                    "dispatch_ordinal": item.payload["dispatch_ordinal"],
+                    "dispatch_kind": item.payload["dispatch_kind"],
+                    "execution_started": item.payload["execution_started"],
+                    "reason_codes": item.payload["reason_codes"],
+                }
+            )
+    dispatches.sort(
+        key=lambda item: (
+            str(item["child_run_id"]),
+            int(item["dispatch_ordinal"]),
+            str(item["receipt_id"]),
+        )
+    )
+    recoveries: list[dict[str, Any]] = []
+    project_actions = chain.actions_root / chain.project_id
+    if project_actions.is_dir():
+        for action_dir in sorted(project_actions.iterdir(), key=lambda path: path.name):
+            if not action_dir.is_dir() or action_dir.is_symlink():
+                continue
+            for item in read_recovery_receipts(
+                action_dir=action_dir, allow_missing=True
+            ):
+                recoveries.append(
+                    {
+                        "receipt_id": item.payload["receipt_id"],
+                        "receipt_sha256": item.sha256,
+                        "recovery_kind": item.payload["recovery_kind"],
+                        "recovered_child_run_id": item.payload[
+                            "recovered_child_run_id"
+                        ],
+                        "source_dispatch_receipt_ids": item.payload[
+                            "source_dispatch_receipt_ids"
+                        ],
+                        "expected_revision": item.payload["expected_revision"],
+                        "completed_revision": item.payload["completed_revision"],
+                    }
+                )
+    recoveries.sort(key=lambda item: str(item["receipt_id"]))
+    return {
+        "dispatch_receipts": dispatches,
+        "recovery_receipts": recoveries,
+    }
 
 
 def _required_locator(locator: dict[str, Any], key: str) -> str:
@@ -895,12 +1068,31 @@ def _candidate_csv(path: Path, candidate_id: str, smiles: str) -> Path:
 
 
 def _write_stale_action_pair(actions_root: Path, *, project_id: str, session_id: str) -> None:
+    _write_action_pair(
+        actions_root,
+        project_id=project_id,
+        session_id=session_id,
+        expected_revision=0,
+        completed_revision=None,
+        status="RUNNING",
+    )
+
+
+def _write_action_pair(
+    actions_root: Path,
+    *,
+    project_id: str,
+    session_id: str,
+    expected_revision: int,
+    completed_revision: int | None,
+    status: str,
+) -> tuple[Path, dict[str, Any]]:
     identity: dict[str, Any] = {
         "request_version": "oled_bounded_discovery_session_action_request.v1",
         "project_id": project_id,
         "session_id": session_id,
         "action": "advance",
-        "expected_revision": 0,
+        "expected_revision": expected_revision,
         "actor": "",
         "note": "",
         "created_at": "2026-07-29T00:03:00Z",
@@ -913,17 +1105,18 @@ def _write_stale_action_pair(actions_root: Path, *, project_id: str, session_id:
         "state_version": "oled_bounded_discovery_session_action_state.v2",
         "action_id": action_id,
         "project_id": project_id,
-        "status": "RUNNING",
+        "status": status,
         "updated_at": "2026-07-29T00:03:01Z",
         "instance_id": "expired-evidence-worker",
         "request_digest": request["request_digest"],
-        "completed_revision": None,
+        "completed_revision": completed_revision,
         "error": None,
     }
     action_dir = actions_root / project_id / action_id
     action_dir.mkdir(parents=True)
     (action_dir / "request.json").write_bytes(_json_bytes(request))
     (action_dir / "action.json").write_bytes(_json_bytes(state))
+    return action_dir, request
 
 
 def _tamper_history_and_resign(chain: SourceChain) -> None:

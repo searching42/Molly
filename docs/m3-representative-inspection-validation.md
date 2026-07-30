@@ -10,8 +10,7 @@ project-scoped `scientific_agent_trajectory_inspection.v1` GET route from two
 new Python interpreters.
 
 The package is evidence-only: it contains trajectory/audit runtime evidence for
-the executable cases and source-contract design analysis for the non-executable
-cases. It is not experimental
+all eight frozen cases. It is not experimental
 validation, high-fidelity-computation validation, remote-backend evidence,
 attribution-accuracy benchmark evidence, or an M4 result. Representative fault
 injection is never described as captured real runtime.
@@ -37,14 +36,11 @@ The frozen v1 roster is:
 | `multiple_equal_first_cause_candidates` | `representative_fault_injection` | deterministic ambiguity with no primary cause |
 | `causal_link_not_proven` | `representative_fault_injection` | independent later stop remains undetermined without a persisted link |
 
-Every case remains in the manifest even when the current source contract cannot
-represent its required evidence. Such a case is `design_analysis_blocked`, never
-silently omitted, downgraded, or declared passed from a test-only projection.
-That status comes from a deterministic preflight over the shipped PR-BD module:
-the evidence records the contract version, production module SHA-256, inspected
-symbol SHA-256, required evidence, observed event fields, and exact missing
-capability. It is machine-reproducible design analysis, not an executed runtime
-case or successful machine validation.
+Every case must execute. The runner fails closed if the typed reason, dispatch
+receipt, recovery receipt, or causal-link source contract required by a case is
+unavailable; a missing production capability is not a valid evidence outcome.
+The four cases previously blocked by PR-BD v1 now consume PR-BJ's authoritative
+source evidence and still traverse the same PR-BD → PR-BF → PR-BG → PR-BH chain.
 
 ## Production and fresh-process protocol
 
@@ -106,33 +102,33 @@ Machine evidence and owner review are separate states. The generated checklist
 is intentionally blank, `human_review_status` is `pending`, and Codex cannot
 self-approve. `owner_review.json` freezes reviewer, review date, decision,
 reviewed commit, evidence-manifest SHA-256, per-case decisions, typed checks,
-and notes. Executed cases and design-blocker diagnoses have different check
-sets. The verifier accepts `approved`, `changes_requested`, or `inconclusive`,
+and notes. Every case uses the executable-case review checklist. The verifier
+accepts `approved`, `changes_requested`, or `inconclusive`,
 binds the reviewed commit to the committed manifest bytes, and requires every
 check to be true before an overall approval is valid. A repository-owner
 approval must exist before any M3 task or gate may change from `I/T/—` to
 `I/T/V`.
 
 The verifier rejects a human approval or M3 V claim that lacks a matching owner
-review record. While any machine case is failed or not executed, or owner review is
-pending, PR-BI remains Draft, M3 remains `I/T/—`, and M4 stays locked.
+review record. While any machine case is failed, or owner review is pending,
+PR-BI remains Draft, M3 remains `I/T/—`, and M4 stays locked.
 
-## Current v1 evidence gap
+## Authoritative source evidence used by the fault cases
 
-The exact-replayed PR-BD projection currently emits a failed child as only
-`failed` or `integrity_failed`. It does not persist the transport reason,
-distinct duplicate-dispatch proof, multiple family reasons at one revision, or
-a recovered-failure causal link. Consequently those four requested semantics
-cannot be produced through the PR-BH GET route without changing PR-BD–PR-BH,
-weakening exact replay, or substituting test-only bytes.
+PR-BJ added versioned, immutable source facts without changing the v1 observer
+envelopes. The runner uses typed `known_hosts_verification_failed` evidence for
+the transport case; two authority-bound receipts with the second explicitly
+`duplicate_rejected` for the duplicate case; two typed reason codes at the same
+failure revision for deterministic ambiguity; and an exact-bound recovery
+receipt plus a later independent bounded stop for the no-causal-link case.
 
-PR-BI records these cases as source-bound `design_analysis_blocked` preflights
-with all non-executed comparison results represented as `null`. It does not
-claim runtime validation or privacy-scan success for them, and it does not
-modify the projection or attribution contracts merely to manufacture
-acceptance evidence.
-Resolving that source-evidence gap requires repository-owner scope direction in
-a separate contract PR before PR-BI can become machine-complete.
+The committed receipt summary contains only opaque IDs, semantic enums, and
+digests. A `duplicate_rejected` receipt proves a rejected second dispatch at the
+execution boundary; it does not claim duplicate scientific computation. A
+recovery receipt proves adoption of an already completed child; it does not
+create an automatic retry or causal link. The later terminal symptom remains
+`undetermined / causal_link_not_proven` unless source bytes persist an explicit
+link.
 
 ## Rollback
 

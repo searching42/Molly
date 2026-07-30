@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from _m3_inspection_validation import (
-    BLOCKER_REQUIREMENTS,
     CASE_CONTRACT_VERSION,
     CASE_FILENAME_BY_ID,
     CASE_ROSTER,
     EVIDENCE_VERSION,
     INSPECTION_VERSION,
     SOURCE_CLASS_BY_CASE,
+    SOURCE_CONTRACTS,
     build_source_chain,
     call_inspection_route,
     canonical_json_bytes,
@@ -29,8 +29,8 @@ from _m3_inspection_validation import (
     pending_owner_review,
     require_runner_checkout_binding,
     runner_code_binding,
+    runtime_source_evidence,
     sha256_bytes,
-    source_contract_preflight,
     source_artifact_digests,
     tree_snapshot,
     write_canonical_json,
@@ -79,7 +79,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         if not args.keep_private_source_bundle:
             _remove_private_tree(args.output)
-    status = "complete" if all(item["machine_validation_status"] == "passed" for item in records) else "incomplete"
+    status = "complete" if _machine_complete(records) else "incomplete"
     print(f"machine_evidence={status}; human_review=pending; cases={len(records)}")
     return 0
 
@@ -101,52 +101,24 @@ def _run_case(private_root: Path, case_id: str) -> dict[str, Any]:
         "case_contract_version": CASE_CONTRACT_VERSION,
         "human_review_status": "pending",
     }
-    if case_id in BLOCKER_REQUIREMENTS:
-        blocker_evidence = source_contract_preflight(case_id)
-        if blocker_evidence["preflight_status"] != "design_analysis_blocked":
-            raise RuntimeError("source-contract blocker preflight no longer blocks")
-        return {
-            **base,
-            "expected_result": _expected_result(case_id),
-            "observed_result": {
-                "status": "design_analysis_blocked",
-                "reason_codes": blocker_evidence["missing_capabilities"],
-            },
-            "blocker_evidence": blocker_evidence,
-            "project_id": None,
-            "session_id": None,
-            "trajectory_id": None,
-            "trajectory_publication_id": None,
-            "audit_id": None,
-            "audit_publication_id": None,
-            "attribution_id": None,
-            "attribution_publication_id": None,
-            "source_artifact_digests": {},
-            "inspection_http_status": None,
-            "inspection_error_code": None,
-            "inspection_response": None,
-            "inspection_response_sha256": None,
-            "fresh_process_run_count": 0,
-            "fresh_process_bytes_equal": None,
-            "hash_seed_bytes_equal": None,
-            "fresh_process_distinct_pids": None,
-            "workspace_before_sha256": None,
-            "workspace_after_sha256": None,
-            "observer_bytes_modified": None,
-            "scientific_bytes_modified": None,
-            "durable_files_created_by_inspection": None,
-            "privacy_scan_passed": None,
-            "machine_validation_status": "not_executed",
-            "case_status": "design_analysis_blocked",
-        }
-
     chain = build_source_chain(private_root / "sources" / case_id, case_id)
+    source_evidence = runtime_source_evidence(chain)
     project = chain.workspace / "projects" / chain.project_id
     snapshot_roots = [project, chain.actions_root / chain.project_id]
     before = tree_snapshot(snapshot_roots)
     original_before = (
         tree_snapshot([chain.root / "original-valid-observer"])
         if case_id == "history_truncation"
+        else None
+    )
+    tampering_evidence = (
+        {
+            "tampering_kind": "required_event_removed_and_outer_manifest_resigned",
+            "original_source_sha256": original_before["sha256"],
+            "tampered_source_sha256": source_artifact_digests(chain)["trajectory"],
+            "partial_timeline_returned": False,
+        }
+        if original_before is not None
         else None
     )
     locator_path = private_root / "locators" / f"{case_id}.json"
@@ -170,7 +142,12 @@ def _run_case(private_root: Path, case_id: str) -> dict[str, Any]:
     response_equal = canonical_json_bytes({"http_status": first["http_status"], "response": first_response}) == canonical_json_bytes({"http_status": second["http_status"], "response": second["response"]})
     privacy_ok = not public_privacy_violations(response_bytes)
     expected = _expected_result(case_id)
-    semantics_ok = _case_semantics(case_id, status=status, payload=first_response)
+    semantics_ok = _case_semantics(
+        case_id,
+        status=status,
+        payload=first_response,
+        source_evidence=source_evidence,
+    )
     unchanged = before["sha256"] == after["sha256"]
     if original_before is not None:
         unchanged = unchanged and original_before == original_after
@@ -188,6 +165,8 @@ def _run_case(private_root: Path, case_id: str) -> dict[str, Any]:
         "attribution_id": chain.attribution_id,
         "attribution_publication_id": chain.attribution_publication_id,
         "source_artifact_digests": source_artifact_digests(chain),
+        "runtime_source_evidence": source_evidence,
+        "tampering_evidence": tampering_evidence,
         "inspection_http_status": status,
         "inspection_error_code": error_code,
         "inspection_response": first_response,
@@ -238,12 +217,24 @@ def _expected_result(case_id: str) -> dict[str, Any]:
         "duplicate_dispatch": {"http_status": 200, "taxonomy_family": "recovery"},
         "stale_state": {"http_status": 200, "telemetry_authority": "non_authoritative_telemetry"},
         "multiple_equal_first_cause_candidates": {"http_status": 200, "ambiguity_reason": "multiple_equal_first_cause_candidates", "primary_first_cause_id": None},
-        "causal_link_not_proven": {"http_status": 200, "attribution_status": "undetermined", "reason": "causal_link_not_proven"},
+        "causal_link_not_proven": {
+            "http_status": 200,
+            "first_cause_family": "recovery",
+            "downstream_status": "undetermined",
+            "downstream_reason": "causal_link_not_proven",
+            "recovery_receipt_count": 1,
+        },
     }
     return values[case_id]
 
 
-def _case_semantics(case_id: str, *, status: int, payload: dict[str, Any]) -> bool:
+def _case_semantics(
+    case_id: str,
+    *,
+    status: int,
+    payload: dict[str, Any],
+    source_evidence: dict[str, Any],
+) -> bool:
     if case_id == "history_truncation":
         return status == 409 and payload.get("error_code") == "observer_publication_integrity_failure" and "timeline" not in payload
     if status != 200 or payload.get("inspection_version") != INSPECTION_VERSION:
@@ -261,6 +252,134 @@ def _case_semantics(case_id: str, *, status: int, payload: dict[str, Any]) -> bo
                 for item in event.get("telemetry_findings", [])
             )
             for event in timeline
+        )
+    timeline = payload.get("timeline")
+    if not isinstance(timeline, list):
+        return False
+    attributions = [
+        (event, finding)
+        for event in timeline
+        if isinstance(event, dict)
+        for finding in event.get("failure_attributions", [])
+        if isinstance(finding, dict)
+    ]
+    if case_id == "known_hosts_propagation":
+        return (
+            any(
+                finding.get("taxonomy_family") == "transport"
+                and finding.get("attribution_role") == "first_cause"
+                and finding.get("attribution_status") == "determined"
+                and "known_hosts_verification_failed"
+                in event.get("reason_codes", [])
+                for event, finding in attributions
+            )
+            and all(
+                finding.get("taxonomy_family") != "model_inadequacy"
+                for _, finding in attributions
+            )
+        )
+    if case_id == "duplicate_dispatch":
+        duplicate_rows = [
+            (event, finding)
+            for event, finding in attributions
+            if finding.get("deterministic_reason_code")
+            == "duplicate_dispatch_persisted"
+        ]
+        receipts = source_evidence.get("dispatch_receipts", [])
+        duplicate = next(
+            (
+                item
+                for item in receipts
+                if item.get("dispatch_kind") == "duplicate_rejected"
+            ),
+            None,
+        )
+        same_child = (
+            [
+                item
+                for item in receipts
+                if duplicate is not None
+                and item.get("child_run_id") == duplicate.get("child_run_id")
+                and item.get("dispatch_kind")
+                in {"initial", "retry", "duplicate_rejected"}
+            ]
+        )
+        return (
+            len(duplicate_rows) == 1
+            and duplicate_rows[0][1].get("taxonomy_family") == "recovery"
+            and duplicate is not None
+            and duplicate.get("execution_started") is False
+            and duplicate.get("reason_codes") == ["duplicate_dispatch_detected"]
+            and len(same_child) == 2
+            and [item.get("dispatch_kind") for item in same_child]
+            == ["initial", "duplicate_rejected"]
+            and len({item.get("receipt_id") for item in same_child}) == 2
+            and all(item.get("authority_sha256") for item in same_child)
+        )
+    if case_id == "multiple_equal_first_cause_candidates":
+        summary = payload.get("summary")
+        candidates = [
+            (event, finding)
+            for event, finding in attributions
+            if finding.get("taxonomy_family")
+            in {"authorization_mismatch", "transport"}
+        ]
+        revisions = {event.get("session_revision") for event, _ in candidates}
+        return (
+            isinstance(summary, dict)
+            and summary.get("primary_first_cause_id") is None
+            and summary.get("ambiguity_reason")
+            == "multiple_equal_first_cause_candidates"
+            and {finding.get("taxonomy_family") for _, finding in candidates}
+            == {"authorization_mismatch", "transport"}
+            and len(revisions) == 1
+            and all(
+                finding.get("attribution_status") == "undetermined"
+                for _, finding in candidates
+            )
+        )
+    if case_id == "causal_link_not_proven":
+        recoveries = source_evidence.get("recovery_receipts", [])
+        receipts = source_evidence.get("dispatch_receipts", [])
+        first_causes = [
+            finding
+            for _, finding in attributions
+            if finding.get("attribution_role") == "first_cause"
+        ]
+        unlinked_terminal = [
+            finding
+            for event, finding in attributions
+            if event.get("event_kind") == "terminal_result_committed"
+            and finding.get("attribution_role") == "downstream_symptom"
+            and finding.get("attribution_status") == "undetermined"
+            and finding.get("deterministic_reason_code") == "causal_link_not_proven"
+        ]
+        recovery = recoveries[0] if len(recoveries) == 1 else None
+        recovered_child = (
+            recovery.get("recovered_child_run_id")
+            if isinstance(recovery, dict)
+            else None
+        )
+        child_receipts = [
+            item
+            for item in receipts
+            if item.get("child_run_id") == recovered_child
+        ]
+        return (
+            len(recoveries) == 1
+            and recovery.get("recovery_kind") == "adopt_completed_child"
+            and {
+                item.get("dispatch_kind") for item in child_receipts
+            } == {"initial", "duplicate_rejected", "recovery_adoption"}
+            and set(recovery.get("source_dispatch_receipt_ids", []))
+            == {
+                item.get("receipt_id")
+                for item in child_receipts
+                if item.get("dispatch_kind") in {"initial", "duplicate_rejected"}
+            }
+            and len(first_causes) == 1
+            and first_causes[0].get("taxonomy_family") == "recovery"
+            and len(unlinked_terminal) == 1
         )
     return False
 
@@ -298,16 +417,12 @@ def _publish_public_package(root: Path, records: list[dict[str, Any]], *, runner
                 "human_review_status": "pending",
             }
         )
-    machine_complete = all(item["machine_validation_status"] == "passed" for item in records)
+    machine_complete = _machine_complete(records)
     runner_binding = runner_code_binding(runner_commit)
     manifest = {
         "evidence_version": EVIDENCE_VERSION,
         "inspection_version": INSPECTION_VERSION,
-        "source_contracts": {
-            "trajectory": "scientific_agent_trajectory_projection.v1",
-            "audit": "scientific_agent_trajectory_audit_metrics.v1",
-            "attribution": "scientific_agent_failure_attribution.v1",
-        },
+        "source_contracts": SOURCE_CONTRACTS,
         "runner_commit": runner_commit,
         "runner_code_binding": runner_binding,
         "cases": manifest_cases,
@@ -330,7 +445,7 @@ def _publish_public_package(root: Path, records: list[dict[str, Any]], *, runner
             "evidence_only": True,
             "runtime_case_evidence_included": True,
             "all_cases_runtime_executed": machine_complete,
-            "design_analysis_blockers_included": not machine_complete,
+            "design_analysis_blockers_included": False,
             "observer_only": True,
             "scientific_validation_claimed": False,
             "benchmark_result_claimed": False,
@@ -369,10 +484,16 @@ high-fidelity-computation, attribution-accuracy, or M4 benchmark evidence.
 
 
 def _summary(records: list[dict[str, Any]]) -> str:
+    machine_complete = _machine_complete(records)
     lines = [
         "# Evidence summary",
         "",
-        "Machine evidence is incomplete; human review is pending; M3 remains I/T/—.",
+        (
+            "Machine evidence is complete (8 executed / 8 passed); human review "
+            "is pending; M3 remains I/T/—."
+            if machine_complete
+            else "Machine evidence is incomplete; human review is pending; M3 remains I/T/—."
+        ),
         "",
         "| Case | Source class | Machine status |",
         "|---|---|---|",
@@ -381,7 +502,7 @@ def _summary(records: list[dict[str, Any]]) -> str:
     lines.extend(
         [
             "",
-            "Four source-contract preflights are design-analysis blocked: exact PR-BD production module bytes and inspected symbol digests show that v1 does not persist the required transport, duplicate-dispatch, multi-family, or recovered-failure linkage facts. They are not described as executed runtime validations. The runner does not weaken replay or modify PR-BD–PR-BH to manufacture them.",
+            "All eight cases execute through production Session/source construction, PR-BD, PR-BF, PR-BG, and two fresh-process calls to the project-scoped PR-BH GET route. PR #12 authoritative receipts and typed failure evidence are summarized without private paths or infrastructure values.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -400,27 +521,16 @@ def _checklist(records: list[dict[str, Any]]) -> str:
         "Allowed decisions: `approved`, `changes_requested`, `inconclusive`.",
     ]
     for record in records:
-        if record["case_status"] == "design_analysis_blocked":
-            checks = (
-                "case source_class 标注准确",
-                "required evidence 与冻结 case contract 一致",
-                "production contract/version/digest 绑定正确",
-                "observed fields 与 PR-BD v1 source bytes 一致",
-                "missing capability 结论准确",
-                "该 case 未声称 runtime 或 inspection validation",
-                "blocker evidence 不含敏感信息",
-            )
-        else:
-            checks = (
-                "case source_class 标注准确",
-                "expected 与 frozen contract 一致",
-                "terminal result 与 source Session 一致",
-                "first cause、symptom 或 undetermined 具有持久化证据",
-                "source references 指向真实持久化 record",
-                "digest 与 case evidence 一致",
-                "response 不含敏感信息",
-                "inspection 未修改 scientific 或 observer bytes",
-            )
+        checks = (
+            "case source_class 标注准确",
+            "expected 与 frozen contract 一致",
+            "terminal result 与 source Session 一致",
+            "first cause、symptom 或 undetermined 具有持久化证据",
+            "source references 指向真实持久化 record",
+            "digest 与 case evidence 一致",
+            "response 不含敏感信息",
+            "inspection 未修改 scientific 或 observer bytes",
+        )
         sections.extend(
             [
                 "",
@@ -430,6 +540,12 @@ def _checklist(records: list[dict[str, Any]]) -> str:
             ]
         )
     return "\n".join(sections) + "\n"
+
+
+def _machine_complete(records: list[dict[str, Any]]) -> bool:
+    return [item.get("case_id") for item in records] == list(CASE_ROSTER) and all(
+        item.get("machine_validation_status") == "passed" for item in records
+    )
 
 
 def _git_head() -> str:
