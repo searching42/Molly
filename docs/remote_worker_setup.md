@@ -74,6 +74,11 @@ Worker state is private, request-scoped, content-bound, and stored below the
 configured root. Keep that root outside source checkouts and back it with
 enough space for the bounded output contracts.
 
+Each adapter runs in a dedicated process group. Walltime expiry and explicit
+cancellation send `SIGTERM`, wait a fixed grace interval, escalate to
+`SIGKILL`, and confirm that the group (including ordinary descendants) has
+exited before publishing a terminal state.
+
 ## 3. Register the connection
 
 The Settings page provides a guided connection form:

@@ -3,14 +3,18 @@ from __future__ import annotations
 import io
 import json
 import os
+import signal
 import stat
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import ai4s_agent.molly_worker as molly_worker_module
 from ai4s_agent.molly_worker import (
     MollyWorker,
     WorkerProtocolError,
@@ -55,6 +59,8 @@ def _worker_settings(tmp_path: Path) -> WorkerSettings:
 
 def _prepared_reinvent_worker(
     tmp_path: Path,
+    *,
+    template_payload: bytes | None = None,
 ) -> tuple[MollyWorker, Any, Any, dict[str, bytes]]:
     settings = _worker_settings(tmp_path)
     worker = MollyWorker(settings)
@@ -65,9 +71,13 @@ def _prepared_reinvent_worker(
     inputs = {
         "request.json": b'{"seed":7}\n',
         "sampling.toml": (
-            b'run_type = "sampling"\n'
-            b'[parameters]\n'
-            b'output_file = "{{molly_output_csv}}"\n'
+            template_payload
+            if template_payload is not None
+            else (
+                b'run_type = "sampling"\n'
+                b'[parameters]\n'
+                b'output_file = "{{molly_output_csv}}"\n'
+            )
         ),
     }
     for relative_path, payload in inputs.items():
@@ -137,6 +147,57 @@ def _prepared_reinvent_worker(
     return worker, request, approval, inputs
 
 
+def _publish_reinvent_output(
+    worker: MollyWorker,
+    request: Any,
+    approval: Any,
+    payload: bytes,
+) -> tuple[Path, Any]:
+    target = worker.store.output_path(request.request_id, "candidates.csv")
+    target.write_bytes(payload)
+    os.chmod(target, 0o600)
+    publication = worker._build_publication(request, approval)
+    succeeded = worker._observation(
+        request,
+        status="SUCCEEDED",
+        publication=publication,
+    )
+    worker.store.write_state(request, succeeded)
+    return target, publication.artifacts[0]
+
+
+_IGNORE_TERM_PROCESS_TREE = r"""
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+child = subprocess.Popen(
+    [
+        sys.executable,
+        "-c",
+        "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)",
+    ]
+)
+Path(sys.argv[1]).write_text(f"{os.getpid()} {child.pid}\n", encoding="utf-8")
+while True:
+    time.sleep(1)
+"""
+
+
+def _wait_for_process_tree(path: Path) -> tuple[int, int]:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if path.is_file():
+            parent, child = path.read_text(encoding="utf-8").split()
+            return int(parent), int(child)
+        time.sleep(0.02)
+    raise AssertionError("process tree did not start")
+
+
 def test_probe_is_read_only_and_reports_only_verified_adapters(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -193,7 +254,7 @@ def test_stage_verify_execute_publish_and_fetch_are_content_bound(
 
     output = b"SMILES,score\nCCO,0.9\n"
 
-    def fake_adapter(_: Any) -> None:
+    def fake_adapter(_: Any, __: Any) -> None:
         target = worker.store.output_path(request.request_id, "candidates.csv")
         target.write_bytes(output)
         os.chmod(target, 0o600)
@@ -232,6 +293,185 @@ def test_stage_verify_execute_publish_and_fetch_are_content_bound(
             sha256=artifact.sha256,
             destination=io.BytesIO(),
         )
+
+
+@pytest.mark.pr_fast
+def test_run_job_rejects_input_inode_replaced_after_execute(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker, request, approval, inputs = _prepared_reinvent_worker(tmp_path)
+    envelope = {
+        "request": request.model_dump(mode="json"),
+        "approval": approval.model_dump(mode="json"),
+    }
+
+    class FakeProcess:
+        pid = 424244
+
+    monkeypatch.setattr(worker, "_require_adapter_available", lambda _: None)
+    monkeypatch.setattr(worker, "_spawn_runner", lambda _: FakeProcess())
+    monkeypatch.setattr(worker, "_process_token", lambda _: "runner-token")
+    assert worker.execute(envelope).status == "ACCEPTED"
+
+    staged = worker.store.input_path(request.request_id, "sampling.toml")
+    replacement = staged.with_name("replacement.toml")
+    replacement.write_bytes(b"x" * len(inputs["sampling.toml"]))
+    os.replace(replacement, staged)
+    called = False
+
+    def fake_adapter(_: Any, __: Any) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(worker, "_execute_adapter", fake_adapter)
+    assert worker.run_job(request.request_id) == 1
+    assert called is False
+    observation = worker.status(
+        request_id=request.request_id,
+        request_sha256=request.request_sha256,
+    )
+    assert observation.status == "FAILED"
+    assert observation.error_code == "staged_input_binding_mismatch"
+
+
+@pytest.mark.pr_fast
+def test_adapter_consumes_attempt_snapshot_after_staged_name_is_replaced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker, request, approval, inputs = _prepared_reinvent_worker(tmp_path)
+    original_snapshot = worker._snapshot_verified_inputs
+
+    def snapshot_then_replace(bound_request: Any) -> Any:
+        snapshot = original_snapshot(bound_request)
+        staged = worker.store.input_path(bound_request.request_id, "sampling.toml")
+        replacement = staged.with_name("late-replacement.toml")
+        replacement.write_bytes(b"x" * len(inputs["sampling.toml"]))
+        os.replace(replacement, staged)
+        return snapshot
+
+    def fake_adapter(_: Any, snapshot: Any) -> None:
+        assert snapshot.paths["sampling.toml"].read_bytes() == inputs["sampling.toml"]
+        output = worker.store.output_path(request.request_id, "candidates.csv")
+        output.write_bytes(b"SMILES,score\nCCO,0.5\n")
+        os.chmod(output, 0o600)
+
+    monkeypatch.setattr(worker, "_snapshot_verified_inputs", snapshot_then_replace)
+    monkeypatch.setattr(worker, "_execute_adapter", fake_adapter)
+    assert worker.run_job(request.request_id) == 0
+    observation = worker.status(
+        request_id=request.request_id,
+        request_sha256=request.request_sha256,
+    )
+    assert observation.status == "SUCCEEDED"
+    assert observation.publication is not None
+    assert observation.publication.input_manifest_sha256 == request.input_manifest.manifest_sha256
+
+
+@pytest.mark.pr_fast
+def test_publication_rejects_output_inode_replacement_after_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker, request, approval, _ = _prepared_reinvent_worker(tmp_path)
+    target = worker.store.output_path(request.request_id, "candidates.csv")
+    target.write_bytes(b"SMILES,score\nCCO,0.1\n")
+    original_inode = target.stat().st_ino
+    original_digest = molly_worker_module._descriptor_digest
+    swapped = False
+
+    def digest_then_swap(descriptor: int) -> Any:
+        nonlocal swapped
+        result = original_digest(descriptor)
+        if not swapped and os.fstat(descriptor).st_ino == original_inode:
+            replacement = target.with_name("replacement.csv")
+            replacement.write_bytes(b"SMILES,score\nCCC,0.2\n")
+            os.replace(replacement, target)
+            swapped = True
+        return result
+
+    monkeypatch.setattr(molly_worker_module, "_descriptor_digest", digest_then_swap)
+    with pytest.raises(WorkerProtocolError, match="output_content_changed"):
+        worker._build_publication(request, approval)
+    assert swapped is True
+
+
+@pytest.mark.pr_fast
+def test_fetch_output_rejects_inode_replacement_during_transfer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker, request, approval, _ = _prepared_reinvent_worker(tmp_path)
+    payload = b"SMILES,score\n" + b"CCO,0.1\n" * 10_000
+    target, artifact = _publish_reinvent_output(
+        worker,
+        request,
+        approval,
+        payload,
+    )
+    original_inode = target.stat().st_ino
+    original_read = molly_worker_module.os.read
+    swapped = False
+
+    def read_then_swap(descriptor: int, size: int) -> bytes:
+        nonlocal swapped
+        chunk = original_read(descriptor, size)
+        if chunk and not swapped and os.fstat(descriptor).st_ino == original_inode:
+            replacement = target.with_name("replacement.csv")
+            replacement.write_bytes(b"SMILES,score\n" + b"CCC,0.2\n" * 10_000)
+            os.replace(replacement, target)
+            swapped = True
+        return chunk
+
+    monkeypatch.setattr(molly_worker_module.os, "read", read_then_swap)
+    with pytest.raises(WorkerProtocolError, match="output_content_mismatch"):
+        worker.fetch_output(
+            request_id=request.request_id,
+            relative_path=artifact.relative_path,
+            size_bytes=artifact.size_bytes,
+            sha256=artifact.sha256,
+            destination=io.BytesIO(),
+        )
+    assert swapped is True
+
+
+@pytest.mark.pr_fast
+def test_fetch_output_rejects_in_place_modification_during_transfer(
+    tmp_path: Path,
+) -> None:
+    worker, request, approval, _ = _prepared_reinvent_worker(tmp_path)
+    payload = b"SMILES,score\n" + b"CCO,0.1\n" * 20_000
+    target, artifact = _publish_reinvent_output(
+        worker,
+        request,
+        approval,
+        payload,
+    )
+
+    class MutatingDestination(io.BytesIO):
+        mutated = False
+
+        def write(self, value: bytes) -> int:
+            written = super().write(value)
+            if not self.mutated:
+                self.mutated = True
+                with target.open("r+b", buffering=0) as stream:
+                    stream.seek(70_000)
+                    stream.write(b"X")
+                    os.fsync(stream.fileno())
+            return written
+
+    destination = MutatingDestination()
+    with pytest.raises(WorkerProtocolError, match="output_content_mismatch"):
+        worker.fetch_output(
+            request_id=request.request_id,
+            relative_path=artifact.relative_path,
+            size_bytes=artifact.size_bytes,
+            sha256=artifact.sha256,
+            destination=destination,
+        )
+    assert destination.mutated is True
 
 
 def test_verify_inputs_rejects_tampering_and_unregistered_files(tmp_path: Path) -> None:
@@ -328,11 +568,20 @@ def test_stage_input_rejects_replaced_symlink(tmp_path: Path) -> None:
 
 def test_reinvent_adapter_uses_fixed_argv_and_worker_owned_output(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     worker, request, _, _ = _prepared_reinvent_worker(tmp_path)
     calls: list[tuple[list[str], dict[str, Any]]] = []
 
-    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+    class FakeProcess:
+        pid = 424243
+
+        @staticmethod
+        def wait(*, timeout: float) -> int:
+            assert timeout == request.requested_resources.walltime_sec
+            return 0
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
         calls.append((command, kwargs))
         config_path = Path(command[-1])
         rendered = config_path.read_text(encoding="utf-8")
@@ -340,9 +589,11 @@ def test_reinvent_adapter_uses_fixed_argv_and_worker_owned_output(
         output_path = worker.store.output_path(request.request_id, "candidates.csv")
         assert str(output_path) in rendered
         output_path.write_bytes(b"SMILES,score\nCCO,0.1\n")
-        return subprocess.CompletedProcess(command, 0, b"", b"")
+        return FakeProcess()
 
-    worker.run_command = fake_run
+    worker.adapter_popen_factory = fake_popen
+    monkeypatch.setattr(worker, "_process_token", lambda _: "adapter-token")
+    monkeypatch.setattr(worker, "_process_group_exists", lambda _: False)
     worker._execute_reinvent4(request)
 
     command, kwargs = calls[0]
@@ -357,11 +608,13 @@ def test_reinvent_adapter_uses_fixed_argv_and_worker_owned_output(
 def test_reinvent_adapter_requires_output_placeholder_in_output_file(
     tmp_path: Path,
 ) -> None:
-    worker, request, _, _ = _prepared_reinvent_worker(tmp_path)
-    template = worker.store.input_path(request.request_id, "sampling.toml")
-    template.write_text(
-        '# {{molly_output_csv}}\n[parameters]\noutput_file = "/tmp/escape.csv"\n',
-        encoding="utf-8",
+    worker, request, _, _ = _prepared_reinvent_worker(
+        tmp_path,
+        template_payload=(
+            b'# {{molly_output_csv}}\n'
+            b'[parameters]\n'
+            b'output_file = "/tmp/escape.csv"\n'
+        ),
     )
 
     with pytest.raises(WorkerProtocolError, match="reinvent4_output_binding_invalid"):
@@ -374,6 +627,69 @@ def test_unimol_config_is_bounded_and_single_model_only() -> None:
         MollyWorker._validate_unimol_config({"kfold": 3})
     with pytest.raises(WorkerProtocolError, match="invalid_unimol_config"):
         MollyWorker._validate_unimol_config({"wrapper": "bash -c arbitrary"})
+
+
+@pytest.mark.pr_fast
+def test_cancel_escalates_to_sigkill_for_ignoring_process_tree(
+    tmp_path: Path,
+) -> None:
+    worker, request, _, _ = _prepared_reinvent_worker(tmp_path)
+    worker.termination_grace_sec = 0.5
+    pid_file = tmp_path / "cancel-tree.pids"
+    process = subprocess.Popen(
+        [sys.executable, "-c", _IGNORE_TERM_PROCESS_TREE, str(pid_file)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    parent_pid, _ = _wait_for_process_tree(pid_file)
+    assert parent_pid == process.pid
+    reaper = threading.Thread(target=process.wait, daemon=True)
+    reaper.start()
+    try:
+        running = worker._observation(request, status="RUNNING")
+        worker.store.write_state(
+            request,
+            running,
+            pid=process.pid,
+            process_token=worker._process_token(process.pid),
+        )
+        cancelled = worker.cancel(
+            request_id=request.request_id,
+            request_sha256=request.request_sha256,
+        )
+        reaper.join(timeout=3)
+        assert cancelled.status == "CANCELLED"
+        assert not worker._process_group_exists(process.pid)
+    finally:
+        if worker._process_group_exists(process.pid):
+            os.killpg(process.pid, signal.SIGKILL)
+        reaper.join(timeout=3)
+
+
+@pytest.mark.pr_fast
+def test_adapter_walltime_kills_ignoring_descendant_processes(
+    tmp_path: Path,
+) -> None:
+    worker, request, _, _ = _prepared_reinvent_worker(tmp_path)
+    worker.adapter_timeout_sec = 0.25
+    worker.termination_grace_sec = 0.5
+    pid_file = tmp_path / "timeout-tree.pids"
+
+    with pytest.raises(WorkerProtocolError, match="walltime_exceeded"):
+        worker._run_adapter_command(
+            request,
+            [sys.executable, "-c", _IGNORE_TERM_PROCESS_TREE, str(pid_file)],
+            cwd=tmp_path,
+            env=worker._adapter_environment(),
+        )
+
+    parent_pid, _ = _wait_for_process_tree(pid_file)
+    assert not worker._process_group_exists(parent_pid)
+    state = worker.store.read_state(request.request_id)
+    assert state["adapter_pid"] is None
+    assert state["adapter_process_token"] == ""
 
 
 def test_worker_config_must_be_private(tmp_path: Path) -> None:
@@ -406,7 +722,7 @@ def test_cli_probe_emits_only_json(
         MollyWorker,
         "probe",
         lambda self: {
-            "hostname": "node45",
+            "hostname": "example-host",
             "capabilities": ["cpu"],
             "details": {},
         },
@@ -424,7 +740,7 @@ def test_cli_probe_emits_only_json(
 
     assert code == 0
     assert json.loads(stdout.getvalue()) == {
-        "hostname": "node45",
+        "hostname": "example-host",
         "capabilities": ["cpu"],
         "details": {},
     }

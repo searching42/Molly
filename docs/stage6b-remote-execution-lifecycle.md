@@ -98,6 +98,15 @@ deployment supplies task-specific adapters behind this protocol (for example
 REINVENT4, MinerU, or UniMol); the browser and LLM cannot select an executable,
 environment activation, command argument, output path, or Shell fragment.
 
+At execution time the worker replays every manifest digest from an
+`O_NOFOLLOW` descriptor into a private, read-only attempt snapshot. Adapters
+consume only snapshot bytes (large Uni-Mol data remains descriptor-bound while
+the adapter materializes its suffix-preserving local input), and the worker
+rechecks device, inode, size, mtime,
+ctime, and SHA-256 before and after adapter execution. Publication validation
+and output transfer each hash and consume one descriptor without reopening the
+named path; a replaced inode or in-place mutation fails closed.
+
 Transport stderr is never persisted or returned. Non-zero exits, malformed or
 oversized JSON, identity mismatches, and unavailable connections are reduced to
 bounded local error codes.

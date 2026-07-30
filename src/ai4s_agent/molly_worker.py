@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -54,6 +55,7 @@ _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,95}$")
 _SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+:-]{0,127}$")
 _TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "CANCELLED"}
 _ACTIVE_STATUSES = {"ACCEPTED", "RUNNING", "CANCEL_REQUESTED"}
+_DEFAULT_TERMINATION_GRACE_SEC = 2.0
 _REINVENT_PLACEHOLDERS = {
     "{{molly_output_csv}}",
     "{{molly_design_request_id}}",
@@ -73,6 +75,35 @@ class WorkerProtocolError(RuntimeError):
         self.code = clean
 
 
+@dataclass(frozen=True)
+class _FileIdentity:
+    device: int
+    inode: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+
+    @classmethod
+    def from_stat(cls, metadata: os.stat_result) -> "_FileIdentity":
+        if not stat.S_ISREG(metadata.st_mode):
+            raise WorkerProtocolError("unsafe_worker_file")
+        return cls(
+            device=metadata.st_dev,
+            inode=metadata.st_ino,
+            size=metadata.st_size,
+            mtime_ns=metadata.st_mtime_ns,
+            ctime_ns=metadata.st_ctime_ns,
+        )
+
+
+@dataclass(frozen=True)
+class _AttemptInputs:
+    root: Path
+    paths: Mapping[str, Path]
+    identities: Mapping[str, _FileIdentity]
+    digests: Mapping[str, str]
+
+
 def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
     return json.dumps(
         value,
@@ -86,37 +117,53 @@ def _digest_bytes(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
-def _digest_file(path: Path) -> tuple[int, str]:
+def _open_regular_no_follow(path: Path) -> int:
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:
         raise WorkerProtocolError("unsafe_worker_file") from exc
     try:
-        initial = os.fstat(descriptor)
-        if not stat.S_ISREG(initial.st_mode):
-            raise WorkerProtocolError("unsafe_worker_file")
+        _FileIdentity.from_stat(os.fstat(descriptor))
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _path_regular_identity(path: Path) -> _FileIdentity:
+    try:
+        metadata = os.lstat(path)
+    except OSError as exc:
+        raise WorkerProtocolError("unsafe_worker_file") from exc
+    return _FileIdentity.from_stat(metadata)
+
+
+def _descriptor_digest(descriptor: int) -> tuple[_FileIdentity, str]:
+    initial = _FileIdentity.from_stat(os.fstat(descriptor))
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
         digest = hashlib.sha256()
-        size = 0
+        received = 0
         while True:
             chunk = os.read(descriptor, 1024 * 1024)
             if not chunk:
                 break
-            size += len(chunk)
+            received += len(chunk)
             digest.update(chunk)
-        final = os.fstat(descriptor)
-        if (
-            initial.st_dev,
-            initial.st_ino,
-            initial.st_size,
-            initial.st_mtime_ns,
-        ) != (
-            final.st_dev,
-            final.st_ino,
-            final.st_size,
-            final.st_mtime_ns,
-        ):
+        final = _FileIdentity.from_stat(os.fstat(descriptor))
+        if initial != final or received != initial.size:
             raise WorkerProtocolError("worker_file_changed")
-        return size, "sha256:" + digest.hexdigest()
+        return initial, "sha256:" + digest.hexdigest()
+    finally:
+        with contextlib.suppress(OSError):
+            os.lseek(descriptor, 0, os.SEEK_SET)
+
+
+def _digest_file(path: Path) -> tuple[int, str]:
+    descriptor = _open_regular_no_follow(path)
+    try:
+        identity, digest = _descriptor_digest(descriptor)
+        return identity.size, digest
     finally:
         os.close(descriptor)
 
@@ -181,13 +228,10 @@ def _read_json_stream(stream: BinaryIO, *, max_bytes: int = _MAX_JSON_BYTES) -> 
 
 
 def _read_json_file(path: Path, *, max_bytes: int = _MAX_JSON_BYTES) -> dict[str, Any]:
+    descriptor = _open_regular_no_follow(path)
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError as exc:
-        raise WorkerProtocolError("unsafe_worker_file") from exc
-    try:
-        initial = os.fstat(descriptor)
-        if not stat.S_ISREG(initial.st_mode) or initial.st_size > max_bytes:
+        initial = _FileIdentity.from_stat(os.fstat(descriptor))
+        if initial.size > max_bytes:
             raise WorkerProtocolError("invalid_worker_json")
         payload = b""
         while len(payload) <= max_bytes:
@@ -195,8 +239,8 @@ def _read_json_file(path: Path, *, max_bytes: int = _MAX_JSON_BYTES) -> dict[str
             if not chunk:
                 break
             payload += chunk
-        final = os.fstat(descriptor)
-        if initial.st_dev != final.st_dev or initial.st_ino != final.st_ino:
+        final = _FileIdentity.from_stat(os.fstat(descriptor))
+        if initial != final or len(payload) != initial.size:
             raise WorkerProtocolError("worker_file_changed")
     finally:
         os.close(descriptor)
@@ -391,6 +435,8 @@ class WorkerStore:
         *,
         pid: int | None = None,
         process_token: str = "",
+        adapter_pid: int | None = None,
+        adapter_process_token: str = "",
     ) -> None:
         _write_private_json(
             self.state_path(request.request_id),
@@ -400,6 +446,8 @@ class WorkerStore:
                 "request_sha256": request.request_sha256,
                 "pid": pid,
                 "process_token": process_token,
+                "adapter_pid": adapter_pid,
+                "adapter_process_token": adapter_process_token,
                 "observation": observation.model_dump(mode="json"),
             },
         )
@@ -459,12 +507,20 @@ class MollyWorker:
         settings: WorkerSettings,
         *,
         popen_factory: Any = subprocess.Popen,
+        adapter_popen_factory: Any = subprocess.Popen,
         run_command: Any = subprocess.run,
+        termination_grace_sec: float = _DEFAULT_TERMINATION_GRACE_SEC,
+        adapter_timeout_sec: float | None = None,
     ) -> None:
         self.settings = settings
         self._store: WorkerStore | None = None
         self.popen_factory = popen_factory
+        self.adapter_popen_factory = adapter_popen_factory
         self.run_command = run_command
+        self.termination_grace_sec = max(0.05, float(termination_grace_sec))
+        self.adapter_timeout_sec = (
+            None if adapter_timeout_sec is None else max(0.05, float(adapter_timeout_sec))
+        )
 
     @property
     def store(self) -> WorkerStore:
@@ -716,26 +772,31 @@ class MollyWorker:
             if request.request_sha256 != clean_digest:
                 raise WorkerProtocolError("request_binding_mismatch")
             state = self.store.read_state(clean_request_id)
-            current = self._refresh_locked(request, state)
-            if current.status in _TERMINAL_STATUSES:
+            current = RemoteObservation.model_validate(state["observation"])
+            if current.status in {"SUCCEEDED", "CANCELLED"}:
+                return current
+            runner_pid = self._state_pid(state, field="pid")
+            runner_token = str(state.get("process_token") or "")
+            adapter_pid = self._state_pid(state, field="adapter_pid")
+            adapter_token = str(state.get("adapter_process_token") or "")
+            if current.status == "FAILED":
+                self._terminate_bound_process_group(adapter_pid, adapter_token)
+                self._terminate_bound_process_group(runner_pid, runner_token)
                 return current
             cancelled = self._observation(request, status="CANCEL_REQUESTED")
-            pid = self._state_pid(state)
-            token = str(state.get("process_token") or "")
             self.store.write_state(
                 request,
                 cancelled,
-                pid=pid,
-                process_token=token,
+                pid=runner_pid,
+                process_token=runner_token,
+                adapter_pid=adapter_pid,
+                adapter_process_token=adapter_token,
             )
-            if pid is not None and self._process_matches(pid, token):
-                try:
-                    os.killpg(pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                except OSError as exc:
-                    raise WorkerProtocolError("worker_cancel_failed") from exc
-            return cancelled
+            self._terminate_bound_process_group(adapter_pid, adapter_token)
+            self._terminate_bound_process_group(runner_pid, runner_token)
+            terminal = self._observation(request, status="CANCELLED")
+            self.store.write_state(request, terminal)
+            return terminal
 
     def fetch_output(
         self,
@@ -771,25 +832,29 @@ class MollyWorker:
             ):
                 raise WorkerProtocolError("output_binding_mismatch")
             source = self.store.output_path(clean_request_id, clean_path)
-            actual_size, actual_digest = _digest_file(source)
-            if actual_size != size_bytes or actual_digest != clean_digest:
-                raise WorkerProtocolError("output_content_mismatch")
+            descriptor = _open_regular_no_follow(source)
             try:
-                descriptor = os.open(
-                    source,
-                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                )
-            except OSError as exc:
-                raise WorkerProtocolError("unsafe_worker_file") from exc
-            try:
+                initial = _FileIdentity.from_stat(os.fstat(descriptor))
+                if initial.size != size_bytes:
+                    raise WorkerProtocolError("output_content_mismatch")
+                digest = hashlib.sha256()
                 remaining = size_bytes
                 while remaining:
                     chunk = os.read(descriptor, min(64 * 1024, remaining))
                     if not chunk:
                         raise WorkerProtocolError("output_content_mismatch")
+                    digest.update(chunk)
                     destination.write(chunk)
                     remaining -= len(chunk)
                 if os.read(descriptor, 1):
+                    raise WorkerProtocolError("output_content_mismatch")
+                final = _FileIdentity.from_stat(os.fstat(descriptor))
+                path_identity = _path_regular_identity(source)
+                if (
+                    final != initial
+                    or path_identity != initial
+                    or "sha256:" + digest.hexdigest() != clean_digest
+                ):
                     raise WorkerProtocolError("output_content_mismatch")
             finally:
                 os.close(descriptor)
@@ -800,6 +865,13 @@ class MollyWorker:
             with self.store.lock(clean_request_id):
                 request, approval = self._load_envelope(clean_request_id)
                 state = self.store.read_state(clean_request_id)
+                current = RemoteObservation.model_validate(state["observation"])
+                if current.status in {"CANCEL_REQUESTED", "CANCELLED"}:
+                    terminal = self._observation(request, status="CANCELLED")
+                    self.store.write_state(request, terminal)
+                    return 1
+                if current.status in {"SUCCEEDED", "FAILED"}:
+                    return 0 if current.status == "SUCCEEDED" else 1
                 pid = os.getpid()
                 token = self._process_token(pid)
                 running = self._observation(request, status="RUNNING")
@@ -809,7 +881,10 @@ class MollyWorker:
                     pid=pid,
                     process_token=token,
                 )
-            self._execute_adapter(request)
+            attempt_inputs = self._snapshot_verified_inputs(request)
+            self._verify_attempt_inputs(attempt_inputs)
+            self._execute_adapter(request, attempt_inputs)
+            self._verify_attempt_inputs(attempt_inputs)
             publication = self._build_publication(request, approval)
             succeeded = self._observation(
                 request,
@@ -817,6 +892,13 @@ class MollyWorker:
                 publication=publication,
             )
             with self.store.lock(clean_request_id):
+                current = RemoteObservation.model_validate(
+                    self.store.read_state(clean_request_id)["observation"]
+                )
+                if current.status in {"CANCEL_REQUESTED", "CANCELLED"}:
+                    cancelled = self._observation(request, status="CANCELLED")
+                    self.store.write_state(request, cancelled)
+                    return 1
                 self.store.write_state(request, succeeded)
             return 0
         except BaseException as exc:
@@ -825,12 +907,18 @@ class MollyWorker:
             with contextlib.suppress(Exception):
                 with self.store.lock(clean_request_id):
                     request, _ = self._load_envelope(clean_request_id)
-                    failed = self._observation(
-                        request,
-                        status="FAILED",
-                        error_code=code,
+                    current = RemoteObservation.model_validate(
+                        self.store.read_state(clean_request_id)["observation"]
                     )
-                    self.store.write_state(request, failed)
+                    if current.status in {"CANCEL_REQUESTED", "CANCELLED"}:
+                        terminal = self._observation(request, status="CANCELLED")
+                    else:
+                        terminal = self._observation(
+                            request,
+                            status="FAILED",
+                            error_code=code,
+                        )
+                    self.store.write_state(request, terminal)
             return 1
 
     def _validate_envelope(
@@ -967,6 +1055,174 @@ class MollyWorker:
         if observed != set(expected):
             raise WorkerProtocolError("staged_input_missing")
 
+    def _snapshot_verified_inputs(
+        self,
+        request: RemoteExecutionRequest,
+    ) -> _AttemptInputs:
+        """Copy each manifest-bound fd into a private, read-only attempt tree."""
+
+        self._verify_staged_inputs(request)
+        job_dir = self.store.job_dir(request.request_id)
+        attempts_root = _ensure_private_directory(job_dir / "work" / "attempts")
+        attempt_root = Path(tempfile.mkdtemp(prefix="attempt-", dir=attempts_root))
+        os.chmod(attempt_root, 0o700)
+        snapshot_root = _ensure_private_directory(attempt_root / "inputs")
+        paths: dict[str, Path] = {}
+        identities: dict[str, _FileIdentity] = {}
+        digests: dict[str, str] = {}
+        try:
+            for artifact in sorted(
+                request.input_manifest.artifacts,
+                key=lambda item: item.relative_path,
+            ):
+                source = self.store.input_path(
+                    request.request_id,
+                    artifact.relative_path,
+                )
+                target = snapshot_root.joinpath(*PurePosixPath(artifact.relative_path).parts)
+                _ensure_private_directory(target.parent)
+                source_descriptor = _open_regular_no_follow(source)
+                try:
+                    initial = _FileIdentity.from_stat(os.fstat(source_descriptor))
+                    if initial.size != artifact.size_bytes:
+                        raise WorkerProtocolError("staged_input_binding_mismatch")
+                    flags = (
+                        os.O_WRONLY
+                        | os.O_CREAT
+                        | os.O_EXCL
+                        | getattr(os, "O_NOFOLLOW", 0)
+                    )
+                    target_descriptor = os.open(target, flags, 0o600)
+                    digest = hashlib.sha256()
+                    received = 0
+                    try:
+                        while True:
+                            chunk = os.read(source_descriptor, 1024 * 1024)
+                            if not chunk:
+                                break
+                            received += len(chunk)
+                            digest.update(chunk)
+                            view = memoryview(chunk)
+                            while view:
+                                written = os.write(target_descriptor, view)
+                                view = view[written:]
+                        os.fsync(target_descriptor)
+                    finally:
+                        os.close(target_descriptor)
+                    final = _FileIdentity.from_stat(os.fstat(source_descriptor))
+                    path_identity = _path_regular_identity(source)
+                    copied_digest = "sha256:" + digest.hexdigest()
+                    if (
+                        initial != final
+                        or initial != path_identity
+                        or received != artifact.size_bytes
+                        or copied_digest != artifact.sha256
+                    ):
+                        raise WorkerProtocolError("staged_input_binding_mismatch")
+                finally:
+                    os.close(source_descriptor)
+                os.chmod(target, 0o400)
+                snapshot_descriptor = _open_regular_no_follow(target)
+                try:
+                    snapshot_identity, snapshot_digest = _descriptor_digest(
+                        snapshot_descriptor
+                    )
+                finally:
+                    os.close(snapshot_descriptor)
+                if (
+                    snapshot_identity.size != artifact.size_bytes
+                    or snapshot_digest != artifact.sha256
+                ):
+                    raise WorkerProtocolError("attempt_input_binding_mismatch")
+                paths[artifact.relative_path] = target
+                identities[artifact.relative_path] = snapshot_identity
+                digests[artifact.relative_path] = snapshot_digest
+            for root, directories, _ in os.walk(snapshot_root, topdown=False):
+                for directory in directories:
+                    os.chmod(Path(root) / directory, 0o500)
+                os.chmod(root, 0o500)
+            os.chmod(attempt_root, 0o500)
+            return _AttemptInputs(
+                root=attempt_root,
+                paths=paths,
+                identities=identities,
+                digests=digests,
+            )
+        except BaseException:
+            shutil.rmtree(attempt_root, ignore_errors=True)
+            raise
+
+    @staticmethod
+    def _verify_attempt_inputs(snapshot: _AttemptInputs) -> None:
+        for relative_path, path in snapshot.paths.items():
+            descriptor = _open_regular_no_follow(path)
+            try:
+                identity, digest = _descriptor_digest(descriptor)
+            finally:
+                os.close(descriptor)
+            if (
+                identity != snapshot.identities[relative_path]
+                or digest != snapshot.digests[relative_path]
+            ):
+                raise WorkerProtocolError("attempt_input_binding_mismatch")
+
+    @staticmethod
+    def _read_attempt_bytes(
+        snapshot: _AttemptInputs,
+        relative_path: str,
+        *,
+        max_bytes: int,
+    ) -> bytes:
+        path = snapshot.paths[relative_path]
+        descriptor = _open_regular_no_follow(path)
+        try:
+            initial = _FileIdentity.from_stat(os.fstat(descriptor))
+            if initial.size > max_bytes:
+                raise WorkerProtocolError("input_too_large")
+            digest = hashlib.sha256()
+            payload = b""
+            while len(payload) < initial.size:
+                chunk = os.read(
+                    descriptor,
+                    min(64 * 1024, initial.size - len(payload)),
+                )
+                if not chunk:
+                    break
+                payload += chunk
+                digest.update(chunk)
+            final = _FileIdentity.from_stat(os.fstat(descriptor))
+            path_identity = _path_regular_identity(path)
+            if (
+                initial != snapshot.identities[relative_path]
+                or final != initial
+                or path_identity != initial
+                or len(payload) != initial.size
+                or "sha256:" + digest.hexdigest() != snapshot.digests[relative_path]
+            ):
+                raise WorkerProtocolError("attempt_input_binding_mismatch")
+            return payload
+        finally:
+            os.close(descriptor)
+
+    @classmethod
+    def _read_attempt_json(
+        cls,
+        snapshot: _AttemptInputs,
+        relative_path: str,
+    ) -> dict[str, Any]:
+        payload = cls._read_attempt_bytes(
+            snapshot,
+            relative_path,
+            max_bytes=_MAX_JSON_BYTES,
+        )
+        try:
+            decoded = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise WorkerProtocolError("invalid_worker_json") from exc
+        if not isinstance(decoded, dict):
+            raise WorkerProtocolError("invalid_worker_json")
+        return decoded
+
     def _observation(
         self,
         request: RemoteExecutionRequest,
@@ -1003,12 +1259,16 @@ class MollyWorker:
             raise WorkerProtocolError("invalid_worker_state") from exc
         if observation.status not in _ACTIVE_STATUSES:
             return observation
-        pid = self._state_pid(state)
+        pid = self._state_pid(state, field="pid")
         token = str(state.get("process_token") or "")
         if pid is None:
             return observation
         if self._process_matches(pid, token):
             return observation
+        adapter_pid = self._state_pid(state, field="adapter_pid")
+        adapter_token = str(state.get("adapter_process_token") or "")
+        self._terminate_bound_process_group(adapter_pid, adapter_token)
+        self._terminate_bound_process_group(pid, token)
         if observation.status == "CANCEL_REQUESTED":
             terminal = self._observation(request, status="CANCELLED")
         else:
@@ -1021,8 +1281,8 @@ class MollyWorker:
         return terminal
 
     @staticmethod
-    def _state_pid(state: Mapping[str, Any]) -> int | None:
-        value = state.get("pid")
+    def _state_pid(state: Mapping[str, Any], *, field: str) -> int | None:
+        value = state.get(field)
         if value is None:
             return None
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -1050,6 +1310,86 @@ class MollyWorker:
         if not token:
             return False
         return cls._process_token(pid) == token
+
+    @staticmethod
+    def _process_group_exists(process_group: int) -> bool:
+        try:
+            os.killpg(process_group, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+        return True
+
+    def _wait_process_group_exit(self, process_group: int) -> bool:
+        deadline = time.monotonic() + self.termination_grace_sec
+        while self._process_group_exists(process_group):
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(min(0.05, self.termination_grace_sec / 4))
+        return True
+
+    def _terminate_known_process_group(self, process_group: int) -> None:
+        if not self._process_group_exists(process_group):
+            return
+        try:
+            os.killpg(process_group, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            raise WorkerProtocolError("worker_cancel_failed") from exc
+        if self._wait_process_group_exit(process_group):
+            return
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            raise WorkerProtocolError("worker_cancel_failed") from exc
+        if not self._wait_process_group_exit(process_group):
+            raise WorkerProtocolError("worker_cancel_failed")
+
+    def _terminate_spawned_process_group(self, process: Any) -> None:
+        """Terminate and reap a process-group leader plus all surviving descendants."""
+
+        process_group = int(process.pid)
+        if self._process_group_exists(process_group):
+            try:
+                os.killpg(process_group, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                raise WorkerProtocolError("worker_cancel_failed") from exc
+        try:
+            process.wait(timeout=self.termination_grace_sec)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process_group, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                raise WorkerProtocolError("worker_cancel_failed") from exc
+            try:
+                process.wait(timeout=self.termination_grace_sec)
+            except subprocess.TimeoutExpired as exc:
+                raise WorkerProtocolError("worker_cancel_failed") from exc
+        if self._process_group_exists(process_group):
+            self._terminate_known_process_group(process_group)
+
+    def _terminate_bound_process_group(
+        self,
+        process_group: int | None,
+        process_token: str,
+    ) -> None:
+        if process_group is None or not self._process_group_exists(process_group):
+            return
+        current_token = self._process_token(process_group)
+        if current_token and current_token != process_token:
+            return
+        if current_token == process_token or not current_token:
+            self._terminate_known_process_group(process_group)
 
     def _spawn_runner(self, request_id: str) -> Any:
         job_dir = self.store.job_dir(request_id)
@@ -1091,16 +1431,26 @@ class MollyWorker:
         if not set(profile.required_capabilities).issubset(capabilities):
             raise WorkerProtocolError("required_capability_unavailable")
 
-    def _execute_adapter(self, request: RemoteExecutionRequest) -> None:
+    def _execute_adapter(
+        self,
+        request: RemoteExecutionRequest,
+        inputs: _AttemptInputs,
+    ) -> None:
         if request.execution_profile_id == "reinvent4-cpu-v1":
-            self._execute_reinvent4(request)
+            self._execute_reinvent4(request, inputs)
             return
         if request.execution_profile_id == "unimol-train-v1":
-            self._execute_unimol(request)
+            self._execute_unimol(request, inputs)
             return
         raise WorkerProtocolError("adapter_unavailable")
 
-    def _execute_reinvent4(self, request: RemoteExecutionRequest) -> None:
+    def _execute_reinvent4(
+        self,
+        request: RemoteExecutionRequest,
+        inputs: _AttemptInputs | None = None,
+    ) -> None:
+        if inputs is None:
+            inputs = self._snapshot_verified_inputs(request)
         repository = self.settings.reinvent4_repository
         python = self.settings.reinvent4_python
         if repository is None or python is None:
@@ -1108,14 +1458,17 @@ class MollyWorker:
         self._require_runtime_path(repository, directory=True)
         self._require_runtime_path(python, executable=True)
         config_artifact = self._single_input_for_purpose(request, "generator-config")
-        template_path = self.store.input_path(
-            request.request_id,
-            config_artifact.relative_path,
-        )
-        template = self._read_text_bound(template_path, max_bytes=16 * 1024 * 1024)
+        try:
+            template = self._read_attempt_bytes(
+                inputs,
+                config_artifact.relative_path,
+                max_bytes=16 * 1024 * 1024,
+            ).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise WorkerProtocolError("input_not_utf8") from exc
         if "{{molly_output_csv}}" not in template:
             raise WorkerProtocolError("reinvent4_output_binding_missing")
-        task_payload = self._optional_task_payload(request)
+        task_payload = self._optional_task_payload(request, inputs)
         seed_value = task_payload.get("seed", 0)
         if isinstance(seed_value, bool):
             raise WorkerProtocolError("invalid_reinvent4_seed")
@@ -1169,21 +1522,36 @@ class MollyWorker:
             str(python),
             "-m",
             "reinvent.Reinvent",
-            str(effective_config),
         ]
-        self._run_adapter_command(
-            request,
-            command,
-            cwd=repository,
-            env=environment,
-        )
+        config_descriptor = _open_regular_no_follow(effective_config)
+        try:
+            config_identity, config_digest = _descriptor_digest(config_descriptor)
+            command.append(self._descriptor_path(config_descriptor))
+            self._run_adapter_command(
+                request,
+                command,
+                cwd=repository,
+                env=environment,
+                pass_fds=(config_descriptor,),
+            )
+            final_identity, final_digest = _descriptor_digest(config_descriptor)
+            if final_identity != config_identity or final_digest != config_digest:
+                raise WorkerProtocolError("effective_config_changed")
+        finally:
+            os.close(config_descriptor)
         if not output_path.is_file():
             raise WorkerProtocolError("reinvent4_output_missing")
         prefix = self._read_prefix(output_path, 4096)
         if not prefix.startswith(b"SMILES,") or b"\x00" in prefix:
             raise WorkerProtocolError("reinvent4_output_invalid")
 
-    def _execute_unimol(self, request: RemoteExecutionRequest) -> None:
+    def _execute_unimol(
+        self,
+        request: RemoteExecutionRequest,
+        inputs: _AttemptInputs | None = None,
+    ) -> None:
+        if inputs is None:
+            inputs = self._snapshot_verified_inputs(request)
         repository = self.settings.unimol_repository
         python = self.settings.unimol_python
         if repository is None or python is None:
@@ -1204,15 +1572,10 @@ class MollyWorker:
         }:
             raise WorkerProtocolError("unimol_training_data_invalid")
         config_artifact = self._single_input_for_purpose(request, "training-config")
-        config_path = self.store.input_path(
-            request.request_id,
-            config_artifact.relative_path,
+        config = self._validate_unimol_config(
+            self._read_attempt_json(inputs, config_artifact.relative_path)
         )
-        config = self._validate_unimol_config(_read_json_file(config_path))
-        data_path = self.store.input_path(
-            request.request_id,
-            data_artifact.relative_path,
-        )
+        data_path = inputs.paths[data_artifact.relative_path]
         job_dir = self.store.job_dir(request.request_id)
         scratch = _ensure_private_directory(job_dir / "work" / "unimol-model")
         model_output = self.store.output_path(
@@ -1230,34 +1593,53 @@ class MollyWorker:
             "model/training_audit.json",
             create_parents=True,
         )
-        adapter_request = job_dir / "work" / "unimol_adapter_request.json"
-        _write_private_json(
-            adapter_request,
-            {
-                "data_path": str(data_path),
-                "scratch_path": str(scratch),
-                "model_output": str(model_output),
-                "metrics_output": str(metrics_output),
-                "config": config,
-            },
-        )
-        runner = job_dir / "work" / "run_unimol.py"
-        _write_private_bytes(runner, _UNIMOL_RUNNER.encode("utf-8"))
-        environment = self._adapter_environment()
-        environment.update(
-            {
-                "OMP_NUM_THREADS": str(request.requested_resources.cpu_threads),
-                "MKL_NUM_THREADS": str(request.requested_resources.cpu_threads),
-                "OPENBLAS_NUM_THREADS": str(request.requested_resources.cpu_threads),
-                "CUDA_VISIBLE_DEVICES": str(config["gpu_device"]),
-            }
-        )
-        self._run_adapter_command(
-            request,
-            [str(python), str(runner), str(adapter_request)],
-            cwd=repository,
-            env=environment,
-        )
+        data_descriptor = _open_regular_no_follow(data_path)
+        try:
+            data_identity, data_digest = _descriptor_digest(data_descriptor)
+            if (
+                data_identity != inputs.identities[data_artifact.relative_path]
+                or data_digest != inputs.digests[data_artifact.relative_path]
+            ):
+                raise WorkerProtocolError("attempt_input_binding_mismatch")
+            adapter_request = job_dir / "work" / "unimol_adapter_request.json"
+            _write_private_json(
+                adapter_request,
+                {
+                    "data_path": self._descriptor_path(data_descriptor),
+                    "data_suffix": (
+                        ".csv"
+                        if data_artifact.media_type == "application/csv"
+                        else ".parquet"
+                    ),
+                    "scratch_path": str(scratch),
+                    "model_output": str(model_output),
+                    "metrics_output": str(metrics_output),
+                    "config": config,
+                },
+            )
+            runner = job_dir / "work" / "run_unimol.py"
+            _write_private_bytes(runner, _UNIMOL_RUNNER.encode("utf-8"))
+            environment = self._adapter_environment()
+            environment.update(
+                {
+                    "OMP_NUM_THREADS": str(request.requested_resources.cpu_threads),
+                    "MKL_NUM_THREADS": str(request.requested_resources.cpu_threads),
+                    "OPENBLAS_NUM_THREADS": str(request.requested_resources.cpu_threads),
+                    "CUDA_VISIBLE_DEVICES": str(config["gpu_device"]),
+                }
+            )
+            self._run_adapter_command(
+                request,
+                [str(python), str(runner), str(adapter_request)],
+                cwd=repository,
+                env=environment,
+                pass_fds=(data_descriptor,),
+            )
+            final_identity, final_digest = _descriptor_digest(data_descriptor)
+            if final_identity != data_identity or final_digest != data_digest:
+                raise WorkerProtocolError("attempt_input_binding_mismatch")
+        finally:
+            os.close(data_descriptor)
         if not model_output.is_file() or not metrics_output.is_file():
             raise WorkerProtocolError("unimol_output_missing")
         _write_private_json(
@@ -1299,15 +1681,43 @@ class MollyWorker:
         if roster is None:
             raise WorkerProtocolError("output_contract_unavailable")
         artifacts: list[RemoteOutputArtifact] = []
+        verification_payloads: dict[str, bytes] = {}
         for artifact_id, relative_path, media_type in roster:
             path = self.store.output_path(request.request_id, relative_path)
-            size_bytes, sha256 = _digest_file(path)
+            descriptor = _open_regular_no_follow(path)
+            try:
+                identity, sha256 = _descriptor_digest(descriptor)
+                if request.output_contract == "reinvent4-generation-output-v1":
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    verification_payloads[relative_path] = os.read(descriptor, 4096)
+                elif media_type == "application/json":
+                    if identity.size > 16 * 1024 * 1024:
+                        raise WorkerProtocolError("output_content_invalid")
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    payload = b""
+                    while len(payload) < identity.size:
+                        chunk = os.read(
+                            descriptor,
+                            min(64 * 1024, identity.size - len(payload)),
+                        )
+                        if not chunk:
+                            break
+                        payload += chunk
+                    verification_payloads[relative_path] = payload
+                else:
+                    verification_payloads[relative_path] = b""
+                final = _FileIdentity.from_stat(os.fstat(descriptor))
+                path_identity = _path_regular_identity(path)
+                if final != identity or path_identity != identity:
+                    raise WorkerProtocolError("output_content_changed")
+            finally:
+                os.close(descriptor)
             artifacts.append(
                 RemoteOutputArtifact(
                     artifact_id=artifact_id,
                     relative_path=relative_path,
                     media_type=media_type,
-                    size_bytes=size_bytes,
+                    size_bytes=identity.size,
                     sha256=sha256,
                 )
             )
@@ -1316,10 +1726,7 @@ class MollyWorker:
         verify_remote_output_contents(
             request.output_contract,
             artifacts,
-            lambda relative_path: self._read_output_for_verification(
-                request,
-                relative_path,
-            ),
+            lambda relative_path: verification_payloads[relative_path],
         )
         payload: dict[str, Any] = {
             "schema_version": "molly_remote_execution_publication.v1",
@@ -1348,7 +1755,11 @@ class MollyWorker:
             raise WorkerProtocolError(f"invalid_{purpose.replace('-', '_')}_input")
         return matches[0]
 
-    def _optional_task_payload(self, request: RemoteExecutionRequest) -> dict[str, Any]:
+    def _optional_task_payload(
+        self,
+        request: RemoteExecutionRequest,
+        inputs: _AttemptInputs,
+    ) -> dict[str, Any]:
         matches = [
             artifact
             for artifact in request.input_manifest.artifacts
@@ -1358,9 +1769,7 @@ class MollyWorker:
             return {}
         if len(matches) != 1 or matches[0].media_type != "application/json":
             raise WorkerProtocolError("invalid_execution_request_input")
-        return _read_json_file(
-            self.store.input_path(request.request_id, matches[0].relative_path)
-        )
+        return self._read_attempt_json(inputs, matches[0].relative_path)
 
     @staticmethod
     def _validate_unimol_config(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1427,33 +1836,80 @@ class MollyWorker:
         *,
         cwd: Path,
         env: Mapping[str, str],
+        pass_fds: Sequence[int] = (),
     ) -> None:
         job_dir = self.store.job_dir(request.request_id)
         stdout_path = job_dir / "logs" / "adapter.stdout.log"
         stderr_path = job_dir / "logs" / "adapter.stderr.log"
-        with open(stdout_path, "ab", buffering=0) as stdout, open(
-            stderr_path,
-            "ab",
-            buffering=0,
-        ) as stderr:
-            os.chmod(stdout_path, 0o600)
-            os.chmod(stderr_path, 0o600)
-            try:
-                completed = self.run_command(
-                    list(command),
-                    stdin=subprocess.DEVNULL,
-                    stdout=stdout,
-                    stderr=stderr,
-                    cwd=cwd,
-                    env=dict(env),
-                    timeout=request.requested_resources.walltime_sec,
-                    check=False,
+        process: Any | None = None
+        return_code: int | None = None
+        try:
+            with open(stdout_path, "ab", buffering=0) as stdout, open(
+                stderr_path,
+                "ab",
+                buffering=0,
+            ) as stderr:
+                os.chmod(stdout_path, 0o600)
+                os.chmod(stderr_path, 0o600)
+                try:
+                    process = self.adapter_popen_factory(
+                        list(command),
+                        stdin=subprocess.DEVNULL,
+                        stdout=stdout,
+                        stderr=stderr,
+                        cwd=cwd,
+                        env=dict(env),
+                        close_fds=True,
+                        pass_fds=tuple(pass_fds),
+                        start_new_session=True,
+                    )
+                except OSError as exc:
+                    raise WorkerProtocolError("adapter_launch_failed") from exc
+                process_token = self._process_token(int(process.pid))
+                with self.store.lock(request.request_id):
+                    state = self.store.read_state(request.request_id)
+                    observation = RemoteObservation.model_validate(state["observation"])
+                    if observation.status in {"CANCEL_REQUESTED", "CANCELLED"}:
+                        self._terminate_spawned_process_group(process)
+                        raise WorkerProtocolError("worker_cancelled")
+                    self.store.write_state(
+                        request,
+                        observation,
+                        pid=self._state_pid(state, field="pid"),
+                        process_token=str(state.get("process_token") or ""),
+                        adapter_pid=int(process.pid),
+                        adapter_process_token=process_token,
+                    )
+                timeout = (
+                    self.adapter_timeout_sec
+                    if self.adapter_timeout_sec is not None
+                    else float(request.requested_resources.walltime_sec)
                 )
-            except subprocess.TimeoutExpired as exc:
-                raise WorkerProtocolError("walltime_exceeded") from exc
-            except OSError as exc:
-                raise WorkerProtocolError("adapter_launch_failed") from exc
-        if completed.returncode != 0:
+                try:
+                    return_code = int(process.wait(timeout=timeout))
+                except subprocess.TimeoutExpired as exc:
+                    self._terminate_spawned_process_group(process)
+                    raise WorkerProtocolError("walltime_exceeded") from exc
+                if self._process_group_exists(int(process.pid)):
+                    self._terminate_known_process_group(int(process.pid))
+        finally:
+            if process is not None:
+                with contextlib.suppress(Exception):
+                    with self.store.lock(request.request_id):
+                        state = self.store.read_state(request.request_id)
+                        if state.get("adapter_pid") == int(process.pid):
+                            observation = RemoteObservation.model_validate(
+                                state["observation"]
+                            )
+                            self.store.write_state(
+                                request,
+                                observation,
+                                pid=self._state_pid(state, field="pid"),
+                                process_token=str(state.get("process_token") or ""),
+                            )
+        if return_code is None:
+            raise WorkerProtocolError("adapter_launch_failed")
+        if return_code != 0:
             raise WorkerProtocolError("adapter_nonzero_exit")
 
     @staticmethod
@@ -1476,29 +1932,11 @@ class MollyWorker:
             raise WorkerProtocolError("runtime_path_unavailable")
 
     @staticmethod
-    def _read_text_bound(path: Path, *, max_bytes: int) -> str:
-        try:
-            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        except OSError as exc:
-            raise WorkerProtocolError("unsafe_worker_file") from exc
-        try:
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > max_bytes:
-                raise WorkerProtocolError("input_too_large")
-            payload = b""
-            while len(payload) <= max_bytes:
-                chunk = os.read(descriptor, min(64 * 1024, max_bytes + 1 - len(payload)))
-                if not chunk:
-                    break
-                payload += chunk
-        finally:
-            os.close(descriptor)
-        if len(payload) > max_bytes:
-            raise WorkerProtocolError("input_too_large")
-        try:
-            return payload.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise WorkerProtocolError("input_not_utf8") from exc
+    def _descriptor_path(descriptor: int) -> str:
+        proc_path = Path(f"/proc/self/fd/{descriptor}")
+        if Path("/proc/self/fd").is_dir():
+            return str(proc_path)
+        return f"/dev/fd/{descriptor}"
 
     @staticmethod
     def _read_prefix(path: Path, size: int) -> bytes:
@@ -1511,37 +1949,6 @@ class MollyWorker:
             if not stat.S_ISREG(metadata.st_mode):
                 raise WorkerProtocolError("unsafe_worker_file")
             return os.read(descriptor, size)
-        finally:
-            os.close(descriptor)
-
-    def _read_output_for_verification(
-        self,
-        request: RemoteExecutionRequest,
-        relative_path: str,
-    ) -> bytes:
-        path = self.store.output_path(request.request_id, relative_path)
-        if request.output_contract == "reinvent4-generation-output-v1":
-            return self._read_prefix(path, 4096)
-        try:
-            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        except OSError as exc:
-            raise WorkerProtocolError("unsafe_worker_file") from exc
-        try:
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 16 * 1024 * 1024:
-                raise WorkerProtocolError("output_content_invalid")
-            payload = b""
-            while len(payload) <= 16 * 1024 * 1024:
-                chunk = os.read(
-                    descriptor,
-                    min(64 * 1024, 16 * 1024 * 1024 + 1 - len(payload)),
-                )
-                if not chunk:
-                    break
-                payload += chunk
-            if len(payload) > 16 * 1024 * 1024:
-                raise WorkerProtocolError("output_content_invalid")
-            return payload
         finally:
             os.close(descriptor)
 
@@ -1696,11 +2103,16 @@ request_path = Path(sys.argv[1])
 payload = json.loads(request_path.read_text(encoding="utf-8"))
 config = payload["config"]
 data_path = Path(payload["data_path"])
+data_suffix = payload["data_suffix"]
 scratch_path = Path(payload["scratch_path"])
 model_output = Path(payload["model_output"])
 metrics_output = Path(payload["metrics_output"])
 
 from unimol_tools import MolTrain
+
+bound_data_path = scratch_path / ("training-data" + data_suffix)
+shutil.copyfile(data_path, bound_data_path)
+os.chmod(bound_data_path, 0o400)
 
 trainer = MolTrain(
     task="regression",
@@ -1724,7 +2136,7 @@ trainer = MolTrain(
     model_name="unimolv1",
     conf_cache_level=1,
 )
-result = trainer.fit(str(data_path))
+result = trainer.fit(str(bound_data_path))
 
 models = sorted(
     path
