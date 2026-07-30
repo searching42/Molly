@@ -31,7 +31,7 @@ jobs:
         run: python -m compileall -q src tests
 
       - name: Validate complete Full CI shard assignment
-        run: python scripts/select_test_shard.py --shards 2 --validate
+        run: python scripts/select_test_shard.py --shards 4 --validate
 
       - name: Check whitespace errors
         shell: bash

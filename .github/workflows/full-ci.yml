@@ -38,7 +38,7 @@ jobs:
         run: python -m compileall -q src tests
 
       - name: Validate complete, non-overlapping shard assignment
-        run: python scripts/select_test_shard.py --shards 2 --validate
+        run: python scripts/select_test_shard.py --shards 4 --validate
 
       - name: Check whitespace errors
         shell: bash
@@ -58,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1]
+        shard: [0, 1, 2, 3]
     env:
       PYTHONHASHSEED: "0"
       PYTHONPATH: src
@@ -88,7 +88,7 @@ jobs:
           set +e
           mapfile -t selected_tests < <(
             python scripts/select_test_shard.py \
-              --shards 2 \
+              --shards 4 \
               --shard "${{ matrix.shard }}" \
               --validate
           )

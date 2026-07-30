@@ -175,5 +175,9 @@ Final static validation also passed:
 ```text
 python -m compileall -q src tests
 git diff --check
-python scripts/select_test_shard.py --shards 2 --validate
+python scripts/select_test_shard.py --shards 4 --validate
 ```
+
+The current maintenance configuration uses four weighted Full CI shards. The
+earlier two-shard timings above remain the historical PR #5 baseline rather
+than a retroactive performance claim for the four-shard workflow.
