@@ -62,6 +62,8 @@ def test_index_page_uses_project_sidebar_and_chat_workspace(rendered_index_html:
     assert 'id="conversation-stream"' in html
     assert 'id="conversation-form"' in html
     assert 'id="conversation-input"' in html
+    assert 'class="settings-scroll"' in html
+    assert "recordTaskStateInConversation" in html
     assert 'id="chat-review-artifacts"' in html
 
 
@@ -1673,6 +1675,12 @@ def test_stage_timeline_component_endpoint_and_ui(tmp_path) -> None:
     assert timeline["retryable"] is True
     assert timeline["events"][0]["stage"] == "inspect_dataset"
     assert timeline["artifacts"][0]["artifact_id"] == "model_metadata"
+    assert resp.json["project_id"] == "proj-a"
+    assert resp.json["run_id"] == "run-1"
+    assert resp.json["state_files"] == ["stage.json"]
+    assert resp.json["task_state"]["state_files"] == ["stage.json"]
+    assert resp.json["task_state"]["artifact_ids"] == ["model_metadata"]
+    assert "artifact_registry.json" not in resp.json["state_files"]
 
 
 def test_report_preview_component_endpoint_and_ui(tmp_path) -> None:
@@ -1916,6 +1924,52 @@ def test_run_status_endpoint_reads_project_run_state_when_project_id_supplied(tm
     assert resp.json["stage"]["stage"] == "train_model"
     assert resp.json["stage"]["status"] == RunStatus.WAITING_USER.value
     assert resp.json["gate_decisions"][0]["gate"] == GateName.TRAIN_CONFIG.value
+    assert resp.json["state_files"] == ["gate_decisions.json", "stage.json"]
+    assert resp.json["task_state"]["run_id"] == "run-project"
+    assert resp.json["task_state"]["project_id"] == "proj-a"
+    assert "artifact_registry.json" not in resp.json["state_files"]
+
+
+def test_run_status_reports_actual_job_state_filenames_without_registry_inference(tmp_path) -> None:
+    app = create_app(base_runs_dir=tmp_path / "runs", workspace_dir=tmp_path)
+    client = app.test_client()
+    storage = ProjectStorage(tmp_path)
+    storage.write_stage_state(
+        "proj-a",
+        "run-jobs",
+        StageState(
+            stage="train_model",
+            status=RunStatus.RUNNING,
+            started_at=now_iso(),
+            updated_at=now_iso(),
+        ),
+    )
+    run_dir = storage.run_dir("proj-a", "run-jobs")
+    write_json(run_dir / "job_state.json", {"status": "RUNNING"})
+    write_json(run_dir / "background_job_state.json", {"status": "RUNNING"})
+
+    resp = client.get("/api/runs/run-jobs?project_id=proj-a")
+
+    assert resp.status_code == 200
+    assert resp.json["artifacts"] == {}
+    assert resp.json["state_files"] == [
+        "background_job_state.json",
+        "job_state.json",
+        "stage.json",
+    ]
+    assert "job.json" not in resp.json["state_files"]
+    assert "artifact_registry.json" not in resp.json["state_files"]
+
+    storage.register_artifact_path(
+        "proj-a",
+        "run-jobs",
+        "model_metadata",
+        "03_training/model_metadata.json",
+    )
+    with_registry = client.get("/api/runs/run-jobs?project_id=proj-a")
+    assert with_registry.status_code == 200
+    assert "artifact_registry.json" in with_registry.json["state_files"]
+    assert with_registry.json["task_state"]["artifact_ids"] == ["model_metadata"]
 
 
 def test_adapter_execute_endpoint_runs_exported_adapter(tmp_path) -> None:

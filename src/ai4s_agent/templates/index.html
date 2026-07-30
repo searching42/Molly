@@ -48,7 +48,7 @@
       .sidebar-section h2 { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; }
       .sidebar-heading { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
       .sidebar-heading h2 { margin: 0; }
-      .conversation-list { display: grid; min-width: 0; max-width: 100%; gap: 0.35rem; overflow: hidden; }
+      .conversation-list { display: grid; min-width: 0; max-width: 100%; max-height: 22vh; gap: 0.35rem; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
       .conversation-row { display: block; min-width: 0; max-width: 100%; overflow: hidden; }
       .conversation-select { display: block; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; padding: 0.5rem 0.58rem; color: var(--ink); background: transparent; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
       .conversation-select.active { background: rgba(20, 92, 114, 0.12); color: var(--blue); }
@@ -58,15 +58,16 @@
       .atomic-task-icon { color: var(--blue); font-size: 1rem; text-align: center; }
       .atomic-task-status { margin: 0.1rem 0 0; padding: 0 0.58rem; }
       .pill { display: inline-flex; align-items: center; min-height: 1.75rem; padding: 0.28rem 0.55rem; border: 1px solid var(--line); border-radius: 999px; background: var(--white); color: var(--muted); font-size: 0.74rem; font-weight: 900; white-space: nowrap; }
-      .chat-panel { display: grid; grid-template-rows: minmax(260px, 1fr) auto; min-height: 520px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
-      .conversation-stream { display: grid; align-content: start; gap: 0.75rem; padding: 1rem; overflow: auto; }
+      .chat-panel { display: grid; grid-template-rows: minmax(0, 1fr) auto; height: clamp(520px, calc(100vh - 2rem), 820px); min-height: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+      .conversation-stream { display: grid; min-height: 0; align-content: start; gap: 0.75rem; padding: 1rem; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
       .chat-message { max-width: min(760px, 92%); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.75rem 0.85rem; background: rgba(255, 255, 255, 0.72); line-height: 1.45; white-space: pre-wrap; }
       .chat-message.user { justify-self: end; background: rgba(220, 239, 229, 0.88); }
       .chat-message.agent, .chat-message.system { justify-self: start; }
       .chat-message.system { border-style: dashed; color: var(--muted); }
+      .chat-message.task-state { border-style: solid; border-color: rgba(20, 92, 114, 0.28); background: rgba(232, 242, 246, 0.82); color: #27424d; }
       .chat-attachments, .pending-attachments { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.55rem; }
       .attachment-chip { display: inline-flex; max-width: 100%; align-items: center; gap: 0.35rem; border: 1px solid var(--line); border-radius: 999px; padding: 0.22rem 0.5rem; color: var(--muted); background: var(--white); font-size: 0.74rem; overflow-wrap: anywhere; }
-      .conversation-composer { display: grid; gap: 0.65rem; border-top: 1px solid var(--line); padding: 0.85rem; background: rgba(246, 247, 248, 0.84); }
+      .conversation-composer { position: relative; z-index: 1; display: grid; gap: 0.65rem; border-top: 1px solid var(--line); padding: 0.85rem; background: #f6f7f8; box-shadow: 0 -8px 18px rgba(23, 32, 39, 0.04); }
       .composer-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.6rem; align-items: center; }
       .composer-actions button { width: auto; min-width: 8.5rem; }
       .attachment-actions { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
@@ -118,9 +119,10 @@
       .icon-button { width: auto; min-width: 2rem; padding: 0.38rem 0.55rem; border: 1px solid var(--line); color: var(--ink); background: transparent; }
       .modal-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 1rem; background: rgba(11, 25, 31, 0.58); backdrop-filter: blur(5px); }
       .modal-backdrop[hidden] { display: none; }
-      .settings-dialog { width: min(560px, 100%); max-height: calc(100vh - 2rem); overflow: auto; border: 1px solid var(--line); border-radius: 12px; padding: 1.15rem; background: #f8fafb; box-shadow: 0 24px 70px rgba(11, 25, 31, 0.34); }
-      .settings-header { display: flex; justify-content: space-between; gap: 1rem; align-items: start; margin-bottom: 0.8rem; }
+      .settings-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(560px, 100%); max-height: calc(100vh - 2rem); overflow: hidden; border: 1px solid var(--line); border-radius: 12px; padding: 0; background: #f8fafb; box-shadow: 0 24px 70px rgba(11, 25, 31, 0.34); }
+      .settings-header { position: relative; z-index: 1; display: flex; justify-content: space-between; gap: 1rem; align-items: start; margin: 0; border-bottom: 1px solid var(--line); padding: 1.15rem; background: #f8fafb; }
       .settings-header .icon-button { flex: 0 0 auto; }
+      .settings-scroll { min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 0 1.15rem 1.15rem; scrollbar-gutter: stable; }
       .settings-dialog form { gap: 0.72rem; }
       .settings-section { display: grid; gap: 0.65rem; margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 1rem; }
       .field-help { margin: -0.28rem 0 0.1rem; color: var(--muted); font-size: 0.76rem; line-height: 1.45; }
@@ -144,7 +146,7 @@
       .model-workflow-header button { width: auto; }
       .workflow-state { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.75rem; background: rgba(245, 246, 247, 0.72); }
       .workflow-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.65rem; }
-      @media (max-width: 900px) { .app-shell { grid-template-columns: 1fr; padding: 0.75rem; } .project-sidebar { position: static; max-height: none; } .composer-actions { grid-template-columns: 1fr; display: grid; } .composer-actions button { width: 100%; } .two-column, .split, .tool-grid, .button-row { grid-template-columns: 1fr; } }
+      @media (max-width: 900px) { .app-shell { grid-template-columns: 1fr; padding: 0.75rem; } .project-sidebar { position: static; max-height: none; } .chat-panel { height: max(440px, calc(100dvh - 1.5rem)); } .composer-actions { grid-template-columns: 1fr; display: grid; } .composer-actions button { width: 100%; } .two-column, .split, .tool-grid, .button-row { grid-template-columns: 1fr; } }
     </style>
   </head>
   <body>
@@ -486,6 +488,7 @@
           </div>
           <button id="llm-settings-close" type="button" class="icon-button" aria-label="关闭设置">×</button>
         </header>
+        <div class="settings-scroll">
         <form id="llm-settings-form">
           <label for="llm-endpoint">OpenAI-compatible endpoint</label>
           <input id="llm-endpoint" name="endpoint" type="url" placeholder="https://example.com/v1" required />
@@ -593,9 +596,11 @@
             <div id="compute-execution-profiles" class="settings-list"></div>
           </details>
         </section>
+        </div>
       </section>
     </div>
 
+    <script src="{{ url_for('static', filename='task_state.js') }}"></script>
     <script>
       const LOCAL_SESSION_TOKEN = document.querySelector('meta[name="molly-local-token"]')?.content || "";
       const output = document.getElementById("output");
@@ -606,6 +611,7 @@
       let currentConversationId = "";
       let pendingConversationAttachments = [];
       let conversationLoadGeneration = 0;
+      let conversationContextGeneration = 0;
       let currentRunId = "";
       let currentConversationDecision = null;
       let currentModelingPlanPayload = null;
@@ -643,6 +649,27 @@
         const projectId = String(project?.project_id || "proj-oled").trim() || "proj-oled";
         const name = String(project?.name || projectId).trim() || projectId;
         activeProject = { project_id: projectId, name };
+      }
+
+      function invalidateConversationContext() {
+        conversationContextGeneration += 1;
+      }
+
+      function currentConversationContext() {
+        return {
+          projectId: String(activeProject.project_id || ""),
+          conversationId: String(currentConversationId || ""),
+          generation: conversationContextGeneration,
+        };
+      }
+
+      function captureConversationContext() {
+        const context = currentConversationContext();
+        return context.projectId && context.conversationId ? Object.freeze(context) : null;
+      }
+
+      function isConversationContextCurrent(context) {
+        return MollyTaskState.sameConversationContext(context, currentConversationContext());
       }
 
       function renderProjectList(projects) {
@@ -730,6 +757,7 @@
 
       function selectProject(project) {
         resetExternalLLMApproval();
+        invalidateConversationContext();
         updateActiveProjectDisplay(project);
         syncProjectId(activeProject.project_id);
         knownConversations = [];
@@ -789,6 +817,9 @@
         const article = document.createElement("article");
         const displayRole = role === "assistant" ? "agent" : role;
         article.className = `chat-message ${displayRole}`;
+        if (displayRole === "system" && String(content || "").startsWith("运行状态 · ")) {
+          article.classList.add("task-state");
+        }
         const text = document.createElement("div");
         text.textContent = String(content || "");
         article.appendChild(text);
@@ -806,6 +837,32 @@
         }
         stream.appendChild(article);
         stream.scrollTop = stream.scrollHeight;
+      }
+
+      async function recordTaskStateInConversation(payload, { runId = "", projectId = "", context = null } = {}) {
+        if (!context) return false;
+        try {
+          const result = await MollyTaskState.persistTaskStateRecord({
+            payload,
+            runId,
+            projectId,
+            context,
+            getContext: currentConversationContext,
+            messages: conversationMessages,
+            persistMessage: persistConversationMessageToContext,
+            appendMessage: appendConversationMessage,
+          });
+          return result.status === "persisted";
+        } catch (_err) {
+          if (isConversationContextCurrent(context)) {
+            appendConversationMessage("system", `运行状态 · ${runId}\n状态读取成功，但未能写入持久化对话。`);
+          }
+          return false;
+        }
+      }
+
+      function conversationDecisionMessages() {
+        return MollyTaskState.conversationDecisionMessages(conversationMessages);
       }
 
       function renderPendingConversationAttachments() {
@@ -1217,6 +1274,7 @@
       }
 
       async function loadProjectConversation(projectId, preferredConversationId = "") {
+        invalidateConversationContext();
         const generation = ++conversationLoadGeneration;
         setText("conversation-status", "正在加载服务端对话…");
         try {
@@ -1336,6 +1394,22 @@
             client_message_id: newClientMessageId(),
           },
         );
+        return response.message;
+      }
+
+      async function persistConversationMessageToContext({ projectId, conversationId, generation, role, content }) {
+        const context = { projectId, conversationId, generation };
+        if (!isConversationContextCurrent(context)) throw new Error("stale_conversation_context");
+        const response = await postJSON(
+          `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
+          {
+            role,
+            content,
+            attachment_ids: [],
+            client_message_id: newClientMessageId(),
+          },
+        );
+        if (!isConversationContextCurrent(context)) throw new Error("stale_conversation_context");
         return response.message;
       }
 
@@ -1771,7 +1845,7 @@
           const response = await postJSON("/api/agent/conversation/next-turn", {
             project_id: projectId,
             run_id: runId,
-            messages: conversationMessages,
+            messages: conversationDecisionMessages(),
             available_inputs: datasetAvailableInputs(),
             external_llm_approved: document.getElementById("conversation-external-llm-approved").checked,
           });
@@ -1929,7 +2003,7 @@
           const response = await postJSON("/api/agent/conversation/research-sources", {
             project_id: activeProject.project_id,
             run_id: runId,
-            messages: conversationMessages,
+            messages: conversationDecisionMessages(),
           });
           currentResearchSourceProposal = response.proposal || null;
           appendConversationMessage("agent", "文献来源 proposal 已生成，仅供审阅，不会执行外部采集。");
@@ -2065,27 +2139,49 @@
         setText("model-workflow-status", `${currentModelWorkflow.runId} 当前状态：${status}`);
       }
 
-      async function refreshModelWorkflow({ renderRaw = true } = {}) {
-        if (!currentModelWorkflow?.runId) return null;
+      async function refreshModelWorkflow({ renderRaw = true, recordConversation = false, context = null } = {}) {
+        const workflow = currentModelWorkflow;
+        const runId = String(workflow?.runId || "");
+        const frozenContext = context || captureConversationContext();
+        if (!runId || !frozenContext || !isConversationContextCurrent(frozenContext)) return null;
+        const projectId = frozenContext.projectId;
         const response = await getJSON(
-          `/api/runs/${encodeURIComponent(currentModelWorkflow.runId)}?project_id=${encodeURIComponent(activeProject.project_id)}`,
+          `/api/runs/${encodeURIComponent(runId)}?project_id=${encodeURIComponent(projectId)}`,
         );
+        if (!isConversationContextCurrent(frozenContext) || currentModelWorkflow !== workflow || workflow.runId !== runId) return null;
+        if (!MollyTaskState.taskStateResponseSnapshot(response, {
+          runId,
+          projectId,
+          context: frozenContext,
+          getContext: currentConversationContext,
+        })) {
+          throw new Error("invalid_task_state_response");
+        }
         const stage = response.stage || {};
         const planned = stage.details?.planned_adapter ? stage.stage : "";
         const execution = {
           status: response.stage_status || stage.status || "UNKNOWN",
           waiting_task: (response.stage_status || stage.status) === "WAITING_USER" && !planned ? stage.stage : "",
           planned_task: planned,
-          executed_tasks: stage.details?.executed_tasks || currentModelWorkflow.lastExecution?.executed_tasks || [],
+          executed_tasks: stage.details?.executed_tasks || workflow.lastExecution?.executed_tasks || [],
         };
-        currentModelWorkflow.lastExecution = execution;
+        workflow.lastExecution = execution;
         persistModelWorkflowState();
         renderModelExecution(execution, response);
         if (renderRaw) render(response);
+        if (recordConversation) {
+          await recordTaskStateInConversation(response, {
+            runId,
+            projectId,
+            context: frozenContext,
+          });
+        }
         return response;
       }
 
       async function startModelRun() {
+        const context = captureConversationContext();
+        if (!context) throw new Error("服务端对话尚未就绪");
         const taskOptions = modelTaskOptions();
         validateModelRunConfiguration(taskOptions);
         const trainingBackend = document.getElementById("training-backend").value;
@@ -2101,10 +2197,11 @@
           requested_tasks: requestedTasks,
           available_artifacts: ["cleaned_train_dataset", "property_catalog"],
         });
+        if (!isConversationContextCurrent(context)) return null;
         const inputArtifacts = modelWorkflowInputArtifacts();
         currentRunId = runId;
         syncRunId(runId);
-        currentModelWorkflow = {
+        const workflow = {
           runId,
           runPlan: expanded.run_plan,
           inputArtifacts,
@@ -2113,13 +2210,15 @@
           generationBackend,
           lastExecution: null,
         };
+        currentModelWorkflow = workflow;
         const response = await postJSON("/api/run-plan/execute", {
-          project_id: activeProject.project_id,
-          run_plan: currentModelWorkflow.runPlan,
+          project_id: context.projectId,
+          run_plan: workflow.runPlan,
           input_artifacts: inputArtifacts,
           task_options: taskOptions,
         });
-        currentModelWorkflow.lastExecution = response.execution || null;
+        if (!isConversationContextCurrent(context) || currentModelWorkflow !== workflow) return null;
+        workflow.lastExecution = response.execution || null;
         persistModelWorkflowState();
         renderModelExecution(response.execution || null);
         appendConversationMessage(
@@ -2127,11 +2226,22 @@
           `${runId} 已创建。任务在 ${modelWaitingTask(response.execution) || response.execution?.status || "当前阶段"} 停下供你审阅。`,
         );
         render(response);
+        try {
+          await refreshModelWorkflow({ renderRaw: false, recordConversation: true, context });
+        } catch (_err) {
+          if (isConversationContextCurrent(context)) {
+            appendConversationMessage("system", `${runId} 已启动，但暂时无法读取持久化状态文件。`);
+          }
+        }
+        return response;
       }
 
       async function approveCurrentModelGate() {
-        if (!currentModelWorkflow?.lastExecution) throw new Error("没有等待批准的模型运行。");
-        const waitingTask = modelWaitingTask(currentModelWorkflow.lastExecution);
+        const context = captureConversationContext();
+        const workflow = currentModelWorkflow;
+        if (!context) throw new Error("服务端对话尚未就绪");
+        if (!workflow?.lastExecution) throw new Error("没有等待批准的模型运行。");
+        const waitingTask = modelWaitingTask(workflow.lastExecution);
         const gate = waitingTask === "train_model"
           ? "gate_3_train_config"
           : waitingTask === "generate_candidates"
@@ -2142,22 +2252,30 @@
         if (!actor) throw new Error("Gate 批准人不能为空。");
         setText("model-workflow-status", `正在以 ${actor} 批准 ${gate}…`);
         const response = await postJSON("/api/run-plan/resume", {
-          project_id: activeProject.project_id,
-          run_plan: currentModelWorkflow.runPlan,
+          project_id: context.projectId,
+          run_plan: workflow.runPlan,
           approved_gates: [gate],
           actor,
           note: `Approved from Molly model training UI for ${waitingTask}.`,
-          input_artifacts: currentModelWorkflow.inputArtifacts,
-          task_options: currentModelWorkflow.taskOptions,
+          input_artifacts: workflow.inputArtifacts,
+          task_options: workflow.taskOptions,
         });
-        currentModelWorkflow.lastExecution = response.execution || null;
+        if (!isConversationContextCurrent(context) || currentModelWorkflow !== workflow) return null;
+        workflow.lastExecution = response.execution || null;
         persistModelWorkflowState();
         renderModelExecution(response.execution || null);
+        try {
+          await refreshModelWorkflow({ renderRaw: false, recordConversation: true, context });
+        } catch (_err) {
+          if (isConversationContextCurrent(context)) {
+            appendConversationMessage("system", `${workflow.runId} 已继续执行，但暂时无法读取持久化状态文件。`);
+          }
+        }
         if (["SUCCEEDED", "DONE"].includes(String(response.execution?.status || ""))) {
-          await refreshModelWorkflow({ renderRaw: false });
-          appendConversationMessage("assistant", `${currentModelWorkflow.runId} 已完成，可在运行 artifact registry 中审阅 model package、generation publication 与 Top-N。`);
+          appendConversationMessage("assistant", `${workflow.runId} 已完成，可在运行 artifact registry 中审阅 model package、generation publication 与 Top-N。`);
         }
         render(response);
+        return response;
       }
 
       async function loadAtomicTasks({ revealResults = false } = {}) {
@@ -2248,7 +2366,7 @@
       });
       document.getElementById("model-run-refresh").addEventListener("click", async () => {
         try {
-          await refreshModelWorkflow();
+          await refreshModelWorkflow({ renderRaw: true, recordConversation: true });
         } catch (err) {
           setText("model-workflow-status", `刷新失败：${normalizeErrorForRender(err).error}`);
           render(err);
@@ -2412,7 +2530,9 @@
           const response = await postJSON(`/api/projects/${projectId}/runs/${runId}/models/promote/draft`, payload);
           fillModelPromotionDraft(response.draft || {});
           render(response);
-        } catch (err) { render(err); }
+        } catch (err) {
+          render(err);
+        }
       });
 
       document.getElementById("model-asset-promotion-form").addEventListener("submit", async (event) => {
@@ -2443,10 +2563,24 @@
 
       document.getElementById("stage-timeline-form").addEventListener("submit", async (event) => {
         event.preventDefault();
+        const context = captureConversationContext();
         const fd = new FormData(event.currentTarget);
-        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
-        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
-        try { render(await getJSON(`/api/projects/${projectId}/runs/${runId}/stage-timeline`)); } catch (err) { render(err); }
+        const projectValue = String(fd.get("project_id") || "").trim();
+        const runValue = String(fd.get("run_id") || "").trim();
+        const projectId = encodeURIComponent(projectValue);
+        const runId = encodeURIComponent(runValue);
+        try {
+          const response = await getJSON(`/api/projects/${projectId}/runs/${runId}/stage-timeline`);
+          if (!context || !isConversationContextCurrent(context)) return;
+          render(response);
+          await recordTaskStateInConversation(response, {
+            runId: runValue,
+            projectId: projectValue,
+            context,
+          });
+        } catch (err) {
+          if (!context || isConversationContextCurrent(context)) render(err);
+        }
       });
 
       document.getElementById("report-preview-form").addEventListener("submit", async (event) => {

@@ -9,6 +9,49 @@ def test_sidebar_matches_frozen_project_conversation_layout(rendered_index_html:
     assert 'class="workspace-topbar"' not in html
 
 
+def test_conversation_history_and_settings_use_independent_scroll_regions(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
+
+    assert ".chat-panel { display: grid; grid-template-rows: minmax(0, 1fr) auto;" in html
+    assert ".conversation-stream { display: grid; min-height: 0;" in html
+    assert "overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable;" in html
+    assert ".conversation-composer { position: relative; z-index: 1;" in html
+    assert ".conversation-list { display: grid;" in html
+    assert "max-height: 22vh" in html
+    assert 'class="settings-dialog"' in html
+    assert 'class="settings-scroll"' in html
+    assert ".settings-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr);" in html
+    assert ".settings-scroll { min-height: 0; overflow-x: hidden; overflow-y: auto;" in html
+    assert html.index('id="llm-settings-close"') < html.index('class="settings-scroll"')
+
+
+def test_task_intermediate_state_files_are_persisted_in_conversation(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
+    module = Path("src/ai4s_agent/static/task_state.js").read_text(encoding="utf-8")
+
+    assert 'src="/static/task_state.js"' in html
+    assert "async function recordTaskStateInConversation(payload," in html
+    assert "persistConversationMessageToContext" in html
+    assert "captureConversationContext()" in html
+    assert "isConversationContextCurrent" in html
+    assert "MollyTaskState.persistTaskStateRecord" in html
+    assert "MollyTaskState.conversationDecisionMessages(conversationMessages)" in html
+    assert "中间状态文件：" in module
+    assert "状态读取成功，但未能写入持久化对话。" in html
+    assert "recordConversation: true" in html
+    assert '"job_state.json"' in module
+    assert '"background_job_state.json"' in module
+    assert '"job.json"' not in module
+    assert "safeTaskStateToken" not in html
+    assert "safeTaskStateToken" not in module
+    assert "stateFiles:" not in html
+    assert 'text.textContent = String(content || "");' in html
+
+
 def test_sidebar_exposes_literature_parse_without_bounded_oled_entry(
     rendered_index_html: str,
 ) -> None:
@@ -83,3 +126,4 @@ def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html:
     assert "probe_transport_failed" in html
     assert "probe_response_unavailable" in html
     assert "probe_response_invalid" in html
+from pathlib import Path

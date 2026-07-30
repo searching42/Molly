@@ -6,6 +6,7 @@ from ai4s_agent.agents.observer import ObserverAgent
 from ai4s_agent.agents.verifier import VerifierAgent
 from ai4s_agent.job_manager import JobManager
 from ai4s_agent.storage import ProjectStorage
+from ai4s_agent.task_state_projection import build_task_state_projection
 from ai4s_agent.ui_cards import build_report_preview, build_stage_timeline
 
 
@@ -18,7 +19,25 @@ def register_project_run_routes(app: Flask, *, projects: ProjectStorage, jobs: J
             return jsonify({"ok": False, "error": str(exc)}), 400
         if state is None:
             return jsonify({"ok": False, "error": "no stage state found for run"}), 404
-        return jsonify({"ok": True, "timeline": build_stage_timeline(state)})
+        timeline = build_stage_timeline(state)
+        run_path = projects.run_dir(project_id, run_id)
+        task_state = build_task_state_projection(
+            run_path=run_path,
+            project_id=project_id,
+            run_id=run_id,
+            stage_payload=state.model_dump(mode="json"),
+            artifact_payload={"artifacts": projects.read_artifact_registry(project_id, run_id)},
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "project_id": project_id,
+                "run_id": run_id,
+                "state_files": task_state["state_files"],
+                "task_state": task_state,
+                "timeline": timeline,
+            }
+        )
 
     @app.get("/api/projects/<project_id>/runs/<run_id>/report-preview")
     def report_preview(project_id: str, run_id: str):
