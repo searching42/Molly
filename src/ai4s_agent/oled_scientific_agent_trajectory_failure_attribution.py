@@ -798,6 +798,7 @@ def _observations(
                 )
             continue
         if kind == "stage_failed":
+            recovered = _outcome_value(event, "recovery_disposition") == "recovered"
             for family, code, reason, sufficient in _stage_failure_classifications(
                 event
             ):
@@ -809,7 +810,7 @@ def _observations(
                         finding_code=code,
                         reason=reason,
                         sufficient=sufficient,
-                        cause_candidate=sufficient,
+                        cause_candidate=sufficient and not recovered,
                         trajectory_digests=trajectory_digests,
                     )
                 )
@@ -851,7 +852,38 @@ def _observations(
             "duplicate_dispatch_detected" in _reason_codes(event)
             for event in child_dispatches[1:]
         )
-        sufficient = explicit and None not in distinct_ids and len(distinct_ids) > 1
+        uses_source_receipts = any(
+            _outcome_value(event, "dispatch_kind") is not None
+            for event in child_dispatches
+        )
+        source_bound = (
+            all(
+                isinstance(event.get("source"), dict)
+                and event["source"].get("logical_role")
+                == "child_dispatch_receipt"
+                for event in child_dispatches
+            )
+            and len(
+                {
+                    event["source"].get("source_artifact_id")
+                    for event in child_dispatches
+                }
+            )
+            == len(child_dispatches)
+            and _outcome_value(child_dispatches[0], "execution_started") is True
+            and any(
+                _outcome_value(event, "dispatch_kind") == "duplicate_rejected"
+                and _outcome_value(event, "execution_started") is False
+                and "duplicate_dispatch_detected" in _reason_codes(event)
+                for event in child_dispatches[1:]
+            )
+        )
+        sufficient = (
+            explicit
+            and None not in distinct_ids
+            and len(distinct_ids) > 1
+            and (source_bound if uses_source_receipts else True)
+        )
         event = child_dispatches[1]
         observations.append(
             _event_observation(

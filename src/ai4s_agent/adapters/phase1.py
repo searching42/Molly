@@ -25,6 +25,9 @@ from ai4s_agent.adapters.claude_scripts import CLAUDE_SCRIPTS, WORKSPACE, build_
 from ai4s_agent.adapters.runtime import run_argv_cmd, run_argv_cmd_with_env
 from ai4s_agent.resource_profiles import ResourceProfileStore
 from ai4s_agent.runtime_environments import RuntimeEnvironmentStore
+from ai4s_agent.oled_scientific_agent_source_evidence import (
+    ScientificAgentTypedFailure,
+)
 from ai4s_agent.generation_publication import (
     GENERATION_PUBLICATION_SCHEMA,
     GENERATION_REQUEST_SCHEMA,
@@ -582,7 +585,7 @@ def _private_reinvent4_environment(payload: dict[str, Any]) -> dict[str, str]:
     if "reinvent4" not in connection.declared_capabilities:
         raise ValueError("REINVENT4 connection profile lacks required capabilities")
     if not connection.known_hosts_path:
-        raise ValueError("REINVENT4 connection profile requires pinned known-hosts")
+        raise ScientificAgentTypedFailure("known_hosts_verification_failed")
     return {
         "environment_id": environment.environment_id,
         "environment_profile_digest": environment.digest(),
@@ -839,7 +842,7 @@ def _generate_candidates_reinvent4_backend(
     if remote_known_hosts_file:
         known_hosts_path = _resolve_path(remote_known_hosts_file, base=WORKSPACE)
         if not known_hosts_path.is_file() or known_hosts_path.is_symlink():
-            raise ValueError("REINVENT4 remote known-hosts file is unavailable")
+            raise ScientificAgentTypedFailure("known_hosts_verification_failed")
         remote_known_hosts_file = str(known_hosts_path)
     if remote_host_key_alias and (
         not _SAFE_SSH_TARGET_RE.fullmatch(remote_host_key_alias)
@@ -853,10 +856,10 @@ def _generate_candidates_reinvent4_backend(
         or remote_expected_hostname.startswith("-")
     ):
         raise ValueError("REINVENT4 expected remote hostname is invalid")
-    if mode == "remote" and (not remote_expected_hostname or not remote_known_hosts_file):
-        raise ValueError(
-            "REINVENT4 remote execution requires hostname verification and pinned known-hosts"
-        )
+    if mode == "remote" and not remote_known_hosts_file:
+        raise ScientificAgentTypedFailure("known_hosts_verification_failed")
+    if mode == "remote" and not remote_expected_hostname:
+        raise ScientificAgentTypedFailure("remote_endpoint_verification_failed")
 
     if mode == "existing_output":
         source_csv_raw = str(payload.get("reinvent4_output_csv") or payload.get("source_csv") or payload.get("source_output_csv") or "").strip()
@@ -1005,7 +1008,7 @@ def _generate_candidates_reinvent4_backend(
         timeout_sec=timeout_sec,
     )
     if int(endpoint_check.get("returncode", 1)) != 0:
-        raise RuntimeError("REINVENT4 remote endpoint hostname check failed")
+        raise ScientificAgentTypedFailure("remote_endpoint_verification_failed")
     remote["endpoint_hostname_verified"] = True
 
     remote_attempt_create = run_argv_cmd(
@@ -1020,7 +1023,7 @@ def _generate_candidates_reinvent4_backend(
         timeout_sec=timeout_sec,
     )
     if int(remote_attempt_create.get("returncode", 1)) != 0:
-        raise RuntimeError("failed to allocate isolated REINVENT4 remote workspace")
+        raise ScientificAgentTypedFailure("tool_runtime_failure")
 
     remote_output_file = str(Path(remote_output_csv))
     remote_command = " ".join(
@@ -1062,7 +1065,7 @@ def _generate_candidates_reinvent4_backend(
     finally:
         os.close(config_descriptor)
     if int(scp_config.get("returncode", 1)) != 0:
-        raise RuntimeError("failed to copy frozen REINVENT4 config")
+        raise ScientificAgentTypedFailure("scp_transfer_failed")
 
     ssh_result = run_argv_cmd(
         argv=[
@@ -1076,7 +1079,7 @@ def _generate_candidates_reinvent4_backend(
         timeout_sec=timeout_sec,
     )
     if int(ssh_result.get("returncode", 1)) != 0:
-        raise RuntimeError("REINVENT4 remote execution failed")
+        raise ScientificAgentTypedFailure("tool_runtime_failure")
 
     fetch_output = run_argv_cmd(
         argv=[
@@ -1090,7 +1093,7 @@ def _generate_candidates_reinvent4_backend(
         timeout_sec=timeout_sec,
     )
     if int(fetch_output.get("returncode", 1)) != 0:
-        raise RuntimeError("failed to fetch REINVENT4 output CSV")
+        raise ScientificAgentTypedFailure("remote_output_retrieval_failed")
 
     raw_output_sha256 = publish_fresh_file(local_download, frozen_raw_output)
     rows, candidates = _read_generated_candidate_csv(

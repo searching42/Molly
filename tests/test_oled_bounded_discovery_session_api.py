@@ -26,6 +26,11 @@ from ai4s_agent.oled_bounded_discovery_session_view import (
     build_oled_bounded_discovery_session_view,
 )
 from ai4s_agent.oled_real_phase1_execution import _stable_hash
+from ai4s_agent.oled_scientific_agent_source_evidence import (
+    publish_dispatch_receipt,
+    read_dispatch_receipts,
+    read_recovery_receipts,
+)
 from ai4s_agent.storage import ProjectStorage
 from tests.test_oled_bounded_discovery_session import (
     _CountingExecutor,
@@ -434,6 +439,68 @@ def test_second_generation_interrupted_action_is_recovered_without_rewriting_req
         actions_root=actions_root,
         executor=_HoldingExecutor(),  # type: ignore[arg-type]
     )
+    original_write_state = restarted._write_state
+    original_publish_recovery_receipt = action_module.publish_recovery_receipt
+    original_reconcile = (
+        action_module.reconcile_completed_oled_bounded_discovery_session_action
+    )
+    reconcile_calls = 0
+
+    def counted_reconcile(**kwargs: Any) -> Any:
+        nonlocal reconcile_calls
+        reconcile_calls += 1
+        return original_reconcile(**kwargs)
+
+    monkeypatch.setattr(
+        action_module,
+        "reconcile_completed_oled_bounded_discovery_session_action",
+        counted_reconcile,
+    )
+
+    def fail_recovery_receipt_publication(**_: Any) -> None:
+        raise RuntimeError("simulated recovery receipt publication failure")
+
+    monkeypatch.setattr(
+        action_module,
+        "publish_recovery_receipt",
+        fail_recovery_receipt_publication,
+    )
+    with pytest.raises(RuntimeError, match="receipt publication failure"):
+        restarted.recover_interrupted_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )
+    assert inspect_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=waiting.session_id,
+    ).revision == 11
+    assert json.loads(
+        (action_dir / "action.json").read_text(encoding="utf-8")
+    )["status"] == "RUNNING"
+    assert read_recovery_receipts(action_dir=action_dir, allow_missing=True) == []
+    assert reconcile_calls == 1
+    monkeypatch.setattr(
+        action_module,
+        "publish_recovery_receipt",
+        original_publish_recovery_receipt,
+    )
+
+    def fail_recovered_telemetry(_: dict[str, Any]) -> None:
+        raise RuntimeError("simulated mutable telemetry write failure")
+
+    monkeypatch.setattr(restarted, "_write_state", fail_recovered_telemetry)
+    with pytest.raises(RuntimeError, match="telemetry write failure"):
+        restarted.recover_interrupted_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )
+    assert json.loads(
+        (action_dir / "action.json").read_text(encoding="utf-8")
+    )["status"] == "RUNNING"
+    assert len(read_recovery_receipts(action_dir=action_dir)) == 1
+    assert reconcile_calls == 1
+    monkeypatch.setattr(restarted, "_write_state", original_write_state)
     recovered = restarted.recover_interrupted_action(
         project_id=project_id,
         action_id=queued["action_id"],
@@ -449,6 +516,58 @@ def test_second_generation_interrupted_action_is_recovered_without_rewriting_req
     )
     assert final_telemetry["status"] == "RECOVERED"
     assert final_telemetry["completed_revision"] == 11
+    receipts = read_recovery_receipts(action_dir=action_dir)
+    assert len(receipts) == 1
+    assert receipts[0].payload["recovery_kind"] == "adopt_completed_child"
+    assert receipts[0].payload["completed_revision"] == 11
+    assert receipts[0].payload["request_digest"] == recovered["request_digest"]
+    repeated = restarted.recover_interrupted_action(
+        project_id=project_id,
+        action_id=queued["action_id"],
+    )
+    assert repeated["status"] == "RECOVERED"
+    assert len(read_recovery_receipts(action_dir=action_dir)) == 1
+    assert reconcile_calls == 1
+
+    recovered_run_id = str(receipts[0].payload["recovered_child_run_id"])
+    recovered_run_dir = storage.run_dir(project_id, recovered_run_id)
+    recovered_task_id = str(
+        read_dispatch_receipts(run_dir=recovered_run_dir)[0].payload["task_id"]
+    )
+    for dispatch_kind, attempt_id, digest_char in (
+        ("idempotent_replay", "a" * 32, "a"),
+        ("recovery_adoption", "b" * 32, "b"),
+    ):
+        publish_dispatch_receipt(
+            run_dir=recovered_run_dir,
+            child_run_id=recovered_run_id,
+            task_id=recovered_task_id,
+            dispatch_kind=dispatch_kind,
+            request_or_stage_digest="sha256:" + digest_char * 64,
+            attempt_id=attempt_id,
+        )
+        assert restarted.get_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )["status"] == "RECOVERED"
+        assert restarted.recover_interrupted_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )["status"] == "RECOVERED"
+
+    publish_dispatch_receipt(
+        run_dir=recovered_run_dir,
+        child_run_id=recovered_run_id,
+        task_id=recovered_task_id,
+        dispatch_kind="duplicate_rejected",
+        request_or_stage_digest="sha256:" + "c" * 64,
+        attempt_id="c" * 32,
+    )
+    with pytest.raises(ValueError, match="dispatch roster mismatch"):
+        restarted.recover_interrupted_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )
 
     next_action = restarted.enqueue_advance(
         project_id=project_id,

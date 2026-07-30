@@ -12,7 +12,13 @@ from pathlib import Path
 
 import pytest
 
+from ai4s_agent import adapters
 import ai4s_agent.oled_scientific_agent_trajectory_failure_attribution as attribution_module
+from ai4s_agent.oled_bounded_discovery_session import (
+    advance_oled_bounded_discovery_session,
+    approve_oled_bounded_discovery_session_gate,
+    create_oled_bounded_discovery_session,
+)
 from ai4s_agent.oled_real_phase1_execution import _stable_hash
 from ai4s_agent.oled_scientific_agent_trajectory_audit_metrics import (
     _prepare_audit_publication_from_verified_bytes,
@@ -30,7 +36,14 @@ from ai4s_agent.oled_scientific_agent_trajectory_projection import (
     _sha256,
     publish_oled_scientific_agent_trajectory_projection,
 )
+from ai4s_agent.oled_scientific_agent_source_evidence import (
+    ScientificAgentTypedFailure,
+    dispatch_authority_roster,
+    publish_dispatch_receipt,
+)
+from ai4s_agent.storage import ProjectStorage
 from test_oled_scientific_agent_trajectory_projection import (
+    _spec,
     _terminal_two_rounds,
     _tree_snapshot,
 )
@@ -334,6 +347,8 @@ def _standard_case(
             for index, event in enumerate(events)
             if event["event_kind"] == "task_dispatched"
         )
+        for key in ("dispatch_kind", "dispatch_ordinal", "execution_started"):
+            events[dispatch_index]["outcome"].pop(key, None)
         duplicate = dict(events[dispatch_index])
         duplicate["reason_codes"] = ["duplicate_dispatch_detected"]
         events.insert(dispatch_index + 1, duplicate)
@@ -479,6 +494,162 @@ def test_multi_family_stage_failure_publishes_ambiguity_without_priority(
 
 
 @pytest.mark.pr_fast
+def test_production_source_multi_family_failure_reaches_attribution_ambiguity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_root = tmp_path / "production-source-multi-family"
+    input_root.mkdir()
+    session_spec = _spec(input_root, monkeypatch, target_top_n=1)
+
+    def fail_with_two_families(_: dict[str, object]) -> dict[str, object]:
+        raise ScientificAgentTypedFailure(
+            "ssh_connection_failed",
+            "gate_snapshot_mismatch",
+        )
+
+    monkeypatch.setattr(
+        adapters,
+        "execute_oled_registry_candidate_screening_adapter",
+        fail_with_two_families,
+    )
+    storage = ProjectStorage(tmp_path / "workspace-production-source")
+    project_id = "attribution-production-source"
+    current = create_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_spec=session_spec,
+    )
+    current = advance_oled_bounded_discovery_session(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,
+        expected_revision=current.revision,
+    )
+    current = approve_oled_bounded_discovery_session_gate(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,
+        expected_revision=current.revision,
+        actor="source-contract-reviewer",
+    )
+    actions_root = tmp_path / "actions-production-source"
+    trajectory = publish_oled_scientific_agent_trajectory_projection(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,
+        actions_root=actions_root,
+        output_root=tmp_path / "trajectory-production-source",
+    )
+    audit = publish_oled_scientific_agent_trajectory_audit_metrics(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,
+        actions_root=actions_root,
+        trajectory_publication_dir=trajectory.output_dir,
+        output_root=tmp_path / "audit-production-source",
+    )
+    attribution = publish_oled_scientific_agent_failure_attribution(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,
+        actions_root=actions_root,
+        trajectory_publication_dir=trajectory.output_dir,
+        audit_publication_dir=audit.output_dir,
+        output_root=tmp_path / "attribution-production-source",
+    )
+    manifest = json.loads(
+        attribution.attribution_manifest_json.read_text(encoding="utf-8")
+    )
+    rows = [
+        json.loads(line)
+        for line in attribution.failure_attributions_jsonl.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+
+    assert manifest["result"] == {
+        "ambiguity_reason": "multiple_equal_first_cause_candidates",
+        "attribution_status": "undetermined",
+        "primary_first_cause_id": None,
+    }
+    assert {
+        row["taxonomy_family"]
+        for row in rows
+        if row["affected"]["event_kind"] == "stage_failed"
+    } == {"authorization_mismatch", "transport"}
+
+
+@pytest.mark.pr_fast
+def test_exact_bound_duplicate_rejection_is_recovery_not_duplicate_computation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "duplicate-source"
+    source_root.mkdir()
+    storage, project_id, current = _terminal_two_rounds(source_root, monkeypatch)
+    terminal = json.loads(
+        (current.session_dir / "session_state.json").read_text(encoding="utf-8")  # type: ignore[attr-defined]
+    )
+    child = terminal["children"][0]
+    run_dir = storage.run_dir(project_id, child["run_id"])
+    publish_dispatch_receipt(
+        run_dir=run_dir,
+        child_run_id=child["run_id"],
+        task_id=child["task_id"],
+        dispatch_kind="duplicate_rejected",
+        request_or_stage_digest="sha256:" + "d" * 64,
+        attempt_id="e" * 32,
+    )
+    stage_path = run_dir / "stage.json"
+    stage_payload = json.loads(stage_path.read_text(encoding="utf-8"))
+    stage_payload.setdefault("details", {})["dispatch_authority_roster"] = (
+        dispatch_authority_roster(run_dir=run_dir)
+    )
+    stage_path.write_bytes(_canonical_json_bytes(stage_payload))
+    actions_root = tmp_path / "duplicate-actions"
+    trajectory = publish_oled_scientific_agent_trajectory_projection(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,  # type: ignore[attr-defined]
+        actions_root=actions_root,
+        output_root=tmp_path / "duplicate-trajectory",
+    )
+    audit = publish_oled_scientific_agent_trajectory_audit_metrics(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,  # type: ignore[attr-defined]
+        actions_root=actions_root,
+        trajectory_publication_dir=trajectory.output_dir,
+        output_root=tmp_path / "duplicate-audit",
+    )
+    attribution = publish_oled_scientific_agent_failure_attribution(
+        storage=storage,
+        project_id=project_id,
+        session_id=current.session_id,  # type: ignore[attr-defined]
+        actions_root=actions_root,
+        trajectory_publication_dir=trajectory.output_dir,
+        audit_publication_dir=audit.output_dir,
+        output_root=tmp_path / "duplicate-attribution",
+    )
+    rows = [
+        json.loads(line)
+        for line in attribution.failure_attributions_jsonl.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    duplicate = next(
+        row
+        for row in rows
+        if row["deterministic_reason_code"] == "duplicate_dispatch_persisted"
+    )
+
+    assert duplicate["taxonomy_family"] == "recovery"
+    assert duplicate["attribution_role"] == "first_cause"
+    assert duplicate["attribution_status"] == "determined"
+    assert "does not claim duplicate computation" in duplicate["rationale_summary"]
+
+
+@pytest.mark.pr_fast
 @pytest.mark.parametrize(
     ("stop_reason", "family"),
     (
@@ -510,6 +681,41 @@ def test_recovered_early_failure_is_not_linked_to_independent_terminal_stop(
     assert terminal["attribution_status"] == "undetermined"
     assert terminal["deterministic_reason_code"] == "causal_link_not_proven"
     assert terminal["finding_code"] == "REVIEW_RECOMMENDED"
+
+
+@pytest.mark.pr_fast
+@pytest.mark.parametrize(
+    ("stop_reason", "family"),
+    (
+        ("max_generation_rounds_reached", "policy_constraint"),
+        ("candidate_supply_exhausted", "candidate_supply"),
+    ),
+)
+def test_explicitly_recovered_failure_cannot_displace_independent_stop_cause(
+    verified_source_bundle: _SourceBundle,
+    stop_reason: str,
+    family: str,
+) -> None:
+    payloads = _recovered_then_bounded_payloads(
+        _trajectory_payloads(verified_source_bundle), stop_reason
+    )
+    events = [json.loads(line) for line in payloads["events.jsonl"].splitlines()]
+    early_failure = next(
+        event for event in events if event["event_kind"] == "stage_failed"
+    )
+    early_failure["outcome"]["recovery_disposition"] = "recovered"
+    prepared = _prepare_direct(_refresh_trajectory(payloads, events=events))
+    rows = _prepared_rows(prepared)
+    primary = next(row for row in rows if row["attribution_role"] == "first_cause")
+    recovered = next(
+        row for row in rows if row["affected"]["event_kind"] == "stage_failed"
+    )
+
+    assert primary["taxonomy_family"] == family
+    assert primary["affected"]["event_kind"] == "terminal_result_committed"
+    assert recovered["attribution_role"] == "downstream_symptom"
+    assert recovered["attribution_status"] == "undetermined"
+    assert recovered["deterministic_reason_code"] == "causal_link_not_proven"
 
 
 @pytest.mark.parametrize(

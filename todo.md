@@ -351,6 +351,7 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 | `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/—` | `DONE` | PR-BF 已完成；等待后续真实/代表性验收补 `V` |
 | `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `I/T/—` | `DONE` | PR-BG 已实现并通过正常、对抗、确定性与完整 suite；等待后续 evidence PR 补 `V` |
 | `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `I/T/—` | `DONE` | PR-BH 已完成；下一 PR 采集代表性 runtime inspection evidence 后补 `V` |
+| `M3-SRC-001`～`M3-SRC-008` authoritative failure source evidence | `I/T/—` | `DONE` | PR-BJ 已实现并通过 source、projection、attribution、recovery、隐私与 legacy byte replay；等待 PR-BI 补 `V` |
 
 目标：从可重放 projection 计算确定性 auditor findings；不得直接改变 Session 或 PR-AU 状态。
 
@@ -363,6 +364,14 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 - `M3-020`：区分 first cause 与 downstream symptom。
 - `M3-021`～`M3-022`：known-hosts 传播、history truncation、duplicate dispatch 和 stale state 标准案例。
 - `M3-023`～`M3-028`：read-only inspect API、查询、最小时间线、evidence 展示、真实 alternatives 和敏感字段控制。
+- `M3-SRC-001`：定义 authoritative failure source evidence contract v1。
+- `M3-SRC-002`：持久化安全、类型化、可多值的 stage failure reason evidence。
+- `M3-SRC-003`：持久化实际 dispatch attempt receipt，并区分首次 dispatch、duplicate dispatch、idempotent replay。
+- `M3-SRC-004`：持久化 recovery adoption receipt 和显式 source link。
+- `M3-SRC-005`：PR-BD 从新 source exact replay reason、dispatch 和 causal link，同时保留 legacy fallback。
+- `M3-SRC-006`：PR-BG 仅依据显式 source evidence 处理 recovered failure、linked symptom 和 unlinked symptom。
+- `M3-SRC-007`：旧 v1 Session/publication 保持逐字节 exact replay。
+- `M3-SRC-008`：完成隐私、完整性、确定性和 observer-only 对抗测试。
 
 ### 5.2 M3 退出条件
 
@@ -668,6 +677,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：projection v1 可能留下 unattached finding；API 需要调用方明确提供三层 publication ID；最小时间线不是通用 causal graph；M4 前不得宣称 attribution accuracy。
 - 批准人：repository owner。
 
+### 2026-07-30：PR-BI 暴露 PR-BD source-evidence gap
+
+- 决策：PR-BI 保持 Draft 和 `I/T/—`，在其前插入独立 PR-BJ source-contract 实现。
+- 原计划：PR-BH 后直接由 PR-BI 完成八个 representative inspection cases。
+- 新计划：先由 PR-BJ 增加 authoritative failure/dispatch/recovery source evidence；PR-BJ 合并后再 rebase PR-BI，并重新执行全部八个 cases。
+- 依据：PR-BI 的 deterministic preflight 证明四个案例无法由当前 PR-BD v1 权威 source 表达；继续修改 evidence runner 会制造 test-only evidence。
+- 影响任务：新增 `M3-SRC-001`～`M3-SRC-008`；`M3-GATE-001`～`M3-GATE-004` 保持未完成；M4 继续锁定。
+- 新增风险：新的 source evidence 可能破坏 legacy exact replay、泄漏基础设施信息，或错误地把 idempotent replay 解释为 duplicate computation。
+- 批准人：repository owner。
+
 后续路线调整必须追加：
 
 ```text
@@ -685,18 +704,18 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 唯一当前动作：M3 representative validation evidence PR
+### 唯一当前动作：authoritative M3 failure source evidence contract v1
 
-任务：补充 `M3-GATE-001`～`M3-GATE-004` 的代表性 runtime `V` 证据。
+任务：完成 `M3-SRC-001`～`M3-SRC-008`，为 PR-BI 当前四个 design-analysis blocker 提供可 exact replay 的权威 source facts。
 
-范围：冻结单轮成功、多轮成功和至少一个真实或代表性失败，通过同一版本 inspect API 在新进程 exact replay，并由人工核对 first cause、symptom 与 evidence；不得新增控制动作、修改 observer contract 或提前进入 M4。
+范围：增加 typed stage failure evidence、immutable dispatch/recovery receipts，以及 PR-BD/PR-BG 的最小 source-driven 消费；不得修改 PR-BI evidence、observer HTTP contract、科学结果或控制行为。
 
 必须验证：
 
-1. 单轮成功、多轮成功和失败 case 使用同一 `scientific_agent_trajectory_inspection.v1` contract。
-2. 全部 case 在新进程完成 exact replay，并保存可审查的脱敏 evidence。
-3. 人工核对 first cause、downstream symptom、ambiguity/undetermined 和 source reference。
-4. inspection on/off 保持全部 scientific 与 observer bytes 不变；只有 evidence PR 可以补 `V`。
+1. legacy v1 source 继续逐字节产生相同 projection/publication identity。
+2. 新 source 能表达 transport reason、distinct dispatch、multi-reason 和 explicit causal link。
+3. immutable receipt 的 roster、bytes、identity 和 privacy boundary 可 exact replay 并 fail closed。
+4. PR-BJ 只达到 `I/T/—`；PR-BI 后续重生 evidence 并经 owner review 后才能补 `V`。
 
 ### 主线队列
 
@@ -706,7 +725,9 @@ PR-BE  external-anchor trajectory verifier 与对抗测试（已完成）
 PR-BF  deterministic trajectory audit metrics v1（已完成）
 PR-BG  failure taxonomy 与 first-cause attribution（已完成）
 PR-BH  read-only inspect API 与最小时间线（已完成）
-PR-BI  M3 representative inspection validation evidence（下一项）
+PR-BJ  authoritative M3 failure source evidence contract v1（当前实现任务）
+PR-BI  representative inspection validation evidence（PR-BJ 后恢复）
+PR-BK  M4 benchmark protocol（仅在 PR-BI 完成并获得 V 后启动）
 ```
 
 ### 资源机会队列

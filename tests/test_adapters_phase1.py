@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import ai4s_agent.adapters.phase1 as phase1_module
+import ai4s_agent.adapters.oled_inverse_design as inverse_design_adapter_module
 from ai4s_agent.adapters import claude_scripts
 from ai4s_agent.adapters.contract_validation import (
     ContractValidationError,
@@ -36,6 +37,9 @@ from ai4s_agent.adapters.phase1 import (
     train_model_unimol_legacy_adapter,
 )
 from ai4s_agent.resource_profiles import ConnectionProfile, ResourceProfileStore
+from ai4s_agent.oled_scientific_agent_source_evidence import (
+    ScientificAgentTypedFailure,
+)
 from ai4s_agent.runtime_environments import (
     RuntimeEnvironmentProfile,
     RuntimeEnvironmentStore,
@@ -878,6 +882,138 @@ def test_reinvent4_pinned_endpoint_hostname_is_checked_before_workspace_creation
     assert calls[0][-1] == 'test "$(hostname -s)" = gpu-worker-main'
     assert calls[1][-1] == f"mkdir -m 700 -- {attempt_dir}"
     assert result["remote"]["endpoint_hostname_verified"] is True
+
+
+@pytest.mark.parametrize(
+    ("boundary", "expected_code"),
+    [
+        pytest.param("known_hosts", "known_hosts_verification_failed", id="known-hosts"),
+        pytest.param(
+            "expected_hostname",
+            "remote_endpoint_verification_failed",
+            id="expected-hostname",
+        ),
+        pytest.param(
+            "endpoint", "remote_endpoint_verification_failed", id="endpoint-identity"
+        ),
+        pytest.param("workspace", "tool_runtime_failure", id="remote-workspace"),
+        pytest.param("config_scp", "scp_transfer_failed", id="config-scp"),
+        pytest.param("execution", "tool_runtime_failure", id="remote-program"),
+        pytest.param(
+            "output_scp", "remote_output_retrieval_failed", id="output-retrieval"
+        ),
+    ],
+)
+@pytest.mark.remote_mock
+def test_reinvent4_remote_failures_emit_typed_codes_from_exact_boundaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+    expected_code: str,
+) -> None:
+    config = tmp_path / "sampling.toml"
+    config.write_text("# minimal test config\n", encoding="utf-8")
+    known_hosts = tmp_path / "known_hosts"
+    if boundary != "known_hosts":
+        known_hosts.write_text(
+            "gpu-worker-main ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
+            encoding="utf-8",
+        )
+    calls: list[list[str]] = []
+
+    def fake_run_argv_cmd(
+        *, argv: list[str], cwd: Path, timeout_sec: int = 120
+    ) -> dict[str, object]:
+        calls.append(argv)
+        call_kind = (
+            "endpoint"
+            if len(calls) == 1
+            else "workspace"
+            if len(calls) == 2
+            else "execution"
+            if len(calls) == 3
+            else "output_scp"
+        )
+        return {
+            "argv": argv,
+            "returncode": 1 if boundary == call_kind else 0,
+            "stdout": "",
+            "stderr": "private.compute.invalid must never be classified",
+        }
+
+    monkeypatch.setattr(phase1_module, "run_argv_cmd", fake_run_argv_cmd)
+    monkeypatch.setattr(
+        phase1_module,
+        "_run_pinned_config_scp",
+        lambda **kwargs: {
+            "returncode": 1 if boundary == "config_scp" else 0,
+            "stdout": "",
+            "stderr": "ssh user@private-host",
+        },
+    )
+    attempt_dir = f"/tmp/molly-pr-bj-{boundary}"
+
+    with pytest.raises(ScientificAgentTypedFailure) as failure:
+        phase1_module._generate_candidates_reinvent4_backend(
+            {
+                "execute": True,
+                "reinvent4_mode": "remote",
+                "reinvent4_config": str(config),
+                "remote_repo": "/srv/example-molly/reinvent4",
+                "remote_python": "/srv/example-molly/envs/reinvent4/bin/python",
+                "reinvent4_remote_attempt_dir": attempt_dir,
+                "reinvent4_remote_config": f"{attempt_dir}/config.toml",
+                "reinvent4_remote_output_csv": f"{attempt_dir}/output.csv",
+                "reinvent4_remote_known_hosts_file": str(known_hosts),
+                "reinvent4_remote_host_key_alias": "gpu-worker-main",
+                "reinvent4_remote_expected_hostname": (
+                    "" if boundary == "expected_hostname" else "gpu-worker-main"
+                ),
+                "local_output_csv": str(tmp_path / f"{boundary}.csv"),
+            },
+            run_id=f"typed-{boundary}",
+            output_dir=tmp_path / boundary,
+            count=1,
+        )
+
+    assert failure.value.reason_codes == (expected_code,)
+    assert "private.compute.invalid" not in str(failure.value)
+    assert "private-host" not in str(failure.value)
+
+
+def test_inverse_design_adapter_preserves_typed_failure_for_executor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def typed_failure(**kwargs: object) -> None:
+        raise ScientificAgentTypedFailure("known_hosts_verification_failed")
+
+    monkeypatch.setattr(
+        inverse_design_adapter_module,
+        "run_oled_inverse_design_from_files",
+        typed_failure,
+    )
+
+    with pytest.raises(ScientificAgentTypedFailure) as failure:
+        inverse_design_adapter_module.execute_oled_inverse_design_adapter(
+            {
+                "run_id": "oled-bounded-session-typed-boundary",
+                "batch_selection_json": "batch.json",
+                "screening_receipt_json": "screening.json",
+                "ranked_shortlist_csv": "shortlist.csv",
+                "phase1_execution_dir": "phase1",
+                "dataset_snapshot_json": "dataset.json",
+                "registry_snapshot_json": "registry.json",
+                "reinvent4_config": "config.toml",
+                "output_root": str(tmp_path / "oled_inverse_design"),
+                "actor": "controller",
+                "confirmed": True,
+                "reinvent4_mode": "remote",
+                "remote_profile_id": "profile-a",
+            }
+        )
+
+    assert failure.value.reason_codes == ("known_hosts_verification_failed",)
 
 
 def test_reinvent4_rejects_ssh_option_injection_before_any_transport(
