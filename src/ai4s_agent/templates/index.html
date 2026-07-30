@@ -49,9 +49,11 @@
       .sidebar-heading { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
       .sidebar-heading h2 { margin: 0; }
       .conversation-list { display: grid; min-width: 0; max-width: 100%; max-height: 22vh; gap: 0.35rem; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
-      .conversation-row { display: block; min-width: 0; max-width: 100%; overflow: hidden; }
+      .conversation-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.25rem; min-width: 0; max-width: 100%; overflow: hidden; }
       .conversation-select { display: block; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; padding: 0.5rem 0.58rem; color: var(--ink); background: transparent; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
       .conversation-select.active { background: rgba(20, 92, 114, 0.12); color: var(--blue); }
+      .conversation-delete { width: auto; min-width: 2rem; padding: 0.38rem 0.5rem; border: 1px solid transparent; color: var(--muted); background: transparent; }
+      .conversation-delete:hover { border-color: rgba(165, 77, 22, 0.35); color: var(--rust); background: rgba(244, 216, 189, 0.38); }
       .atomic-task-list { display: grid; gap: 0.4rem; }
       .atomic-task-button { display: grid; grid-template-columns: 1.7rem minmax(0, 1fr); gap: 0.55rem; align-items: center; padding: 0.58rem 0.65rem; border: 1px solid transparent; color: var(--ink); background: transparent; text-align: left; }
       .atomic-task-button:hover { border-color: var(--line); background: rgba(255, 255, 255, 0.66); }
@@ -65,6 +67,7 @@
       .chat-message.agent, .chat-message.system { justify-self: start; }
       .chat-message.system { border-style: dashed; color: var(--muted); }
       .chat-message.task-state { border-style: solid; border-color: rgba(20, 92, 114, 0.28); background: rgba(232, 242, 246, 0.82); color: #27424d; }
+      .chat-message strong { font-weight: 900; }
       .chat-attachments, .pending-attachments { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.55rem; }
       .attachment-chip { display: inline-flex; max-width: 100%; align-items: center; gap: 0.35rem; border: 1px solid var(--line); border-radius: 999px; padding: 0.22rem 0.5rem; color: var(--muted); background: var(--white); font-size: 0.74rem; overflow-wrap: anywhere; }
       .conversation-composer { position: relative; z-index: 1; display: grid; gap: 0.65rem; border-top: 1px solid var(--line); padding: 0.85rem; background: #f6f7f8; box-shadow: 0 -8px 18px rgba(23, 32, 39, 0.04); }
@@ -197,12 +200,11 @@
       </aside>
 
       <section id="project-chat" class="chat-panel" aria-label="项目对话">
-        <div id="conversation-stream" class="conversation-stream" aria-live="polite">
-          <article class="chat-message agent">描述你的目标、数据背景或可引用来源。Agent 会先整理可审阅 payload，不会直接执行训练或外部检索。</article>
-        </div>
+        <div id="conversation-stream" class="conversation-stream" aria-live="polite"></div>
         <form id="conversation-form" class="conversation-composer">
           <label for="conversation-input">和 Agent 对话</label>
-          <textarea id="conversation-input" name="message" placeholder="例如：我想训练 OLED PLQY 模型，优先改善高 PLQY 候选的排序；可以参考 DOI 10.1038/s41597-020-00634-8。"></textarea>
+          <textarea id="conversation-input" name="message" aria-describedby="conversation-keyboard-help"></textarea>
+          <p id="conversation-keyboard-help" class="field-help">Enter 发送，Shift + Enter 换行。</p>
           <input id="conversation-file-input" type="file" multiple hidden accept=".csv,.tsv,.json,.jsonl,.sdf,.mol,.smi,.txt,.md,.pdf,.xls,.xlsx" />
           <div id="pending-conversation-attachments" class="pending-attachments" hidden></div>
           <p id="conversation-status" class="small">对话会保存到当前项目的本地服务端工作区。</p>
@@ -316,12 +318,6 @@
         <summary><strong>高级工具</strong><span class="pill">原始 API 工具</span></summary>
         <div class="advanced-body">
           <div class="tool-grid">
-            <article class="mini-panel">
-              <h3>当前响应</h3>
-              <p class="small">最近一次原始 API 响应，仅用于调试。</p>
-              <pre id="output" class="output">就绪。</pre>
-            </article>
-
             <article class="mini-panel">
               <h3>主流程高级参数</h3>
               <p class="small">普通流程会自动推断；只有调试依赖和计划时才需要填写。</p>
@@ -523,6 +519,16 @@
             <h2 id="compute-settings-title">计算资源</h2>
             <p class="small">连接信息只保存在当前用户配置目录。连接一台已在 <code>~/.ssh/config</code> 配好的远端计算机时，只需填写连接别名、主机名和运行目录；密码与私钥仍由 SSH 管理。</p>
           </div>
+          <details id="molly-worker-protocol-help" class="settings-advanced">
+            <summary>远端还没有 molly-worker？查看安装 / 实现要求</summary>
+            <p class="field-help"><strong>当前仓库没有可直接从 PyPI 安装的 molly-worker 服务端包。</strong>计算资源探测与受控执行要求远端提供一个名为 <code>molly-worker</code> 的兼容可执行文件，并确保非交互 SSH 会话也能从 <code>PATH</code> 找到它。</p>
+            <ol class="field-help">
+              <li>最小探测接口：实现 <code>molly-worker probe --json</code>，成功时只向 stdout 输出包含 <code>hostname</code>、<code>capabilities</code> 和 <code>details</code> 的 JSON 对象。</li>
+              <li>模型任务还必须按固定协议实现 <code>stage</code>、<code>verify-inputs</code>、<code>execute</code>、<code>status</code> 和 <code>cancel</code>；不要让 UI 拼接任意远端命令。</li>
+              <li>部署后先运行 <code>ssh &lt;SSH 别名&gt; -- molly-worker probe --json</code>，确认可免交互执行，再在这里保存并测试连接。</li>
+            </ol>
+            <p class="field-help">完整安全边界与请求/响应约定见 <a href="https://github.com/searching42/Molly/blob/main/docs/remote_worker_setup.md" target="_blank" rel="noreferrer">remote worker setup</a> 和 <a href="https://github.com/searching42/Molly/blob/main/docs/stage6b-remote-execution-lifecycle.md" target="_blank" rel="noreferrer">Stage 6B protocol</a>。</p>
+          </details>
           <form id="compute-connection-form">
             <label for="compute-resource-role">资源类型</label>
             <select id="compute-resource-role" aria-describedby="compute-resource-role-help">
@@ -603,7 +609,6 @@
     <script src="{{ url_for('static', filename='task_state.js') }}"></script>
     <script>
       const LOCAL_SESSION_TOKEN = document.querySelector('meta[name="molly-local-token"]')?.content || "";
-      const output = document.getElementById("output");
       let activeProject = { project_id: "proj-oled", name: "proj-oled" };
       let knownProjects = [];
       let knownConversations = [];
@@ -611,6 +616,8 @@
       let currentConversationId = "";
       let pendingConversationAttachments = [];
       let conversationLoadGeneration = 0;
+      let pendingConversationLoad = null;
+      const deletedConversationKeys = new Set();
       let conversationContextGeneration = 0;
       let currentRunId = "";
       let currentConversationDecision = null;
@@ -638,7 +645,6 @@
 
       function render(payload) {
         const normalized = normalizeErrorForRender(payload);
-        output.textContent = JSON.stringify(normalized, null, 2);
         renderAgentReviewCard(null);
         if (normalized.ok === false || normalized.error) {
           appendConversationMessage("system", `操作失败：${normalized.error || "未知错误"}`);
@@ -670,6 +676,35 @@
 
       function isConversationContextCurrent(context) {
         return MollyTaskState.sameConversationContext(context, currentConversationContext());
+      }
+
+      function conversationIdentityKey(projectId, conversationId) {
+        return `${String(projectId || "")}\u0000${String(conversationId || "")}`;
+      }
+
+      function conversationDeletionDecision(
+        projectId,
+        conversationId,
+        activeProjectId,
+        activeConversationId,
+        pendingLoad,
+      ) {
+        const sameProject = projectId === activeProjectId;
+        const preservePendingSelection = Boolean(
+          sameProject && pendingLoad && pendingLoad.projectId === projectId &&
+          pendingLoad.conversationId && pendingLoad.conversationId !== conversationId
+        );
+        return {
+          sameProject,
+          deletedIsCurrent: Boolean(
+            sameProject && conversationId === activeConversationId && !preservePendingSelection
+          ),
+          cancelPendingLoad: Boolean(
+            sameProject && pendingLoad && pendingLoad.projectId === projectId &&
+            pendingLoad.conversationId === conversationId
+          ),
+          preservePendingSelection,
+        };
       }
 
       function renderProjectList(projects) {
@@ -725,6 +760,17 @@
             }
           });
           row.appendChild(select);
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "conversation-delete";
+          remove.textContent = "×";
+          remove.title = `删除对话：${select.textContent}`;
+          remove.setAttribute("aria-label", remove.title);
+          remove.addEventListener("click", (event) => {
+            event.stopPropagation();
+            void deleteConversation(activeProject.project_id, conversationId, select.textContent);
+          });
+          row.appendChild(remove);
           root.appendChild(row);
         });
       }
@@ -751,6 +797,49 @@
           await loadProjectConversation(activeProject.project_id, conversationId);
         } catch (err) {
           setText("conversation-status", `新建对话失败：${normalizeErrorForRender(err).error}`);
+          render(err);
+        }
+      }
+
+      async function deleteConversation(projectId, conversationId, title) {
+        if (!projectId || !conversationId) return;
+        if (!window.confirm(`删除对话“${String(title || "新对话")}”？`)) return;
+        try {
+          await deleteJSON(
+            `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}`,
+          );
+          const deletedKey = conversationIdentityKey(projectId, conversationId);
+          deletedConversationKeys.add(deletedKey);
+          const decision = conversationDeletionDecision(
+            projectId,
+            conversationId,
+            activeProject.project_id,
+            currentConversationId,
+            pendingConversationLoad,
+          );
+          if (!decision.sameProject) return;
+          if (decision.cancelPendingLoad) {
+            conversationLoadGeneration += 1;
+            pendingConversationLoad = null;
+          }
+          knownConversations = knownConversations.filter(
+            (item) => String(item.conversation_id || "") !== conversationId,
+          );
+          if (!decision.deletedIsCurrent) {
+            renderConversationList();
+            return;
+          }
+          resetExternalLLMApproval();
+          invalidateConversationContext();
+          currentConversationId = "";
+          conversationMessages = [];
+          const stream = document.getElementById("conversation-stream");
+          if (stream) stream.innerHTML = "";
+          const nextConversationId = String(knownConversations[0]?.conversation_id || "");
+          await loadProjectConversation(projectId, nextConversationId);
+          setText("conversation-status", "对话已删除；原记录已从活动列表移除。");
+        } catch (err) {
+          setText("conversation-status", `删除对话失败：${normalizeErrorForRender(err).error}`);
           render(err);
         }
       }
@@ -821,7 +910,11 @@
           article.classList.add("task-state");
         }
         const text = document.createElement("div");
-        text.textContent = String(content || "");
+        if (displayRole === "agent") {
+          appendSafeBoldMarkdown(text, content);
+        } else {
+          text.textContent = String(content || "");
+        }
         article.appendChild(text);
         if (Array.isArray(attachments) && attachments.length) {
           const tray = document.createElement("div");
@@ -837,6 +930,28 @@
         }
         stream.appendChild(article);
         stream.scrollTop = stream.scrollHeight;
+      }
+
+      function appendSafeBoldMarkdown(root, content) {
+        const value = String(content || "");
+        let cursor = 0;
+        while (cursor < value.length) {
+          const opening = value.indexOf("**", cursor);
+          if (opening < 0) {
+            root.appendChild(document.createTextNode(value.slice(cursor)));
+            return;
+          }
+          const closing = value.indexOf("**", opening + 2);
+          if (closing < 0 || closing === opening + 2) {
+            root.appendChild(document.createTextNode(value.slice(cursor)));
+            return;
+          }
+          root.appendChild(document.createTextNode(value.slice(cursor, opening)));
+          const strong = document.createElement("strong");
+          strong.textContent = value.slice(opening + 2, closing);
+          root.appendChild(strong);
+          cursor = closing + 2;
+        }
       }
 
       async function recordTaskStateInConversation(payload, { runId = "", projectId = "", context = null } = {}) {
@@ -1276,6 +1391,11 @@
       async function loadProjectConversation(projectId, preferredConversationId = "") {
         invalidateConversationContext();
         const generation = ++conversationLoadGeneration;
+        pendingConversationLoad = Object.freeze({
+          projectId,
+          conversationId: preferredConversationId,
+          generation,
+        });
         setText("conversation-status", "正在加载服务端对话…");
         try {
           const importedConversationId = await importLegacyLocalConversation(projectId);
@@ -1295,6 +1415,12 @@
           }
           if (generation !== conversationLoadGeneration || projectId !== activeProject.project_id) return;
           const nextConversationId = String(selected.conversation_id || "");
+          pendingConversationLoad = Object.freeze({
+            projectId,
+            conversationId: nextConversationId,
+            generation,
+          });
+          if (deletedConversationKeys.has(conversationIdentityKey(projectId, nextConversationId))) return;
           if (nextConversationId !== currentConversationId) resetExternalLLMApproval();
           currentConversationId = nextConversationId;
           renderConversationList();
@@ -1336,9 +1462,6 @@
           const stream = document.getElementById("conversation-stream");
           if (stream) stream.innerHTML = "";
           storedMessages.forEach((item) => appendConversationMessage(item.role, item.content, item.attachments));
-          if (!storedMessages.length) {
-            appendConversationMessage("assistant", "描述你的目标、数据背景或可引用来源。对话会保存在当前项目中。");
-          }
           renderConversationList();
           setText(
             "conversation-status",
@@ -1374,6 +1497,8 @@
           if (generation !== conversationLoadGeneration) return;
           setText("conversation-status", `加载对话失败：${normalizeErrorForRender(err).error}`);
           render(err);
+        } finally {
+          if (pendingConversationLoad?.generation === generation) pendingConversationLoad = null;
         }
       }
 
@@ -1821,6 +1946,13 @@
         }
       });
 
+      document.getElementById("conversation-input").addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+        event.preventDefault();
+        if (!String(event.currentTarget.value || "").trim()) return;
+        event.currentTarget.form?.requestSubmit();
+      });
+
       document.getElementById("conversation-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         const input = document.getElementById("conversation-input");
@@ -1866,7 +1998,7 @@
           renderAgentQuestions(agentQuestions);
           render(response);
         } catch (err) {
-          appendConversationMessage("system", "对话整理失败，详情见当前响应。");
+          appendConversationMessage("system", "对话整理失败；请检查连接配置后重试。");
           render(err);
         }
       });
@@ -2010,7 +2142,7 @@
           renderConversationArtifact("research_source_proposal", currentResearchSourceProposal);
           render(response);
         } catch (err) {
-          appendConversationMessage("system", "文献来源准备失败，详情见当前响应。");
+          appendConversationMessage("system", "文献来源准备失败；请检查当前项目与文献输入后重试。");
           render(err);
         }
       }
@@ -2132,7 +2264,7 @@
           return;
         }
         if (status === "FAILED") {
-          const error = execution.error?.message || execution.result?.error?.message || "任务失败，请查看当前响应。";
+          const error = execution.error?.message || execution.result?.error?.message || "任务失败；服务端未提供可公开的详细原因。";
           setText("model-workflow-status", `${currentModelWorkflow.runId} 失败：${error}`);
           return;
         }
@@ -2284,13 +2416,10 @@
           render(response);
           if (revealResults) {
             const tasks = Array.isArray(response.tasks) ? response.tasks : [];
-            const advancedTools = document.getElementById("advanced-tools");
-            if (advancedTools) advancedTools.open = true;
             appendConversationMessage(
               "agent",
-              `已加载原子任务工具箱，共 ${tasks.length} 项。完整任务定义已在下方“高级工具”的“当前响应”中展开。`,
+              `已加载原子任务工具箱，共 ${tasks.length} 项。请从左侧任务入口或高级工具中的对应表单继续。`,
             );
-            output.scrollIntoView({ behavior: "smooth", block: "start" });
           }
           return response;
         } catch (err) {

@@ -3,11 +3,15 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import stat
+import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+import ai4s_agent.conversation_store as conversation_store_module
 from ai4s_agent.app import create_app
 from ai4s_agent.conversation_store import ConversationStore
 from ai4s_agent.storage import ProjectStorage
@@ -211,6 +215,113 @@ def test_concurrent_message_appends_have_unique_contiguous_sequences(tmp_path) -
     assert recovered is False
     assert [item.sequence for item in messages] == list(range(1, 41))
     assert len({item.message_id for item in messages}) == 40
+
+
+def test_delete_waits_for_inflight_append_and_archives_the_appended_message(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = _store(tmp_path)
+    store.create_conversation("project-a", conversation_id="conversation-a")
+    reached_append = threading.Barrier(2)
+    release_append = threading.Event()
+    original_append = store._append_json_line
+
+    def delayed_append(path, payload) -> None:
+        reached_append.wait(timeout=5)
+        assert release_append.wait(timeout=5)
+        original_append(path, payload)
+
+    monkeypatch.setattr(store, "_append_json_line", delayed_append)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        append_future = executor.submit(
+            store.append_message,
+            "project-a",
+            "conversation-a",
+            role="user",
+            content="must remain in the archived generation",
+        )
+        reached_append.wait(timeout=5)
+        delete_future = executor.submit(store.delete_conversation, "project-a", "conversation-a")
+        assert delete_future.done() is False
+        release_append.set()
+        append_future.result(timeout=5)
+        delete_future.result(timeout=5)
+
+    archived = list(
+        (tmp_path / "projects" / "project-a" / "conversations" / ".deleted").glob(
+            "conversation-a.*"
+        )
+    )
+    assert len(archived) == 1
+    assert b"must remain in the archived generation" in (archived[0] / "messages.jsonl").read_bytes()
+
+
+def test_delete_serializes_recreate_and_rejects_stale_append(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = _store(tmp_path)
+    store.create_conversation("project-a", conversation_id="conversation-a")
+    reached_rename = threading.Barrier(2)
+    release_rename = threading.Event()
+    original_rename = conversation_store_module.os.rename
+
+    def delayed_rename(source, target) -> None:
+        if str(source).endswith("/conversation-a"):
+            reached_rename.wait(timeout=5)
+            assert release_rename.wait(timeout=5)
+        original_rename(source, target)
+
+    monkeypatch.setattr(conversation_store_module.os, "rename", delayed_rename)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        delete_future = executor.submit(store.delete_conversation, "project-a", "conversation-a")
+        reached_rename.wait(timeout=5)
+        recreate_future = executor.submit(
+            store.create_conversation,
+            "project-a",
+            conversation_id="conversation-a",
+        )
+        assert recreate_future.done() is False
+        release_rename.set()
+        delete_future.result(timeout=5)
+        with pytest.raises(ValueError, match="deleted conversation_id cannot be reused"):
+            recreate_future.result(timeout=5)
+
+    with pytest.raises(FileNotFoundError, match="conversation not found"):
+        store.append_message(
+            "project-a",
+            "conversation-a",
+            role="user",
+            content="stale request",
+        )
+    active = tmp_path / "projects" / "project-a" / "conversations" / "conversation-a"
+    assert not active.exists()
+
+
+@pytest.mark.parametrize(
+    ("deleted_id", "new_id"),
+    [("a.b", "a"), ("a", "a.b")],
+)
+@pytest.mark.pr_fast
+def test_deleted_conversation_tombstone_matches_exact_dotted_identity(
+    tmp_path,
+    deleted_id: str,
+    new_id: str,
+) -> None:
+    store = _store(tmp_path)
+    store.create_conversation("project-a", conversation_id=deleted_id)
+    store.delete_conversation("project-a", deleted_id)
+
+    created, was_created = store.create_conversation(
+        "project-a",
+        conversation_id=new_id,
+    )
+
+    assert was_created is True
+    assert created.conversation_id == new_id
+    with pytest.raises(ValueError, match="deleted conversation_id cannot be reused"):
+        store.create_conversation("project-a", conversation_id=deleted_id)
 
 
 def test_attachment_artifacts_are_content_addressed_and_message_refs_have_no_paths(tmp_path) -> None:
@@ -543,6 +654,59 @@ def test_conversation_api_supports_batch_attachments_import_and_freeze(tmp_path)
     assert repeated.json["idempotent"] is True
 
 
+def test_conversation_delete_archives_record_and_api_removes_it_from_active_list(
+    tmp_path,
+) -> None:
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path,
+        user_config_dir=tmp_path / "config",
+    )
+    client = app.test_client()
+    created = client.post(
+        "/api/projects/project-a/conversations",
+        json={"conversation_id": "conversation-delete", "title": "Delete me"},
+    )
+    assert created.status_code == 201
+    appended = client.post(
+        "/api/projects/project-a/conversations/conversation-delete/messages",
+        json={"role": "user", "content": "retained in recoverable archive"},
+    )
+    assert appended.status_code == 201
+
+    deleted = client.delete(
+        "/api/projects/project-a/conversations/conversation-delete"
+    )
+
+    assert deleted.status_code == 200
+    assert deleted.json == {
+        "ok": True,
+        "deleted": True,
+        "conversation_id": "conversation-delete",
+    }
+    assert deleted.headers["Cache-Control"] == "no-store"
+    listing = client.get("/api/projects/project-a/conversations")
+    assert listing.json["conversations"] == []
+    assert client.get(
+        "/api/projects/project-a/conversations/conversation-delete"
+    ).status_code == 404
+    archived = list(
+        (tmp_path / "projects" / "project-a" / "conversations" / ".deleted").glob(
+            "conversation-delete.*"
+        )
+    )
+    assert len(archived) == 1
+    assert b"retained in recoverable archive" in (
+        archived[0] / "messages.jsonl"
+    ).read_bytes()
+
+    repeated = client.delete(
+        "/api/projects/project-a/conversations/conversation-delete"
+    )
+    assert repeated.status_code == 404
+    assert repeated.json == {"ok": False, "error": "conversation not found"}
+
+
 def test_batch_attachment_limit_rejects_file_after_budget_is_exhausted(tmp_path) -> None:
     app = create_app(
         base_runs_dir=tmp_path / "runs",
@@ -585,6 +749,84 @@ def test_browser_ui_uses_server_conversations_and_idempotent_local_storage_impor
     assert "localStorage.removeItem(key)" in html
     assert "/conversations/${encodeURIComponent(conversationId)}/messages" in html
     assert "attachment_ids: attachmentIds" in html
+    assert "async function deleteConversation(projectId, conversationId, title)" in html
+    assert 'method: "DELETE"' in html
+
+
+@pytest.mark.pr_fast
+def test_browser_delete_decision_uses_post_response_conversation_and_pending_load(tmp_path) -> None:
+    node_binary = shutil.which("node")
+    if node_binary is None:
+        pytest.skip("Node.js is unavailable for the executable UI contract test")
+    app = create_app(
+        base_runs_dir=tmp_path / "runs",
+        workspace_dir=tmp_path,
+        user_config_dir=tmp_path / "config",
+    )
+    html = app.test_client().get("/").get_data(as_text=True)
+    function_start = html.index("function conversationDeletionDecision(")
+    function_end = html.index("function renderProjectList(", function_start)
+    function_source = html[function_start:function_end]
+    script = f"""
+{function_source}
+const results = {{
+  currentToOther: conversationDeletionDecision(
+    "project-a", "conversation-a", "project-a", "conversation-c",
+    {{ projectId: "project-a", conversationId: "conversation-c", generation: 9 }},
+  ),
+  otherToDeleted: conversationDeletionDecision(
+    "project-a", "conversation-a", "project-a", "conversation-a",
+    {{ projectId: "project-a", conversationId: "conversation-a", generation: 10 }},
+  ),
+  pendingDeletedWhileOtherRemainsCurrent: conversationDeletionDecision(
+    "project-a", "conversation-a", "project-a", "conversation-b",
+    {{ projectId: "project-a", conversationId: "conversation-a", generation: 11 }},
+  ),
+  currentDeletedWhileOtherSelectionLoads: conversationDeletionDecision(
+    "project-a", "conversation-a", "project-a", "conversation-a",
+    {{ projectId: "project-a", conversationId: "conversation-c", generation: 12 }},
+  ),
+}};
+process.stdout.write(JSON.stringify(results));
+"""
+    completed = subprocess.run(
+        [node_binary],
+        input=script,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "currentToOther": {
+            "sameProject": True,
+            "deletedIsCurrent": False,
+            "cancelPendingLoad": False,
+            "preservePendingSelection": True,
+        },
+        "otherToDeleted": {
+            "sameProject": True,
+            "deletedIsCurrent": True,
+            "cancelPendingLoad": True,
+            "preservePendingSelection": False,
+        },
+        "pendingDeletedWhileOtherRemainsCurrent": {
+            "sameProject": True,
+            "deletedIsCurrent": False,
+            "cancelPendingLoad": True,
+            "preservePendingSelection": False,
+        },
+        "currentDeletedWhileOtherSelectionLoads": {
+            "sameProject": True,
+            "deletedIsCurrent": False,
+            "cancelPendingLoad": False,
+            "preservePendingSelection": True,
+        },
+    }
+    assert "deletedConversationKeys.has(conversationIdentityKey(projectId, nextConversationId))" in html
 
 
 @pytest.mark.parametrize("project_id,conversation_id", [("../escape", "safe"), ("safe", "../escape")])
