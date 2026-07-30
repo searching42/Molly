@@ -127,7 +127,7 @@ local path, user name, hostname, or temporary locator is committed as evidence.
 The final local targeted validation comprised:
 
 ```text
-source evidence + PR-BD + PR-BE + PR-BG: 101 passed
+source evidence + PR-BD + PR-BE + PR-BG: 117 passed
 PR-AW action/recovery API:                 14 passed
 RunPlanExecutor failure regression:         1 passed
 REINVENT4 typed remote boundaries:          9 passed

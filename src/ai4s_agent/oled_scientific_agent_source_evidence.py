@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,9 +17,6 @@ from ai4s_agent.oled_categorical_dataset_execution import (
 )
 from ai4s_agent.oled_supplementary_material_identity_review import (
     _pinned_output_parents_without_symlink_components,
-)
-from ai4s_agent.oled_supplementary_scoped_candidate_response import (
-    _read_regular_file_bound,
 )
 
 
@@ -293,9 +291,9 @@ def publish_dispatch_receipt(
 def read_dispatch_receipts(
     *, run_dir: Path, allow_missing: bool = False
 ) -> list[BoundSourceReceipt]:
-    root = _receipt_root(run_dir, "dispatch-receipts")
     receipts = _read_receipts(
-        root=root,
+        parent=run_dir,
+        receipt_directory_name="dispatch-receipts",
         prefix=_DISPATCH_RECEIPT_PREFIX,
         validator=validate_dispatch_receipt,
         allow_missing=allow_missing,
@@ -416,7 +414,8 @@ def read_recovery_receipts(
     *, action_dir: Path, allow_missing: bool = False
 ) -> list[BoundSourceReceipt]:
     receipts = _read_receipts(
-        root=_receipt_root(action_dir, "recovery-receipts"),
+        parent=action_dir,
+        receipt_directory_name="recovery-receipts",
         prefix=_RECOVERY_RECEIPT_PREFIX,
         validator=validate_recovery_receipt,
         allow_missing=allow_missing,
@@ -503,45 +502,83 @@ def _publish_receipt(
 
 def _read_receipts(
     *,
-    root: Path,
+    parent: Path,
+    receipt_directory_name: str,
     prefix: str,
     validator: Any,
     allow_missing: bool,
 ) -> list[BoundSourceReceipt]:
-    if not os.path.lexists(root):
-        if allow_missing:
-            return []
-        raise ValueError("source receipt directory is unavailable")
-    if root.is_symlink() or not root.is_dir():
-        raise ValueError("source receipt directory is invalid")
-    names = sorted(os.listdir(root))
-    if len(names) > _MAX_RECEIPTS:
-        raise ValueError("source receipt roster exceeds the v1 limit")
-    receipts: list[BoundSourceReceipt] = []
-    for name in names:
-        _receipt_id(name, prefix=prefix)
-        receipt_dir = root / name
-        if receipt_dir.is_symlink() or not receipt_dir.is_dir():
-            raise ValueError("source receipt entry is invalid")
-        if sorted(os.listdir(receipt_dir)) != ["receipt.json"]:
-            raise ValueError("source receipt file roster is invalid")
-        receipt_json = receipt_dir / "receipt.json"
-        payload_bytes, sha256 = _read_regular_file_bound(
-            receipt_json.absolute(),
-            max_bytes=_MAX_RECEIPT_BYTES,
-            reject_symlink_components=True,
-        )
-        payload = validator(_parse_json(payload_bytes))
-        if payload["receipt_id"] != name or _canonical_json_bytes(payload) != payload_bytes:
-            raise ValueError("source receipt path or canonical bytes are invalid")
-        receipts.append(
-            BoundSourceReceipt(
-                payload=payload,
-                sha256=sha256,
-                receipt_dir=receipt_dir,
-                receipt_json=receipt_json,
+    if receipt_directory_name not in {"dispatch-receipts", "recovery-receipts"}:
+        raise ValueError("source receipt directory role is invalid")
+    root = parent / receipt_directory_name
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory_flag is None:
+        raise ValueError("source receipt verification requires safe dirfd support")
+    with _pinned_output_parents_without_symlink_components(parent) as pinned:
+        parent_descriptor = pinned[parent]
+        try:
+            named_root = os.stat(
+                receipt_directory_name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
             )
+        except FileNotFoundError as exc:
+            if allow_missing:
+                return []
+            raise ValueError("source receipt directory is unavailable") from exc
+        if not stat.S_ISDIR(named_root.st_mode):
+            raise ValueError("source receipt directory is invalid")
+        root_descriptor = os.open(
+            receipt_directory_name,
+            os.O_RDONLY | directory_flag | no_follow,
+            dir_fd=parent_descriptor,
         )
+        try:
+            opened_root = os.fstat(root_descriptor)
+            _require_same_stable_entry(
+                named_root,
+                opened_root,
+                label="source receipt directory",
+                require_directory=True,
+            )
+            names = sorted(os.listdir(root_descriptor))
+            if len(names) > _MAX_RECEIPTS:
+                raise ValueError("source receipt roster exceeds the v1 limit")
+            receipts = [
+                _read_receipt_at(
+                    root_descriptor=root_descriptor,
+                    root=root,
+                    name=name,
+                    prefix=prefix,
+                    validator=validator,
+                    no_follow=no_follow,
+                    directory_flag=directory_flag,
+                )
+                for name in names
+            ]
+            final_named_root = os.stat(
+                receipt_directory_name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            final_opened_root = os.fstat(root_descriptor)
+            _require_same_stable_entry(
+                named_root,
+                final_named_root,
+                label="source receipt directory",
+                require_directory=True,
+            )
+            _require_same_stable_entry(
+                opened_root,
+                final_opened_root,
+                label="source receipt directory",
+                require_directory=True,
+            )
+            if sorted(os.listdir(root_descriptor)) != names:
+                raise ValueError("source receipt roster changed during verification")
+        finally:
+            os.close(root_descriptor)
     receipts.sort(
         key=lambda item: (
             int(item.payload.get("dispatch_ordinal", 0)),
@@ -549,6 +586,156 @@ def _read_receipts(
         )
     )
     return receipts
+
+
+def _read_receipt_at(
+    *,
+    root_descriptor: int,
+    root: Path,
+    name: str,
+    prefix: str,
+    validator: Any,
+    no_follow: int,
+    directory_flag: int,
+) -> BoundSourceReceipt:
+    _receipt_id(name, prefix=prefix)
+    named_directory = os.stat(name, dir_fd=root_descriptor, follow_symlinks=False)
+    if not stat.S_ISDIR(named_directory.st_mode):
+        raise ValueError("source receipt entry is invalid")
+    receipt_descriptor = os.open(
+        name,
+        os.O_RDONLY | directory_flag | no_follow,
+        dir_fd=root_descriptor,
+    )
+    try:
+        opened_directory = os.fstat(receipt_descriptor)
+        _require_same_stable_entry(
+            named_directory,
+            opened_directory,
+            label="source receipt entry",
+            require_directory=True,
+        )
+        if sorted(os.listdir(receipt_descriptor)) != ["receipt.json"]:
+            raise ValueError("source receipt file roster is invalid")
+        payload_bytes, sha256 = _read_regular_receipt_at(
+            directory_descriptor=receipt_descriptor,
+            no_follow=no_follow,
+        )
+        payload = validator(_parse_json(payload_bytes))
+        if payload["receipt_id"] != name or _canonical_json_bytes(payload) != payload_bytes:
+            raise ValueError("source receipt path or canonical bytes are invalid")
+        final_named_directory = os.stat(
+            name,
+            dir_fd=root_descriptor,
+            follow_symlinks=False,
+        )
+        final_opened_directory = os.fstat(receipt_descriptor)
+        _require_same_stable_entry(
+            named_directory,
+            final_named_directory,
+            label="source receipt entry",
+            require_directory=True,
+        )
+        _require_same_stable_entry(
+            opened_directory,
+            final_opened_directory,
+            label="source receipt entry",
+            require_directory=True,
+        )
+        if sorted(os.listdir(receipt_descriptor)) != ["receipt.json"]:
+            raise ValueError("source receipt file roster changed during verification")
+    finally:
+        os.close(receipt_descriptor)
+    receipt_dir = root / name
+    return BoundSourceReceipt(
+        payload=payload,
+        sha256=sha256,
+        receipt_dir=receipt_dir,
+        receipt_json=receipt_dir / "receipt.json",
+    )
+
+
+def _read_regular_receipt_at(
+    *, directory_descriptor: int, no_follow: int
+) -> tuple[bytes, str]:
+    filename = "receipt.json"
+    named = os.stat(filename, dir_fd=directory_descriptor, follow_symlinks=False)
+    if not stat.S_ISREG(named.st_mode) or named.st_size > _MAX_RECEIPT_BYTES:
+        raise ValueError("source receipt file is invalid")
+    descriptor = os.open(
+        filename,
+        os.O_RDONLY | no_follow,
+        dir_fd=directory_descriptor,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        _require_same_stable_entry(
+            named,
+            opened,
+            label="source receipt file",
+            require_directory=False,
+        )
+        chunks: list[bytes] = []
+        remaining = _MAX_RECEIPT_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) > _MAX_RECEIPT_BYTES:
+            raise ValueError("source receipt file exceeds the v1 limit")
+        final_named = os.stat(
+            filename,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        final_opened = os.fstat(descriptor)
+        _require_same_stable_entry(
+            named,
+            final_named,
+            label="source receipt file",
+            require_directory=False,
+        )
+        _require_same_stable_entry(
+            opened,
+            final_opened,
+            label="source receipt file",
+            require_directory=False,
+        )
+    finally:
+        os.close(descriptor)
+    return payload, "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _require_same_stable_entry(
+    expected: os.stat_result,
+    observed: os.stat_result,
+    *,
+    label: str,
+    require_directory: bool,
+) -> None:
+    expected_kind = (
+        stat.S_ISDIR(expected.st_mode)
+        if require_directory
+        else stat.S_ISREG(expected.st_mode)
+    )
+    observed_kind = (
+        stat.S_ISDIR(observed.st_mode)
+        if require_directory
+        else stat.S_ISREG(observed.st_mode)
+    )
+    if (
+        not expected_kind
+        or not observed_kind
+        or expected.st_dev != observed.st_dev
+        or expected.st_ino != observed.st_ino
+        or expected.st_size != observed.st_size
+        or expected.st_mtime_ns != observed.st_mtime_ns
+        or expected.st_ctime_ns != observed.st_ctime_ns
+    ):
+        raise ValueError(f"{label} changed during verification")
 
 
 def _receipt_root(parent: Path, name: str) -> Path:
