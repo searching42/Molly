@@ -876,6 +876,7 @@ def test_run_plan_executor_marks_stage_failed_when_adapter_raises(tmp_path: Path
     assert state is not None
     assert state.status == RunStatus.FAILED
     assert state.error == {"code": "adapter_exception", "message": "adapter exploded"}
+    assert "failure_evidence" not in state.details
 
 
 def test_run_plan_execute_endpoint_runs_executor_and_returns_stage_state(tmp_path: Path) -> None:

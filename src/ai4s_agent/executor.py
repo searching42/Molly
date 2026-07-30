@@ -37,6 +37,13 @@ from ai4s_agent.oled_real_phase1_execution import (
     _validated_split_by_row,
 )
 from ai4s_agent.oled_registry_candidate_screening import _load_screening_inputs
+from ai4s_agent.oled_scientific_agent_source_evidence import (
+    ScientificAgentTypedFailure,
+    build_failure_evidence,
+    failure_reason_codes_for_error_code,
+    publish_dispatch_receipt,
+    read_dispatch_receipts,
+)
 from ai4s_agent.oled_supplementary_material_identity_review import (
     _pinned_output_parents_without_symlink_components,
 )
@@ -249,6 +256,13 @@ class RunPlanExecutor:
                 # result for this task.  Return it idempotently before a gate
                 # snapshot is written, so a retry cannot make a succeeded run
                 # look like it is awaiting another human decision.
+                self._record_non_dispatch_receipt(
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    task_id=task.task_id,
+                    dispatch_kind="idempotent_replay",
+                    approved_gates=approved_gates,
+                )
                 return {
                     "ok": True,
                     "run_id": run_id,
@@ -322,6 +336,14 @@ class RunPlanExecutor:
                     "adapter": adapter_name or "",
                     "error": error,
                 }
+                self._record_non_dispatch_receipt(
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    task_id=task.task_id,
+                    dispatch_kind="duplicate_rejected",
+                    approved_gates=approved_gates,
+                    reason_codes=("duplicate_dispatch_detected",),
+                )
                 result_path = self._write_adapter_result(
                     run_dir,
                     task.task_id,
@@ -345,6 +367,10 @@ class RunPlanExecutor:
                     details={
                         "adapter": adapter_name or "",
                         "rejected_before_adapter_dispatch": True,
+                        **self._failure_evidence_details(
+                            run_id=run_id,
+                            reason_codes=("duplicate_dispatch_detected",),
+                        ),
                     },
                 )
                 return {
@@ -377,8 +403,57 @@ class RunPlanExecutor:
             if planned_result is not None:
                 result = planned_result
             else:
+                self._record_actual_dispatch_receipt(
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    task_id=task.task_id,
+                    adapter_name=adapter_name,
+                    approved_gates=approved_gates,
+                )
                 try:
                     result = adapter(payload)
+                except ScientificAgentTypedFailure as exc:
+                    error = {
+                        "code": "typed_adapter_failure",
+                        "message": "The adapter reported a typed execution failure.",
+                    }
+                    result_path = self._write_adapter_result(
+                        run_dir,
+                        task.task_id,
+                        {
+                            "status": "failed",
+                            "adapter": adapter_name or "",
+                            "error": error,
+                        },
+                        attempt_id=attempt_id,
+                    )
+                    failure_artifacts = [
+                        ArtifactRef(
+                            artifact_id=f"{task.task_id}_result",
+                            relative_path=self._relative(run_dir, result_path),
+                        )
+                    ]
+                    self._write_stage(
+                        project_id=project_id,
+                        run_id=run_id,
+                        stage=task.task_id,
+                        status=RunStatus.FAILED,
+                        next_stage=next_stage,
+                        error=error,
+                        artifacts=failure_artifacts,
+                        details=self._failure_evidence_details(
+                            run_id=run_id,
+                            reason_codes=exc.reason_codes,
+                        ),
+                    )
+                    return {
+                        "ok": False,
+                        "run_id": run_id,
+                        "status": RunStatus.FAILED.value,
+                        "failed_task": task.task_id,
+                        "executed_tasks": executed,
+                        "error": error,
+                    }
                 except Exception as exc:
                     if task.task_id in _IMMUTABLE_EXECUTION_RECORD_TASK_IDS:
                         # This result may become an execution record.  Keep an
@@ -416,6 +491,10 @@ class RunPlanExecutor:
                         next_stage=next_stage,
                         error=error,
                         artifacts=failure_artifacts,
+                        details=self._failure_evidence_details(
+                            run_id=run_id,
+                            reason_codes=("adapter_runtime_failed",),
+                        ),
                     )
                     return {
                         "ok": False,
@@ -468,6 +547,16 @@ class RunPlanExecutor:
                     "result": result,
                 }
             if result_status != "success":
+                result_error = result.get("error")
+                result_error_code = (
+                    result_error.get("code")
+                    if isinstance(result_error, dict)
+                    else None
+                )
+                reason_codes = failure_reason_codes_for_error_code(
+                    result_error_code,
+                    fallback="tool_runtime_failure",
+                )
                 self._write_stage(
                     project_id=project_id,
                     run_id=run_id,
@@ -476,6 +565,10 @@ class RunPlanExecutor:
                     next_stage=next_stage,
                     error=result.get("error") if isinstance(result.get("error"), dict) else {"message": str(result)},
                     artifacts=[ArtifactRef(artifact_id=f"{task.task_id}_result", relative_path=self._relative(run_dir, result_path))],
+                    details=self._failure_evidence_details(
+                        run_id=run_id,
+                        reason_codes=reason_codes,
+                    ),
                 )
                 return {
                     "ok": False,
@@ -532,6 +625,10 @@ class RunPlanExecutor:
                     next_stage=next_stage,
                     error=error,
                     artifacts=failure_artifacts,
+                    details=self._failure_evidence_details(
+                        run_id=run_id,
+                        reason_codes=("output_parse_failed",),
+                    ),
                 )
                 return {
                     "ok": False,
@@ -3914,6 +4011,13 @@ class RunPlanExecutor:
         history = list(previous.history) if previous is not None else []
         history.append(StageHistoryItem(stage=stage, status=status, updated_at=now))
         started_at = previous.started_at if previous is not None and previous.stage == stage else now
+        next_details = dict(details or {})
+        if (
+            previous is not None
+            and "failure_evidence" not in next_details
+            and "failure_evidence" in previous.details
+        ):
+            next_details["failure_evidence"] = previous.details["failure_evidence"]
         state = StageState(
             stage=stage,
             next_stage=next_stage,
@@ -3923,10 +4027,108 @@ class RunPlanExecutor:
             updated_at=now,
             error=error,
             artifacts=artifacts or [],
-            details=details or {},
+            details=next_details,
             history=history,
         )
         self.storage.write_stage_state(project_id, run_id, state)
+
+    @staticmethod
+    def _source_evidence_enabled(run_id: str) -> bool:
+        return run_id.startswith("oled-bounded-session-")
+
+    @classmethod
+    def _failure_evidence_details(
+        cls,
+        *,
+        run_id: str,
+        reason_codes: tuple[str, ...],
+    ) -> dict[str, Any]:
+        if not cls._source_evidence_enabled(run_id):
+            return {}
+        return {
+            "failure_evidence": build_failure_evidence(
+                reason_codes=reason_codes
+            )
+        }
+
+    @staticmethod
+    def _dispatch_source_digest(
+        *,
+        run_id: str,
+        task_id: str,
+        adapter_name: str | None,
+        approved_gates: set[str],
+    ) -> str:
+        value = {
+            "run_id": run_id,
+            "task_id": task_id,
+            "adapter": adapter_name or "",
+            "approved_gates": sorted(approved_gates),
+        }
+        payload = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+    def _record_actual_dispatch_receipt(
+        self,
+        *,
+        run_dir: Path,
+        run_id: str,
+        task_id: str,
+        adapter_name: str | None,
+        approved_gates: set[str],
+    ) -> None:
+        if not self._source_evidence_enabled(run_id):
+            return
+        existing = read_dispatch_receipts(run_dir=run_dir, allow_missing=True)
+        actual = [
+            item
+            for item in existing
+            if item.payload["dispatch_kind"] in {"initial", "retry"}
+        ]
+        publish_dispatch_receipt(
+            run_dir=run_dir,
+            child_run_id=run_id,
+            task_id=task_id,
+            dispatch_kind="initial" if not actual else "retry",
+            request_or_stage_digest=self._dispatch_source_digest(
+                run_id=run_id,
+                task_id=task_id,
+                adapter_name=adapter_name,
+                approved_gates=approved_gates,
+            ),
+        )
+
+    def _record_non_dispatch_receipt(
+        self,
+        *,
+        run_dir: Path,
+        run_id: str,
+        task_id: str,
+        dispatch_kind: str,
+        approved_gates: set[str],
+        reason_codes: tuple[str, ...] = (),
+    ) -> None:
+        if not self._source_evidence_enabled(run_id):
+            return
+        publish_dispatch_receipt(
+            run_dir=run_dir,
+            child_run_id=run_id,
+            task_id=task_id,
+            dispatch_kind=dispatch_kind,
+            request_or_stage_digest=self._dispatch_source_digest(
+                run_id=run_id,
+                task_id=task_id,
+                adapter_name=None,
+                approved_gates=approved_gates,
+            ),
+            reason_codes=reason_codes,
+        )
 
     @staticmethod
     def _relative(run_dir: Path, path: Path) -> str:

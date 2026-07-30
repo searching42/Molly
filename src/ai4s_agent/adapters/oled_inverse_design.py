@@ -6,6 +6,9 @@ from typing import Any
 from ai4s_agent._utils import strict_bool
 from ai4s_agent.adapters.contract_validation import validate_adapter_output_shape
 from ai4s_agent.oled_inverse_design import run_oled_inverse_design_from_files
+from ai4s_agent.oled_scientific_agent_source_evidence import (
+    ScientificAgentTypedFailure,
+)
 
 
 _ADAPTER_NAME = "execute_oled_inverse_design_adapter"
@@ -128,6 +131,10 @@ def execute_oled_inverse_design_adapter(payload: dict[str, Any]) -> dict[str, An
             ),
             timeout_sec=timeout_sec,
         )
+    except ScientificAgentTypedFailure:
+        # The executor persists the validated safe reason code.  This adapter
+        # must not collapse that typed boundary into a generic result.
+        raise
     except Exception:
         # Persisted adapter results are visible to users and must not reveal
         # local/remote paths, command output, or transport details.

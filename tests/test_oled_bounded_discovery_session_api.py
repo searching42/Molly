@@ -26,6 +26,9 @@ from ai4s_agent.oled_bounded_discovery_session_view import (
     build_oled_bounded_discovery_session_view,
 )
 from ai4s_agent.oled_real_phase1_execution import _stable_hash
+from ai4s_agent.oled_scientific_agent_source_evidence import (
+    read_recovery_receipts,
+)
 from ai4s_agent.storage import ProjectStorage
 from tests.test_oled_bounded_discovery_session import (
     _CountingExecutor,
@@ -434,6 +437,22 @@ def test_second_generation_interrupted_action_is_recovered_without_rewriting_req
         actions_root=actions_root,
         executor=_HoldingExecutor(),  # type: ignore[arg-type]
     )
+    original_write_state = restarted._write_state
+
+    def fail_recovered_telemetry(_: dict[str, Any]) -> None:
+        raise RuntimeError("simulated mutable telemetry write failure")
+
+    monkeypatch.setattr(restarted, "_write_state", fail_recovered_telemetry)
+    with pytest.raises(RuntimeError, match="telemetry write failure"):
+        restarted.recover_interrupted_action(
+            project_id=project_id,
+            action_id=queued["action_id"],
+        )
+    assert json.loads(
+        (action_dir / "action.json").read_text(encoding="utf-8")
+    )["status"] == "RUNNING"
+    assert len(read_recovery_receipts(action_dir=action_dir)) == 1
+    monkeypatch.setattr(restarted, "_write_state", original_write_state)
     recovered = restarted.recover_interrupted_action(
         project_id=project_id,
         action_id=queued["action_id"],
@@ -449,6 +468,17 @@ def test_second_generation_interrupted_action_is_recovered_without_rewriting_req
     )
     assert final_telemetry["status"] == "RECOVERED"
     assert final_telemetry["completed_revision"] == 11
+    receipts = read_recovery_receipts(action_dir=action_dir)
+    assert len(receipts) == 1
+    assert receipts[0].payload["recovery_kind"] == "adopt_completed_child"
+    assert receipts[0].payload["completed_revision"] == 11
+    assert receipts[0].payload["request_digest"] == recovered["request_digest"]
+    repeated = restarted.recover_interrupted_action(
+        project_id=project_id,
+        action_id=queued["action_id"],
+    )
+    assert repeated["status"] == "RECOVERED"
+    assert len(read_recovery_receipts(action_dir=action_dir)) == 1
 
     next_action = restarted.enqueue_advance(
         project_id=project_id,

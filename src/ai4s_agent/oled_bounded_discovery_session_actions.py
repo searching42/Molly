@@ -20,6 +20,7 @@ from ai4s_agent.oled_bounded_discovery_session import (
 from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_directory
 from ai4s_agent.oled_bounded_discovery_session_view import (
     build_oled_bounded_discovery_session_view,
+    replay_oled_bounded_discovery_projection_source,
     validated_oled_bounded_project_id,
 )
 from ai4s_agent.oled_real_phase1_execution import _json_bytes, _stable_hash
@@ -28,6 +29,12 @@ from ai4s_agent.oled_supplementary_scoped_candidate_response import (
 )
 from ai4s_agent.oled_supplementary_material_identity_review import (
     _pinned_output_parents_without_symlink_components,
+)
+from ai4s_agent.oled_scientific_agent_source_evidence import (
+    BoundSourceReceipt,
+    publish_recovery_receipt,
+    read_dispatch_receipts,
+    read_recovery_receipts,
 )
 from ai4s_agent.storage import ProjectStorage
 
@@ -213,6 +220,15 @@ class OledBoundedDiscoverySessionActionService:
         with self._lock:
             request, state, request_bytes = self._read(clean_project, action_id)
             if state["status"] == "RECOVERED":
+                receipt = self._require_recovery_receipt(
+                    project_id=clean_project,
+                    request=request,
+                    state=state,
+                )
+                if int(receipt.payload["completed_revision"]) != int(
+                    state["completed_revision"]
+                ):
+                    raise ValueError("PR-AW recovered telemetry receipt mismatch")
                 public = _public_record(request, state)
                 public["result"] = build_oled_bounded_discovery_session_view(
                     storage=self.storage,
@@ -225,6 +241,41 @@ class OledBoundedDiscoverySessionActionService:
             if self._owned_active_action(state):
                 raise ValueError("PR-AW action is still owned by a live worker")
 
+            existing_receipts = read_recovery_receipts(
+                action_dir=self._action_dir(clean_project, action_id),
+                allow_missing=True,
+            )
+            if existing_receipts:
+                receipt = self._verify_recovery_receipt(
+                    project_id=clean_project,
+                    request=request,
+                    receipt=existing_receipts[0],
+                )
+                recovered = {
+                    **state,
+                    "state_version": _STATE_VERSION,
+                    "status": "RECOVERED",
+                    "updated_at": now_iso(),
+                    "completed_revision": int(
+                        receipt.payload["completed_revision"]
+                    ),
+                    "error": None,
+                }
+                self._write_state(recovered)
+                public = _public_record(request, recovered)
+                public["result"] = build_oled_bounded_discovery_session_view(
+                    storage=self.storage,
+                    project_id=clean_project,
+                    session_id=str(request["session_id"]),
+                )
+                return public
+
+        before_view, _, _ = replay_oled_bounded_discovery_projection_source(
+            storage=self.storage,
+            project_id=clean_project,
+            session_id=str(request["session_id"]),
+        )
+
         result = reconcile_completed_oled_bounded_discovery_session_action(
             storage=self.storage,
             project_id=clean_project,
@@ -233,6 +284,41 @@ class OledBoundedDiscoverySessionActionService:
         )
         if result.revision <= int(request["expected_revision"]):
             raise ValueError("PR-AW interrupted action did not advance the session")
+
+        after_view, _, _ = replay_oled_bounded_discovery_projection_source(
+            storage=self.storage,
+            project_id=clean_project,
+            session_id=str(request["session_id"]),
+        )
+        recovered_child = _recovered_child(before_view, after_view)
+        run_dir = self.storage.run_dir(clean_project, recovered_child["run_id"])
+        stage_path = run_dir / "stage.json"
+        _, recovered_stage_sha256 = _read_regular_file_bound(
+            stage_path.absolute(),
+            max_bytes=1024 * 1024,
+            reject_symlink_components=True,
+        )
+        dispatch_receipts = read_dispatch_receipts(
+            run_dir=run_dir,
+            allow_missing=True,
+        )
+        recovery_receipt = publish_recovery_receipt(
+            action_dir=self._action_dir(clean_project, action_id),
+            action_id=action_id,
+            request_digest=str(request["request_digest"]),
+            recovered_child_run_id=str(recovered_child["run_id"]),
+            recovered_stage_sha256=recovered_stage_sha256,
+            source_dispatch_receipt_ids=[
+                str(item.payload["receipt_id"]) for item in dispatch_receipts
+            ],
+            expected_revision=int(request["expected_revision"]),
+            completed_revision=result.revision,
+        )
+        self._verify_recovery_receipt(
+            project_id=clean_project,
+            request=request,
+            receipt=recovery_receipt,
+        )
 
         with self._lock:
             current_request, current_state, current_bytes = self._read(
@@ -260,6 +346,78 @@ class OledBoundedDiscoverySessionActionService:
                 session_id=result.session_id,
             )
             return public
+
+    def _require_recovery_receipt(
+        self,
+        *,
+        project_id: str,
+        request: dict[str, Any],
+        state: dict[str, Any],
+    ) -> BoundSourceReceipt:
+        receipts = read_recovery_receipts(
+            action_dir=self._action_dir(project_id, str(request["action_id"])),
+            allow_missing=True,
+        )
+        if len(receipts) != 1:
+            raise ValueError("PR-AW recovered action lacks authoritative receipt")
+        receipt = self._verify_recovery_receipt(
+            project_id=project_id,
+            request=request,
+            receipt=receipts[0],
+        )
+        if receipt.payload["completed_revision"] != state["completed_revision"]:
+            raise ValueError("PR-AW recovery receipt revision mismatch")
+        return receipt
+
+    def _verify_recovery_receipt(
+        self,
+        *,
+        project_id: str,
+        request: dict[str, Any],
+        receipt: BoundSourceReceipt,
+    ) -> BoundSourceReceipt:
+        payload = receipt.payload
+        if (
+            payload["action_id"] != request["action_id"]
+            or payload["request_digest"] != request["request_digest"]
+            or payload["expected_revision"] != request["expected_revision"]
+        ):
+            raise ValueError("PR-AW recovery receipt request binding mismatch")
+        view, _, _ = replay_oled_bounded_discovery_projection_source(
+            storage=self.storage,
+            project_id=project_id,
+            session_id=str(request["session_id"]),
+        )
+        if int(view["revision"]) != int(payload["completed_revision"]):
+            raise ValueError("PR-AW recovery receipt Session revision mismatch")
+        child_matches = [
+            child
+            for child in view["children"]
+            if child["run_id"] == payload["recovered_child_run_id"]
+            and child["status"] == "succeeded"
+        ]
+        if len(child_matches) != 1:
+            raise ValueError("PR-AW recovery receipt child binding mismatch")
+        run_dir = self.storage.run_dir(
+            project_id, str(payload["recovered_child_run_id"])
+        )
+        _, stage_sha256 = _read_regular_file_bound(
+            (run_dir / "stage.json").absolute(),
+            max_bytes=1024 * 1024,
+            reject_symlink_components=True,
+        )
+        if stage_sha256 != payload["recovered_stage_sha256"]:
+            raise ValueError("PR-AW recovery receipt StageState binding mismatch")
+        dispatch_ids = sorted(
+            str(item.payload["receipt_id"])
+            for item in read_dispatch_receipts(
+                run_dir=run_dir,
+                allow_missing=True,
+            )
+        )
+        if dispatch_ids != list(payload["source_dispatch_receipt_ids"]):
+            raise ValueError("PR-AW recovery receipt dispatch roster mismatch")
+        return receipt
 
     def _enqueue(
         self,
@@ -671,6 +829,30 @@ def _public_record(
         "updated_at": state["updated_at"],
         "completed_revision": state["completed_revision"],
         "error": state["error"],
+    }
+
+
+def _recovered_child(
+    before_view: dict[str, Any], after_view: dict[str, Any]
+) -> dict[str, str]:
+    before = {
+        str(child["run_id"]): str(child["status"])
+        for child in before_view.get("children", [])
+        if isinstance(child, dict)
+    }
+    matches = [
+        child
+        for child in after_view.get("children", [])
+        if isinstance(child, dict)
+        and child.get("status") == "succeeded"
+        and before.get(str(child.get("run_id"))) != "succeeded"
+    ]
+    if len(matches) != 1:
+        raise ValueError("PR-AW recovery child transition is ambiguous")
+    child = matches[0]
+    return {
+        "run_id": _safe_segment(str(child.get("run_id")), "recovered child run_id"),
+        "task_id": _safe_segment(str(child.get("task_id")), "recovered child task_id"),
     }
 
 
