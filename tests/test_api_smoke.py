@@ -62,6 +62,8 @@ def test_index_page_uses_project_sidebar_and_chat_workspace(rendered_index_html:
     assert 'id="conversation-stream"' in html
     assert 'id="conversation-form"' in html
     assert 'id="conversation-input"' in html
+    assert 'class="settings-scroll"' in html
+    assert "recordTaskStateInConversation" in html
     assert 'id="chat-review-artifacts"' in html
 
 

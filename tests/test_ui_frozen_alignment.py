@@ -9,6 +9,41 @@ def test_sidebar_matches_frozen_project_conversation_layout(rendered_index_html:
     assert 'class="workspace-topbar"' not in html
 
 
+def test_conversation_history_and_settings_use_independent_scroll_regions(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
+
+    assert ".chat-panel { display: grid; grid-template-rows: minmax(0, 1fr) auto;" in html
+    assert ".conversation-stream { display: grid; min-height: 0;" in html
+    assert "overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable;" in html
+    assert ".conversation-composer { position: relative; z-index: 1;" in html
+    assert ".conversation-list { display: grid;" in html
+    assert "max-height: 22vh" in html
+    assert 'class="settings-dialog"' in html
+    assert 'class="settings-scroll"' in html
+    assert ".settings-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr);" in html
+    assert ".settings-scroll { min-height: 0; overflow-x: hidden; overflow-y: auto;" in html
+    assert html.index('id="llm-settings-close"') < html.index('class="settings-scroll"')
+
+
+def test_task_intermediate_state_files_are_persisted_in_conversation(
+    rendered_index_html: str,
+) -> None:
+    html = rendered_index_html
+
+    assert "async function recordTaskStateInConversation(payload, options = {})" in html
+    assert 'persistConversationMessage("system", content)' in html
+    assert 'item.content === content' in html
+    assert '"run_plan.json", "stage.json", "gate_decisions.json", "job.json", "artifact_registry.json"' in html
+    assert "中间状态文件：" in html
+    assert "状态已显示，但未能写入持久化对话。" in html
+    assert "conversationDecisionMessages()" in html
+    assert "recordConversation: true" in html
+    assert 'stateFiles: ["stage.json"]' in html
+    assert 'text.textContent = String(content || "");' in html
+
+
 def test_sidebar_exposes_literature_parse_without_bounded_oled_entry(
     rendered_index_html: str,
 ) -> None:

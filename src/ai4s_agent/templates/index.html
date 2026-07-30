@@ -48,7 +48,7 @@
       .sidebar-section h2 { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; }
       .sidebar-heading { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
       .sidebar-heading h2 { margin: 0; }
-      .conversation-list { display: grid; min-width: 0; max-width: 100%; gap: 0.35rem; overflow: hidden; }
+      .conversation-list { display: grid; min-width: 0; max-width: 100%; max-height: 22vh; gap: 0.35rem; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
       .conversation-row { display: block; min-width: 0; max-width: 100%; overflow: hidden; }
       .conversation-select { display: block; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; padding: 0.5rem 0.58rem; color: var(--ink); background: transparent; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
       .conversation-select.active { background: rgba(20, 92, 114, 0.12); color: var(--blue); }
@@ -58,15 +58,16 @@
       .atomic-task-icon { color: var(--blue); font-size: 1rem; text-align: center; }
       .atomic-task-status { margin: 0.1rem 0 0; padding: 0 0.58rem; }
       .pill { display: inline-flex; align-items: center; min-height: 1.75rem; padding: 0.28rem 0.55rem; border: 1px solid var(--line); border-radius: 999px; background: var(--white); color: var(--muted); font-size: 0.74rem; font-weight: 900; white-space: nowrap; }
-      .chat-panel { display: grid; grid-template-rows: minmax(260px, 1fr) auto; min-height: 520px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
-      .conversation-stream { display: grid; align-content: start; gap: 0.75rem; padding: 1rem; overflow: auto; }
+      .chat-panel { display: grid; grid-template-rows: minmax(0, 1fr) auto; height: clamp(520px, calc(100vh - 2rem), 820px); min-height: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+      .conversation-stream { display: grid; min-height: 0; align-content: start; gap: 0.75rem; padding: 1rem; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
       .chat-message { max-width: min(760px, 92%); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.75rem 0.85rem; background: rgba(255, 255, 255, 0.72); line-height: 1.45; white-space: pre-wrap; }
       .chat-message.user { justify-self: end; background: rgba(220, 239, 229, 0.88); }
       .chat-message.agent, .chat-message.system { justify-self: start; }
       .chat-message.system { border-style: dashed; color: var(--muted); }
+      .chat-message.task-state { border-style: solid; border-color: rgba(20, 92, 114, 0.28); background: rgba(232, 242, 246, 0.82); color: #27424d; }
       .chat-attachments, .pending-attachments { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.55rem; }
       .attachment-chip { display: inline-flex; max-width: 100%; align-items: center; gap: 0.35rem; border: 1px solid var(--line); border-radius: 999px; padding: 0.22rem 0.5rem; color: var(--muted); background: var(--white); font-size: 0.74rem; overflow-wrap: anywhere; }
-      .conversation-composer { display: grid; gap: 0.65rem; border-top: 1px solid var(--line); padding: 0.85rem; background: rgba(246, 247, 248, 0.84); }
+      .conversation-composer { position: relative; z-index: 1; display: grid; gap: 0.65rem; border-top: 1px solid var(--line); padding: 0.85rem; background: #f6f7f8; box-shadow: 0 -8px 18px rgba(23, 32, 39, 0.04); }
       .composer-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.6rem; align-items: center; }
       .composer-actions button { width: auto; min-width: 8.5rem; }
       .attachment-actions { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
@@ -118,9 +119,10 @@
       .icon-button { width: auto; min-width: 2rem; padding: 0.38rem 0.55rem; border: 1px solid var(--line); color: var(--ink); background: transparent; }
       .modal-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 1rem; background: rgba(11, 25, 31, 0.58); backdrop-filter: blur(5px); }
       .modal-backdrop[hidden] { display: none; }
-      .settings-dialog { width: min(560px, 100%); max-height: calc(100vh - 2rem); overflow: auto; border: 1px solid var(--line); border-radius: 12px; padding: 1.15rem; background: #f8fafb; box-shadow: 0 24px 70px rgba(11, 25, 31, 0.34); }
-      .settings-header { display: flex; justify-content: space-between; gap: 1rem; align-items: start; margin-bottom: 0.8rem; }
+      .settings-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(560px, 100%); max-height: calc(100vh - 2rem); overflow: hidden; border: 1px solid var(--line); border-radius: 12px; padding: 0; background: #f8fafb; box-shadow: 0 24px 70px rgba(11, 25, 31, 0.34); }
+      .settings-header { position: relative; z-index: 1; display: flex; justify-content: space-between; gap: 1rem; align-items: start; margin: 0; border-bottom: 1px solid var(--line); padding: 1.15rem; background: #f8fafb; }
       .settings-header .icon-button { flex: 0 0 auto; }
+      .settings-scroll { min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 0 1.15rem 1.15rem; scrollbar-gutter: stable; }
       .settings-dialog form { gap: 0.72rem; }
       .settings-section { display: grid; gap: 0.65rem; margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 1rem; }
       .field-help { margin: -0.28rem 0 0.1rem; color: var(--muted); font-size: 0.76rem; line-height: 1.45; }
@@ -144,7 +146,7 @@
       .model-workflow-header button { width: auto; }
       .workflow-state { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.75rem; background: rgba(245, 246, 247, 0.72); }
       .workflow-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.65rem; }
-      @media (max-width: 900px) { .app-shell { grid-template-columns: 1fr; padding: 0.75rem; } .project-sidebar { position: static; max-height: none; } .composer-actions { grid-template-columns: 1fr; display: grid; } .composer-actions button { width: 100%; } .two-column, .split, .tool-grid, .button-row { grid-template-columns: 1fr; } }
+      @media (max-width: 900px) { .app-shell { grid-template-columns: 1fr; padding: 0.75rem; } .project-sidebar { position: static; max-height: none; } .chat-panel { height: max(440px, calc(100dvh - 1.5rem)); } .composer-actions { grid-template-columns: 1fr; display: grid; } .composer-actions button { width: 100%; } .two-column, .split, .tool-grid, .button-row { grid-template-columns: 1fr; } }
     </style>
   </head>
   <body>
@@ -486,6 +488,7 @@
           </div>
           <button id="llm-settings-close" type="button" class="icon-button" aria-label="关闭设置">×</button>
         </header>
+        <div class="settings-scroll">
         <form id="llm-settings-form">
           <label for="llm-endpoint">OpenAI-compatible endpoint</label>
           <input id="llm-endpoint" name="endpoint" type="url" placeholder="https://example.com/v1" required />
@@ -593,6 +596,7 @@
             <div id="compute-execution-profiles" class="settings-list"></div>
           </details>
         </section>
+        </div>
       </section>
     </div>
 
@@ -789,6 +793,9 @@
         const article = document.createElement("article");
         const displayRole = role === "assistant" ? "agent" : role;
         article.className = `chat-message ${displayRole}`;
+        if (displayRole === "system" && String(content || "").startsWith("运行状态 · ")) {
+          article.classList.add("task-state");
+        }
         const text = document.createElement("div");
         text.textContent = String(content || "");
         article.appendChild(text);
@@ -806,6 +813,97 @@
         }
         stream.appendChild(article);
         stream.scrollTop = stream.scrollHeight;
+      }
+
+      function safeTaskStateToken(value, fallback = "unavailable") {
+        const clean = String(value || "").trim();
+        return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(clean) ? clean : fallback;
+      }
+
+      function taskStateSnapshot(payload, { runId = "", stateFiles = [] } = {}) {
+        const response = payload && typeof payload === "object" ? payload : {};
+        const timeline = response.timeline && typeof response.timeline === "object" ? response.timeline : null;
+        const stage = response.stage && typeof response.stage === "object" ? response.stage : timeline;
+        const status = safeTaskStateToken(response.stage_status || stage?.status);
+        const currentStage = safeTaskStateToken(stage?.stage || stage?.current_stage);
+        const cleanRunId = safeTaskStateToken(response.run_id || runId);
+        const historySource = Array.isArray(stage?.history)
+          ? stage.history
+          : Array.isArray(stage?.events)
+          ? stage.events
+          : [];
+        const history = historySource.slice(-8).map((item) => ({
+          stage: safeTaskStateToken(item?.stage),
+          status: safeTaskStateToken(item?.status),
+        }));
+        const artifactIds = new Set();
+        let artifactRegistryObserved = false;
+        if (response.artifacts && typeof response.artifacts === "object" && !Array.isArray(response.artifacts)) {
+          artifactRegistryObserved = true;
+          Object.keys(response.artifacts).forEach((artifactId) => artifactIds.add(safeTaskStateToken(artifactId)));
+        }
+        if (Array.isArray(stage?.artifacts)) {
+          stage.artifacts.forEach((artifact) => artifactIds.add(safeTaskStateToken(artifact?.artifact_id)));
+        }
+        artifactIds.delete("unavailable");
+        const files = new Set(
+          stateFiles.filter((name) => ["run_plan.json", "stage.json", "gate_decisions.json", "job.json", "artifact_registry.json"].includes(name)),
+        );
+        if (response.plan_exists) files.add("run_plan.json");
+        if (stage) files.add("stage.json");
+        if (Array.isArray(response.gate_decisions) && response.gate_decisions.length) files.add("gate_decisions.json");
+        if (response.job && typeof response.job === "object") files.add("job.json");
+        if (artifactRegistryObserved) files.add("artifact_registry.json");
+        return {
+          runId: cleanRunId,
+          currentStage,
+          status,
+          history,
+          artifactIds: Array.from(artifactIds).sort(),
+          stateFiles: Array.from(files).sort(),
+        };
+      }
+
+      function taskStateConversationContent(snapshot) {
+        const lines = [
+          `运行状态 · ${snapshot.runId}`,
+          `当前阶段：${snapshot.currentStage}`,
+          `状态：${snapshot.status}`,
+          `中间状态文件：${snapshot.stateFiles.length ? snapshot.stateFiles.join("、") : "尚无可展示的已持久化状态文件"}`,
+        ];
+        if (snapshot.history.length) {
+          lines.push(`阶段记录：${snapshot.history.map((item) => `${item.stage} (${item.status})`).join(" → ")}`);
+        }
+        if (snapshot.artifactIds.length) lines.push(`已登记工件：${snapshot.artifactIds.join("、")}`);
+        return lines.join("\n");
+      }
+
+      async function recordTaskStateInConversation(payload, options = {}) {
+        const snapshot = taskStateSnapshot(payload, options);
+        if (snapshot.runId === "unavailable" || (snapshot.status === "unavailable" && snapshot.currentStage === "unavailable")) return false;
+        const content = taskStateConversationContent(snapshot);
+        if (conversationMessages.some((item) => item.role === "system" && item.content === content)) return false;
+        const chips = snapshot.stateFiles.map((name) => ({ original_name: name, artifact_id: name }));
+        const projectId = String(options.projectId || activeProject.project_id || "").trim();
+        if (projectId !== activeProject.project_id) {
+          appendConversationMessage("system", `${content}\n该运行不属于当前项目，因此未写入当前项目的持久化对话。`, chips);
+          return false;
+        }
+        try {
+          const persisted = await persistConversationMessage("system", content);
+          conversationMessages.push({ role: "system", content: persisted.content });
+          appendConversationMessage("system", persisted.content, chips);
+          return true;
+        } catch (_err) {
+          appendConversationMessage("system", `${content}\n状态已显示，但未能写入持久化对话。`, chips);
+          return false;
+        }
+      }
+
+      function conversationDecisionMessages() {
+        return conversationMessages.filter(
+          (item) => !(item.role === "system" && String(item.content || "").startsWith("运行状态 · ")),
+        );
       }
 
       function renderPendingConversationAttachments() {
@@ -1771,7 +1869,7 @@
           const response = await postJSON("/api/agent/conversation/next-turn", {
             project_id: projectId,
             run_id: runId,
-            messages: conversationMessages,
+            messages: conversationDecisionMessages(),
             available_inputs: datasetAvailableInputs(),
             external_llm_approved: document.getElementById("conversation-external-llm-approved").checked,
           });
@@ -1929,7 +2027,7 @@
           const response = await postJSON("/api/agent/conversation/research-sources", {
             project_id: activeProject.project_id,
             run_id: runId,
-            messages: conversationMessages,
+            messages: conversationDecisionMessages(),
           });
           currentResearchSourceProposal = response.proposal || null;
           appendConversationMessage("agent", "文献来源 proposal 已生成，仅供审阅，不会执行外部采集。");
@@ -2065,7 +2163,7 @@
         setText("model-workflow-status", `${currentModelWorkflow.runId} 当前状态：${status}`);
       }
 
-      async function refreshModelWorkflow({ renderRaw = true } = {}) {
+      async function refreshModelWorkflow({ renderRaw = true, recordConversation = false } = {}) {
         if (!currentModelWorkflow?.runId) return null;
         const response = await getJSON(
           `/api/runs/${encodeURIComponent(currentModelWorkflow.runId)}?project_id=${encodeURIComponent(activeProject.project_id)}`,
@@ -2082,6 +2180,12 @@
         persistModelWorkflowState();
         renderModelExecution(execution, response);
         if (renderRaw) render(response);
+        if (recordConversation) {
+          await recordTaskStateInConversation(response, {
+            runId: currentModelWorkflow.runId,
+            projectId: activeProject.project_id,
+          });
+        }
         return response;
       }
 
@@ -2127,6 +2231,11 @@
           `${runId} 已创建。任务在 ${modelWaitingTask(response.execution) || response.execution?.status || "当前阶段"} 停下供你审阅。`,
         );
         render(response);
+        try {
+          await refreshModelWorkflow({ renderRaw: false, recordConversation: true });
+        } catch (_err) {
+          appendConversationMessage("system", `${runId} 已启动，但暂时无法读取持久化状态文件。`);
+        }
       }
 
       async function approveCurrentModelGate() {
@@ -2153,8 +2262,12 @@
         currentModelWorkflow.lastExecution = response.execution || null;
         persistModelWorkflowState();
         renderModelExecution(response.execution || null);
+        try {
+          await refreshModelWorkflow({ renderRaw: false, recordConversation: true });
+        } catch (_err) {
+          appendConversationMessage("system", `${currentModelWorkflow.runId} 已继续执行，但暂时无法读取持久化状态文件。`);
+        }
         if (["SUCCEEDED", "DONE"].includes(String(response.execution?.status || ""))) {
-          await refreshModelWorkflow({ renderRaw: false });
           appendConversationMessage("assistant", `${currentModelWorkflow.runId} 已完成，可在运行 artifact registry 中审阅 model package、generation publication 与 Top-N。`);
         }
         render(response);
@@ -2248,7 +2361,7 @@
       });
       document.getElementById("model-run-refresh").addEventListener("click", async () => {
         try {
-          await refreshModelWorkflow();
+          await refreshModelWorkflow({ renderRaw: true, recordConversation: true });
         } catch (err) {
           setText("model-workflow-status", `刷新失败：${normalizeErrorForRender(err).error}`);
           render(err);
@@ -2444,9 +2557,19 @@
       document.getElementById("stage-timeline-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         const fd = new FormData(event.currentTarget);
-        const projectId = encodeURIComponent(String(fd.get("project_id") || "").trim());
-        const runId = encodeURIComponent(String(fd.get("run_id") || "").trim());
-        try { render(await getJSON(`/api/projects/${projectId}/runs/${runId}/stage-timeline`)); } catch (err) { render(err); }
+        const projectValue = String(fd.get("project_id") || "").trim();
+        const runValue = String(fd.get("run_id") || "").trim();
+        const projectId = encodeURIComponent(projectValue);
+        const runId = encodeURIComponent(runValue);
+        try {
+          const response = await getJSON(`/api/projects/${projectId}/runs/${runId}/stage-timeline`);
+          render(response);
+          await recordTaskStateInConversation(response, {
+            runId: runValue,
+            projectId: projectValue,
+            stateFiles: ["stage.json"],
+          });
+        } catch (err) { render(err); }
       });
 
       document.getElementById("report-preview-form").addEventListener("submit", async (event) => {
