@@ -57,7 +57,7 @@ class ConversationStore:
                     expected_conversation_id=clean_id,
                 )
                 return metadata, False
-            if self._conversation_id_was_deleted(root, clean_id):
+            if self._conversation_id_was_deleted(root, project_id, clean_id):
                 raise ValueError("deleted conversation_id cannot be reused")
             self._ensure_private_directory(directory)
             with self._directory_lock(directory):
@@ -696,15 +696,41 @@ class ConversationStore:
         self._ensure_relative(project, root, "conversations")
         return root
 
-    def _conversation_id_was_deleted(self, root: Path, conversation_id: str) -> bool:
+    def _conversation_id_was_deleted(
+        self,
+        root: Path,
+        project_id: str,
+        conversation_id: str,
+    ) -> bool:
         trash = (root / ".deleted").resolve()
         self._ensure_relative(root, trash, "deleted conversations")
         if not trash.exists():
             return False
         if not trash.is_dir():
             raise ValueError("deleted conversations archive is invalid")
-        prefix = f"{conversation_id}."
-        return any(child.name.startswith(prefix) for child in trash.iterdir())
+        for child in sorted(trash.iterdir(), key=lambda item: item.name):
+            if child.is_symlink() or not child.is_dir():
+                raise ValueError("deleted conversation archive entry is invalid")
+            metadata = self._read_metadata(
+                child / "metadata.json",
+                expected_project_id=project_id,
+                expected_conversation_id=self._archived_conversation_id(child.name),
+            )
+            if metadata.conversation_id == conversation_id:
+                return True
+        return False
+
+    @staticmethod
+    def _archived_conversation_id(archive_name: str) -> str:
+        conversation_id, separator, suffix = archive_name.rpartition(".")
+        if (
+            not separator
+            or not conversation_id
+            or len(suffix) != 32
+            or any(char not in "0123456789abcdef" for char in suffix)
+        ):
+            raise ValueError("deleted conversation archive identity is invalid")
+        return ConversationStore._clean_id(conversation_id, "conversation_id")
 
     def _artifacts_root(self, project_id: str) -> Path:
         project = self.projects.project_dir(project_id)

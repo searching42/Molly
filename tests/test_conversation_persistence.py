@@ -299,6 +299,31 @@ def test_delete_serializes_recreate_and_rejects_stale_append(
     assert not active.exists()
 
 
+@pytest.mark.parametrize(
+    ("deleted_id", "new_id"),
+    [("a.b", "a"), ("a", "a.b")],
+)
+@pytest.mark.pr_fast
+def test_deleted_conversation_tombstone_matches_exact_dotted_identity(
+    tmp_path,
+    deleted_id: str,
+    new_id: str,
+) -> None:
+    store = _store(tmp_path)
+    store.create_conversation("project-a", conversation_id=deleted_id)
+    store.delete_conversation("project-a", deleted_id)
+
+    created, was_created = store.create_conversation(
+        "project-a",
+        conversation_id=new_id,
+    )
+
+    assert was_created is True
+    assert created.conversation_id == new_id
+    with pytest.raises(ValueError, match="deleted conversation_id cannot be reused"):
+        store.create_conversation("project-a", conversation_id=deleted_id)
+
+
 def test_attachment_artifacts_are_content_addressed_and_message_refs_have_no_paths(tmp_path) -> None:
     store = _store(tmp_path)
     store.create_conversation("project-a", conversation_id="conversation-a")
@@ -757,6 +782,10 @@ const results = {{
     "project-a", "conversation-a", "project-a", "conversation-b",
     {{ projectId: "project-a", conversationId: "conversation-a", generation: 11 }},
   ),
+  currentDeletedWhileOtherSelectionLoads: conversationDeletionDecision(
+    "project-a", "conversation-a", "project-a", "conversation-a",
+    {{ projectId: "project-a", conversationId: "conversation-c", generation: 12 }},
+  ),
 }};
 process.stdout.write(JSON.stringify(results));
 """
@@ -776,16 +805,25 @@ process.stdout.write(JSON.stringify(results));
             "sameProject": True,
             "deletedIsCurrent": False,
             "cancelPendingLoad": False,
+            "preservePendingSelection": True,
         },
         "otherToDeleted": {
             "sameProject": True,
             "deletedIsCurrent": True,
             "cancelPendingLoad": True,
+            "preservePendingSelection": False,
         },
         "pendingDeletedWhileOtherRemainsCurrent": {
             "sameProject": True,
             "deletedIsCurrent": False,
             "cancelPendingLoad": True,
+            "preservePendingSelection": False,
+        },
+        "currentDeletedWhileOtherSelectionLoads": {
+            "sameProject": True,
+            "deletedIsCurrent": False,
+            "cancelPendingLoad": False,
+            "preservePendingSelection": True,
         },
     }
     assert "deletedConversationKeys.has(conversationIdentityKey(projectId, nextConversationId))" in html

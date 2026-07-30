@@ -690,13 +690,20 @@
         pendingLoad,
       ) {
         const sameProject = projectId === activeProjectId;
+        const preservePendingSelection = Boolean(
+          sameProject && pendingLoad && pendingLoad.projectId === projectId &&
+          pendingLoad.conversationId && pendingLoad.conversationId !== conversationId
+        );
         return {
           sameProject,
-          deletedIsCurrent: sameProject && conversationId === activeConversationId,
+          deletedIsCurrent: Boolean(
+            sameProject && conversationId === activeConversationId && !preservePendingSelection
+          ),
           cancelPendingLoad: Boolean(
             sameProject && pendingLoad && pendingLoad.projectId === projectId &&
             pendingLoad.conversationId === conversationId
           ),
+          preservePendingSelection,
         };
       }
 
