@@ -864,12 +864,15 @@ def test_project_id_whitespace_is_rejected_before_cross_project_session_read(
         project_id="canonical-project",
         session_spec=spec,
     )
-    padded = create_oled_bounded_discovery_session(
-        storage=storage,
-        project_id=noncanonical,
-        session_spec=spec,
-    )
-    assert canonical.session_id == padded.session_id
+    with pytest.raises(
+        ValueError,
+        match="project_id must be a canonical single-component identifier",
+    ):
+        create_oled_bounded_discovery_session(
+            storage=storage,
+            project_id=noncanonical,
+            session_spec=spec,
+        )
     service = OledBoundedDiscoverySessionActionService(
         storage=storage,
         actions_root=tmp_path / "actions",
@@ -899,11 +902,15 @@ def test_project_id_whitespace_is_rejected_before_cross_project_session_read(
         project_id="canonical-project",
         session_id=canonical.session_id,
     ).revision == 0
-    assert inspect_oled_bounded_discovery_session(
-        storage=storage,
-        project_id=noncanonical,
-        session_id=padded.session_id,
-    ).revision == 0
+    with pytest.raises(
+        ValueError,
+        match="project_id must be a canonical single-component identifier",
+    ):
+        inspect_oled_bounded_discovery_session(
+            storage=storage,
+            project_id=noncanonical,
+            session_id=canonical.session_id,
+        )
 
 
 def test_completed_session_view_presents_exact_replayed_top_n(
