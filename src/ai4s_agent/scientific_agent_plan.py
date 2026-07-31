@@ -108,9 +108,16 @@ def _existing_project_dir(storage: Any, project_id: str) -> Path:
 
 def _safe_scope_id(value: Any, *, field: str) -> str:
     clean = str(value or "").strip().lower()
-    if _SAFE_SCOPE_ID.fullmatch(clean) is None or str(value) != clean:
+    # basename is the CodeQL-recognized path sanitizer; equality preserves the
+    # stronger repository contract that IDs are canonical single components.
+    safe_component = os.path.basename(clean)
+    if (
+        safe_component != clean
+        or _SAFE_SCOPE_ID.fullmatch(safe_component) is None
+        or str(value) != clean
+    ):
         raise ScientificAgentPlanError(f"{field} must be a lowercase single-component identifier")
-    return clean
+    return safe_component
 
 
 def _safe_logical_id(value: Any, *, field: str) -> str:
@@ -131,9 +138,15 @@ def _safe_relative_artifact_path(value: Any) -> str:
     path = PurePosixPath(raw)
     if path.is_absolute() or ".." in path.parts or "." in path.parts or not path.parts:
         raise ScientificAgentPlanError("artifact registry contains an unsafe relative path")
-    if any(not component or component in {".", ".."} for component in path.parts):
+    safe_parts = tuple(os.path.basename(component) for component in path.parts)
+    if any(
+        not component
+        or component in {".", ".."}
+        or safe_component != component
+        for component, safe_component in zip(path.parts, safe_parts, strict=True)
+    ):
         raise ScientificAgentPlanError("artifact registry contains an unsafe relative path")
-    return str(path)
+    return PurePosixPath(*safe_parts).as_posix()
 
 
 def _safe_artifact_path(run_dir: Path, relative_path: str, *, label: str) -> Path:
