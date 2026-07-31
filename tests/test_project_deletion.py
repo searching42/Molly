@@ -8,6 +8,21 @@ from ai4s_agent.app import create_app
 from ai4s_agent.storage import ProjectStorage
 
 
+INVALID_PROJECT_IDS = (
+    "a/b",
+    "a/../b",
+    "../b",
+    ".",
+    "..",
+    "/absolute/path",
+    " project-a",
+    "project-a ",
+    "a" * 97,
+    "a\\b",
+    "project\x00id",
+)
+
+
 def _app(tmp_path):
     return create_app(
         base_runs_dir=tmp_path / "runs",
@@ -101,6 +116,53 @@ def test_project_delete_rejects_symlink_alias(tmp_path) -> None:
     assert response.status_code == 400
     assert response.json == {"ok": False, "error": "invalid project identifier"}
     assert (tmp_path / "projects" / "project-source" / "project.json").is_file()
+
+
+@pytest.mark.parametrize("project_id", INVALID_PROJECT_IDS)
+def test_project_storage_rejects_noncanonical_project_ids_before_path_use(
+    tmp_path,
+    project_id: str,
+) -> None:
+    storage = ProjectStorage(tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match="project_id must be a canonical single-component identifier",
+    ):
+        storage.project_dir(project_id)
+
+    assert not [item for item in storage.projects_root.iterdir() if item.is_dir()]
+
+
+@pytest.mark.parametrize("project_id", INVALID_PROJECT_IDS)
+def test_create_project_api_rejects_noncanonical_project_ids(
+    tmp_path,
+    project_id: str,
+) -> None:
+    response = _app(tmp_path).test_client().post(
+        "/api/projects",
+        json={"project_id": project_id},
+    )
+
+    assert response.status_code == 400
+    assert response.json == {
+        "ok": False,
+        "error": "project_id must be a canonical single-component identifier",
+    }
+
+
+def test_delete_project_api_does_not_trim_project_id(tmp_path) -> None:
+    client = _app(tmp_path).test_client()
+    assert client.post(
+        "/api/projects",
+        json={"project_id": "project-a"},
+    ).status_code == 200
+
+    response = client.delete("/api/projects/%20project-a%20")
+
+    assert response.status_code == 400
+    assert response.json == {"ok": False, "error": "invalid project identifier"}
+    assert (tmp_path / "projects" / "project-a" / "project.json").is_file()
 
 
 @pytest.mark.pr_fast

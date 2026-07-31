@@ -26,10 +26,13 @@ def register_project_routes(
     @app.post("/api/projects")
     def create_project():
         payload = request.get_json(silent=True) or {}
-        project_id = str(payload.get("project_id") or uuid.uuid4().hex[:8]).strip()
+        supplied_project_id = payload.get("project_id")
+        project_id = (
+            uuid.uuid4().hex[:8]
+            if supplied_project_id is None or supplied_project_id == ""
+            else str(supplied_project_id)
+        )
         name = str(payload.get("name") or project_id).strip()
-        if not project_id:
-            return jsonify({"ok": False, "error": "project_id required"}), 400
         try:
             metadata = projects.create_project(
                 project_id,
@@ -52,9 +55,8 @@ def register_project_routes(
 
     @app.delete("/api/projects/<project_id>")
     def delete_project(project_id: str):
-        clean_id = str(project_id or "").strip()
         try:
-            metadata = projects.delete_project(clean_id)
+            metadata = projects.delete_project(project_id)
         except FileNotFoundError:
             return jsonify({"ok": False, "error": "project not found"}), 404
         except ValueError:

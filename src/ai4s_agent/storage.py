@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import threading
 from typing import Any
 
@@ -15,6 +16,8 @@ try:  # pragma: no cover - POSIX CI exercises the cross-process lock.
     import fcntl
 except ImportError:  # pragma: no cover - process-local locking preserves portability.
     fcntl = None  # type: ignore[assignment]
+
+from werkzeug.utils import secure_filename
 
 from ai4s_agent._utils import now_iso, write_json as atomic_write_json
 from ai4s_agent.schemas import (
@@ -28,6 +31,19 @@ from ai4s_agent.schemas import (
 
 
 _PROJECT_LOCKS: dict[str, threading.RLock] = defaultdict(threading.RLock)
+_PROJECT_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,95}$")
+
+
+def _validate_project_id(project_id: object) -> str:
+    raw = str(project_id or "")
+    safe_id = secure_filename(raw)
+    if (
+        raw != raw.strip()
+        or safe_id != raw
+        or _PROJECT_ID_PATTERN.fullmatch(safe_id) is None
+    ):
+        raise ValueError("project_id must be a canonical single-component identifier")
+    return safe_id
 
 
 def _ensure_relative(parent: Path, child: Path, label: str) -> None:
@@ -137,10 +153,11 @@ class ProjectStorage:
         name: str,
         created_at: str,
     ) -> dict[str, str]:
+        clean_id = _validate_project_id(project_id)
         with self._projects_lock():
-            path = self._project_dir_locked(project_id, create=True)
+            path = self._project_dir_locked(clean_id, create=True)
             payload = {
-                "project_id": str(project_id),
+                "project_id": clean_id,
                 "name": str(name),
                 "created_at": str(created_at),
             }
@@ -153,17 +170,21 @@ class ProjectStorage:
             for child in sorted(self.projects_root.iterdir(), key=lambda item: item.name):
                 if child.is_symlink() or not child.is_dir():
                     continue
-                tombstone = self._deleted_project_path(child.name)
+                try:
+                    clean_id = _validate_project_id(child.name)
+                except ValueError:
+                    continue
+                tombstone = self._deleted_project_path(clean_id)
                 if tombstone.exists() or tombstone.is_symlink():
                     continue
                 metadata = self._read_json(child, "project.json")
                 metadata_project_id = metadata.get("project_id")
-                if metadata_project_id and metadata_project_id != child.name:
+                if metadata_project_id and metadata_project_id != clean_id:
                     raise ValueError("project metadata identity mismatch")
                 result.append(
                     {
-                        "project_id": child.name,
-                        "name": str(metadata.get("name") or child.name),
+                        "project_id": clean_id,
+                        "name": str(metadata.get("name") or clean_id),
                         "created_at": str(metadata.get("created_at") or ""),
                     }
                 )
@@ -172,21 +193,22 @@ class ProjectStorage:
     def delete_project(self, project_id: str) -> dict[str, str]:
         """Remove a project from the active workspace using a recoverable rename."""
 
+        clean_id = _validate_project_id(project_id)
         with self._projects_lock():
-            path = self._project_dir_locked(project_id, create=False)
+            path = self._project_dir_locked(clean_id, create=False)
             metadata = self._read_json(path, "project.json")
             metadata_project_id = metadata.get("project_id")
-            if metadata_project_id and metadata_project_id != str(project_id):
+            if metadata_project_id and metadata_project_id != clean_id:
                 raise ValueError("project metadata identity mismatch")
             if not metadata:
                 metadata = {
-                    "project_id": str(project_id),
-                    "name": str(project_id),
+                    "project_id": clean_id,
+                    "name": clean_id,
                     "created_at": "",
                 }
             archive_root = self._deleted_projects_root()
             archive_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-            archive_path = self._deleted_project_path(project_id)
+            archive_path = self._deleted_project_path(clean_id)
             if archive_path.exists() or archive_path.is_symlink():
                 raise FileNotFoundError("project not found")
             os.rename(path, archive_path)
@@ -229,7 +251,7 @@ class ProjectStorage:
                         fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def _project_dir_locked(self, project_id: str, *, create: bool) -> Path:
-        clean_id = str(project_id or "").strip()
+        clean_id = _validate_project_id(project_id)
         raw_path = self.projects_root / clean_id
         if raw_path.is_symlink():
             raise ValueError("project_id resolves through a symbolic link")
@@ -254,7 +276,8 @@ class ProjectStorage:
         return path
 
     def _deleted_project_path(self, project_id: str) -> Path:
-        digest = hashlib.sha256(str(project_id).encode("utf-8")).hexdigest()
+        clean_id = _validate_project_id(project_id)
+        digest = hashlib.sha256(clean_id.encode("utf-8")).hexdigest()
         root = self._deleted_projects_root()
         path = (root / digest).resolve()
         _ensure_relative(root, path, "deleted project")
