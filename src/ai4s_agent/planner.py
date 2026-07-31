@@ -1046,16 +1046,22 @@ def expand_run_plan(
         spec = task_registry.get(task_id)
         for artifact in spec.output_artifacts:
             requested_producers.setdefault(artifact, []).append(task_id)
+    requested_output_artifacts = set(requested_producers)
 
     def direct_inputs_match_snapshot(task_id: str) -> bool:
         candidate = task_registry.get(task_id)
         if any(
             artifact not in pre_existing_artifacts
+            and artifact not in requested_output_artifacts
             for artifact in candidate.required_artifacts
         ):
             return False
         return all(
-            any(artifact in pre_existing_artifacts for artifact in alternatives)
+            any(
+                artifact in pre_existing_artifacts
+                or artifact in requested_output_artifacts
+                for artifact in alternatives
+            )
             for alternatives in candidate.input_artifact_alternatives
         )
 

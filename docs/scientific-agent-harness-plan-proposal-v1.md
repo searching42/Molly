@@ -183,9 +183,12 @@ The registered data chain supports both content-bound `uploaded_dataset ->
 inspect_dataset -> clean_dataset -> check_trainability -> baseline train_model`
 and `confirmed_training_dataset -> inspect_dataset -> check_trainability ->
 baseline train_model` without inventing `uploaded_dataset` as missing. Local
-dependency expansion selects the `property_catalog` producer from the bound
-source snapshot: cleaning is authoritative for a raw upload, while inspection
-is authoritative for an already confirmed dataset. `clean_dataset` therefore
+dependency expansion selects artifact producers from the bound source snapshot
+and the explicitly requested upstream task roster: cleaning is authoritative
+for a raw upload, while inspection is authoritative for an already confirmed
+dataset. Explicit granular fallback producers remain authoritative over a
+monolithic workflow that happens to emit the same logical artifact.
+`clean_dataset` therefore
 declares the `property_catalog` that the Executor actually registers; the
 Planner does not model the dataset itself as an unused `check_trainability`
 input.

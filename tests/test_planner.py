@@ -89,6 +89,26 @@ def test_trainability_selects_inspection_catalog_for_confirmed_dataset_chain() -
     assert plan.missing_artifacts == []
 
 
+def test_requested_granular_producer_is_not_replaced_by_monolithic_workflow() -> None:
+    plan = expand_run_plan(
+        run_id="r-granular-literature-fallback",
+        requested_tasks=[
+            "parse_document_pdfplumber",
+            "index_corpus",
+            "retrieve_evidence",
+        ],
+        available_artifacts=["pdf_corpus"],
+    )
+
+    task_ids = [task.task_id for task in plan.tasks]
+    assert task_ids == [
+        "parse_document_pdfplumber",
+        "index_corpus",
+        "retrieve_evidence",
+    ]
+    assert "literature_to_dataset_workflow" not in task_ids
+
+
 def test_expand_run_plan_tracks_missing_artifacts_without_producers() -> None:
     registry = AtomicTaskRegistry(
         [
