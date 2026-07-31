@@ -1,0 +1,301 @@
+{
+  "$defs": {
+    "AgentAuthorizationMode": {
+      "enum": [
+        "stepwise",
+        "frozen_plan"
+      ],
+      "title": "AgentAuthorizationMode",
+      "type": "string"
+    },
+    "AgentPermissionFinding": {
+      "additionalProperties": false,
+      "description": "One deterministic, reviewable permission-policy finding.",
+      "properties": {
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/AgentPermissionOutcome"
+        },
+        "task_id": {
+          "default": "",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason_code",
+        "outcome"
+      ],
+      "title": "AgentPermissionFinding",
+      "type": "object"
+    },
+    "AgentPermissionOutcome": {
+      "enum": [
+        "ALLOW",
+        "REQUIRE_APPROVAL",
+        "DENY"
+      ],
+      "title": "AgentPermissionOutcome",
+      "type": "string"
+    },
+    "AgentPermissionPhase": {
+      "enum": [
+        "proposal_review",
+        "authorization_candidate",
+        "authorized_start",
+        "shadow_comparison"
+      ],
+      "title": "AgentPermissionPhase",
+      "type": "string"
+    },
+    "AgentTaskPermissionDecision": {
+      "additionalProperties": false,
+      "description": "Permission result for exactly one ordered RunPlan task.",
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "effect_class": {
+          "title": "Effect Class",
+          "type": "string"
+        },
+        "risk_level": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Risk Level",
+          "type": "string"
+        },
+        "required_permissions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Permissions",
+          "type": "array"
+        },
+        "required_gates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Gates",
+          "type": "array"
+        },
+        "execution_route": {
+          "title": "Execution Route",
+          "type": "string"
+        },
+        "remote_task_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Task Type"
+        },
+        "outcome": {
+          "$ref": "#/$defs/AgentPermissionOutcome"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/AgentPermissionFinding"
+          },
+          "title": "Findings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id",
+        "effect_class",
+        "risk_level",
+        "execution_route",
+        "outcome"
+      ],
+      "title": "AgentTaskPermissionDecision",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Non-executing deterministic permission decision bound to one proposal.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_permission_decision.v1",
+      "default": "agent_permission_decision.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "decision_id": {
+      "default": "",
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "proposal_digest": {
+      "title": "Proposal Digest",
+      "type": "string"
+    },
+    "semantic_plan_id": {
+      "title": "Semantic Plan Id",
+      "type": "string"
+    },
+    "semantic_plan_digest": {
+      "title": "Semantic Plan Digest",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "observation_digest": {
+      "title": "Observation Digest",
+      "type": "string"
+    },
+    "tool_catalog_digest": {
+      "title": "Tool Catalog Digest",
+      "type": "string"
+    },
+    "phase": {
+      "$ref": "#/$defs/AgentPermissionPhase"
+    },
+    "policy_version": {
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "policy_digest": {
+      "title": "Policy Digest",
+      "type": "string"
+    },
+    "authorization_mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentAuthorizationMode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "requested_preauthorized_gate_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Requested Preauthorized Gate Ids",
+      "type": "array"
+    },
+    "actor": {
+      "default": "",
+      "title": "Actor",
+      "type": "string"
+    },
+    "actor_source": {
+      "default": "",
+      "title": "Actor Source",
+      "type": "string"
+    },
+    "client_request_id": {
+      "default": "",
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "authorization_id": {
+      "default": "",
+      "title": "Authorization Id",
+      "type": "string"
+    },
+    "authorization_digest": {
+      "default": "",
+      "title": "Authorization Digest",
+      "type": "string"
+    },
+    "task_decisions": {
+      "items": {
+        "$ref": "#/$defs/AgentTaskPermissionDecision"
+      },
+      "title": "Task Decisions",
+      "type": "array"
+    },
+    "outcome": {
+      "$ref": "#/$defs/AgentPermissionOutcome"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/AgentPermissionFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "decision_digest": {
+      "default": "",
+      "title": "Decision Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "proposal_id",
+    "proposal_digest",
+    "semantic_plan_id",
+    "semantic_plan_digest",
+    "observation_id",
+    "observation_digest",
+    "tool_catalog_digest",
+    "phase",
+    "policy_version",
+    "policy_digest",
+    "outcome",
+    "created_at"
+  ],
+  "title": "AgentPermissionDecision",
+  "type": "object"
+}

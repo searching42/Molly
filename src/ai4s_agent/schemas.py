@@ -2284,6 +2284,643 @@ class AgentExecutionPlanProposal(BaseModel):
         return self.semantic_plan_material()
 
 
+class AgentPermissionOutcome(str, Enum):
+    ALLOW = "ALLOW"
+    REQUIRE_APPROVAL = "REQUIRE_APPROVAL"
+    DENY = "DENY"
+
+
+class AgentPermissionPhase(str, Enum):
+    PROPOSAL_REVIEW = "proposal_review"
+    AUTHORIZATION_CANDIDATE = "authorization_candidate"
+    AUTHORIZED_START = "authorized_start"
+    SHADOW_COMPARISON = "shadow_comparison"
+
+
+class AgentAuthorizationMode(str, Enum):
+    STEPWISE = "stepwise"
+    FROZEN_PLAN = "frozen_plan"
+
+
+class AgentPermissionShadowAlignment(str, Enum):
+    MATCH = "MATCH"
+    NEW_STRICTER = "NEW_STRICTER"
+    NEW_LOOSER = "NEW_LOOSER"
+    INCOMPARABLE = "INCOMPARABLE"
+
+
+class AgentPermissionFinding(BaseModel):
+    """One deterministic, reviewable permission-policy finding."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    reason_code: str
+    outcome: AgentPermissionOutcome
+    task_id: str = ""
+    detail: str = ""
+
+    @field_validator("reason_code")
+    @classmethod
+    def validate_reason_code(cls, value: str) -> str:
+        clean = str(value or "").strip()
+        if re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", clean) is None:
+            raise ValueError("reason_code must be an uppercase canonical code")
+        return clean
+
+    @field_validator("task_id")
+    @classmethod
+    def validate_task_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="task_id", allow_empty=True)
+
+    @field_validator("detail")
+    @classmethod
+    def validate_detail(cls, value: str) -> str:
+        return _agent_safe_text(value, field="detail", max_length=1000)
+
+
+class AgentTaskPermissionDecision(BaseModel):
+    """Permission result for exactly one ordered RunPlan task."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    task_id: str
+    effect_class: str
+    risk_level: Literal["low", "medium", "high"]
+    required_permissions: list[str] = Field(default_factory=list)
+    required_gates: list[str] = Field(default_factory=list)
+    execution_route: str
+    remote_task_type: str | None = None
+    outcome: AgentPermissionOutcome
+    reason_codes: list[str] = Field(default_factory=list)
+    findings: list[AgentPermissionFinding] = Field(default_factory=list)
+
+    @field_validator("task_id", "effect_class", "execution_route")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("remote_task_type")
+    @classmethod
+    def validate_remote_task_type(cls, value: str | None) -> str | None:
+        return None if value is None else _agent_identifier(value, field="remote_task_type")
+
+    @field_validator("required_permissions", "required_gates", "reason_codes")
+    @classmethod
+    def validate_identifier_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True, max_items=1024)
+
+
+class AgentPermissionDecision(BaseModel):
+    """Non-executing deterministic permission decision bound to one proposal."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_permission_decision.v1"] = "agent_permission_decision.v1"
+    decision_id: str = ""
+    project_id: str
+    run_id: str
+    proposal_id: str
+    proposal_digest: str
+    semantic_plan_id: str
+    semantic_plan_digest: str
+    observation_id: str
+    observation_digest: str
+    tool_catalog_digest: str
+    phase: AgentPermissionPhase
+    policy_version: str
+    policy_digest: str
+    authorization_mode: AgentAuthorizationMode | None = None
+    requested_preauthorized_gate_ids: list[str] = Field(default_factory=list)
+    actor: str = ""
+    actor_source: str = ""
+    client_request_id: str = ""
+    authorization_id: str = ""
+    authorization_digest: str = ""
+    task_decisions: list[AgentTaskPermissionDecision] = Field(default_factory=list)
+    outcome: AgentPermissionOutcome
+    reason_codes: list[str] = Field(default_factory=list)
+    findings: list[AgentPermissionFinding] = Field(default_factory=list)
+    decision_digest: str = ""
+    created_at: str
+    executable: Literal[False] = False
+
+    @field_validator(
+        "decision_id",
+        "project_id",
+        "run_id",
+        "proposal_id",
+        "semantic_plan_id",
+        "observation_id",
+        "policy_version",
+        "client_request_id",
+        "authorization_id",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name
+            in {"decision_id", "client_request_id", "authorization_id"},
+        )
+
+    @field_validator("proposal_digest", "semantic_plan_digest", "observation_digest", "tool_catalog_digest", "policy_digest")
+    @classmethod
+    def validate_required_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("authorization_digest", "decision_digest")
+    @classmethod
+    def validate_optional_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name, allow_empty=True)
+
+    @field_validator("requested_preauthorized_gate_ids", "reason_codes")
+    @classmethod
+    def validate_identifier_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True, max_items=1024)
+
+    @field_validator("actor", "actor_source")
+    @classmethod
+    def validate_actor_text(cls, value: str, info: Any) -> str:
+        return _agent_safe_text(value, field=info.field_name, max_length=256)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> "AgentPermissionDecision":
+        task_ids = [item.task_id for item in self.task_decisions]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("permission task decisions must have unique task IDs")
+        if self.phase == AgentPermissionPhase.AUTHORIZED_START:
+            if not self.authorization_id or not self.authorization_digest:
+                raise ValueError("authorized-start decisions require exact authorization binding")
+        elif self.authorization_id or self.authorization_digest:
+            raise ValueError("only authorized-start decisions may bind an authorization")
+        expected = _agent_digest(self.semantic_material())
+        if self.decision_digest and self.decision_digest != expected:
+            raise ValueError("agent permission decision digest mismatch")
+        object.__setattr__(self, "decision_digest", expected)
+        expected_id = f"permission-{expected.split(':', 1)[1][:32]}"
+        if self.decision_id and self.decision_id != expected_id:
+            raise ValueError("permission decision ID must derive from its semantic digest")
+        object.__setattr__(self, "decision_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("decision_id", None)
+        payload.pop("decision_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentPlanAuthorizationRequest(BaseModel):
+    """The complete and only client-controlled exact-authorization payload."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_plan_authorization_request.v1"] = (
+        "agent_plan_authorization_request.v1"
+    )
+    expected_proposal_digest: str
+    authorization_mode: AgentAuthorizationMode
+    requested_preauthorized_gate_ids: list[str] = Field(default_factory=list)
+    confirmed: Literal[True]
+    client_request_id: str
+    note: str = ""
+
+    @field_validator("confirmed", mode="before")
+    @classmethod
+    def validate_literal_confirmation(cls, value: Any) -> bool:
+        if value is not True:
+            raise ValueError("confirmed must be the literal JSON value true")
+        return True
+
+    @field_validator("expected_proposal_digest")
+    @classmethod
+    def validate_proposal_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="expected_proposal_digest")
+
+    @field_validator("client_request_id")
+    @classmethod
+    def validate_request_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="client_request_id")
+
+    @field_validator("requested_preauthorized_gate_ids")
+    @classmethod
+    def validate_gate_ids(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(
+            value,
+            field="requested_preauthorized_gate_ids",
+            sort_values=True,
+            max_items=1024,
+        )
+
+    @field_validator("note")
+    @classmethod
+    def validate_note(cls, value: str) -> str:
+        return _agent_safe_text(value, field="note", max_length=2000)
+
+
+class AgentAuthorizationArtifactBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact_id: str
+    content_digest: str
+    trust_class: ArtifactTrustClass
+    verification_state: Literal["verified", "registered"]
+    producer_task_id: str | None = None
+
+    @field_validator("artifact_id")
+    @classmethod
+    def validate_artifact_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="artifact_id")
+
+    @field_validator("content_digest")
+    @classmethod
+    def validate_content_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="content_digest")
+
+    @field_validator("producer_task_id")
+    @classmethod
+    def validate_producer(cls, value: str | None) -> str | None:
+        return None if value is None else _agent_identifier(value, field="producer_task_id")
+
+
+class AgentAuthorizationProfileBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    profile_id: str
+    profile_type: str
+    capability_digest: str
+    availability_state: Literal["available"] = "available"
+    verified_capabilities: list[str] = Field(default_factory=list)
+    supported_logical_task_types: list[str] = Field(default_factory=list)
+
+    @field_validator("profile_id", "profile_type")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("capability_digest")
+    @classmethod
+    def validate_capability_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="capability_digest")
+
+    @field_validator("verified_capabilities", "supported_logical_task_types")
+    @classmethod
+    def validate_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True, max_items=1024)
+
+
+class AgentAuthorizationGateBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    task_id: str
+    gate_id: str
+    effect_class: str
+    gate_class: Literal["operational", "semantic"]
+    supports_plan_preapproval: bool
+
+    @field_validator("task_id", "gate_id", "effect_class")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+
+class AgentPlanAuthorization(BaseModel):
+    """Exact immutable user authority for one verified proposal; never executable."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_plan_authorization.v1"] = "agent_plan_authorization.v1"
+    authorization_id: str = ""
+    project_id: str
+    run_id: str
+    proposal_id: str
+    proposal_digest: str
+    semantic_plan_id: str
+    semantic_plan_digest: str
+    observation_id: str
+    observation_digest: str
+    tool_catalog_digest: str
+    run_plan_digest: str
+    run_plan: RunPlan
+    task_ids: list[str]
+    effective_planner_options: dict[str, dict[str, Any]]
+    compiled_task_options: dict[str, dict[str, Any]]
+    dispatch_intents: list[AgentTaskDispatchIntent]
+    artifact_bindings: list[AgentAuthorizationArtifactBinding] = Field(default_factory=list)
+    profile_bindings: list[AgentAuthorizationProfileBinding] = Field(default_factory=list)
+    limits: dict[str, Any] = Field(default_factory=dict)
+    stop_conditions: list[str] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+    required_gates: list[str] = Field(default_factory=list)
+    gate_bindings: list[AgentAuthorizationGateBinding] = Field(default_factory=list)
+    preauthorized_operational_gates: list[str] = Field(default_factory=list)
+    pending_gates: list[str] = Field(default_factory=list)
+    permission_policy_version: str
+    permission_policy_digest: str
+    permission_decision_id: str
+    permission_decision_digest: str
+    authorization_mode: AgentAuthorizationMode
+    actor: str
+    actor_source: str
+    note: str = ""
+    client_request_id: str
+    authorization_digest: str = ""
+    created_at: str
+    executable: Literal[False] = False
+
+    @field_validator(
+        "authorization_id",
+        "project_id",
+        "run_id",
+        "proposal_id",
+        "semantic_plan_id",
+        "observation_id",
+        "permission_policy_version",
+        "permission_decision_id",
+        "client_request_id",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name == "authorization_id")
+
+    @field_validator(
+        "proposal_digest",
+        "semantic_plan_digest",
+        "observation_digest",
+        "tool_catalog_digest",
+        "run_plan_digest",
+        "permission_policy_digest",
+        "permission_decision_digest",
+    )
+    @classmethod
+    def validate_required_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("authorization_digest")
+    @classmethod
+    def validate_authorization_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="authorization_digest", allow_empty=True)
+
+    @field_validator("task_ids")
+    @classmethod
+    def validate_task_ids(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="task_ids", sort_values=False, max_items=1024)
+
+    @field_validator("required_gates", "preauthorized_operational_gates", "pending_gates")
+    @classmethod
+    def validate_gate_ids(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True, max_items=1024)
+
+    @field_validator("stop_conditions", "success_criteria")
+    @classmethod
+    def validate_text_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=False, max_items=1024)
+
+    @field_validator("effective_planner_options", "compiled_task_options")
+    @classmethod
+    def validate_options(cls, value: dict[str, dict[str, Any]], info: Any) -> dict[str, dict[str, Any]]:
+        normalized: dict[str, dict[str, Any]] = {}
+        for task_id, options in value.items():
+            clean_task = _agent_identifier(task_id, field=f"{info.field_name} key")
+            if not isinstance(options, dict):
+                raise ValueError(f"{info.field_name} values must be objects")
+            normalized[clean_task] = _agent_safe_value(options, f"{info.field_name}.{clean_task}")
+        return {key: normalized[key] for key in sorted(normalized)}
+
+    @field_validator("limits")
+    @classmethod
+    def validate_limits(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _agent_limits(value, field="limits")
+
+    @field_validator("actor", "actor_source", "note")
+    @classmethod
+    def validate_text(cls, value: str, info: Any) -> str:
+        return _agent_safe_text(
+            value,
+            field=info.field_name,
+            max_length=2000 if info.field_name == "note" else 256,
+            allow_empty=info.field_name == "note",
+        )
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_authorization(self) -> "AgentPlanAuthorization":
+        run_plan_task_ids = [item.task_id for item in self.run_plan.tasks]
+        if self.run_plan.run_id != self.run_id or self.task_ids != run_plan_task_ids:
+            raise ValueError("authorization task roster must equal the ordered canonical RunPlan")
+        if self.run_plan_digest != _agent_digest(self.run_plan.model_dump(mode="json")):
+            raise ValueError("authorization RunPlan digest mismatch")
+        roster = set(self.task_ids)
+        if set(self.effective_planner_options) != roster or set(self.compiled_task_options) != roster:
+            raise ValueError("authorization option maps must exactly cover the RunPlan")
+        if {item.task_id for item in self.dispatch_intents} != roster:
+            raise ValueError("authorization dispatch intents must exactly cover the RunPlan")
+        if sorted({item.gate_id for item in self.gate_bindings}) != self.required_gates:
+            raise ValueError("authorization Gate bindings must exactly cover required gates")
+        if set(self.preauthorized_operational_gates).intersection(self.pending_gates):
+            raise ValueError("preauthorized and pending Gate rosters must be disjoint")
+        if sorted({*self.preauthorized_operational_gates, *self.pending_gates}) != self.required_gates:
+            raise ValueError("authorization Gate rosters must partition required gates")
+        if self.authorization_mode == AgentAuthorizationMode.STEPWISE and self.preauthorized_operational_gates:
+            raise ValueError("stepwise authorization must not preauthorize Gates")
+        binding_by_gate = {item.gate_id: item for item in self.gate_bindings}
+        for gate_id in self.preauthorized_operational_gates:
+            binding = binding_by_gate[gate_id]
+            if binding.gate_class != "operational" or not binding.supports_plan_preapproval:
+                raise ValueError("authorization contains an ineligible preauthorized Gate")
+        expected = _agent_digest(self.semantic_material())
+        if self.authorization_digest and self.authorization_digest != expected:
+            raise ValueError("agent plan authorization digest mismatch")
+        object.__setattr__(self, "authorization_digest", expected)
+        expected_id = f"authorization-{expected.split(':', 1)[1][:32]}"
+        if self.authorization_id and self.authorization_id != expected_id:
+            raise ValueError("authorization ID must derive from its semantic digest")
+        object.__setattr__(self, "authorization_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("authorization_id", None)
+        payload.pop("authorization_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentPlanStartIntent(BaseModel):
+    """Immutable request for a future Controller action; never a dispatch."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_plan_start_intent.v1"] = "agent_plan_start_intent.v1"
+    start_intent_id: str = ""
+    project_id: str
+    run_id: str
+    proposal_id: str
+    proposal_digest: str
+    authorization_id: str
+    authorization_digest: str
+    permission_decision_id: str
+    permission_decision_digest: str
+    authorization_mode: AgentAuthorizationMode
+    requested_by: str
+    requested_by_source: str
+    intent_type: Literal["start_authorized_plan"] = "start_authorized_plan"
+    handoff_target: Literal["scientific_agent_harness_controller.v1"] = (
+        "scientific_agent_harness_controller.v1"
+    )
+    dispatch_state: Literal["not_dispatched"] = "not_dispatched"
+    client_request_id: str
+    start_intent_digest: str = ""
+    created_at: str
+    executable: Literal[False] = False
+
+    @field_validator(
+        "start_intent_id",
+        "project_id",
+        "run_id",
+        "proposal_id",
+        "authorization_id",
+        "permission_decision_id",
+        "client_request_id",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name == "start_intent_id")
+
+    @field_validator("proposal_digest", "authorization_digest", "permission_decision_digest")
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("start_intent_digest")
+    @classmethod
+    def validate_intent_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="start_intent_digest", allow_empty=True)
+
+    @field_validator("requested_by", "requested_by_source")
+    @classmethod
+    def validate_actor(cls, value: str, info: Any) -> str:
+        return _agent_safe_text(value, field=info.field_name, max_length=256, allow_empty=False)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_start_intent(self) -> "AgentPlanStartIntent":
+        expected = _agent_digest(self.semantic_material())
+        if self.start_intent_digest and self.start_intent_digest != expected:
+            raise ValueError("agent plan start intent digest mismatch")
+        object.__setattr__(self, "start_intent_digest", expected)
+        identity = _agent_digest(
+            {
+                "schema_version": self.schema_version,
+                "project_id": self.project_id,
+                "proposal_id": self.proposal_id,
+                "proposal_digest": self.proposal_digest,
+                "intent_type": self.intent_type,
+            }
+        )
+        expected_id = f"start-intent-{identity.split(':', 1)[1][:32]}"
+        if self.start_intent_id and self.start_intent_id != expected_id:
+            raise ValueError("start intent ID must derive from the proposal start slot")
+        object.__setattr__(self, "start_intent_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("start_intent_id", None)
+        payload.pop("start_intent_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentPermissionShadowRecord(BaseModel):
+    """Independent audit-only comparison with the existing route expectation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_permission_shadow_record.v1"] = (
+        "agent_permission_shadow_record.v1"
+    )
+    shadow_record_id: str = ""
+    project_id: str
+    run_id: str
+    proposal_id: str
+    permission_decision_id: str
+    new_outcome: AgentPermissionOutcome
+    legacy_action: str
+    legacy_outcome: AgentPermissionOutcome | None = None
+    alignment: AgentPermissionShadowAlignment
+    reason_codes: list[str] = Field(default_factory=list)
+    policy_digest: str
+    source_digest: str
+    shadow_record_digest: str = ""
+    created_at: str
+    executable: Literal[False] = False
+
+    @field_validator("shadow_record_id", "project_id", "run_id", "proposal_id", "permission_decision_id", "legacy_action")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name == "shadow_record_id")
+
+    @field_validator("reason_codes")
+    @classmethod
+    def validate_reason_codes(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="reason_codes", sort_values=True, max_items=1024)
+
+    @field_validator("policy_digest", "source_digest")
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("shadow_record_digest")
+    @classmethod
+    def validate_record_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="shadow_record_digest", allow_empty=True)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_shadow_record(self) -> "AgentPermissionShadowRecord":
+        if self.alignment == AgentPermissionShadowAlignment.INCOMPARABLE:
+            if self.legacy_outcome is not None:
+                raise ValueError("incomparable shadow records must not claim a legacy outcome")
+        elif self.legacy_outcome is None:
+            raise ValueError("comparable shadow records require a legacy outcome")
+        expected = _agent_digest(self.semantic_material())
+        if self.shadow_record_digest and self.shadow_record_digest != expected:
+            raise ValueError("permission shadow record digest mismatch")
+        object.__setattr__(self, "shadow_record_digest", expected)
+        expected_id = f"shadow-{expected.split(':', 1)[1][:32]}"
+        if self.shadow_record_id and self.shadow_record_id != expected_id:
+            raise ValueError("shadow record ID must derive from its semantic digest")
+        object.__setattr__(self, "shadow_record_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("shadow_record_id", None)
+        payload.pop("shadow_record_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
 class RunPlanDiff(BaseModel):
     added_tasks: list[str] = Field(default_factory=list)
     removed_tasks: list[str] = Field(default_factory=list)
@@ -4807,6 +5444,11 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_project_observation": AgentProjectObservation,
     "agent_execution_plan_llm_response": AgentExecutionPlanLLMResponse,
     "agent_execution_plan_proposal": AgentExecutionPlanProposal,
+    "agent_permission_decision": AgentPermissionDecision,
+    "agent_plan_authorization_request": AgentPlanAuthorizationRequest,
+    "agent_plan_authorization": AgentPlanAuthorization,
+    "agent_plan_start_intent": AgentPlanStartIntent,
+    "agent_permission_shadow_record": AgentPermissionShadowRecord,
     "run_plan_diff": RunPlanDiff,
     "plan_rationale": PlanRationale,
     "plan_question": PlanQuestion,

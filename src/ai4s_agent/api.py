@@ -38,6 +38,9 @@ from ai4s_agent.routes.projects import register_project_routes
 from ai4s_agent.routes.review import register_review_routes
 from ai4s_agent.routes.run_plans import register_run_plan_routes
 from ai4s_agent.routes.scientific_agent_plans import register_scientific_agent_plan_routes
+from ai4s_agent.routes.scientific_agent_permissions import (
+    register_scientific_agent_permission_routes,
+)
 from ai4s_agent.routes.worker_deployment import register_worker_deployment_routes
 from ai4s_agent.storage import ProjectStorage
 
@@ -144,6 +147,11 @@ def register_routes(
         resource_profiles=resource_profiles,
         llm_settings=llm_settings,
         llm_providers=llm_providers,
+    )
+    register_scientific_agent_permission_routes(
+        app,
+        projects=projects,
+        proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
     )
     register_llm_settings_routes(
         app,

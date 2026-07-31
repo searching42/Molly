@@ -442,10 +442,10 @@ M3.5 至少支持两种用户模式：
 | `M3H-001` 建立单一 `ScientificToolSpec` 能力契约 | `I/T/—` | `DONE` | PR-BL 在 `fa13e67` 冻结显式 allowlist、permission、artifact input、option/default compiler 与 backend/profile/dispatch metadata，并通过 owner review |
 | `M3H-002` 建立脱敏 `AgentProjectObservation` | `I/T/—` | `DONE` | PR-BL 完成 privacy-safe source projection、single-connection capability binding、artifact trust、stale detection 与 repository privacy，并通过 owner review |
 | `M3H-003` 建立 LLM 长程计划 proposal contract | `I/T/—` | `DONE` | PR-BL 完成全 RunPlan effective/compiled options、dispatch intents、跨进程 reservation、crash-safe publication 与 non-execution boundary，并通过 owner review |
-| `M3H-004` 建立 deterministic Permission Engine | `I(partial)/T(partial)/—` | `READY` | 统一 `ALLOW`、`REQUIRE_APPROVAL`、`DENY`、effect class、risk、permission、Gate 与预算判断 |
-| `M3H-005` 建立 immutable plan authorization | `I(partial)/T(partial)/—` | `READY` | 绑定 proposal、observation、RunPlan、task options、输入 artifact、profile、预算、actor 与 approval mode digest |
-| `M3H-006` 实现 approve-and-start 与两种审批模式 | `—/—/—` | `READY` | 用户批准后由 Controller 启动；不得由自由文本、external LLM consent 或 LLM 自身输出产生执行授权 |
-| `M3H-007` Permission Engine shadow mode | `—/—/—` | `READY` | 在成为权威入口前与现有 UI/route 行为逐项比较，发现 policy drift 而不改变执行结果 |
+| `M3H-004` 建立 deterministic Permission Engine | `I/T/—` | `READY` | PR-BM Draft 实现固定 policy identity、三态 precedence、proposal/candidate/authorized-start phase 与 fail-closed finding；等待 owner review |
+| `M3H-005` 建立 immutable plan authorization | `I/T/—` | `READY` | PR-BM Draft exact 绑定 proposal、observation、RunPlan、task options、artifact/profile、预算、actor、Gate 与 mode digest；等待 owner review |
+| `M3H-006` 实现 approve-and-start 与两种审批模式 | `I/T/—` | `READY` | PR-BM Draft 先提交 authorization、再提交 `not_dispatched` start intent，并覆盖跨进程/crash recovery；等待 owner review |
+| `M3H-007` Permission Engine shadow mode | `I/T/—` | `READY` | PR-BM Draft 提供独立显式 shadow comparator/audit，不拦截或改变现有 route；等待 owner review |
 | `M3H-008` Harness Controller 接入现有执行链 | `I(partial)/T(partial)/—` | `DEFERRED` | 复用 `RunPlanExecutor`、Gate snapshot、RemoteExecutionService、固定 worker transport、cancel/recover 与 exact replay，不建立第二套状态机 |
 | `M3H-009` 接入 Execution Agent LLM | `—/—/—` | `DEFERRED` | 仅输出版本化 `ToolCallProposal`，在已批准 plan/action space 内选择下一步；无任意 adapter、argv、shell、SSH 或绝对路径字段 |
 | `M3H-010` Verifier-bound feedback observation | `I(partial)/T(partial)/—` | `DEFERRED` | 只有 authoritative StageState 和 verified publication 能支持 running/success/failure；LLM 文本不能改变 UI 或状态 |
@@ -927,6 +927,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：Permission Engine 与 authorization 若重新解释 proposal defaults、effective options、dispatch intents 或 semantic Gate，会破坏 PR-BL 冻结的 exact-plan 边界；PR-BM 必须绑定既有 digest 并先以 shadow mode 验证 policy drift。
 - 批准人：searching42（repository owner）。
 
+### 2026-07-31：PR-BM Draft 冻结 permission、authorization 与 start-intent 非执行边界
+
+- 决策：PR-BM 仅新增 deterministic Permission Engine、exact immutable plan authorization、authorization-first approve-and-start 与独立 shadow audit；start intent 固定 `not_dispatched` / `executable=false`，不接入 Controller、Executor、RemoteExecutionService、worker、adapter、GateDecision 或 StageState。
+- 原计划：PR #18 合并后启动 PR-BM，基于 PR-BL exact proposal/source binding 实现 `M3H-004`～`M3H-007`，并保持 PR-BN `DEFERRED`。
+- 新计划：PR-BM Draft 以 `scientific-agent-permission-policy.v1` 固定 effect/permission/risk/Gate/budget/artifact/profile/mode/precedence 语义；一次批准并启动按 `RESERVED -> AUTHORIZATION_COMMITTED -> START_INTENT_COMMITTED` 做两个不可变提交，等待 owner review 后才能把任务标为 `DONE` 或解锁 PR-BN。
+- 依据：新增严格 Pydantic/schema、project-scoped no-replace control store、exact verifier、cross-process request lock/checkpoint/recovery、stepwise/frozen-plan/semantic-Gate/authority-confusion/no-call/shadow/隐私与对抗测试，以及 `docs/scientific-agent-permission-authorization-v1.md`。
+- 影响任务：`M3H-004`～`M3H-007` 证据更新为 `I/T/—`，工作状态保持 `READY`；`M3H-GATE-002` 不标记 `V` 且不声明完成；PR-BN/M3H-008/M3H-010 继续 `DEFERRED`；PR-BM 保持唯一当前动作。
+- 新增风险：未来 Controller 必须在 dispatch 前重新验证 permission policy digest、authorization/start-intent exact bytes、source freshness 与 pending/preauthorized Gate roster；不得把 `ALLOW` 或 start intent 误写为 running/execution authority。
+- 批准人：待 repository owner review。
+
 后续路线调整必须追加：
 
 ```text
@@ -956,7 +966,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 - approve-and-start 必须先提交 authorization，再提交独立 start intent/control record；重复批准、重复启动、崩溃恢复和 stale proposal 必须幂等或 fail closed；
 - Permission Engine 先以 shadow mode 与现有 route/UI 决策逐项比较，不修改现有执行结果，不调用 Executor、RemoteExecutionService、worker、SSH 或 adapter。
 
-当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`；PR-BL 的 `M3H-001`～`M3H-003` 为 `I/T/— / DONE` 并已通过 owner review；PR-BM 的 `M3H-004`～`M3H-007` 为 `READY`，在 PR #18 合并后启动；M4/PR-BK 继续暂缓。
+当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`；PR-BL 的 `M3H-001`～`M3H-003` 为 `I/T/— / DONE`、已通过 owner review并合并；PR-BM 的 `M3H-004`～`M3H-007` 已达到 `I/T/—` 但保持 `READY` 等待 owner review；PR-BN 继续 `DEFERRED`，M4/PR-BK 继续暂缓。
 
 必须验证：
 
@@ -977,8 +987,8 @@ PR-BH  read-only inspect API 与最小时间线（已完成）
 PR-BJ  authoritative M3 failure source evidence contract v1（已完成）
 PR-BI  representative inspection validation evidence（machine + owner review complete）
 
-PR-BL  ScientificToolSpec、AgentProjectObservation、LLM long-horizon plan proposal（owner review approved；待合并）
-PR-BM  Permission Engine、immutable plan authorization、approve-and-start contract（下一唯一当前动作；PR #18 合并后启动）
+PR-BL  ScientificToolSpec、AgentProjectObservation、LLM long-horizon plan proposal（owner review approved；已合并）
+PR-BM  Permission Engine、immutable plan authorization、approve-and-start contract（唯一当前动作；Draft 等待 owner review）
 PR-BN  Harness Controller 接入现有 Executor/remote/verifier 链
 PR-BO  Execution Agent LLM 与受约束 ToolCallProposal
 PR-BP  Replanner、plan diff 与重新授权
