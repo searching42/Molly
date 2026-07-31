@@ -288,32 +288,6 @@ def _agent_safe_value(value: Any, path: str = "value") -> Any:
     return value
 
 
-def _agent_safe_compiled_task_value(value: Any, path: str = "value") -> Any:
-    """Allow one deterministic server-owned adapter binding in compiled options.
-
-    LLM-originated options continue to use :func:`_agent_safe_value`, where an
-    ``adapter`` key is forbidden.  Persisted proposals are independently
-    recompiled from the registry before they are accepted as exact bytes.
-    """
-
-    _validate_json_safe(value, path)
-    if isinstance(value, str):
-        return _agent_safe_text(value, field=path)
-    if isinstance(value, dict):
-        for key, item in value.items():
-            normalized = _agent_normalize_contract_key(key)
-            if normalized == "adapter":
-                _agent_identifier(item, field=f"{path}.{key}")
-                continue
-            if normalized in _AGENT_FORBIDDEN_KEY_TOKENS:
-                raise ValueError(f"{path}.{key} is not allowed in compiled task options")
-            _agent_safe_compiled_task_value(item, f"{path}.{key}")
-    elif isinstance(value, list):
-        for index, item in enumerate(value):
-            _agent_safe_compiled_task_value(item, f"{path}[{index}]")
-    return value
-
-
 def _agent_string_list(
     value: list[str],
     *,
@@ -1068,6 +1042,17 @@ ScientificPermission = Literal[
     "scientific_dataset_confirmation",
 ]
 
+ScientificExecutionRoute = Literal[
+    "local_executor",
+    "remote_execution_service",
+]
+
+ScientificRemoteTaskType = Literal[
+    "document_parsing",
+    "model_training",
+    "molecular_generation",
+]
+
 
 class AtomicTaskSpec(BaseModel):
     task_id: str
@@ -1091,6 +1076,15 @@ class AtomicTaskSpec(BaseModel):
     option_compiler_version: str = ""
     logical_profile_requirements: list[str] = Field(default_factory=list)
     backend_profile_requirements: dict[str, list[str]] = Field(default_factory=dict)
+    default_planner_backend: str | None = None
+    execution_route: ScientificExecutionRoute | None = "local_executor"
+    remote_task_type: ScientificRemoteTaskType | None = None
+    backend_execution_routes: dict[str, ScientificExecutionRoute] = Field(
+        default_factory=dict
+    )
+    backend_remote_task_types: dict[str, ScientificRemoteTaskType | None] = Field(
+        default_factory=dict
+    )
     accepted_input_trust_classes_by_artifact: dict[str, list[ArtifactTrustClass]] = Field(
         default_factory=dict
     )
@@ -1117,6 +1111,10 @@ class AtomicTaskSpec(BaseModel):
             "option_compiler_version",
             "logical_profile_requirements",
             "backend_profile_requirements",
+            "execution_route",
+            "remote_task_type",
+            "backend_execution_routes",
+            "backend_remote_task_types",
             "optional_input_artifacts",
             "input_artifact_alternatives",
             "accepted_input_trust_classes_by_artifact",
@@ -1169,6 +1167,38 @@ class AtomicTaskSpec(BaseModel):
             raise ValueError(
                 "backend profile requirements must exactly cover the planner backend enum"
             )
+        if backend_values:
+            if self.default_planner_backend not in backend_values:
+                raise ValueError("backend-selected planner tasks require a registered default backend")
+            if self.execution_route is not None or self.remote_task_type is not None:
+                raise ValueError(
+                    "backend-selected execution routes must not also define a static route"
+                )
+            if set(self.backend_execution_routes) != backend_values:
+                raise ValueError(
+                    "backend execution routes must exactly cover the planner backend enum"
+                )
+            if set(self.backend_remote_task_types) != backend_values:
+                raise ValueError(
+                    "backend remote task types must exactly cover the planner backend enum"
+                )
+            for backend, route in self.backend_execution_routes.items():
+                remote_type = self.backend_remote_task_types[backend]
+                if route == "remote_execution_service" and remote_type is None:
+                    raise ValueError("remote backends require a logical remote task type")
+                if route == "local_executor" and remote_type is not None:
+                    raise ValueError("local backends must not define a remote task type")
+        else:
+            if self.default_planner_backend is not None:
+                raise ValueError("static execution routes must not define a default backend")
+            if self.execution_route is None:
+                raise ValueError("planner-visible tasks without a backend require a static route")
+            if self.backend_execution_routes or self.backend_remote_task_types:
+                raise ValueError("static execution routes must not define backend route maps")
+            if self.execution_route == "remote_execution_service" and self.remote_task_type is None:
+                raise ValueError("remote tasks require a logical remote task type")
+            if self.execution_route == "local_executor" and self.remote_task_type is not None:
+                raise ValueError("local tasks must not define a remote task type")
         if not self.verification_policy.strip():
             raise ValueError("planner-visible atomic task requires an explicit verification policy")
         return self
@@ -1220,6 +1250,15 @@ class ScientificToolSpec(BaseModel):
     option_compiler_version: str
     logical_profile_requirements: list[str] = Field(default_factory=list)
     backend_profile_requirements: dict[str, list[str]] = Field(default_factory=dict)
+    default_planner_backend: str | None = None
+    execution_route: ScientificExecutionRoute | None = None
+    remote_task_type: ScientificRemoteTaskType | None = None
+    backend_execution_routes: dict[str, ScientificExecutionRoute] = Field(
+        default_factory=dict
+    )
+    backend_remote_task_types: dict[str, ScientificRemoteTaskType | None] = Field(
+        default_factory=dict
+    )
     accepted_input_trust_classes_by_artifact: dict[str, list[ArtifactTrustClass]] = Field(
         default_factory=dict
     )
@@ -1300,6 +1339,32 @@ class ScientificToolSpec(BaseModel):
         backend_values = set(backend_schema.get("enum", [])) if isinstance(backend_schema, dict) else set()
         if set(self.backend_profile_requirements) != backend_values:
             raise ValueError("tool backend profile requirements must cover its backend enum")
+        if backend_values:
+            if self.default_planner_backend not in backend_values:
+                raise ValueError("backend-selected tools require a registered default backend")
+            if self.execution_route is not None or self.remote_task_type is not None:
+                raise ValueError("backend-selected tools must not define a static execution route")
+            if set(self.backend_execution_routes) != backend_values:
+                raise ValueError("tool backend execution routes must cover its backend enum")
+            if set(self.backend_remote_task_types) != backend_values:
+                raise ValueError("tool backend remote task types must cover its backend enum")
+            for backend, route in self.backend_execution_routes.items():
+                remote_type = self.backend_remote_task_types[backend]
+                if route == "remote_execution_service" and remote_type is None:
+                    raise ValueError("remote tool backends require a remote task type")
+                if route == "local_executor" and remote_type is not None:
+                    raise ValueError("local tool backends must not define a remote task type")
+        else:
+            if self.default_planner_backend is not None:
+                raise ValueError("static tools must not define a default backend")
+            if self.execution_route is None:
+                raise ValueError("tools without a backend require a static execution route")
+            if self.backend_execution_routes or self.backend_remote_task_types:
+                raise ValueError("static tool routes must not define backend route maps")
+            if self.execution_route == "remote_execution_service" and self.remote_task_type is None:
+                raise ValueError("remote tools require a remote task type")
+            if self.execution_route == "local_executor" and self.remote_task_type is not None:
+                raise ValueError("local tools must not define a remote task type")
         return self
 
 
@@ -1436,7 +1501,6 @@ class AgentExecutionPlanLLMResponse(BaseModel):
             value,
             field=info.field_name,
             sort_values=info.field_name in {
-                "requested_tool_ids",
                 "selected_input_artifact_ids",
                 "selected_logical_profile_ids",
             },
@@ -1817,6 +1881,83 @@ class AgentLLMInvocationMetadata(BaseModel):
         return value
 
 
+class AgentRemoteResourceRequestIntent(BaseModel):
+    """Review-only resource intent; nullable fields are never invented authority."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["not_configured", "partial", "configured"] = "not_configured"
+    gpu_count: int | None = None
+    cpu_threads: int | None = None
+    walltime_sec: int | None = None
+
+    @field_validator("gpu_count", "cpu_threads", "walltime_sec")
+    @classmethod
+    def validate_resource_value(cls, value: int | None, info: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{info.field_name} must be an integer or null")
+        if info.field_name == "gpu_count" and value < 0:
+            raise ValueError("gpu_count must be non-negative")
+        if info.field_name != "gpu_count" and value <= 0:
+            raise ValueError(f"{info.field_name} must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_status(self) -> "AgentRemoteResourceRequestIntent":
+        values = (self.gpu_count, self.cpu_threads, self.walltime_sec)
+        expected = (
+            "configured"
+            if all(value is not None for value in values)
+            else "partial"
+            if any(value is not None for value in values)
+            else "not_configured"
+        )
+        if self.status != expected:
+            raise ValueError("resource request status must match configured fields")
+        return self
+
+
+class AgentTaskDispatchIntent(BaseModel):
+    """Non-executing route binding for one canonical RunPlan task."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    execution_route: ScientificExecutionRoute
+    remote_task_type: ScientificRemoteTaskType | None = None
+    logical_profile_id: str | None = None
+    requested_resources: AgentRemoteResourceRequestIntent | None = None
+
+    @field_validator("task_id")
+    @classmethod
+    def validate_task_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="task_id")
+
+    @field_validator("logical_profile_id")
+    @classmethod
+    def validate_profile_id(cls, value: str | None) -> str | None:
+        return None if value is None else _agent_identifier(value, field="logical_profile_id")
+
+    @model_validator(mode="after")
+    def validate_route_binding(self) -> "AgentTaskDispatchIntent":
+        if self.execution_route == "local_executor":
+            if (
+                self.remote_task_type is not None
+                or self.logical_profile_id is not None
+                or self.requested_resources is not None
+            ):
+                raise ValueError("local dispatch intent must not contain remote bindings")
+            return self
+        if (
+            self.remote_task_type is None
+            or self.requested_resources is None
+        ):
+            raise ValueError("remote dispatch intent requires a task type and resource intent")
+        return self
+
+
 class AgentExecutionPlanProposal(BaseModel):
     """Immutable review/control artifact.  It is never an execution authority."""
 
@@ -1841,6 +1982,7 @@ class AgentExecutionPlanProposal(BaseModel):
     )
     selected_artifacts: list[str] = Field(default_factory=list)
     selected_profiles: list[str] = Field(default_factory=list)
+    dispatch_intents: list[AgentTaskDispatchIntent] = Field(default_factory=list)
     limits: dict[str, Any] = Field(default_factory=dict)
     stop_conditions: list[str] = Field(default_factory=list)
     success_criteria: list[str] = Field(default_factory=list)
@@ -1913,18 +2055,25 @@ class AgentExecutionPlanProposal(BaseModel):
             task_id = _agent_identifier(key, field=f"{info.field_name} key")
             if not isinstance(options, dict):
                 raise ValueError(f"{info.field_name} values must be objects")
-            validator = (
-                _agent_safe_compiled_task_value
-                if info.field_name == "compiled_task_options"
-                else _agent_safe_value
+            normalized[task_id] = _agent_safe_value(
+                options, f"{info.field_name}.{task_id}"
             )
-            normalized[task_id] = validator(options, f"{info.field_name}.{task_id}")
         return {key: normalized[key] for key in sorted(normalized)}
 
     @field_validator("selected_artifacts", "selected_profiles", "required_gates", "missing_artifacts")
     @classmethod
     def validate_compiled_id_lists(cls, value: list[str], info: Any) -> list[str]:
         return _agent_string_list(value, field=info.field_name, sort_values=True)
+
+    @field_validator("dispatch_intents")
+    @classmethod
+    def validate_dispatch_intents(
+        cls, value: list[AgentTaskDispatchIntent]
+    ) -> list[AgentTaskDispatchIntent]:
+        task_ids = [item.task_id for item in value]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("proposal dispatch intents must have unique task IDs")
+        return sorted(value, key=lambda item: item.task_id)
 
     @field_validator("limits")
     @classmethod
@@ -1951,6 +2100,10 @@ class AgentExecutionPlanProposal(BaseModel):
             task.task_id for task in self.run_plan.tasks
         ):
             raise ValueError("compiled task options may only reference compiled RunPlan tasks")
+        if {item.task_id for item in self.dispatch_intents} != {
+            task.task_id for task in self.run_plan.tasks
+        }:
+            raise ValueError("proposal dispatch intents must exactly cover the compiled RunPlan")
         semantic_digest = _agent_digest(self.semantic_plan_material())
         if self.semantic_plan_digest and self.semantic_plan_digest != semantic_digest:
             raise ValueError("agent execution semantic plan digest mismatch")

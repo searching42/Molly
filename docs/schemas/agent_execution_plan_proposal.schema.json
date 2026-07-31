@@ -193,6 +193,124 @@
       "title": "AgentLLMInvocationMetadata",
       "type": "object"
     },
+    "AgentRemoteResourceRequestIntent": {
+      "additionalProperties": false,
+      "description": "Review-only resource intent; nullable fields are never invented authority.",
+      "properties": {
+        "status": {
+          "default": "not_configured",
+          "enum": [
+            "not_configured",
+            "partial",
+            "configured"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "gpu_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Count"
+        },
+        "cpu_threads": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Threads"
+        },
+        "walltime_sec": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Walltime Sec"
+        }
+      },
+      "title": "AgentRemoteResourceRequestIntent",
+      "type": "object"
+    },
+    "AgentTaskDispatchIntent": {
+      "additionalProperties": false,
+      "description": "Non-executing route binding for one canonical RunPlan task.",
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "execution_route": {
+          "enum": [
+            "local_executor",
+            "remote_execution_service"
+          ],
+          "title": "Execution Route",
+          "type": "string"
+        },
+        "remote_task_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "document_parsing",
+                "model_training",
+                "molecular_generation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Task Type"
+        },
+        "logical_profile_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Logical Profile Id"
+        },
+        "requested_resources": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRemoteResourceRequestIntent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "task_id",
+        "execution_route"
+      ],
+      "title": "AgentTaskDispatchIntent",
+      "type": "object"
+    },
     "PlannedTask": {
       "properties": {
         "task_id": {
@@ -367,6 +485,13 @@
         "type": "string"
       },
       "title": "Selected Profiles",
+      "type": "array"
+    },
+    "dispatch_intents": {
+      "items": {
+        "$ref": "#/$defs/AgentTaskDispatchIntent"
+      },
+      "title": "Dispatch Intents",
       "type": "array"
     },
     "limits": {

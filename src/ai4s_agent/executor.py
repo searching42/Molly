@@ -1641,25 +1641,50 @@ class RunPlanExecutor:
                 "output_dir": str(run_dir / "02_clean"),
             }
         if task_id == "run_baseline":
+            training_csv = (
+                artifact_paths.get("cleaned_train_dataset")
+                or artifact_paths.get("confirmed_training_dataset")
+                or ""
+            )
+            if not training_csv:
+                raise ValueError(
+                    "missing artifact path: cleaned_train_dataset or confirmed_training_dataset"
+                )
             return {
                 "run_id": run_id,
-                "cleaned_master_csv": self._require_artifact(artifact_paths, "cleaned_train_dataset"),
+                "cleaned_master_csv": training_csv,
+                "trainability_report_json": self._require_artifact(
+                    artifact_paths, "trainability_report"
+                ),
                 "output_dir": str(run_dir / "03_baseline"),
             }
         if task_id == "train_model":
+            training_csv = (
+                artifact_paths.get("cleaned_train_dataset")
+                or artifact_paths.get("confirmed_training_dataset")
+                or ""
+            )
+            if not training_csv:
+                raise ValueError(
+                    "missing artifact path: cleaned_train_dataset or confirmed_training_dataset"
+                )
+            property_id = str(task_options.get("property_id") or "").strip()
+            if not property_id:
+                property_id = self._infer_property_id(artifact_paths)
             payload = {
                 "run_id": run_id,
-                "cleaned_master_csv": self._require_artifact(artifact_paths, "cleaned_train_dataset"),
-                "property_id": self._infer_property_id(artifact_paths),
+                "cleaned_master_csv": training_csv,
+                "trainability_report_json": self._require_artifact(
+                    artifact_paths, "trainability_report"
+                ),
+                "property_id": property_id,
                 "model_root": str(run_dir / "04_models"),
             }
             if str((options or {}).get("adapter") or "").strip() == "train_model_unimol_legacy_adapter":
-                property_id = str(task_options.get("property_id") or payload["property_id"])
                 payload = {
                     **payload,
                     "train_csv": payload["cleaned_master_csv"],
                     "target_col": property_id,
-                    "property_id": property_id,
                     "save_dir": str(run_dir / "04_models" / property_id / "unimol_legacy"),
                     "log_dir": str(run_dir / "04_models" / property_id / "unimol_legacy_logs"),
                     "execute": False,
@@ -1673,33 +1698,50 @@ class RunPlanExecutor:
                 "backend": "deterministic_stub",
                 "count": 32,
                 "seed": 0,
-                "reference_csv": artifact_paths.get("cleaned_train_dataset", ""),
+                "reference_csv": (
+                    artifact_paths.get("cleaned_train_dataset")
+                    or artifact_paths.get("confirmed_training_dataset")
+                    or ""
+                ),
                 "confirmed": GateName.FINAL_THRESHOLD.value in approved,
                 "actor": actor,
             }
             payload.update(task_options)
             return payload
         if task_id == "predict_candidates":
-            property_id = self._infer_property_id(artifact_paths)
+            property_id = str(task_options.get("property_id") or "").strip()
+            if not property_id:
+                property_id = self._infer_property_id(artifact_paths)
             payload = {
                 "run_id": run_id,
                 "candidate_csv": self._require_artifact(artifact_paths, "candidate_dataset"),
                 "property_id": property_id,
                 "model_path": self._model_path(artifact_paths),
+                "model_metadata_json": self._require_artifact(
+                    artifact_paths, "model_metadata"
+                ),
                 "output_csv": str(run_dir / "06_prediction" / f"{run_id}_{property_id}_predictions.csv"),
             }
+            trained_model_dir = str(artifact_paths.get("trained_model") or "").strip()
+            if trained_model_dir:
+                payload["trained_model_dir"] = trained_model_dir
             payload.update(task_options)
             return payload
         if task_id == "filter_rank":
-            property_id = self._infer_property_id(artifact_paths)
+            score_columns = task_options.get("score_columns")
+            if isinstance(score_columns, list) and score_columns:
+                default_columns = [str(item) for item in score_columns]
+            else:
+                property_id = self._infer_property_id(artifact_paths)
+                default_columns = [f"{property_id}_pred"]
             payload = {
                 "run_id": run_id,
                 "prediction_csv": self._require_artifact(artifact_paths, "candidate_predictions"),
                 "output_csv": str(run_dir / "07_rank" / f"{run_id}_ranked_candidates.csv"),
                 "topn": 10,
-                "score_columns": [f"{property_id}_pred"],
-                "directions": {f"{property_id}_pred": "maximize"},
-                "weights": {f"{property_id}_pred": 1.0},
+                "score_columns": default_columns,
+                "directions": {column: "maximize" for column in default_columns},
+                "weights": {column: 1.0 for column in default_columns},
                 "hard_constraints": {},
             }
             payload.update(task_options)
@@ -1709,7 +1751,100 @@ class RunPlanExecutor:
                 "run_id": run_id,
                 "output_dir": str(run_dir / "05_report"),
                 "sections": {"Summary": ["RunPlan executor completed available tasks."]},
-                "artifacts": dict(artifact_paths),
+                "artifacts": {
+                    "ranked_candidates": self._require_artifact(
+                        artifact_paths, "ranked_candidates"
+                    )
+                },
+            }
+        if task_id == "index_corpus":
+            return {
+                "run_id": run_id,
+                "parsed_document_json": self._require_artifact(
+                    artifact_paths, "parsed_document"
+                ),
+                "output_dir": str(run_dir / "literature_index"),
+            }
+        if task_id == "retrieve_evidence":
+            payload = {
+                "run_id": run_id,
+                "corpus_index_json": self._require_artifact(
+                    artifact_paths, "corpus_index"
+                ),
+                "output_dir": str(run_dir / "literature_retrieval"),
+            }
+            payload.update(task_options)
+            return payload
+        if task_id == "extract_records":
+            return {
+                "run_id": run_id,
+                "evidence_hits_json": self._require_artifact(
+                    artifact_paths, "evidence_hits"
+                ),
+                "chunks_jsonl": self._require_artifact(
+                    artifact_paths, "evidence_chunks"
+                ),
+                "output_dir": str(run_dir / "literature_extraction"),
+            }
+        if task_id == "normalize_extracted_units":
+            return {
+                "run_id": run_id,
+                "extracted_records_jsonl": self._require_artifact(
+                    artifact_paths, "extracted_records"
+                ),
+                "output_dir": str(run_dir / "literature_normalization"),
+            }
+        if task_id == "track_citation_provenance":
+            return {
+                "run_id": run_id,
+                "parsed_document_json": self._require_artifact(
+                    artifact_paths, "parsed_document"
+                ),
+                "evidence_hits_json": self._require_artifact(
+                    artifact_paths, "evidence_hits"
+                ),
+                "extracted_records_jsonl": self._require_artifact(
+                    artifact_paths, "extracted_records"
+                ),
+                "output_dir": str(run_dir / "literature_provenance"),
+            }
+        if task_id == "merge_extracted_records":
+            return {
+                "run_id": run_id,
+                "extracted_records_jsonl": self._require_artifact(
+                    artifact_paths, "normalized_extracted_records"
+                ),
+                "output_dir": str(run_dir / "literature_merge"),
+            }
+        if task_id == "evaluate_extraction_benchmark":
+            return {
+                "run_id": run_id,
+                "evidence_hits_json": self._require_artifact(
+                    artifact_paths, "evidence_hits"
+                ),
+                "normalized_extracted_records_jsonl": self._require_artifact(
+                    artifact_paths, "normalized_extracted_records"
+                ),
+                "conflict_report_json": self._require_artifact(
+                    artifact_paths, "conflict_report"
+                ),
+                "output_dir": str(run_dir / "literature_benchmark"),
+            }
+        if task_id == "confirm_extracted_dataset":
+            return {
+                "run_id": run_id,
+                "candidate_training_dataset_csv": self._require_artifact(
+                    artifact_paths, "candidate_training_dataset"
+                ),
+                "conflict_report_json": self._require_artifact(
+                    artifact_paths, "conflict_report"
+                ),
+                "citation_provenance_report_json": self._require_artifact(
+                    artifact_paths, "citation_provenance_report"
+                ),
+                "output_dir": str(run_dir / "literature_confirmation"),
+                "confirmed": GateName.DATA_MINING.value in approved,
+                "actor": actor,
             }
         if task_id == "parse_document_pdfplumber":
             input_pdf = self._absolute_artifact_path(artifact_paths, "pdf_corpus")

@@ -40,7 +40,9 @@ from ai4s_agent.schemas import (
     AgentLLMInvocationMetadata,
     AgentProjectObservation,
     AgentProjectObservationSourceBinding,
+    AgentRemoteResourceRequestIntent,
     AgentStageObservation,
+    AgentTaskDispatchIntent,
     RunPlan,
     RunStatus,
     ScientificToolCatalog,
@@ -443,6 +445,17 @@ def build_scientific_tool_catalog(
                 backend_profile_requirements={
                     backend: list(requirements)
                     for backend, requirements in sorted(task.backend_profile_requirements.items())
+                },
+                default_planner_backend=task.default_planner_backend,
+                execution_route=task.execution_route,
+                remote_task_type=task.remote_task_type,
+                backend_execution_routes={
+                    backend: route
+                    for backend, route in sorted(task.backend_execution_routes.items())
+                },
+                backend_remote_task_types={
+                    backend: remote_type
+                    for backend, remote_type in sorted(task.backend_remote_task_types.items())
                 },
                 accepted_input_trust_classes_by_artifact={
                     artifact_id: list(trust_classes)
@@ -1013,10 +1026,31 @@ class PlannerOptionCompiler:
         planner_options: Mapping[str, Any],
     ) -> list[str]:
         requirements = set(tool.logical_profile_requirements)
-        backend = planner_options.get("backend")
+        backend = planner_options.get("backend", tool.default_planner_backend)
         if backend is not None:
             requirements.update(tool.backend_profile_requirements.get(str(backend), []))
         return sorted(requirements)
+
+    @staticmethod
+    def execution_binding(
+        *,
+        tool: ScientificToolSpec,
+        planner_options: Mapping[str, Any],
+    ) -> tuple[str, str | None]:
+        backend = planner_options.get("backend", tool.default_planner_backend)
+        if backend is None:
+            if tool.execution_route is None:
+                raise ScientificAgentPlanError(
+                    f"planner tool requires an explicit backend route: {tool.tool_id}"
+                )
+            return tool.execution_route, tool.remote_task_type
+        backend_id = str(backend)
+        route = tool.backend_execution_routes.get(backend_id)
+        if route is None:
+            raise ScientificAgentPlanError(
+                f"planner backend has no registered execution route: {tool.tool_id}"
+            )
+        return route, tool.backend_remote_task_types.get(backend_id)
 
     def compile(
         self,
@@ -1052,10 +1086,7 @@ class PlannerOptionCompiler:
                     raise ScientificAgentPlanError(
                         "n_bits is only valid for baseline model training"
                     )
-                return {
-                    "adapter": "train_model_unimol_legacy_adapter",
-                    "property_id": property_id,
-                }
+                return {"property_id": property_id}
             raise ScientificAgentPlanError("unsupported model training backend")
         if compiler == "scientific-planner-option-generate-candidates.v1":
             return {
@@ -1272,9 +1303,23 @@ class AgentExecutionPlanCompiler:
                 if gate not in required_gates:
                     required_gates.append(gate)
         questions = list(parsed.questions)
+        planned_tasks_by_id = {task.task_id: task for task in run_plan.tasks}
         for tool in expanded_tools.values():
             for alternatives in tool.input_artifact_alternatives:
-                if any(artifact_id in selected_artifacts for artifact_id in alternatives):
+                selected_alternatives = [
+                    artifact_id
+                    for artifact_id in alternatives
+                    if artifact_id in selected_artifacts
+                ]
+                if len(selected_alternatives) > 1:
+                    raise ScientificAgentPlanError(
+                        f"select exactly one artifact from the registered alternative set: {tool.tool_id}"
+                    )
+                planned_task = planned_tasks_by_id[tool.task_id]
+                if any(
+                    artifact_id in planned_task.required_artifacts
+                    for artifact_id in alternatives
+                ):
                     continue
                 question_id = "missing_artifact_choice_" + "_or_".join(alternatives)
                 if not any(item.question_id == question_id for item in questions):
@@ -1287,6 +1332,103 @@ class AgentExecutionPlanCompiler:
                                 + "."
                             ),
                             reason="The registered task requires one artifact from this alternative set.",
+                            blocks_proposal=True,
+                        )
+                    )
+        dispatch_intents: list[AgentTaskDispatchIntent] = []
+        for planned_task in run_plan.tasks:
+            tool = expanded_tools.get(planned_task.task_id)
+            if tool is None:
+                spec = self.registry.get(planned_task.task_id)
+                if spec.execution_route != "local_executor":
+                    raise ScientificAgentPlanError(
+                        "non-visible expanded tasks must remain on the registered local route"
+                    )
+                dispatch_intents.append(
+                    AgentTaskDispatchIntent(
+                        task_id=planned_task.task_id,
+                        execution_route="local_executor",
+                    )
+                )
+                continue
+            planner_options = parsed.task_options.get(tool.tool_id, {})
+            route, remote_task_type = self.option_compiler.execution_binding(
+                tool=tool,
+                planner_options=planner_options,
+            )
+            if route == "local_executor":
+                dispatch_intents.append(
+                    AgentTaskDispatchIntent(
+                        task_id=planned_task.task_id,
+                        execution_route="local_executor",
+                    )
+                )
+                continue
+            if remote_task_type is None:
+                raise ScientificAgentPlanError(
+                    f"remote task has no registered logical task type: {planned_task.task_id}"
+                )
+            matching_profiles = [
+                profiles_by_id[profile_id]
+                for profile_id in selected_profiles
+                if _profile_matches_requirement(profiles_by_id[profile_id], remote_task_type)
+            ]
+            if len(matching_profiles) > 1:
+                raise ScientificAgentPlanError(
+                    f"remote task has ambiguous logical profile bindings: {planned_task.task_id}"
+                )
+            runtime_limit = parsed.limits.get("max_runtime_sec")
+            walltime_sec = (
+                int(runtime_limit)
+                if isinstance(runtime_limit, int) and not isinstance(runtime_limit, bool)
+                else None
+            )
+            resource_status = "partial" if walltime_sec is not None else "not_configured"
+            resources = AgentRemoteResourceRequestIntent(
+                status=resource_status,
+                gpu_count=None,
+                cpu_threads=None,
+                walltime_sec=walltime_sec,
+            )
+            dispatch_intents.append(
+                AgentTaskDispatchIntent(
+                    task_id=planned_task.task_id,
+                    execution_route="remote_execution_service",
+                    remote_task_type=remote_task_type,
+                    logical_profile_id=(
+                        matching_profiles[0].profile_id if matching_profiles else None
+                    ),
+                    requested_resources=resources,
+                )
+            )
+            if not matching_profiles:
+                question_id = f"remote_profile_{planned_task.task_id}"
+                if not any(item.question_id == question_id for item in questions):
+                    questions.append(
+                        AgentExecutionPlanQuestion(
+                            question_id=question_id,
+                            prompt=(
+                                "Select one available logical execution profile for remote task "
+                                f"{planned_task.task_id}."
+                            ),
+                            reason="No profile authority is bound to the expanded remote task.",
+                            blocks_proposal=True,
+                        )
+                    )
+            if resources.status != "configured":
+                question_id = f"remote_resources_{planned_task.task_id}"
+                if not any(item.question_id == question_id for item in questions):
+                    questions.append(
+                        AgentExecutionPlanQuestion(
+                            question_id=question_id,
+                            prompt=(
+                                "Configure the GPU count, CPU thread count, and walltime "
+                                f"for remote task {planned_task.task_id}."
+                            ),
+                            reason=(
+                                "The planning observation does not contain authority for a "
+                                "complete remote resource request."
+                            ),
                             blocks_proposal=True,
                         )
                     )
@@ -1340,6 +1482,7 @@ class AgentExecutionPlanCompiler:
             option_compiler_version=PLANNER_OPTION_COMPILER_VERSION,
             selected_artifacts=selected_artifacts,
             selected_profiles=selected_profiles,
+            dispatch_intents=dispatch_intents,
             limits=dict(parsed.limits),
             stop_conditions=list(parsed.stop_conditions),
             success_criteria=list(parsed.success_criteria),

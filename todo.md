@@ -897,6 +897,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：server-owned option compiler 需要与 Executor payload 持续做契约测试；provider 已返回但 checkpoint 未落盘时只能进入 typed recovery，不能自动重复外部调用；request-private interrupted staging 需要 verifier 忽略且不得成为 publication；proposal 仍可能被误认为 execution authority。
 - 批准人：repository owner。
 
+### 2026-07-31：PR-BL 第三轮冻结 dispatch intent 与逐工具 artifact contract
+
+- 决策：在同一 Draft PR #18 中冻结 `local_executor` / `remote_execution_service` 的服务端路由投影；Uni-Mol、REINVENT4 与 MinerU proposal 只保存 logical remote task type、logical profile 与 nullable resource request，不再把 legacy SSH adapter 写入 `compiled_task_options`。
+- 原计划：第二轮修复通过 CI 后结束 PR-BL review remediation。
+- 新计划：逐个对齐 planner-visible task 的 Registry input contract、deterministic RunPlan dependency input 与 Executor payload/snapshot 实际输入；契约测试必须使用 per-tool minimal artifact roster，并覆盖 raw uploaded CSV 与 confirmed dataset 两条长程 baseline planning 链。
+- 依据：review 发现 future authorization 若绑定 legacy adapter 会阻断 RemoteExecutionService 接入，且全 Registry artifact 并集测试会掩盖 `run_baseline`、`check_trainability`、generation 与 confirmed-dataset dependency drift。
+- 影响任务：`M3H-001`～`M3H-003` 继续保持 `I/T/— / READY`；`M3H-004`～后续任务继续 `DEFERRED`；`M3H-GATE-001` 不标记 `V`；PR #18 保持 Draft，不合并且不启动 PR-BM。
+- 新增风险：future authorization 必须同时绑定 `compiled_task_options` 与 `dispatch_intents`；remote resource authority 尚未配置时只能形成 blocking review question，不能被默认值或 profile 上限替代；新增 visible task 必须同步维护最小 payload contract 测试。
+- 批准人：repository owner。
+
 后续路线调整必须追加：
 
 ```text

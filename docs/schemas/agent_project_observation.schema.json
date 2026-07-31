@@ -487,6 +487,81 @@
           "title": "Backend Profile Requirements",
           "type": "object"
         },
+        "default_planner_backend": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default Planner Backend"
+        },
+        "execution_route": {
+          "anyOf": [
+            {
+              "enum": [
+                "local_executor",
+                "remote_execution_service"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Route"
+        },
+        "remote_task_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "document_parsing",
+                "model_training",
+                "molecular_generation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Task Type"
+        },
+        "backend_execution_routes": {
+          "additionalProperties": {
+            "enum": [
+              "local_executor",
+              "remote_execution_service"
+            ],
+            "type": "string"
+          },
+          "title": "Backend Execution Routes",
+          "type": "object"
+        },
+        "backend_remote_task_types": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "enum": [
+                  "document_parsing",
+                  "model_training",
+                  "molecular_generation"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Backend Remote Task Types",
+          "type": "object"
+        },
         "accepted_input_trust_classes_by_artifact": {
           "additionalProperties": {
             "items": {

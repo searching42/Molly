@@ -20,8 +20,9 @@ in PR-BL. No task is executed. Executor/verifier authority is unchanged.`
 
 `AtomicTaskRegistry` in `src/ai4s_agent/planner.py` is the current executable
 task fact source. Each `AtomicTaskSpec` defines the canonical task ID,
-required and output artifact contracts, risk level, required gates, adapter
-binding, and dependency hints. `expand_run_plan()` resolves the registered
+required/optional/alternative input and output artifact contracts, risk level,
+required gates, adapter binding, dependency hints, and the planner-facing
+local/remote execution-route projection. `expand_run_plan()` resolves the registered
 dependency graph and computes missing artifacts. The new
 `ScientificToolCatalog` is a deterministic, privacy-safe projection of these
 registered specs; it is not a second task registry and contains no adapter
@@ -39,9 +40,13 @@ and ordinary approval words are not parsed as actions. The dedicated planning
 call introduced here is a separate `complete_json()` call with a strict
 `AgentExecutionPlanLLMResponse` schema.
 
-PR-BL does not modify `RunPlanExecutor`, Gate snapshots or exact approval,
-`RemoteExecutionService`/remote lifecycle, worker protocol, StageState,
-queue jobs, adapters, or the execution UI.
+PR-BL does not call `RunPlanExecutor.execute()`/`resume_after_gate()`, consume a
+Gate, or invoke `RemoteExecutionService`, remote lifecycle, transport, worker,
+or adapters. The existing Executor authority and adapter bindings are unchanged.
+The only Executor-side change aligns deterministic payload/snapshot construction
+for already registered local tasks with their declared artifact contracts; it
+does not add an execution entry point or dispatch path. Worker protocol,
+StageState, queue jobs, and the execution UI are unchanged.
 
 ## Contracts
 
@@ -60,9 +65,11 @@ The five published JSON schema files are generated from the Pydantic models in
 human label and description, required and optional logical artifact IDs,
 input-artifact alternative groups, effect class, risk, required permissions and
 gates, a closed high-level option schema, an option-compiler version, static and
-backend-conditioned logical profile requirements, per-artifact accepted trust
-classes, budget dimensions, preapproval declaration, idempotency policy,
-verification policy, and planner visibility. `AtomicTaskSpec.planner_visible`
+backend-conditioned logical profile requirements, static/backend-conditioned
+`local_executor` or `remote_execution_service` routes, a logical remote task
+type, a server-owned default backend for dependency expansion, per-artifact
+accepted trust classes, budget dimensions, preapproval declaration,
+idempotency policy, verification policy, and planner visibility. `AtomicTaskSpec.planner_visible`
 defaults to `false`: PR-BL freezes
 a narrow v1 roster in `DEFAULT_ATOMIC_TASKS`, and every visible task explicitly
 sets all projection metadata. New execution tasks remain hidden until a review
@@ -142,25 +149,41 @@ planning data transfer only and is not execution authorization.
    references;
 3. maps tool IDs to registered task IDs;
 4. compiles planner-facing typed options through the registered,
-   versioned `PlannerOptionCompiler` into canonical Executor task options;
+   versioned `PlannerOptionCompiler` into canonical scientific task options;
 5. derives backend-conditioned profile requirements from the selected backend,
    so baseline/stub paths remain local while Uni-Mol/REINVENT4 require their
    existing logical profiles;
-6. calls the existing `expand_run_plan()` dependency resolver;
-7. derives missing artifacts and required gates from registered task specs;
-8. rejects LLM-provided dependencies, output artifacts, gates, adapter names,
+6. derives an immutable per-task dispatch intent: local tasks bind
+   `local_executor`; MinerU, Uni-Mol, and REINVENT4 bind
+   `remote_execution_service`, logical task type, selected logical profile, and
+   a nullable resource-request intent;
+7. calls the existing `expand_run_plan()` dependency resolver, including a
+   deterministic choice among registered input alternatives;
+8. derives missing artifacts and required gates from registered task specs;
+9. rejects LLM-provided dependencies, output artifacts, gates, adapter names,
    status claims, and permissions;
-9. creates the canonical `RunPlan` and proposal semantic digest.
+10. creates the canonical `RunPlan` and proposal semantic digest.
 
 The proposal persists both `planner_options` and `compiled_task_options`, plus
 `scientific-planner-option-compiler.v1`. The former is the validated LLM
-suggestion; the latter is the exact deterministic representation that a future
-authorization must bind. The compiler maps only declared high-level options to
-fields consumed by the existing Executor payload/snapshot path. A server-owned
-legacy adapter binding may be materialized for Uni-Mol, but an LLM-provided
-`adapter` field is always rejected. Tasks whose current Executor branch does not
-consume configurable options expose a closed empty v1 schema rather than
-claiming unsupported semantics.
+suggestion; the latter is the exact deterministic scientific-parameter
+representation that a future authorization must bind together with
+`dispatch_intents`. Local options map only to fields consumed by the existing
+Executor payload/snapshot path. Remote options never contain an adapter name,
+SSH/SCP material, command, environment, or connection detail: Uni-Mol,
+REINVENT4, and MinerU freeze only a `RemoteExecutionService` dispatch intent.
+Incomplete remote profile or resource authority becomes a blocking review
+question and cannot be interpreted as dispatch permission. Tasks whose current
+Executor branch does not consume configurable options expose a closed empty v1
+schema rather than claiming unsupported semantics.
+
+The artifact roster is tested per tool with only its required inputs and one
+selected optional/alternative input; no global registry artifact union is used.
+The registered data chain supports both content-bound `uploaded_dataset ->
+inspect_dataset -> clean_dataset -> check_trainability -> baseline train_model`
+and `confirmed_training_dataset -> inspect_dataset -> check_trainability ->
+baseline train_model` without inventing `uploaded_dataset` as missing. Local
+Phase 3 payload snapshots likewise bind exactly the registered logical inputs.
 
 The frozen permission vocabulary is `read_content_bound_input`,
 `derive_project_artifact`, `external_document_processing`,
@@ -299,8 +322,10 @@ The next PR can reuse the catalog builder/API, observation verifier and source
 bindings, proposal verifier and digest, strict option schemas,
 `compiled_task_options`, option-compiler version, artifact alternatives and
 per-input trust bindings, explicit permission metadata, backend-conditioned
-logical profile capability bindings, and canonical dependency-expanded
-`RunPlan`. A future exact authorization must bind `compiled_task_options`, not
+logical profile capability bindings, `dispatch_intents`, remote logical task
+types, nullable resource-request intents, and canonical dependency-expanded
+`RunPlan`. A future exact authorization must bind `compiled_task_options` and
+`dispatch_intents`, not
 recompile or reinterpret planner prose/options. PR-BM must add a separate
 Permission Engine and explicit user authorization; it must not reinterpret this
 proposal artifact as authorization or alter the existing

@@ -158,6 +158,10 @@ def _visible_task(
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={
             artifact_id: ["content_bound_input", "registered_intermediate", "verified_output"]
             for artifact_id in required
@@ -359,6 +363,10 @@ def test_catalog_is_explicit_opt_in_with_complete_v1_metadata() -> None:
         "option_compiler_version",
         "logical_profile_requirements",
         "backend_profile_requirements",
+        "execution_route",
+        "remote_task_type",
+        "backend_execution_routes",
+        "backend_remote_task_types",
         "optional_input_artifacts",
         "input_artifact_alternatives",
         "accepted_input_trust_classes_by_artifact",
@@ -379,6 +387,15 @@ def test_catalog_is_explicit_opt_in_with_complete_v1_metadata() -> None:
             backend_schema = task.option_schema.get("properties", {}).get("backend", {})
             backend_values = set(backend_schema.get("enum", [])) if isinstance(backend_schema, dict) else set()
             assert set(task.backend_profile_requirements) == backend_values
+            if backend_values:
+                assert task.default_planner_backend in backend_values
+                assert set(task.backend_execution_routes) == backend_values
+                assert set(task.backend_remote_task_types) == backend_values
+            else:
+                assert task.execution_route in {
+                    "local_executor",
+                    "remote_execution_service",
+                }
     assert AtomicTaskSpec(task_id="future_internal_task").planner_visible is False
     with pytest.raises(ValueError, match="explicitly set projection metadata"):
         AtomicTaskSpec(task_id="unsafe_visible_task", planner_visible=True)
@@ -461,6 +478,10 @@ def test_planning_privacy_checks_allow_normal_oled_prose_and_schema_terms() -> N
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={},
         budget_dimensions=[],
         supports_plan_preapproval=False,
@@ -785,6 +806,7 @@ def test_backend_options_determine_logical_profile_requirements(tmp_path: Path) 
                 task_options={
                     "generate_candidates": {"backend": "reinvent4", "count": 8}
                 },
+                limits={"max_runtime_sec": 600},
             ),
             "reinvent4-cpu-v1",
         ),
@@ -796,6 +818,159 @@ def test_backend_options_determine_logical_profile_requirements(tmp_path: Path) 
             created_at=_clock(),
         )
         assert proposal.selected_profiles == [expected_profile]
+        remote_task_id = (
+            "train_model" if expected_profile == "unimol-train-v1" else "generate_candidates"
+        )
+        intent = next(
+            item for item in proposal.dispatch_intents if item.task_id == remote_task_id
+        )
+        assert intent.execution_route == "remote_execution_service"
+        assert intent.logical_profile_id == expected_profile
+        assert intent.remote_task_type in {"model_training", "molecular_generation"}
+        assert intent.requested_resources is not None
+        if expected_profile == "reinvent4-cpu-v1":
+            assert intent.requested_resources.status == "partial"
+            assert intent.requested_resources.walltime_sec == 600
+        else:
+            assert intent.requested_resources.status == "not_configured"
+        proposal_bytes = json.dumps(proposal.model_dump(mode="json"), sort_keys=True)
+        assert "train_model_unimol_legacy_adapter" not in proposal_bytes
+        assert "generate_candidates_stub_adapter" not in proposal_bytes
+        assert '"adapter"' not in proposal_bytes
+
+
+def test_uploaded_csv_compiles_inspect_clean_trainability_and_baseline_training(
+    tmp_path: Path,
+) -> None:
+    storage, run_dir = _storage_with_run(tmp_path)
+    _write_content_bound_artifact(
+        storage,
+        run_dir,
+        artifact_id="uploaded_dataset",
+        relative_path="inputs/uploaded.csv",
+        content=b"SMILES,plqy\nC,0.42\n",
+    )
+    assert not (run_dir / "stage.json").exists()
+    observation = _observation(storage)
+    response = AgentExecutionPlanLLMResponse.model_validate(
+        {
+            "requested_tool_ids": [
+                "inspect_dataset",
+                "clean_dataset",
+                "check_trainability",
+                "train_model",
+            ],
+            "selected_input_artifact_ids": ["uploaded_dataset"],
+            "task_options": {
+                "inspect_dataset": {},
+                "clean_dataset": {},
+                "check_trainability": {},
+                "train_model": {"backend": "baseline", "property_id": "plqy"},
+            },
+            "selected_logical_profile_ids": [],
+            "limits": {},
+            "stop_conditions": ["stop on validation failure"],
+            "success_criteria": ["produce a reviewable baseline model plan"],
+            "rationales": [],
+            "assumptions": [],
+            "questions": [],
+        }
+    )
+    proposal = AgentExecutionPlanCompiler().compile(
+        observation=observation,
+        response=response,
+        invocation=_invocation(observation, response),
+        created_at=_clock(),
+    )
+
+    assert [task.task_id for task in proposal.run_plan.tasks] == [
+        "inspect_dataset",
+        "clean_dataset",
+        "check_trainability",
+        "train_model",
+    ]
+    assert proposal.missing_artifacts == []
+    assert not [question for question in proposal.questions if question.blocks_proposal]
+    train_task = next(task for task in proposal.run_plan.tasks if task.task_id == "train_model")
+    assert "cleaned_train_dataset" in train_task.required_artifacts
+    assert proposal.executable is False
+    assert not (run_dir / "stage.json").exists()
+
+
+def test_confirmed_dataset_compiles_trainability_and_baseline_without_raw_upload(
+    tmp_path: Path,
+) -> None:
+    storage, run_dir = _storage_with_run(tmp_path)
+    _write_confirmed_dataset(storage, run_dir)
+    stage_before = (run_dir / "stage.json").read_bytes()
+    observation = _observation(storage)
+    response = AgentExecutionPlanLLMResponse.model_validate(
+        {
+            "requested_tool_ids": ["check_trainability", "train_model"],
+            "selected_input_artifact_ids": ["confirmed_training_dataset"],
+            "task_options": {
+                "check_trainability": {},
+                "train_model": {"backend": "baseline", "property_id": "plqy"},
+            },
+            "selected_logical_profile_ids": [],
+            "limits": {},
+            "stop_conditions": ["stop on validation failure"],
+            "success_criteria": ["produce a reviewable baseline model plan"],
+            "rationales": [],
+            "assumptions": [],
+            "questions": [],
+        }
+    )
+    proposal = AgentExecutionPlanCompiler().compile(
+        observation=observation,
+        response=response,
+        invocation=_invocation(observation, response),
+        created_at=_clock(),
+    )
+
+    assert [task.task_id for task in proposal.run_plan.tasks] == [
+        "inspect_dataset",
+        "check_trainability",
+        "train_model",
+    ]
+    assert proposal.missing_artifacts == []
+    assert "uploaded_dataset" not in proposal.run_plan.available_artifacts
+    assert "clean_dataset" not in {task.task_id for task in proposal.run_plan.tasks}
+    assert not [question for question in proposal.questions if question.blocks_proposal]
+    train_task = next(task for task in proposal.run_plan.tasks if task.task_id == "train_model")
+    assert "confirmed_training_dataset" in train_task.required_artifacts
+    assert proposal.executable is False
+    assert (run_dir / "stage.json").read_bytes() == stage_before
+
+
+def test_compiler_rejects_multiple_artifacts_from_one_registered_alternative_set(
+    tmp_path: Path,
+) -> None:
+    storage, run_dir = _storage_with_run(tmp_path)
+    _write_confirmed_dataset(storage, run_dir)
+    _write_content_bound_artifact(
+        storage,
+        run_dir,
+        artifact_id="uploaded_dataset",
+        relative_path="inputs/uploaded.csv",
+        content=b"SMILES,plqy\nC,0.42\n",
+    )
+    observation = _observation(storage)
+    response = _response(
+        tool_id="inspect_dataset",
+        selected_input_artifact_ids=[
+            "uploaded_dataset",
+            "confirmed_training_dataset",
+        ],
+        task_options={"inspect_dataset": {}},
+    )
+    with pytest.raises(ScientificAgentPlanError, match="select exactly one artifact"):
+        AgentExecutionPlanCompiler().compile(
+            observation=observation,
+            response=response,
+            invocation=_invocation(observation, response),
+            created_at=_clock(),
+        )
 
 
 @pytest.mark.parametrize(
@@ -857,6 +1032,13 @@ def test_compiler_uses_tool_specific_artifact_trust_classes(tmp_path: Path) -> N
         created_at=_clock(),
     )
     assert parse_proposal.selected_artifacts == ["pdf_corpus"]
+    parse_intent = next(
+        item for item in parse_proposal.dispatch_intents if item.task_id == "parse_document"
+    )
+    assert parse_intent.execution_route == "remote_execution_service"
+    assert parse_intent.remote_task_type == "document_parsing"
+    assert parse_intent.logical_profile_id == "mineru-v1"
+    assert "adapter" not in parse_proposal.compiled_task_options["parse_document"]
 
     _write_content_bound_artifact(
         storage,
@@ -974,10 +1156,8 @@ def test_planner_option_compiler_materializes_executor_canonical_options() -> No
         tool=tools["train_model"],
         planner_options={"backend": "unimol", "property_id": "plqy"},
     )
-    assert unimol == {
-        "adapter": "train_model_unimol_legacy_adapter",
-        "property_id": "plqy",
-    }
+    assert unimol == {"property_id": "plqy"}
+    assert "adapter" not in unimol
     generation = compiler.compile(
         tool=tools["generate_candidates"],
         planner_options={"backend": "deterministic_stub", "count": 12},
@@ -1010,23 +1190,7 @@ def test_every_visible_tool_compiles_into_executor_snapshot_without_ignored_opti
     storage, run_dir = _storage_with_run(tmp_path)
     artifact_dir = run_dir / "snapshot-inputs"
     artifact_dir.mkdir()
-    artifact_paths: dict[str, str] = {}
     registry = AtomicTaskRegistry()
-    for task in registry.list_tasks():
-        for artifact_id in {
-            *task.required_artifacts,
-            *task.optional_input_artifacts,
-        }:
-            path = artifact_dir / f"{artifact_id}.json"
-            payload = {"property_id": "plqy", "properties": [{"property_id": "plqy"}]}
-            if artifact_id == "model_metadata":
-                model_file = artifact_dir / "model.pkl"
-                model_file.write_bytes(b"model")
-                payload["model_path"] = str(model_file)
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            artifact_paths[artifact_id] = str(path)
-    artifact_paths["uploaded_dataset"] = str(artifact_dir / "uploaded_dataset.json")
-
     planner_options = {
         "clean_dataset": {"drop_empty_target_rows": True},
         "train_model": {"backend": "baseline", "property_id": "plqy"},
@@ -1038,6 +1202,7 @@ def test_every_visible_tool_compiles_into_executor_snapshot_without_ignored_opti
                 {"column": "plqy_pred", "direction": "maximize", "weight": 1.0}
             ],
         },
+        "retrieve_evidence": {"query": "OLED emitter PLQY", "topk": 5},
     }
     catalog = build_scientific_tool_catalog(registry)
     option_compiler = PlannerOptionCompiler()
@@ -1046,17 +1211,46 @@ def test_every_visible_tool_compiles_into_executor_snapshot_without_ignored_opti
         options = planner_options.get(tool.tool_id, {})
         assert Draft202012Validator(tool.option_schema).is_valid(options)
         compiled = option_compiler.compile(tool=tool, planner_options=options)
+        route, remote_task_type = option_compiler.execution_binding(
+            tool=tool,
+            planner_options=options,
+        )
+        if route == "remote_execution_service":
+            assert remote_task_type in {
+                "document_parsing",
+                "model_training",
+                "molecular_generation",
+            }
+            assert "adapter" not in compiled
+            continue
+
+        selected_inputs = list(tool.required_input_artifact_ids)
+        selected_inputs.extend(group[0] for group in tool.input_artifact_alternatives)
+        selected_inputs = list(dict.fromkeys(selected_inputs))
+        artifact_paths: dict[str, str] = {}
+        for artifact_id in selected_inputs:
+            path = artifact_dir / f"{tool.task_id}-{artifact_id}.json"
+            payload = {
+                "property_id": "plqy",
+                "properties": [{"property_id": "plqy"}],
+            }
+            if artifact_id == "model_metadata":
+                model_file = artifact_dir / f"{tool.task_id}-model.pkl"
+                model_file.write_bytes(b"model")
+                payload["model_path"] = str(model_file)
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            artifact_paths[artifact_id] = str(path)
         run_plan = RunPlan(
             run_id=run_dir.name,
             requested_tasks=[tool.task_id],
             tasks=[
                 PlannedTask(
                     task_id=tool.task_id,
-                    required_artifacts=list(tool.required_input_artifact_ids),
+                    required_artifacts=selected_inputs,
                     output_artifacts=list(tool.output_artifact_ids),
                 )
             ],
-            available_artifacts=sorted(artifact_paths),
+            available_artifacts=selected_inputs,
         )
         snapshot = executor._execution_snapshot(
             task_id=tool.task_id,
@@ -1068,12 +1262,85 @@ def test_every_visible_tool_compiles_into_executor_snapshot_without_ignored_opti
             options=compiled,
         )
         assert snapshot["task_options"] == compiled
+        assert set(snapshot["input_artifacts"]) == set(selected_inputs)
         for key, value in compiled.items():
-            if key == "adapter":
-                assert snapshot["adapter"] == value
-            else:
-                assert key in snapshot["payload"]
-                assert snapshot["payload"][key] == value
+            assert key in snapshot["payload"]
+            assert snapshot["payload"][key] == value
+
+
+def test_selected_optional_executor_inputs_are_bound_without_global_artifact_union(
+    tmp_path: Path,
+) -> None:
+    from ai4s_agent.executor import RunPlanExecutor
+
+    storage, run_dir = _storage_with_run(tmp_path)
+    artifact_dir = run_dir / "optional-snapshot-inputs"
+    artifact_dir.mkdir()
+    executor = RunPlanExecutor(storage=storage)
+    registry = AtomicTaskRegistry()
+
+    confirmed = artifact_dir / "confirmed.json"
+    confirmed.write_text("{}", encoding="utf-8")
+    generation_paths = {"confirmed_training_dataset": str(confirmed)}
+    generation_plan = RunPlan(
+        run_id=run_dir.name,
+        requested_tasks=["generate_candidates"],
+        tasks=[
+            PlannedTask(
+                task_id="generate_candidates",
+                required_artifacts=["confirmed_training_dataset"],
+                output_artifacts=["candidate_dataset"],
+            )
+        ],
+        available_artifacts=["confirmed_training_dataset"],
+    )
+    generation_snapshot = executor._execution_snapshot(
+        task_id="generate_candidates",
+        spec_default_adapter=registry.get("generate_candidates").default_adapter,
+        run_plan=generation_plan,
+        run_dir=run_dir,
+        artifact_paths=generation_paths,
+        approved_gates=set(),
+        options={"backend": "deterministic_stub", "count": 8, "seed": 0},
+    )
+    assert generation_snapshot["payload"]["reference_csv"] == str(confirmed)
+    assert set(generation_snapshot["input_artifacts"]) == set(generation_paths)
+
+    candidate = artifact_dir / "candidate.csv"
+    candidate.write_text("SMILES\nC\n", encoding="utf-8")
+    metadata = artifact_dir / "model_metadata.json"
+    metadata.write_text(json.dumps({"property_id": "plqy"}), encoding="utf-8")
+    trained_model = artifact_dir / "trained-model"
+    trained_model.mkdir()
+    (trained_model / "model.pkl").write_bytes(b"model")
+    artifact_paths = {
+        "candidate_dataset": str(candidate),
+        "model_metadata": str(metadata),
+        "trained_model": str(trained_model),
+    }
+    plan = RunPlan(
+        run_id=run_dir.name,
+        requested_tasks=["predict_candidates"],
+        tasks=[
+            PlannedTask(
+                task_id="predict_candidates",
+                required_artifacts=list(artifact_paths),
+                output_artifacts=["candidate_predictions"],
+            )
+        ],
+        available_artifacts=list(artifact_paths),
+    )
+    snapshot = executor._execution_snapshot(
+        task_id="predict_candidates",
+        spec_default_adapter=registry.get("predict_candidates").default_adapter,
+        run_plan=plan,
+        run_dir=run_dir,
+        artifact_paths=artifact_paths,
+        approved_gates=set(),
+        options={"property_id": "plqy"},
+    )
+    assert set(snapshot["input_artifacts"]) == set(artifact_paths)
+    assert snapshot["payload"]["model_path"] == str(trained_model / "model.pkl")
 
 
 def test_proposal_storage_is_exact_no_replace_and_detects_stale_sources(tmp_path: Path) -> None:

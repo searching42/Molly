@@ -54,6 +54,10 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={
             "uploaded_dataset": ["content_bound_input", "registered_intermediate"],
             "confirmed_training_dataset": ["confirmed_scientific_input"],
@@ -66,12 +70,13 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     ),
     AtomicTaskSpec(
         task_id="clean_dataset",
-        required_artifacts=["dataset_profile", "uploaded_dataset"],
+        required_artifacts=["uploaded_dataset"],
         optional_input_artifacts=[],
         input_artifact_alternatives=[],
         output_artifacts=["cleaned_train_dataset", "cleaning_rules"],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="execute_cleaning_adapter",
+        depends_on=["inspect_dataset"],
         scientific_tool_id="clean_dataset",
         label="Clean dataset",
         description="Apply the registered data-cleaning workflow to a logical dataset profile.",
@@ -88,8 +93,11 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-clean-dataset.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={
-            "dataset_profile": ["registered_intermediate", "verified_output"],
             "uploaded_dataset": ["content_bound_input", "registered_intermediate"],
         },
         budget_dimensions=["max_records"],
@@ -100,7 +108,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     ),
     AtomicTaskSpec(
         task_id="check_trainability",
-        required_artifacts=["cleaned_train_dataset", "property_catalog"],
+        required_artifacts=["property_catalog"],
         optional_input_artifacts=[],
         input_artifact_alternatives=[],
         output_artifacts=["trainability_report"],
@@ -115,8 +123,12 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact=_uniform_input_trust(
-            ["cleaned_train_dataset", "property_catalog"],
+            ["property_catalog"],
             ["registered_intermediate", "verified_output", "confirmed_scientific_input"],
         ),
         budget_dimensions=["max_records"],
@@ -128,8 +140,8 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     AtomicTaskSpec(
         task_id="run_baseline",
         required_artifacts=["trainability_report"],
-        optional_input_artifacts=[],
-        input_artifact_alternatives=[],
+        optional_input_artifacts=["cleaned_train_dataset", "confirmed_training_dataset"],
+        input_artifact_alternatives=[["cleaned_train_dataset", "confirmed_training_dataset"]],
         output_artifacts=["baseline_report", "backend_recommendation"],
         risk_level=RiskLevel.LOW,
         default_adapter="run_baseline_service",
@@ -142,8 +154,14 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={
-            "trainability_report": ["registered_intermediate", "verified_output"]
+            "trainability_report": ["registered_intermediate", "verified_output"],
+            "cleaned_train_dataset": ["registered_intermediate", "verified_output"],
+            "confirmed_training_dataset": ["confirmed_scientific_input"],
         },
         budget_dimensions=["max_records", "max_runtime_sec"],
         supports_plan_preapproval=False,
@@ -153,9 +171,9 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     ),
     AtomicTaskSpec(
         task_id="train_model",
-        required_artifacts=["cleaned_train_dataset", "trainability_report"],
-        optional_input_artifacts=[],
-        input_artifact_alternatives=[],
+        required_artifacts=["trainability_report"],
+        optional_input_artifacts=["cleaned_train_dataset", "confirmed_training_dataset"],
+        input_artifact_alternatives=[["cleaned_train_dataset", "confirmed_training_dataset"]],
         output_artifacts=[
             "trained_model",
             "model_metadata",
@@ -183,10 +201,19 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-train-model.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={"baseline": [], "unimol": ["model_training"]},
-        accepted_input_trust_classes_by_artifact=_uniform_input_trust(
-            ["cleaned_train_dataset", "trainability_report"],
-            ["verified_output", "confirmed_scientific_input"],
-        ),
+        default_planner_backend="baseline",
+        execution_route=None,
+        remote_task_type=None,
+        backend_execution_routes={
+            "baseline": "local_executor",
+            "unimol": "remote_execution_service",
+        },
+        backend_remote_task_types={"baseline": None, "unimol": "model_training"},
+        accepted_input_trust_classes_by_artifact={
+            "trainability_report": ["registered_intermediate", "verified_output"],
+            "cleaned_train_dataset": ["registered_intermediate", "verified_output"],
+            "confirmed_training_dataset": ["confirmed_scientific_input"],
+        },
         budget_dimensions=["max_runtime_sec", "max_gpu_hours"],
         supports_plan_preapproval=False,
         idempotency_policy="server_checked",
@@ -195,8 +222,8 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     ),
     AtomicTaskSpec(
         task_id="generate_candidates",
-        required_artifacts=["trained_model", "model_metadata"],
-        optional_input_artifacts=[],
+        required_artifacts=[],
+        optional_input_artifacts=["cleaned_train_dataset", "confirmed_training_dataset"],
         input_artifact_alternatives=[],
         output_artifacts=["candidate_dataset", "generation_report", "generation_publication"],
         risk_level=RiskLevel.MEDIUM,
@@ -221,9 +248,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
             "deterministic_stub": [],
             "reinvent4": ["molecular_generation"],
         },
-        accepted_input_trust_classes_by_artifact=_uniform_input_trust(
-            ["trained_model", "model_metadata"], ["verified_output"]
-        ),
+        default_planner_backend="deterministic_stub",
+        execution_route=None,
+        remote_task_type=None,
+        backend_execution_routes={
+            "deterministic_stub": "local_executor",
+            "reinvent4": "remote_execution_service",
+        },
+        backend_remote_task_types={
+            "deterministic_stub": None,
+            "reinvent4": "molecular_generation",
+        },
+        accepted_input_trust_classes_by_artifact={
+            "cleaned_train_dataset": ["registered_intermediate", "verified_output"],
+            "confirmed_training_dataset": ["confirmed_scientific_input"],
+        },
         budget_dimensions=["max_runtime_sec", "max_steps"],
         supports_plan_preapproval=False,
         idempotency_policy="server_checked",
@@ -232,8 +271,8 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     ),
     AtomicTaskSpec(
         task_id="predict_candidates",
-        required_artifacts=["trained_model", "candidate_dataset"],
-        optional_input_artifacts=[],
+        required_artifacts=["model_metadata", "candidate_dataset"],
+        optional_input_artifacts=["trained_model"],
         input_artifact_alternatives=[],
         output_artifacts=["candidate_predictions"],
         risk_level=RiskLevel.MEDIUM,
@@ -249,8 +288,12 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact=_uniform_input_trust(
-            ["trained_model", "candidate_dataset"], ["verified_output"]
+            ["candidate_dataset", "model_metadata", "trained_model"], ["verified_output"]
         ),
         budget_dimensions=["max_runtime_sec", "max_records"],
         supports_plan_preapproval=False,
@@ -309,6 +352,10 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-filter-rank.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={
             "candidate_predictions": ["registered_intermediate", "verified_output"]
         },
@@ -335,6 +382,10 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={"ranked_candidates": ["verified_output"]},
         budget_dimensions=["max_records"],
         supports_plan_preapproval=False,
@@ -364,6 +415,10 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=["document_parsing"],
         backend_profile_requirements={},
+        execution_route="remote_execution_service",
+        remote_task_type="document_parsing",
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={
             "pdf_corpus": ["content_bound_input", "registered_intermediate", "verified_output"]
         },
@@ -435,6 +490,10 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={
             "parsed_document": ["registered_intermediate", "verified_output"]
         },
@@ -471,10 +530,20 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         description="Retrieve bounded evidence from the registered corpus index.",
         effect_class="derive_local",
         required_permissions=["derive_project_artifact"],
-        option_schema=_closed_option_schema(),
+        option_schema=_closed_option_schema(
+            {
+                "query": {"type": "string", "minLength": 1, "maxLength": 2000},
+                "topk": {"type": "integer", "minimum": 1, "maximum": 1000},
+            },
+            required=["query"],
+        ),
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={
             "corpus_index": ["registered_intermediate", "verified_output"]
         },
@@ -506,6 +575,10 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact=_uniform_input_trust(
             ["evidence_hits", "evidence_chunks"], ["registered_intermediate", "verified_output"]
         ),
@@ -536,6 +609,10 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact={
             "extracted_records": ["registered_intermediate", "verified_output"]
         },
@@ -562,6 +639,10 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact=_uniform_input_trust(
             ["parsed_document", "evidence_hits", "extracted_records"],
             ["registered_intermediate", "verified_output"],
@@ -574,7 +655,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     ),
     AtomicTaskSpec(
         task_id="merge_extracted_records",
-        required_artifacts=["normalized_extracted_records", "citation_provenance_report"],
+        required_artifacts=["normalized_extracted_records"],
         optional_input_artifacts=[],
         input_artifact_alternatives=[],
         output_artifacts=["merged_records", "conflict_report", "candidate_training_dataset"],
@@ -589,8 +670,12 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact=_uniform_input_trust(
-            ["normalized_extracted_records", "citation_provenance_report"],
+            ["normalized_extracted_records"],
             ["registered_intermediate", "verified_output"],
         ),
         budget_dimensions=["max_records"],
@@ -616,6 +701,10 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact=_uniform_input_trust(
             ["evidence_hits", "normalized_extracted_records", "conflict_report"],
             ["registered_intermediate", "verified_output"],
@@ -651,6 +740,10 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
         accepted_input_trust_classes_by_artifact=_uniform_input_trust(
             ["candidate_training_dataset", "conflict_report", "citation_provenance_report"],
             ["content_bound_input", "registered_intermediate", "verified_output"],
@@ -938,6 +1031,7 @@ def expand_run_plan(
     ordered_task_ids: list[str] = []
     unresolved_by_task: dict[str, list[str]] = {}
     dependencies_by_task: dict[str, list[str]] = {}
+    required_by_task: dict[str, list[str]] = {}
     dedup_requested: list[str] = []
     for requested in requested_tasks:
         if requested not in dedup_requested:
@@ -957,8 +1051,46 @@ def expand_run_plan(
         spec = task_registry.get(task_id)
         resolving.add(task_id)
 
-        dependencies = list(spec.depends_on)
+        dependencies: list[str] = []
         unresolved_requirements: list[str] = []
+        selected_requirements = list(spec.required_artifacts)
+
+        for alternatives in spec.input_artifact_alternatives:
+            selected = next(
+                (
+                    artifact
+                    for artifact in alternatives
+                    if artifact in pre_existing_artifacts
+                ),
+                None,
+            )
+            if selected is None:
+                selected = next(
+                    (
+                        artifact
+                        for artifact in alternatives
+                        if artifact in preferred_producers
+                    ),
+                    None,
+                )
+            if selected is None:
+                first_alternative = alternatives[0]
+                producer = task_registry.producer_for(first_alternative)
+                if producer is not None:
+                    selected = first_alternative
+            if selected is None:
+                continue
+            selected_requirements.append(selected)
+            if selected in pre_existing_artifacts:
+                continue
+            producer = preferred_producers.get(selected) or task_registry.producer_for(selected)
+            if producer is None:
+                continue
+            if producer == task_id:
+                raise ValueError(
+                    f"self-referencing alternative artifact dependency in task {task_id}: {selected}"
+                )
+            dependencies.append(producer)
 
         for required in spec.required_artifacts:
             if required in pre_existing_artifacts:
@@ -974,6 +1106,8 @@ def expand_run_plan(
             unresolved_requirements.append(required)
             missing_artifacts.add(required)
 
+        dependencies.extend(spec.depends_on)
+
         dedup_dependencies: list[str] = []
         for dep in dependencies:
             if dep not in dedup_dependencies:
@@ -987,6 +1121,7 @@ def expand_run_plan(
         ordered_task_ids.append(task_id)
         unresolved_by_task[task_id] = unresolved_requirements
         dependencies_by_task[task_id] = dedup_dependencies
+        required_by_task[task_id] = list(dict.fromkeys(selected_requirements))
         available.update(spec.output_artifacts)
 
     for requested in requested_tasks:
@@ -1000,7 +1135,7 @@ def expand_run_plan(
             PlannedTask(
                 task_id=task_id,
                 depends_on=depends_on,
-                required_artifacts=list(spec.required_artifacts),
+                required_artifacts=list(required_by_task.get(task_id, spec.required_artifacts)),
                 output_artifacts=list(spec.output_artifacts),
                 unresolved_requirements=list(unresolved_by_task.get(task_id, [])),
             )
