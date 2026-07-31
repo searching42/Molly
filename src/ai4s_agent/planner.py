@@ -73,7 +73,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         required_artifacts=["uploaded_dataset"],
         optional_input_artifacts=[],
         input_artifact_alternatives=[],
-        output_artifacts=["cleaned_train_dataset", "cleaning_rules"],
+        output_artifacts=["cleaned_train_dataset", "cleaning_rules", "property_catalog"],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="execute_cleaning_adapter",
         depends_on=["inspect_dataset"],
@@ -918,10 +918,10 @@ class AtomicTaskRegistry:
         source = list(tasks or DEFAULT_ATOMIC_TASKS)
         self._validate_tasks(source)
         self._tasks = {task.task_id: task for task in source}
-        self._artifact_producers: dict[str, str] = {}
+        self._artifact_producers: dict[str, list[str]] = {}
         for task in source:
             for artifact in task.output_artifacts:
-                self._artifact_producers.setdefault(artifact, task.task_id)
+                self._artifact_producers.setdefault(artifact, []).append(task.task_id)
 
     @staticmethod
     def _validate_tasks(tasks: list[AtomicTaskSpec]) -> None:
@@ -947,7 +947,11 @@ class AtomicTaskRegistry:
             raise ValueError(f"unknown atomic task: {task_id}") from exc
 
     def producer_for(self, artifact_id: str) -> str | None:
-        return self._artifact_producers.get(artifact_id)
+        producers = self._artifact_producers.get(artifact_id, [])
+        return producers[0] if producers else None
+
+    def producers_for(self, artifact_id: str) -> list[str]:
+        return list(self._artifact_producers.get(artifact_id, []))
 
 
 def build_plan(run_id: str, prompt: str) -> PlanModel:
@@ -1037,11 +1041,66 @@ def expand_run_plan(
         if requested not in dedup_requested:
             dedup_requested.append(requested)
 
-    preferred_producers: dict[str, str] = {}
+    requested_producers: dict[str, list[str]] = {}
     for task_id in dedup_requested:
         spec = task_registry.get(task_id)
         for artifact in spec.output_artifacts:
-            preferred_producers.setdefault(artifact, task_id)
+            requested_producers.setdefault(artifact, []).append(task_id)
+
+    def direct_inputs_match_snapshot(task_id: str) -> bool:
+        candidate = task_registry.get(task_id)
+        if any(
+            artifact not in pre_existing_artifacts
+            for artifact in candidate.required_artifacts
+        ):
+            return False
+        return all(
+            any(artifact in pre_existing_artifacts for artifact in alternatives)
+            for alternatives in candidate.input_artifact_alternatives
+        )
+
+    def depends_transitively(
+        task_id: str,
+        dependency_id: str,
+        seen: set[str] | None = None,
+    ) -> bool:
+        if task_id == dependency_id:
+            return False
+        visited = set(seen or set())
+        if task_id in visited:
+            return False
+        visited.add(task_id)
+        task = task_registry.get(task_id)
+        if dependency_id in task.depends_on:
+            return True
+        return any(
+            depends_transitively(item, dependency_id, visited)
+            for item in task.depends_on
+        )
+
+    def select_producer(artifact_id: str) -> str | None:
+        producers = task_registry.producers_for(artifact_id)
+        if not producers:
+            return None
+        compatible = [
+            producer for producer in producers if direct_inputs_match_snapshot(producer)
+        ]
+        candidates = compatible or producers
+        candidate_set = set(candidates)
+        requested = set(requested_producers.get(artifact_id, []))
+        source_order = {task_id: index for index, task_id in enumerate(producers)}
+        return max(
+            candidates,
+            key=lambda producer: (
+                sum(
+                    1
+                    for other in candidate_set
+                    if depends_transitively(producer, other)
+                ),
+                int(producer in requested),
+                -source_order[producer],
+            ),
+        )
 
     def resolve_task(task_id: str) -> None:
         if task_id in resolved:
@@ -1069,22 +1128,24 @@ def expand_run_plan(
                     (
                         artifact
                         for artifact in alternatives
-                        if artifact in preferred_producers
+                        if artifact in requested_producers
                     ),
                     None,
                 )
             if selected is None:
                 first_alternative = alternatives[0]
-                producer = task_registry.producer_for(first_alternative)
+                producer = select_producer(first_alternative)
                 if producer is not None:
                     selected = first_alternative
             if selected is None:
-                continue
+                selected = alternatives[0]
             selected_requirements.append(selected)
             if selected in pre_existing_artifacts:
                 continue
-            producer = preferred_producers.get(selected) or task_registry.producer_for(selected)
+            producer = select_producer(selected)
             if producer is None:
+                unresolved_requirements.append(selected)
+                missing_artifacts.add(selected)
                 continue
             if producer == task_id:
                 raise ValueError(
@@ -1095,7 +1156,7 @@ def expand_run_plan(
         for required in spec.required_artifacts:
             if required in pre_existing_artifacts:
                 continue
-            producer = preferred_producers.get(required) or task_registry.producer_for(required)
+            producer = select_producer(required)
             if producer == task_id:
                 raise ValueError(
                     f"self-referencing artifact dependency in task {task_id}: {required}"

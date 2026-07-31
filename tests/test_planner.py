@@ -50,6 +50,45 @@ def test_train_model_task_declares_promotable_model_package_outputs() -> None:
     assert "model_package_review" in spec.output_artifacts
 
 
+def test_clean_dataset_declares_the_property_catalog_that_executor_registers() -> None:
+    spec = AtomicTaskRegistry().get("clean_dataset")
+
+    assert "property_catalog" in spec.output_artifacts
+
+
+def test_trainability_selects_cleaned_catalog_for_raw_dataset_chain() -> None:
+    plan = expand_run_plan(
+        run_id="r-raw-trainability",
+        requested_tasks=["check_trainability"],
+        available_artifacts=["uploaded_dataset"],
+    )
+
+    assert [task.task_id for task in plan.tasks] == [
+        "inspect_dataset",
+        "clean_dataset",
+        "check_trainability",
+    ]
+    check = next(task for task in plan.tasks if task.task_id == "check_trainability")
+    assert check.depends_on == ["clean_dataset"]
+    assert plan.missing_artifacts == []
+
+
+def test_trainability_selects_inspection_catalog_for_confirmed_dataset_chain() -> None:
+    plan = expand_run_plan(
+        run_id="r-confirmed-trainability",
+        requested_tasks=["check_trainability"],
+        available_artifacts=["confirmed_training_dataset"],
+    )
+
+    assert [task.task_id for task in plan.tasks] == [
+        "inspect_dataset",
+        "check_trainability",
+    ]
+    check = next(task for task in plan.tasks if task.task_id == "check_trainability")
+    assert check.depends_on == ["inspect_dataset"]
+    assert plan.missing_artifacts == []
+
+
 def test_expand_run_plan_tracks_missing_artifacts_without_producers() -> None:
     registry = AtomicTaskRegistry(
         [

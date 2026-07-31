@@ -854,16 +854,9 @@ def test_uploaded_csv_compiles_inspect_clean_trainability_and_baseline_training(
     observation = _observation(storage)
     response = AgentExecutionPlanLLMResponse.model_validate(
         {
-            "requested_tool_ids": [
-                "inspect_dataset",
-                "clean_dataset",
-                "check_trainability",
-                "train_model",
-            ],
+            "requested_tool_ids": ["check_trainability", "train_model"],
             "selected_input_artifact_ids": ["uploaded_dataset"],
             "task_options": {
-                "inspect_dataset": {},
-                "clean_dataset": {},
                 "check_trainability": {},
                 "train_model": {"backend": "baseline", "property_id": "plqy"},
             },
