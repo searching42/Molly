@@ -668,6 +668,172 @@ def test_cancel_escalates_to_sigkill_for_ignoring_process_tree(
         reaper.join(timeout=3)
 
 
+@pytest.mark.parametrize("status", ["CANCEL_REQUESTED", "CANCELLED"])
+def test_adapter_is_not_spawned_after_cancel_state(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    worker, request, _, _ = _prepared_reinvent_worker(tmp_path)
+    cancelled = worker._observation(request, status=status)
+    worker.store.write_state(request, cancelled)
+    spawn_calls = 0
+
+    def forbidden_popen(*args: Any, **kwargs: Any) -> None:
+        nonlocal spawn_calls
+        del args, kwargs
+        spawn_calls += 1
+        raise AssertionError("adapter must not spawn after cancellation")
+
+    worker.adapter_popen_factory = forbidden_popen
+    with pytest.raises(WorkerProtocolError, match="worker_cancelled"):
+        worker._run_adapter_command(
+            request,
+            [sys.executable, "-c", "raise SystemExit(1)"],
+            cwd=tmp_path,
+            env=worker._adapter_environment(),
+        )
+    assert spawn_calls == 0
+
+
+@pytest.mark.pr_fast
+def test_cancel_waits_for_atomic_adapter_spawn_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker, request, _, _ = _prepared_reinvent_worker(tmp_path)
+    worker.termination_grace_sec = 0.5
+    runner = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(300)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    runner_reaper = threading.Thread(target=runner.wait, daemon=True)
+    runner_reaper.start()
+    running = worker._observation(request, status="RUNNING")
+    worker.store.write_state(
+        request,
+        running,
+        pid=runner.pid,
+        process_token=worker._process_token(runner.pid),
+    )
+
+    adapter_pid_file = tmp_path / "spawn-registration-race.pids"
+    adapter_spawned = threading.Event()
+    allow_registration = threading.Event()
+    adapter_registered = threading.Event()
+    cancel_started = threading.Event()
+    cancel_finished = threading.Event()
+    adapter_processes: list[subprocess.Popen[bytes]] = []
+    registration_records: list[tuple[str, int]] = []
+    adapter_errors: list[BaseException] = []
+    cancel_results: list[Any] = []
+    cancel_errors: list[BaseException] = []
+
+    def gated_popen(command: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
+        process = subprocess.Popen(command, **kwargs)
+        adapter_processes.append(process)
+        adapter_spawned.set()
+        if not allow_registration.wait(timeout=5):
+            raise AssertionError("adapter registration gate timed out")
+        return process
+
+    original_write_state = worker.store.write_state
+
+    def tracking_write_state(*args: Any, **kwargs: Any) -> None:
+        original_write_state(*args, **kwargs)
+        adapter_pid = kwargs.get("adapter_pid")
+        if adapter_pid is not None:
+            registration_records.append((args[1].status, int(adapter_pid)))
+            adapter_registered.set()
+
+    monkeypatch.setattr(worker.store, "write_state", tracking_write_state)
+    worker.adapter_popen_factory = gated_popen
+
+    def run_adapter() -> None:
+        try:
+            worker._run_adapter_command(
+                request,
+                [
+                    sys.executable,
+                    "-c",
+                    _IGNORE_TERM_PROCESS_TREE,
+                    str(adapter_pid_file),
+                ],
+                cwd=tmp_path,
+                env=worker._adapter_environment(),
+            )
+        except BaseException as exc:
+            adapter_errors.append(exc)
+
+    def cancel_request() -> None:
+        cancel_started.set()
+        try:
+            cancel_results.append(
+                worker.cancel(
+                    request_id=request.request_id,
+                    request_sha256=request.request_sha256,
+                )
+            )
+        except BaseException as exc:
+            cancel_errors.append(exc)
+        finally:
+            cancel_finished.set()
+
+    adapter_thread = threading.Thread(target=run_adapter, daemon=True)
+    cancel_thread = threading.Thread(target=cancel_request, daemon=True)
+    adapter_thread.start()
+    try:
+        assert adapter_spawned.wait(timeout=3)
+        adapter_parent_pid, _ = _wait_for_process_tree(adapter_pid_file)
+        assert adapter_processes[0].pid == adapter_parent_pid
+        state_before_registration = worker.store.read_state(request.request_id)
+        assert state_before_registration["adapter_pid"] is None
+
+        cancel_thread.start()
+        assert cancel_started.wait(timeout=1)
+        assert not cancel_finished.wait(timeout=0.5)
+
+        allow_registration.set()
+        assert adapter_registered.wait(timeout=3)
+        cancel_thread.join(timeout=5)
+        adapter_thread.join(timeout=5)
+        runner_reaper.join(timeout=3)
+
+        assert not cancel_thread.is_alive()
+        assert not adapter_thread.is_alive()
+        assert cancel_errors == []
+        assert len(cancel_results) == 1
+        assert cancel_results[0].status == "CANCELLED"
+        assert registration_records[0] == ("RUNNING", adapter_parent_pid)
+        assert len(adapter_errors) == 1
+        assert isinstance(adapter_errors[0], WorkerProtocolError)
+        assert adapter_errors[0].code == "adapter_nonzero_exit"
+        assert not worker._process_group_exists(runner.pid)
+        assert not worker._process_group_exists(adapter_parent_pid)
+        terminal_state = worker.store.read_state(request.request_id)
+        assert terminal_state["observation"]["status"] == "CANCELLED"
+        assert terminal_state["pid"] is None
+        assert terminal_state["adapter_pid"] is None
+    finally:
+        allow_registration.set()
+        if worker._process_group_exists(runner.pid):
+            os.killpg(runner.pid, signal.SIGKILL)
+        for process in adapter_processes:
+            if worker._process_group_exists(process.pid):
+                os.killpg(process.pid, signal.SIGKILL)
+        if cancel_thread.ident is not None:
+            cancel_thread.join(timeout=3)
+        adapter_thread.join(timeout=3)
+        runner_reaper.join(timeout=3)
+        for process in adapter_processes:
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+
+
 @pytest.mark.pr_fast
 def test_adapter_walltime_kills_ignoring_descendant_processes(
     tmp_path: Path,

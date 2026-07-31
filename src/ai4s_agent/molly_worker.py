@@ -1851,35 +1851,41 @@ class MollyWorker:
             ) as stderr:
                 os.chmod(stdout_path, 0o600)
                 os.chmod(stderr_path, 0o600)
-                try:
-                    process = self.adapter_popen_factory(
-                        list(command),
-                        stdin=subprocess.DEVNULL,
-                        stdout=stdout,
-                        stderr=stderr,
-                        cwd=cwd,
-                        env=dict(env),
-                        close_fds=True,
-                        pass_fds=tuple(pass_fds),
-                        start_new_session=True,
-                    )
-                except OSError as exc:
-                    raise WorkerProtocolError("adapter_launch_failed") from exc
-                process_token = self._process_token(int(process.pid))
+                # cancel() reads the adapter binding under this same lock. Keep
+                # process creation and durable registration indivisible so it
+                # can never terminate the runner while overlooking its adapter.
                 with self.store.lock(request.request_id):
                     state = self.store.read_state(request.request_id)
                     observation = RemoteObservation.model_validate(state["observation"])
                     if observation.status in {"CANCEL_REQUESTED", "CANCELLED"}:
-                        self._terminate_spawned_process_group(process)
                         raise WorkerProtocolError("worker_cancelled")
-                    self.store.write_state(
-                        request,
-                        observation,
-                        pid=self._state_pid(state, field="pid"),
-                        process_token=str(state.get("process_token") or ""),
-                        adapter_pid=int(process.pid),
-                        adapter_process_token=process_token,
-                    )
+                    try:
+                        process = self.adapter_popen_factory(
+                            list(command),
+                            stdin=subprocess.DEVNULL,
+                            stdout=stdout,
+                            stderr=stderr,
+                            cwd=cwd,
+                            env=dict(env),
+                            close_fds=True,
+                            pass_fds=tuple(pass_fds),
+                            start_new_session=True,
+                        )
+                    except OSError as exc:
+                        raise WorkerProtocolError("adapter_launch_failed") from exc
+                    try:
+                        process_token = self._process_token(int(process.pid))
+                        self.store.write_state(
+                            request,
+                            observation,
+                            pid=self._state_pid(state, field="pid"),
+                            process_token=str(state.get("process_token") or ""),
+                            adapter_pid=int(process.pid),
+                            adapter_process_token=process_token,
+                        )
+                    except BaseException:
+                        self._terminate_spawned_process_group(process)
+                        raise
                 timeout = (
                     self.adapter_timeout_sec
                     if self.adapter_timeout_sec is not None
