@@ -65,6 +65,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # Evidence verification resolves the exact historical runner commit.
+          fetch-depth: 0
 
       - name: Set up Python with dependency cache
         uses: actions/setup-python@v5

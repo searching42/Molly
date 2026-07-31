@@ -3,8 +3,8 @@
 > 文档状态：Active
 > 当前公开基线：`public-baseline-v1`（单一根提交的隐私审查快照）
 > 历史审计基线：迁移前完整提交、分支与 PR 保留在私有审计仓库
-> 当前主里程碑：M3 — 轨迹完整性、故障归因与指标
-> 最后更新：2026-07-29
+> 当前主里程碑：M4 — 轨迹审计 Benchmark
+> 最后更新：2026-07-31
 > 适用范围：Molly Agent 执行能力、长程任务轨迹审计及科学有效性验证
 
 `todo.md` 是仓库中里程碑范围、任务状态、验收门槛、风险状态和推进顺序的唯一规范性来源。领域专题文档可以解释实现细节，但不得维护与本文件竞争的路线或状态表。
@@ -346,12 +346,14 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 
 优先级：`P1`
 
-| 范围 | 证据 | 工作状态 | 下一交付 |
+范围状态：`DONE`。PR-BI 八个 production-backed representative cases 已完成机器验证，并由 repository owner 对 evidence commit `b2e254217aba52858f7a8cea0209afbf08fa3af9` 及 manifest `sha256:0e7c8531bb12f07768baa371c8e508259844c438c4534db91e3c6ea839423f3f` 完成人工复核。M3 仅获得轨迹完整性、确定性审计、故障归因和 read-only inspection 的代表性 runtime validation；不声明 M4 benchmark 准确率或科学性能验证。
+
+| 范围 | 证据 | 工作状态 | 结论 |
 |---|---|---|---|
-| `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/—` | `DONE` | PR-BF 已完成；等待后续真实/代表性验收补 `V` |
-| `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `I/T/—` | `DONE` | PR-BG 已实现并通过正常、对抗、确定性与完整 suite；等待后续 evidence PR 补 `V` |
-| `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `I/T/—` | `DONE` | PR-BH 已完成；下一 PR 采集代表性 runtime inspection evidence 后补 `V` |
-| `M3-SRC-001`～`M3-SRC-008` authoritative failure source evidence | `I/T/—` | `DONE` | PR-BJ 已实现并通过 source、projection、attribution、recovery、隐私与 legacy byte replay；等待 PR-BI 补 `V` |
+| `M3-001`～`M3-017` provenance coverage 与确定性核心指标 | `I/T/V` | `DONE` | 单轮、多轮及故障案例通过同版本审计指标；跨进程与不同 hash seed 结果一致 |
+| `M3-018`～`M3-022` failure taxonomy、first cause 与标准故障案例 | `I/T/V` | `DONE` | transport、history truncation、duplicate rejection、stale state、equal-first-cause ambiguity 和 unlinked symptom 已通过代表性验收 |
+| `M3-023`～`M3-028` read-only inspect API 与最小时间线 | `I/T/V` | `DONE` | 八案例均经同一 exact-replayed GET contract；inspection 未修改 observer 或 scientific bytes |
+| `M3-SRC-001`～`M3-SRC-008` authoritative failure source evidence | `I/T/V` | `DONE` | typed failure、dispatch authority、recovery receipt 和 causal-link source 已在 PR-BI 代表性案例中完成验证 |
 
 目标：从可重放 projection 计算确定性 auditor findings；不得直接改变 Session 或 PR-AU 状态。
 
@@ -375,16 +377,18 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 
 ### 5.2 M3 退出条件
 
-- `M3-GATE-001`：单轮成功、多轮成功和真实失败轨迹生成同一版本审计指标。
-- `M3-GATE-002`：相同 projection 重复计算得到逐字节一致结果。
-- `M3-GATE-003`：标准案例中 first cause 与 downstream symptom 可区分。
-- `M3-GATE-004`：read-only API 不修改 projection 或 scientific Session。
+- `[I/T/V] [DONE] M3-GATE-001`：单轮成功、多轮成功和代表性失败轨迹生成同一版本审计指标。
+- `[I/T/V] [DONE] M3-GATE-002`：相同 projection 在独立进程和不同 `PYTHONHASHSEED` 下得到逐字节一致结果。
+- `[I/T/V] [DONE] M3-GATE-003`：标准案例中 first cause、downstream symptom、equal-first-cause ambiguity 和 causal-link-not-proven 可区分。
+- `[I/T/V] [DONE] M3-GATE-004`：read-only API 不修改 projection、observer publication 或 scientific Session bytes。
 
 ---
 
 ## 6. M4：轨迹审计 Benchmark
 
 优先级：`P1`
+
+范围状态：`READY`。M3 已完成并获得 `I/T/V`。下一交付为 PR-BK：冻结 M4 benchmark v1 的语料边界、任务定义、label/adjudication 规则、split、防泄漏规则、baseline 和预注册指标；在 protocol 冻结前不得读取或使用 hidden-test 结果。
 
 ### 6.1 语料、任务与 baseline
 
@@ -677,6 +681,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：projection v1 可能留下 unattached finding；API 需要调用方明确提供三层 publication ID；最小时间线不是通用 causal graph；M4 前不得宣称 attribution accuracy。
 - 批准人：repository owner。
 
+### 2026-07-29：PR-BI 冻结代表性 evidence runner，但 M3 暂不补 V
+
+- 决策：接受 production-backed Process A/B/C runner、八案例固定 roster、脱敏 public evidence schema 和 repository-owner checklist 作为 PR-BI 的 evidence 基础；当前只记录 machine evidence，不自行完成 human review。
+- 原计划：八个案例均通过同一 `scientific_agent_trajectory_inspection.v1` GET route，机器 evidence 完整后由 repository owner 复核并补 M3 `V`。
+- 新计划：单轮成功、多轮成功、history truncation fail-closed 和 stale telemetry 四项按生产链通过；known-hosts propagation、duplicate dispatch、multiple-family ambiguity 和 causal-link-not-proven 通过生产 PR-BD module/contract digest preflight 记录为 `design_analysis_blocked`，不是已执行 runtime validation；PR-BI 保持 Draft，M3 保持 `I/T/—`，M4 不解锁。
+- 依据：当时 PR-BD exact replay 只把 failed child 投影为 `failed` / `integrity_failed`，没有持久化 transport reason、distinct duplicate-dispatch proof、同 revision multi-family reason 或 recovered-failure causal link；通过修改 PR-BD～PR-BH、放宽 replay 或使用 test-only bytes 制造 evidence 均违反 PR-BI 停止条件。
+- 影响任务：`M3-001`～`M3-028` 的 `I/T/— / DONE` 不变；`M3-GATE-001`～`M3-GATE-004` 不标记完成；PR-BI 状态为 machine evidence incomplete / human review pending。
+- 新增风险：v1 source-evidence seam 不足以通过 inspection route 验收四个标准归因案例；需要独立兼容 source-contract PR。
+- 批准人：repository owner。
+
 ### 2026-07-30：PR-BI 暴露 PR-BD source-evidence gap
 
 - 决策：PR-BI 保持 Draft 和 `I/T/—`，在其前插入独立 PR-BJ source-contract 实现。
@@ -686,6 +700,26 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 影响任务：新增 `M3-SRC-001`～`M3-SRC-008`；`M3-GATE-001`～`M3-GATE-004` 保持未完成；M4 继续锁定。
 - 新增风险：新的 source evidence 可能破坏 legacy exact replay、泄漏基础设施信息，或错误地把 idempotent replay 解释为 duplicate computation。
 - 批准人：repository owner。
+
+### 2026-07-30：PR-BJ 合并后恢复 PR-BI 八案例 runtime evidence
+
+- 决策：在 PR-BJ 已完成 `M3-SRC-001`～`M3-SRC-008` 后，PR-BI 删除四个正常路径中的 `design_analysis_blocked` 分支，全部八案例通过生产 source 和同一 PR-BH GET route 执行。
+- 原计划：PR-BI 保持四项 machine pass、四项 design-analysis blocked，等待独立 source-contract PR。
+- 新计划：全量重生八个 case、manifest、runner binding、fresh-process digest、privacy 与 observer-only snapshot；machine evidence 完整后仍保持 human review pending 和 M3 `I/T/—`。
+- 依据：PR-BJ 已提供 typed transport reason、authority-bound distinct dispatch receipts、同 revision multi-reason 与 recovery receipt；八案例均能由 PR-BD → PR-BF → PR-BG → PR-BH exact replay，而无需 test-only observer bytes。
+- 影响任务：`M3-GATE-001`～`M3-GATE-004` 仍未补 `V`；只有 repository owner 批准全部 case 后才完成 M3 并解锁 M4。
+- 新增风险：representative fault injection 不代表真实失败分布；duplicate rejection 不等于重复科学计算；无显式 link 的后续 symptom 必须继续保持 undetermined。
+- 批准人：repository owner。
+
+### 2026-07-30：PR-BI owner review approved，M3 完成并解锁 M4
+
+- 决策：repository owner 批准 PR-BI 八个 production-backed representative inspection cases，接受其作为 `M3-GATE-001`～`M3-GATE-004` 的代表性 runtime validation。
+- 原计划：八案例 machine evidence 完整后保持 human review pending，M3 维持 `I/T/—`，M4 locked。
+- 新计划：将 M3 范围和四个退出条件更新为 `I/T/V / DONE`；M4 更新为 `READY`，下一主线交付为 PR-BK benchmark protocol。
+- 依据：reviewed evidence commit 为 `b2e254217aba52858f7a8cea0209afbf08fa3af9`；evidence manifest SHA-256 为 `sha256:0e7c8531bb12f07768baa371c8e508259844c438c4534db91e3c6ea839423f3f`；八案例均 machine passed，fresh-process、不同 `PYTHONHASHSEED`、exact replay、隐私扫描、observer-only snapshot、commit binding、PR Fast、4-shard Full CI 和 CodeQL 均通过；owner review 的每个案例及检查项均 approved。
+- 影响任务：`M3-001`～`M3-028`、`M3-SRC-001`～`M3-SRC-008` 和 `M3-GATE-001`～`M3-GATE-004` 更新为 `I/T/V / DONE`；PR-BI 可进入 Ready/merge；PR-BK 更新为下一当前动作。
+- 新增风险：代表性 fault injection 不能代表真实失败分布；M3 validation 不等于 attribution benchmark accuracy；duplicate rejection 不等于重复科学计算；M4 必须使用独立 reviewed labels、严格 split 和 leakage control。
+- 批准人：searching42（repository owner）。
 
 后续路线调整必须追加：
 
@@ -704,18 +738,20 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 唯一当前动作：authoritative M3 failure source evidence contract v1
+### 唯一当前动作：PR-BK M4 benchmark protocol
 
-任务：完成 `M3-SRC-001`～`M3-SRC-008`，为 PR-BI 当前四个 design-analysis blocker 提供可 exact replay 的权威 source facts。
+任务：冻结 M4 benchmark v1 的研究问题、轨迹语料边界、标注与 adjudication contract、train/dev/hidden-test split、防泄漏规则、baseline、指标和预注册阈值。
 
-范围：增加 typed stage failure evidence、immutable dispatch/recovery receipts，以及 PR-BD/PR-BG 的最小 source-driven 消费；不得修改 PR-BI evidence、observer HTTP contract、科学结果或控制行为。
+范围：只定义和冻结 benchmark protocol；不得提前查看 hidden-test 结果，不得宣称 attribution accuracy，不得在 M4 前将 Critic 接入控制面。
+
+当前状态：PR-BI 八案例 machine evidence 与 repository-owner review 已完成；M3 为 `I/T/V / DONE`；M4 为 `READY`。
 
 必须验证：
 
-1. legacy v1 source 继续逐字节产生相同 projection/publication identity。
-2. 新 source 能表达 transport reason、distinct dispatch、multi-reason 和 explicit causal link。
-3. immutable receipt 的 roster、bytes、identity 和 privacy boundary 可 exact replay 并 fail closed。
-4. PR-BJ 只达到 `I/T/—`；PR-BI 后续重生 evidence 并经 owner review 后才能补 `V`。
+1. benchmark case、failure family、source variant 和时间切分边界明确；
+2. 同一 Session、template 或同源变体不得跨 split；
+3. label revision、annotator、adjudication 和一致性记录 contract 冻结；
+4. baseline、指标和数值阈值必须在 hidden-test evaluation 前冻结。
 
 ### 主线队列
 
@@ -725,9 +761,9 @@ PR-BE  external-anchor trajectory verifier 与对抗测试（已完成）
 PR-BF  deterministic trajectory audit metrics v1（已完成）
 PR-BG  failure taxonomy 与 first-cause attribution（已完成）
 PR-BH  read-only inspect API 与最小时间线（已完成）
-PR-BJ  authoritative M3 failure source evidence contract v1（当前实现任务）
-PR-BI  representative inspection validation evidence（PR-BJ 后恢复）
-PR-BK  M4 benchmark protocol（仅在 PR-BI 完成并获得 V 后启动）
+PR-BJ  authoritative M3 failure source evidence contract v1（已完成）
+PR-BI  representative inspection validation evidence（machine + owner review complete）
+PR-BK  M4 benchmark protocol（下一当前动作）
 ```
 
 ### 资源机会队列
@@ -735,7 +771,7 @@ PR-BK  M4 benchmark protocol（仅在 PR-BI 完成并获得 V 后启动）
 ```text
 PR-BC  logical compute-worker-main remote 两轮 canary
        M1 完成且资源安全时随时执行
-       不阻塞 PR-BI
+       不阻塞 PR-BK 或 M4 主线
 ```
 
 任何后续 PR 如果不能直接推进上述队列、关闭真实 blocker 或产出 benchmark evidence，默认暂缓。

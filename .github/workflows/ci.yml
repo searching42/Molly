@@ -53,6 +53,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # Evidence verification resolves the historical runner commit. PR
+          # checkouts use a synthetic merge commit, so a fixed shallow depth
+          # cannot reliably retain that object after later review commits.
+          fetch-depth: 0
 
       - name: Set up Python with dependency cache
         uses: actions/setup-python@v5
