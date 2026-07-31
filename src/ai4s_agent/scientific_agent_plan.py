@@ -440,6 +440,14 @@ def build_scientific_tool_catalog(
                 required_permissions=list(task.required_permissions),
                 required_gates=list(task.gates),
                 option_schema=dict(task.option_schema),
+                default_planner_options=dict(task.default_planner_options),
+                backend_default_planner_options={
+                    backend: dict(options)
+                    for backend, options in sorted(
+                        task.backend_default_planner_options.items()
+                    )
+                },
+                review_required_option_ids=list(task.review_required_option_ids),
                 option_compiler_version=task.option_compiler_version,
                 logical_profile_requirements=list(task.logical_profile_requirements),
                 backend_profile_requirements={
@@ -1019,6 +1027,45 @@ class PlannerOptionCompiler:
         }
     )
 
+    @staticmethod
+    def materialize_effective_options(
+        *,
+        tool: ScientificToolSpec,
+        planner_options: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Merge server defaults with one validated LLM-facing option patch."""
+
+        explicit = dict(planner_options)
+        backend = explicit.get(
+            "backend",
+            tool.default_planner_options.get("backend", tool.default_planner_backend),
+        )
+        effective = dict(tool.default_planner_options)
+        if backend is not None:
+            effective.update(
+                tool.backend_default_planner_options.get(str(backend), {})
+            )
+        effective.update(explicit)
+        validator = Draft202012Validator(tool.option_schema)
+        if not validator.is_valid(effective):
+            raise ScientificAgentPlanError(
+                f"options rejected by the server schema for tool: {tool.tool_id}"
+            )
+        return {key: effective[key] for key in sorted(effective)}
+
+    @staticmethod
+    def unresolved_review_options(
+        *,
+        tool: ScientificToolSpec,
+        effective_options: Mapping[str, Any],
+    ) -> list[str]:
+        unresolved: list[str] = []
+        for option_id in tool.review_required_option_ids:
+            value = effective_options.get(option_id)
+            if value is None or value == "" or value == [] or value == {}:
+                unresolved.append(option_id)
+        return sorted(unresolved)
+
     def required_profile_terms(
         self,
         *,
@@ -1075,7 +1122,8 @@ class PlannerOptionCompiler:
             }
         if compiler == "scientific-planner-option-train-model.v1":
             backend = str(options.get("backend") or "")
-            property_id = str(options.get("property_id") or "")
+            property_value = options.get("property_id")
+            property_id = str(property_value) if property_value is not None else None
             if backend == "baseline":
                 return {
                     "n_bits": int(options.get("n_bits", 256)),
@@ -1095,7 +1143,7 @@ class PlannerOptionCompiler:
                 "seed": int(options.get("seed", 0)),
             }
         if compiler == "scientific-planner-option-filter-rank.v1":
-            objectives = options.get("objectives", [])
+            objectives = options.get("objectives") or []
             if not isinstance(objectives, list):  # schema validation should already reject this.
                 raise ScientificAgentPlanError("filter objectives must be an array")
             columns: list[str] = []
@@ -1145,7 +1193,11 @@ class PlannerOptionCompiler:
                 "directions": directions,
                 "hard_constraints": hard_constraints,
                 "score_columns": columns,
-                "topn": int(options.get("top_n")),
+                "topn": (
+                    int(options["top_n"])
+                    if options.get("top_n") is not None
+                    else None
+                ),
                 "weights": weights,
             }
         raise ScientificAgentPlanError("registered option compiler is unreachable")
@@ -1204,16 +1256,6 @@ class AgentExecutionPlanCompiler:
                 raise ScientificAgentPlanError(f"unknown selected artifact: {artifact_id}")
             if artifact.verification_state not in {"registered", "verified"} or not artifact.content_digest:
                 raise ScientificAgentPlanError(f"selected artifact is not currently available: {artifact_id}")
-        compiled_options: dict[str, dict[str, Any]] = {}
-        for tool in selected_tools:
-            options = parsed.task_options.get(tool.tool_id, {})
-            validator = Draft202012Validator(tool.option_schema)
-            if not validator.is_valid(options):
-                raise ScientificAgentPlanError(f"options rejected by the server schema for tool: {tool.tool_id}")
-            compiled_options[tool.task_id] = self.option_compiler.compile(
-                tool=tool,
-                planner_options=options,
-            )
         selected_profiles = sorted(set(parsed.selected_logical_profile_ids))
         if len(selected_profiles) != len(parsed.selected_logical_profile_ids):
             raise ScientificAgentPlanError("selected profile IDs must be unique")
@@ -1226,31 +1268,6 @@ class AgentExecutionPlanCompiler:
                 raise ScientificAgentPlanError(f"unknown logical execution profile: {profile_id}")
             if profile.availability_state != "available":
                 raise ScientificAgentPlanError(f"logical execution profile is not available: {profile_id}")
-        required_profile_terms = {
-            requirement
-            for tool in selected_tools
-            for requirement in self.option_compiler.required_profile_terms(
-                tool=tool,
-                planner_options=parsed.task_options.get(tool.tool_id, {}),
-            )
-        }
-        for requirement in sorted(required_profile_terms):
-            if not any(
-                _profile_matches_requirement(profile, requirement)
-                for profile in (profiles_by_id[item] for item in selected_profiles)
-            ):
-                raise ScientificAgentPlanError(
-                    f"selected logical profiles do not satisfy requirement: {requirement}"
-                )
-        for profile_id in selected_profiles:
-            profile = profiles_by_id[profile_id]
-            if not any(
-                _profile_matches_requirement(profile, requirement)
-                for requirement in required_profile_terms
-            ):
-                raise ScientificAgentPlanError(
-                    f"selected logical profile is not required by compiled planner options: {profile_id}"
-                )
         if observation.budget_limits.status == "configured":
             for dimension, proposed_limit in parsed.limits.items():
                 authority_limit = observation.budget_limits.limits.get(dimension)
@@ -1277,6 +1294,77 @@ class AgentExecutionPlanCompiler:
             for tool in observation.tool_catalog.tools
             if tool.task_id in {task.task_id for task in run_plan.tasks}
         }
+        questions = list(parsed.questions)
+        effective_options: dict[str, dict[str, Any]] = {}
+        compiled_options: dict[str, dict[str, Any]] = {}
+        for planned_task in run_plan.tasks:
+            tool = expanded_tools.get(planned_task.task_id)
+            if tool is None:
+                spec = self.registry.get(planned_task.task_id)
+                if spec.planner_visible:
+                    raise ScientificAgentPlanError(
+                        "expanded planner-visible task is absent from the bound tool catalog"
+                    )
+                if (
+                    spec.option_schema is not None
+                    or spec.default_planner_options
+                    or spec.backend_default_planner_options
+                    or spec.review_required_option_ids
+                ):
+                    raise ScientificAgentPlanError(
+                        "non-visible expanded tasks must have fixed empty caller options"
+                    )
+                effective_options[planned_task.task_id] = {}
+                compiled_options[planned_task.task_id] = {}
+                continue
+            planner_options = parsed.task_options.get(tool.tool_id, {})
+            effective = self.option_compiler.materialize_effective_options(
+                tool=tool,
+                planner_options=planner_options,
+            )
+            effective_options[planned_task.task_id] = effective
+            compiled_options[planned_task.task_id] = self.option_compiler.compile(
+                tool=tool,
+                planner_options=effective,
+            )
+            for option_id in self.option_compiler.unresolved_review_options(
+                tool=tool,
+                effective_options=effective,
+            ):
+                question_id = f"missing_option_{planned_task.task_id}_{option_id}"
+                if not any(item.question_id == question_id for item in questions):
+                    questions.append(
+                        AgentExecutionPlanQuestion(
+                            question_id=question_id,
+                            prompt=(
+                                f"Provide the reviewed {option_id} option for task "
+                                f"{planned_task.task_id}."
+                            ),
+                            reason=(
+                                "The registered tool contract does not permit this scientific "
+                                "option to be inferred from runtime state."
+                            ),
+                            blocks_proposal=True,
+                        )
+                    )
+        required_profile_terms = {
+            requirement
+            for task_id, tool in expanded_tools.items()
+            for requirement in self.option_compiler.required_profile_terms(
+                tool=tool,
+                planner_options=effective_options[task_id],
+            )
+        }
+        for profile_id in selected_profiles:
+            profile = profiles_by_id[profile_id]
+            if not any(
+                _profile_matches_requirement(profile, requirement)
+                for requirement in required_profile_terms
+            ):
+                raise ScientificAgentPlanError(
+                    "selected logical profile is not required by the expanded plan: "
+                    f"{profile_id}"
+                )
         for artifact_id in selected_artifacts:
             artifact = available_by_id[artifact_id]
             accepting_tools = [
@@ -1302,7 +1390,6 @@ class AgentExecutionPlanCompiler:
             for gate in spec.gates:
                 if gate not in required_gates:
                     required_gates.append(gate)
-        questions = list(parsed.questions)
         planned_tasks_by_id = {task.task_id: task for task in run_plan.tasks}
         for tool in expanded_tools.values():
             for alternatives in tool.input_artifact_alternatives:
@@ -1351,7 +1438,7 @@ class AgentExecutionPlanCompiler:
                     )
                 )
                 continue
-            planner_options = parsed.task_options.get(tool.tool_id, {})
+            planner_options = effective_options[planned_task.task_id]
             route, remote_task_type = self.option_compiler.execution_binding(
                 tool=tool,
                 planner_options=planner_options,
@@ -1478,6 +1565,7 @@ class AgentExecutionPlanCompiler:
                 tool_id: dict(options)
                 for tool_id, options in sorted(parsed.task_options.items())
             },
+            effective_planner_options=effective_options,
             compiled_task_options=compiled_options,
             option_compiler_version=PLANNER_OPTION_COMPILER_VERSION,
             selected_artifacts=selected_artifacts,

@@ -23,12 +23,15 @@ from ai4s_agent.resource_profiles import (
 )
 from ai4s_agent.schemas import (
     AgentExecutionPlanLLMResponse,
+    AgentExecutionPlanProposal,
     AgentLLMInvocationMetadata,
+    AgentProjectObservation,
     ArtifactRef,
     AtomicTaskSpec,
     PlannedTask,
     RunPlan,
     RunStatus,
+    ScientificToolCatalog,
     ScientificToolSpec,
     StageState,
 )
@@ -135,6 +138,7 @@ def _visible_task(
     required_artifacts: list[str] | None = None,
     output_artifacts: list[str] | None = None,
     option_schema: dict[str, object] | None = None,
+    default_planner_options: dict[str, object] | None = None,
 ) -> AtomicTaskSpec:
     required = required_artifacts or []
     return AtomicTaskSpec(
@@ -155,6 +159,9 @@ def _visible_task(
             "required": [],
             "additionalProperties": False,
         },
+        default_planner_options=default_planner_options or {},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
@@ -341,6 +348,47 @@ def test_catalog_is_registry_projection_and_deterministic() -> None:
     assert first.excluded_task_ids == ["hidden_task"]
     assert "default_adapter" not in first.model_dump_json()
     assert "callable" not in first.model_dump_json()
+    changed_defaults = build_scientific_tool_catalog(
+        AtomicTaskRegistry(
+            [
+                _visible_task(
+                    task_id="z_task",
+                    tool_id="z_tool",
+                    required_artifacts=["input_artifact"],
+                    output_artifacts=["output_artifact"],
+                    option_schema={
+                        "type": "object",
+                        "properties": {
+                            "top_n": {"type": "integer", "minimum": 1}
+                        },
+                        "required": [],
+                        "additionalProperties": False,
+                    },
+                    default_planner_options={"top_n": 2},
+                ),
+                AtomicTaskSpec(task_id="hidden_task", planner_visible=False),
+            ]
+        )
+    )
+    assert changed_defaults.catalog_digest != first.catalog_digest
+
+
+def test_frozen_scientific_agent_schemas_match_generated_models() -> None:
+    schema_dir = Path(__file__).resolve().parents[1] / "docs" / "schemas"
+    models = {
+        "atomic_task_spec": AtomicTaskSpec,
+        "scientific_tool_spec": ScientificToolSpec,
+        "scientific_tool_catalog": ScientificToolCatalog,
+        "agent_project_observation": AgentProjectObservation,
+        "agent_execution_plan_llm_response": AgentExecutionPlanLLMResponse,
+        "agent_execution_plan_proposal": AgentExecutionPlanProposal,
+    }
+
+    for name, model in models.items():
+        frozen = json.loads(
+            (schema_dir / f"{name}.schema.json").read_text(encoding="utf-8")
+        )
+        assert frozen == model.model_json_schema()
 
 
 def test_catalog_is_explicit_opt_in_with_complete_v1_metadata() -> None:
@@ -360,6 +408,9 @@ def test_catalog_is_explicit_opt_in_with_complete_v1_metadata() -> None:
         "effect_class",
         "required_permissions",
         "option_schema",
+        "default_planner_options",
+        "backend_default_planner_options",
+        "review_required_option_ids",
         "option_compiler_version",
         "logical_profile_requirements",
         "backend_profile_requirements",
@@ -391,6 +442,7 @@ def test_catalog_is_explicit_opt_in_with_complete_v1_metadata() -> None:
                 assert task.default_planner_backend in backend_values
                 assert set(task.backend_execution_routes) == backend_values
                 assert set(task.backend_remote_task_types) == backend_values
+                assert set(task.backend_default_planner_options) == backend_values
             else:
                 assert task.execution_route in {
                     "local_executor",
@@ -475,6 +527,9 @@ def test_planning_privacy_checks_allow_normal_oled_prose_and_schema_terms() -> N
             "additionalProperties": False,
             "description": "High-level OLED property constraints.",
         },
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
         option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
         backend_profile_requirements={},
@@ -719,6 +774,26 @@ def test_compiler_expands_registry_dependencies_and_never_accepts_llm_dependenci
     assert proposal.proposal_id.startswith("proposal-")
     assert "gate_3_train_config" in proposal.required_gates
     assert proposal.missing_artifacts == ["uploaded_dataset"]
+    assert set(proposal.effective_planner_options) == set(task_ids)
+    assert set(proposal.compiled_task_options) == set(task_ids)
+    assert proposal.effective_planner_options["train_model"] == {
+        "backend": "baseline",
+        "n_bits": 256,
+        "property_id": None,
+    }
+    assert proposal.compiled_task_options["train_model"] == {
+        "n_bits": 256,
+        "property_id": None,
+    }
+    assert proposal.effective_planner_options["filter_rank"] == {
+        "constraints": [],
+        "objectives": None,
+        "top_n": None,
+    }
+    question_ids = {item.question_id for item in proposal.questions}
+    assert "missing_option_train_model_property_id" in question_ids
+    assert "missing_option_filter_rank_objectives" in question_ids
+    assert "missing_option_filter_rank_top_n" in question_ids
 
 
 def test_compiler_rejects_unknown_artifact_and_profile_mismatch(tmp_path: Path) -> None:
@@ -740,13 +815,178 @@ def test_compiler_rejects_unknown_artifact_and_profile_mismatch(tmp_path: Path) 
             "train_model": {"backend": "unimol", "property_id": "plqy"}
         },
     )
-    with pytest.raises(ScientificAgentPlanError, match="selected logical profiles do not satisfy requirement"):
-        AgentExecutionPlanCompiler().compile(
-            observation=observation,
-            response=train_response,
-            invocation=_invocation(observation, train_response),
-            created_at=_clock(),
-        )
+    train_proposal = AgentExecutionPlanCompiler().compile(
+        observation=observation,
+        response=train_response,
+        invocation=_invocation(observation, train_response),
+        created_at=_clock(),
+    )
+    assert "remote_profile_train_model" in {
+        item.question_id for item in train_proposal.questions
+    }
+
+
+def test_implicit_remote_dependency_accepts_expanded_profile_binding(
+    tmp_path: Path,
+) -> None:
+    storage, run_dir = _storage_with_run(tmp_path)
+    _write_content_bound_artifact(
+        storage,
+        run_dir,
+        artifact_id="pdf_corpus",
+        relative_path="inputs/papers.pdf",
+        content=b"%PDF-1.7 review-only input\n",
+    )
+    profiles = ResourceProfileStore(
+        workspace_dir=tmp_path / "implicit-profile-workspace",
+        config_dir=tmp_path / "implicit-profile-config",
+    )
+    connection = _connection(
+        connection_id="mineru-worker",
+        capabilities=["mineru", "gpu"],
+    )
+    profiles.save_connection(connection)
+    _save_available_probe(profiles, connection)
+    observation = _observation(storage, resource_profiles=profiles)
+    response = _response(
+        tool_id="index_corpus",
+        selected_input_artifact_ids=["pdf_corpus"],
+        selected_logical_profile_ids=["mineru-v1"],
+        task_options={"index_corpus": {}},
+    )
+
+    proposal = AgentExecutionPlanCompiler().compile(
+        observation=observation,
+        response=response,
+        invocation=_invocation(observation, response),
+        created_at=_clock(),
+    )
+
+    assert proposal.run_plan.requested_tasks == ["index_corpus"]
+    assert [task.task_id for task in proposal.run_plan.tasks] == [
+        "parse_document",
+        "index_corpus",
+    ]
+    assert set(proposal.effective_planner_options) == {
+        "parse_document",
+        "index_corpus",
+    }
+    assert set(proposal.compiled_task_options) == {
+        "parse_document",
+        "index_corpus",
+    }
+    parse_intent = next(
+        item for item in proposal.dispatch_intents if item.task_id == "parse_document"
+    )
+    assert parse_intent.logical_profile_id == "mineru-v1"
+    assert "parse_document" not in response.requested_tool_ids
+    assert "remote_profile_parse_document" not in {
+        item.question_id for item in proposal.questions
+    }
+
+
+def test_proposal_rejects_missing_expanded_task_options(tmp_path: Path) -> None:
+    storage, _ = _storage_with_run(tmp_path)
+    observation = _observation(storage)
+    response = _response()
+    proposal = AgentExecutionPlanCompiler().compile(
+        observation=observation,
+        response=response,
+        invocation=_invocation(observation, response),
+        created_at=_clock(),
+    )
+    payload = proposal.model_dump(mode="json")
+    del payload["compiled_task_options"]["train_model"]
+
+    with pytest.raises(
+        ValidationError,
+        match="compiled task options must exactly cover the compiled RunPlan",
+    ):
+        AgentExecutionPlanProposal.model_validate(payload)
+
+
+def test_proposal_without_blocking_questions_has_complete_task_bindings(
+    tmp_path: Path,
+) -> None:
+    storage, run_dir = _storage_with_run(tmp_path)
+    _write_content_bound_artifact(
+        storage,
+        run_dir,
+        artifact_id="uploaded_dataset",
+        relative_path="inputs/uploaded.csv",
+        content=b"smiles,plqy\nC,0.42\n",
+    )
+    observation = _observation(storage)
+    response = _response(
+        tool_id="inspect_dataset",
+        selected_input_artifact_ids=["uploaded_dataset"],
+        task_options={"inspect_dataset": {}},
+    )
+    proposal = AgentExecutionPlanCompiler().compile(
+        observation=observation,
+        response=response,
+        invocation=_invocation(observation, response),
+        created_at=_clock(),
+    )
+
+    assert proposal.questions == []
+    task_ids = {task.task_id for task in proposal.run_plan.tasks}
+    assert set(proposal.effective_planner_options) == task_ids
+    assert set(proposal.compiled_task_options) == task_ids
+    assert {item.task_id for item in proposal.dispatch_intents} == task_ids
+    assert all(
+        item.execution_route == "local_executor"
+        and item.logical_profile_id is None
+        and item.requested_resources is None
+        for item in proposal.dispatch_intents
+    )
+
+
+def test_non_visible_expanded_dependency_has_fixed_empty_options(
+    tmp_path: Path,
+) -> None:
+    storage, _ = _storage_with_run(tmp_path)
+    registry = AtomicTaskRegistry(
+        [
+            AtomicTaskSpec(
+                task_id="internal_prepare",
+                output_artifacts=["prepared_input"],
+            ),
+            _visible_task(
+                task_id="review_result",
+                required_artifacts=["prepared_input"],
+                output_artifacts=["review_output"],
+            ),
+        ]
+    )
+    observation = AgentProjectObservationBuilder(
+        storage=storage,
+        registry=registry,
+        clock=_clock,
+    ).build(
+        project_id="project-1",
+        run_id="run-1",
+        goal="Prepare a reviewable scientific plan",
+        user_constraints=[],
+    )
+    response = _response(
+        tool_id="review_result",
+        task_options={"review_result": {}},
+    )
+
+    proposal = AgentExecutionPlanCompiler(registry=registry).compile(
+        observation=observation,
+        response=response,
+        invocation=_invocation(observation, response),
+        created_at=_clock(),
+    )
+
+    assert [task.task_id for task in proposal.run_plan.tasks] == [
+        "internal_prepare",
+        "review_result",
+    ]
+    assert proposal.effective_planner_options["internal_prepare"] == {}
+    assert proposal.compiled_task_options["internal_prepare"] == {}
 
 
 def test_backend_options_determine_logical_profile_requirements(tmp_path: Path) -> None:
@@ -1202,11 +1442,19 @@ def test_every_visible_tool_compiles_into_executor_snapshot_without_ignored_opti
     executor = RunPlanExecutor(storage=storage, registry=registry)
     for tool in catalog.tools:
         options = planner_options.get(tool.tool_id, {})
-        assert Draft202012Validator(tool.option_schema).is_valid(options)
-        compiled = option_compiler.compile(tool=tool, planner_options=options)
-        route, remote_task_type = option_compiler.execution_binding(
+        effective = option_compiler.materialize_effective_options(
             tool=tool,
             planner_options=options,
+        )
+        assert Draft202012Validator(tool.option_schema).is_valid(effective)
+        assert not option_compiler.unresolved_review_options(
+            tool=tool,
+            effective_options=effective,
+        )
+        compiled = option_compiler.compile(tool=tool, planner_options=effective)
+        route, remote_task_type = option_compiler.execution_binding(
+            tool=tool,
+            planner_options=effective,
         )
         if route == "remote_execution_service":
             assert remote_task_type in {

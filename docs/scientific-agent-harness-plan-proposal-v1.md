@@ -67,8 +67,10 @@ input-artifact alternative groups, effect class, risk, required permissions and
 gates, a closed high-level option schema, an option-compiler version, static and
 backend-conditioned logical profile requirements, static/backend-conditioned
 `local_executor` or `remote_execution_service` routes, a logical remote task
-type, a server-owned default backend for dependency expansion, per-artifact
-accepted trust classes, budget dimensions, preapproval declaration,
+type, server-owned general/backend-conditioned planner defaults, option IDs
+that require an explicit scientific review value, a server-owned default
+backend for dependency expansion, per-artifact accepted trust classes, budget
+dimensions, preapproval declaration,
 idempotency policy, verification policy, and planner visibility. `AtomicTaskSpec.planner_visible`
 defaults to `false`: PR-BL freezes
 a narrow v1 roster in `DEFAULT_ATOMIC_TASKS`, and every visible task explicitly
@@ -145,31 +147,39 @@ planning data transfer only and is not execution authorization.
 `AgentExecutionPlanCompiler` then:
 
 1. binds the parsed response to the observation and catalog digests;
-2. validates tool, artifact, option-schema, logical-profile, and capability
-   references;
+2. validates tool, artifact, logical-profile, and capability references;
 3. maps tool IDs to registered task IDs;
-4. compiles planner-facing typed options through the registered,
-   versioned `PlannerOptionCompiler` into canonical scientific task options;
-5. derives backend-conditioned profile requirements from the selected backend,
-   so baseline/stub paths remain local while Uni-Mol/REINVENT4 require their
-   existing logical profiles;
-6. derives an immutable per-task dispatch intent: local tasks bind
+4. calls the existing `expand_run_plan()` dependency resolver, including a
+   deterministic choice among registered input alternatives;
+5. materializes `effective_planner_options` for every expanded task from the
+   catalog-bound defaults plus the validated LLM option patch, and emits a
+   blocking question for each unresolved review-required scientific option;
+6. compiles every expanded task through the registered, versioned
+   `PlannerOptionCompiler` into canonical scientific task options; even a task
+   with no options has an explicit `{}` entry;
+7. derives backend-conditioned profile requirements after expansion, so an
+   implicit MinerU/Uni-Mol/REINVENT4 dependency may bind an appropriate selected
+   logical profile without appearing in `requested_tool_ids`;
+8. derives an immutable per-task dispatch intent: local tasks bind
    `local_executor`; MinerU, Uni-Mol, and REINVENT4 bind
    `remote_execution_service`, logical task type, selected logical profile, and
    a nullable resource-request intent;
-7. calls the existing `expand_run_plan()` dependency resolver, including a
-   deterministic choice among registered input alternatives;
-8. derives missing artifacts and required gates from registered task specs;
-9. rejects LLM-provided dependencies, output artifacts, gates, adapter names,
+9. derives missing artifacts and required gates from registered task specs;
+10. rejects LLM-provided dependencies, output artifacts, gates, adapter names,
    status claims, and permissions;
-10. creates the canonical `RunPlan` and proposal semantic digest.
+11. creates the canonical `RunPlan` and proposal semantic digest.
 
-The proposal persists both `planner_options` and `compiled_task_options`, plus
+The proposal persists raw `planner_options`, task-keyed
+`effective_planner_options`, and task-keyed `compiled_task_options`, plus
 `scientific-planner-option-compiler.v1`. The former is the validated LLM
-suggestion; the latter is the exact deterministic scientific-parameter
+suggestion. The effective map records server defaults and explicit unresolved
+review placeholders. The compiled map is the exact deterministic scientific-parameter
 representation that a future authorization must bind together with
-`dispatch_intents`. Local options map only to fields consumed by the existing
-Executor payload/snapshot path. Remote options never contain an adapter name,
+`dispatch_intents`. Both task-keyed maps and `dispatch_intents` exactly cover
+the complete expanded `RunPlan`; a missing key is invalid, including for an
+implicit dependency. Non-planner-visible internal dependencies are permitted
+only with fixed empty caller options. Local options map only to fields consumed
+by the existing Executor payload/snapshot path. Remote options never contain an adapter name,
 SSH/SCP material, command, environment, or connection detail: Uni-Mol,
 REINVENT4, and MinerU freeze only a `RemoteExecutionService` dispatch intent.
 Incomplete remote profile or resource authority becomes a blocking review
@@ -330,11 +340,13 @@ LLM consent must never be interpreted as execution consent.
 
 The next PR can reuse the catalog builder/API, observation verifier and source
 bindings, proposal verifier and digest, strict option schemas,
-`compiled_task_options`, option-compiler version, artifact alternatives and
+`effective_planner_options`, `compiled_task_options`, option-compiler version,
+server defaults/review-required option IDs, artifact alternatives and
 per-input trust bindings, explicit permission metadata, backend-conditioned
 logical profile capability bindings, `dispatch_intents`, remote logical task
 types, nullable resource-request intents, and canonical dependency-expanded
-`RunPlan`. A future exact authorization must bind `compiled_task_options` and
+`RunPlan`. A future exact authorization must bind `effective_planner_options`,
+`compiled_task_options`, and
 `dispatch_intents`, not
 recompile or reinterpret planner prose/options. PR-BM must add a separate
 Permission Engine and explicit user authorization; it must not reinterpret this

@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
+from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -336,8 +337,26 @@ def _agent_validate_option_schema(value: dict[str, Any]) -> dict[str, Any]:
         if unknown:
             raise ValueError(f"{path} contains unsupported schema keywords: {sorted(unknown)}")
         node_type = node.get("type")
-        allowed_types = {"string", "integer", "number", "boolean", "array", "object"}
-        if node_type is not None and node_type not in allowed_types:
+        allowed_types = {
+            "string",
+            "integer",
+            "number",
+            "boolean",
+            "array",
+            "object",
+            "null",
+        }
+        if isinstance(node_type, list):
+            if (
+                len(node_type) != len(set(node_type))
+                or "null" not in node_type
+                or len(node_type) != 2
+                or any(item not in allowed_types for item in node_type)
+            ):
+                raise ValueError(
+                    f"{path}.type must be one allowlisted type or one nullable allowlisted type"
+                )
+        elif node_type is not None and node_type not in allowed_types.difference({"null"}):
             raise ValueError(f"{path}.type is not an allowlisted scalar type")
         if "properties" in node:
             child_properties = node["properties"]
@@ -1073,6 +1092,9 @@ class AtomicTaskSpec(BaseModel):
     effect_class: ScientificEffectClass | None = None
     required_permissions: list[ScientificPermission] = Field(default_factory=list)
     option_schema: dict[str, Any] | None = None
+    default_planner_options: dict[str, Any] = Field(default_factory=dict)
+    backend_default_planner_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    review_required_option_ids: list[str] = Field(default_factory=list)
     option_compiler_version: str = ""
     logical_profile_requirements: list[str] = Field(default_factory=list)
     backend_profile_requirements: dict[str, list[str]] = Field(default_factory=dict)
@@ -1108,6 +1130,9 @@ class AtomicTaskSpec(BaseModel):
             "effect_class",
             "required_permissions",
             "option_schema",
+            "default_planner_options",
+            "backend_default_planner_options",
+            "review_required_option_ids",
             "option_compiler_version",
             "logical_profile_requirements",
             "backend_profile_requirements",
@@ -1137,6 +1162,22 @@ class AtomicTaskSpec(BaseModel):
         if self.option_schema is None:
             raise ValueError("planner-visible atomic task requires an explicit option schema")
         _agent_validate_option_schema(self.option_schema)
+        _agent_safe_value(self.default_planner_options, "default_planner_options")
+        option_properties = self.option_schema.get("properties", {})
+        if not set(self.default_planner_options).issubset(option_properties):
+            raise ValueError("default planner options must reference declared option properties")
+        if len(self.review_required_option_ids) != len(set(self.review_required_option_ids)):
+            raise ValueError("review-required planner option IDs must be unique")
+        if not set(self.review_required_option_ids).issubset(option_properties):
+            raise ValueError("review-required planner option IDs must reference declared properties")
+        if any(
+            option_id not in self.default_planner_options
+            or self.default_planner_options[option_id] not in (None, "", [], {})
+            for option_id in self.review_required_option_ids
+        ):
+            raise ValueError(
+                "review-required planner options must have an explicit unresolved server default"
+            )
         if not self.option_compiler_version.strip():
             raise ValueError("planner-visible atomic task requires an option compiler version")
         all_inputs = {
@@ -1182,12 +1223,30 @@ class AtomicTaskSpec(BaseModel):
                 raise ValueError(
                     "backend remote task types must exactly cover the planner backend enum"
                 )
+            if set(self.backend_default_planner_options) != backend_values:
+                raise ValueError(
+                    "backend default planner options must exactly cover the planner backend enum"
+                )
             for backend, route in self.backend_execution_routes.items():
                 remote_type = self.backend_remote_task_types[backend]
                 if route == "remote_execution_service" and remote_type is None:
                     raise ValueError("remote backends require a logical remote task type")
                 if route == "local_executor" and remote_type is not None:
                     raise ValueError("local backends must not define a remote task type")
+            for backend, backend_defaults in self.backend_default_planner_options.items():
+                _agent_safe_value(
+                    backend_defaults,
+                    f"backend_default_planner_options.{backend}",
+                )
+                effective_defaults = {
+                    **self.default_planner_options,
+                    **backend_defaults,
+                    "backend": backend,
+                }
+                if not Draft202012Validator(self.option_schema).is_valid(effective_defaults):
+                    raise ValueError(
+                        f"planner defaults do not conform to the option schema for backend {backend}"
+                    )
         else:
             if self.default_planner_backend is not None:
                 raise ValueError("static execution routes must not define a default backend")
@@ -1195,10 +1254,16 @@ class AtomicTaskSpec(BaseModel):
                 raise ValueError("planner-visible tasks without a backend require a static route")
             if self.backend_execution_routes or self.backend_remote_task_types:
                 raise ValueError("static execution routes must not define backend route maps")
+            if self.backend_default_planner_options:
+                raise ValueError("static execution routes must not define backend option defaults")
             if self.execution_route == "remote_execution_service" and self.remote_task_type is None:
                 raise ValueError("remote tasks require a logical remote task type")
             if self.execution_route == "local_executor" and self.remote_task_type is not None:
                 raise ValueError("local tasks must not define a remote task type")
+            if not Draft202012Validator(self.option_schema).is_valid(
+                self.default_planner_options
+            ):
+                raise ValueError("planner defaults do not conform to the option schema")
         if not self.verification_policy.strip():
             raise ValueError("planner-visible atomic task requires an explicit verification policy")
         return self
@@ -1247,6 +1312,9 @@ class ScientificToolSpec(BaseModel):
             "additionalProperties": False,
         }
     )
+    default_planner_options: dict[str, Any] = Field(default_factory=dict)
+    backend_default_planner_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    review_required_option_ids: list[str] = Field(default_factory=list)
     option_compiler_version: str
     logical_profile_requirements: list[str] = Field(default_factory=list)
     backend_profile_requirements: dict[str, list[str]] = Field(default_factory=dict)
@@ -1307,6 +1375,20 @@ class ScientificToolSpec(BaseModel):
     def validate_options(cls, value: dict[str, Any]) -> dict[str, Any]:
         return _agent_validate_option_schema(value)
 
+    @field_validator("default_planner_options")
+    @classmethod
+    def validate_default_planner_options(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _agent_safe_value(value, "default_planner_options")
+
+    @field_validator("review_required_option_ids")
+    @classmethod
+    def validate_review_required_option_ids(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(
+            value,
+            field="review_required_option_ids",
+            sort_values=True,
+        )
+
     @model_validator(mode="after")
     def validate_tool_projection(self) -> "ScientificToolSpec":
         if not self.planner_visible:
@@ -1335,6 +1417,19 @@ class ScientificToolSpec(BaseModel):
                 raise ValueError(f"tool input trust classes must be non-empty and unique: {artifact_id}")
             if "unavailable" in trust_classes:
                 raise ValueError("planner tools must not accept unavailable artifacts")
+        option_properties = self.option_schema.get("properties", {})
+        if not set(self.default_planner_options).issubset(option_properties):
+            raise ValueError("tool defaults must reference declared option properties")
+        if not set(self.review_required_option_ids).issubset(option_properties):
+            raise ValueError("tool review-required option IDs must reference declared properties")
+        if any(
+            option_id not in self.default_planner_options
+            or self.default_planner_options[option_id] not in (None, "", [], {})
+            for option_id in self.review_required_option_ids
+        ):
+            raise ValueError(
+                "tool review-required options must have an explicit unresolved server default"
+            )
         backend_schema = self.option_schema.get("properties", {}).get("backend", {})
         backend_values = set(backend_schema.get("enum", [])) if isinstance(backend_schema, dict) else set()
         if set(self.backend_profile_requirements) != backend_values:
@@ -1348,12 +1443,28 @@ class ScientificToolSpec(BaseModel):
                 raise ValueError("tool backend execution routes must cover its backend enum")
             if set(self.backend_remote_task_types) != backend_values:
                 raise ValueError("tool backend remote task types must cover its backend enum")
+            if set(self.backend_default_planner_options) != backend_values:
+                raise ValueError("tool backend option defaults must cover its backend enum")
             for backend, route in self.backend_execution_routes.items():
                 remote_type = self.backend_remote_task_types[backend]
                 if route == "remote_execution_service" and remote_type is None:
                     raise ValueError("remote tool backends require a remote task type")
                 if route == "local_executor" and remote_type is not None:
                     raise ValueError("local tool backends must not define a remote task type")
+            for backend, backend_defaults in self.backend_default_planner_options.items():
+                _agent_safe_value(
+                    backend_defaults,
+                    f"backend_default_planner_options.{backend}",
+                )
+                effective_defaults = {
+                    **self.default_planner_options,
+                    **backend_defaults,
+                    "backend": backend,
+                }
+                if not Draft202012Validator(self.option_schema).is_valid(effective_defaults):
+                    raise ValueError(
+                        f"tool defaults do not conform to the option schema for backend {backend}"
+                    )
         else:
             if self.default_planner_backend is not None:
                 raise ValueError("static tools must not define a default backend")
@@ -1361,10 +1472,16 @@ class ScientificToolSpec(BaseModel):
                 raise ValueError("tools without a backend require a static execution route")
             if self.backend_execution_routes or self.backend_remote_task_types:
                 raise ValueError("static tool routes must not define backend route maps")
+            if self.backend_default_planner_options:
+                raise ValueError("static tool routes must not define backend option defaults")
             if self.execution_route == "remote_execution_service" and self.remote_task_type is None:
                 raise ValueError("remote tools require a remote task type")
             if self.execution_route == "local_executor" and self.remote_task_type is not None:
                 raise ValueError("local tools must not define a remote task type")
+            if not Draft202012Validator(self.option_schema).is_valid(
+                self.default_planner_options
+            ):
+                raise ValueError("tool defaults do not conform to the option schema")
         return self
 
 
@@ -1976,6 +2093,7 @@ class AgentExecutionPlanProposal(BaseModel):
     validated_llm_response: AgentExecutionPlanLLMResponse
     run_plan: RunPlan
     planner_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    effective_planner_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
     compiled_task_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
     option_compiler_version: Literal["scientific-planner-option-compiler.v1"] = (
         "scientific-planner-option-compiler.v1"
@@ -2043,7 +2161,11 @@ class AgentExecutionPlanProposal(BaseModel):
     def validate_proposal_digests(cls, value: str, info: Any) -> str:
         return _agent_digest_value(value, field=info.field_name)
 
-    @field_validator("planner_options", "compiled_task_options")
+    @field_validator(
+        "planner_options",
+        "effective_planner_options",
+        "compiled_task_options",
+    )
     @classmethod
     def validate_proposal_options(
         cls,
@@ -2096,13 +2218,16 @@ class AgentExecutionPlanProposal(BaseModel):
             raise ValueError("proposal run_id must match compiled RunPlan")
         if self.planner_options != self.validated_llm_response.task_options:
             raise ValueError("proposal planner options must equal the validated LLM options")
-        if set(self.compiled_task_options).difference(
-            task.task_id for task in self.run_plan.tasks
-        ):
-            raise ValueError("compiled task options may only reference compiled RunPlan tasks")
-        if {item.task_id for item in self.dispatch_intents} != {
-            task.task_id for task in self.run_plan.tasks
-        }:
+        run_plan_task_ids = {task.task_id for task in self.run_plan.tasks}
+        if set(self.effective_planner_options) != run_plan_task_ids:
+            raise ValueError(
+                "effective planner options must exactly cover the compiled RunPlan"
+            )
+        if set(self.compiled_task_options) != run_plan_task_ids:
+            raise ValueError(
+                "compiled task options must exactly cover the compiled RunPlan"
+            )
+        if {item.task_id for item in self.dispatch_intents} != run_plan_task_ids:
             raise ValueError("proposal dispatch intents must exactly cover the compiled RunPlan")
         semantic_digest = _agent_digest(self.semantic_plan_material())
         if self.semantic_plan_digest and self.semantic_plan_digest != semantic_digest:

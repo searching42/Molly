@@ -459,6 +459,14 @@
       "title": "Planner Options",
       "type": "object"
     },
+    "effective_planner_options": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Effective Planner Options",
+      "type": "object"
+    },
     "compiled_task_options": {
       "additionalProperties": {
         "additionalProperties": true,

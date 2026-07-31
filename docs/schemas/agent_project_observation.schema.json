@@ -466,6 +466,26 @@
           "title": "Option Schema",
           "type": "object"
         },
+        "default_planner_options": {
+          "additionalProperties": true,
+          "title": "Default Planner Options",
+          "type": "object"
+        },
+        "backend_default_planner_options": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Backend Default Planner Options",
+          "type": "object"
+        },
+        "review_required_option_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Review Required Option Ids",
+          "type": "array"
+        },
         "option_compiler_version": {
           "title": "Option Compiler Version",
           "type": "string"

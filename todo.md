@@ -907,6 +907,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：future authorization 必须同时绑定 `compiled_task_options` 与 `dispatch_intents`；remote resource authority 尚未配置时只能形成 blocking review question，不能被默认值或 profile 上限替代；新增 visible task 必须同步维护最小 payload contract 测试。
 - 批准人：repository owner。
 
+### 2026-07-31：PR-BL 第四轮冻结 expanded-task effective options
+
+- 决策：在同一 Draft PR #18 中为完整 dependency-expanded `RunPlan` 冻结 task-keyed `effective_planner_options`、`compiled_task_options` 与 `dispatch_intents`；三者必须精确覆盖每个展开任务，不能通过缺失 key 表达运行时默认。
+- 原计划：第三轮 remote route 与 artifact contract 修复通过 CI 后结束 PR-BL review remediation。
+- 新计划：`ScientificToolSpec` 纳入 catalog-digest-bound 的一般/按 backend 默认参数与 review-required option ID；先展开 RunPlan，再为所有 visible task 合并默认值、生成必审问题和 canonical options，随后派生 route/profile；non-visible internal dependency 仅允许固定空 options。PR-BM 继续 `DEFERRED`，等待本轮 owner review。
+- 依据：review 发现只请求 `render_report` 时，隐式 `train_model`、`predict_candidates` 与 `filter_rank` 未冻结完整参数；只请求 `index_corpus` 时，隐式 `parse_document` 的 MinerU profile 又会在展开前被误判为不需要。缺失参数会使未来 exact authorization 无法覆盖真实 Executor 语义。
+- 影响任务：`M3H-001`～`M3H-003` 继续保持 `I/T/— / READY`；`M3H-004`～后续任务继续 `DEFERRED`；`M3H-GATE-001` 不标记 `V`；PR #18 保持 Draft，不合并且不启动 PR-BM。
+- 新增风险：默认参数与 option compiler 必须随 Executor contract 一起审查；review-required 科学参数只能保留显式 unresolved 值并形成 blocking question；future authorization 必须绑定 effective/compiled options、dispatch intent、profile 与资源状态。
+- 批准人：repository owner。
+
 后续路线调整必须追加：
 
 ```text
