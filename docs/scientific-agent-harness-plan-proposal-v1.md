@@ -57,11 +57,13 @@ The five published JSON schema files are generated from the Pydantic models in
 | `AgentExecutionPlanProposal` | `agent_execution_plan_proposal.v1` | Immutable review/control artifact with compiled `RunPlan`. |
 
 `ScientificToolSpec` includes the schema version, canonical tool/task IDs,
-human label and description, logical artifact IDs, effect class, risk,
-required permissions and gates, a closed high-level option schema, logical
-profile requirements, accepted input-artifact trust classes, budget dimensions,
-preapproval declaration, idempotency policy, verification policy, and planner
-visibility. `AtomicTaskSpec.planner_visible` defaults to `false`: PR-BL freezes
+human label and description, required and optional logical artifact IDs,
+input-artifact alternative groups, effect class, risk, required permissions and
+gates, a closed high-level option schema, an option-compiler version, static and
+backend-conditioned logical profile requirements, per-artifact accepted trust
+classes, budget dimensions, preapproval declaration, idempotency policy,
+verification policy, and planner visibility. `AtomicTaskSpec.planner_visible`
+defaults to `false`: PR-BL freezes
 a narrow v1 roster in `DEFAULT_ATOMIC_TASKS`, and every visible task explicitly
 sets all projection metadata. New execution tasks remain hidden until a review
 adds an explicit projection; no task-ID heuristic infers effect, profile, or
@@ -110,9 +112,12 @@ as `content_bound_input`; a registered produced artifact is
 `registered_intermediate`; terminal StageState output is `verified_output`; and
 only a terminal `confirm_extracted_dataset` output is
 `confirmed_scientific_input`. A JSON field such as `confirmed: true` cannot
-promote itself. Each tool declares which input trust classes it accepts, so raw
-PDF/CSV inputs can be proposed only for a matching registered parsing or
-confirmation task.
+promote itself. Each tool declares trust classes by logical input ID, so raw
+PDF/CSV inputs can be proposed only for a matching registered task. In
+particular, `inspect_dataset` accepts one content-bound/registered
+`uploaded_dataset` or a confirmed `confirmed_training_dataset`; that alternative
+is part of the registered task contract and the selected content digest is bound
+into the observation and proposal.
 
 The recursive schema/privacy checks reject exact forbidden structural keys and
 authority fields rather than silently removing them. Natural-language goal and
@@ -136,11 +141,34 @@ planning data transfer only and is not execution authorization.
 2. validates tool, artifact, option-schema, logical-profile, and capability
    references;
 3. maps tool IDs to registered task IDs;
-4. calls the existing `expand_run_plan()` dependency resolver;
-5. derives missing artifacts and required gates from registered task specs;
-6. rejects LLM-provided dependencies, output artifacts, gates, adapter names,
+4. compiles planner-facing typed options through the registered,
+   versioned `PlannerOptionCompiler` into canonical Executor task options;
+5. derives backend-conditioned profile requirements from the selected backend,
+   so baseline/stub paths remain local while Uni-Mol/REINVENT4 require their
+   existing logical profiles;
+6. calls the existing `expand_run_plan()` dependency resolver;
+7. derives missing artifacts and required gates from registered task specs;
+8. rejects LLM-provided dependencies, output artifacts, gates, adapter names,
    status claims, and permissions;
-7. creates the canonical `RunPlan` and proposal semantic digest.
+9. creates the canonical `RunPlan` and proposal semantic digest.
+
+The proposal persists both `planner_options` and `compiled_task_options`, plus
+`scientific-planner-option-compiler.v1`. The former is the validated LLM
+suggestion; the latter is the exact deterministic representation that a future
+authorization must bind. The compiler maps only declared high-level options to
+fields consumed by the existing Executor payload/snapshot path. A server-owned
+legacy adapter binding may be materialized for Uni-Mol, but an LLM-provided
+`adapter` field is always rejected. Tasks whose current Executor branch does not
+consume configurable options expose a closed empty v1 schema rather than
+claiming unsupported semantics.
+
+The frozen permission vocabulary is `read_content_bound_input`,
+`derive_project_artifact`, `external_document_processing`,
+`model_training_compute`, `model_inference_compute`,
+`candidate_generation_compute`, and
+`scientific_dataset_confirmation`. Every planner-visible task declares at least
+one meaningful permission. PR-BL only describes these permissions; it does not
+decide or grant them.
 
 The resulting proposal has `status=review_required` and an immutable
 `executable=false` literal. It carries no authorization, approval state,
@@ -158,9 +186,11 @@ The contract deliberately separates identities:
   immutable persisted envelope and its full `proposal_digest`.
 
 A repeated `client_request_id` with identical request material replays the
-exact stored publication without another LLM call. Reuse with different
-request material fails closed. Separate requests may publish distinct envelopes
-for the same semantic plan without a no-replace byte conflict.
+exact stored publication without another LLM call. A request-scoped advisory
+file lock covers reservation, planning, checkpoint, publication, and commit
+across processes. Reuse with different request material fails before a second
+LLM call. Separate requests may publish distinct envelopes for the same semantic
+plan without a no-replace byte conflict.
 
 ## Storage and API contract
 
@@ -176,13 +206,32 @@ projects/<project_id>/agent_plan_proposals/<publication_id>/
   proposal_summary.md
   source_binding.json
   verification.json
+  publication_manifest.json
 
-projects/<project_id>/agent_plan_requests/<client_request_id>.json
+projects/<project_id>/agent_plan_requests/<client_request_id>/
+  request.lock
+  reservation.json
+  planning.json
+  planning_checkpoint.json
+  publication_pending.json
+  committed.json
 ```
 
-Files are created with no-replace, `O_NOFOLLOW`, exclusive creation, fsync,
-and exact canonical-byte replay checks. A repeated publication of identical
-bytes is idempotent. Reusing a publication ID for different bytes is a conflict.
+Request markers are immutable and advance through `RESERVED`, `PLANNING`,
+`PUBLICATION_PENDING`, and `COMMITTED`. A validated post-LLM checkpoint supports
+exact recovery without another provider call. If a process dies after the
+provider returned but before a validated checkpoint can be persisted, retry
+enters a typed `PLANNING` recovery state instead of ambiguously repeating an
+external call.
+
+Files are created in a request-private staging directory with no-replace,
+`O_NOFOLLOW`, exclusive creation and fsync; the manifest is written last, the
+directory is fsynced, and an atomic rename publishes the complete directory.
+The proposal root is then fsynced before the immutable request binding is
+committed. Recovery after a partial staging write, completed rename, or rename
+without the final request binding verifies and reuses the exact checkpoint and
+publication. A repeated publication of identical bytes is idempotent. Reusing
+a publication ID for different bytes is a conflict.
 Creating the first proposal for a project never creates a run directory,
 StageState, GateDecision, queue job, or execution authority.
 Reads verify all projections, digests, source bindings, and (by default) the
@@ -225,6 +274,9 @@ The contract treats the following as hostile or stale input:
 - symlink/replacement attacks against source and proposal files;
 - duplicate publication, request-ID reuse with different request material, or
   same-publication-ID different-byte replay;
+- concurrent same-request planning across Flask workers, interrupted staging
+  writes, publication-before-binding crashes, and ambiguous post-provider
+  failures;
 - raw-data, private-document, infrastructure, email, IP, token, and exception
   leakage to an external LLM, API response, log, or Markdown artifact;
 - drift between a planner catalog and the single `AtomicTaskRegistry` source.
@@ -244,8 +296,24 @@ LLM consent must never be interpreted as execution consent.
 ## PR-BM handoff
 
 The next PR can reuse the catalog builder/API, observation verifier and source
-bindings, proposal verifier and digest, strict option schemas, logical profile
-capability bindings, and canonical dependency-expanded `RunPlan`. PR-BM must
-add a separate Permission Engine and explicit user authorization; it must not
-reinterpret this proposal artifact as authorization or alter the existing
+bindings, proposal verifier and digest, strict option schemas,
+`compiled_task_options`, option-compiler version, artifact alternatives and
+per-input trust bindings, explicit permission metadata, backend-conditioned
+logical profile capability bindings, and canonical dependency-expanded
+`RunPlan`. A future exact authorization must bind `compiled_task_options`, not
+recompile or reinterpret planner prose/options. PR-BM must add a separate
+Permission Engine and explicit user authorization; it must not reinterpret this
+proposal artifact as authorization or alter the existing
 Executor/Gate/remote/worker authority without a separate reviewed change.
+
+## Generated schema propagation
+
+All schema files under `docs/schemas/` are regenerated by the same
+`export_json_schemas()` implementation from the Pydantic source models. Several
+non-Harness composite schemas reference `AtomicTaskSpec`, so regeneration may
+propagate its new optional/default planning metadata into Critic, Gate, OLED, or
+other aggregate schema documents. That propagation does not change those
+components' authority or runtime semantics; `planner_visible` remains false by
+default and the fields are inert outside the explicit catalog projection. The
+schema regeneration test requires a clean byte-for-byte workspace after running
+the generator.

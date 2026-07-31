@@ -24,7 +24,7 @@ def test_expand_run_plan_adds_required_dependencies() -> None:
     plan = expand_run_plan(
         run_id="r1",
         requested_tasks=["render_report"],
-        available_artifacts=["candidate_dataset"],
+        available_artifacts=["candidate_dataset", "uploaded_dataset"],
     )
     ordered_ids = [task.task_id for task in plan.tasks]
     assert ordered_ids == [

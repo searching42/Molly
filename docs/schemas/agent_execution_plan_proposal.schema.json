@@ -333,13 +333,27 @@
     "run_plan": {
       "$ref": "#/$defs/RunPlan"
     },
-    "task_options": {
+    "planner_options": {
       "additionalProperties": {
         "additionalProperties": true,
         "type": "object"
       },
-      "title": "Task Options",
+      "title": "Planner Options",
       "type": "object"
+    },
+    "compiled_task_options": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Compiled Task Options",
+      "type": "object"
+    },
+    "option_compiler_version": {
+      "const": "scientific-planner-option-compiler.v1",
+      "default": "scientific-planner-option-compiler.v1",
+      "title": "Option Compiler Version",
+      "type": "string"
     },
     "selected_artifacts": {
       "items": {

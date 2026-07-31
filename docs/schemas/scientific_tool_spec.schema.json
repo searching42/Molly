@@ -31,6 +31,30 @@
       "title": "Input Artifact Ids",
       "type": "array"
     },
+    "required_input_artifact_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Input Artifact Ids",
+      "type": "array"
+    },
+    "optional_input_artifact_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Optional Input Artifact Ids",
+      "type": "array"
+    },
+    "input_artifact_alternatives": {
+      "items": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Input Artifact Alternatives",
+      "type": "array"
+    },
     "output_artifact_ids": {
       "items": {
         "type": "string"
@@ -63,6 +87,15 @@
     },
     "required_permissions": {
       "items": {
+        "enum": [
+          "read_content_bound_input",
+          "derive_project_artifact",
+          "external_document_processing",
+          "model_training_compute",
+          "model_inference_compute",
+          "candidate_generation_compute",
+          "scientific_dataset_confirmation"
+        ],
         "type": "string"
       },
       "title": "Required Permissions",
@@ -80,6 +113,10 @@
       "title": "Option Schema",
       "type": "object"
     },
+    "option_compiler_version": {
+      "title": "Option Compiler Version",
+      "type": "string"
+    },
     "logical_profile_requirements": {
       "items": {
         "type": "string"
@@ -87,19 +124,32 @@
       "title": "Logical Profile Requirements",
       "type": "array"
     },
-    "accepted_input_trust_classes": {
-      "items": {
-        "enum": [
-          "content_bound_input",
-          "registered_intermediate",
-          "verified_output",
-          "confirmed_scientific_input",
-          "unavailable"
-        ],
-        "type": "string"
+    "backend_profile_requirements": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
       },
-      "title": "Accepted Input Trust Classes",
-      "type": "array"
+      "title": "Backend Profile Requirements",
+      "type": "object"
+    },
+    "accepted_input_trust_classes_by_artifact": {
+      "additionalProperties": {
+        "items": {
+          "enum": [
+            "content_bound_input",
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input",
+            "unavailable"
+          ],
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Accepted Input Trust Classes By Artifact",
+      "type": "object"
     },
     "budget_dimensions": {
       "items": {
@@ -140,6 +190,7 @@
     "description",
     "effect_class",
     "risk_level",
+    "option_compiler_version",
     "verification_policy"
   ],
   "title": "ScientificToolSpec",

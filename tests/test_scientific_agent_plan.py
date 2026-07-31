@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from ai4s_agent.llm_provider import StubLLMProvider
@@ -22,6 +26,8 @@ from ai4s_agent.schemas import (
     AgentLLMInvocationMetadata,
     ArtifactRef,
     AtomicTaskSpec,
+    PlannedTask,
+    RunPlan,
     RunStatus,
     ScientificToolSpec,
     StageState,
@@ -29,8 +35,10 @@ from ai4s_agent.schemas import (
 from ai4s_agent.scientific_agent_plan import (
     AgentExecutionPlanCompiler,
     AgentProjectObservationBuilder,
+    PlannerOptionCompiler,
     ScientificAgentPlanError,
     ScientificAgentPlanPublicationConflict,
+    ScientificAgentPlanRecoveryRequired,
     ScientificAgentPlanProposalStore,
     ScientificAgentPlanService,
     ScientificAgentPlanSourceChanged,
@@ -41,6 +49,72 @@ from ai4s_agent.storage import ProjectStorage
 
 def _clock() -> str:
     return "2026-07-31T00:00:00Z"
+
+
+def _private_path_canary() -> str:
+    return str(Path("/") / "Users" / "example-user" / "private.csv")
+
+
+def _multiprocess_plan_worker(
+    workspace_dir: str,
+    counter_path: str,
+    *,
+    request_id: str,
+    goal: str,
+    start_event,
+    result_queue,
+    fault_phase: str = "",
+) -> None:
+    storage = ProjectStorage(workspace_dir=Path(workspace_dir))
+
+    class ProcessProvider(StubLLMProvider):
+        def __init__(self) -> None:
+            super().__init__(response=_response().model_dump(mode="json"))
+
+        def complete_json(self, **kwargs):
+            descriptor = os.open(
+                counter_path,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                0o600,
+            )
+            try:
+                os.write(descriptor, b"llm-call\n")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            time.sleep(0.2)
+            return super().complete_json(**kwargs)
+
+    def fault(phase: str) -> None:
+        if phase == fault_phase:
+            raise RuntimeError(f"simulated crash at {phase}")
+
+    builder = AgentProjectObservationBuilder(storage=storage, clock=_clock)
+    store = ScientificAgentPlanProposalStore(
+        storage=storage,
+        observation_builder=builder,
+        fault_injector=fault if fault_phase else None,
+    )
+    service = ScientificAgentPlanService(
+        storage=storage,
+        observation_builder=builder,
+        proposal_store=store,
+        clock=_clock,
+    )
+    start_event.wait()
+    try:
+        proposal = service.create_proposal(
+            project_id="project-1",
+            run_id="run-1",
+            goal=goal,
+            user_constraints=[],
+            provider=ProcessProvider(),
+            client_request_id=request_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - process result is asserted by the parent.
+        result_queue.put((type(exc).__name__, getattr(exc, "state", "")))
+    else:
+        result_queue.put(("success", proposal.proposal_id))
 
 
 def _storage_with_run(tmp_path: Path, *, run_id: str = "run-1") -> tuple[ProjectStorage, Path]:
@@ -67,11 +141,13 @@ def _visible_task(
         task_id=task_id,
         scientific_tool_id=tool_id or task_id,
         required_artifacts=required,
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=output_artifacts or [],
         label=task_id.replace("_", " ").title(),
         description="A review-only logical scientific task.",
         effect_class="compute",
-        required_permissions=[],
+        required_permissions=["derive_project_artifact"],
         option_schema=option_schema
         or {
             "type": "object",
@@ -79,12 +155,13 @@ def _visible_task(
             "required": [],
             "additionalProperties": False,
         },
+        option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
-        accepted_input_trust_classes=(
-            ["content_bound_input", "registered_intermediate", "verified_output"]
-            if required
-            else []
-        ),
+        backend_profile_requirements={},
+        accepted_input_trust_classes_by_artifact={
+            artifact_id: ["content_bound_input", "registered_intermediate", "verified_output"]
+            for artifact_id in required
+        },
         budget_dimensions=[],
         supports_plan_preapproval=False,
         idempotency_policy="server_checked",
@@ -160,7 +237,7 @@ def _write_confirmed_dataset(storage: ProjectStorage, run_dir: Path, *, canary: 
         payload.update(
             {
                 "private_document_text": "private paper text",
-                "path": "/Users/benton/private.csv",
+                "path": _private_path_canary(),
                 "hostname": "cluster.internal",
                 "token": "sk-test-canary",
             }
@@ -279,8 +356,12 @@ def test_catalog_is_explicit_opt_in_with_complete_v1_metadata() -> None:
         "effect_class",
         "required_permissions",
         "option_schema",
+        "option_compiler_version",
         "logical_profile_requirements",
-        "accepted_input_trust_classes",
+        "backend_profile_requirements",
+        "optional_input_artifacts",
+        "input_artifact_alternatives",
+        "accepted_input_trust_classes_by_artifact",
         "budget_dimensions",
         "supports_plan_preapproval",
         "idempotency_policy",
@@ -292,6 +373,12 @@ def test_catalog_is_explicit_opt_in_with_complete_v1_metadata() -> None:
             assert required_metadata.issubset(task.model_fields_set)
             assert task.option_schema is not None
             assert task.label and task.description and task.effect_class
+            assert task.required_permissions
+            assert task.option_compiler_version
+            assert task.verification_policy
+            backend_schema = task.option_schema.get("properties", {}).get("backend", {})
+            backend_values = set(backend_schema.get("enum", [])) if isinstance(backend_schema, dict) else set()
+            assert set(task.backend_profile_requirements) == backend_values
     assert AtomicTaskSpec(task_id="future_internal_task").planner_visible is False
     with pytest.raises(ValueError, match="explicitly set projection metadata"):
         AtomicTaskSpec(task_id="unsafe_visible_task", planner_visible=True)
@@ -371,8 +458,10 @@ def test_planning_privacy_checks_allow_normal_oled_prose_and_schema_terms() -> N
             "additionalProperties": False,
             "description": "High-level OLED property constraints.",
         },
+        option_compiler_version="scientific-planner-option-identity.v1",
         logical_profile_requirements=[],
-        accepted_input_trust_classes=[],
+        backend_profile_requirements={},
+        accepted_input_trust_classes_by_artifact={},
         budget_dimensions=[],
         supports_plan_preapproval=False,
         idempotency_policy="server_checked",
@@ -429,7 +518,7 @@ def test_observation_is_privacy_safe_and_handles_missing_run(tmp_path: Path) -> 
     observation = _observation(storage, resource_profiles=profiles)
     serialized = observation.model_dump_json()
     for canary in (
-        "/Users/benton/private.csv",
+        _private_path_canary(),
         "cluster.internal",
         "sk-test-canary",
         "private paper text",
@@ -568,7 +657,7 @@ def test_profile_snapshot_requires_one_enabled_digest_matched_connection(tmp_pat
         {"adapter_name": "bad"},
         {"command": "rm -rf"},
         {"ssh": "cluster"},
-        {"path": "/Users/private/file"},
+        {"path": _private_path_canary()},
         {"environment": {"TOKEN": "secret"}},
         {"task_options": {"render_report": {"module": "x"}}},
     ],
@@ -608,7 +697,7 @@ def test_compiler_expands_registry_dependencies_and_never_accepts_llm_dependenci
     assert proposal.status == "review_required"
     assert proposal.proposal_id.startswith("proposal-")
     assert "gate_3_train_config" in proposal.required_gates
-    assert proposal.missing_artifacts == []
+    assert proposal.missing_artifacts == ["uploaded_dataset"]
 
 
 def test_compiler_rejects_unknown_artifact_and_profile_mismatch(tmp_path: Path) -> None:
@@ -626,12 +715,111 @@ def test_compiler_rejects_unknown_artifact_and_profile_mismatch(tmp_path: Path) 
     train_response = _response(
         tool_id="train_model",
         selected_input_artifact_ids=[],
+        task_options={
+            "train_model": {"backend": "unimol", "property_id": "plqy"}
+        },
     )
     with pytest.raises(ScientificAgentPlanError, match="selected logical profiles do not satisfy requirement"):
         AgentExecutionPlanCompiler().compile(
             observation=observation,
             response=train_response,
             invocation=_invocation(observation, train_response),
+            created_at=_clock(),
+        )
+
+
+def test_backend_options_determine_logical_profile_requirements(tmp_path: Path) -> None:
+    storage, _ = _storage_with_run(tmp_path)
+    observation = _observation(storage)
+    for response in (
+        _response(
+            tool_id="train_model",
+            task_options={
+                "train_model": {"backend": "baseline", "property_id": "plqy"}
+            },
+        ),
+        _response(
+            tool_id="generate_candidates",
+            task_options={
+                "generate_candidates": {
+                    "backend": "deterministic_stub",
+                    "count": 8,
+                }
+            },
+        ),
+    ):
+        proposal = AgentExecutionPlanCompiler().compile(
+            observation=observation,
+            response=response,
+            invocation=_invocation(observation, response),
+            created_at=_clock(),
+        )
+        assert proposal.selected_profiles == []
+
+    profiles = ResourceProfileStore(
+        workspace_dir=tmp_path / "backend-profile-workspace",
+        config_dir=tmp_path / "backend-profile-config",
+    )
+    connection = _connection(
+        connection_id="scientific-worker",
+        capabilities=["cpu", "gpu", "reinvent4", "unimol"],
+    )
+    profiles.save_connection(connection)
+    _save_available_probe(profiles, connection)
+    observation = _observation(storage, resource_profiles=profiles)
+    for response, expected_profile in (
+        (
+            _response(
+                tool_id="train_model",
+                selected_logical_profile_ids=["unimol-train-v1"],
+                task_options={
+                    "train_model": {"backend": "unimol", "property_id": "plqy"}
+                },
+            ),
+            "unimol-train-v1",
+        ),
+        (
+            _response(
+                tool_id="generate_candidates",
+                selected_logical_profile_ids=["reinvent4-cpu-v1"],
+                task_options={
+                    "generate_candidates": {"backend": "reinvent4", "count": 8}
+                },
+            ),
+            "reinvent4-cpu-v1",
+        ),
+    ):
+        proposal = AgentExecutionPlanCompiler().compile(
+            observation=observation,
+            response=response,
+            invocation=_invocation(observation, response),
+            created_at=_clock(),
+        )
+        assert proposal.selected_profiles == [expected_profile]
+
+
+@pytest.mark.parametrize(
+    ("tool_id", "options"),
+    [
+        ("generate_candidates", {"candidate_count": 8}),
+        ("filter_rank", {"topn": 3}),
+        ("train_model", {"target_property": "plqy"}),
+        ("inspect_dataset", {"target_property": "plqy"}),
+    ],
+)
+def test_executor_incompatible_planner_option_aliases_fail_closed(
+    tmp_path: Path,
+    tool_id: str,
+    options: dict[str, object],
+) -> None:
+    storage, _ = _storage_with_run(tmp_path)
+    observation = _observation(storage)
+    response = _response(tool_id=tool_id, task_options={tool_id: options})
+    with pytest.raises(ScientificAgentPlanError, match="options rejected"):
+        AgentExecutionPlanCompiler().compile(
+            observation=observation,
+            response=response,
+            invocation=_invocation(observation, response),
             created_at=_clock(),
         )
 
@@ -660,7 +848,7 @@ def test_compiler_uses_tool_specific_artifact_trust_classes(tmp_path: Path) -> N
         tool_id="parse_document",
         selected_input_artifact_ids=["pdf_corpus"],
         selected_logical_profile_ids=["mineru-v1"],
-        task_options={"parse_document": {"max_pages": 12}},
+        task_options={"parse_document": {}},
     )
     parse_proposal = AgentExecutionPlanCompiler().compile(
         observation=observation,
@@ -685,7 +873,7 @@ def test_compiler_uses_tool_specific_artifact_trust_classes(tmp_path: Path) -> N
     confirm_response = _response(
         tool_id="confirm_extracted_dataset",
         selected_input_artifact_ids=["candidate_training_dataset"],
-        task_options={"confirm_extracted_dataset": {"minimum_confidence": 0.8}},
+        task_options={"confirm_extracted_dataset": {}},
     )
     confirm_proposal = AgentExecutionPlanCompiler().compile(
         observation=observation,
@@ -707,7 +895,10 @@ def test_compiler_uses_tool_specific_artifact_trust_classes(tmp_path: Path) -> N
     rejected_response = _response(
         tool_id="train_model",
         selected_input_artifact_ids=["cleaned_train_dataset"],
-        selected_logical_profile_ids=["unimol-train-v1"],
+        selected_logical_profile_ids=[],
+        task_options={
+            "train_model": {"backend": "baseline", "property_id": "plqy"}
+        },
     )
     with pytest.raises(ScientificAgentPlanError, match="trust class"):
         AgentExecutionPlanCompiler().compile(
@@ -716,6 +907,173 @@ def test_compiler_uses_tool_specific_artifact_trust_classes(tmp_path: Path) -> N
             invocation=_invocation(observation, rejected_response),
             created_at=_clock(),
         )
+
+
+def test_content_bound_uploaded_csv_can_bind_inspect_dataset_without_stage_state(
+    tmp_path: Path,
+) -> None:
+    storage, run_dir = _storage_with_run(tmp_path)
+    assert not (run_dir / "stage.json").exists()
+    raw_csv = b"smiles,plqy\nC,0.42\n"
+    _write_content_bound_artifact(
+        storage,
+        run_dir,
+        artifact_id="uploaded_dataset",
+        relative_path="inputs/uploaded.csv",
+        content=raw_csv,
+    )
+    observation = _observation(storage)
+    uploaded = next(
+        item for item in observation.available_artifacts if item.artifact_id == "uploaded_dataset"
+    )
+    assert uploaded.trust_class == "content_bound_input"
+    assert uploaded.content_digest == "sha256:" + hashlib.sha256(raw_csv).hexdigest()
+
+    response = _response(
+        tool_id="inspect_dataset",
+        selected_input_artifact_ids=["uploaded_dataset"],
+        task_options={"inspect_dataset": {}},
+    )
+    proposal = AgentExecutionPlanCompiler().compile(
+        observation=observation,
+        response=response,
+        invocation=_invocation(observation, response),
+        created_at=_clock(),
+    )
+    assert proposal.selected_artifacts == ["uploaded_dataset"]
+    assert proposal.run_plan.requested_tasks == ["inspect_dataset"]
+    assert [task.task_id for task in proposal.run_plan.tasks] == ["inspect_dataset"]
+    assert proposal.run_plan.missing_artifacts == []
+    assert not proposal.questions
+    assert proposal.observation_digest == observation.observation_digest
+    assert proposal.executable is False
+    assert not (run_dir / "stage.json").exists()
+
+
+def test_planner_option_compiler_materializes_executor_canonical_options() -> None:
+    catalog = build_scientific_tool_catalog()
+    tools = {tool.tool_id: tool for tool in catalog.tools}
+    compiler = PlannerOptionCompiler()
+
+    clean = compiler.compile(
+        tool=tools["clean_dataset"],
+        planner_options={"drop_empty_target_rows": True},
+    )
+    assert clean == {
+        "drop_empty_target_rows": True,
+        "min_nonempty": 1,
+        "min_numeric_ratio": 0.5,
+        "strict_smiles_cleaning": True,
+    }
+    baseline = compiler.compile(
+        tool=tools["train_model"],
+        planner_options={"backend": "baseline", "property_id": "plqy"},
+    )
+    assert baseline == {"n_bits": 256, "property_id": "plqy"}
+    unimol = compiler.compile(
+        tool=tools["train_model"],
+        planner_options={"backend": "unimol", "property_id": "plqy"},
+    )
+    assert unimol == {
+        "adapter": "train_model_unimol_legacy_adapter",
+        "property_id": "plqy",
+    }
+    generation = compiler.compile(
+        tool=tools["generate_candidates"],
+        planner_options={"backend": "deterministic_stub", "count": 12},
+    )
+    assert generation == {"backend": "deterministic_stub", "count": 12, "seed": 0}
+    ranking = compiler.compile(
+        tool=tools["filter_rank"],
+        planner_options={
+            "top_n": 4,
+            "objectives": [
+                {"column": "plqy_pred", "direction": "maximize", "weight": 1.0}
+            ],
+            "constraints": [{"column": "sa_score", "maximum": 4.5}],
+        },
+    )
+    assert ranking == {
+        "directions": {"plqy_pred": "maximize"},
+        "hard_constraints": {"sa_score": {"max": 4.5}},
+        "score_columns": ["plqy_pred"],
+        "topn": 4,
+        "weights": {"plqy_pred": 1.0},
+    }
+
+
+def test_every_visible_tool_compiles_into_executor_snapshot_without_ignored_options(
+    tmp_path: Path,
+) -> None:
+    from ai4s_agent.executor import RunPlanExecutor
+
+    storage, run_dir = _storage_with_run(tmp_path)
+    artifact_dir = run_dir / "snapshot-inputs"
+    artifact_dir.mkdir()
+    artifact_paths: dict[str, str] = {}
+    registry = AtomicTaskRegistry()
+    for task in registry.list_tasks():
+        for artifact_id in {
+            *task.required_artifacts,
+            *task.optional_input_artifacts,
+        }:
+            path = artifact_dir / f"{artifact_id}.json"
+            payload = {"property_id": "plqy", "properties": [{"property_id": "plqy"}]}
+            if artifact_id == "model_metadata":
+                model_file = artifact_dir / "model.pkl"
+                model_file.write_bytes(b"model")
+                payload["model_path"] = str(model_file)
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            artifact_paths[artifact_id] = str(path)
+    artifact_paths["uploaded_dataset"] = str(artifact_dir / "uploaded_dataset.json")
+
+    planner_options = {
+        "clean_dataset": {"drop_empty_target_rows": True},
+        "train_model": {"backend": "baseline", "property_id": "plqy"},
+        "generate_candidates": {"backend": "deterministic_stub", "count": 8},
+        "predict_candidates": {"property_id": "plqy"},
+        "filter_rank": {
+            "top_n": 3,
+            "objectives": [
+                {"column": "plqy_pred", "direction": "maximize", "weight": 1.0}
+            ],
+        },
+    }
+    catalog = build_scientific_tool_catalog(registry)
+    option_compiler = PlannerOptionCompiler()
+    executor = RunPlanExecutor(storage=storage, registry=registry)
+    for tool in catalog.tools:
+        options = planner_options.get(tool.tool_id, {})
+        assert Draft202012Validator(tool.option_schema).is_valid(options)
+        compiled = option_compiler.compile(tool=tool, planner_options=options)
+        run_plan = RunPlan(
+            run_id=run_dir.name,
+            requested_tasks=[tool.task_id],
+            tasks=[
+                PlannedTask(
+                    task_id=tool.task_id,
+                    required_artifacts=list(tool.required_input_artifact_ids),
+                    output_artifacts=list(tool.output_artifact_ids),
+                )
+            ],
+            available_artifacts=sorted(artifact_paths),
+        )
+        snapshot = executor._execution_snapshot(
+            task_id=tool.task_id,
+            spec_default_adapter=registry.get(tool.task_id).default_adapter,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            approved_gates=set(tool.required_gates),
+            options=compiled,
+        )
+        assert snapshot["task_options"] == compiled
+        for key, value in compiled.items():
+            if key == "adapter":
+                assert snapshot["adapter"] == value
+            else:
+                assert key in snapshot["payload"]
+                assert snapshot["payload"][key] == value
 
 
 def test_proposal_storage_is_exact_no_replace_and_detects_stale_sources(tmp_path: Path) -> None:
@@ -749,7 +1107,12 @@ def test_proposal_storage_is_exact_no_replace_and_detects_stale_sources(tmp_path
     published_bytes = b"".join(
         path.read_bytes() for path in sorted(proposal_dir.iterdir())
     )
-    for canary in (b"/Users/benton/private.csv", b"cluster.internal", b"sk-test-canary", b"private paper text"):
+    for canary in (
+        _private_path_canary().encode("utf-8"),
+        b"cluster.internal",
+        b"sk-test-canary",
+        b"private paper text",
+    ):
         assert canary not in published_bytes
     replay = store.publish(
         observation=observation,
@@ -871,6 +1234,203 @@ def test_service_request_idempotency_separates_semantics_from_publication(tmp_pa
     assert second_publication.proposal_digest != first.proposal_digest
     assert _proposal_dir(storage, first.proposal_id).is_dir()
     assert _proposal_dir(storage, second_publication.proposal_id).is_dir()
+
+
+def test_cross_process_same_request_calls_llm_once(tmp_path: Path) -> None:
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("cross-process file-lock acceptance requires fork")
+    storage, _ = _storage_with_run(tmp_path)
+    workspace = str(storage.workspace_dir)
+    counter = str(tmp_path / "llm-calls.log")
+    context = multiprocessing.get_context("fork")
+    start_event = context.Event()
+    result_queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_multiprocess_plan_worker,
+            kwargs={
+                "workspace_dir": workspace,
+                "counter_path": counter,
+                "request_id": "request-process-replay",
+                "goal": "Prepare a reviewable scientific plan",
+                "start_event": start_event,
+                "result_queue": result_queue,
+            },
+        )
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    start_event.set()
+    for process in processes:
+        process.join(timeout=15)
+        assert process.exitcode == 0
+    results = [result_queue.get(timeout=2) for _ in processes]
+    assert [result[0] for result in results] == ["success", "success"]
+    assert results[0][1] == results[1][1]
+    assert Path(counter).read_text(encoding="utf-8").splitlines() == ["llm-call"]
+
+
+def test_cross_process_same_request_different_payload_fails_before_second_llm(
+    tmp_path: Path,
+) -> None:
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("cross-process file-lock acceptance requires fork")
+    storage, _ = _storage_with_run(tmp_path)
+    workspace = str(storage.workspace_dir)
+    counter = str(tmp_path / "llm-calls.log")
+    context = multiprocessing.get_context("fork")
+    start_event = context.Event()
+    result_queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_multiprocess_plan_worker,
+            kwargs={
+                "workspace_dir": workspace,
+                "counter_path": counter,
+                "request_id": "request-process-conflict",
+                "goal": goal,
+                "start_event": start_event,
+                "result_queue": result_queue,
+            },
+        )
+        for goal in ("Plan OLED screening", "Plan a different OLED objective")
+    ]
+    for process in processes:
+        process.start()
+    start_event.set()
+    for process in processes:
+        process.join(timeout=15)
+        assert process.exitcode == 0
+    results = [result_queue.get(timeout=2) for _ in processes]
+    assert sorted(result[0] for result in results) == [
+        "ScientificAgentPlanPublicationConflict",
+        "success",
+    ]
+    assert Path(counter).read_text(encoding="utf-8").splitlines() == ["llm-call"]
+
+
+@pytest.mark.parametrize(
+    "fault_phase",
+    ["after_publication_file_3", "after_publication_rename", "before_request_commit"],
+)
+def test_new_process_recovers_checkpointed_publication_without_repeating_llm(
+    tmp_path: Path,
+    fault_phase: str,
+) -> None:
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("cross-process recovery acceptance requires fork")
+    storage, _ = _storage_with_run(tmp_path)
+    workspace = str(storage.workspace_dir)
+    counter = str(tmp_path / "llm-calls.log")
+    context = multiprocessing.get_context("fork")
+    first_event = context.Event()
+    first_queue = context.Queue()
+    first = context.Process(
+        target=_multiprocess_plan_worker,
+        kwargs={
+            "workspace_dir": workspace,
+            "counter_path": counter,
+            "request_id": "request-crash-recovery",
+            "goal": "Prepare a reviewable scientific plan",
+            "start_event": first_event,
+            "result_queue": first_queue,
+            "fault_phase": fault_phase,
+        },
+    )
+    first.start()
+    first_event.set()
+    first.join(timeout=15)
+    assert first.exitcode == 0
+    assert first_queue.get(timeout=2)[0] == "RuntimeError"
+
+    second_event = context.Event()
+    second_queue = context.Queue()
+    second = context.Process(
+        target=_multiprocess_plan_worker,
+        kwargs={
+            "workspace_dir": workspace,
+            "counter_path": counter,
+            "request_id": "request-crash-recovery",
+            "goal": "Prepare a reviewable scientific plan",
+            "start_event": second_event,
+            "result_queue": second_queue,
+        },
+    )
+    second.start()
+    second_event.set()
+    second.join(timeout=15)
+    assert second.exitcode == 0
+    assert second_queue.get(timeout=2)[0] == "success"
+    assert Path(counter).read_text(encoding="utf-8").splitlines() == ["llm-call"]
+
+    request_dir = (
+        storage.projects_root
+        / "project-1"
+        / "agent_plan_requests"
+        / "request-crash-recovery"
+    )
+    assert json.loads((request_dir / "reservation.json").read_text())["status"] == "RESERVED"
+    assert json.loads((request_dir / "planning.json").read_text())["status"] == "PLANNING"
+    assert json.loads((request_dir / "publication_pending.json").read_text())[
+        "status"
+    ] == "PUBLICATION_PENDING"
+    assert json.loads((request_dir / "committed.json").read_text())["status"] == "COMMITTED"
+
+
+def test_crash_after_llm_without_checkpoint_enters_typed_recovery_without_second_call(
+    tmp_path: Path,
+) -> None:
+    storage, run_dir = _storage_with_run(tmp_path)
+
+    class CountingProvider(StubLLMProvider):
+        def __init__(self) -> None:
+            super().__init__(response=_response().model_dump(mode="json"))
+            self.calls = 0
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            return super().complete_json(**kwargs)
+
+    def crash_after_llm(phase: str) -> None:
+        if phase == "after_llm_response":
+            raise RuntimeError("simulated process loss after provider response")
+
+    builder = AgentProjectObservationBuilder(storage=storage, clock=_clock)
+    crashing_store = ScientificAgentPlanProposalStore(
+        storage=storage,
+        observation_builder=builder,
+        fault_injector=crash_after_llm,
+    )
+    first_provider = CountingProvider()
+    with pytest.raises(RuntimeError, match="process loss"):
+        ScientificAgentPlanService(
+            storage=storage,
+            observation_builder=builder,
+            proposal_store=crashing_store,
+            clock=_clock,
+        ).create_proposal(
+            project_id="project-1",
+            run_id=run_dir.name,
+            goal="Prepare a reviewable scientific plan",
+            user_constraints=[],
+            provider=first_provider,
+            client_request_id="request-uncertain-provider-result",
+        )
+    assert first_provider.calls == 1
+
+    second_provider = CountingProvider()
+    with pytest.raises(ScientificAgentPlanRecoveryRequired) as exc_info:
+        ScientificAgentPlanService(storage=storage, clock=_clock).create_proposal(
+            project_id="project-1",
+            run_id=run_dir.name,
+            goal="Prepare a reviewable scientific plan",
+            user_constraints=[],
+            provider=second_provider,
+            client_request_id="request-uncertain-provider-result",
+        )
+    assert exc_info.value.state == "PLANNING"
+    assert second_provider.calls == 0
 
 
 def test_service_creation_isolated_from_execution_authority(tmp_path: Path, monkeypatch) -> None:

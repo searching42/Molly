@@ -288,6 +288,32 @@ def _agent_safe_value(value: Any, path: str = "value") -> Any:
     return value
 
 
+def _agent_safe_compiled_task_value(value: Any, path: str = "value") -> Any:
+    """Allow one deterministic server-owned adapter binding in compiled options.
+
+    LLM-originated options continue to use :func:`_agent_safe_value`, where an
+    ``adapter`` key is forbidden.  Persisted proposals are independently
+    recompiled from the registry before they are accepted as exact bytes.
+    """
+
+    _validate_json_safe(value, path)
+    if isinstance(value, str):
+        return _agent_safe_text(value, field=path)
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized = _agent_normalize_contract_key(key)
+            if normalized == "adapter":
+                _agent_identifier(item, field=f"{path}.{key}")
+                continue
+            if normalized in _AGENT_FORBIDDEN_KEY_TOKENS:
+                raise ValueError(f"{path}.{key} is not allowed in compiled task options")
+            _agent_safe_compiled_task_value(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _agent_safe_compiled_task_value(item, f"{path}[{index}]")
+    return value
+
+
 def _agent_string_list(
     value: list[str],
     *,
@@ -1032,10 +1058,22 @@ ArtifactTrustClass = Literal[
     "unavailable",
 ]
 
+ScientificPermission = Literal[
+    "read_content_bound_input",
+    "derive_project_artifact",
+    "external_document_processing",
+    "model_training_compute",
+    "model_inference_compute",
+    "candidate_generation_compute",
+    "scientific_dataset_confirmation",
+]
+
 
 class AtomicTaskSpec(BaseModel):
     task_id: str
     required_artifacts: list[str] = Field(default_factory=list)
+    optional_input_artifacts: list[str] = Field(default_factory=list)
+    input_artifact_alternatives: list[list[str]] = Field(default_factory=list)
     output_artifacts: list[str] = Field(default_factory=list)
     risk_level: RiskLevel = RiskLevel.LOW
     gates: list[str] = Field(default_factory=list)
@@ -1048,10 +1086,14 @@ class AtomicTaskSpec(BaseModel):
     label: str = ""
     description: str = ""
     effect_class: ScientificEffectClass | None = None
-    required_permissions: list[str] = Field(default_factory=list)
+    required_permissions: list[ScientificPermission] = Field(default_factory=list)
     option_schema: dict[str, Any] | None = None
+    option_compiler_version: str = ""
     logical_profile_requirements: list[str] = Field(default_factory=list)
-    accepted_input_trust_classes: list[ArtifactTrustClass] = Field(default_factory=list)
+    backend_profile_requirements: dict[str, list[str]] = Field(default_factory=dict)
+    accepted_input_trust_classes_by_artifact: dict[str, list[ArtifactTrustClass]] = Field(
+        default_factory=dict
+    )
     budget_dimensions: list[str] = Field(default_factory=list)
     supports_plan_preapproval: bool = False
     idempotency_policy: str = "server_checked"
@@ -1072,8 +1114,12 @@ class AtomicTaskSpec(BaseModel):
             "effect_class",
             "required_permissions",
             "option_schema",
+            "option_compiler_version",
             "logical_profile_requirements",
-            "accepted_input_trust_classes",
+            "backend_profile_requirements",
+            "optional_input_artifacts",
+            "input_artifact_alternatives",
+            "accepted_input_trust_classes_by_artifact",
             "budget_dimensions",
             "supports_plan_preapproval",
             "idempotency_policy",
@@ -1093,9 +1139,35 @@ class AtomicTaskSpec(BaseModel):
         if self.option_schema is None:
             raise ValueError("planner-visible atomic task requires an explicit option schema")
         _agent_validate_option_schema(self.option_schema)
-        if self.required_artifacts and not self.accepted_input_trust_classes:
+        if not self.option_compiler_version.strip():
+            raise ValueError("planner-visible atomic task requires an option compiler version")
+        all_inputs = {
+            *self.required_artifacts,
+            *self.optional_input_artifacts,
+            *(artifact for group in self.input_artifact_alternatives for artifact in group),
+        }
+        alternative_inputs = {
+            artifact for group in self.input_artifact_alternatives for artifact in group
+        }
+        if any(not group or len(group) != len(set(group)) for group in self.input_artifact_alternatives):
+            raise ValueError("planner-visible input artifact alternatives must be non-empty and unique")
+        if not alternative_inputs.issubset(set(self.optional_input_artifacts)):
+            raise ValueError("input artifact alternatives must reference optional input artifacts")
+        trust_inputs = set(self.accepted_input_trust_classes_by_artifact)
+        if trust_inputs != all_inputs:
             raise ValueError(
-                "planner-visible atomic task with inputs requires explicit accepted artifact trust classes"
+                "planner-visible input trust policy must exactly cover every declared input artifact"
+            )
+        if any(
+            not trust_classes or "unavailable" in trust_classes
+            for trust_classes in self.accepted_input_trust_classes_by_artifact.values()
+        ):
+            raise ValueError("planner-visible artifact trust policies must be non-empty and available")
+        backend_schema = self.option_schema.get("properties", {}).get("backend", {})
+        backend_values = set(backend_schema.get("enum", [])) if isinstance(backend_schema, dict) else set()
+        if set(self.backend_profile_requirements) != backend_values:
+            raise ValueError(
+                "backend profile requirements must exactly cover the planner backend enum"
             )
         if not self.verification_policy.strip():
             raise ValueError("planner-visible atomic task requires an explicit verification policy")
@@ -1129,10 +1201,13 @@ class ScientificToolSpec(BaseModel):
     label: str
     description: str
     input_artifact_ids: list[str] = Field(default_factory=list)
+    required_input_artifact_ids: list[str] = Field(default_factory=list)
+    optional_input_artifact_ids: list[str] = Field(default_factory=list)
+    input_artifact_alternatives: list[list[str]] = Field(default_factory=list)
     output_artifact_ids: list[str] = Field(default_factory=list)
     effect_class: ScientificEffectClass
     risk_level: Literal["low", "medium", "high"]
-    required_permissions: list[str] = Field(default_factory=list)
+    required_permissions: list[ScientificPermission] = Field(default_factory=list)
     required_gates: list[str] = Field(default_factory=list)
     option_schema: dict[str, Any] = Field(
         default_factory=lambda: {
@@ -1142,8 +1217,12 @@ class ScientificToolSpec(BaseModel):
             "additionalProperties": False,
         }
     )
+    option_compiler_version: str
     logical_profile_requirements: list[str] = Field(default_factory=list)
-    accepted_input_trust_classes: list[ArtifactTrustClass] = Field(default_factory=list)
+    backend_profile_requirements: dict[str, list[str]] = Field(default_factory=dict)
+    accepted_input_trust_classes_by_artifact: dict[str, list[ArtifactTrustClass]] = Field(
+        default_factory=dict
+    )
     budget_dimensions: list[str] = Field(default_factory=list)
     supports_plan_preapproval: bool = False
     idempotency_policy: Literal["none", "replay_safe", "server_checked"] = "server_checked"
@@ -1162,6 +1241,8 @@ class ScientificToolSpec(BaseModel):
 
     @field_validator(
         "input_artifact_ids",
+        "required_input_artifact_ids",
+        "optional_input_artifact_ids",
         "output_artifact_ids",
         "required_permissions",
         "required_gates",
@@ -1172,14 +1253,15 @@ class ScientificToolSpec(BaseModel):
     def validate_identifier_lists(cls, value: list[str], info: Any) -> list[str]:
         return _agent_string_list(value, field=info.field_name, sort_values=True)
 
-    @field_validator("accepted_input_trust_classes")
+    @field_validator("option_compiler_version")
     @classmethod
-    def validate_trust_classes(cls, value: list[ArtifactTrustClass]) -> list[ArtifactTrustClass]:
-        if len(value) != len(set(value)):
-            raise ValueError("accepted input artifact trust classes must be unique")
-        if "unavailable" in value:
-            raise ValueError("planner tools must not accept unavailable artifacts")
-        return sorted(value)
+    def validate_option_compiler_version(cls, value: str) -> str:
+        return _agent_safe_text(
+            value,
+            field="option_compiler_version",
+            max_length=128,
+            allow_empty=False,
+        )
 
     @field_validator("option_schema")
     @classmethod
@@ -1192,8 +1274,32 @@ class ScientificToolSpec(BaseModel):
             raise ValueError("ScientificToolSpec instances in the planner catalog must be visible")
         if self.task_id in self.output_artifact_ids:
             raise ValueError("tool output artifact IDs must not equal the task ID")
-        if self.input_artifact_ids and not self.accepted_input_trust_classes:
-            raise ValueError("tool input contract requires accepted artifact trust classes")
+        aggregate = sorted(
+            {
+                *self.required_input_artifact_ids,
+                *self.optional_input_artifact_ids,
+                *(artifact for group in self.input_artifact_alternatives for artifact in group),
+            }
+        )
+        if self.input_artifact_ids != aggregate:
+            raise ValueError("tool input artifact roster must equal its structured input contract")
+        if any(not group or len(group) != len(set(group)) for group in self.input_artifact_alternatives):
+            raise ValueError("tool input artifact alternatives must be non-empty and unique")
+        if not {
+            artifact for group in self.input_artifact_alternatives for artifact in group
+        }.issubset(set(self.optional_input_artifact_ids)):
+            raise ValueError("tool input alternatives must reference optional input artifacts")
+        if set(self.accepted_input_trust_classes_by_artifact) != set(self.input_artifact_ids):
+            raise ValueError("tool input trust policy must exactly cover its input artifact roster")
+        for artifact_id, trust_classes in self.accepted_input_trust_classes_by_artifact.items():
+            if len(trust_classes) != len(set(trust_classes)) or not trust_classes:
+                raise ValueError(f"tool input trust classes must be non-empty and unique: {artifact_id}")
+            if "unavailable" in trust_classes:
+                raise ValueError("planner tools must not accept unavailable artifacts")
+        backend_schema = self.option_schema.get("properties", {}).get("backend", {})
+        backend_values = set(backend_schema.get("enum", [])) if isinstance(backend_schema, dict) else set()
+        if set(self.backend_profile_requirements) != backend_values:
+            raise ValueError("tool backend profile requirements must cover its backend enum")
         return self
 
 
@@ -1728,7 +1834,11 @@ class AgentExecutionPlanProposal(BaseModel):
     tool_catalog_digest: str
     validated_llm_response: AgentExecutionPlanLLMResponse
     run_plan: RunPlan
-    task_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    planner_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    compiled_task_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    option_compiler_version: Literal["scientific-planner-option-compiler.v1"] = (
+        "scientific-planner-option-compiler.v1"
+    )
     selected_artifacts: list[str] = Field(default_factory=list)
     selected_profiles: list[str] = Field(default_factory=list)
     limits: dict[str, Any] = Field(default_factory=dict)
@@ -1791,15 +1901,24 @@ class AgentExecutionPlanProposal(BaseModel):
     def validate_proposal_digests(cls, value: str, info: Any) -> str:
         return _agent_digest_value(value, field=info.field_name)
 
-    @field_validator("task_options")
+    @field_validator("planner_options", "compiled_task_options")
     @classmethod
-    def validate_compiled_options(cls, value: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    def validate_proposal_options(
+        cls,
+        value: dict[str, dict[str, Any]],
+        info: Any,
+    ) -> dict[str, dict[str, Any]]:
         normalized: dict[str, dict[str, Any]] = {}
         for key, options in value.items():
-            task_id = _agent_identifier(key, field="task_options key")
+            task_id = _agent_identifier(key, field=f"{info.field_name} key")
             if not isinstance(options, dict):
-                raise ValueError("compiled task options must be objects")
-            normalized[task_id] = _agent_safe_value(options, f"task_options.{task_id}")
+                raise ValueError(f"{info.field_name} values must be objects")
+            validator = (
+                _agent_safe_compiled_task_value
+                if info.field_name == "compiled_task_options"
+                else _agent_safe_value
+            )
+            normalized[task_id] = validator(options, f"{info.field_name}.{task_id}")
         return {key: normalized[key] for key in sorted(normalized)}
 
     @field_validator("selected_artifacts", "selected_profiles", "required_gates", "missing_artifacts")
@@ -1826,6 +1945,12 @@ class AgentExecutionPlanProposal(BaseModel):
     def validate_proposal(self) -> "AgentExecutionPlanProposal":
         if self.run_plan.run_id != self.run_id:
             raise ValueError("proposal run_id must match compiled RunPlan")
+        if self.planner_options != self.validated_llm_response.task_options:
+            raise ValueError("proposal planner options must equal the validated LLM options")
+        if set(self.compiled_task_options).difference(
+            task.task_id for task in self.run_plan.tasks
+        ):
+            raise ValueError("compiled task options may only reference compiled RunPlan tasks")
         semantic_digest = _agent_digest(self.semantic_plan_material())
         if self.semantic_plan_digest and self.semantic_plan_digest != semantic_digest:
             raise ValueError("agent execution semantic plan digest mismatch")

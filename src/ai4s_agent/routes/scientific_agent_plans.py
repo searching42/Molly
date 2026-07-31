@@ -13,6 +13,7 @@ from ai4s_agent.scientific_agent_plan import (
     AgentProjectObservationBuilder,
     ScientificAgentPlanError,
     ScientificAgentPlanPublicationConflict,
+    ScientificAgentPlanRecoveryRequired,
     ScientificAgentPlanProposalStore,
     ScientificAgentPlanService,
     ScientificAgentPlanSourceChanged,
@@ -110,6 +111,14 @@ def register_scientific_agent_plan_routes(
                 return _error_response("authoritative project source changed; retry planning", 409)
             except ScientificAgentPlanPublicationConflict:
                 return _error_response("proposal ID is already bound to different content", 409)
+            except ScientificAgentPlanRecoveryRequired as exc:
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "planning request requires explicit recovery",
+                        "recovery_state": exc.state,
+                    }
+                ), 409
             except ScientificAgentPlanError:
                 return _error_response("planning proposal was rejected by server validation", 400)
             except ValueError:

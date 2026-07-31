@@ -439,9 +439,9 @@ M3.5 至少支持两种用户模式：
 | 任务 | 证据 | 工作状态 | 目标 |
 |---|---|---|---|
 | `M3H-000` 冻结 Harness 主线、权限链和 PR 队列 | `I/—/—` | `DONE` | 本节与决策日志成为规范路线 |
-| `M3H-001` 建立单一 `ScientificToolSpec` 能力契约 | `I/T/—` | `READY` | PR-BL Draft review remediation 中：必须以显式 v1 allowlist、完整 metadata 和无第二 registry drift 关闭 blocker 后再标记完成 |
-| `M3H-002` 建立脱敏 `AgentProjectObservation` | `I/T/—` | `READY` | PR-BL Draft review remediation 中：必须关闭正常 OLED prose、profile binding、artifact trust 和 privacy blocker 后再标记完成 |
-| `M3H-003` 建立 LLM 长程计划 proposal contract | `I/T/—` | `READY` | PR-BL Draft review remediation 中：必须关闭 request idempotency、first-plan storage 和 stale verification blocker 后再标记完成 |
+| `M3H-001` 建立单一 `ScientificToolSpec` 能力契约 | `I/T/—` | `READY` | PR-BL Draft review remediation：显式 allowlist、permission、artifact input、option compiler 与 backend/profile metadata 已实现，等待 CI 与 owner review 后再标记完成 |
+| `M3H-002` 建立脱敏 `AgentProjectObservation` | `I/T/—` | `READY` | PR-BL Draft review remediation：OLED prose、single-connection profile、artifact trust 与 repository privacy 定向测试已通过，等待 CI 与 owner review |
+| `M3H-003` 建立 LLM 长程计划 proposal contract | `I/T/—` | `READY` | PR-BL Draft review remediation：compiled options、跨进程 reservation 与 crash-safe publication 已实现，等待 CI 与 owner review |
 | `M3H-004` 建立 deterministic Permission Engine | `I(partial)/T(partial)/—` | `DEFERRED` | 统一 `ALLOW`、`REQUIRE_APPROVAL`、`DENY`、effect class、risk、permission、Gate 与预算判断 |
 | `M3H-005` 建立 immutable plan authorization | `I(partial)/T(partial)/—` | `DEFERRED` | 绑定 proposal、observation、RunPlan、task options、输入 artifact、profile、预算、actor 与 approval mode digest |
 | `M3H-006` 实现 approve-and-start 与两种审批模式 | `—/—/—` | `DEFERRED` | 用户批准后由 Controller 启动；不得由自由文本、external LLM consent 或 LLM 自身输出产生执行授权 |
@@ -492,7 +492,7 @@ PR-BR  M3H-013～M3H-015
 
 - `M3H-GATE-001`：LLM 可基于脱敏 observation 生成完整、schema-valid、canonical、不可替换的长程计划 proposal；未知工具、参数、状态、approval 或命令注入 fail closed。
 
-PR-BL 仍在 Draft review remediation。`M3H-GATE-001` 不标记 `V`，且在 PR #18 的 catalog、privacy、profile、artifact trust、idempotency 与 first-plan storage blocker 获得审查确认前，不将 `M3H-001`～`M3H-003` 标记 `DONE`。代表性 runtime、外部 provider 与后续 Harness execution validation 留给 PR-BM～PR-BR，且不在本 PR 中宣称完成。
+PR-BL 仍在 Draft review remediation。`M3H-GATE-001` 不标记 `V`，且在 PR #18 的 catalog、privacy、profile、artifact trust、planner/Executor option binding、跨进程 idempotency 与 crash recovery 获得 CI 和审查确认前，不将 `M3H-001`～`M3H-003` 标记 `DONE`。代表性 runtime、外部 provider 与后续 Harness execution validation 留给 PR-BM～PR-BR，且不在本 PR 中宣称完成。
 - `M3H-GATE-002`：用户可通过 `stepwise` 或 `frozen_plan` 批准 exact plan 并由同一操作启动；external LLM consent、普通聊天文字和 LLM 自身输出均不能产生执行权限。
 - `M3H-GATE-003`：Execution Agent 只能发起 allowlisted `ToolCallProposal`；Controller 能证明每次 dispatch 属于当前有效授权、预算、profile 和 artifact lineage。
 - `M3H-GATE-004`：Executor、RemoteExecutionService、`molly-worker`、Verifier 和 Artifact Registry 保持唯一真实执行与结果权威；Harness/LLM 不能伪造 `RUNNING`、`SUCCEEDED` 或 verified artifact。
@@ -885,6 +885,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 依据：PR #18 review 指出上述问题可分别阻断正常 OLED 目标、错误显示远程 profile 可用、扩大 Planner 暴露面、破坏实际 API 幂等、阻断新项目首个计划，或拒绝 raw PDF/raw dataset 的合法规划输入。
 - 影响任务：`M3H-001`～`M3H-003` 为 `I/T/— / READY`；`M3H-004`～后续任务继续 `DEFERRED`；`M3H-GATE-001` 不标记 `V`；PR-BL review remediation 成为唯一当前动作。
 - 新增风险：修复后的 v1 schema 仍可能过早冻结；显式 roster 的维护与 profile/trust metadata drift 需要后续审查；review artifact 仍可能被误读为执行 authority。
+- 批准人：repository owner。
+
+### 2026-07-31：PR-BL 第二轮契约修复继续保持 Draft
+
+- 决策：在同一 PR #18 中统一 Planner 与现有 Executor 的 option 语义，补齐 raw CSV 的显式输入绑定、跨进程 request reservation 与 crash-safe publication，并冻结 permission 和 backend-conditioned profile metadata；修复完成后仍等待 Full CI 与 owner review，不合并、不启动 PR-BM。
+- 原计划：第一轮六个 blocker 修复后进入最终审查。
+- 新计划：proposal 同时持久化 LLM-facing `planner_options` 与 server-compiled `compiled_task_options`，未来 authorization 必须绑定后者；`inspect_dataset` 接受 content-bound `uploaded_dataset` 或 confirmed dataset；相同 request ID 由跨进程锁和 immutable `RESERVED`/`PLANNING`/`PUBLICATION_PENDING`/`COMMITTED` 状态保护，publication 通过私有 staging、fsync、manifest-last 和原子 rename 提交。
+- 依据：review 指出的 Full CI repository privacy 回归、Planner/Executor 字段漂移、raw CSV 无法进入首个计划、thread-only idempotency 与空 permission/unconditional profile metadata；新增 Executor snapshot、backend/profile、双进程竞争、不同 payload、三处 publication fault recovery 和 typed ambiguous-provider recovery 测试。
+- 影响任务：`M3H-001`～`M3H-003` 继续保持 `I/T/— / READY`；`M3H-004`～后续任务继续 `DEFERRED`；`M3H-GATE-001` 不标记 `V`；PR-BL 仍是唯一当前动作。
+- 新增风险：server-owned option compiler 需要与 Executor payload 持续做契约测试；provider 已返回但 checkpoint 未落盘时只能进入 typed recovery，不能自动重复外部调用；request-private interrupted staging 需要 verifier 忽略且不得成为 publication；proposal 仍可能被误认为 execution authority。
 - 批准人：repository owner。
 
 后续路线调整必须追加：

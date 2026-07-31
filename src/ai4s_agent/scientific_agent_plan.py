@@ -9,14 +9,15 @@ source of task dependencies and execution metadata.
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import math
 import os
 import re
 import stat
-import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
@@ -48,14 +49,17 @@ from ai4s_agent.schemas import (
 
 
 SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION = "scientific-agent-long-horizon-plan.v1"
+PLANNER_OPTION_COMPILER_VERSION = "scientific-planner-option-compiler.v1"
 SOURCE_BINDING_SCHEMA_VERSION = "agent_plan_source_binding.v1"
 PROPOSAL_VERIFICATION_SCHEMA_VERSION = "agent_plan_proposal_verification.v1"
 REQUEST_BINDING_SCHEMA_VERSION = "agent_plan_request_binding.v1"
+REQUEST_CHECKPOINT_SCHEMA_VERSION = "agent_plan_request_checkpoint.v1"
+PUBLICATION_MANIFEST_SCHEMA_VERSION = "agent_plan_publication_manifest.v1"
 _SAFE_SCOPE_ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,95}$")
 _SAFE_LOGICAL_ID = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
 _MAX_SOURCE_BYTES = 16 * 1024 * 1024
 _MAX_ARTIFACT_BYTES_TO_HASH = 2 * 1024 * 1024 * 1024
-_PROPOSAL_FILES = (
+_PROPOSAL_DATA_FILES = (
     "observation.json",
     "tool_catalog.json",
     "llm_response.json",
@@ -64,8 +68,7 @@ _PROPOSAL_FILES = (
     "source_binding.json",
     "verification.json",
 )
-_STORE_LOCKS: dict[str, threading.RLock] = {}
-_STORE_LOCKS_GUARD = threading.Lock()
+_PROPOSAL_FILES = (*_PROPOSAL_DATA_FILES, "publication_manifest.json")
 
 
 class ScientificAgentPlanError(ValueError):
@@ -78,6 +81,14 @@ class ScientificAgentPlanSourceChanged(ScientificAgentPlanError):
 
 class ScientificAgentPlanPublicationConflict(ScientificAgentPlanError):
     """Raised when no-replace publication finds different bytes for an ID."""
+
+
+class ScientificAgentPlanRecoveryRequired(ScientificAgentPlanError):
+    """Raised when an interrupted external planning call cannot be replayed safely."""
+
+    def __init__(self, state: str) -> None:
+        self.state = state
+        super().__init__(f"planning request requires typed recovery from state: {state}")
 
 
 def _existing_project_dir(storage: Any, project_id: str) -> Path:
@@ -385,20 +396,46 @@ def build_scientific_tool_catalog(
             raise ScientificAgentPlanError(f"duplicate tool ID in scientific catalog: {tool_id}")
         seen_tool_ids.add(tool_id)
         try:
+            input_artifact_ids = sorted(
+                {
+                    *task.required_artifacts,
+                    *task.optional_input_artifacts,
+                    *(
+                        artifact
+                        for group in task.input_artifact_alternatives
+                        for artifact in group
+                    ),
+                }
+            )
             tool = ScientificToolSpec(
                 tool_id=tool_id,
                 task_id=task_id,
                 label=task.label,
                 description=task.description,
-                input_artifact_ids=list(task.required_artifacts),
+                input_artifact_ids=input_artifact_ids,
+                required_input_artifact_ids=list(task.required_artifacts),
+                optional_input_artifact_ids=list(task.optional_input_artifacts),
+                input_artifact_alternatives=[
+                    list(group) for group in task.input_artifact_alternatives
+                ],
                 output_artifact_ids=list(task.output_artifacts),
                 effect_class=task.effect_class,
                 risk_level=task.risk_level.value,
                 required_permissions=list(task.required_permissions),
                 required_gates=list(task.gates),
                 option_schema=dict(task.option_schema),
+                option_compiler_version=task.option_compiler_version,
                 logical_profile_requirements=list(task.logical_profile_requirements),
-                accepted_input_trust_classes=list(task.accepted_input_trust_classes),
+                backend_profile_requirements={
+                    backend: list(requirements)
+                    for backend, requirements in sorted(task.backend_profile_requirements.items())
+                },
+                accepted_input_trust_classes_by_artifact={
+                    artifact_id: list(trust_classes)
+                    for artifact_id, trust_classes in sorted(
+                        task.accepted_input_trust_classes_by_artifact.items()
+                    )
+                },
                 budget_dimensions=list(task.budget_dimensions),
                 supports_plan_preapproval=bool(task.supports_plan_preapproval),
                 idempotency_policy=task.idempotency_policy,
@@ -941,11 +978,152 @@ class AgentProjectObservationBuilder:
             )
 
 
+class PlannerOptionCompiler:
+    """Compile allowlisted planner options into canonical Executor task options."""
+
+    version = PLANNER_OPTION_COMPILER_VERSION
+    _SUPPORTED_COMPILERS = frozenset(
+        {
+            "scientific-planner-option-identity.v1",
+            "scientific-planner-option-clean-dataset.v1",
+            "scientific-planner-option-train-model.v1",
+            "scientific-planner-option-generate-candidates.v1",
+            "scientific-planner-option-filter-rank.v1",
+        }
+    )
+
+    def required_profile_terms(
+        self,
+        *,
+        tool: ScientificToolSpec,
+        planner_options: Mapping[str, Any],
+    ) -> list[str]:
+        requirements = set(tool.logical_profile_requirements)
+        backend = planner_options.get("backend")
+        if backend is not None:
+            requirements.update(tool.backend_profile_requirements.get(str(backend), []))
+        return sorted(requirements)
+
+    def compile(
+        self,
+        *,
+        tool: ScientificToolSpec,
+        planner_options: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        compiler = tool.option_compiler_version
+        if compiler not in self._SUPPORTED_COMPILERS:
+            raise ScientificAgentPlanError(
+                f"unsupported registered option compiler: {compiler}"
+            )
+        options = dict(planner_options)
+        if compiler == "scientific-planner-option-identity.v1":
+            return options
+        if compiler == "scientific-planner-option-clean-dataset.v1":
+            return {
+                "drop_empty_target_rows": bool(options.get("drop_empty_target_rows", False)),
+                "min_nonempty": int(options.get("min_nonempty", 1)),
+                "min_numeric_ratio": float(options.get("min_numeric_ratio", 0.5)),
+                "strict_smiles_cleaning": bool(options.get("strict_smiles_cleaning", True)),
+            }
+        if compiler == "scientific-planner-option-train-model.v1":
+            backend = str(options.get("backend") or "")
+            property_id = str(options.get("property_id") or "")
+            if backend == "baseline":
+                return {
+                    "n_bits": int(options.get("n_bits", 256)),
+                    "property_id": property_id,
+                }
+            if backend == "unimol":
+                if "n_bits" in options:
+                    raise ScientificAgentPlanError(
+                        "n_bits is only valid for baseline model training"
+                    )
+                return {
+                    "adapter": "train_model_unimol_legacy_adapter",
+                    "property_id": property_id,
+                }
+            raise ScientificAgentPlanError("unsupported model training backend")
+        if compiler == "scientific-planner-option-generate-candidates.v1":
+            return {
+                "backend": str(options.get("backend") or ""),
+                "count": int(options.get("count", 32)),
+                "seed": int(options.get("seed", 0)),
+            }
+        if compiler == "scientific-planner-option-filter-rank.v1":
+            objectives = options.get("objectives", [])
+            if not isinstance(objectives, list):  # schema validation should already reject this.
+                raise ScientificAgentPlanError("filter objectives must be an array")
+            columns: list[str] = []
+            directions: dict[str, str] = {}
+            weights: dict[str, float] = {}
+            for item in objectives:
+                if not isinstance(item, dict):
+                    raise ScientificAgentPlanError("filter objective must be an object")
+                column = str(item.get("column") or "")
+                if column in columns:
+                    raise ScientificAgentPlanError("filter objective columns must be unique")
+                columns.append(column)
+                directions[column] = str(item.get("direction") or "")
+                weights[column] = float(item.get("weight"))
+            hard_constraints: dict[str, dict[str, float]] = {}
+            constraints = options.get("constraints", [])
+            if not isinstance(constraints, list):
+                raise ScientificAgentPlanError("filter constraints must be an array")
+            for item in constraints:
+                if not isinstance(item, dict):
+                    raise ScientificAgentPlanError("filter constraint must be an object")
+                column = str(item.get("column") or "")
+                if column in hard_constraints:
+                    raise ScientificAgentPlanError("filter constraint columns must be unique")
+                bounds = {
+                    key: float(item[key])
+                    for key in ("minimum", "maximum")
+                    if key in item
+                }
+                if not bounds:
+                    raise ScientificAgentPlanError(
+                        "filter constraint requires a minimum or maximum"
+                    )
+                if (
+                    "minimum" in bounds
+                    and "maximum" in bounds
+                    and bounds["minimum"] > bounds["maximum"]
+                ):
+                    raise ScientificAgentPlanError(
+                        "filter constraint minimum must not exceed maximum"
+                    )
+                hard_constraints[column] = {
+                    ("min" if key == "minimum" else "max"): value
+                    for key, value in bounds.items()
+                }
+            return {
+                "directions": directions,
+                "hard_constraints": hard_constraints,
+                "score_columns": columns,
+                "topn": int(options.get("top_n")),
+                "weights": weights,
+            }
+        raise ScientificAgentPlanError("registered option compiler is unreachable")
+
+
+def _profile_matches_requirement(
+    profile: AgentExecutionProfileObservation,
+    requirement: str,
+) -> bool:
+    return requirement in {
+        profile.profile_id,
+        profile.profile_type,
+        *profile.supported_logical_task_types,
+        *profile.verified_capabilities,
+    }
+
+
 class AgentExecutionPlanCompiler:
     """Compile validated LLM suggestions through the existing task registry."""
 
     def __init__(self, *, registry: AtomicTaskRegistry | None = None) -> None:
         self.registry = registry or AtomicTaskRegistry()
+        self.option_compiler = PlannerOptionCompiler()
 
     def compile(
         self,
@@ -981,29 +1159,16 @@ class AgentExecutionPlanCompiler:
                 raise ScientificAgentPlanError(f"unknown selected artifact: {artifact_id}")
             if artifact.verification_state not in {"registered", "verified"} or not artifact.content_digest:
                 raise ScientificAgentPlanError(f"selected artifact is not currently available: {artifact_id}")
-            accepting_tools = [
-                tool
-                for tool in selected_tools
-                if artifact_id in tool.input_artifact_ids
-            ]
-            if not accepting_tools:
-                raise ScientificAgentPlanError(
-                    f"selected artifact is not part of a requested tool input contract: {artifact_id}"
-                )
-            if not any(
-                artifact.trust_class in tool.accepted_input_trust_classes
-                for tool in accepting_tools
-            ):
-                raise ScientificAgentPlanError(
-                    f"selected artifact trust class is not accepted by the requested tool: {artifact_id}"
-                )
         compiled_options: dict[str, dict[str, Any]] = {}
         for tool in selected_tools:
             options = parsed.task_options.get(tool.tool_id, {})
             validator = Draft202012Validator(tool.option_schema)
             if not validator.is_valid(options):
                 raise ScientificAgentPlanError(f"options rejected by the server schema for tool: {tool.tool_id}")
-            compiled_options[tool.task_id] = dict(options)
+            compiled_options[tool.task_id] = self.option_compiler.compile(
+                tool=tool,
+                planner_options=options,
+            )
         selected_profiles = sorted(set(parsed.selected_logical_profile_ids))
         if len(selected_profiles) != len(parsed.selected_logical_profile_ids):
             raise ScientificAgentPlanError("selected profile IDs must be unique")
@@ -1019,20 +1184,27 @@ class AgentExecutionPlanCompiler:
         required_profile_terms = {
             requirement
             for tool in selected_tools
-            for requirement in tool.logical_profile_requirements
+            for requirement in self.option_compiler.required_profile_terms(
+                tool=tool,
+                planner_options=parsed.task_options.get(tool.tool_id, {}),
+            )
         }
         for requirement in sorted(required_profile_terms):
             if not any(
-                requirement in {
-                    profile.profile_id,
-                    profile.profile_type,
-                    *profile.supported_logical_task_types,
-                    *profile.verified_capabilities,
-                }
+                _profile_matches_requirement(profile, requirement)
                 for profile in (profiles_by_id[item] for item in selected_profiles)
             ):
                 raise ScientificAgentPlanError(
                     f"selected logical profiles do not satisfy requirement: {requirement}"
+                )
+        for profile_id in selected_profiles:
+            profile = profiles_by_id[profile_id]
+            if not any(
+                _profile_matches_requirement(profile, requirement)
+                for requirement in required_profile_terms
+            ):
+                raise ScientificAgentPlanError(
+                    f"selected logical profile is not required by compiled planner options: {profile_id}"
                 )
         if observation.budget_limits.status == "configured":
             for dimension, proposed_limit in parsed.limits.items():
@@ -1055,6 +1227,30 @@ class AgentExecutionPlanCompiler:
             )
         except ValueError as exc:
             raise ScientificAgentPlanError("registered task dependency expansion failed") from exc
+        expanded_tools = {
+            tool.task_id: tool
+            for tool in observation.tool_catalog.tools
+            if tool.task_id in {task.task_id for task in run_plan.tasks}
+        }
+        for artifact_id in selected_artifacts:
+            artifact = available_by_id[artifact_id]
+            accepting_tools = [
+                tool
+                for tool in expanded_tools.values()
+                if artifact_id in tool.input_artifact_ids
+            ]
+            if not accepting_tools:
+                raise ScientificAgentPlanError(
+                    f"selected artifact is not part of the expanded plan input contract: {artifact_id}"
+                )
+            if not any(
+                artifact.trust_class
+                in tool.accepted_input_trust_classes_by_artifact.get(artifact_id, [])
+                for tool in accepting_tools
+            ):
+                raise ScientificAgentPlanError(
+                    f"selected artifact trust class is not accepted by the expanded plan: {artifact_id}"
+                )
         required_gates: list[str] = []
         for task in run_plan.tasks:
             spec = self.registry.get(task.task_id)
@@ -1062,6 +1258,24 @@ class AgentExecutionPlanCompiler:
                 if gate not in required_gates:
                     required_gates.append(gate)
         questions = list(parsed.questions)
+        for tool in expanded_tools.values():
+            for alternatives in tool.input_artifact_alternatives:
+                if any(artifact_id in selected_artifacts for artifact_id in alternatives):
+                    continue
+                question_id = "missing_artifact_choice_" + "_or_".join(alternatives)
+                if not any(item.question_id == question_id for item in questions):
+                    questions.append(
+                        AgentExecutionPlanQuestion(
+                            question_id=question_id,
+                            prompt=(
+                                "Select one content-bound input artifact: "
+                                + " or ".join(alternatives)
+                                + "."
+                            ),
+                            reason="The registered task requires one artifact from this alternative set.",
+                            blocks_proposal=True,
+                        )
+                    )
         for artifact_id in run_plan.missing_artifacts:
             question_id = f"missing_artifact_{artifact_id}"
             if not any(item.question_id == question_id for item in questions):
@@ -1104,7 +1318,12 @@ class AgentExecutionPlanCompiler:
             tool_catalog_digest=observation.tool_catalog.catalog_digest,
             validated_llm_response=parsed,
             run_plan=run_plan,
-            task_options=compiled_options,
+            planner_options={
+                tool_id: dict(options)
+                for tool_id, options in sorted(parsed.task_options.items())
+            },
+            compiled_task_options=compiled_options,
+            option_compiler_version=PLANNER_OPTION_COMPILER_VERSION,
             selected_artifacts=selected_artifacts,
             selected_profiles=selected_profiles,
             limits=dict(parsed.limits),
@@ -1229,60 +1448,67 @@ class ScientificAgentPlanService:
             goal=clean_goal,
             user_constraints=clean_constraints,
         )
-        replay = self.proposal_store.replay_request(
+        with self.proposal_store.request_session(
             project_id=clean_project_id,
             client_request_id=request_id,
             request_digest=request_digest,
-        )
-        if replay is not None:
-            return replay.proposal
-        observation = self.observation_builder.build(
-            project_id=clean_project_id,
-            run_id=clean_run_id,
-            goal=clean_goal,
-            user_constraints=clean_constraints,
-        )
-        started = time.monotonic()
-        try:
-            invocation_record = provider.complete_json(
-                messages=build_scientific_agent_plan_messages(observation=observation),
-                prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
-                response_model=AgentExecutionPlanLLMResponse,
+        ) as session:
+            replay = self.proposal_store.recover_request(session)
+            if replay is not None:
+                return replay.proposal
+            observation = self.observation_builder.build(
+                project_id=clean_project_id,
+                run_id=clean_run_id,
+                goal=clean_goal,
+                user_constraints=clean_constraints,
             )
-        except (LLMProviderError, OSError) as exc:
-            raise ScientificAgentPlanError("dedicated LLM planning call failed") from exc
-        latency_ms = max(0.0, (time.monotonic() - started) * 1000.0)
-        try:
-            parsed = AgentExecutionPlanLLMResponse.model_validate(invocation_record.parsed_output)
-            invocation = AgentLLMInvocationMetadata(
-                provider=invocation_record.provider,
-                model=invocation_record.model,
-                prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
-                response_id=invocation_record.response_id,
-                observation_digest=observation.observation_digest,
-                tool_catalog_digest=observation.tool_catalog.catalog_digest,
-                validated_output_digest=_canonical_digest(parsed.model_dump(mode="json")),
-                latency_ms=latency_ms,
+            # PLANNING means an external call may have started.  Build and
+            # validate the local observation first so a pre-provider source
+            # failure remains safely retryable under the RESERVED state.
+            self.proposal_store.mark_planning(session)
+            started = time.monotonic()
+            try:
+                invocation_record = provider.complete_json(
+                    messages=build_scientific_agent_plan_messages(observation=observation),
+                    prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
+                    response_model=AgentExecutionPlanLLMResponse,
+                )
+            except (LLMProviderError, OSError) as exc:
+                raise ScientificAgentPlanError("dedicated LLM planning call failed") from exc
+            latency_ms = max(0.0, (time.monotonic() - started) * 1000.0)
+            self.proposal_store._fault("after_llm_response")
+            try:
+                parsed = AgentExecutionPlanLLMResponse.model_validate(invocation_record.parsed_output)
+                invocation = AgentLLMInvocationMetadata(
+                    provider=invocation_record.provider,
+                    model=invocation_record.model,
+                    prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
+                    response_id=invocation_record.response_id,
+                    observation_digest=observation.observation_digest,
+                    tool_catalog_digest=observation.tool_catalog.catalog_digest,
+                    validated_output_digest=_canonical_digest(parsed.model_dump(mode="json")),
+                    latency_ms=latency_ms,
+                )
+            except ValueError as exc:
+                raise ScientificAgentPlanError("LLM planning response failed strict validation") from exc
+            self.observation_builder.assert_current(observation)
+            proposal = self.compiler.compile(
+                observation=observation,
+                response=parsed,
+                invocation=invocation,
+                created_at=self.clock(),
+                client_request_id=request_id,
+                invocation_id=f"invocation-{uuid.uuid4().hex}",
             )
-        except ValueError as exc:
-            raise ScientificAgentPlanError("LLM planning response failed strict validation") from exc
-        self.observation_builder.assert_current(observation)
-        proposal = self.compiler.compile(
-            observation=observation,
-            response=parsed,
-            invocation=invocation,
-            created_at=self.clock(),
-            client_request_id=request_id,
-            invocation_id=f"invocation-{uuid.uuid4().hex}",
-        )
-        self.proposal_store.publish(
-            observation=observation,
-            catalog=observation.tool_catalog,
-            llm_response=parsed,
-            proposal=proposal,
-            request_digest=request_digest,
-        )
-        return proposal
+            self.proposal_store.publish(
+                observation=observation,
+                catalog=observation.tool_catalog,
+                llm_response=parsed,
+                proposal=proposal,
+                request_digest=request_digest,
+                session=session,
+            )
+            return proposal
 
 
 @dataclass(frozen=True)
@@ -1317,6 +1543,37 @@ def _write_exclusive(path: Path, payload: bytes) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+    _fsync_directory(path.parent)
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def _exclusive_process_lock(path: Path):
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ScientificAgentPlanError("planning request lock is not a regular file")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
 
 def _read_exact_bytes(path: Path, *, label: str, max_bytes: int) -> bytes:
@@ -1326,9 +1583,12 @@ def _read_exact_bytes(path: Path, *, label: str, max_bytes: int) -> bytes:
     return payload
 
 
-def _store_lock(key: str) -> threading.RLock:
-    with _STORE_LOCKS_GUARD:
-        return _STORE_LOCKS.setdefault(key, threading.RLock())
+@dataclass(frozen=True)
+class ScientificAgentPlanRequestSession:
+    project_id: str
+    client_request_id: str
+    request_digest: str
+    request_dir: Path
 
 
 class ScientificAgentPlanProposalStore:
@@ -1340,10 +1600,113 @@ class ScientificAgentPlanProposalStore:
         storage: Any,
         observation_builder: AgentProjectObservationBuilder | None = None,
         registry: AtomicTaskRegistry | None = None,
+        fault_injector: Callable[[str], None] | None = None,
     ) -> None:
         self.storage = storage
         self.observation_builder = observation_builder
         self.registry = registry or getattr(observation_builder, "registry", None) or AtomicTaskRegistry()
+        self.fault_injector = fault_injector
+
+    def _fault(self, phase: str) -> None:
+        if self.fault_injector is not None:
+            self.fault_injector(phase)
+
+    @contextmanager
+    def request_session(
+        self,
+        *,
+        project_id: str,
+        client_request_id: str,
+        request_digest: str,
+    ):
+        clean_project_id = _safe_scope_id(project_id, field="project_id")
+        clean_request_id = _safe_scope_id(client_request_id, field="client_request_id")
+        request_dir = self._request_dir(
+            project_id=clean_project_id,
+            client_request_id=clean_request_id,
+            create=True,
+        )
+        if request_dir is None:  # pragma: no cover - create=True guarantees a path.
+            raise ScientificAgentPlanError("planning request storage is unavailable")
+        lock_path = request_dir / "request.lock"
+        if lock_path.is_symlink():
+            raise ScientificAgentPlanError("planning request lock is a symbolic link")
+        with _exclusive_process_lock(lock_path):
+            session = ScientificAgentPlanRequestSession(
+                project_id=clean_project_id,
+                client_request_id=clean_request_id,
+                request_digest=request_digest,
+                request_dir=request_dir,
+            )
+            reservation = {
+                "schema_version": REQUEST_BINDING_SCHEMA_VERSION,
+                "status": "RESERVED",
+                "project_id": clean_project_id,
+                "client_request_id": clean_request_id,
+                "request_digest": request_digest,
+            }
+            self._write_or_verify_request_file(
+                request_dir / "reservation.json",
+                _pretty_json_bytes(reservation),
+                conflict="client request ID is already bound to different planning content",
+            )
+            yield session
+
+    def mark_planning(self, session: ScientificAgentPlanRequestSession) -> None:
+        marker = {
+            "schema_version": REQUEST_BINDING_SCHEMA_VERSION,
+            "status": "PLANNING",
+            "project_id": session.project_id,
+            "client_request_id": session.client_request_id,
+            "request_digest": session.request_digest,
+        }
+        self._write_or_verify_request_file(
+            session.request_dir / "planning.json",
+            _pretty_json_bytes(marker),
+            conflict="planning request state differs from its reservation",
+        )
+
+    def recover_request(
+        self,
+        session: ScientificAgentPlanRequestSession,
+    ) -> ScientificAgentPlanPublication | None:
+        committed_path = session.request_dir / "committed.json"
+        if committed_path.exists() or committed_path.is_symlink():
+            committed = self._read_request_json(committed_path, label="committed planning request")
+            self._verify_request_identity(committed, session=session, expected_status="COMMITTED")
+            proposal_id = committed.get("proposal_id")
+            if not isinstance(proposal_id, str):
+                raise ScientificAgentPlanPublicationConflict("committed request binding is incomplete")
+            try:
+                return self.read(
+                    project_id=session.project_id,
+                    proposal_id=proposal_id,
+                    verify_current=True,
+                )
+            except (ScientificAgentPlanError, FileNotFoundError) as exc:
+                raise ScientificAgentPlanPublicationConflict(
+                    "committed request publication failed exact verification"
+                ) from exc
+
+        checkpoint_path = session.request_dir / "planning_checkpoint.json"
+        if checkpoint_path.exists() or checkpoint_path.is_symlink():
+            observation, catalog, llm_response, proposal = self._read_checkpoint(
+                checkpoint_path,
+                session=session,
+            )
+            return self._publish_locked(
+                observation=observation,
+                catalog=catalog,
+                llm_response=llm_response,
+                proposal=proposal,
+                session=session,
+            )
+
+        if (session.request_dir / "publication_pending.json").exists():
+            raise ScientificAgentPlanRecoveryRequired("PUBLICATION_PENDING")
+        if (session.request_dir / "planning.json").exists():
+            raise ScientificAgentPlanRecoveryRequired("PLANNING")
+        return None
 
     def publish(
         self,
@@ -1353,6 +1716,59 @@ class ScientificAgentPlanProposalStore:
         llm_response: AgentExecutionPlanLLMResponse,
         proposal: AgentExecutionPlanProposal,
         request_digest: str | None = None,
+        session: ScientificAgentPlanRequestSession | None = None,
+    ) -> ScientificAgentPlanPublication:
+        bound_request_digest = request_digest or _planning_request_digest(
+            project_id=proposal.project_id,
+            run_id=proposal.run_id,
+            goal=proposal.goal,
+            user_constraints=proposal.user_constraints,
+        )
+        if session is None:
+            with self.request_session(
+                project_id=proposal.project_id,
+                client_request_id=proposal.client_request_id,
+                request_digest=bound_request_digest,
+            ) as local_session:
+                replay = self.recover_request(local_session)
+                if replay is not None:
+                    if replay.proposal.model_dump(mode="json") != proposal.model_dump(mode="json"):
+                        raise ScientificAgentPlanPublicationConflict(
+                            "client request ID is already bound to a different proposal"
+                        )
+                    return replay
+                self.mark_planning(local_session)
+                return self._publish_locked(
+                    observation=observation,
+                    catalog=catalog,
+                    llm_response=llm_response,
+                    proposal=proposal,
+                    session=local_session,
+                )
+        if (
+            session.project_id != proposal.project_id
+            or session.client_request_id != proposal.client_request_id
+            or session.request_digest != bound_request_digest
+        ):
+            raise ScientificAgentPlanPublicationConflict(
+                "proposal publication does not match its request reservation"
+            )
+        return self._publish_locked(
+            observation=observation,
+            catalog=catalog,
+            llm_response=llm_response,
+            proposal=proposal,
+            session=session,
+        )
+
+    def _publish_locked(
+        self,
+        *,
+        observation: AgentProjectObservation,
+        catalog: ScientificToolCatalog,
+        llm_response: AgentExecutionPlanLLMResponse,
+        proposal: AgentExecutionPlanProposal,
+        session: ScientificAgentPlanRequestSession,
     ) -> ScientificAgentPlanPublication:
         if proposal.project_id != observation.project_id or proposal.run_id != observation.run_id:
             raise ScientificAgentPlanError("proposal identity does not match observation")
@@ -1375,55 +1791,47 @@ class ScientificAgentPlanProposalStore:
             llm_response=llm_response,
             proposal=proposal,
         )
-        bound_request_digest = request_digest or _planning_request_digest(
-            project_id=proposal.project_id,
-            run_id=proposal.run_id,
-            goal=proposal.goal,
-            user_constraints=proposal.user_constraints,
-        )
-        request_payload = self._request_binding_payload(
+        checkpoint = self._checkpoint_payload(
+            observation=observation,
+            catalog=catalog,
+            llm_response=llm_response,
             proposal=proposal,
-            request_digest=bound_request_digest,
+            session=session,
         )
-        request_path = self._request_binding_path(
-            project_id=proposal.project_id,
-            client_request_id=proposal.client_request_id,
-            create=True,
+        self._write_or_verify_request_file(
+            session.request_dir / "planning_checkpoint.json",
+            _pretty_json_bytes(checkpoint),
+            conflict="planning checkpoint differs from the reserved request",
         )
-        if request_path is None:  # pragma: no cover - create=True guarantees a path.
-            raise ScientificAgentPlanError("planning request storage is unavailable")
-        lock_key = str(request_path)
-        with _store_lock(lock_key):
-            if request_path.exists() or request_path.is_symlink():
-                existing_request = self._read_request_binding(request_path)
-                if existing_request != request_payload:
-                    raise ScientificAgentPlanPublicationConflict(
-                        "client request ID is already bound to different planning content"
-                    )
-            # Create the immutable publication directory only after obtaining
-            # the request lock.  A same-request retry must never race an empty
-            # directory into existence and then fail with FileExistsError.
-            proposal_dir = self._proposal_dir(
-                project_id=proposal.project_id,
-                proposal_id=proposal.proposal_id,
-                create=True,
-            )
-            existing = any((proposal_dir / filename).exists() or (proposal_dir / filename).is_symlink() for filename in _PROPOSAL_FILES)
-            if existing:
-                for filename in _PROPOSAL_FILES:
-                    path = proposal_dir / filename
-                    if path.is_symlink() or not path.is_file():
-                        raise ScientificAgentPlanPublicationConflict("existing proposal publication is incomplete")
-                    actual = _read_exact_bytes(path, label=f"proposal {filename}", max_bytes=_MAX_SOURCE_BYTES)
-                    if actual != expected[filename]:
-                        raise ScientificAgentPlanPublicationConflict(
-                            "proposal ID is already bound to different bytes"
-                        )
-            else:
-                for filename in _PROPOSAL_FILES:
-                    _write_exclusive(proposal_dir / filename, expected[filename])
-            if not request_path.exists():
-                _write_exclusive(request_path, _pretty_json_bytes(request_payload))
+        pending = {
+            "schema_version": REQUEST_BINDING_SCHEMA_VERSION,
+            "status": "PUBLICATION_PENDING",
+            "project_id": session.project_id,
+            "client_request_id": session.client_request_id,
+            "request_digest": session.request_digest,
+            "proposal_id": proposal.proposal_id,
+            "proposal_digest": proposal.proposal_digest,
+        }
+        self._write_or_verify_request_file(
+            session.request_dir / "publication_pending.json",
+            _pretty_json_bytes(pending),
+            conflict="pending publication differs from its planning checkpoint",
+        )
+        self._commit_publication(
+            expected=expected,
+            proposal=proposal,
+            session=session,
+        )
+        self._fault("before_request_commit")
+        committed = self._request_binding_payload(
+            proposal=proposal,
+            request_digest=session.request_digest,
+        ) | {"status": "COMMITTED"}
+        self._write_or_verify_request_file(
+            session.request_dir / "committed.json",
+            _pretty_json_bytes(committed),
+            conflict="committed request binding differs from the publication",
+        )
         return ScientificAgentPlanPublication(proposal=proposal, observation=observation, catalog=catalog)
 
     def replay_request(
@@ -1435,34 +1843,199 @@ class ScientificAgentPlanProposalStore:
     ) -> ScientificAgentPlanPublication | None:
         """Return an immutable replay without issuing another planning call."""
 
-        clean_project_id = _safe_scope_id(project_id, field="project_id")
-        clean_request_id = _safe_scope_id(client_request_id, field="client_request_id")
-        path = self._request_binding_path(
-            project_id=clean_project_id,
-            client_request_id=clean_request_id,
+        request_dir = self._request_dir(
+            project_id=project_id,
+            client_request_id=client_request_id,
             create=False,
         )
-        if path is None:
+        if request_dir is None:
             return None
-        payload = self._read_request_binding(path)
-        if payload.get("request_digest") != request_digest:
-            raise ScientificAgentPlanPublicationConflict(
-                "client request ID is already bound to different planning content"
+        with self.request_session(
+            project_id=project_id,
+            client_request_id=client_request_id,
+            request_digest=request_digest,
+        ) as session:
+            return self.recover_request(session)
+
+    @staticmethod
+    def _write_or_verify_request_file(
+        path: Path,
+        payload: bytes,
+        *,
+        conflict: str,
+    ) -> None:
+        if path.is_symlink():
+            raise ScientificAgentPlanError("planning request state is a symbolic link")
+        if path.exists():
+            actual = _read_exact_bytes(
+                path,
+                label="planning request state",
+                max_bytes=_MAX_SOURCE_BYTES,
             )
-        if payload.get("project_id") != clean_project_id or payload.get("client_request_id") != clean_request_id:
-            raise ScientificAgentPlanPublicationConflict("client request binding identity mismatch")
-        proposal_id = payload.get("proposal_id")
-        if not isinstance(proposal_id, str):
-            raise ScientificAgentPlanPublicationConflict("client request binding is incomplete")
-        return self.read(
-            project_id=clean_project_id,
-            proposal_id=proposal_id,
-            # A request replay is an exact read, not permission to reuse a
-            # stale plan after project state has changed.  It still avoids a
-            # second LLM invocation, but fails closed when its source binding
-            # is no longer current.
-            verify_current=True,
+            if actual != payload:
+                raise ScientificAgentPlanPublicationConflict(conflict)
+            return
+        try:
+            _write_exclusive(path, payload)
+        except FileExistsError:
+            actual = _read_exact_bytes(
+                path,
+                label="planning request state",
+                max_bytes=_MAX_SOURCE_BYTES,
+            )
+            if actual != payload:
+                raise ScientificAgentPlanPublicationConflict(conflict)
+
+    @staticmethod
+    def _read_request_json(path: Path, *, label: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(
+                _read_exact_bytes(path, label=label, max_bytes=_MAX_SOURCE_BYTES)
+            )
+        except json.JSONDecodeError as exc:
+            raise ScientificAgentPlanPublicationConflict(
+                f"{label} is not valid JSON"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ScientificAgentPlanPublicationConflict(f"{label} must be an object")
+        return payload
+
+    @staticmethod
+    def _verify_request_identity(
+        payload: Mapping[str, Any],
+        *,
+        session: ScientificAgentPlanRequestSession,
+        expected_status: str,
+    ) -> None:
+        if (
+            payload.get("schema_version") != REQUEST_BINDING_SCHEMA_VERSION
+            or payload.get("status") != expected_status
+            or payload.get("project_id") != session.project_id
+            or payload.get("client_request_id") != session.client_request_id
+            or payload.get("request_digest") != session.request_digest
+        ):
+            raise ScientificAgentPlanPublicationConflict(
+                "planning request state identity mismatch"
+            )
+
+    @staticmethod
+    def _checkpoint_payload(
+        *,
+        observation: AgentProjectObservation,
+        catalog: ScientificToolCatalog,
+        llm_response: AgentExecutionPlanLLMResponse,
+        proposal: AgentExecutionPlanProposal,
+        session: ScientificAgentPlanRequestSession,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": REQUEST_CHECKPOINT_SCHEMA_VERSION,
+            "project_id": session.project_id,
+            "client_request_id": session.client_request_id,
+            "request_digest": session.request_digest,
+            "observation": observation.model_dump(mode="json"),
+            "catalog": catalog.model_dump(mode="json"),
+            "llm_response": llm_response.model_dump(mode="json"),
+            "proposal": proposal.model_dump(mode="json"),
+        }
+
+    def _read_checkpoint(
+        self,
+        path: Path,
+        *,
+        session: ScientificAgentPlanRequestSession,
+    ) -> tuple[
+        AgentProjectObservation,
+        ScientificToolCatalog,
+        AgentExecutionPlanLLMResponse,
+        AgentExecutionPlanProposal,
+    ]:
+        payload = self._read_request_json(path, label="planning checkpoint")
+        if (
+            payload.get("schema_version") != REQUEST_CHECKPOINT_SCHEMA_VERSION
+            or payload.get("project_id") != session.project_id
+            or payload.get("client_request_id") != session.client_request_id
+            or payload.get("request_digest") != session.request_digest
+        ):
+            raise ScientificAgentPlanPublicationConflict(
+                "planning checkpoint identity mismatch"
+            )
+        try:
+            observation = AgentProjectObservation.model_validate(payload.get("observation"))
+            catalog = ScientificToolCatalog.model_validate(payload.get("catalog"))
+            llm_response = AgentExecutionPlanLLMResponse.model_validate(payload.get("llm_response"))
+            proposal = AgentExecutionPlanProposal.model_validate(payload.get("proposal"))
+        except ValueError as exc:
+            raise ScientificAgentPlanPublicationConflict(
+                "planning checkpoint failed strict validation"
+            ) from exc
+        return observation, catalog, llm_response, proposal
+
+    def _commit_publication(
+        self,
+        *,
+        expected: Mapping[str, bytes],
+        proposal: AgentExecutionPlanProposal,
+        session: ScientificAgentPlanRequestSession,
+    ) -> None:
+        root = self._planning_root(
+            project_id=proposal.project_id,
+            name="agent_plan_proposals",
+            create=True,
         )
+        if root is None:  # pragma: no cover - create=True guarantees a path.
+            raise ScientificAgentPlanError("proposal storage is unavailable")
+        target = self._proposal_target(root=root, proposal_id=proposal.proposal_id)
+        if target.exists() or target.is_symlink():
+            self._verify_publication_bytes(target, expected=expected)
+            return
+
+        staging = session.request_dir / f"publication-staging-{uuid.uuid4().hex}"
+        if staging.exists() or staging.is_symlink():  # pragma: no cover - random namespace.
+            raise ScientificAgentPlanPublicationConflict("publication staging path already exists")
+        staging.mkdir(mode=0o700, parents=False, exist_ok=False)
+        _fsync_directory(session.request_dir)
+        for index, filename in enumerate(_PROPOSAL_FILES, start=1):
+            _write_exclusive(staging / filename, expected[filename])
+            self._fault(f"after_publication_file_{index}")
+        _fsync_directory(staging)
+        try:
+            os.rename(staging, target)
+        except OSError as exc:
+            if not target.exists() or target.is_symlink():
+                raise ScientificAgentPlanPublicationConflict(
+                    "proposal publication could not be atomically committed"
+                ) from exc
+            self._verify_publication_bytes(target, expected=expected)
+        else:
+            _fsync_directory(root)
+        self._fault("after_publication_rename")
+        self._verify_publication_bytes(target, expected=expected)
+
+    @staticmethod
+    def _verify_publication_bytes(
+        proposal_dir: Path,
+        *,
+        expected: Mapping[str, bytes],
+    ) -> None:
+        if proposal_dir.is_symlink() or not proposal_dir.is_dir():
+            raise ScientificAgentPlanPublicationConflict(
+                "proposal publication is not a safe directory"
+            )
+        for filename in _PROPOSAL_FILES:
+            path = proposal_dir / filename
+            if path.is_symlink() or not path.is_file():
+                raise ScientificAgentPlanPublicationConflict(
+                    "existing proposal publication is incomplete"
+                )
+            actual = _read_exact_bytes(
+                path,
+                label=f"proposal {filename}",
+                max_bytes=_MAX_SOURCE_BYTES,
+            )
+            if actual != expected[filename]:
+                raise ScientificAgentPlanPublicationConflict(
+                    "proposal ID is already bound to different bytes"
+                )
 
     def read(
         self,
@@ -1584,7 +2157,7 @@ class ScientificAgentPlanProposalStore:
             "verified": True,
         }
         summary = self._summary_markdown(proposal)
-        return {
+        payloads = {
             "observation.json": _pretty_json_bytes(observation.model_dump(mode="json")),
             "tool_catalog.json": _pretty_json_bytes(catalog.model_dump(mode="json")),
             "llm_response.json": _pretty_json_bytes(llm_response.model_dump(mode="json")),
@@ -1593,6 +2166,21 @@ class ScientificAgentPlanProposalStore:
             "source_binding.json": _pretty_json_bytes(source_binding),
             "verification.json": _pretty_json_bytes(verification),
         }
+        manifest = {
+            "schema_version": PUBLICATION_MANIFEST_SCHEMA_VERSION,
+            "proposal_id": proposal.proposal_id,
+            "proposal_digest": proposal.proposal_digest,
+            "files": {
+                filename: {
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "size_bytes": len(payload),
+                }
+                for filename, payload in sorted(payloads.items())
+            },
+            "complete": True,
+        }
+        payloads["publication_manifest.json"] = _pretty_json_bytes(manifest)
+        return payloads
 
     @staticmethod
     def _summary_markdown(proposal: AgentExecutionPlanProposal) -> str:
@@ -1667,14 +2255,7 @@ class ScientificAgentPlanProposalStore:
             raise ScientificAgentPlanError("proposal directory is a symbolic link")
         if candidate_path.exists() and not candidate_path.is_dir():
             raise ScientificAgentPlanPublicationConflict("proposal path is not a directory")
-        if create and not candidate_path.exists():
-            try:
-                candidate_path.mkdir(mode=0o700, exist_ok=False)
-            except FileExistsError:
-                # Same-ID publishers converge below on either the exact
-                # immutable bytes or a no-replace conflict.
-                pass
-        elif not create and not candidate_path.is_dir():
+        if not candidate_path.is_dir():
             raise FileNotFoundError("proposal not found")
         if candidate_path.is_symlink() or not candidate_path.is_dir():
             raise ScientificAgentPlanPublicationConflict("proposal directory is not a safe directory")
@@ -1683,13 +2264,26 @@ class ScientificAgentPlanProposalStore:
             raise ScientificAgentPlanError("proposal directory escapes project scope")
         return candidate
 
+    @staticmethod
+    def _proposal_target(*, root: Path, proposal_id: str) -> Path:
+        clean_proposal_id = _safe_scope_id(proposal_id, field="proposal_id")
+        candidate = root / clean_proposal_id
+        if candidate.is_symlink():
+            raise ScientificAgentPlanPublicationConflict(
+                "proposal target is a symbolic link"
+            )
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(root):
+            raise ScientificAgentPlanError("proposal target escapes project scope")
+        return resolved
+
     def _find_proposal_dir(self, project_id: str, proposal_id: str) -> Path | None:
         try:
             return self._proposal_dir(project_id=project_id, proposal_id=proposal_id, create=False)
         except FileNotFoundError:
             return None
 
-    def _request_binding_path(
+    def _request_dir(
         self,
         *,
         project_id: str,
@@ -1704,16 +2298,28 @@ class ScientificAgentPlanProposalStore:
         )
         if root is None:
             return None
-        path = root / f"{clean_request_id}.json"
+        path = root / clean_request_id
         if path.is_symlink():
-            raise ScientificAgentPlanError("client request binding is a symbolic link")
-        resolved = path.resolve()
-        if not resolved.is_relative_to(root):
-            raise ScientificAgentPlanError("client request binding escapes project scope")
-        if path.exists() and not path.is_file():
-            raise ScientificAgentPlanPublicationConflict("client request binding is not a file")
+            raise ScientificAgentPlanError("client request directory is a symbolic link")
+        if path.exists() and not path.is_dir():
+            raise ScientificAgentPlanPublicationConflict(
+                "client request path is not a directory"
+            )
+        if create and not path.exists():
+            try:
+                path.mkdir(mode=0o700, parents=False, exist_ok=False)
+            except FileExistsError:
+                pass
+            _fsync_directory(root)
         if not create and not path.exists():
             return None
+        if path.is_symlink() or not path.is_dir():
+            raise ScientificAgentPlanPublicationConflict(
+                "client request directory is not safe"
+            )
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root):
+            raise ScientificAgentPlanError("client request directory escapes project scope")
         return resolved
 
     @staticmethod
@@ -1733,39 +2339,6 @@ class ScientificAgentPlanProposalStore:
             "proposal_digest": proposal.proposal_digest,
         }
 
-    @staticmethod
-    def _read_request_binding(path: Path) -> dict[str, str]:
-        if path.is_symlink() or not path.is_file():
-            raise ScientificAgentPlanPublicationConflict("client request binding is incomplete")
-        try:
-            payload = json.loads(
-                _read_exact_bytes(
-                    path,
-                    label="client request binding",
-                    max_bytes=_MAX_SOURCE_BYTES,
-                )
-            )
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise ScientificAgentPlanPublicationConflict("client request binding is invalid") from exc
-        expected_fields = {
-            "schema_version",
-            "project_id",
-            "client_request_id",
-            "request_digest",
-            "proposal_id",
-            "publication_id",
-            "semantic_plan_id",
-            "proposal_digest",
-        }
-        if not isinstance(payload, dict) or set(payload) != expected_fields:
-            raise ScientificAgentPlanPublicationConflict("client request binding has an invalid shape")
-        if any(not isinstance(value, str) for value in payload.values()):
-            raise ScientificAgentPlanPublicationConflict("client request binding has invalid values")
-        if payload["schema_version"] != REQUEST_BINDING_SCHEMA_VERSION:
-            raise ScientificAgentPlanPublicationConflict("client request binding schema mismatch")
-        return payload
-
-
 # Short aliases make the additive contract discoverable without changing the
 # existing review-only AgentToolRegistry names.
 ScientificToolCatalogBuilder = build_scientific_tool_catalog
@@ -1774,13 +2347,16 @@ AgentPlanProposalStore = ScientificAgentPlanProposalStore
 
 __all__ = [
     "SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION",
+    "PLANNER_OPTION_COMPILER_VERSION",
     "ScientificAgentPlanError",
     "ScientificAgentPlanSourceChanged",
     "ScientificAgentPlanPublicationConflict",
+    "ScientificAgentPlanRecoveryRequired",
     "build_scientific_tool_catalog",
     "ScientificToolCatalogBuilder",
     "AgentProjectObservationBuilder",
     "AgentExecutionPlanCompiler",
+    "PlannerOptionCompiler",
     "build_scientific_agent_plan_messages",
     "ScientificAgentPlanService",
     "ScientificAgentPlanPublication",
