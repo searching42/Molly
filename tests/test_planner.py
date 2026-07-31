@@ -24,7 +24,7 @@ def test_expand_run_plan_adds_required_dependencies() -> None:
     plan = expand_run_plan(
         run_id="r1",
         requested_tasks=["render_report"],
-        available_artifacts=["candidate_dataset"],
+        available_artifacts=["candidate_dataset", "uploaded_dataset"],
     )
     ordered_ids = [task.task_id for task in plan.tasks]
     assert ordered_ids == [
@@ -48,6 +48,65 @@ def test_train_model_task_declares_promotable_model_package_outputs() -> None:
     assert "domain_model_manifest" in spec.output_artifacts
     assert "model_diagnostics_report" in spec.output_artifacts
     assert "model_package_review" in spec.output_artifacts
+
+
+def test_clean_dataset_declares_the_property_catalog_that_executor_registers() -> None:
+    spec = AtomicTaskRegistry().get("clean_dataset")
+
+    assert "property_catalog" in spec.output_artifacts
+
+
+def test_trainability_selects_cleaned_catalog_for_raw_dataset_chain() -> None:
+    plan = expand_run_plan(
+        run_id="r-raw-trainability",
+        requested_tasks=["check_trainability"],
+        available_artifacts=["uploaded_dataset"],
+    )
+
+    assert [task.task_id for task in plan.tasks] == [
+        "inspect_dataset",
+        "clean_dataset",
+        "check_trainability",
+    ]
+    check = next(task for task in plan.tasks if task.task_id == "check_trainability")
+    assert check.depends_on == ["clean_dataset"]
+    assert plan.missing_artifacts == []
+
+
+def test_trainability_selects_inspection_catalog_for_confirmed_dataset_chain() -> None:
+    plan = expand_run_plan(
+        run_id="r-confirmed-trainability",
+        requested_tasks=["check_trainability"],
+        available_artifacts=["confirmed_training_dataset"],
+    )
+
+    assert [task.task_id for task in plan.tasks] == [
+        "inspect_dataset",
+        "check_trainability",
+    ]
+    check = next(task for task in plan.tasks if task.task_id == "check_trainability")
+    assert check.depends_on == ["inspect_dataset"]
+    assert plan.missing_artifacts == []
+
+
+def test_requested_granular_producer_is_not_replaced_by_monolithic_workflow() -> None:
+    plan = expand_run_plan(
+        run_id="r-granular-literature-fallback",
+        requested_tasks=[
+            "parse_document_pdfplumber",
+            "index_corpus",
+            "retrieve_evidence",
+        ],
+        available_artifacts=["pdf_corpus"],
+    )
+
+    task_ids = [task.task_id for task in plan.tasks]
+    assert task_ids == [
+        "parse_document_pdfplumber",
+        "index_corpus",
+        "retrieve_evidence",
+    ]
+    assert "literature_to_dataset_workflow" not in task_ids
 
 
 def test_expand_run_plan_tracks_missing_artifacts_without_producers() -> None:
@@ -230,7 +289,7 @@ def test_phase3_merge_conflict_atomic_task_is_registered() -> None:
     registry = AtomicTaskRegistry()
     task = registry.get("merge_extracted_records")
 
-    assert task.required_artifacts == ["normalized_extracted_records", "citation_provenance_report"]
+    assert task.required_artifacts == ["normalized_extracted_records"]
     assert task.output_artifacts == ["merged_records", "conflict_report", "candidate_training_dataset"]
     assert task.default_adapter == "merge_extracted_records_adapter"
     assert callable(getattr(adapters, task.default_adapter))

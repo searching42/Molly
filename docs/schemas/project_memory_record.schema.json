@@ -11,7 +11,10 @@
         "remote_host",
         "parser_choice",
         "property_alias",
-        "risk_policy"
+        "risk_policy",
+        "run_plan_review",
+        "run_plan_replan_application",
+        "run_plan_resume_intent_validation"
       ],
       "title": "Category",
       "type": "string"

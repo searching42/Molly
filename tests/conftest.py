@@ -173,7 +173,15 @@ _REMOTE_MOCK_SCOPED_FILES = frozenset(
 # PR Fast keeps the complete cheap unit layer and adds these reviewed canaries.
 # Function prefixes intentionally include parameterized cases where every case
 # protects a distinct identity, path, or artifact boundary.
-_PR_FAST_FILES = frozenset({"tests/test_ui_frozen_alignment.py"})
+_PR_FAST_FILES = frozenset(
+    {
+        "tests/test_ui_frozen_alignment.py",
+        # The plan-proposal contract is a small, deterministic review-only
+        # surface with adversarial storage/privacy coverage. Keep it in the
+        # PR-fast canary so a change cannot bypass its non-execution boundary.
+        "tests/test_scientific_agent_plan.py",
+    }
+)
 _PR_FAST_NODE_PREFIXES = (
     "tests/test_api_smoke.py::test_healthz",
     "tests/test_api_smoke.py::test_index_page_",

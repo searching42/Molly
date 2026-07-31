@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 from datetime import datetime, timezone
@@ -8,7 +9,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from jsonschema import Draft202012Validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _validate_json_safe(value: Any, path: str = "value") -> Any:
@@ -143,6 +145,240 @@ def _validate_execution_request_parameters(value: Any, path: str = "user_paramet
     elif isinstance(value, list):
         for index, item in enumerate(value):
             _validate_execution_request_parameters(item, f"{path}[{index}]")
+    return value
+
+
+_AGENT_IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,95}$")
+_AGENT_DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+_AGENT_EMAIL_PATTERN = re.compile(r"\b[^\s@]+@[^\s@]+\.[^\s@]+\b")
+_AGENT_IPV4_PATTERN = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
+_AGENT_ABSOLUTE_PATH_PATTERN = re.compile(
+    r"(?:^|[\s\"'=(])/(?!/)(?:[^\s/]+/)*[^\s/]+",
+    re.IGNORECASE,
+)
+_AGENT_WINDOWS_PATH_PATTERN = re.compile(r"(?:^|[\s\"'=(])[A-Za-z]:[\\/]")
+# Prose is an input surface for scientific goals, assumptions, and questions.
+# Do not reject ordinary domain language such as "host–dopant", "triplet
+# energy", "failed validation", or "authorization review" merely because a
+# word resembles an infrastructure or authority field.  Structural fields are
+# rejected separately by exact key matching below.  These patterns therefore
+# only target concrete sensitive payloads that cannot safely enter the LLM
+# planning surface as prose.
+_AGENT_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|secret|credential)\b"
+    r"\s*[:=]\s*(?:bearer\s+)?[^\s,;]{6,}",
+    re.IGNORECASE,
+)
+_AGENT_BEARER_TOKEN_PATTERN = re.compile(r"\bbearer\s+[a-z0-9._~-]{12,}\b", re.IGNORECASE)
+_AGENT_SECRET_LITERAL_PATTERN = re.compile(
+    r"\b(?:sk|rk|pk)-[a-z0-9_-]{8,}\b|\bAIza[a-z0-9_-]{12,}\b",
+    re.IGNORECASE,
+)
+_AGENT_PRIVATE_KEY_PATTERN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE)
+_AGENT_ENV_ASSIGNMENT_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]{2,}\s*=")
+_AGENT_FORBIDDEN_KEY_TOKENS = frozenset(
+    {
+        "adapter",
+        "adapter_name",
+        "api_key",
+        "approval",
+        "approved",
+        "argv",
+        "authorization",
+        "callable",
+        "command",
+        "dispatch",
+        "environment",
+        "execute",
+        "gate_decision",
+        "hostname",
+        "ip",
+        "known_hosts",
+        "module",
+        "path",
+        "absolute_path",
+        "running",
+        "scp",
+        "shell",
+        "ssh",
+        "start_now",
+        "status_override",
+        "succeeded",
+        "failed",
+        "token",
+        "worker_command",
+    }
+)
+
+
+def _agent_normalize_contract_key(value: Any) -> str:
+    """Normalize a structured JSON key without using substring policy."""
+
+    raw = str(value or "").strip()
+    snake = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw)
+    return re.sub(r"[^a-z0-9]+", "_", snake.lower()).strip("_")
+
+
+def _agent_canonical_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _agent_digest(value: Any) -> str:
+    return f"sha256:{hashlib.sha256(_agent_canonical_bytes(value)).hexdigest()}"
+
+
+def _agent_identifier(value: Any, *, field: str, allow_empty: bool = False) -> str:
+    clean = str(value or "").strip().lower()
+    if allow_empty and not clean:
+        return ""
+    if _AGENT_IDENTIFIER_PATTERN.fullmatch(clean) is None:
+        raise ValueError(f"{field} must be a lowercase canonical identifier")
+    if str(value) != clean:
+        raise ValueError(f"{field} must use its lowercase canonical representation")
+    return clean
+
+
+def _agent_digest_value(value: Any, *, field: str, allow_empty: bool = False) -> str:
+    clean = str(value or "").strip()
+    if allow_empty and not clean:
+        return ""
+    if _AGENT_DIGEST_PATTERN.fullmatch(clean) is None:
+        raise ValueError(f"{field} must be a lowercase sha256 digest")
+    return clean
+
+
+def _agent_safe_text(value: Any, *, field: str, max_length: int = 4096, allow_empty: bool = True) -> str:
+    clean = str(value or "").strip()
+    if not allow_empty and not clean:
+        raise ValueError(f"{field} must not be empty")
+    if len(clean) > max_length or any(ord(char) < 32 and char not in "\t\n" for char in clean):
+        raise ValueError(f"{field} contains unsafe or oversized text")
+    if (
+        _AGENT_EMAIL_PATTERN.search(clean)
+        or _AGENT_IPV4_PATTERN.search(clean)
+        or _AGENT_ABSOLUTE_PATH_PATTERN.search(clean)
+        or _AGENT_WINDOWS_PATH_PATTERN.search(clean)
+        or _AGENT_SECRET_ASSIGNMENT_PATTERN.search(clean)
+        or _AGENT_BEARER_TOKEN_PATTERN.search(clean)
+        or _AGENT_SECRET_LITERAL_PATTERN.search(clean)
+        or _AGENT_PRIVATE_KEY_PATTERN.search(clean)
+        or _AGENT_ENV_ASSIGNMENT_PATTERN.search(clean)
+    ):
+        raise ValueError(f"{field} contains private infrastructure, command, credential, or authority material")
+    return clean
+
+
+def _agent_safe_value(value: Any, path: str = "value") -> Any:
+    _validate_json_safe(value, path)
+    if isinstance(value, str):
+        return _agent_safe_text(value, field=path)
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized = _agent_normalize_contract_key(key)
+            if normalized in _AGENT_FORBIDDEN_KEY_TOKENS:
+                raise ValueError(f"{path}.{key} is not allowed in a scientific agent contract")
+            _agent_safe_value(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _agent_safe_value(item, f"{path}[{index}]")
+    return value
+
+
+def _agent_string_list(
+    value: list[str],
+    *,
+    field: str,
+    unique: bool = True,
+    sort_values: bool = False,
+    max_items: int = 256,
+) -> list[str]:
+    if len(value) > max_items:
+        raise ValueError(f"{field} contains too many entries")
+    cleaned = [_agent_safe_text(item, field=f"{field}[{index}]", allow_empty=False) for index, item in enumerate(value)]
+    if unique and len(cleaned) != len(set(cleaned)):
+        raise ValueError(f"{field} must not contain duplicates")
+    return sorted(cleaned) if sort_values else cleaned
+
+
+def _agent_validate_option_schema(value: dict[str, Any]) -> dict[str, Any]:
+    _agent_safe_value(value, "option_schema")
+    if value.get("type") != "object":
+        raise ValueError("option_schema must describe an object")
+    if value.get("additionalProperties") is not False:
+        raise ValueError("option_schema must reject additional properties")
+    properties = value.get("properties", {})
+    if not isinstance(properties, dict):
+        raise ValueError("option_schema.properties must be an object")
+    allowed_schema_keys = {
+        "type",
+        "properties",
+        "required",
+        "additionalProperties",
+        "description",
+        "enum",
+        "minimum",
+        "maximum",
+        "minItems",
+        "maxItems",
+        "minLength",
+        "maxLength",
+        "items",
+    }
+
+    def visit(node: Any, path: str) -> None:
+        if not isinstance(node, dict):
+            raise ValueError(f"{path} must be an object")
+        unknown = set(node).difference(allowed_schema_keys)
+        if unknown:
+            raise ValueError(f"{path} contains unsupported schema keywords: {sorted(unknown)}")
+        node_type = node.get("type")
+        allowed_types = {
+            "string",
+            "integer",
+            "number",
+            "boolean",
+            "array",
+            "object",
+            "null",
+        }
+        if isinstance(node_type, list):
+            if (
+                len(node_type) != len(set(node_type))
+                or "null" not in node_type
+                or len(node_type) != 2
+                or any(item not in allowed_types for item in node_type)
+            ):
+                raise ValueError(
+                    f"{path}.type must be one allowlisted type or one nullable allowlisted type"
+                )
+        elif node_type is not None and node_type not in allowed_types.difference({"null"}):
+            raise ValueError(f"{path}.type is not an allowlisted scalar type")
+        if "properties" in node:
+            child_properties = node["properties"]
+            if not isinstance(child_properties, dict):
+                raise ValueError(f"{path}.properties must be an object")
+            for key, child in child_properties.items():
+                _agent_identifier(key, field=f"{path}.property")
+                visit(child, f"{path}.properties.{key}")
+        if "required" in node:
+            required = node["required"]
+            if (
+                not isinstance(required, list)
+                or any(not isinstance(item, str) for item in required)
+                or any(item not in node.get("properties", {}) for item in required)
+            ):
+                raise ValueError(f"{path}.required must name declared properties")
+        if node.get("additionalProperties") not in (None, False):
+            raise ValueError(f"{path}.additionalProperties must be false")
+        if "items" in node:
+            visit(node["items"], f"{path}.items")
+
+    visit(value, "option_schema")
     return value
 
 
@@ -796,14 +1032,241 @@ class ExtractionBenchmarkReport(BaseModel):
         return value
 
 
+ScientificEffectClass = Literal[
+    "observe",
+    "derive_local",
+    "mutate_artifacts",
+    "external_io",
+    "compute",
+    "scientific_confirm",
+    "change_objective",
+    "publish_or_promote",
+]
+
+ArtifactTrustClass = Literal[
+    "content_bound_input",
+    "registered_intermediate",
+    "verified_output",
+    "confirmed_scientific_input",
+    "unavailable",
+]
+
+ScientificPermission = Literal[
+    "read_content_bound_input",
+    "derive_project_artifact",
+    "external_document_processing",
+    "model_training_compute",
+    "model_inference_compute",
+    "candidate_generation_compute",
+    "scientific_dataset_confirmation",
+]
+
+ScientificExecutionRoute = Literal[
+    "local_executor",
+    "remote_execution_service",
+]
+
+ScientificRemoteTaskType = Literal[
+    "document_parsing",
+    "model_training",
+    "molecular_generation",
+]
+
+
 class AtomicTaskSpec(BaseModel):
     task_id: str
     required_artifacts: list[str] = Field(default_factory=list)
+    optional_input_artifacts: list[str] = Field(default_factory=list)
+    input_artifact_alternatives: list[list[str]] = Field(default_factory=list)
     output_artifacts: list[str] = Field(default_factory=list)
     risk_level: RiskLevel = RiskLevel.LOW
     gates: list[str] = Field(default_factory=list)
     default_adapter: str | None = None
     depends_on: list[str] = Field(default_factory=list)
+    # Optional server-owned projection metadata.  The existing adapter and
+    # dependency fields remain the execution authority; these fields only
+    # describe what a future planner may see.
+    scientific_tool_id: str | None = None
+    label: str = ""
+    description: str = ""
+    effect_class: ScientificEffectClass | None = None
+    required_permissions: list[ScientificPermission] = Field(default_factory=list)
+    option_schema: dict[str, Any] | None = None
+    default_planner_options: dict[str, Any] = Field(default_factory=dict)
+    backend_default_planner_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    review_required_option_ids: list[str] = Field(default_factory=list)
+    option_compiler_version: str = ""
+    logical_profile_requirements: list[str] = Field(default_factory=list)
+    backend_profile_requirements: dict[str, list[str]] = Field(default_factory=dict)
+    default_planner_backend: str | None = None
+    execution_route: ScientificExecutionRoute | None = "local_executor"
+    remote_task_type: ScientificRemoteTaskType | None = None
+    backend_execution_routes: dict[str, ScientificExecutionRoute] = Field(
+        default_factory=dict
+    )
+    backend_remote_task_types: dict[str, ScientificRemoteTaskType | None] = Field(
+        default_factory=dict
+    )
+    accepted_input_trust_classes_by_artifact: dict[str, list[ArtifactTrustClass]] = Field(
+        default_factory=dict
+    )
+    budget_dimensions: list[str] = Field(default_factory=list)
+    supports_plan_preapproval: bool = False
+    idempotency_policy: str = "server_checked"
+    verification_policy: str = ""
+    # Planner exposure is opt-in.  New registered execution tasks must be
+    # deliberately reviewed and receive complete metadata before they can be
+    # projected into the LLM-facing catalog.
+    planner_visible: bool = False
+
+    @model_validator(mode="after")
+    def validate_planner_projection_metadata(self) -> "AtomicTaskSpec":
+        if not self.planner_visible:
+            return self
+        required_fields = {
+            "scientific_tool_id",
+            "label",
+            "description",
+            "effect_class",
+            "required_permissions",
+            "option_schema",
+            "default_planner_options",
+            "backend_default_planner_options",
+            "review_required_option_ids",
+            "option_compiler_version",
+            "logical_profile_requirements",
+            "backend_profile_requirements",
+            "execution_route",
+            "remote_task_type",
+            "backend_execution_routes",
+            "backend_remote_task_types",
+            "optional_input_artifacts",
+            "input_artifact_alternatives",
+            "accepted_input_trust_classes_by_artifact",
+            "budget_dimensions",
+            "supports_plan_preapproval",
+            "idempotency_policy",
+            "verification_policy",
+            "planner_visible",
+        }
+        omitted = sorted(required_fields.difference(self.model_fields_set))
+        if omitted:
+            raise ValueError(
+                "planner-visible atomic task must explicitly set projection metadata: "
+                + ", ".join(omitted)
+            )
+        if not self.scientific_tool_id or not self.label.strip() or not self.description.strip():
+            raise ValueError("planner-visible atomic task requires non-empty tool ID, label, and description")
+        if self.effect_class is None:
+            raise ValueError("planner-visible atomic task requires an explicit effect class")
+        if self.option_schema is None:
+            raise ValueError("planner-visible atomic task requires an explicit option schema")
+        _agent_validate_option_schema(self.option_schema)
+        _agent_safe_value(self.default_planner_options, "default_planner_options")
+        option_properties = self.option_schema.get("properties", {})
+        if not set(self.default_planner_options).issubset(option_properties):
+            raise ValueError("default planner options must reference declared option properties")
+        if len(self.review_required_option_ids) != len(set(self.review_required_option_ids)):
+            raise ValueError("review-required planner option IDs must be unique")
+        if not set(self.review_required_option_ids).issubset(option_properties):
+            raise ValueError("review-required planner option IDs must reference declared properties")
+        if any(
+            option_id not in self.default_planner_options
+            or self.default_planner_options[option_id] not in (None, "", [], {})
+            for option_id in self.review_required_option_ids
+        ):
+            raise ValueError(
+                "review-required planner options must have an explicit unresolved server default"
+            )
+        if not self.option_compiler_version.strip():
+            raise ValueError("planner-visible atomic task requires an option compiler version")
+        all_inputs = {
+            *self.required_artifacts,
+            *self.optional_input_artifacts,
+            *(artifact for group in self.input_artifact_alternatives for artifact in group),
+        }
+        alternative_inputs = {
+            artifact for group in self.input_artifact_alternatives for artifact in group
+        }
+        if any(not group or len(group) != len(set(group)) for group in self.input_artifact_alternatives):
+            raise ValueError("planner-visible input artifact alternatives must be non-empty and unique")
+        if not alternative_inputs.issubset(set(self.optional_input_artifacts)):
+            raise ValueError("input artifact alternatives must reference optional input artifacts")
+        trust_inputs = set(self.accepted_input_trust_classes_by_artifact)
+        if trust_inputs != all_inputs:
+            raise ValueError(
+                "planner-visible input trust policy must exactly cover every declared input artifact"
+            )
+        if any(
+            not trust_classes or "unavailable" in trust_classes
+            for trust_classes in self.accepted_input_trust_classes_by_artifact.values()
+        ):
+            raise ValueError("planner-visible artifact trust policies must be non-empty and available")
+        backend_schema = self.option_schema.get("properties", {}).get("backend", {})
+        backend_values = set(backend_schema.get("enum", [])) if isinstance(backend_schema, dict) else set()
+        if set(self.backend_profile_requirements) != backend_values:
+            raise ValueError(
+                "backend profile requirements must exactly cover the planner backend enum"
+            )
+        if backend_values:
+            if self.default_planner_backend not in backend_values:
+                raise ValueError("backend-selected planner tasks require a registered default backend")
+            if self.execution_route is not None or self.remote_task_type is not None:
+                raise ValueError(
+                    "backend-selected execution routes must not also define a static route"
+                )
+            if set(self.backend_execution_routes) != backend_values:
+                raise ValueError(
+                    "backend execution routes must exactly cover the planner backend enum"
+                )
+            if set(self.backend_remote_task_types) != backend_values:
+                raise ValueError(
+                    "backend remote task types must exactly cover the planner backend enum"
+                )
+            if set(self.backend_default_planner_options) != backend_values:
+                raise ValueError(
+                    "backend default planner options must exactly cover the planner backend enum"
+                )
+            for backend, route in self.backend_execution_routes.items():
+                remote_type = self.backend_remote_task_types[backend]
+                if route == "remote_execution_service" and remote_type is None:
+                    raise ValueError("remote backends require a logical remote task type")
+                if route == "local_executor" and remote_type is not None:
+                    raise ValueError("local backends must not define a remote task type")
+            for backend, backend_defaults in self.backend_default_planner_options.items():
+                _agent_safe_value(
+                    backend_defaults,
+                    f"backend_default_planner_options.{backend}",
+                )
+                effective_defaults = {
+                    **self.default_planner_options,
+                    **backend_defaults,
+                    "backend": backend,
+                }
+                if not Draft202012Validator(self.option_schema).is_valid(effective_defaults):
+                    raise ValueError(
+                        f"planner defaults do not conform to the option schema for backend {backend}"
+                    )
+        else:
+            if self.default_planner_backend is not None:
+                raise ValueError("static execution routes must not define a default backend")
+            if self.execution_route is None:
+                raise ValueError("planner-visible tasks without a backend require a static route")
+            if self.backend_execution_routes or self.backend_remote_task_types:
+                raise ValueError("static execution routes must not define backend route maps")
+            if self.backend_default_planner_options:
+                raise ValueError("static execution routes must not define backend option defaults")
+            if self.execution_route == "remote_execution_service" and self.remote_task_type is None:
+                raise ValueError("remote tasks require a logical remote task type")
+            if self.execution_route == "local_executor" and self.remote_task_type is not None:
+                raise ValueError("local tasks must not define a remote task type")
+            if not Draft202012Validator(self.option_schema).is_valid(
+                self.default_planner_options
+            ):
+                raise ValueError("planner defaults do not conform to the option schema")
+        if not self.verification_policy.strip():
+            raise ValueError("planner-visible atomic task requires an explicit verification policy")
+        return self
 
 
 class PlannedTask(BaseModel):
@@ -820,6 +1283,1005 @@ class RunPlan(BaseModel):
     tasks: list[PlannedTask]
     available_artifacts: list[str] = Field(default_factory=list)
     missing_artifacts: list[str] = Field(default_factory=list)
+
+
+class ScientificToolSpec(BaseModel):
+    """Strict, LLM-facing projection of one registered atomic task."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["scientific_tool_spec.v1"] = "scientific_tool_spec.v1"
+    tool_id: str
+    task_id: str
+    label: str
+    description: str
+    input_artifact_ids: list[str] = Field(default_factory=list)
+    required_input_artifact_ids: list[str] = Field(default_factory=list)
+    optional_input_artifact_ids: list[str] = Field(default_factory=list)
+    input_artifact_alternatives: list[list[str]] = Field(default_factory=list)
+    output_artifact_ids: list[str] = Field(default_factory=list)
+    effect_class: ScientificEffectClass
+    risk_level: Literal["low", "medium", "high"]
+    required_permissions: list[ScientificPermission] = Field(default_factory=list)
+    required_gates: list[str] = Field(default_factory=list)
+    option_schema: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        }
+    )
+    default_planner_options: dict[str, Any] = Field(default_factory=dict)
+    backend_default_planner_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    review_required_option_ids: list[str] = Field(default_factory=list)
+    option_compiler_version: str
+    logical_profile_requirements: list[str] = Field(default_factory=list)
+    backend_profile_requirements: dict[str, list[str]] = Field(default_factory=dict)
+    default_planner_backend: str | None = None
+    execution_route: ScientificExecutionRoute | None = None
+    remote_task_type: ScientificRemoteTaskType | None = None
+    backend_execution_routes: dict[str, ScientificExecutionRoute] = Field(
+        default_factory=dict
+    )
+    backend_remote_task_types: dict[str, ScientificRemoteTaskType | None] = Field(
+        default_factory=dict
+    )
+    accepted_input_trust_classes_by_artifact: dict[str, list[ArtifactTrustClass]] = Field(
+        default_factory=dict
+    )
+    budget_dimensions: list[str] = Field(default_factory=list)
+    supports_plan_preapproval: bool = False
+    idempotency_policy: Literal["none", "replay_safe", "server_checked"] = "server_checked"
+    verification_policy: str
+    planner_visible: bool = True
+
+    @field_validator("tool_id", "task_id")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("label", "description", "verification_policy")
+    @classmethod
+    def validate_safe_text(cls, value: str, info: Any) -> str:
+        return _agent_safe_text(value, field=info.field_name, allow_empty=info.field_name != "label")
+
+    @field_validator(
+        "input_artifact_ids",
+        "required_input_artifact_ids",
+        "optional_input_artifact_ids",
+        "output_artifact_ids",
+        "required_permissions",
+        "required_gates",
+        "logical_profile_requirements",
+        "budget_dimensions",
+    )
+    @classmethod
+    def validate_identifier_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True)
+
+    @field_validator("option_compiler_version")
+    @classmethod
+    def validate_option_compiler_version(cls, value: str) -> str:
+        return _agent_safe_text(
+            value,
+            field="option_compiler_version",
+            max_length=128,
+            allow_empty=False,
+        )
+
+    @field_validator("option_schema")
+    @classmethod
+    def validate_options(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _agent_validate_option_schema(value)
+
+    @field_validator("default_planner_options")
+    @classmethod
+    def validate_default_planner_options(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _agent_safe_value(value, "default_planner_options")
+
+    @field_validator("review_required_option_ids")
+    @classmethod
+    def validate_review_required_option_ids(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(
+            value,
+            field="review_required_option_ids",
+            sort_values=True,
+        )
+
+    @model_validator(mode="after")
+    def validate_tool_projection(self) -> "ScientificToolSpec":
+        if not self.planner_visible:
+            raise ValueError("ScientificToolSpec instances in the planner catalog must be visible")
+        if self.task_id in self.output_artifact_ids:
+            raise ValueError("tool output artifact IDs must not equal the task ID")
+        aggregate = sorted(
+            {
+                *self.required_input_artifact_ids,
+                *self.optional_input_artifact_ids,
+                *(artifact for group in self.input_artifact_alternatives for artifact in group),
+            }
+        )
+        if self.input_artifact_ids != aggregate:
+            raise ValueError("tool input artifact roster must equal its structured input contract")
+        if any(not group or len(group) != len(set(group)) for group in self.input_artifact_alternatives):
+            raise ValueError("tool input artifact alternatives must be non-empty and unique")
+        if not {
+            artifact for group in self.input_artifact_alternatives for artifact in group
+        }.issubset(set(self.optional_input_artifact_ids)):
+            raise ValueError("tool input alternatives must reference optional input artifacts")
+        if set(self.accepted_input_trust_classes_by_artifact) != set(self.input_artifact_ids):
+            raise ValueError("tool input trust policy must exactly cover its input artifact roster")
+        for artifact_id, trust_classes in self.accepted_input_trust_classes_by_artifact.items():
+            if len(trust_classes) != len(set(trust_classes)) or not trust_classes:
+                raise ValueError(f"tool input trust classes must be non-empty and unique: {artifact_id}")
+            if "unavailable" in trust_classes:
+                raise ValueError("planner tools must not accept unavailable artifacts")
+        option_properties = self.option_schema.get("properties", {})
+        if not set(self.default_planner_options).issubset(option_properties):
+            raise ValueError("tool defaults must reference declared option properties")
+        if not set(self.review_required_option_ids).issubset(option_properties):
+            raise ValueError("tool review-required option IDs must reference declared properties")
+        if any(
+            option_id not in self.default_planner_options
+            or self.default_planner_options[option_id] not in (None, "", [], {})
+            for option_id in self.review_required_option_ids
+        ):
+            raise ValueError(
+                "tool review-required options must have an explicit unresolved server default"
+            )
+        backend_schema = self.option_schema.get("properties", {}).get("backend", {})
+        backend_values = set(backend_schema.get("enum", [])) if isinstance(backend_schema, dict) else set()
+        if set(self.backend_profile_requirements) != backend_values:
+            raise ValueError("tool backend profile requirements must cover its backend enum")
+        if backend_values:
+            if self.default_planner_backend not in backend_values:
+                raise ValueError("backend-selected tools require a registered default backend")
+            if self.execution_route is not None or self.remote_task_type is not None:
+                raise ValueError("backend-selected tools must not define a static execution route")
+            if set(self.backend_execution_routes) != backend_values:
+                raise ValueError("tool backend execution routes must cover its backend enum")
+            if set(self.backend_remote_task_types) != backend_values:
+                raise ValueError("tool backend remote task types must cover its backend enum")
+            if set(self.backend_default_planner_options) != backend_values:
+                raise ValueError("tool backend option defaults must cover its backend enum")
+            for backend, route in self.backend_execution_routes.items():
+                remote_type = self.backend_remote_task_types[backend]
+                if route == "remote_execution_service" and remote_type is None:
+                    raise ValueError("remote tool backends require a remote task type")
+                if route == "local_executor" and remote_type is not None:
+                    raise ValueError("local tool backends must not define a remote task type")
+            for backend, backend_defaults in self.backend_default_planner_options.items():
+                _agent_safe_value(
+                    backend_defaults,
+                    f"backend_default_planner_options.{backend}",
+                )
+                effective_defaults = {
+                    **self.default_planner_options,
+                    **backend_defaults,
+                    "backend": backend,
+                }
+                if not Draft202012Validator(self.option_schema).is_valid(effective_defaults):
+                    raise ValueError(
+                        f"tool defaults do not conform to the option schema for backend {backend}"
+                    )
+        else:
+            if self.default_planner_backend is not None:
+                raise ValueError("static tools must not define a default backend")
+            if self.execution_route is None:
+                raise ValueError("tools without a backend require a static execution route")
+            if self.backend_execution_routes or self.backend_remote_task_types:
+                raise ValueError("static tool routes must not define backend route maps")
+            if self.backend_default_planner_options:
+                raise ValueError("static tool routes must not define backend option defaults")
+            if self.execution_route == "remote_execution_service" and self.remote_task_type is None:
+                raise ValueError("remote tools require a remote task type")
+            if self.execution_route == "local_executor" and self.remote_task_type is not None:
+                raise ValueError("local tools must not define a remote task type")
+            if not Draft202012Validator(self.option_schema).is_valid(
+                self.default_planner_options
+            ):
+                raise ValueError("tool defaults do not conform to the option schema")
+        return self
+
+
+class ScientificToolCatalog(BaseModel):
+    """Deterministic catalog projection; never an execution registry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["scientific_tool_catalog.v1"] = "scientific_tool_catalog.v1"
+    catalog_id: str = "scientific-tool-catalog-v1"
+    tools: list[ScientificToolSpec] = Field(default_factory=list)
+    excluded_task_ids: list[str] = Field(default_factory=list)
+    catalog_digest: str = ""
+
+    @field_validator("catalog_id")
+    @classmethod
+    def validate_catalog_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="catalog_id")
+
+    @field_validator("excluded_task_ids")
+    @classmethod
+    def validate_excluded_ids(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="excluded_task_ids", sort_values=True)
+
+    @field_validator("catalog_digest")
+    @classmethod
+    def validate_catalog_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="catalog_digest", allow_empty=True)
+
+    @model_validator(mode="after")
+    def validate_catalog(self) -> "ScientificToolCatalog":
+        if len(self.tools) > 1024:
+            raise ValueError("scientific tool catalog contains too many tools")
+        tools = sorted(self.tools, key=lambda item: (item.tool_id, item.task_id))
+        tool_ids = [item.tool_id for item in tools]
+        task_ids = [item.task_id for item in tools]
+        if len(tool_ids) != len(set(tool_ids)):
+            raise ValueError("scientific tool catalog contains duplicate tool IDs")
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("scientific tool catalog contains duplicate task mappings")
+        if set(task_ids).intersection(self.excluded_task_ids):
+            raise ValueError("planner-visible and excluded task IDs must be disjoint")
+        object.__setattr__(self, "tools", tools)
+        object.__setattr__(self, "excluded_task_ids", sorted(set(self.excluded_task_ids)))
+        expected = _agent_digest(self.semantic_material())
+        if self.catalog_digest and self.catalog_digest != expected:
+            raise ValueError("scientific tool catalog digest mismatch")
+        object.__setattr__(self, "catalog_digest", expected)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "catalog_id": self.catalog_id,
+            "tools": [item.model_dump(mode="json") for item in self.tools],
+            "excluded_task_ids": list(self.excluded_task_ids),
+        }
+
+
+class AgentExecutionPlanQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: str
+    prompt: str
+    reason: str
+    blocks_proposal: bool = True
+
+    @field_validator("question_id")
+    @classmethod
+    def validate_question_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="question_id")
+
+    @field_validator("prompt", "reason")
+    @classmethod
+    def validate_question_text(cls, value: str, info: Any) -> str:
+        return _agent_safe_text(value, field=info.field_name, allow_empty=False)
+
+
+_AGENT_LIMIT_KEYS = frozenset(
+    {
+        "max_runtime_sec",
+        "max_steps",
+        "max_records",
+        "max_cost_usd",
+        "max_gpu_hours",
+    }
+)
+_AGENT_MAX_CANONICAL_RESPONSE_BYTES = 512 * 1024
+_AGENT_MAX_OBSERVATION_BYTES = 4 * 1024 * 1024
+
+
+def _agent_limits(value: dict[str, Any], *, field: str = "limits") -> dict[str, Any]:
+    _agent_safe_value(value, field)
+    unknown = set(value).difference(_AGENT_LIMIT_KEYS)
+    if unknown:
+        raise ValueError(f"{field} contains unsupported budget dimensions: {sorted(unknown)}")
+    for key, raw in value.items():
+        if raw is None:
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, int | float) or not math.isfinite(float(raw)) or float(raw) <= 0:
+            raise ValueError(f"{field}.{key} must be a positive finite number or null")
+    return {str(key): value[key] for key in sorted(value)}
+
+
+class AgentExecutionPlanLLMResponse(BaseModel):
+    """Only high-level planner suggestions; no execution or approval fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["agent_execution_plan_llm_response.v1"] = "agent_execution_plan_llm_response.v1"
+    requested_tool_ids: list[str]
+    selected_input_artifact_ids: list[str]
+    task_options: dict[str, dict[str, Any]]
+    selected_logical_profile_ids: list[str]
+    limits: dict[str, Any]
+    stop_conditions: list[str]
+    success_criteria: list[str]
+    rationales: list[str]
+    assumptions: list[str]
+    questions: list[AgentExecutionPlanQuestion]
+
+    @field_validator(
+        "requested_tool_ids",
+        "selected_input_artifact_ids",
+        "selected_logical_profile_ids",
+        "stop_conditions",
+        "success_criteria",
+        "rationales",
+        "assumptions",
+    )
+    @classmethod
+    def validate_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(
+            value,
+            field=info.field_name,
+            sort_values=info.field_name in {
+                "selected_input_artifact_ids",
+                "selected_logical_profile_ids",
+            },
+        )
+
+    @field_validator("task_options")
+    @classmethod
+    def validate_task_options(cls, value: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        if len(value) > 256:
+            raise ValueError("task_options contains too many task entries")
+        normalized: dict[str, dict[str, Any]] = {}
+        for key, options in value.items():
+            task_id = _agent_identifier(key, field="task_options key")
+            if not isinstance(options, dict):
+                raise ValueError("task_options values must be objects")
+            normalized[task_id] = _agent_safe_value(options, f"task_options.{task_id}")
+        return {key: normalized[key] for key in sorted(normalized)}
+
+    @field_validator("limits")
+    @classmethod
+    def validate_response_limits(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _agent_limits(value, field="limits")
+
+    @model_validator(mode="after")
+    def validate_non_empty_response(self) -> "AgentExecutionPlanLLMResponse":
+        if not self.requested_tool_ids and not self.questions:
+            raise ValueError("LLM planning response must select a tool or ask a question")
+        option_keys = set(self.task_options)
+        if option_keys.difference(self.requested_tool_ids):
+            raise ValueError("task_options may only reference requested tool IDs")
+        if len(_agent_canonical_bytes(self.model_dump(mode="json"))) > _AGENT_MAX_CANONICAL_RESPONSE_BYTES:
+            raise ValueError("LLM planning response exceeds the canonical size limit")
+        return self
+
+
+class AgentArtifactObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    logical_kind: str
+    content_digest: str = ""
+    size_bytes: int = 0
+    verification_state: Literal["verified", "registered", "missing", "unavailable"] = "unavailable"
+    trust_class: ArtifactTrustClass = "unavailable"
+    producer_task_id: str | None = None
+    schema_summary: dict[str, Any] = Field(default_factory=dict)
+    provenance_completeness_summary: list[str] = Field(default_factory=list)
+
+    @field_validator("artifact_id", "logical_kind")
+    @classmethod
+    def validate_artifact_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("content_digest")
+    @classmethod
+    def validate_content_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="content_digest", allow_empty=True)
+
+    @field_validator("size_bytes")
+    @classmethod
+    def validate_size(cls, value: int) -> int:
+        if isinstance(value, bool) or value < 0:
+            raise ValueError("artifact size_bytes must be a non-negative integer")
+        return value
+
+    @field_validator("producer_task_id")
+    @classmethod
+    def validate_producer(cls, value: str | None) -> str | None:
+        return None if value is None else _agent_identifier(value, field="producer_task_id")
+
+    @field_validator("schema_summary")
+    @classmethod
+    def validate_schema_summary(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _agent_safe_value(value, "schema_summary")
+
+    @field_validator("provenance_completeness_summary")
+    @classmethod
+    def validate_provenance_summary(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="provenance_completeness_summary", sort_values=True)
+
+    @model_validator(mode="after")
+    def validate_trust_binding(self) -> "AgentArtifactObservation":
+        if self.verification_state in {"missing", "unavailable"}:
+            if self.trust_class != "unavailable":
+                raise ValueError("unavailable artifacts must use the unavailable trust class")
+            return self
+        if not self.content_digest:
+            raise ValueError("available artifacts require a content digest")
+        if self.trust_class == "unavailable":
+            raise ValueError("available artifacts require a concrete trust class")
+        if self.verification_state == "verified" and self.trust_class not in {
+            "verified_output",
+            "confirmed_scientific_input",
+        }:
+            raise ValueError("verified artifacts require verified or confirmed trust class")
+        if self.verification_state == "registered" and self.trust_class not in {
+            "content_bound_input",
+            "registered_intermediate",
+        }:
+            raise ValueError("registered artifacts require input or intermediate trust class")
+        return self
+
+
+class AgentExecutionProfileObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: str
+    profile_type: str
+    declared_capabilities: list[str] = Field(default_factory=list)
+    verified_capabilities: list[str] = Field(default_factory=list)
+    availability_state: Literal["available", "unavailable", "unknown", "stale", "not_configured"]
+    capability_digest: str
+    supported_logical_task_types: list[str] = Field(default_factory=list)
+
+    @field_validator("profile_id", "profile_type")
+    @classmethod
+    def validate_profile_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("declared_capabilities", "verified_capabilities", "supported_logical_task_types")
+    @classmethod
+    def validate_capability_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True)
+
+    @field_validator("capability_digest")
+    @classmethod
+    def validate_capability_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="capability_digest")
+
+
+class AgentBudgetObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["configured", "unknown", "not_configured"] = "not_configured"
+    limits: dict[str, Any] = Field(default_factory=dict)
+    dimensions: list[str] = Field(default_factory=list)
+
+    @field_validator("limits")
+    @classmethod
+    def validate_budget_limits(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _agent_limits(value, field="budget_limits")
+
+    @field_validator("dimensions")
+    @classmethod
+    def validate_budget_dimensions(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="budget_dimensions", sort_values=True)
+
+    @model_validator(mode="after")
+    def validate_budget_state(self) -> "AgentBudgetObservation":
+        if self.status != "configured" and self.limits:
+            raise ValueError("unconfigured budget observations must not contain authoritative limits")
+        return self
+
+
+class AgentStageObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage_id: str
+    status: str
+    next_stage: str = ""
+    executed_task_ids: list[str] = Field(default_factory=list)
+    required_gate_ids: list[str] = Field(default_factory=list)
+    failure_family: str = ""
+    error_code: str = ""
+    verified_artifact_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("stage_id", "next_stage")
+    @classmethod
+    def validate_stage_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=True)
+
+    @field_validator("status")
+    @classmethod
+    def validate_stage_status(cls, value: str) -> str:
+        clean = str(value or "").strip().upper()
+        allowed = {item.value for item in RunStatus} | {"UNAVAILABLE"}
+        if clean not in allowed:
+            raise ValueError("stage status is not an allowlisted server-derived status")
+        return clean
+
+    @field_validator("executed_task_ids", "required_gate_ids", "verified_artifact_ids")
+    @classmethod
+    def validate_stage_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True)
+
+    @field_validator("failure_family", "error_code")
+    @classmethod
+    def validate_failure_fields(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=True)
+
+
+class AgentExistingPlanSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    present: bool = False
+    plan_digest: str = ""
+    requested_task_ids: list[str] = Field(default_factory=list)
+    task_ids: list[str] = Field(default_factory=list)
+    missing_artifacts: list[str] = Field(default_factory=list)
+
+    @field_validator("plan_digest")
+    @classmethod
+    def validate_plan_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="plan_digest", allow_empty=True)
+
+    @field_validator("requested_task_ids", "task_ids", "missing_artifacts")
+    @classmethod
+    def validate_plan_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True)
+
+
+class AgentProjectObservationSourceBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str
+    identity: str
+    source_digest: str
+    present: bool = True
+
+    @field_validator("source_id", "identity")
+    @classmethod
+    def validate_source_text(cls, value: str, info: Any) -> str:
+        return _agent_safe_text(value, field=info.field_name, allow_empty=False)
+
+    @field_validator("source_digest")
+    @classmethod
+    def validate_source_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="source_digest")
+
+
+class AgentProjectObservation(BaseModel):
+    """Fixed, privacy-safe, server-derived input surface for the Planner LLM."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["agent_project_observation.v1"] = "agent_project_observation.v1"
+    observation_id: str = ""
+    project_id: str
+    run_id: str
+    created_at: str
+    goal_context: str
+    explicit_constraints: list[str] = Field(default_factory=list)
+    current_stage_summary: AgentStageObservation
+    current_run_status: str
+    next_stage: str = ""
+    available_artifacts: list[AgentArtifactObservation] = Field(default_factory=list)
+    confirmed_dataset_summaries: list[dict[str, Any]] = Field(default_factory=list)
+    tool_catalog: ScientificToolCatalog
+    logical_execution_profiles: list[AgentExecutionProfileObservation] = Field(default_factory=list)
+    capability_summary: list[str] = Field(default_factory=list)
+    budget_limits: AgentBudgetObservation = Field(default_factory=AgentBudgetObservation)
+    existing_plan_summary: AgentExistingPlanSummary = Field(default_factory=AgentExistingPlanSummary)
+    blocking_questions: list[AgentExecutionPlanQuestion] = Field(default_factory=list)
+    source_bindings: list[AgentProjectObservationSourceBinding] = Field(default_factory=list)
+    observation_digest: str = ""
+
+    @field_validator("observation_id")
+    @classmethod
+    def validate_observation_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="observation_id", allow_empty=True)
+
+    @field_validator("project_id", "run_id")
+    @classmethod
+    def validate_identity(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @field_validator("goal_context")
+    @classmethod
+    def validate_goal_context(cls, value: str) -> str:
+        return _agent_safe_text(value, field="goal_context", max_length=8000, allow_empty=False)
+
+    @field_validator("explicit_constraints", "capability_summary")
+    @classmethod
+    def validate_observation_text_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True)
+
+    @field_validator("current_run_status")
+    @classmethod
+    def validate_current_run_status(cls, value: str) -> str:
+        clean = str(value or "").strip().upper()
+        allowed = {item.value for item in RunStatus} | {"UNAVAILABLE"}
+        if clean not in allowed:
+            raise ValueError("current_run_status is not an allowlisted server-derived status")
+        return clean
+
+    @field_validator("next_stage")
+    @classmethod
+    def validate_next_stage(cls, value: str) -> str:
+        return _agent_identifier(value, field="next_stage", allow_empty=True)
+
+    @field_validator("confirmed_dataset_summaries")
+    @classmethod
+    def validate_dataset_summaries(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [_agent_safe_value(item, f"confirmed_dataset_summaries[{index}]") for index, item in enumerate(value)]
+
+    @field_validator("source_bindings")
+    @classmethod
+    def validate_source_bindings(cls, value: list[AgentProjectObservationSourceBinding]) -> list[AgentProjectObservationSourceBinding]:
+        ids = [item.source_id for item in value]
+        if len(ids) != len(set(ids)):
+            raise ValueError("observation source bindings must have unique source IDs")
+        return sorted(value, key=lambda item: item.source_id)
+
+    @field_validator("observation_digest")
+    @classmethod
+    def validate_observation_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="observation_digest", allow_empty=True)
+
+    @model_validator(mode="after")
+    def validate_observation(self) -> "AgentProjectObservation":
+        artifacts = sorted(self.available_artifacts, key=lambda item: item.artifact_id)
+        profiles = sorted(self.logical_execution_profiles, key=lambda item: item.profile_id)
+        questions = sorted(self.blocking_questions, key=lambda item: item.question_id)
+        if len({item.artifact_id for item in artifacts}) != len(artifacts):
+            raise ValueError("available artifacts must have unique IDs")
+        if len({item.profile_id for item in profiles}) != len(profiles):
+            raise ValueError("logical execution profiles must have unique IDs")
+        if len(artifacts) > 10_000 or len(profiles) > 256 or len(self.confirmed_dataset_summaries) > 256:
+            raise ValueError("agent project observation exceeds the collection size limit")
+        object.__setattr__(self, "available_artifacts", artifacts)
+        object.__setattr__(self, "logical_execution_profiles", profiles)
+        object.__setattr__(self, "blocking_questions", questions)
+        if len(_agent_canonical_bytes(self.semantic_material())) > _AGENT_MAX_OBSERVATION_BYTES:
+            raise ValueError("agent project observation exceeds the canonical size limit")
+        expected = _agent_digest(self.semantic_material())
+        if self.observation_digest and self.observation_digest != expected:
+            raise ValueError("agent project observation digest mismatch")
+        object.__setattr__(self, "observation_digest", expected)
+        expected_id = f"observation-{expected.split(':', 1)[1][:32]}"
+        if self.observation_id and self.observation_id != expected_id:
+            raise ValueError("observation_id must be derived from the observation digest")
+        object.__setattr__(self, "observation_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("observation_id", None)
+        payload.pop("created_at", None)
+        payload.pop("observation_digest", None)
+        return payload
+
+
+class AgentLLMInvocationMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    model: str = ""
+    prompt_version: Literal["scientific-agent-long-horizon-plan.v1"]
+    response_id: str = ""
+    observation_digest: str
+    tool_catalog_digest: str
+    validated_output_digest: str
+    latency_ms: float | None = None
+    cost_usd: float | None = None
+
+    @field_validator("provider", "model", "response_id")
+    @classmethod
+    def validate_invocation_text(cls, value: str, info: Any) -> str:
+        return _agent_safe_text(value, field=info.field_name, max_length=512)
+
+    @field_validator("observation_digest", "tool_catalog_digest", "validated_output_digest")
+    @classmethod
+    def validate_invocation_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("latency_ms", "cost_usd")
+    @classmethod
+    def validate_invocation_numbers(cls, value: float | None, info: Any) -> float | None:
+        if value is None:
+            return None
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"{info.field_name} must be a finite non-negative number")
+        return value
+
+
+class AgentRemoteResourceRequestIntent(BaseModel):
+    """Review-only resource intent; nullable fields are never invented authority."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["not_configured", "partial", "configured"] = "not_configured"
+    gpu_count: int | None = None
+    cpu_threads: int | None = None
+    walltime_sec: int | None = None
+
+    @field_validator("gpu_count", "cpu_threads", "walltime_sec")
+    @classmethod
+    def validate_resource_value(cls, value: int | None, info: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{info.field_name} must be an integer or null")
+        if info.field_name == "gpu_count" and value < 0:
+            raise ValueError("gpu_count must be non-negative")
+        if info.field_name != "gpu_count" and value <= 0:
+            raise ValueError(f"{info.field_name} must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_status(self) -> "AgentRemoteResourceRequestIntent":
+        values = (self.gpu_count, self.cpu_threads, self.walltime_sec)
+        expected = (
+            "configured"
+            if all(value is not None for value in values)
+            else "partial"
+            if any(value is not None for value in values)
+            else "not_configured"
+        )
+        if self.status != expected:
+            raise ValueError("resource request status must match configured fields")
+        return self
+
+
+class AgentTaskDispatchIntent(BaseModel):
+    """Non-executing route binding for one canonical RunPlan task."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    execution_route: ScientificExecutionRoute
+    remote_task_type: ScientificRemoteTaskType | None = None
+    logical_profile_id: str | None = None
+    requested_resources: AgentRemoteResourceRequestIntent | None = None
+
+    @field_validator("task_id")
+    @classmethod
+    def validate_task_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="task_id")
+
+    @field_validator("logical_profile_id")
+    @classmethod
+    def validate_profile_id(cls, value: str | None) -> str | None:
+        return None if value is None else _agent_identifier(value, field="logical_profile_id")
+
+    @model_validator(mode="after")
+    def validate_route_binding(self) -> "AgentTaskDispatchIntent":
+        if self.execution_route == "local_executor":
+            if (
+                self.remote_task_type is not None
+                or self.logical_profile_id is not None
+                or self.requested_resources is not None
+            ):
+                raise ValueError("local dispatch intent must not contain remote bindings")
+            return self
+        if (
+            self.remote_task_type is None
+            or self.requested_resources is None
+        ):
+            raise ValueError("remote dispatch intent requires a task type and resource intent")
+        return self
+
+
+class AgentExecutionPlanProposal(BaseModel):
+    """Immutable review/control artifact.  It is never an execution authority."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["agent_execution_plan_proposal.v1"] = "agent_execution_plan_proposal.v1"
+    project_id: str
+    run_id: str
+    goal: str
+    user_constraints: list[str] = Field(default_factory=list)
+    planner_backend: str
+    prompt_version: Literal["scientific-agent-long-horizon-plan.v1"]
+    observation_id: str
+    observation_digest: str
+    tool_catalog_digest: str
+    validated_llm_response: AgentExecutionPlanLLMResponse
+    run_plan: RunPlan
+    planner_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    effective_planner_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    compiled_task_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    option_compiler_version: Literal["scientific-planner-option-compiler.v1"] = (
+        "scientific-planner-option-compiler.v1"
+    )
+    selected_artifacts: list[str] = Field(default_factory=list)
+    selected_profiles: list[str] = Field(default_factory=list)
+    dispatch_intents: list[AgentTaskDispatchIntent] = Field(default_factory=list)
+    limits: dict[str, Any] = Field(default_factory=dict)
+    stop_conditions: list[str] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+    rationales: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    questions: list[AgentExecutionPlanQuestion] = Field(default_factory=list)
+    required_gates: list[str] = Field(default_factory=list)
+    missing_artifacts: list[str] = Field(default_factory=list)
+    status: Literal["review_required"] = "review_required"
+    llm_invocation: AgentLLMInvocationMetadata
+    # Semantic identity names the compiled plan only.  Invocation, request,
+    # and publication identities deliberately remain separate so a retry does
+    # not collide with a new LLM call that happened to propose the same plan.
+    semantic_plan_id: str = ""
+    semantic_plan_digest: str = ""
+    invocation_id: str
+    client_request_id: str
+    publication_id: str = ""
+    # ``proposal_id`` remains the API-facing compatibility alias for the
+    # immutable publication identity.
+    proposal_id: str = ""
+    proposal_digest: str = ""
+    executable: Literal[False] = False
+    created_at: str
+
+    @field_validator("proposal_id", "semantic_plan_id", "publication_id")
+    @classmethod
+    def validate_derived_proposal_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=True)
+
+    @field_validator("invocation_id", "client_request_id")
+    @classmethod
+    def validate_request_and_invocation_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("project_id", "run_id", "observation_id")
+    @classmethod
+    def validate_proposal_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("goal")
+    @classmethod
+    def validate_proposal_goal(cls, value: str) -> str:
+        return _agent_safe_text(value, field="goal", max_length=8000, allow_empty=False)
+
+    @field_validator("user_constraints", "stop_conditions", "success_criteria", "rationales", "assumptions")
+    @classmethod
+    def validate_proposal_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=info.field_name == "user_constraints")
+
+    @field_validator("planner_backend")
+    @classmethod
+    def validate_backend(cls, value: str) -> str:
+        return _agent_safe_text(value, field="planner_backend", max_length=128, allow_empty=False)
+
+    @field_validator("observation_digest", "tool_catalog_digest")
+    @classmethod
+    def validate_proposal_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator(
+        "planner_options",
+        "effective_planner_options",
+        "compiled_task_options",
+    )
+    @classmethod
+    def validate_proposal_options(
+        cls,
+        value: dict[str, dict[str, Any]],
+        info: Any,
+    ) -> dict[str, dict[str, Any]]:
+        normalized: dict[str, dict[str, Any]] = {}
+        for key, options in value.items():
+            task_id = _agent_identifier(key, field=f"{info.field_name} key")
+            if not isinstance(options, dict):
+                raise ValueError(f"{info.field_name} values must be objects")
+            normalized[task_id] = _agent_safe_value(
+                options, f"{info.field_name}.{task_id}"
+            )
+        return {key: normalized[key] for key in sorted(normalized)}
+
+    @field_validator("selected_artifacts", "selected_profiles", "required_gates", "missing_artifacts")
+    @classmethod
+    def validate_compiled_id_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True)
+
+    @field_validator("dispatch_intents")
+    @classmethod
+    def validate_dispatch_intents(
+        cls, value: list[AgentTaskDispatchIntent]
+    ) -> list[AgentTaskDispatchIntent]:
+        task_ids = [item.task_id for item in value]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("proposal dispatch intents must have unique task IDs")
+        return sorted(value, key=lambda item: item.task_id)
+
+    @field_validator("limits")
+    @classmethod
+    def validate_proposal_limits(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _agent_limits(value, field="limits")
+
+    @field_validator("semantic_plan_digest", "proposal_digest")
+    @classmethod
+    def validate_optional_proposal_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name, allow_empty=True)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_proposal_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_proposal(self) -> "AgentExecutionPlanProposal":
+        if self.run_plan.run_id != self.run_id:
+            raise ValueError("proposal run_id must match compiled RunPlan")
+        if self.planner_options != self.validated_llm_response.task_options:
+            raise ValueError("proposal planner options must equal the validated LLM options")
+        run_plan_task_ids = {task.task_id for task in self.run_plan.tasks}
+        if set(self.effective_planner_options) != run_plan_task_ids:
+            raise ValueError(
+                "effective planner options must exactly cover the compiled RunPlan"
+            )
+        if set(self.compiled_task_options) != run_plan_task_ids:
+            raise ValueError(
+                "compiled task options must exactly cover the compiled RunPlan"
+            )
+        if {item.task_id for item in self.dispatch_intents} != run_plan_task_ids:
+            raise ValueError("proposal dispatch intents must exactly cover the compiled RunPlan")
+        semantic_digest = _agent_digest(self.semantic_plan_material())
+        if self.semantic_plan_digest and self.semantic_plan_digest != semantic_digest:
+            raise ValueError("agent execution semantic plan digest mismatch")
+        object.__setattr__(self, "semantic_plan_digest", semantic_digest)
+        expected_semantic_id = f"semantic-plan-{semantic_digest.split(':', 1)[1][:32]}"
+        if self.semantic_plan_id and self.semantic_plan_id != expected_semantic_id:
+            raise ValueError("semantic_plan_id must be derived from the semantic plan digest")
+        object.__setattr__(self, "semantic_plan_id", expected_semantic_id)
+
+        publication_seed = {
+            "project_id": self.project_id,
+            "client_request_id": self.client_request_id,
+        }
+        expected_publication_id = f"proposal-{_agent_digest(publication_seed).split(':', 1)[1][:32]}"
+        if self.publication_id and self.publication_id != expected_publication_id:
+            raise ValueError("publication_id must be derived from the project request binding")
+        object.__setattr__(self, "publication_id", expected_publication_id)
+        if self.proposal_id and self.proposal_id != expected_publication_id:
+            raise ValueError("proposal_id must equal the immutable publication ID")
+        object.__setattr__(self, "proposal_id", expected_publication_id)
+
+        expected = _agent_digest(self.publication_material())
+        if self.proposal_digest and self.proposal_digest != expected:
+            raise ValueError("agent execution plan proposal digest mismatch")
+        object.__setattr__(self, "proposal_digest", expected)
+        return self
+
+    def semantic_plan_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        for key in (
+            "proposal_id",
+            "publication_id",
+            "proposal_digest",
+            "semantic_plan_id",
+            "semantic_plan_digest",
+            "invocation_id",
+            "client_request_id",
+            "created_at",
+            "llm_invocation",
+            "planner_backend",
+        ):
+            payload.pop(key, None)
+        return payload
+
+    def publication_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("proposal_digest", None)
+        return payload
+
+    # Backward-compatible internal name used by callers that only need the
+    # semantic plan material, never the per-invocation publication envelope.
+    def semantic_material(self) -> dict[str, Any]:
+        return self.semantic_plan_material()
 
 
 class RunPlanDiff(BaseModel):
@@ -3340,6 +4802,11 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "stage_state": StageState,
     "atomic_task_spec": AtomicTaskSpec,
     "run_plan": RunPlan,
+    "scientific_tool_spec": ScientificToolSpec,
+    "scientific_tool_catalog": ScientificToolCatalog,
+    "agent_project_observation": AgentProjectObservation,
+    "agent_execution_plan_llm_response": AgentExecutionPlanLLMResponse,
+    "agent_execution_plan_proposal": AgentExecutionPlanProposal,
     "run_plan_diff": RunPlanDiff,
     "plan_rationale": PlanRationale,
     "plan_question": PlanQuestion,

@@ -1,0 +1,766 @@
+{
+  "$defs": {
+    "AgentArtifactObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "logical_kind": {
+          "title": "Logical Kind",
+          "type": "string"
+        },
+        "content_digest": {
+          "default": "",
+          "title": "Content Digest",
+          "type": "string"
+        },
+        "size_bytes": {
+          "default": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "verification_state": {
+          "default": "unavailable",
+          "enum": [
+            "verified",
+            "registered",
+            "missing",
+            "unavailable"
+          ],
+          "title": "Verification State",
+          "type": "string"
+        },
+        "trust_class": {
+          "default": "unavailable",
+          "enum": [
+            "content_bound_input",
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input",
+            "unavailable"
+          ],
+          "title": "Trust Class",
+          "type": "string"
+        },
+        "producer_task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Producer Task Id"
+        },
+        "schema_summary": {
+          "additionalProperties": true,
+          "title": "Schema Summary",
+          "type": "object"
+        },
+        "provenance_completeness_summary": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Provenance Completeness Summary",
+          "type": "array"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "logical_kind"
+      ],
+      "title": "AgentArtifactObservation",
+      "type": "object"
+    },
+    "AgentBudgetObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "default": "not_configured",
+          "enum": [
+            "configured",
+            "unknown",
+            "not_configured"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "limits": {
+          "additionalProperties": true,
+          "title": "Limits",
+          "type": "object"
+        },
+        "dimensions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dimensions",
+          "type": "array"
+        }
+      },
+      "title": "AgentBudgetObservation",
+      "type": "object"
+    },
+    "AgentExecutionPlanQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "blocks_proposal": {
+          "default": true,
+          "title": "Blocks Proposal",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "AgentExecutionPlanQuestion",
+      "type": "object"
+    },
+    "AgentExecutionProfileObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "profile_id": {
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_type": {
+          "title": "Profile Type",
+          "type": "string"
+        },
+        "declared_capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Declared Capabilities",
+          "type": "array"
+        },
+        "verified_capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Verified Capabilities",
+          "type": "array"
+        },
+        "availability_state": {
+          "enum": [
+            "available",
+            "unavailable",
+            "unknown",
+            "stale",
+            "not_configured"
+          ],
+          "title": "Availability State",
+          "type": "string"
+        },
+        "capability_digest": {
+          "title": "Capability Digest",
+          "type": "string"
+        },
+        "supported_logical_task_types": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Supported Logical Task Types",
+          "type": "array"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_type",
+        "availability_state",
+        "capability_digest"
+      ],
+      "title": "AgentExecutionProfileObservation",
+      "type": "object"
+    },
+    "AgentExistingPlanSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "present": {
+          "default": false,
+          "title": "Present",
+          "type": "boolean"
+        },
+        "plan_digest": {
+          "default": "",
+          "title": "Plan Digest",
+          "type": "string"
+        },
+        "requested_task_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requested Task Ids",
+          "type": "array"
+        },
+        "task_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Task Ids",
+          "type": "array"
+        },
+        "missing_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Artifacts",
+          "type": "array"
+        }
+      },
+      "title": "AgentExistingPlanSummary",
+      "type": "object"
+    },
+    "AgentProjectObservationSourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "identity": {
+          "title": "Identity",
+          "type": "string"
+        },
+        "source_digest": {
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "present": {
+          "default": true,
+          "title": "Present",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_id",
+        "identity",
+        "source_digest"
+      ],
+      "title": "AgentProjectObservationSourceBinding",
+      "type": "object"
+    },
+    "AgentStageObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "stage_id": {
+          "title": "Stage Id",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "next_stage": {
+          "default": "",
+          "title": "Next Stage",
+          "type": "string"
+        },
+        "executed_task_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Executed Task Ids",
+          "type": "array"
+        },
+        "required_gate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Gate Ids",
+          "type": "array"
+        },
+        "failure_family": {
+          "default": "",
+          "title": "Failure Family",
+          "type": "string"
+        },
+        "error_code": {
+          "default": "",
+          "title": "Error Code",
+          "type": "string"
+        },
+        "verified_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Verified Artifact Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "stage_id",
+        "status"
+      ],
+      "title": "AgentStageObservation",
+      "type": "object"
+    },
+    "ScientificToolCatalog": {
+      "additionalProperties": false,
+      "description": "Deterministic catalog projection; never an execution registry.",
+      "properties": {
+        "schema_version": {
+          "const": "scientific_tool_catalog.v1",
+          "default": "scientific_tool_catalog.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "catalog_id": {
+          "default": "scientific-tool-catalog-v1",
+          "title": "Catalog Id",
+          "type": "string"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ScientificToolSpec"
+          },
+          "title": "Tools",
+          "type": "array"
+        },
+        "excluded_task_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Excluded Task Ids",
+          "type": "array"
+        },
+        "catalog_digest": {
+          "default": "",
+          "title": "Catalog Digest",
+          "type": "string"
+        }
+      },
+      "title": "ScientificToolCatalog",
+      "type": "object"
+    },
+    "ScientificToolSpec": {
+      "additionalProperties": false,
+      "description": "Strict, LLM-facing projection of one registered atomic task.",
+      "properties": {
+        "schema_version": {
+          "const": "scientific_tool_spec.v1",
+          "default": "scientific_tool_spec.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tool_id": {
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "input_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Artifact Ids",
+          "type": "array"
+        },
+        "required_input_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Input Artifact Ids",
+          "type": "array"
+        },
+        "optional_input_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Optional Input Artifact Ids",
+          "type": "array"
+        },
+        "input_artifact_alternatives": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Input Artifact Alternatives",
+          "type": "array"
+        },
+        "output_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Output Artifact Ids",
+          "type": "array"
+        },
+        "effect_class": {
+          "enum": [
+            "observe",
+            "derive_local",
+            "mutate_artifacts",
+            "external_io",
+            "compute",
+            "scientific_confirm",
+            "change_objective",
+            "publish_or_promote"
+          ],
+          "title": "Effect Class",
+          "type": "string"
+        },
+        "risk_level": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Risk Level",
+          "type": "string"
+        },
+        "required_permissions": {
+          "items": {
+            "enum": [
+              "read_content_bound_input",
+              "derive_project_artifact",
+              "external_document_processing",
+              "model_training_compute",
+              "model_inference_compute",
+              "candidate_generation_compute",
+              "scientific_dataset_confirmation"
+            ],
+            "type": "string"
+          },
+          "title": "Required Permissions",
+          "type": "array"
+        },
+        "required_gates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Gates",
+          "type": "array"
+        },
+        "option_schema": {
+          "additionalProperties": true,
+          "title": "Option Schema",
+          "type": "object"
+        },
+        "default_planner_options": {
+          "additionalProperties": true,
+          "title": "Default Planner Options",
+          "type": "object"
+        },
+        "backend_default_planner_options": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Backend Default Planner Options",
+          "type": "object"
+        },
+        "review_required_option_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Review Required Option Ids",
+          "type": "array"
+        },
+        "option_compiler_version": {
+          "title": "Option Compiler Version",
+          "type": "string"
+        },
+        "logical_profile_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Logical Profile Requirements",
+          "type": "array"
+        },
+        "backend_profile_requirements": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Backend Profile Requirements",
+          "type": "object"
+        },
+        "default_planner_backend": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default Planner Backend"
+        },
+        "execution_route": {
+          "anyOf": [
+            {
+              "enum": [
+                "local_executor",
+                "remote_execution_service"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Route"
+        },
+        "remote_task_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "document_parsing",
+                "model_training",
+                "molecular_generation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Task Type"
+        },
+        "backend_execution_routes": {
+          "additionalProperties": {
+            "enum": [
+              "local_executor",
+              "remote_execution_service"
+            ],
+            "type": "string"
+          },
+          "title": "Backend Execution Routes",
+          "type": "object"
+        },
+        "backend_remote_task_types": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "enum": [
+                  "document_parsing",
+                  "model_training",
+                  "molecular_generation"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Backend Remote Task Types",
+          "type": "object"
+        },
+        "accepted_input_trust_classes_by_artifact": {
+          "additionalProperties": {
+            "items": {
+              "enum": [
+                "content_bound_input",
+                "registered_intermediate",
+                "verified_output",
+                "confirmed_scientific_input",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Accepted Input Trust Classes By Artifact",
+          "type": "object"
+        },
+        "budget_dimensions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Budget Dimensions",
+          "type": "array"
+        },
+        "supports_plan_preapproval": {
+          "default": false,
+          "title": "Supports Plan Preapproval",
+          "type": "boolean"
+        },
+        "idempotency_policy": {
+          "default": "server_checked",
+          "enum": [
+            "none",
+            "replay_safe",
+            "server_checked"
+          ],
+          "title": "Idempotency Policy",
+          "type": "string"
+        },
+        "verification_policy": {
+          "title": "Verification Policy",
+          "type": "string"
+        },
+        "planner_visible": {
+          "default": true,
+          "title": "Planner Visible",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "tool_id",
+        "task_id",
+        "label",
+        "description",
+        "effect_class",
+        "risk_level",
+        "option_compiler_version",
+        "verification_policy"
+      ],
+      "title": "ScientificToolSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Fixed, privacy-safe, server-derived input surface for the Planner LLM.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_project_observation.v1",
+      "default": "agent_project_observation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "observation_id": {
+      "default": "",
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "goal_context": {
+      "title": "Goal Context",
+      "type": "string"
+    },
+    "explicit_constraints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Explicit Constraints",
+      "type": "array"
+    },
+    "current_stage_summary": {
+      "$ref": "#/$defs/AgentStageObservation"
+    },
+    "current_run_status": {
+      "title": "Current Run Status",
+      "type": "string"
+    },
+    "next_stage": {
+      "default": "",
+      "title": "Next Stage",
+      "type": "string"
+    },
+    "available_artifacts": {
+      "items": {
+        "$ref": "#/$defs/AgentArtifactObservation"
+      },
+      "title": "Available Artifacts",
+      "type": "array"
+    },
+    "confirmed_dataset_summaries": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Confirmed Dataset Summaries",
+      "type": "array"
+    },
+    "tool_catalog": {
+      "$ref": "#/$defs/ScientificToolCatalog"
+    },
+    "logical_execution_profiles": {
+      "items": {
+        "$ref": "#/$defs/AgentExecutionProfileObservation"
+      },
+      "title": "Logical Execution Profiles",
+      "type": "array"
+    },
+    "capability_summary": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Capability Summary",
+      "type": "array"
+    },
+    "budget_limits": {
+      "$ref": "#/$defs/AgentBudgetObservation"
+    },
+    "existing_plan_summary": {
+      "$ref": "#/$defs/AgentExistingPlanSummary"
+    },
+    "blocking_questions": {
+      "items": {
+        "$ref": "#/$defs/AgentExecutionPlanQuestion"
+      },
+      "title": "Blocking Questions",
+      "type": "array"
+    },
+    "source_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentProjectObservationSourceBinding"
+      },
+      "title": "Source Bindings",
+      "type": "array"
+    },
+    "observation_digest": {
+      "default": "",
+      "title": "Observation Digest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "created_at",
+    "goal_context",
+    "current_stage_summary",
+    "current_run_status",
+    "tool_catalog"
+  ],
+  "title": "AgentProjectObservation",
+  "type": "object"
+}

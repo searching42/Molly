@@ -14,38 +14,183 @@ from ai4s_agent.schemas import (
 )
 
 
+def _closed_option_schema(
+    properties: dict[str, dict[str, object]] | None = None,
+    *,
+    required: list[str] | None = None,
+) -> dict[str, object]:
+    """Return an explicit, closed high-level planning option contract."""
+
+    return {
+        "type": "object",
+        "properties": properties or {},
+        "required": required or [],
+        "additionalProperties": False,
+    }
+
+
+def _uniform_input_trust(
+    artifact_ids: list[str],
+    trust_classes: list[str],
+) -> dict[str, list[str]]:
+    return {artifact_id: list(trust_classes) for artifact_id in artifact_ids}
+
+
 DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     AtomicTaskSpec(
         task_id="inspect_dataset",
         required_artifacts=[],
+        optional_input_artifacts=["uploaded_dataset", "confirmed_training_dataset"],
+        input_artifact_alternatives=[["uploaded_dataset", "confirmed_training_dataset"]],
         output_artifacts=["dataset_profile", "property_catalog"],
         risk_level=RiskLevel.LOW,
         default_adapter="inspect_dataset_service",
+        scientific_tool_id="inspect_dataset",
+        label="Inspect dataset",
+        description="Inspect a content-bound dataset and derive its logical profile.",
+        effect_class="observe",
+        required_permissions=["read_content_bound_input", "derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "uploaded_dataset": ["content_bound_input", "registered_intermediate"],
+            "confirmed_training_dataset": ["confirmed_scientific_input"],
+        },
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="clean_dataset",
-        required_artifacts=["dataset_profile"],
-        output_artifacts=["cleaned_train_dataset", "cleaning_rules"],
+        required_artifacts=["uploaded_dataset"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
+        output_artifacts=["cleaned_train_dataset", "cleaning_rules", "property_catalog"],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="execute_cleaning_adapter",
+        depends_on=["inspect_dataset"],
+        scientific_tool_id="clean_dataset",
+        label="Clean dataset",
+        description="Apply the registered data-cleaning workflow to a logical dataset profile.",
+        effect_class="derive_local",
+        required_permissions=["read_content_bound_input", "derive_project_artifact"],
+        option_schema=_closed_option_schema(
+            {
+                "min_numeric_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+                "min_nonempty": {"type": "integer", "minimum": 1, "maximum": 1000000000},
+                "drop_empty_target_rows": {"type": "boolean"},
+                "strict_smiles_cleaning": {"type": "boolean"},
+            }
+        ),
+        default_planner_options={
+            "drop_empty_target_rows": False,
+            "min_nonempty": 1,
+            "min_numeric_ratio": 0.5,
+            "strict_smiles_cleaning": True,
+        },
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-clean-dataset.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "uploaded_dataset": ["content_bound_input", "registered_intermediate"],
+        },
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="check_trainability",
-        required_artifacts=["cleaned_train_dataset", "property_catalog"],
+        required_artifacts=["property_catalog"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=["trainability_report"],
         risk_level=RiskLevel.LOW,
         default_adapter="check_trainability_service",
+        scientific_tool_id="check_trainability",
+        label="Check trainability",
+        description="Evaluate whether the cleaned dataset supports the registered modeling workflow.",
+        effect_class="observe",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact=_uniform_input_trust(
+            ["property_catalog"],
+            ["registered_intermediate", "verified_output", "confirmed_scientific_input"],
+        ),
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="run_baseline",
         required_artifacts=["trainability_report"],
+        optional_input_artifacts=["cleaned_train_dataset", "confirmed_training_dataset"],
+        input_artifact_alternatives=[["cleaned_train_dataset", "confirmed_training_dataset"]],
         output_artifacts=["baseline_report", "backend_recommendation"],
         risk_level=RiskLevel.LOW,
         default_adapter="run_baseline_service",
+        scientific_tool_id="run_baseline",
+        label="Run baseline assessment",
+        description="Produce the registered baseline assessment and backend recommendation.",
+        effect_class="observe",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "trainability_report": ["registered_intermediate", "verified_output"],
+            "cleaned_train_dataset": ["registered_intermediate", "verified_output"],
+            "confirmed_training_dataset": ["confirmed_scientific_input"],
+        },
+        budget_dimensions=["max_records", "max_runtime_sec"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="train_model",
-        required_artifacts=["cleaned_train_dataset", "trainability_report"],
+        required_artifacts=["trainability_report"],
+        optional_input_artifacts=["cleaned_train_dataset", "confirmed_training_dataset"],
+        input_artifact_alternatives=[["cleaned_train_dataset", "confirmed_training_dataset"]],
         output_artifacts=[
             "trained_model",
             "model_metadata",
@@ -57,43 +202,294 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         risk_level=RiskLevel.HIGH,
         gates=[GateName.TRAIN_CONFIG.value],
         default_adapter="train_model_baseline_adapter",
+        scientific_tool_id="train_model",
+        label="Train model",
+        description="Train the registered model from a reviewed training dataset and trainability report.",
+        effect_class="compute",
+        required_permissions=["derive_project_artifact", "model_training_compute"],
+        option_schema=_closed_option_schema(
+            {
+                "backend": {"type": "string", "enum": ["baseline", "unimol"]},
+                "property_id": {
+                    "type": ["string", "null"],
+                    "minLength": 1,
+                    "maxLength": 96,
+                },
+                "n_bits": {"type": "integer", "minimum": 32, "maximum": 8192},
+            },
+            required=["backend", "property_id"],
+        ),
+        default_planner_options={"backend": "baseline", "property_id": None},
+        backend_default_planner_options={
+            "baseline": {"n_bits": 256},
+            "unimol": {},
+        },
+        review_required_option_ids=["property_id"],
+        option_compiler_version="scientific-planner-option-train-model.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={"baseline": [], "unimol": ["model_training"]},
+        default_planner_backend="baseline",
+        execution_route=None,
+        remote_task_type=None,
+        backend_execution_routes={
+            "baseline": "local_executor",
+            "unimol": "remote_execution_service",
+        },
+        backend_remote_task_types={"baseline": None, "unimol": "model_training"},
+        accepted_input_trust_classes_by_artifact={
+            "trainability_report": ["registered_intermediate", "verified_output"],
+            "cleaned_train_dataset": ["registered_intermediate", "verified_output"],
+            "confirmed_training_dataset": ["confirmed_scientific_input"],
+        },
+        budget_dimensions=["max_runtime_sec", "max_gpu_hours"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="generate_candidates",
-        required_artifacts=["trained_model", "model_metadata"],
+        required_artifacts=[],
+        optional_input_artifacts=["cleaned_train_dataset", "confirmed_training_dataset"],
+        input_artifact_alternatives=[],
         output_artifacts=["candidate_dataset", "generation_report", "generation_publication"],
         risk_level=RiskLevel.MEDIUM,
         gates=[GateName.FINAL_THRESHOLD.value],
         default_adapter="generate_candidates_stub_adapter",
+        scientific_tool_id="generate_candidates",
+        label="Generate candidate molecules",
+        description="Generate candidate molecules using the registered logical generation workflow.",
+        effect_class="compute",
+        required_permissions=["derive_project_artifact", "candidate_generation_compute"],
+        option_schema=_closed_option_schema(
+            {
+                "backend": {"type": "string", "enum": ["deterministic_stub", "reinvent4"]},
+                "count": {"type": "integer", "minimum": 1, "maximum": 100000},
+                "seed": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+            },
+            required=["backend", "count"],
+        ),
+        default_planner_options={
+            "backend": "deterministic_stub",
+            "count": 32,
+            "seed": 0,
+        },
+        backend_default_planner_options={
+            "deterministic_stub": {},
+            "reinvent4": {},
+        },
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-generate-candidates.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={
+            "deterministic_stub": [],
+            "reinvent4": ["molecular_generation"],
+        },
+        default_planner_backend="deterministic_stub",
+        execution_route=None,
+        remote_task_type=None,
+        backend_execution_routes={
+            "deterministic_stub": "local_executor",
+            "reinvent4": "remote_execution_service",
+        },
+        backend_remote_task_types={
+            "deterministic_stub": None,
+            "reinvent4": "molecular_generation",
+        },
+        accepted_input_trust_classes_by_artifact={
+            "cleaned_train_dataset": ["registered_intermediate", "verified_output"],
+            "confirmed_training_dataset": ["confirmed_scientific_input"],
+        },
+        budget_dimensions=["max_runtime_sec", "max_steps"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="predict_candidates",
-        required_artifacts=["trained_model", "candidate_dataset"],
+        required_artifacts=["model_metadata", "candidate_dataset"],
+        optional_input_artifacts=["trained_model"],
+        input_artifact_alternatives=[],
         output_artifacts=["candidate_predictions"],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="predict_candidates_baseline_adapter",
+        scientific_tool_id="predict_candidates",
+        label="Predict candidate properties",
+        description="Score generated candidates with the registered prediction workflow.",
+        effect_class="compute",
+        required_permissions=["derive_project_artifact", "model_inference_compute"],
+        option_schema=_closed_option_schema(
+            {
+                "property_id": {
+                    "type": ["string", "null"],
+                    "minLength": 1,
+                    "maxLength": 96,
+                }
+            }
+        ),
+        default_planner_options={"property_id": None},
+        backend_default_planner_options={},
+        review_required_option_ids=["property_id"],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact=_uniform_input_trust(
+            ["candidate_dataset", "model_metadata", "trained_model"], ["verified_output"]
+        ),
+        budget_dimensions=["max_runtime_sec", "max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="filter_rank",
         required_artifacts=["candidate_predictions"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=["ranked_candidates", "topn_export"],
         risk_level=RiskLevel.LOW,
         default_adapter="filter_rank_adapter",
+        scientific_tool_id="filter_rank",
+        label="Filter and rank candidates",
+        description="Filter and rank candidate predictions with registered high-level criteria.",
+        effect_class="derive_local",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(
+            {
+                "top_n": {
+                    "type": ["integer", "null"],
+                    "minimum": 1,
+                    "maximum": 10000,
+                },
+                "objectives": {
+                    "type": ["array", "null"],
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "column": {"type": "string", "minLength": 1, "maxLength": 96},
+                            "direction": {"type": "string", "enum": ["maximize", "minimize"]},
+                            "weight": {"type": "number", "minimum": 0, "maximum": 1000000},
+                        },
+                        "required": ["column", "direction", "weight"],
+                        "additionalProperties": False,
+                    },
+                },
+                "constraints": {
+                    "type": "array",
+                    "maxItems": 64,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "column": {"type": "string", "minLength": 1, "maxLength": 96},
+                            "minimum": {"type": "number", "minimum": -1000000, "maximum": 1000000},
+                            "maximum": {"type": "number", "minimum": -1000000, "maximum": 1000000},
+                        },
+                        "required": ["column"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            required=["top_n", "objectives"],
+        ),
+        default_planner_options={
+            "constraints": [],
+            "objectives": None,
+            "top_n": None,
+        },
+        backend_default_planner_options={},
+        review_required_option_ids=["objectives", "top_n"],
+        option_compiler_version="scientific-planner-option-filter-rank.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "candidate_predictions": ["registered_intermediate", "verified_output"]
+        },
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="render_report",
         required_artifacts=["ranked_candidates"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=["report_markdown", "report_html"],
         risk_level=RiskLevel.LOW,
         default_adapter="render_report_adapter",
+        scientific_tool_id="render_report",
+        label="Render scientific report",
+        description="Render a reviewable report from the registered ranked-candidate artifact.",
+        effect_class="mutate_artifacts",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={"ranked_candidates": ["verified_output"]},
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="parse_document",
         required_artifacts=["pdf_corpus"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=["parsed_document", "parsed_tables", "parser_audit"],
         risk_level=RiskLevel.MEDIUM,
         gates=[GateName.DATA_MINING.value],
         default_adapter="parse_document_mineru_adapter",
+        scientific_tool_id="parse_document",
+        label="Parse PDF corpus",
+        description="Parse a content-bound PDF corpus through the registered document-parsing workflow.",
+        effect_class="compute",
+        required_permissions=[
+            "read_content_bound_input",
+            "derive_project_artifact",
+            "external_document_processing",
+        ],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=["document_parsing"],
+        backend_profile_requirements={},
+        execution_route="remote_execution_service",
+        remote_task_type="document_parsing",
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "pdf_corpus": ["content_bound_input", "registered_intermediate", "verified_output"]
+        },
+        budget_dimensions=["max_runtime_sec", "max_gpu_hours"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="parse_document_pdfplumber",
@@ -143,9 +539,35 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     AtomicTaskSpec(
         task_id="index_corpus",
         required_artifacts=["parsed_document"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=["corpus_index", "evidence_chunks"],
         risk_level=RiskLevel.LOW,
         default_adapter="index_corpus_adapter",
+        scientific_tool_id="index_corpus",
+        label="Index parsed corpus",
+        description="Build the registered logical index from parsed document artifacts.",
+        effect_class="derive_local",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "parsed_document": ["registered_intermediate", "verified_output"]
+        },
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="build_multi_index",
@@ -164,13 +586,51 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     AtomicTaskSpec(
         task_id="retrieve_evidence",
         required_artifacts=["corpus_index"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=["evidence_hits", "retrieval_log"],
         risk_level=RiskLevel.LOW,
         default_adapter="retrieve_evidence_adapter",
+        scientific_tool_id="retrieve_evidence",
+        label="Retrieve evidence",
+        description="Retrieve bounded evidence from the registered corpus index.",
+        effect_class="derive_local",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(
+            {
+                "query": {
+                    "type": ["string", "null"],
+                    "minLength": 1,
+                    "maxLength": 2000,
+                },
+                "topk": {"type": "integer", "minimum": 1, "maximum": 1000},
+            },
+            required=["query"],
+        ),
+        default_planner_options={"query": None, "topk": 10},
+        backend_default_planner_options={},
+        review_required_option_ids=["query"],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "corpus_index": ["registered_intermediate", "verified_output"]
+        },
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="extract_records",
         required_artifacts=["evidence_hits", "evidence_chunks"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=[
             "extracted_records",
             "rejected_records",
@@ -179,10 +639,36 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         ],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="extract_records_adapter",
+        scientific_tool_id="extract_records",
+        label="Extract scientific records",
+        description="Extract structured records from registered evidence artifacts.",
+        effect_class="compute",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact=_uniform_input_trust(
+            ["evidence_hits", "evidence_chunks"], ["registered_intermediate", "verified_output"]
+        ),
+        budget_dimensions=["max_records", "max_runtime_sec"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="normalize_extracted_units",
         required_artifacts=["extracted_records"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=[
             "normalized_extracted_records",
             "candidate_training_dataset",
@@ -190,27 +676,132 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         ],
         risk_level=RiskLevel.LOW,
         default_adapter="normalize_extracted_units_adapter",
+        scientific_tool_id="normalize_extracted_units",
+        label="Normalize extracted units",
+        description="Normalize units in registered extracted scientific records.",
+        effect_class="derive_local",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "extracted_records": ["registered_intermediate", "verified_output"]
+        },
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="track_citation_provenance",
         required_artifacts=["parsed_document", "evidence_hits", "extracted_records"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=["citation_provenance_report", "audit_summary"],
         risk_level=RiskLevel.LOW,
         default_adapter="track_citation_provenance_adapter",
+        scientific_tool_id="track_citation_provenance",
+        label="Track citation provenance",
+        description="Build the registered provenance report for parsed and extracted records.",
+        effect_class="derive_local",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact=_uniform_input_trust(
+            ["parsed_document", "evidence_hits", "extracted_records"],
+            ["registered_intermediate", "verified_output"],
+        ),
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="merge_extracted_records",
-        required_artifacts=["normalized_extracted_records", "citation_provenance_report"],
+        required_artifacts=["normalized_extracted_records"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=["merged_records", "conflict_report", "candidate_training_dataset"],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="merge_extracted_records_adapter",
+        scientific_tool_id="merge_extracted_records",
+        label="Merge extracted records",
+        description="Merge normalized records using registered provenance and conflict rules.",
+        effect_class="derive_local",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact=_uniform_input_trust(
+            ["normalized_extracted_records"],
+            ["registered_intermediate", "verified_output"],
+        ),
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="evaluate_extraction_benchmark",
         required_artifacts=["evidence_hits", "normalized_extracted_records", "conflict_report"],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=["extraction_benchmark_report"],
         risk_level=RiskLevel.LOW,
         default_adapter="evaluate_extraction_benchmark_adapter",
+        scientific_tool_id="evaluate_extraction_benchmark",
+        label="Evaluate extraction benchmark",
+        description="Evaluate registered extraction quality evidence without changing scientific confirmation.",
+        effect_class="observe",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact=_uniform_input_trust(
+            ["evidence_hits", "normalized_extracted_records", "conflict_report"],
+            ["registered_intermediate", "verified_output"],
+        ),
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="confirm_extracted_dataset",
@@ -219,10 +810,40 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
             "conflict_report",
             "citation_provenance_report",
         ],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
         output_artifacts=["confirmed_training_dataset", "extraction_confirmation_record"],
         risk_level=RiskLevel.HIGH,
         gates=[GateName.DATA_MINING.value],
         default_adapter="confirm_extracted_dataset_adapter",
+        scientific_tool_id="confirm_extracted_dataset",
+        label="Confirm extracted dataset",
+        description="Prepare the registered dataset-confirmation task for review; it does not grant confirmation authority.",
+        effect_class="scientific_confirm",
+        required_permissions=[
+            "derive_project_artifact",
+            "scientific_dataset_confirmation",
+        ],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact=_uniform_input_trust(
+            ["candidate_training_dataset", "conflict_report", "citation_provenance_report"],
+            ["content_bound_input", "registered_intermediate", "verified_output"],
+        ),
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="literature_to_dataset_workflow",
@@ -388,14 +1009,18 @@ class AtomicTaskRegistry:
         source = list(tasks or DEFAULT_ATOMIC_TASKS)
         self._validate_tasks(source)
         self._tasks = {task.task_id: task for task in source}
-        self._artifact_producers: dict[str, str] = {}
+        self._artifact_producers: dict[str, list[str]] = {}
         for task in source:
             for artifact in task.output_artifacts:
-                self._artifact_producers.setdefault(artifact, task.task_id)
+                self._artifact_producers.setdefault(artifact, []).append(task.task_id)
 
     @staticmethod
     def _validate_tasks(tasks: list[AtomicTaskSpec]) -> None:
         valid_gates = {gate.value for gate in GateName}
+        task_ids = [task.task_id for task in tasks]
+        if len(task_ids) != len(set(task_ids)):
+            duplicates = sorted({task_id for task_id in task_ids if task_ids.count(task_id) > 1})
+            raise ValueError(f"duplicate atomic task ID: {', '.join(duplicates)}")
         for task in tasks:
             if task.risk_level == RiskLevel.HIGH and not task.gates:
                 raise ValueError(f"high-risk task requires gate: {task.task_id}")
@@ -413,7 +1038,11 @@ class AtomicTaskRegistry:
             raise ValueError(f"unknown atomic task: {task_id}") from exc
 
     def producer_for(self, artifact_id: str) -> str | None:
-        return self._artifact_producers.get(artifact_id)
+        producers = self._artifact_producers.get(artifact_id, [])
+        return producers[0] if producers else None
+
+    def producers_for(self, artifact_id: str) -> list[str]:
+        return list(self._artifact_producers.get(artifact_id, []))
 
 
 def build_plan(run_id: str, prompt: str) -> PlanModel:
@@ -497,16 +1126,78 @@ def expand_run_plan(
     ordered_task_ids: list[str] = []
     unresolved_by_task: dict[str, list[str]] = {}
     dependencies_by_task: dict[str, list[str]] = {}
+    required_by_task: dict[str, list[str]] = {}
     dedup_requested: list[str] = []
     for requested in requested_tasks:
         if requested not in dedup_requested:
             dedup_requested.append(requested)
 
-    preferred_producers: dict[str, str] = {}
+    requested_producers: dict[str, list[str]] = {}
     for task_id in dedup_requested:
         spec = task_registry.get(task_id)
         for artifact in spec.output_artifacts:
-            preferred_producers.setdefault(artifact, task_id)
+            requested_producers.setdefault(artifact, []).append(task_id)
+    requested_output_artifacts = set(requested_producers)
+
+    def direct_inputs_match_snapshot(task_id: str) -> bool:
+        candidate = task_registry.get(task_id)
+        if any(
+            artifact not in pre_existing_artifacts
+            and artifact not in requested_output_artifacts
+            for artifact in candidate.required_artifacts
+        ):
+            return False
+        return all(
+            any(
+                artifact in pre_existing_artifacts
+                or artifact in requested_output_artifacts
+                for artifact in alternatives
+            )
+            for alternatives in candidate.input_artifact_alternatives
+        )
+
+    def depends_transitively(
+        task_id: str,
+        dependency_id: str,
+        seen: set[str] | None = None,
+    ) -> bool:
+        if task_id == dependency_id:
+            return False
+        visited = set(seen or set())
+        if task_id in visited:
+            return False
+        visited.add(task_id)
+        task = task_registry.get(task_id)
+        if dependency_id in task.depends_on:
+            return True
+        return any(
+            depends_transitively(item, dependency_id, visited)
+            for item in task.depends_on
+        )
+
+    def select_producer(artifact_id: str) -> str | None:
+        producers = task_registry.producers_for(artifact_id)
+        if not producers:
+            return None
+        compatible = [
+            producer for producer in producers if direct_inputs_match_snapshot(producer)
+        ]
+        candidates = compatible or producers
+        candidate_set = set(candidates)
+        requested = set(requested_producers.get(artifact_id, []))
+        source_order = {task_id: index for index, task_id in enumerate(producers)}
+        return max(
+            candidates,
+            key=lambda producer: (
+                sum(
+                    1
+                    for other in candidate_set
+                    if depends_transitively(producer, other)
+                ),
+                int(producer in requested),
+                -source_order[producer],
+            ),
+        )
 
     def resolve_task(task_id: str) -> None:
         if task_id in resolved:
@@ -516,13 +1207,53 @@ def expand_run_plan(
         spec = task_registry.get(task_id)
         resolving.add(task_id)
 
-        dependencies = list(spec.depends_on)
+        dependencies: list[str] = []
         unresolved_requirements: list[str] = []
+        selected_requirements = list(spec.required_artifacts)
+
+        for alternatives in spec.input_artifact_alternatives:
+            selected = next(
+                (
+                    artifact
+                    for artifact in alternatives
+                    if artifact in pre_existing_artifacts
+                ),
+                None,
+            )
+            if selected is None:
+                selected = next(
+                    (
+                        artifact
+                        for artifact in alternatives
+                        if artifact in requested_producers
+                    ),
+                    None,
+                )
+            if selected is None:
+                first_alternative = alternatives[0]
+                producer = select_producer(first_alternative)
+                if producer is not None:
+                    selected = first_alternative
+            if selected is None:
+                selected = alternatives[0]
+            selected_requirements.append(selected)
+            if selected in pre_existing_artifacts:
+                continue
+            producer = select_producer(selected)
+            if producer is None:
+                unresolved_requirements.append(selected)
+                missing_artifacts.add(selected)
+                continue
+            if producer == task_id:
+                raise ValueError(
+                    f"self-referencing alternative artifact dependency in task {task_id}: {selected}"
+                )
+            dependencies.append(producer)
 
         for required in spec.required_artifacts:
             if required in pre_existing_artifacts:
                 continue
-            producer = preferred_producers.get(required) or task_registry.producer_for(required)
+            producer = select_producer(required)
             if producer == task_id:
                 raise ValueError(
                     f"self-referencing artifact dependency in task {task_id}: {required}"
@@ -532,6 +1263,8 @@ def expand_run_plan(
                 continue
             unresolved_requirements.append(required)
             missing_artifacts.add(required)
+
+        dependencies.extend(spec.depends_on)
 
         dedup_dependencies: list[str] = []
         for dep in dependencies:
@@ -546,6 +1279,7 @@ def expand_run_plan(
         ordered_task_ids.append(task_id)
         unresolved_by_task[task_id] = unresolved_requirements
         dependencies_by_task[task_id] = dedup_dependencies
+        required_by_task[task_id] = list(dict.fromkeys(selected_requirements))
         available.update(spec.output_artifacts)
 
     for requested in requested_tasks:
@@ -559,7 +1293,7 @@ def expand_run_plan(
             PlannedTask(
                 task_id=task_id,
                 depends_on=depends_on,
-                required_artifacts=list(spec.required_artifacts),
+                required_artifacts=list(required_by_task.get(task_id, spec.required_artifacts)),
                 output_artifacts=list(spec.output_artifacts),
                 unresolved_requirements=list(unresolved_by_task.get(task_id, [])),
             )

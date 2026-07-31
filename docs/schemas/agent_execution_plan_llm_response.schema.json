@@ -1,0 +1,126 @@
+{
+  "$defs": {
+    "AgentExecutionPlanQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "blocks_proposal": {
+          "default": true,
+          "title": "Blocks Proposal",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "AgentExecutionPlanQuestion",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Only high-level planner suggestions; no execution or approval fields.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_execution_plan_llm_response.v1",
+      "default": "agent_execution_plan_llm_response.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "requested_tool_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Requested Tool Ids",
+      "type": "array"
+    },
+    "selected_input_artifact_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Selected Input Artifact Ids",
+      "type": "array"
+    },
+    "task_options": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Task Options",
+      "type": "object"
+    },
+    "selected_logical_profile_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Selected Logical Profile Ids",
+      "type": "array"
+    },
+    "limits": {
+      "additionalProperties": true,
+      "title": "Limits",
+      "type": "object"
+    },
+    "stop_conditions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Stop Conditions",
+      "type": "array"
+    },
+    "success_criteria": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Success Criteria",
+      "type": "array"
+    },
+    "rationales": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Rationales",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/AgentExecutionPlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "requested_tool_ids",
+    "selected_input_artifact_ids",
+    "task_options",
+    "selected_logical_profile_ids",
+    "limits",
+    "stop_conditions",
+    "success_criteria",
+    "rationales",
+    "assumptions",
+    "questions"
+  ],
+  "title": "AgentExecutionPlanLLMResponse",
+  "type": "object"
+}

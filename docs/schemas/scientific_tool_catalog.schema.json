@@ -1,0 +1,333 @@
+{
+  "$defs": {
+    "ScientificToolSpec": {
+      "additionalProperties": false,
+      "description": "Strict, LLM-facing projection of one registered atomic task.",
+      "properties": {
+        "schema_version": {
+          "const": "scientific_tool_spec.v1",
+          "default": "scientific_tool_spec.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tool_id": {
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "input_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Artifact Ids",
+          "type": "array"
+        },
+        "required_input_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Input Artifact Ids",
+          "type": "array"
+        },
+        "optional_input_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Optional Input Artifact Ids",
+          "type": "array"
+        },
+        "input_artifact_alternatives": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Input Artifact Alternatives",
+          "type": "array"
+        },
+        "output_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Output Artifact Ids",
+          "type": "array"
+        },
+        "effect_class": {
+          "enum": [
+            "observe",
+            "derive_local",
+            "mutate_artifacts",
+            "external_io",
+            "compute",
+            "scientific_confirm",
+            "change_objective",
+            "publish_or_promote"
+          ],
+          "title": "Effect Class",
+          "type": "string"
+        },
+        "risk_level": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Risk Level",
+          "type": "string"
+        },
+        "required_permissions": {
+          "items": {
+            "enum": [
+              "read_content_bound_input",
+              "derive_project_artifact",
+              "external_document_processing",
+              "model_training_compute",
+              "model_inference_compute",
+              "candidate_generation_compute",
+              "scientific_dataset_confirmation"
+            ],
+            "type": "string"
+          },
+          "title": "Required Permissions",
+          "type": "array"
+        },
+        "required_gates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Gates",
+          "type": "array"
+        },
+        "option_schema": {
+          "additionalProperties": true,
+          "title": "Option Schema",
+          "type": "object"
+        },
+        "default_planner_options": {
+          "additionalProperties": true,
+          "title": "Default Planner Options",
+          "type": "object"
+        },
+        "backend_default_planner_options": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Backend Default Planner Options",
+          "type": "object"
+        },
+        "review_required_option_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Review Required Option Ids",
+          "type": "array"
+        },
+        "option_compiler_version": {
+          "title": "Option Compiler Version",
+          "type": "string"
+        },
+        "logical_profile_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Logical Profile Requirements",
+          "type": "array"
+        },
+        "backend_profile_requirements": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Backend Profile Requirements",
+          "type": "object"
+        },
+        "default_planner_backend": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default Planner Backend"
+        },
+        "execution_route": {
+          "anyOf": [
+            {
+              "enum": [
+                "local_executor",
+                "remote_execution_service"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Route"
+        },
+        "remote_task_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "document_parsing",
+                "model_training",
+                "molecular_generation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Task Type"
+        },
+        "backend_execution_routes": {
+          "additionalProperties": {
+            "enum": [
+              "local_executor",
+              "remote_execution_service"
+            ],
+            "type": "string"
+          },
+          "title": "Backend Execution Routes",
+          "type": "object"
+        },
+        "backend_remote_task_types": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "enum": [
+                  "document_parsing",
+                  "model_training",
+                  "molecular_generation"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Backend Remote Task Types",
+          "type": "object"
+        },
+        "accepted_input_trust_classes_by_artifact": {
+          "additionalProperties": {
+            "items": {
+              "enum": [
+                "content_bound_input",
+                "registered_intermediate",
+                "verified_output",
+                "confirmed_scientific_input",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Accepted Input Trust Classes By Artifact",
+          "type": "object"
+        },
+        "budget_dimensions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Budget Dimensions",
+          "type": "array"
+        },
+        "supports_plan_preapproval": {
+          "default": false,
+          "title": "Supports Plan Preapproval",
+          "type": "boolean"
+        },
+        "idempotency_policy": {
+          "default": "server_checked",
+          "enum": [
+            "none",
+            "replay_safe",
+            "server_checked"
+          ],
+          "title": "Idempotency Policy",
+          "type": "string"
+        },
+        "verification_policy": {
+          "title": "Verification Policy",
+          "type": "string"
+        },
+        "planner_visible": {
+          "default": true,
+          "title": "Planner Visible",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "tool_id",
+        "task_id",
+        "label",
+        "description",
+        "effect_class",
+        "risk_level",
+        "option_compiler_version",
+        "verification_policy"
+      ],
+      "title": "ScientificToolSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Deterministic catalog projection; never an execution registry.",
+  "properties": {
+    "schema_version": {
+      "const": "scientific_tool_catalog.v1",
+      "default": "scientific_tool_catalog.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "catalog_id": {
+      "default": "scientific-tool-catalog-v1",
+      "title": "Catalog Id",
+      "type": "string"
+    },
+    "tools": {
+      "items": {
+        "$ref": "#/$defs/ScientificToolSpec"
+      },
+      "title": "Tools",
+      "type": "array"
+    },
+    "excluded_task_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Excluded Task Ids",
+      "type": "array"
+    },
+    "catalog_digest": {
+      "default": "",
+      "title": "Catalog Digest",
+      "type": "string"
+    }
+  },
+  "title": "ScientificToolCatalog",
+  "type": "object"
+}
