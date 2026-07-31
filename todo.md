@@ -3,7 +3,7 @@
 > 文档状态：Active
 > 当前公开基线：`public-baseline-v1`（单一根提交的隐私审查快照）
 > 历史审计基线：迁移前完整提交、分支与 PR 保留在私有审计仓库
-> 当前主里程碑：M4 — 轨迹审计 Benchmark
+> 当前主里程碑：M3.5 — Scientific Agent Harness 与受控 LLM 执行接入
 > 最后更新：2026-07-31
 > 适用范围：Molly Agent 执行能力、长程任务轨迹审计及科学有效性验证
 
@@ -70,18 +70,20 @@ I/T(partial)/—     通用机制已测试，但当前里程碑场景尚未覆�
 ### 0.5 总体依赖与并行关系
 
 ```text
-主执行与审计线：M1 → M2 → M3 → M4 → M6 ─┐
-                                              ├→ M7
-科学验证线：  M1 → M5 ──────────────────────┘
-                         └→ M9
+主执行与审计线：M1 → M2 → M3 → M3.5 Harness → M4 → M6 ─┐
+                                                            ├→ M7
+科学验证线：  M1 → M5 ────────────────────────────────────┘
+                               └→ M9
 
 资源机会线：  M1 → M1.5 remote multi-round
 最后探索：    M7 + M9 → M8 Agentic RL
 ```
 
-- M5 的任务和数据定义可在 M1 后启动，不依赖 M2。
-- M4 与 M5 可以并行；M6 依赖 M4，M7 依赖 M5 与 M6，M9 依赖 M5。
-- M1.5 只在资源安全时执行，不阻塞 M2。
+- M3.5 在不替换既有 Gate、RunPlanExecutor、RemoteExecutionService、Verifier 和 `molly-worker` 的前提下，统一 LLM 计划、工具权限、人工授权、受控 dispatch、结果验证与重规划。
+- M5 的任务和数据定义可在 M1 后启动，不依赖 M2 或 M3.5。
+- M4 在 M3.5 核心动作、授权和轨迹 schema 冻结后重新进入 `READY`；M4 与 M5 可以并行。
+- M6 依赖 M4；M7 依赖 M5、M6 与已完成的 M3.5 Harness；M9 依赖 M5。
+- M1.5 只在资源安全时执行，不阻塞 M3.5。
 - M8 最后开始，不得先于 M7 和 M9。
 
 ### 0.6 公开仓库迁移规则
@@ -384,11 +386,125 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 
 ---
 
+## 5.5. M3.5：Scientific Agent Harness 与受控 LLM 执行接入
+
+优先级：`P0`
+
+范围状态：`READY`。M3 已完成并提供可重放、可归因的执行轨迹基础；当前下一主线改为完善领域化 Scientific Agent Harness，并让 LLM 通过受约束的计划、工具调用和重规划契约接入现有执行链条。M4 benchmark protocol 暂缓到 Harness 核心 action/authorization schema 冻结后，避免 benchmark 在动作空间与权限语义变化后返工。
+
+目标权限链：
+
+```text
+LLM Planner / Execution Agent / Replanner
+                  ↓ 结构化 proposal
+User approval / immutable plan authorization
+                  ↓
+Scientific Agent Harness + deterministic Permission Engine
+                  ↓ validated dispatch
+RunPlanExecutor / RemoteExecutionService / fixed molly-worker protocol
+                  ↓
+Verifier / output contract / Artifact Registry / exact replay
+                  ↓ verified observation
+LLM continues, stops, or proposes a new plan revision
+```
+
+M3.5 的核心原则：
+
+- LLM 决定“建议做什么”和“在已批准范围内下一步调用哪个工具”；
+- 用户决定“是否批准完整计划、修改计划或拒绝执行”；
+- Harness 与 Controller 决定动作是否在权限、计划、预算、资源和当前状态范围内；
+- Executor 或 RemoteExecutionService 决定真实 dispatch；
+- Verifier、output contract、publication 和 Artifact Registry 决定任务是否真正完成；
+- LLM 不直接拥有 shell、SSH、任意文件路径或 `molly-worker` 命令权限，不直接写 Gate、审批或执行状态。
+
+### 5.5.1 运行模式与不可变边界
+
+M3.5 至少支持两种用户模式：
+
+1. `stepwise`：用户批准完整计划并启动；运行到需要人工判断的 Gate 时暂停，逐项确认后继续。
+2. `frozen_plan`：用户一次性批准 exact plan digest、参数范围、logical resource profile、预算和可预授权的 operational Gate；Controller 仅在实际 execution snapshot 落在授权范围内时自动继续。
+
+以下事项不得被计划级预授权替代：
+
+- 新抽取科学数据是否进入 confirmed training dataset；
+- 目标属性、优化目标、科学约束或评价口径变化；
+- 新增外部来源、扩大资源或预算、改变 logical execution profile；
+- 失败后的自动重试、任务图修改或新增工具；
+- 最终候选 promotion、实验批次或其他科学语义确认。
+
+“批准并启动”可以是一次 UI 操作，但服务端必须先持久化 immutable authorization，再建立 dispatch/controller 状态；授权提交与真实 dispatch 在 crash/recovery 语义上保持可区分。
+
+### 5.5.2 任务与状态
+
+| 任务 | 证据 | 工作状态 | 目标 |
+|---|---|---|---|
+| `M3H-000` 冻结 Harness 主线、权限链和 PR 队列 | `I/—/—` | `DONE` | 本节与决策日志成为规范路线 |
+| `M3H-001` 建立单一 `ScientificToolSpec` 能力契约 | `I(partial)/T(partial)/—` | `READY` | 从 `AtomicTaskRegistry`、policy metadata 与 verifier binding 派生 Agent/UI 可见工具，避免第二套可执行 registry |
+| `M3H-002` 建立脱敏 `AgentProjectObservation` | `I(partial)/T(partial)/—` | `READY` | 只读取 server-derived StageState、verified artifact 摘要、能力、预算和 logical profile；不暴露私有 locator、命令或原始文献全文 |
+| `M3H-003` 建立 LLM 长程计划 proposal contract | `I(partial)/T(partial)/—` | `READY` | 专用 JSON planning call 生成完整 RunPlan、task options、limits、stop conditions 和 questions；自然语言回复不作为动作解析源 |
+| `M3H-004` 建立 deterministic Permission Engine | `I(partial)/T(partial)/—` | `DEFERRED` | 统一 `ALLOW`、`REQUIRE_APPROVAL`、`DENY`、effect class、risk、permission、Gate 与预算判断 |
+| `M3H-005` 建立 immutable plan authorization | `I(partial)/T(partial)/—` | `DEFERRED` | 绑定 proposal、observation、RunPlan、task options、输入 artifact、profile、预算、actor 与 approval mode digest |
+| `M3H-006` 实现 approve-and-start 与两种审批模式 | `—/—/—` | `DEFERRED` | 用户批准后由 Controller 启动；不得由自由文本、external LLM consent 或 LLM 自身输出产生执行授权 |
+| `M3H-007` Permission Engine shadow mode | `—/—/—` | `DEFERRED` | 在成为权威入口前与现有 UI/route 行为逐项比较，发现 policy drift 而不改变执行结果 |
+| `M3H-008` Harness Controller 接入现有执行链 | `I(partial)/T(partial)/—` | `DEFERRED` | 复用 `RunPlanExecutor`、Gate snapshot、RemoteExecutionService、固定 worker transport、cancel/recover 与 exact replay，不建立第二套状态机 |
+| `M3H-009` 接入 Execution Agent LLM | `—/—/—` | `DEFERRED` | 仅输出版本化 `ToolCallProposal`，在已批准 plan/action space 内选择下一步；无任意 adapter、argv、shell、SSH 或绝对路径字段 |
+| `M3H-010` Verifier-bound feedback observation | `I(partial)/T(partial)/—` | `DEFERRED` | 只有 authoritative StageState 和 verified publication 能支持 running/success/failure；LLM 文本不能改变 UI 或状态 |
+| `M3H-011` Replanner 与 plan revision | `I(partial)/T(partial)/—` | `DEFERRED` | 用户反馈或运行失败产生 explicit diff、新 plan digest 与新授权；旧授权对任何实质变化失效 |
+| `M3H-012` 统一 Plan/Tool/Permission/Replan UI | `I(partial)/T(partial)/—` | `DEFERRED` | 支持批准并启动、修改后重规划、拒绝、atomic task 与端到端模式；保留高级诊断入口 |
+| `M3H-013` confirmed CSV → fresh model → Top-N Harness 验收 | `I/T(partial)/—` | `DEFERRED` | 不复用既有模型或预测；在批准范围内完成训练、生成、预测、排序、Top-N 与报告 |
+| `M3H-014` PDF → candidate dataset Harness 验收 | `I/T(partial)/—` | `DEFERRED` | 调用 MinerU/pdfplumber、抽取、归一化、provenance、冲突合并和 CSV；在 dataset confirmation 前强制暂停 |
+| `M3H-015` Harness 轨迹、恢复、隐私与对抗验收 | `I(partial)/T(partial)/—` | `DEFERRED` | action proposal、permission、authorization、dispatch、verification、replan 均可重放且不含 private chain-of-thought 或基础设施敏感信息 |
+
+`I(partial)` 与 `T(partial)` 仅表示当前仓库已有相关 Planner、review-only tool registry、Gate、Executor、remote lifecycle、worker、task-state projection 或 replan 设计；不得据此宣称 Harness 已完成。
+
+### 5.5.3 实施 PR 队列
+
+```text
+PR-BL  M3H-001～M3H-003
+       ScientificToolSpec、AgentProjectObservation、LLM long-horizon plan proposal
+       只生成、验证和持久化计划；不得执行
+
+PR-BM  M3H-004～M3H-007
+       Permission Engine、immutable plan authorization、approve-and-start contract
+       先 shadow mode；不允许 LLM 自批准或直接 dispatch
+
+PR-BN  M3H-008、M3H-010
+       Harness Controller 接入 RunPlanExecutor、RemoteExecutionService 与 Verifier
+       stepwise/frozen-plan 执行、幂等、cancel/recover、authority-bound 状态
+
+PR-BO  M3H-009
+       Execution Agent LLM 与受约束 ToolCallProposal
+       只能选择注册工具和 logical profile，不接触 shell/SSH/molly-worker argv
+
+PR-BP  M3H-011
+       Replanner、计划 diff、新授权和失败/反馈闭环
+
+PR-BQ  M3H-012
+       主 UI 统一 Plan/Tool/Permission/Replan cards 与 atomic/end-to-end 入口
+
+PR-BR  M3H-013～M3H-015
+       confirmed CSV 与 PDF 两条 acceptance、exact replay、恢复、隐私和对抗 evidence
+```
+
+在 PR-BL～PR-BR 完成前，不删除现有执行 API，不替换 `RunPlanExecutor`，不修改固定 `molly-worker` 协议为任意命令执行，也不将 review-only AgentToolRegistry 直接改成第二个执行 registry。
+
+### 5.5.4 M3.5 退出条件
+
+- `M3H-GATE-001`：LLM 可基于脱敏 observation 生成完整、schema-valid、canonical、不可替换的长程计划 proposal；未知工具、参数、状态、approval 或命令注入 fail closed。
+- `M3H-GATE-002`：用户可通过 `stepwise` 或 `frozen_plan` 批准 exact plan 并由同一操作启动；external LLM consent、普通聊天文字和 LLM 自身输出均不能产生执行权限。
+- `M3H-GATE-003`：Execution Agent 只能发起 allowlisted `ToolCallProposal`；Controller 能证明每次 dispatch 属于当前有效授权、预算、profile 和 artifact lineage。
+- `M3H-GATE-004`：Executor、RemoteExecutionService、`molly-worker`、Verifier 和 Artifact Registry 保持唯一真实执行与结果权威；Harness/LLM 不能伪造 `RUNNING`、`SUCCEEDED` 或 verified artifact。
+- `M3H-GATE-005`：Replanner 对用户反馈、失败或计划漂移生成 explicit diff；任何实质变更创建新 digest 并要求新授权，不自动重试或扩大预算。
+- `M3H-GATE-006`：confirmed CSV → fresh model → Top-N 在 Harness 下完成代表性验收；PDF → candidate dataset 在 confirmation Gate 前正确暂停；新进程可恢复并 exact replay 完整 Harness 轨迹。
+- `M3H-GATE-007`：Harness 权限系统、UI 与现有手动执行路径完成兼容/迁移验证，没有第二套 task、Gate、StageState 或 publication authority。
+
+---
+
 ## 6. M4：轨迹审计 Benchmark
 
 优先级：`P1`
 
-范围状态：`READY`。M3 已完成并获得 `I/T/V`。下一交付为 PR-BK：冻结 M4 benchmark v1 的语料边界、任务定义、label/adjudication 规则、split、防泄漏规则、baseline 和预注册指标；在 protocol 冻结前不得读取或使用 hidden-test 结果。
+范围状态：`DEFERRED`。M3 已完成并获得 `I/T/V`，但当前按 owner-directed 路线先完成 M3.5 Harness。PR-BK 的 benchmark protocol 任务保留不取消；待 `M3H-GATE-001`～`M3H-GATE-005` 冻结动作、授权、执行与重规划语义后恢复为 `READY`，避免 benchmark action/authorization label 在 Harness 接入后发生结构性返工。在 protocol 冻结前不得读取或使用 hidden-test 结果。
 
 ### 6.1 语料、任务与 baseline
 
@@ -460,18 +576,20 @@ M5 未通过前，`MODEL_INADEQUACY_DETECTED` 只能是审计建议，不能成�
 
 ---
 
-## 9. M7：自适应科学 Planner
+## 9. M7：Benchmark-driven 自适应科学策略
 
 优先级：`P2`
-前置条件：M5 与 M6 完成。
+前置条件：M3.5、M5 与 M6 完成。
 
-- `M7-001`：定义有限高层 action vocabulary。
-- `M7-002`：Planner 只能从显式 action set 选择，不生成任意工具调用。
-- `M7-003`：每个 action 提供 preconditions、expected benefit/cost、risk 和 evidence。
-- `M7-004`：保留 deterministic PR-AU 作为 fallback。
-- `M7-005`～`M7-006`：shadow mode 比较 adaptive planner 与 PR-AU，并评估无效生成和计算浪费。
-- `M7-007`：未达到 benchmark 门槛前不得自动放宽科学约束。
-- `M7-008`：不得自动批准 gate。
+M3.5 负责通用 Harness、受控工具调用、人工授权与 Replanner plumbing；M7 不重复建设 Harness，而是在 M5/M6 benchmark 证据上研究更强的科学决策策略。
+
+- `M7-001`：冻结 benchmark-driven 高层 scientific action vocabulary。
+- `M7-002`：自适应策略只能从 M3.5 Harness 暴露的显式 action/tool set 选择，不生成任意工具、命令或权限。
+- `M7-003`：每个 action 提供 preconditions、expected benefit/cost、risk、uncertainty 和 evidence。
+- `M7-004`：保留 deterministic PR-AU 与固定 Harness policy 作为 fallback/baseline。
+- `M7-005`～`M7-006`：shadow mode 比较 adaptive policy、fixed Harness controller 与 PR-AU，并评估无效生成、计算浪费和人工介入。
+- `M7-007`：未达到预注册 benchmark 门槛前不得自动放宽科学约束、预算或 applicability-domain policy。
+- `M7-008`：LLM、Critic 与 adaptive policy 均不得自批准 Gate；仅可消费 exact user authorization 范围内的 operational Gate。
 
 ---
 
@@ -526,6 +644,10 @@ RL 是最后的探索路线，不是当前产品承诺。
 | `R9` reward hacking | 高 | `OPEN` | hidden holdout、多维 reward、对抗检查、gate 和硬预算 |
 | `R10` 远程环境漂移 | 中 | `MONITORING` | 每次 remote execution 重做资源/环境 preflight；新 profile 承载 drift |
 | `R11` runtime provenance 泄漏敏感基础设施信息 | 高 | `OPEN` | canonical projection 不保存 known-hosts 原始字节或绝对路径身份；actor 使用稳定可匿名标识；export 前扫描 |
+| `R12` 工具、权限和 UI capability 出现多套事实源 | 高 | `OPEN` | `ScientificToolSpec` 从 AtomicTaskRegistry/policy/verifier binding 派生；AgentToolRegistry 与 UI 只消费投影 |
+| `R13` LLM plan/tool 参数注入或越权 dispatch | 高 | `OPEN` | JSON schema、allowlisted options、logical profile、canonical digest、Permission Engine 与 fail-closed Controller；无 shell/SSH/绝对路径 |
+| `R14` 计划级授权错误吞并科学语义 Gate | 高 | `OPEN` | 区分 operational 与 semantic Gate；新数据确认、目标变化、重试、预算扩大和 promotion 始终重新人工批准 |
+| `R15` Harness 基础设施扩张挤占科学/benchmark 进展 | 高 | `MONITORING` | 冻结 PR-BL～PR-BR 和退出条件；每个 PR 必须关闭明确 contract/controller/UI/acceptance 任务，不增加通用 shell Agent |
 
 补充控制：
 
@@ -535,6 +657,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 - `R11-003`：actor 使用可审计但可匿名化的稳定标识。
 - `R11-004`：benchmark/export 前扫描路径、用户名和基础设施信息。
 - logical transport profile ID/digest 可以保留；具体 runtime locator 留在 verifier 运行环境中。
+- `R12`～`R15` 在 M3.5 完成前保持 `OPEN` 或 `MONITORING`；不能仅凭 schema 或单元测试数量关闭。
 
 ---
 
@@ -566,6 +689,15 @@ RL 是最后的探索路线，不是当前产品承诺。
 - `DOD-RESEARCH-004`：不把计划或推测标记为 validated。
 - `DOD-RESEARCH-005`：路线变化进入决策日志。
 
+### 13.4 Harness/permission PR
+
+- `DOD-HARNESS-001`：LLM 只能输出版本化 proposal，不接触任意 shell、SSH、adapter callable、绝对路径或 `molly-worker` argv。
+- `DOD-HARNESS-002`：permission decision 由确定性代码产生，绑定 observation、plan、artifact、profile、budget 和 actor digest，并有 `ALLOW`/`REQUIRE_APPROVAL`/`DENY` 对抗测试。
+- `DOD-HARNESS-003`：用户批准与 dispatch 在持久化和 crash/recovery 语义上可区分；重复批准、启动和恢复幂等或 fail closed。
+- `DOD-HARNESS-004`：只有 Executor/RemoteExecutionService 与 Verifier 能提交执行事实和成功结论；LLM 文本与 mutable telemetry 不得成为权威。
+- `DOD-HARNESS-005`：external LLM consent、计划审批、GateDecision 和科学数据确认是独立权限，不得相互替代。
+- `DOD-HARNESS-006`：旧 RunPlan、Gate、remote execution、worker、Artifact Registry 和 UI 高级诊断路径有兼容测试，迁移不建立第二套状态机。
+
 ---
 
 ## 14. 当前明确非目标
@@ -574,8 +706,8 @@ RL 是最后的探索路线，不是当前产品承诺。
 |---|---|---|
 | `NG-001` | `ACTIVE` | 不继续扩展通用数据治理层 |
 | `NG-002` | `ACTIVE` | 不重新设计 Registry identity governance |
-| `NG-003` | `ACTIVE` | 不增加无 benchmark 支撑的通用 Goal Agent |
-| `NG-004` | `ACTIVE` | 不自动批准 gate |
+| `NG-003` | `ACTIVE` | 不增加无约束、无明确 action space 的通用 Goal/Shell Agent；M3.5 仅实现领域化、allowlisted、可验证的 Scientific Agent Harness |
+| `NG-004` | `ACTIVE` | LLM、Critic 和 Harness 不得自批准 Gate；Controller 仅可按 immutable user authorization 消费 exact-matched operational Gate，semantic Gate 始终人工确认 |
 | `NG-005` | `ACTIVE` | 不把模型预测描述为实验或计算验证结果 |
 | `NG-006` | `ACTIVE` | M5 前不引入 MD 或高成本性质计算作为闭环必需步骤 |
 | `NG-007` | `ACTIVE` | M4 前不引入控制执行的 Critic |
@@ -583,6 +715,8 @@ RL 是最后的探索路线，不是当前产品承诺。
 | `NG-009` | `ACTIVE` | 不以 schema、artifact 或安全检查数量衡量项目进展 |
 | `NG-010` | `ACTIVE` | M2 v1 不修改 scientific executor 主动写轨迹事件 |
 | `NG-011` | `ACTIVE` | M5 完成前不增加候选来源类型；之后仅在 benchmark 证明必要且决策日志批准时讨论，不自动扩展 |
+| `NG-012` | `ACTIVE` | 不向 LLM 暴露原始 SSH、shell、任意本地/远程路径、凭证或 `molly-worker` 命令接口 |
+| `NG-013` | `ACTIVE` | 不以 Harness 替换 RunPlanExecutor、RemoteExecutionService、Verifier、Artifact Registry、Gate 或 Session authority |
 
 ---
 
@@ -721,6 +855,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：代表性 fault injection 不能代表真实失败分布；M3 validation 不等于 attribution benchmark accuracy；duplicate rejection 不等于重复科学计算；M4 必须使用独立 reviewed labels、严格 split 和 leakage control。
 - 批准人：searching42（repository owner）。
 
+### 2026-07-31：插入 M3.5 Scientific Agent Harness，LLM 接入既有执行链成为下一主线
+
+- 决策：在 M3 与 M4 之间插入 M3.5，以领域化 Scientific Agent Harness、统一工具权限系统、LLM 长程规划、Execution Agent、Replanner 和统一 UI 作为下一阶段 P0 主线。
+- 原计划：M3 完成后直接执行 PR-BK，冻结 M4 trajectory-audit benchmark protocol；当前 UI 中 LLM 继续只解释确定性决策，文献、训练和远程执行分别由硬编码入口触发。
+- 新计划：先按 PR-BL～PR-BR 冻结工具/observation/plan contract，建立 Permission Engine 与 immutable authorization，把 Harness Controller 接入既有 RunPlanExecutor、RemoteExecutionService、固定 `molly-worker` 和 Verifier，再引入受约束 Execution Agent/Replanner 与端到端 UI 验收；完成核心 Harness gate 后返回 PR-BK/M4。
+- 依据：当前仓库已经具备 Gate、execution snapshot、RunPlanExecutor、remote lifecycle、worker、publication verifier、Artifact Registry、恢复与 exact replay，但 `AgentToolRegistry`/action handoff 仍为 review-only，对话 LLM 不能发起动作，UI 对文献和训练存在专用编排。直接进入 M4 会在动作、授权、permission 和 replan schema 变化后造成 benchmark protocol 返工，也无法生成研究长程 LLM action/error propagation 所需的统一轨迹。
+- 影响任务：新增 `M3H-000`～`M3H-015` 与 `M3H-GATE-001`～`M3H-GATE-007`；M3.5 设为 `P0 / READY`，PR-BL 成为唯一当前动作；PR-BK/M4 从 `READY` 调整为策略性 `DEFERRED`；M7 收窄为 benchmark-driven adaptive scientific policy，不重复建设 Harness。
+- 新增风险：工具/权限事实源重复、LLM 参数注入或越权、计划级授权吞并 semantic Gate、Harness 基础设施扩张挤占 benchmark；新增 `R12`～`R15`、`NG-012`～`NG-013` 和 Harness-specific Definition of Done 控制这些风险。
+- 批准人：repository owner。
+
 后续路线调整必须追加：
 
 ```text
@@ -738,20 +882,27 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 唯一当前动作：PR-BK M4 benchmark protocol
+### 唯一当前动作：PR-BL ScientificToolSpec、Observation 与长程计划 proposal
 
-任务：冻结 M4 benchmark v1 的研究问题、轨迹语料边界、标注与 adjudication contract、train/dev/hidden-test split、防泄漏规则、baseline、指标和预注册阈值。
+任务：完成 `M3H-001`～`M3H-003`，在不执行任何任务的前提下冻结 Harness 的单一工具能力契约、脱敏项目 observation 和专用 LLM JSON 长程计划 proposal。
 
-范围：只定义和冻结 benchmark protocol；不得提前查看 hidden-test 结果，不得宣称 attribution accuracy，不得在 M4 前将 Critic 接入控制面。
+范围：
 
-当前状态：PR-BI 八案例 machine evidence 与 repository-owner review 已完成；M3 为 `I/T/V / DONE`；M4 为 `READY`。
+- `ScientificToolSpec` 必须从现有 `AtomicTaskRegistry`、permission/policy metadata 与 verifier binding 派生；不得把 review-only `AgentToolRegistry` 变成第二个执行 registry；
+- observation 只包含 server-derived、privacy-safe 的状态、artifact 摘要、logical profile、预算与 capability；
+- LLM 只能输出注册 task、artifact ID、allowlisted task options、logical profile、limits、stop conditions、rationale 和 questions；
+- proposal 必须 `executable=false`、绑定 observation/RunPlan/options digest、不可替换且可重放；
+- 不新增 approve、execute、resume、SSH、worker dispatch 或 UI 执行按钮。
+
+当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`；M4/PR-BK 保留但暂缓，待 Harness 核心 schema 冻结后恢复。
 
 必须验证：
 
-1. benchmark case、failure family、source variant 和时间切分边界明确；
-2. 同一 Session、template 或同源变体不得跨 split；
-3. label revision、annotator、adjudication 和一致性记录 contract 冻结；
-4. baseline、指标和数值阈值必须在 hidden-test evaluation 前冻结。
+1. unknown task、unknown option、adapter/command/path injection、伪造 approval/status fail closed；
+2. external LLM consent 仅授权数据发送，不产生执行权限；
+3. observation、proposal 和 schema canonical serialization 跨进程稳定；
+4. 不泄漏 hostname、IP、用户名、known-hosts、absolute path、token、raw stderr 或私有论文全文；
+5. 当前 ConversationAgent、RunPlanExecutor、RemoteExecutionService、worker 与 UI 行为不发生执行语义变化。
 
 ### 主线队列
 
@@ -763,7 +914,15 @@ PR-BG  failure taxonomy 与 first-cause attribution（已完成）
 PR-BH  read-only inspect API 与最小时间线（已完成）
 PR-BJ  authoritative M3 failure source evidence contract v1（已完成）
 PR-BI  representative inspection validation evidence（machine + owner review complete）
-PR-BK  M4 benchmark protocol（下一当前动作）
+
+PR-BL  ScientificToolSpec、AgentProjectObservation、LLM long-horizon plan proposal（下一当前动作）
+PR-BM  Permission Engine、immutable plan authorization、approve-and-start contract
+PR-BN  Harness Controller 接入现有 Executor/remote/verifier 链
+PR-BO  Execution Agent LLM 与受约束 ToolCallProposal
+PR-BP  Replanner、plan diff 与重新授权
+PR-BQ  统一 Harness UI 与 atomic/end-to-end 入口
+PR-BR  CSV/PDF acceptance、恢复、exact replay、隐私与对抗 evidence
+PR-BK  M4 benchmark protocol（M3.5 核心完成后恢复）
 ```
 
 ### 资源机会队列
@@ -771,7 +930,7 @@ PR-BK  M4 benchmark protocol（下一当前动作）
 ```text
 PR-BC  logical compute-worker-main remote 两轮 canary
        M1 完成且资源安全时随时执行
-       不阻塞 PR-BK 或 M4 主线
+       不阻塞 PR-BL～PR-BR 或 M3.5 主线
 ```
 
-任何后续 PR 如果不能直接推进上述队列、关闭真实 blocker 或产出 benchmark evidence，默认暂缓。
+任何后续 PR 如果不能直接推进上述队列、关闭真实 correctness/security blocker 或产出 Harness/benchmark evidence，默认暂缓。
