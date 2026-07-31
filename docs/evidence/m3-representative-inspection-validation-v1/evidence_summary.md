@@ -1,6 +1,15 @@
 # Evidence summary
 
-Machine evidence is complete (8 executed / 8 passed); human review is pending; M3 remains I/T/—.
+Machine evidence is complete (8 executed / 8 passed). The immutable machine
+manifest and case records retain the `pending` / `not_yet_claimed` state captured
+when they were generated. The independent `owner_review.json` is approved, and
+the verifier computes the committed package as `m3_v_eligible=true`. M3 is
+therefore `I/T/V / DONE`, and M4 is `READY`.
+
+The M3 `V` is limited to representative runtime validation of trajectory
+integrity, deterministic audit, failure attribution, and read-only inspection.
+It does not claim scientific performance, M4 benchmark attribution accuracy, or
+experimental validation.
 
 | Case | Source class | Machine status |
 |---|---|---|

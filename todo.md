@@ -3,8 +3,8 @@
 > 文档状态：Active
 > 当前公开基线：`public-baseline-v1`（单一根提交的隐私审查快照）
 > 历史审计基线：迁移前完整提交、分支与 PR 保留在私有审计仓库
-> 当前主里程碑：M3 — 轨迹完整性、故障归因与指标
-> 最后更新：2026-07-30
+> 当前主里程碑：M4 — 轨迹审计 Benchmark
+> 最后更新：2026-07-31
 > 适用范围：Molly Agent 执行能力、长程任务轨迹审计及科学有效性验证
 
 `todo.md` 是仓库中里程碑范围、任务状态、验收门槛、风险状态和推进顺序的唯一规范性来源。领域专题文档可以解释实现细节，但不得维护与本文件竞争的路线或状态表。
@@ -771,7 +771,7 @@ PR-BK  M4 benchmark protocol（下一当前动作）
 ```text
 PR-BC  logical compute-worker-main remote 两轮 canary
        M1 完成且资源安全时随时执行
-       不阻塞 PR-BI
+       不阻塞 PR-BK 或 M4 主线
 ```
 
 任何后续 PR 如果不能直接推进上述队列、关闭真实 blocker 或产出 benchmark evidence，默认暂缓。
