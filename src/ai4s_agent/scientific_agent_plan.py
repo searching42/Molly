@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
 from jsonschema import Draft202012Validator
+from werkzeug.utils import secure_filename
 
 from ai4s_agent._utils import now_iso
 from ai4s_agent.llm_provider import LLMProvider, LLMProviderError
@@ -108,9 +109,9 @@ def _existing_project_dir(storage: Any, project_id: str) -> Path:
 
 def _safe_scope_id(value: Any, *, field: str) -> str:
     clean = str(value or "").strip().lower()
-    # basename is the CodeQL-recognized path sanitizer; equality preserves the
-    # stronger repository contract that IDs are canonical single components.
-    safe_component = os.path.basename(clean)
+    # secure_filename is the same path sanitizer used by ProjectStorage;
+    # equality preserves the stronger canonical single-component contract.
+    safe_component = secure_filename(clean)
     if (
         safe_component != clean
         or _SAFE_SCOPE_ID.fullmatch(safe_component) is None
@@ -138,7 +139,7 @@ def _safe_relative_artifact_path(value: Any) -> str:
     path = PurePosixPath(raw)
     if path.is_absolute() or ".." in path.parts or "." in path.parts or not path.parts:
         raise ScientificAgentPlanError("artifact registry contains an unsafe relative path")
-    safe_parts = tuple(os.path.basename(component) for component in path.parts)
+    safe_parts = tuple(secure_filename(component) for component in path.parts)
     if any(
         not component
         or component in {".", ".."}
