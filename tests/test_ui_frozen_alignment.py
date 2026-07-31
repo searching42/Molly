@@ -1,7 +1,8 @@
 def test_sidebar_matches_frozen_project_conversation_layout(rendered_index_html: str) -> None:
     html = rendered_index_html
 
-    assert "<h2>Projects</h2>" in html
+    assert "<h2>控制台</h2>" in html
+    assert '<label class="sr-status" for="new-project-name">Projects</label>' in html
     assert 'id="new-conversation-button"' in html
     assert 'id="conversation-list"' in html
     assert 'class="atomic-task-list"' in html
@@ -89,14 +90,18 @@ def test_chat_keyboard_delete_and_safe_bold_markdown_contract(
 ) -> None:
     html = rendered_index_html
 
-    assert 'id="conversation-input" name="message" aria-describedby="conversation-keyboard-help"' in html
-    assert "Enter 发送，Shift + Enter 换行。" in html
+    assert 'id="conversation-input" name="message" aria-label="和 Agent 对话"' in html
+    assert 'placeholder="Enter 发送，Shift + Enter 换行。&#10;对话会保存到本地服务端工作区。"' in html
     assert 'event.key !== "Enter" || event.shiftKey || event.isComposing' in html
     assert "event.currentTarget.form?.requestSubmit();" in html
-    assert 'id="conversation-input" name="message" placeholder=' not in html
+    assert 'id="conversation-keyboard-help"' not in html
+    assert "对话已保存到本地服务端工作区。" not in html
+    assert "先在对话中上传并发送 PDF。" not in html
     assert "描述你的目标、数据背景或可引用来源" not in html
     assert 'remove.className = "conversation-delete";' in html
     assert "async function deleteConversation(projectId, conversationId, title)" in html
+    assert 'remove.className = "project-delete";' in html
+    assert "async function deleteProject(projectId, name)" in html
     assert "await deleteJSON(" in html
     assert "function appendSafeBoldMarkdown(root, content)" in html
     assert 'const strong = document.createElement("strong");' in html
@@ -133,6 +138,9 @@ def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html:
 
     assert 'id="llm-settings-form"' in html
     assert 'id="llm-api-key-source"' in html
+    settings_start = html.index('id="llm-settings-form"')
+    settings_form = html[settings_start:html.index("</form>", settings_start)]
+    assert 'id="conversation-external-llm-approved"' in settings_form
     assert 'patchJSON("/api/settings/llm", payload)' in html
     assert 'id="compute-connection-form"' in html
     assert 'id="compute-resource-role"' in html

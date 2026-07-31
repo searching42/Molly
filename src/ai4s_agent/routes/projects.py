@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-import json
-from pathlib import Path
-from typing import Any
 import uuid
 
 from flask import Flask, jsonify, request
 from pydantic import ValidationError
 from werkzeug.utils import secure_filename
 
-from ai4s_agent._utils import now_iso, write_json
+from ai4s_agent._utils import now_iso
 from ai4s_agent.memory import PermissionPolicy, ProjectMemory
 from ai4s_agent.schemas import ProjectMemoryRecord
 from ai4s_agent.storage import ProjectStorage
@@ -29,36 +26,49 @@ def register_project_routes(
     @app.post("/api/projects")
     def create_project():
         payload = request.get_json(silent=True) or {}
-        project_id = str(payload.get("project_id") or uuid.uuid4().hex[:8]).strip()
+        supplied_project_id = payload.get("project_id")
+        project_id = (
+            uuid.uuid4().hex[:8]
+            if supplied_project_id is None or supplied_project_id == ""
+            else str(supplied_project_id)
+        )
         name = str(payload.get("name") or project_id).strip()
-        if not project_id:
-            return jsonify({"ok": False, "error": "project_id required"}), 400
         try:
-            project_dir = projects.project_dir(project_id)
+            metadata = projects.create_project(
+                project_id,
+                name=name,
+                created_at=now_iso(),
+            )
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
-        write_json(project_dir / "project.json", {
-            "project_id": project_id,
-            "name": name,
-            "created_at": now_iso(),
-        })
-        return jsonify({"ok": True, "project_id": project_id, "name": name})
+        return jsonify(
+            {
+                "ok": True,
+                "project_id": metadata["project_id"],
+                "name": metadata["name"],
+            }
+        )
 
     @app.get("/api/projects")
     def list_projects():
-        projects_root = projects.projects_root
-        result = []
-        if projects_root.exists():
-            for child in sorted(projects_root.iterdir()):
-                if not child.is_dir():
-                    continue
-                meta = _read_json(child / "project.json")
-                result.append({
-                    "project_id": child.name,
-                    "name": meta.get("name", child.name),
-                    "created_at": meta.get("created_at", ""),
-                })
-        return jsonify({"ok": True, "projects": result})
+        return jsonify({"ok": True, "projects": projects.list_projects()})
+
+    @app.delete("/api/projects/<project_id>")
+    def delete_project(project_id: str):
+        try:
+            metadata = projects.delete_project(project_id)
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "project not found"}), 404
+        except ValueError:
+            return jsonify({"ok": False, "error": "invalid project identifier"}), 400
+        return jsonify(
+            {
+                "ok": True,
+                "deleted": True,
+                "project_id": metadata["project_id"],
+                "name": metadata["name"],
+            }
+        )
 
     @app.get("/api/projects/<project_id>/memory")
     def list_project_memory(project_id: str):
@@ -186,16 +196,6 @@ def register_project_routes(
             dest.unlink(missing_ok=True)
             return jsonify({"ok": False, "error": str(exc), "max_upload_bytes": max_upload_bytes}), 413
         return jsonify({"ok": True, "path": str(dest), "filename": filename})
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        if not path.exists():
-            return {}
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except json.JSONDecodeError:
-        return {}
 
 
 def _as_bool(value: object) -> bool:
