@@ -439,9 +439,9 @@ M3.5 至少支持两种用户模式：
 | 任务 | 证据 | 工作状态 | 目标 |
 |---|---|---|---|
 | `M3H-000` 冻结 Harness 主线、权限链和 PR 队列 | `I/—/—` | `DONE` | 本节与决策日志成为规范路线 |
-| `M3H-001` 建立单一 `ScientificToolSpec` 能力契约 | `I/T/—` | `DONE` | 从 `AtomicTaskRegistry`、policy metadata 与 verifier binding 派生 Agent/UI 可见工具，避免第二套可执行 registry |
-| `M3H-002` 建立脱敏 `AgentProjectObservation` | `I/T/—` | `DONE` | 只读取 server-derived StageState、verified artifact 摘要、能力、预算和 logical profile；不暴露私有 locator、命令或原始文献全文 |
-| `M3H-003` 建立 LLM 长程计划 proposal contract | `I/T/—` | `DONE` | 专用 JSON planning call 生成完整 RunPlan、task options、limits、stop conditions 和 questions；自然语言回复不作为动作解析源 |
+| `M3H-001` 建立单一 `ScientificToolSpec` 能力契约 | `I/T/—` | `READY` | PR-BL Draft review remediation 中：必须以显式 v1 allowlist、完整 metadata 和无第二 registry drift 关闭 blocker 后再标记完成 |
+| `M3H-002` 建立脱敏 `AgentProjectObservation` | `I/T/—` | `READY` | PR-BL Draft review remediation 中：必须关闭正常 OLED prose、profile binding、artifact trust 和 privacy blocker 后再标记完成 |
+| `M3H-003` 建立 LLM 长程计划 proposal contract | `I/T/—` | `READY` | PR-BL Draft review remediation 中：必须关闭 request idempotency、first-plan storage 和 stale verification blocker 后再标记完成 |
 | `M3H-004` 建立 deterministic Permission Engine | `I(partial)/T(partial)/—` | `DEFERRED` | 统一 `ALLOW`、`REQUIRE_APPROVAL`、`DENY`、effect class、risk、permission、Gate 与预算判断 |
 | `M3H-005` 建立 immutable plan authorization | `I(partial)/T(partial)/—` | `DEFERRED` | 绑定 proposal、observation、RunPlan、task options、输入 artifact、profile、预算、actor 与 approval mode digest |
 | `M3H-006` 实现 approve-and-start 与两种审批模式 | `—/—/—` | `DEFERRED` | 用户批准后由 Controller 启动；不得由自由文本、external LLM consent 或 LLM 自身输出产生执行授权 |
@@ -492,7 +492,7 @@ PR-BR  M3H-013～M3H-015
 
 - `M3H-GATE-001`：LLM 可基于脱敏 observation 生成完整、schema-valid、canonical、不可替换的长程计划 proposal；未知工具、参数、状态、approval 或命令注入 fail closed。
 
-PR-BL 已达到 `M3H-GATE-001` 的 implementation/test 部分（`I/T`）；本条不标记 `V`。代表性 runtime、外部 provider 与后续 Harness execution validation 留给 PR-BM～PR-BR，且不在本 PR 中宣称完成。
+PR-BL 仍在 Draft review remediation。`M3H-GATE-001` 不标记 `V`，且在 PR #18 的 catalog、privacy、profile、artifact trust、idempotency 与 first-plan storage blocker 获得审查确认前，不将 `M3H-001`～`M3H-003` 标记 `DONE`。代表性 runtime、外部 provider 与后续 Harness execution validation 留给 PR-BM～PR-BR，且不在本 PR 中宣称完成。
 - `M3H-GATE-002`：用户可通过 `stepwise` 或 `frozen_plan` 批准 exact plan 并由同一操作启动；external LLM consent、普通聊天文字和 LLM 自身输出均不能产生执行权限。
 - `M3H-GATE-003`：Execution Agent 只能发起 allowlisted `ToolCallProposal`；Controller 能证明每次 dispatch 属于当前有效授权、预算、profile 和 artifact lineage。
 - `M3H-GATE-004`：Executor、RemoteExecutionService、`molly-worker`、Verifier 和 Artifact Registry 保持唯一真实执行与结果权威；Harness/LLM 不能伪造 `RUNNING`、`SUCCEEDED` 或 verified artifact。
@@ -877,6 +877,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：schema 过早冻结、tool projection metadata drift、observation 过度暴露、review artifact 被误认为 execution authority，以及大型 registry projection 的维护成本；后续 PR 必须继续复用 source binding、digest 和 verifier。
 - 批准人：repository owner。
 
+### 2026-07-31：PR-BL Draft review remediation 保持为唯一当前动作
+
+- 决策：PR #18 在保持 Draft、禁止合并和禁止启动 PR-BM 的前提下，修复 review 发现的六个 correctness/privacy blocker；M3H-001～M3H-003 暂恢复为 `READY`，直到修复获得审查确认。
+- 原计划：将 PR-BL 的三个任务记为 `I/T/— / DONE`，并将 PR-BM 设为下一唯一当前动作。
+- 新计划：PR-BL 继续冻结 read-only schema 与 non-execution boundary，但必须修复普通 OLED prose 的 false positive、single-connection profile capability binding、explicit planner allowlist、semantic/request/publication identity、project-scoped first-plan storage 与 artifact trust class 后才可结束；PR-BM 保持 `DEFERRED`。
+- 依据：PR #18 review 指出上述问题可分别阻断正常 OLED 目标、错误显示远程 profile 可用、扩大 Planner 暴露面、破坏实际 API 幂等、阻断新项目首个计划，或拒绝 raw PDF/raw dataset 的合法规划输入。
+- 影响任务：`M3H-001`～`M3H-003` 为 `I/T/— / READY`；`M3H-004`～后续任务继续 `DEFERRED`；`M3H-GATE-001` 不标记 `V`；PR-BL review remediation 成为唯一当前动作。
+- 新增风险：修复后的 v1 schema 仍可能过早冻结；显式 roster 的维护与 profile/trust metadata drift 需要后续审查；review artifact 仍可能被误读为执行 authority。
+- 批准人：repository owner。
+
 后续路线调整必须追加：
 
 ```text
@@ -894,9 +904,9 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 唯一当前动作：PR-BM Permission Engine 与 immutable authorization
+### 唯一当前动作：PR-BL Draft review remediation（PR #18）
 
-任务：在 PR-BL 冻结的工具、observation 与 review-only proposal contract 之上，实现 deterministic Permission Engine、immutable plan authorization 与 approve-and-start contract；不得把 external LLM consent、普通聊天文字或 LLM 输出解释为执行授权。
+任务：在不扩大为 Permission Engine、authorization 或 execution 的前提下，完成 PR #18 的 ScientificToolSpec、AgentProjectObservation 与 review-only plan proposal blocker 修复和验证；不得把 external LLM consent、普通聊天文字或 LLM 输出解释为执行授权。
 
 范围：
 
@@ -906,7 +916,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 - proposal 必须 `executable=false`、绑定 observation/RunPlan/options digest、不可替换且可重放；
 - 不新增 approve、execute、resume、SSH、worker dispatch 或 UI 执行按钮。
 
-当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`；PR-BL 的 M3H-001～003 为 `I/T/— / DONE`；M4/PR-BK 保留但暂缓，待 Harness 核心 schema 冻结后恢复。
+当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`；PR-BL 的 M3H-001～003 为 `I/T/— / READY`，PR #18 维持 Draft；M4/PR-BK 保留但暂缓，待 Harness 核心 schema 和 review 确认后恢复。
 
 必须验证：
 
@@ -927,8 +937,8 @@ PR-BH  read-only inspect API 与最小时间线（已完成）
 PR-BJ  authoritative M3 failure source evidence contract v1（已完成）
 PR-BI  representative inspection validation evidence（machine + owner review complete）
 
-PR-BL  ScientificToolSpec、AgentProjectObservation、LLM long-horizon plan proposal（实现/测试完成；runtime validation 不在本 PR）
-PR-BM  Permission Engine、immutable plan authorization、approve-and-start contract
+PR-BL  ScientificToolSpec、AgentProjectObservation、LLM long-horizon plan proposal（Draft review remediation；不合并、不启动 PR-BM）
+PR-BM  Permission Engine、immutable plan authorization、approve-and-start contract（PR-BL 审查确认后）
 PR-BN  Harness Controller 接入现有 Executor/remote/verifier 链
 PR-BO  Execution Agent LLM 与受约束 ToolCallProposal
 PR-BP  Replanner、plan diff 与重新授权

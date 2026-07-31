@@ -14,6 +14,19 @@ from ai4s_agent.schemas import (
 )
 
 
+def _closed_option_schema(
+    properties: dict[str, dict[str, object]] | None = None,
+) -> dict[str, object]:
+    """Return an explicit, closed high-level planning option contract."""
+
+    return {
+        "type": "object",
+        "properties": properties or {},
+        "required": [],
+        "additionalProperties": False,
+    }
+
+
 DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     AtomicTaskSpec(
         task_id="inspect_dataset",
@@ -21,6 +34,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["dataset_profile", "property_catalog"],
         risk_level=RiskLevel.LOW,
         default_adapter="inspect_dataset_service",
+        scientific_tool_id="inspect_dataset",
+        label="Inspect dataset",
+        description="Inspect a content-bound dataset and derive its logical profile.",
+        effect_class="observe",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {"target_property": {"type": "string", "minLength": 1, "maxLength": 96}}
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=[],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="clean_dataset",
@@ -28,6 +56,24 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["cleaned_train_dataset", "cleaning_rules"],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="execute_cleaning_adapter",
+        scientific_tool_id="clean_dataset",
+        label="Clean dataset",
+        description="Apply the registered data-cleaning workflow to a logical dataset profile.",
+        effect_class="derive_local",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {
+                "duplicate_policy": {"type": "string", "enum": ["keep_first", "drop_all"]},
+                "missing_value_policy": {"type": "string", "enum": ["drop_rows", "report_only"]},
+            }
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["registered_intermediate", "verified_output"],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="check_trainability",
@@ -35,6 +81,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["trainability_report"],
         risk_level=RiskLevel.LOW,
         default_adapter="check_trainability_service",
+        scientific_tool_id="check_trainability",
+        label="Check trainability",
+        description="Evaluate whether the cleaned dataset supports the registered modeling workflow.",
+        effect_class="observe",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {"validation_fraction": {"type": "number", "minimum": 0.01, "maximum": 0.5}}
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["registered_intermediate", "verified_output", "confirmed_scientific_input"],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="run_baseline",
@@ -42,6 +103,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["baseline_report", "backend_recommendation"],
         risk_level=RiskLevel.LOW,
         default_adapter="run_baseline_service",
+        scientific_tool_id="run_baseline",
+        label="Run baseline assessment",
+        description="Produce the registered baseline assessment and backend recommendation.",
+        effect_class="observe",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {"random_seed": {"type": "integer", "minimum": 0, "maximum": 2147483647}}
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["registered_intermediate", "verified_output"],
+        budget_dimensions=["max_records", "max_runtime_sec"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="train_model",
@@ -57,6 +133,26 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         risk_level=RiskLevel.HIGH,
         gates=[GateName.TRAIN_CONFIG.value],
         default_adapter="train_model_baseline_adapter",
+        scientific_tool_id="train_model",
+        label="Train model",
+        description="Train the registered model from a reviewed training dataset and trainability report.",
+        effect_class="compute",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {
+                "target_property": {"type": "string", "minLength": 1, "maxLength": 96},
+                "max_epochs": {"type": "integer", "minimum": 1, "maximum": 10000},
+                "validation_fraction": {"type": "number", "minimum": 0.01, "maximum": 0.5},
+                "random_seed": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+            }
+        ),
+        logical_profile_requirements=["model_training"],
+        accepted_input_trust_classes=["verified_output", "confirmed_scientific_input"],
+        budget_dimensions=["max_runtime_sec", "max_gpu_hours"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="generate_candidates",
@@ -65,6 +161,25 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         risk_level=RiskLevel.MEDIUM,
         gates=[GateName.FINAL_THRESHOLD.value],
         default_adapter="generate_candidates_stub_adapter",
+        scientific_tool_id="generate_candidates",
+        label="Generate candidate molecules",
+        description="Generate candidate molecules using the registered logical generation workflow.",
+        effect_class="compute",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {
+                "candidate_count": {"type": "integer", "minimum": 1, "maximum": 100000},
+                "temperature": {"type": "number", "minimum": 0.1, "maximum": 5.0},
+                "random_seed": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+            }
+        ),
+        logical_profile_requirements=["molecular_generation"],
+        accepted_input_trust_classes=["verified_output"],
+        budget_dimensions=["max_runtime_sec", "max_steps"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="predict_candidates",
@@ -72,6 +187,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["candidate_predictions"],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="predict_candidates_baseline_adapter",
+        scientific_tool_id="predict_candidates",
+        label="Predict candidate properties",
+        description="Score generated candidates with the registered prediction workflow.",
+        effect_class="compute",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {"batch_size": {"type": "integer", "minimum": 1, "maximum": 100000}}
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["verified_output"],
+        budget_dimensions=["max_runtime_sec", "max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="filter_rank",
@@ -79,6 +209,25 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["ranked_candidates", "topn_export"],
         risk_level=RiskLevel.LOW,
         default_adapter="filter_rank_adapter",
+        scientific_tool_id="filter_rank",
+        label="Filter and rank candidates",
+        description="Filter and rank candidate predictions with registered high-level criteria.",
+        effect_class="derive_local",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {
+                "ranking_property": {"type": "string", "minLength": 1, "maxLength": 96},
+                "top_n": {"type": "integer", "minimum": 1, "maximum": 10000},
+                "minimum_score": {"type": "number", "minimum": -1000000, "maximum": 1000000},
+            }
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["registered_intermediate", "verified_output"],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="render_report",
@@ -86,6 +235,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["report_markdown", "report_html"],
         risk_level=RiskLevel.LOW,
         default_adapter="render_report_adapter",
+        scientific_tool_id="render_report",
+        label="Render scientific report",
+        description="Render a reviewable report from the registered ranked-candidate artifact.",
+        effect_class="mutate_artifacts",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {"include_provenance": {"type": "boolean"}}
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["verified_output"],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="parse_document",
@@ -94,6 +258,24 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         risk_level=RiskLevel.MEDIUM,
         gates=[GateName.DATA_MINING.value],
         default_adapter="parse_document_mineru_adapter",
+        scientific_tool_id="parse_document",
+        label="Parse PDF corpus",
+        description="Parse a content-bound PDF corpus through the registered document-parsing workflow.",
+        effect_class="compute",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {
+                "max_pages": {"type": "integer", "minimum": 1, "maximum": 100000},
+                "extract_tables": {"type": "boolean"},
+            }
+        ),
+        logical_profile_requirements=["document_parsing"],
+        accepted_input_trust_classes=["content_bound_input", "registered_intermediate", "verified_output"],
+        budget_dimensions=["max_runtime_sec", "max_gpu_hours"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="parse_document_pdfplumber",
@@ -146,6 +328,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["corpus_index", "evidence_chunks"],
         risk_level=RiskLevel.LOW,
         default_adapter="index_corpus_adapter",
+        scientific_tool_id="index_corpus",
+        label="Index parsed corpus",
+        description="Build the registered logical index from parsed document artifacts.",
+        effect_class="derive_local",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {"chunk_size": {"type": "integer", "minimum": 128, "maximum": 32768}}
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["registered_intermediate", "verified_output"],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="build_multi_index",
@@ -167,6 +364,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["evidence_hits", "retrieval_log"],
         risk_level=RiskLevel.LOW,
         default_adapter="retrieve_evidence_adapter",
+        scientific_tool_id="retrieve_evidence",
+        label="Retrieve evidence",
+        description="Retrieve bounded evidence from the registered corpus index.",
+        effect_class="derive_local",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {"top_k": {"type": "integer", "minimum": 1, "maximum": 1000}}
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["registered_intermediate", "verified_output"],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="extract_records",
@@ -179,6 +391,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         ],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="extract_records_adapter",
+        scientific_tool_id="extract_records",
+        label="Extract scientific records",
+        description="Extract structured records from registered evidence artifacts.",
+        effect_class="compute",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {"confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1}}
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["registered_intermediate", "verified_output"],
+        budget_dimensions=["max_records", "max_runtime_sec"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="normalize_extracted_units",
@@ -190,6 +417,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         ],
         risk_level=RiskLevel.LOW,
         default_adapter="normalize_extracted_units_adapter",
+        scientific_tool_id="normalize_extracted_units",
+        label="Normalize extracted units",
+        description="Normalize units in registered extracted scientific records.",
+        effect_class="derive_local",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {"strict_units": {"type": "boolean"}}
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["registered_intermediate", "verified_output"],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="track_citation_provenance",
@@ -197,6 +439,19 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["citation_provenance_report", "audit_summary"],
         risk_level=RiskLevel.LOW,
         default_adapter="track_citation_provenance_adapter",
+        scientific_tool_id="track_citation_provenance",
+        label="Track citation provenance",
+        description="Build the registered provenance report for parsed and extracted records.",
+        effect_class="derive_local",
+        required_permissions=[],
+        option_schema=_closed_option_schema(),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["registered_intermediate", "verified_output"],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="merge_extracted_records",
@@ -204,6 +459,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["merged_records", "conflict_report", "candidate_training_dataset"],
         risk_level=RiskLevel.MEDIUM,
         default_adapter="merge_extracted_records_adapter",
+        scientific_tool_id="merge_extracted_records",
+        label="Merge extracted records",
+        description="Merge normalized records using registered provenance and conflict rules.",
+        effect_class="derive_local",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {"conflict_policy": {"type": "string", "enum": ["preserve", "prefer_high_confidence"]}}
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["registered_intermediate", "verified_output"],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="evaluate_extraction_benchmark",
@@ -211,6 +481,19 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         output_artifacts=["extraction_benchmark_report"],
         risk_level=RiskLevel.LOW,
         default_adapter="evaluate_extraction_benchmark_adapter",
+        scientific_tool_id="evaluate_extraction_benchmark",
+        label="Evaluate extraction benchmark",
+        description="Evaluate registered extraction quality evidence without changing scientific confirmation.",
+        effect_class="observe",
+        required_permissions=[],
+        option_schema=_closed_option_schema(),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["registered_intermediate", "verified_output"],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="confirm_extracted_dataset",
@@ -223,6 +506,21 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         risk_level=RiskLevel.HIGH,
         gates=[GateName.DATA_MINING.value],
         default_adapter="confirm_extracted_dataset_adapter",
+        scientific_tool_id="confirm_extracted_dataset",
+        label="Confirm extracted dataset",
+        description="Prepare the registered dataset-confirmation task for review; it does not grant confirmation authority.",
+        effect_class="scientific_confirm",
+        required_permissions=[],
+        option_schema=_closed_option_schema(
+            {"minimum_confidence": {"type": "number", "minimum": 0, "maximum": 1}}
+        ),
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=["content_bound_input", "registered_intermediate", "verified_output"],
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     ),
     AtomicTaskSpec(
         task_id="literature_to_dataset_workflow",

@@ -59,9 +59,13 @@ The five published JSON schema files are generated from the Pydantic models in
 `ScientificToolSpec` includes the schema version, canonical tool/task IDs,
 human label and description, logical artifact IDs, effect class, risk,
 required permissions and gates, a closed high-level option schema, logical
-profile requirements, budget dimensions, preapproval declaration,
-idempotency policy, verification policy, and planner visibility. Its
-`effect_class` vocabulary is deliberately limited to `observe`,
+profile requirements, accepted input-artifact trust classes, budget dimensions,
+preapproval declaration, idempotency policy, verification policy, and planner
+visibility. `AtomicTaskSpec.planner_visible` defaults to `false`: PR-BL freezes
+a narrow v1 roster in `DEFAULT_ATOMIC_TASKS`, and every visible task explicitly
+sets all projection metadata. New execution tasks remain hidden until a review
+adds an explicit projection; no task-ID heuristic infers effect, profile, or
+planner visibility. Its `effect_class` vocabulary is deliberately limited to `observe`,
 `derive_local`, `mutate_artifacts`, `external_io`, `compute`,
 `scientific_confirm`, `change_objective`, and `publish_or_promote`.
 
@@ -88,7 +92,10 @@ capabilities fail closed during server compilation.
 
 Every observation binds project/run identity, StageState, artifact registry,
 confirmed dataset manifests, catalog, logical profile snapshot, and existing
-RunPlan through source digests. Semantic identity excludes wall-clock
+RunPlan through source digests. An execution profile is `available` only when
+one enabled connection has a digest-matched successful probe whose verified
+capabilities independently cover that profile's whole requirement; capability
+fragments from disabled or separate connections are never combined. Semantic identity excludes wall-clock
 `created_at`; canonical JSON sorting makes equal source snapshots produce equal
 semantic bytes and digests. The builder rechecks source files, artifact inodes
 and bytes, catalog digest, and profile snapshot before publishing.
@@ -97,9 +104,22 @@ The observation schema and projection do not contain absolute paths, host/IP,
 SSH aliases, usernames or emails, `known_hosts`, commands/argv, environment
 assignments, credentials, raw stderr/stdout, raw CSV/PDF/model/document text,
 or private chain-of-thought. Artifact content is streamed for hashing; only a
-small allowlisted JSON manifest summary can enter the observation. The
-recursive schema/privacy checks reject forbidden keys and authority fields
-rather than silently removing them.
+small allowlisted JSON manifest summary can enter the observation. A registry-
+bound input with a content digest but no server-recorded producer is classified
+as `content_bound_input`; a registered produced artifact is
+`registered_intermediate`; terminal StageState output is `verified_output`; and
+only a terminal `confirm_extracted_dataset` output is
+`confirmed_scientific_input`. A JSON field such as `confirmed: true` cannot
+promote itself. Each tool declares which input trust classes it accepts, so raw
+PDF/CSV inputs can be proposed only for a matching registered parsing or
+confirmation task.
+
+The recursive schema/privacy checks reject exact forbidden structural keys and
+authority fields rather than silently removing them. Natural-language goal and
+rationale text is not treated as an authority parser: normal OLED wording such
+as “host–dopant”, “failed validation”, and “authorization review” is allowed.
+Prose is still rejected for concrete absolute paths, IPs, email addresses,
+credential formats, and environment assignments.
 
 ## Planning and deterministic compilation
 
@@ -127,12 +147,28 @@ The resulting proposal has `status=review_required` and an immutable
 dispatch state, or current execution status claim. It is a review/control
 artifact, not a scientific result trust anchor.
 
+The contract deliberately separates identities:
+
+- `semantic_plan_digest` / `semantic_plan_id` bind deterministic planning
+  semantics and exclude time, provider response IDs, latency, and invocation
+  metadata;
+- `invocation_id` records one dedicated LLM call;
+- `client_request_id` binds one client retry request; and
+- `publication_id` (also returned as compatibility `proposal_id`) names the
+  immutable persisted envelope and its full `proposal_digest`.
+
+A repeated `client_request_id` with identical request material replays the
+exact stored publication without another LLM call. Reuse with different
+request material fails closed. Separate requests may publish distinct envelopes
+for the same semantic plan without a no-replace byte conflict.
+
 ## Storage and API contract
 
-Published proposals are stored under the existing project/run scope:
+Published proposals use a project-scoped planning-only area; a run ID remains a
+logical observation/RunPlan binding but does not need to pre-exist:
 
 ```text
-projects/<project_id>/runs/<run_id>/agent_plans/<proposal_id>/
+projects/<project_id>/agent_plan_proposals/<publication_id>/
   observation.json
   tool_catalog.json
   llm_response.json
@@ -140,11 +176,15 @@ projects/<project_id>/runs/<run_id>/agent_plans/<proposal_id>/
   proposal_summary.md
   source_binding.json
   verification.json
+
+projects/<project_id>/agent_plan_requests/<client_request_id>.json
 ```
 
 Files are created with no-replace, `O_NOFOLLOW`, exclusive creation, fsync,
 and exact canonical-byte replay checks. A repeated publication of identical
-bytes is idempotent. Reusing a proposal ID for different bytes is a conflict.
+bytes is idempotent. Reusing a publication ID for different bytes is a conflict.
+Creating the first proposal for a project never creates a run directory,
+StageState, GateDecision, queue job, or execution authority.
 Reads verify all projections, digests, source bindings, and (by default) the
 current authoritative source snapshot. A stale StageState, artifact digest,
 catalog, profile snapshot, or run plan fails closed. Publication never updates
@@ -157,7 +197,8 @@ POST /api/projects/<project_id>/agent-plan-proposals
 GET  /api/projects/<project_id>/agent-plan-proposals/<proposal_id>
 ```
 
-POST accepts only `run_id`, `goal`, `user_constraints`, the existing
+POST accepts only `run_id`, `goal`, `user_constraints`, optional
+`client_request_id`, the existing
 `external_llm_approved` consent flag, and an optional existing `llm_provider`
 override. Observation, catalog, RunPlan, Gate, status, and execution fields
 submitted by a client are rejected. GET performs exact verification and returns
@@ -179,9 +220,11 @@ The contract treats the following as hostile or stale input:
 - `approved`, `execute`, `dispatch`, `start_now`, `RUNNING`, `SUCCEEDED`,
   `FAILED`, or status-override injection;
 - missing or replaced artifacts, StageState races, stale catalog/profile
-  capability, and changed existing RunPlan;
+  capability, a probe whose digest no longer matches its connection, split
+  capabilities across connections, and changed existing RunPlan;
 - symlink/replacement attacks against source and proposal files;
-- duplicate proposal publication or same-ID different-byte replay;
+- duplicate publication, request-ID reuse with different request material, or
+  same-publication-ID different-byte replay;
 - raw-data, private-document, infrastructure, email, IP, token, and exception
   leakage to an external LLM, API response, log, or Markdown artifact;
 - drift between a planner catalog and the single `AtomicTaskRegistry` source.

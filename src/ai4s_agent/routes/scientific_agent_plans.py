@@ -61,6 +61,7 @@ def register_scientific_agent_plan_routes(
                 "run_id",
                 "goal",
                 "user_constraints",
+                "client_request_id",
                 "external_llm_approved",
                 "llm_provider",
             }
@@ -74,6 +75,9 @@ def register_scientific_agent_plan_routes(
             constraints = payload.get("user_constraints", [])
             if not isinstance(constraints, list) or any(not isinstance(item, str) for item in constraints):
                 return _error_response("user_constraints must be a list of strings", 400)
+            request_id = payload.get("client_request_id")
+            if request_id is not None and not isinstance(request_id, str):
+                return _error_response("client_request_id must be a string", 400)
             provider_context: AbstractContextManager[LLMProvider | None] = _llm_provider_from_payload(
                 payload,
                 settings=llm_settings,
@@ -98,9 +102,10 @@ def register_scientific_agent_plan_routes(
                     goal=goal,
                     user_constraints=constraints,
                     provider=provider,
+                    client_request_id=request_id,
                 )
             except FileNotFoundError:
-                return _error_response("run or project not found", 404)
+                return _error_response("project not found", 404)
             except ScientificAgentPlanSourceChanged:
                 return _error_response("authoritative project source changed; retry planning", 409)
             except ScientificAgentPlanPublicationConflict:

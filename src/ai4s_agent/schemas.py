@@ -156,19 +156,24 @@ _AGENT_ABSOLUTE_PATH_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _AGENT_WINDOWS_PATH_PATTERN = re.compile(r"(?:^|[\s\"'=(])[A-Za-z]:[\\/]")
-_AGENT_FORBIDDEN_TEXT_PATTERN = re.compile(
-    r"\b(?:ssh|scp|known[_-]?hosts|molly-worker|worker[_-]?command|shell|argv|command|"
-    r"api[_-]?key|access[_-]?token|auth[_-]?token|authorization|password|secret|credential|"
-    r"host(?:name)?|ip(?:v[46])?|username|email|"
-    r"raw[_-]?(?:csv|pdf|dataset|model)|private[_-]?(?:document|paper|chain[_-]?of[_-]?thought)|"
-    r"stderr|stdout)\b",
+# Prose is an input surface for scientific goals, assumptions, and questions.
+# Do not reject ordinary domain language such as "host–dopant", "triplet
+# energy", "failed validation", or "authorization review" merely because a
+# word resembles an infrastructure or authority field.  Structural fields are
+# rejected separately by exact key matching below.  These patterns therefore
+# only target concrete sensitive payloads that cannot safely enter the LLM
+# planning surface as prose.
+_AGENT_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|secret|credential)\b"
+    r"\s*[:=]\s*(?:bearer\s+)?[^\s,;]{6,}",
     re.IGNORECASE,
 )
-_AGENT_AUTHORITY_ASSIGNMENT_PATTERN = re.compile(
-    r"\b(?:approved?|approval|execute|dispatch|start[_-]?now|running|succeeded|failed|"
-    r"status[_-]?override)\b\s*[:=]",
+_AGENT_BEARER_TOKEN_PATTERN = re.compile(r"\bbearer\s+[a-z0-9._~-]{12,}\b", re.IGNORECASE)
+_AGENT_SECRET_LITERAL_PATTERN = re.compile(
+    r"\b(?:sk|rk|pk)-[a-z0-9_-]{8,}\b|\bAIza[a-z0-9_-]{12,}\b",
     re.IGNORECASE,
 )
+_AGENT_PRIVATE_KEY_PATTERN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE)
 _AGENT_ENV_ASSIGNMENT_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]{2,}\s*=")
 _AGENT_FORBIDDEN_KEY_TOKENS = frozenset(
     {
@@ -203,6 +208,14 @@ _AGENT_FORBIDDEN_KEY_TOKENS = frozenset(
         "worker_command",
     }
 )
+
+
+def _agent_normalize_contract_key(value: Any) -> str:
+    """Normalize a structured JSON key without using substring policy."""
+
+    raw = str(value or "").strip()
+    snake = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw)
+    return re.sub(r"[^a-z0-9]+", "_", snake.lower()).strip("_")
 
 
 def _agent_canonical_bytes(value: Any) -> bytes:
@@ -249,8 +262,10 @@ def _agent_safe_text(value: Any, *, field: str, max_length: int = 4096, allow_em
         or _AGENT_IPV4_PATTERN.search(clean)
         or _AGENT_ABSOLUTE_PATH_PATTERN.search(clean)
         or _AGENT_WINDOWS_PATH_PATTERN.search(clean)
-        or _AGENT_FORBIDDEN_TEXT_PATTERN.search(clean)
-        or _AGENT_AUTHORITY_ASSIGNMENT_PATTERN.search(clean)
+        or _AGENT_SECRET_ASSIGNMENT_PATTERN.search(clean)
+        or _AGENT_BEARER_TOKEN_PATTERN.search(clean)
+        or _AGENT_SECRET_LITERAL_PATTERN.search(clean)
+        or _AGENT_PRIVATE_KEY_PATTERN.search(clean)
         or _AGENT_ENV_ASSIGNMENT_PATTERN.search(clean)
     ):
         raise ValueError(f"{field} contains private infrastructure, command, credential, or authority material")
@@ -263,10 +278,8 @@ def _agent_safe_value(value: Any, path: str = "value") -> Any:
         return _agent_safe_text(value, field=path)
     if isinstance(value, dict):
         for key, item in value.items():
-            normalized = str(key).strip().lower().replace("-", "_")
-            if normalized in _AGENT_FORBIDDEN_KEY_TOKENS or any(
-                token in normalized for token in _AGENT_FORBIDDEN_KEY_TOKENS
-            ):
+            normalized = _agent_normalize_contract_key(key)
+            if normalized in _AGENT_FORBIDDEN_KEY_TOKENS:
                 raise ValueError(f"{path}.{key} is not allowed in a scientific agent contract")
             _agent_safe_value(item, f"{path}.{key}")
     elif isinstance(value, list):
@@ -1000,6 +1013,26 @@ class ExtractionBenchmarkReport(BaseModel):
         return value
 
 
+ScientificEffectClass = Literal[
+    "observe",
+    "derive_local",
+    "mutate_artifacts",
+    "external_io",
+    "compute",
+    "scientific_confirm",
+    "change_objective",
+    "publish_or_promote",
+]
+
+ArtifactTrustClass = Literal[
+    "content_bound_input",
+    "registered_intermediate",
+    "verified_output",
+    "confirmed_scientific_input",
+    "unavailable",
+]
+
+
 class AtomicTaskSpec(BaseModel):
     task_id: str
     required_artifacts: list[str] = Field(default_factory=list)
@@ -1014,22 +1047,59 @@ class AtomicTaskSpec(BaseModel):
     scientific_tool_id: str | None = None
     label: str = ""
     description: str = ""
-    effect_class: str = "compute"
+    effect_class: ScientificEffectClass | None = None
     required_permissions: list[str] = Field(default_factory=list)
-    option_schema: dict[str, Any] = Field(
-        default_factory=lambda: {
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": False,
-        }
-    )
+    option_schema: dict[str, Any] | None = None
     logical_profile_requirements: list[str] = Field(default_factory=list)
+    accepted_input_trust_classes: list[ArtifactTrustClass] = Field(default_factory=list)
     budget_dimensions: list[str] = Field(default_factory=list)
     supports_plan_preapproval: bool = False
     idempotency_policy: str = "server_checked"
-    verification_policy: str = "server_verifier_required"
-    planner_visible: bool = True
+    verification_policy: str = ""
+    # Planner exposure is opt-in.  New registered execution tasks must be
+    # deliberately reviewed and receive complete metadata before they can be
+    # projected into the LLM-facing catalog.
+    planner_visible: bool = False
+
+    @model_validator(mode="after")
+    def validate_planner_projection_metadata(self) -> "AtomicTaskSpec":
+        if not self.planner_visible:
+            return self
+        required_fields = {
+            "scientific_tool_id",
+            "label",
+            "description",
+            "effect_class",
+            "required_permissions",
+            "option_schema",
+            "logical_profile_requirements",
+            "accepted_input_trust_classes",
+            "budget_dimensions",
+            "supports_plan_preapproval",
+            "idempotency_policy",
+            "verification_policy",
+            "planner_visible",
+        }
+        omitted = sorted(required_fields.difference(self.model_fields_set))
+        if omitted:
+            raise ValueError(
+                "planner-visible atomic task must explicitly set projection metadata: "
+                + ", ".join(omitted)
+            )
+        if not self.scientific_tool_id or not self.label.strip() or not self.description.strip():
+            raise ValueError("planner-visible atomic task requires non-empty tool ID, label, and description")
+        if self.effect_class is None:
+            raise ValueError("planner-visible atomic task requires an explicit effect class")
+        if self.option_schema is None:
+            raise ValueError("planner-visible atomic task requires an explicit option schema")
+        _agent_validate_option_schema(self.option_schema)
+        if self.required_artifacts and not self.accepted_input_trust_classes:
+            raise ValueError(
+                "planner-visible atomic task with inputs requires explicit accepted artifact trust classes"
+            )
+        if not self.verification_policy.strip():
+            raise ValueError("planner-visible atomic task requires an explicit verification policy")
+        return self
 
 
 class PlannedTask(BaseModel):
@@ -1046,18 +1116,6 @@ class RunPlan(BaseModel):
     tasks: list[PlannedTask]
     available_artifacts: list[str] = Field(default_factory=list)
     missing_artifacts: list[str] = Field(default_factory=list)
-
-
-ScientificEffectClass = Literal[
-    "observe",
-    "derive_local",
-    "mutate_artifacts",
-    "external_io",
-    "compute",
-    "scientific_confirm",
-    "change_objective",
-    "publish_or_promote",
-]
 
 
 class ScientificToolSpec(BaseModel):
@@ -1085,6 +1143,7 @@ class ScientificToolSpec(BaseModel):
         }
     )
     logical_profile_requirements: list[str] = Field(default_factory=list)
+    accepted_input_trust_classes: list[ArtifactTrustClass] = Field(default_factory=list)
     budget_dimensions: list[str] = Field(default_factory=list)
     supports_plan_preapproval: bool = False
     idempotency_policy: Literal["none", "replay_safe", "server_checked"] = "server_checked"
@@ -1113,6 +1172,15 @@ class ScientificToolSpec(BaseModel):
     def validate_identifier_lists(cls, value: list[str], info: Any) -> list[str]:
         return _agent_string_list(value, field=info.field_name, sort_values=True)
 
+    @field_validator("accepted_input_trust_classes")
+    @classmethod
+    def validate_trust_classes(cls, value: list[ArtifactTrustClass]) -> list[ArtifactTrustClass]:
+        if len(value) != len(set(value)):
+            raise ValueError("accepted input artifact trust classes must be unique")
+        if "unavailable" in value:
+            raise ValueError("planner tools must not accept unavailable artifacts")
+        return sorted(value)
+
     @field_validator("option_schema")
     @classmethod
     def validate_options(cls, value: dict[str, Any]) -> dict[str, Any]:
@@ -1124,6 +1192,8 @@ class ScientificToolSpec(BaseModel):
             raise ValueError("ScientificToolSpec instances in the planner catalog must be visible")
         if self.task_id in self.output_artifact_ids:
             raise ValueError("tool output artifact IDs must not equal the task ID")
+        if self.input_artifact_ids and not self.accepted_input_trust_classes:
+            raise ValueError("tool input contract requires accepted artifact trust classes")
         return self
 
 
@@ -1304,6 +1374,7 @@ class AgentArtifactObservation(BaseModel):
     content_digest: str = ""
     size_bytes: int = 0
     verification_state: Literal["verified", "registered", "missing", "unavailable"] = "unavailable"
+    trust_class: ArtifactTrustClass = "unavailable"
     producer_task_id: str | None = None
     schema_summary: dict[str, Any] = Field(default_factory=dict)
     provenance_completeness_summary: list[str] = Field(default_factory=list)
@@ -1339,6 +1410,28 @@ class AgentArtifactObservation(BaseModel):
     @classmethod
     def validate_provenance_summary(cls, value: list[str]) -> list[str]:
         return _agent_string_list(value, field="provenance_completeness_summary", sort_values=True)
+
+    @model_validator(mode="after")
+    def validate_trust_binding(self) -> "AgentArtifactObservation":
+        if self.verification_state in {"missing", "unavailable"}:
+            if self.trust_class != "unavailable":
+                raise ValueError("unavailable artifacts must use the unavailable trust class")
+            return self
+        if not self.content_digest:
+            raise ValueError("available artifacts require a content digest")
+        if self.trust_class == "unavailable":
+            raise ValueError("available artifacts require a concrete trust class")
+        if self.verification_state == "verified" and self.trust_class not in {
+            "verified_output",
+            "confirmed_scientific_input",
+        }:
+            raise ValueError("verified artifacts require verified or confirmed trust class")
+        if self.verification_state == "registered" and self.trust_class not in {
+            "content_bound_input",
+            "registered_intermediate",
+        }:
+            raise ValueError("registered artifacts require input or intermediate trust class")
+        return self
 
 
 class AgentExecutionProfileObservation(BaseModel):
@@ -1624,7 +1717,6 @@ class AgentExecutionPlanProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["agent_execution_plan_proposal.v1"] = "agent_execution_plan_proposal.v1"
-    proposal_id: str = ""
     project_id: str
     run_id: str
     goal: str
@@ -1649,14 +1741,30 @@ class AgentExecutionPlanProposal(BaseModel):
     missing_artifacts: list[str] = Field(default_factory=list)
     status: Literal["review_required"] = "review_required"
     llm_invocation: AgentLLMInvocationMetadata
+    # Semantic identity names the compiled plan only.  Invocation, request,
+    # and publication identities deliberately remain separate so a retry does
+    # not collide with a new LLM call that happened to propose the same plan.
+    semantic_plan_id: str = ""
+    semantic_plan_digest: str = ""
+    invocation_id: str
+    client_request_id: str
+    publication_id: str = ""
+    # ``proposal_id`` remains the API-facing compatibility alias for the
+    # immutable publication identity.
+    proposal_id: str = ""
     proposal_digest: str = ""
     executable: Literal[False] = False
     created_at: str
 
-    @field_validator("proposal_id")
+    @field_validator("proposal_id", "semantic_plan_id", "publication_id")
     @classmethod
-    def validate_proposal_id(cls, value: str) -> str:
-        return _agent_identifier(value, field="proposal_id", allow_empty=True)
+    def validate_derived_proposal_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=True)
+
+    @field_validator("invocation_id", "client_request_id")
+    @classmethod
+    def validate_request_and_invocation_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
 
     @field_validator("project_id", "run_id", "observation_id")
     @classmethod
@@ -1704,10 +1812,10 @@ class AgentExecutionPlanProposal(BaseModel):
     def validate_proposal_limits(cls, value: dict[str, Any]) -> dict[str, Any]:
         return _agent_limits(value, field="limits")
 
-    @field_validator("proposal_digest")
+    @field_validator("semantic_plan_digest", "proposal_digest")
     @classmethod
-    def validate_proposal_digest(cls, value: str) -> str:
-        return _agent_digest_value(value, field="proposal_digest", allow_empty=True)
+    def validate_optional_proposal_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name, allow_empty=True)
 
     @field_validator("created_at")
     @classmethod
@@ -1718,21 +1826,59 @@ class AgentExecutionPlanProposal(BaseModel):
     def validate_proposal(self) -> "AgentExecutionPlanProposal":
         if self.run_plan.run_id != self.run_id:
             raise ValueError("proposal run_id must match compiled RunPlan")
-        expected = _agent_digest(self.semantic_material())
+        semantic_digest = _agent_digest(self.semantic_plan_material())
+        if self.semantic_plan_digest and self.semantic_plan_digest != semantic_digest:
+            raise ValueError("agent execution semantic plan digest mismatch")
+        object.__setattr__(self, "semantic_plan_digest", semantic_digest)
+        expected_semantic_id = f"semantic-plan-{semantic_digest.split(':', 1)[1][:32]}"
+        if self.semantic_plan_id and self.semantic_plan_id != expected_semantic_id:
+            raise ValueError("semantic_plan_id must be derived from the semantic plan digest")
+        object.__setattr__(self, "semantic_plan_id", expected_semantic_id)
+
+        publication_seed = {
+            "project_id": self.project_id,
+            "client_request_id": self.client_request_id,
+        }
+        expected_publication_id = f"proposal-{_agent_digest(publication_seed).split(':', 1)[1][:32]}"
+        if self.publication_id and self.publication_id != expected_publication_id:
+            raise ValueError("publication_id must be derived from the project request binding")
+        object.__setattr__(self, "publication_id", expected_publication_id)
+        if self.proposal_id and self.proposal_id != expected_publication_id:
+            raise ValueError("proposal_id must equal the immutable publication ID")
+        object.__setattr__(self, "proposal_id", expected_publication_id)
+
+        expected = _agent_digest(self.publication_material())
         if self.proposal_digest and self.proposal_digest != expected:
             raise ValueError("agent execution plan proposal digest mismatch")
         object.__setattr__(self, "proposal_digest", expected)
-        expected_id = f"proposal-{expected.split(':', 1)[1][:32]}"
-        if self.proposal_id and self.proposal_id != expected_id:
-            raise ValueError("proposal_id must be derived from the proposal digest")
-        object.__setattr__(self, "proposal_id", expected_id)
         return self
 
-    def semantic_material(self) -> dict[str, Any]:
+    def semantic_plan_material(self) -> dict[str, Any]:
         payload = self.model_dump(mode="json")
-        for key in ("proposal_id", "proposal_digest", "created_at", "llm_invocation"):
+        for key in (
+            "proposal_id",
+            "publication_id",
+            "proposal_digest",
+            "semantic_plan_id",
+            "semantic_plan_digest",
+            "invocation_id",
+            "client_request_id",
+            "created_at",
+            "llm_invocation",
+            "planner_backend",
+        ):
             payload.pop(key, None)
         return payload
+
+    def publication_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("proposal_digest", None)
+        return payload
+
+    # Backward-compatible internal name used by callers that only need the
+    # semantic plan material, never the per-invocation publication envelope.
+    def semantic_material(self) -> dict[str, Any]:
+        return self.semantic_plan_material()
 
 
 class RunPlanDiff(BaseModel):

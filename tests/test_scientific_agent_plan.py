@@ -12,13 +12,18 @@ from pydantic import ValidationError
 from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.llm_provider import LLMProviderError
 from ai4s_agent.planner import AtomicTaskRegistry
-from ai4s_agent.resource_profiles import ResourceProfileStore
+from ai4s_agent.resource_profiles import (
+    CapabilityProbeResult,
+    ConnectionProfile,
+    ResourceProfileStore,
+)
 from ai4s_agent.schemas import (
     AgentExecutionPlanLLMResponse,
     AgentLLMInvocationMetadata,
     ArtifactRef,
     AtomicTaskSpec,
     RunStatus,
+    ScientificToolSpec,
     StageState,
 )
 from ai4s_agent.scientific_agent_plan import (
@@ -27,6 +32,7 @@ from ai4s_agent.scientific_agent_plan import (
     ScientificAgentPlanError,
     ScientificAgentPlanPublicationConflict,
     ScientificAgentPlanProposalStore,
+    ScientificAgentPlanService,
     ScientificAgentPlanSourceChanged,
     build_scientific_tool_catalog,
 )
@@ -44,8 +50,103 @@ def _storage_with_run(tmp_path: Path, *, run_id: str = "run-1") -> tuple[Project
     return storage, run_dir
 
 
+def _proposal_dir(storage: ProjectStorage, proposal_id: str) -> Path:
+    return storage.projects_root / "project-1" / "agent_plan_proposals" / proposal_id
+
+
+def _visible_task(
+    *,
+    task_id: str,
+    tool_id: str | None = None,
+    required_artifacts: list[str] | None = None,
+    output_artifacts: list[str] | None = None,
+    option_schema: dict[str, object] | None = None,
+) -> AtomicTaskSpec:
+    required = required_artifacts or []
+    return AtomicTaskSpec(
+        task_id=task_id,
+        scientific_tool_id=tool_id or task_id,
+        required_artifacts=required,
+        output_artifacts=output_artifacts or [],
+        label=task_id.replace("_", " ").title(),
+        description="A review-only logical scientific task.",
+        effect_class="compute",
+        required_permissions=[],
+        option_schema=option_schema
+        or {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=(
+            ["content_bound_input", "registered_intermediate", "verified_output"]
+            if required
+            else []
+        ),
+        budget_dimensions=[],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
+    )
+
+
+def _connection(
+    *,
+    connection_id: str,
+    capabilities: list[str],
+    enabled: bool = True,
+) -> ConnectionProfile:
+    return ConnectionProfile(
+        connection_id=connection_id,
+        display_name="",
+        ssh_host_alias=f"{connection_id}-ssh",
+        expected_hostname=connection_id,
+        remote_root=f"/srv/{connection_id}",
+        declared_capabilities=capabilities,
+        enabled=enabled,
+    )
+
+
+def _save_available_probe(store: ResourceProfileStore, connection: ConnectionProfile) -> None:
+    store.save_probe(
+        CapabilityProbeResult(
+            connection_id=connection.connection_id,
+            connection_profile_digest=connection.digest(),
+            status="available",
+            checked_at=_clock(),
+            verified_capabilities=connection.declared_capabilities,
+        )
+    )
+
+
+def _profile(observation, profile_id: str):
+    return next(item for item in observation.logical_execution_profiles if item.profile_id == profile_id)
+
+
+def _write_content_bound_artifact(
+    storage: ProjectStorage,
+    run_dir: Path,
+    *,
+    artifact_id: str,
+    relative_path: str,
+    content: bytes,
+) -> None:
+    artifact_path = run_dir / relative_path
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_bytes(content)
+    storage.register_artifact_path(
+        "project-1",
+        run_dir.name,
+        artifact_id,
+        relative_path,
+    )
+
+
 def _write_confirmed_dataset(storage: ProjectStorage, run_dir: Path, *, canary: bool = False) -> None:
-    dataset_path = run_dir / "data" / "confirmed_dataset.json"
+    dataset_path = run_dir / "data" / "confirmed_training_dataset.json"
     dataset_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "dataset_id": "confirmed-dataset",
@@ -68,26 +169,26 @@ def _write_confirmed_dataset(storage: ProjectStorage, run_dir: Path, *, canary: 
     storage.register_artifact_path(
         "project-1",
         run_dir.name,
-        "confirmed_dataset",
-        "data/confirmed_dataset.json",
+        "confirmed_training_dataset",
+        "data/confirmed_training_dataset.json",
     )
     storage.write_stage_state(
         "project-1",
         run_dir.name,
         StageState(
-            stage="clean_dataset",
+            stage="confirm_extracted_dataset",
             next_stage="train_model",
             status=RunStatus.SUCCEEDED,
             started_at=_clock(),
             updated_at=_clock(),
             artifacts=[
                 ArtifactRef(
-                    artifact_id="confirmed_dataset",
-                    relative_path="data/confirmed_dataset.json",
-                    producer_task_id="clean_dataset",
+                    artifact_id="confirmed_training_dataset",
+                    relative_path="data/confirmed_training_dataset.json",
+                    producer_task_id="confirm_extracted_dataset",
                 )
             ],
-            details={"executed_tasks": ["clean_dataset", "not-a-registered-task"]},
+            details={"executed_tasks": ["confirm_extracted_dataset", "not-a-registered-task"]},
         ),
     )
 
@@ -137,12 +238,11 @@ def _observation(storage: ProjectStorage, *, resource_profiles=None, run_id: str
 
 def test_catalog_is_registry_projection_and_deterministic() -> None:
     tasks = [
-        AtomicTaskSpec(
+        _visible_task(
             task_id="z_task",
-            scientific_tool_id="z_tool",
+            tool_id="z_tool",
             required_artifacts=["input_artifact"],
             output_artifacts=["output_artifact"],
-            description="A safe high-level task.",
             option_schema={
                 "type": "object",
                 "properties": {"top_n": {"type": "integer", "minimum": 1}},
@@ -162,10 +262,45 @@ def test_catalog_is_registry_projection_and_deterministic() -> None:
     assert "callable" not in first.model_dump_json()
 
 
+def test_catalog_is_explicit_opt_in_with_complete_v1_metadata() -> None:
+    registry = AtomicTaskRegistry()
+    catalog = build_scientific_tool_catalog(registry)
+    visible = {task.task_id for task in registry.list_tasks() if task.planner_visible}
+    assert visible == {tool.task_id for tool in catalog.tools}
+    assert "execute_oled_inverse_design" in catalog.excluded_task_ids
+    assert "parse_document_pdfplumber" in catalog.excluded_task_ids
+    assert "train_model" in visible
+    assert "generate_candidates" in visible
+    assert "filter_rank" in visible
+    required_metadata = {
+        "scientific_tool_id",
+        "label",
+        "description",
+        "effect_class",
+        "required_permissions",
+        "option_schema",
+        "logical_profile_requirements",
+        "accepted_input_trust_classes",
+        "budget_dimensions",
+        "supports_plan_preapproval",
+        "idempotency_policy",
+        "verification_policy",
+        "planner_visible",
+    }
+    for task in registry.list_tasks():
+        if task.planner_visible:
+            assert required_metadata.issubset(task.model_fields_set)
+            assert task.option_schema is not None
+            assert task.label and task.description and task.effect_class
+    assert AtomicTaskSpec(task_id="future_internal_task").planner_visible is False
+    with pytest.raises(ValueError, match="explicitly set projection metadata"):
+        AtomicTaskSpec(task_id="unsafe_visible_task", planner_visible=True)
+
+
 def test_catalog_rejects_duplicate_tool_mapping_and_unsafe_option_schema() -> None:
     duplicate = [
-        AtomicTaskSpec(task_id="first_task", scientific_tool_id="same_tool"),
-        AtomicTaskSpec(task_id="second_task", scientific_tool_id="same_tool"),
+        _visible_task(task_id="first_task", tool_id="same_tool"),
+        _visible_task(task_id="second_task", tool_id="same_tool"),
     ]
     with pytest.raises(ScientificAgentPlanError):
         build_scientific_tool_catalog(AtomicTaskRegistry(duplicate))
@@ -173,17 +308,94 @@ def test_catalog_rejects_duplicate_tool_mapping_and_unsafe_option_schema() -> No
     with pytest.raises(ValueError, match="duplicate atomic task ID"):
         AtomicTaskRegistry([AtomicTaskSpec(task_id="same_task"), AtomicTaskSpec(task_id="same_task")])
 
-    unsafe = AtomicTaskSpec(
-        task_id="unsafe_task",
+    with pytest.raises(ValueError):
+        _visible_task(
+            task_id="unsafe_task",
+            option_schema={
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": [],
+                "additionalProperties": False,
+            },
+        )
+
+
+def test_planning_privacy_checks_allow_normal_oled_prose_and_schema_terms() -> None:
+    response = AgentExecutionPlanLLMResponse.model_validate(
+        {
+            "requested_tool_ids": ["render_report"],
+            "selected_input_artifact_ids": [],
+            "task_options": {
+                "render_report": {
+                    "triplet_energy": 2.8,
+                    "dipole_moment": 4.2,
+                    "description": "OLED host–dopant screening context.",
+                }
+            },
+            "selected_logical_profile_ids": [],
+            "limits": {},
+            "stop_conditions": ["stop if the previous model failed validation"],
+            "success_criteria": ["Optimize PLQY for an OLED host–dopant system"],
+            "rationales": ["The authorization review remains pending."],
+            "assumptions": ["Triplet energy and dipole moment are relevant properties."],
+            "questions": [],
+        }
+    )
+    assert response.success_criteria == ["Optimize PLQY for an OLED host–dopant system"]
+    assert response.task_options["render_report"]["triplet_energy"] == 2.8
+
+    tool = ScientificToolSpec(
+        tool_id="oled_property_analysis",
+        task_id="oled_property_analysis",
+        label="OLED property analysis",
+        description="Analyze triplet_energy and dipole_moment without execution.",
+        input_artifact_ids=[],
+        output_artifact_ids=["oled_property_summary"],
+        effect_class="observe",
+        risk_level="low",
+        required_permissions=[],
+        required_gates=[],
         option_schema={
             "type": "object",
-            "properties": {"command": {"type": "string"}},
+            "properties": {
+                "triplet_energy": {
+                    "type": "number",
+                    "description": "Triplet energy in eV.",
+                },
+                "dipole_moment": {
+                    "type": "number",
+                    "description": "Dipole moment in Debye.",
+                },
+            },
             "required": [],
             "additionalProperties": False,
+            "description": "High-level OLED property constraints.",
         },
+        logical_profile_requirements=[],
+        accepted_input_trust_classes=[],
+        budget_dimensions=[],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
     )
-    with pytest.raises(ScientificAgentPlanError):
-        build_scientific_tool_catalog(AtomicTaskRegistry([unsafe]))
+    assert set(tool.option_schema["properties"]) == {"triplet_energy", "dipole_moment"}
+
+    with pytest.raises(ValidationError):
+        AgentExecutionPlanLLMResponse.model_validate(
+            {
+                "requested_tool_ids": ["render_report"],
+                "selected_input_artifact_ids": [],
+                "task_options": {"render_report": {}},
+                "selected_logical_profile_ids": [],
+                "limits": {},
+                "stop_conditions": [],
+                "success_criteria": [],
+                "rationales": ["use sk-test-canary only"],
+                "assumptions": [],
+                "questions": [],
+            }
+        )
 
 
 def test_catalog_canonical_bytes_are_hash_seed_independent() -> None:
@@ -249,11 +461,109 @@ def test_observation_rejects_symlink_artifact(tmp_path: Path) -> None:
         _observation(storage)
 
 
+def test_raw_registered_json_cannot_self_promote_to_confirmed_input(tmp_path: Path) -> None:
+    storage, run_dir = _storage_with_run(tmp_path)
+    _write_content_bound_artifact(
+        storage,
+        run_dir,
+        artifact_id="confirmed_training_dataset",
+        relative_path="inputs/user_claimed_confirmed.json",
+        content=json.dumps(
+            {
+                "dataset_id": "user-claim",
+                "confirmed": True,
+                "status": "confirmed",
+                "row_count": 999,
+            }
+        ).encode("utf-8"),
+    )
+    observation = _observation(storage)
+    artifact = next(
+        item for item in observation.available_artifacts if item.artifact_id == "confirmed_training_dataset"
+    )
+    assert artifact.verification_state == "registered"
+    assert artifact.trust_class == "content_bound_input"
+    assert observation.confirmed_dataset_summaries == []
+
+
+def test_profile_snapshot_requires_one_enabled_digest_matched_connection(tmp_path: Path) -> None:
+    storage, _ = _storage_with_run(tmp_path)
+    profiles = ResourceProfileStore(
+        workspace_dir=tmp_path / "profile-workspace",
+        config_dir=tmp_path / "profile-config",
+    )
+    disabled_capable = _connection(
+        connection_id="disabled-unimol",
+        capabilities=["unimol", "gpu"],
+        enabled=False,
+    )
+    enabled_unrelated = _connection(
+        connection_id="enabled-mineru",
+        capabilities=["mineru", "gpu"],
+    )
+    for connection in (disabled_capable, enabled_unrelated):
+        profiles.save_connection(connection)
+        _save_available_probe(profiles, connection)
+    observation = _observation(storage, resource_profiles=profiles)
+    unimol = _profile(observation, "unimol-train-v1")
+    assert unimol.availability_state == "unavailable"
+    assert unimol.declared_capabilities == []
+    assert unimol.verified_capabilities == []
+
+    # Capability fragments on two enabled connections must never be joined
+    # into a fictional Uni-Mol+GPU environment.
+    profiles = ResourceProfileStore(
+        workspace_dir=tmp_path / "split-profile-workspace",
+        config_dir=tmp_path / "split-profile-config",
+    )
+    for connection in (
+        _connection(connection_id="unimol-only", capabilities=["unimol"]),
+        _connection(connection_id="gpu-only", capabilities=["gpu"]),
+    ):
+        profiles.save_connection(connection)
+        _save_available_probe(profiles, connection)
+    observation = _observation(storage, resource_profiles=profiles)
+    assert _profile(observation, "unimol-train-v1").availability_state == "unavailable"
+
+    # A probe is stale after its connection digest changes, even when the
+    # declared capability set is still sufficient.
+    profiles = ResourceProfileStore(
+        workspace_dir=tmp_path / "stale-profile-workspace",
+        config_dir=tmp_path / "stale-profile-config",
+    )
+    original = _connection(connection_id="unimol-gpu", capabilities=["unimol", "gpu"])
+    profiles.save_connection(original)
+    _save_available_probe(profiles, original)
+    profiles.save_connection(
+        original.model_copy(update={"declared_capabilities": ["cpu", "gpu", "unimol"]})
+    )
+    observation = _observation(storage, resource_profiles=profiles)
+    assert _profile(observation, "unimol-train-v1").availability_state == "stale"
+
+    # A single enabled, digest-matched, successful probe covering the full
+    # requirement is the only path to "available".
+    profiles = ResourceProfileStore(
+        workspace_dir=tmp_path / "available-profile-workspace",
+        config_dir=tmp_path / "available-profile-config",
+    )
+    capable = _connection(connection_id="unimol-gpu", capabilities=["unimol", "gpu"])
+    profiles.save_connection(capable)
+    _save_available_probe(profiles, capable)
+    observation = _observation(storage, resource_profiles=profiles)
+    unimol = _profile(observation, "unimol-train-v1")
+    assert unimol.availability_state == "available"
+    assert unimol.verified_capabilities == ["gpu", "unimol"]
+    serialized = observation.model_dump_json()
+    assert "unimol-gpu-ssh" not in serialized
+    assert "/srv/unimol-gpu" not in serialized
+
+
 @pytest.mark.parametrize(
     "hostile",
     [
         {"execute": True},
         {"approved": True},
+        {"authorization": "approved"},
         {"status": "SUCCEEDED"},
         {"adapter_name": "bad"},
         {"command": "rm -rf"},
@@ -315,13 +625,95 @@ def test_compiler_rejects_unknown_artifact_and_profile_mismatch(tmp_path: Path) 
 
     train_response = _response(
         tool_id="train_model",
-        selected_input_artifact_ids=["confirmed_dataset"],
+        selected_input_artifact_ids=[],
     )
-    with pytest.raises(ScientificAgentPlanError):
+    with pytest.raises(ScientificAgentPlanError, match="selected logical profiles do not satisfy requirement"):
         AgentExecutionPlanCompiler().compile(
             observation=observation,
             response=train_response,
             invocation=_invocation(observation, train_response),
+            created_at=_clock(),
+        )
+
+
+def test_compiler_uses_tool_specific_artifact_trust_classes(tmp_path: Path) -> None:
+    storage, run_dir = _storage_with_run(tmp_path)
+    _write_content_bound_artifact(
+        storage,
+        run_dir,
+        artifact_id="pdf_corpus",
+        relative_path="inputs/papers.pdf",
+        content=b"%PDF-1.7 review-only input\n",
+    )
+    profiles = ResourceProfileStore(
+        workspace_dir=tmp_path / "profile-workspace",
+        config_dir=tmp_path / "profile-config",
+    )
+    mineru = _connection(connection_id="mineru-gpu", capabilities=["mineru", "gpu"])
+    profiles.save_connection(mineru)
+    _save_available_probe(profiles, mineru)
+    observation = _observation(storage, resource_profiles=profiles)
+    pdf = next(item for item in observation.available_artifacts if item.artifact_id == "pdf_corpus")
+    assert pdf.verification_state == "registered"
+    assert pdf.trust_class == "content_bound_input"
+    parse_response = _response(
+        tool_id="parse_document",
+        selected_input_artifact_ids=["pdf_corpus"],
+        selected_logical_profile_ids=["mineru-v1"],
+        task_options={"parse_document": {"max_pages": 12}},
+    )
+    parse_proposal = AgentExecutionPlanCompiler().compile(
+        observation=observation,
+        response=parse_response,
+        invocation=_invocation(observation, parse_response),
+        created_at=_clock(),
+    )
+    assert parse_proposal.selected_artifacts == ["pdf_corpus"]
+
+    _write_content_bound_artifact(
+        storage,
+        run_dir,
+        artifact_id="candidate_training_dataset",
+        relative_path="inputs/raw_dataset.csv",
+        content=b"smiles,plqy\nC,0.42\n",
+    )
+    observation = _observation(storage, resource_profiles=profiles)
+    raw_dataset = next(
+        item for item in observation.available_artifacts if item.artifact_id == "candidate_training_dataset"
+    )
+    assert raw_dataset.trust_class == "content_bound_input"
+    confirm_response = _response(
+        tool_id="confirm_extracted_dataset",
+        selected_input_artifact_ids=["candidate_training_dataset"],
+        task_options={"confirm_extracted_dataset": {"minimum_confidence": 0.8}},
+    )
+    confirm_proposal = AgentExecutionPlanCompiler().compile(
+        observation=observation,
+        response=confirm_response,
+        invocation=_invocation(observation, confirm_response),
+        created_at=_clock(),
+    )
+    assert "candidate_training_dataset" in confirm_proposal.selected_artifacts
+    assert confirm_proposal.executable is False
+
+    _write_content_bound_artifact(
+        storage,
+        run_dir,
+        artifact_id="cleaned_train_dataset",
+        relative_path="inputs/unverified_cleaned.csv",
+        content=b"smiles,plqy\nC,0.42\n",
+    )
+    observation = _observation(storage, resource_profiles=profiles)
+    rejected_response = _response(
+        tool_id="train_model",
+        selected_input_artifact_ids=["cleaned_train_dataset"],
+        selected_logical_profile_ids=["unimol-train-v1"],
+    )
+    with pytest.raises(ScientificAgentPlanError, match="trust class"):
+        AgentExecutionPlanCompiler().compile(
+            observation=observation,
+            response=rejected_response,
+            invocation=_invocation(observation, rejected_response),
             created_at=_clock(),
         )
 
@@ -353,8 +745,9 @@ def test_proposal_storage_is_exact_no_replace_and_detects_stale_sources(tmp_path
         llm_response=response,
         proposal=proposal,
     )
+    proposal_dir = _proposal_dir(storage, proposal.proposal_id)
     published_bytes = b"".join(
-        path.read_bytes() for path in sorted((run_dir / "agent_plans" / proposal.proposal_id).iterdir())
+        path.read_bytes() for path in sorted(proposal_dir.iterdir())
     )
     for canary in (b"/Users/benton/private.csv", b"cluster.internal", b"sk-test-canary", b"private paper text"):
         assert canary not in published_bytes
@@ -367,7 +760,6 @@ def test_proposal_storage_is_exact_no_replace_and_detects_stale_sources(tmp_path
     assert replay.proposal.proposal_digest == first.proposal.proposal_digest
     loaded = store.read(project_id="project-1", proposal_id=proposal.proposal_id)
     assert loaded.proposal.model_dump(mode="json") == proposal.model_dump(mode="json")
-    proposal_dir = run_dir / "agent_plans" / proposal.proposal_id
     summary_bytes = (proposal_dir / "proposal_summary.md").read_bytes()
     (proposal_dir / "proposal_summary.md").write_text("tampered\n", encoding="utf-8")
     with pytest.raises(ScientificAgentPlanPublicationConflict):
@@ -381,7 +773,7 @@ def test_proposal_storage_is_exact_no_replace_and_detects_stale_sources(tmp_path
         store.read(project_id="project-1", proposal_id=proposal.proposal_id, verify_current=False)
 
     (proposal_dir / "proposal_summary.md").write_bytes(summary_bytes)
-    (run_dir / "data" / "confirmed_dataset.json").write_text(
+    (run_dir / "data" / "confirmed_training_dataset.json").write_text(
         json.dumps({"dataset_id": "confirmed-dataset", "confirmed": True, "row_count": 5}),
         encoding="utf-8",
     )
@@ -417,24 +809,117 @@ def test_proposal_publication_does_not_modify_stage_state(tmp_path: Path) -> Non
     assert not (run_dir / "queue_job.json").exists()
 
 
-def test_loopback_stub_service_metadata_is_redacted_from_public_artifacts(tmp_path: Path) -> None:
+def test_service_request_idempotency_separates_semantics_from_publication(tmp_path: Path) -> None:
     storage, run_dir = _storage_with_run(tmp_path)
     _write_confirmed_dataset(storage, run_dir)
-    from ai4s_agent.scientific_agent_plan import ScientificAgentPlanService
 
+    class CountingStubProvider(StubLLMProvider):
+        def __init__(self) -> None:
+            super().__init__(response=_response().model_dump(mode="json"), response_id="provider-response")
+            self.calls = 0
+
+        def complete_json(self, **kwargs):
+            self.calls += 1
+            return super().complete_json(**kwargs)
+
+    provider = CountingStubProvider()
     service = ScientificAgentPlanService(storage=storage, clock=_clock)
-    proposal = service.create_proposal(
+    first = service.create_proposal(
+        project_id="project-1",
+        run_id=run_dir.name,
+        goal="Prepare a reviewable scientific plan",
+        user_constraints=[],
+        provider=provider,
+        client_request_id="request-replay-1",
+    )
+    replay = service.create_proposal(
+        project_id="project-1",
+        run_id=run_dir.name,
+        goal="Prepare a reviewable scientific plan",
+        user_constraints=[],
+        provider=provider,
+        client_request_id="request-replay-1",
+    )
+    assert provider.calls == 1
+    assert replay.model_dump(mode="json") == first.model_dump(mode="json")
+    assert first.publication_id == first.proposal_id
+    assert first.semantic_plan_id.startswith("semantic-plan-")
+
+    with pytest.raises(ScientificAgentPlanPublicationConflict):
+        service.create_proposal(
+            project_id="project-1",
+            run_id=run_dir.name,
+            goal="A different planning goal",
+            user_constraints=[],
+            provider=provider,
+            client_request_id="request-replay-1",
+        )
+    assert provider.calls == 1
+
+    second_publication = service.create_proposal(
+        project_id="project-1",
+        run_id=run_dir.name,
+        goal="Prepare a reviewable scientific plan",
+        user_constraints=[],
+        provider=provider,
+        client_request_id="request-replay-2",
+    )
+    assert provider.calls == 2
+    assert second_publication.semantic_plan_id == first.semantic_plan_id
+    assert second_publication.semantic_plan_digest == first.semantic_plan_digest
+    assert second_publication.publication_id != first.publication_id
+    assert second_publication.proposal_digest != first.proposal_digest
+    assert _proposal_dir(storage, first.proposal_id).is_dir()
+    assert _proposal_dir(storage, second_publication.proposal_id).is_dir()
+
+
+def test_service_creation_isolated_from_execution_authority(tmp_path: Path, monkeypatch) -> None:
+    from ai4s_agent.executor import RunPlanExecutor
+    from ai4s_agent.remote_execution_service import DescriptorRemoteExecutionLifecycleService
+    import ai4s_agent.scientific_agent_plan as plan_module
+
+    def forbidden(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("planning proposal creation must not enter execution authority")
+
+    monkeypatch.setattr(RunPlanExecutor, "execute", forbidden)
+    monkeypatch.setattr(RunPlanExecutor, "resume_after_gate", forbidden)
+    monkeypatch.setattr(DescriptorRemoteExecutionLifecycleService, "prepare", forbidden)
+    monkeypatch.setattr(DescriptorRemoteExecutionLifecycleService, "approve", forbidden)
+    assert "RunPlanExecutor" not in plan_module.__dict__
+    assert "DescriptorRemoteExecutionLifecycleService" not in plan_module.__dict__
+
+    storage, run_dir = _storage_with_run(tmp_path)
+    _write_confirmed_dataset(storage, run_dir)
+    proposal = ScientificAgentPlanService(storage=storage, clock=_clock).create_proposal(
         project_id="project-1",
         run_id=run_dir.name,
         goal="Prepare a reviewable scientific plan",
         user_constraints=[],
         provider=StubLLMProvider(response=_response().model_dump(mode="json")),
     )
-    proposal_json = (run_dir / "agent_plans" / proposal.proposal_id / "proposal.json").read_text(encoding="utf-8")
-    llm_json = (run_dir / "agent_plans" / proposal.proposal_id / "llm_response.json").read_text(encoding="utf-8")
+    assert proposal.executable is False
+    assert not (run_dir / "gate_decision.json").exists()
+    assert not (run_dir / "queue_job.json").exists()
+
+
+def test_loopback_stub_service_metadata_is_redacted_from_public_artifacts(tmp_path: Path) -> None:
+    storage, run_dir = _storage_with_run(tmp_path)
+    _write_confirmed_dataset(storage, run_dir)
+    service = ScientificAgentPlanService(storage=storage, clock=_clock)
+    proposal = service.create_proposal(
+        project_id="project-1",
+        run_id=run_dir.name,
+        goal="Optimize PLQY for an OLED host–dopant system; the previous model failed validation.",
+        user_constraints=[],
+        provider=StubLLMProvider(response=_response().model_dump(mode="json")),
+    )
+    proposal_json = (_proposal_dir(storage, proposal.proposal_id) / "proposal.json").read_text(encoding="utf-8")
+    llm_json = (_proposal_dir(storage, proposal.proposal_id) / "llm_response.json").read_text(encoding="utf-8")
     assert "raw_response" not in proposal_json
     assert "messages" not in llm_json
     assert proposal.executable is False
+    assert "OLED host–dopant" in proposal.goal
 
 
 def test_service_rejects_malformed_or_failed_dedicated_planning_call(tmp_path: Path) -> None:
@@ -463,7 +948,6 @@ def test_project_scoped_api_is_non_executable_and_requires_external_consent(tmp_
     workspace = tmp_path / "api-workspace"
     storage = ProjectStorage(workspace_dir=workspace)
     storage.create_project("project-1", name="Project", created_at=_clock())
-    storage.run_dir("project-1", "run-1")
     app = create_app(
         base_runs_dir=tmp_path / "runs",
         workspace_dir=workspace,
@@ -471,9 +955,10 @@ def test_project_scoped_api_is_non_executable_and_requires_external_consent(tmp_
     )
     client = app.test_client()
     valid_body = {
-        "run_id": "run-1",
+        "run_id": "planning-run-1",
         "goal": "Prepare a reviewable scientific plan",
         "user_constraints": [],
+        "client_request_id": "api-first-plan",
         "llm_provider": {
             "provider": "stub",
             "model": "stub",
@@ -482,7 +967,7 @@ def test_project_scoped_api_is_non_executable_and_requires_external_consent(tmp_
     }
     rejected = client.post(
         "/api/projects/project-1/agent-plan-proposals",
-        json={**valid_body, "run_plan": {"run_id": "run-1"}},
+        json={**valid_body, "run_plan": {"run_id": "planning-run-1"}},
     )
     assert rejected.status_code == 400
     assert "run_plan" not in rejected.get_json().get("error", "")
@@ -493,7 +978,12 @@ def test_project_scoped_api_is_non_executable_and_requires_external_consent(tmp_
     assert body["executable"] is False
     proposal_id = body["proposal_id"]
     assert body["proposal"]["executable"] is False
-    assert not (storage.run_dir("project-1", "run-1") / "gate_decision.json").exists()
+    project_dir = workspace / "projects" / "project-1"
+    assert (project_dir / "agent_plan_proposals" / proposal_id / "proposal.json").is_file()
+    assert not (project_dir / "runs" / "planning-run-1").exists()
+    assert not (project_dir / "stage.json").exists()
+    assert not (project_dir / "gate_decision.json").exists()
+    assert not (project_dir / "queue_job.json").exists()
 
     fetched = client.get(f"/api/projects/project-1/agent-plan-proposals/{proposal_id}")
     assert fetched.status_code == 200, fetched.get_json()

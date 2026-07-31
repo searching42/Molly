@@ -33,6 +33,16 @@
       "default": "",
       "title": "Approved At",
       "type": "string"
+    },
+    "approved_snapshot_id": {
+      "default": "",
+      "title": "Approved Snapshot Id",
+      "type": "string"
+    },
+    "approved_snapshot_hash": {
+      "default": "",
+      "title": "Approved Snapshot Hash",
+      "type": "string"
     }
   },
   "required": [

@@ -287,11 +287,6 @@
       "title": "Schema Version",
       "type": "string"
     },
-    "proposal_id": {
-      "default": "",
-      "title": "Proposal Id",
-      "type": "string"
-    },
     "project_id": {
       "title": "Project Id",
       "type": "string"
@@ -423,6 +418,34 @@
     "llm_invocation": {
       "$ref": "#/$defs/AgentLLMInvocationMetadata"
     },
+    "semantic_plan_id": {
+      "default": "",
+      "title": "Semantic Plan Id",
+      "type": "string"
+    },
+    "semantic_plan_digest": {
+      "default": "",
+      "title": "Semantic Plan Digest",
+      "type": "string"
+    },
+    "invocation_id": {
+      "title": "Invocation Id",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "publication_id": {
+      "default": "",
+      "title": "Publication Id",
+      "type": "string"
+    },
+    "proposal_id": {
+      "default": "",
+      "title": "Proposal Id",
+      "type": "string"
+    },
     "proposal_digest": {
       "default": "",
       "title": "Proposal Digest",
@@ -451,6 +474,8 @@
     "validated_llm_response",
     "run_plan",
     "llm_invocation",
+    "invocation_id",
+    "client_request_id",
     "created_at"
   ],
   "title": "AgentExecutionPlanProposal",

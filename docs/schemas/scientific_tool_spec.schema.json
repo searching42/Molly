@@ -87,6 +87,20 @@
       "title": "Logical Profile Requirements",
       "type": "array"
     },
+    "accepted_input_trust_classes": {
+      "items": {
+        "enum": [
+          "content_bound_input",
+          "registered_intermediate",
+          "verified_output",
+          "confirmed_scientific_input",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "title": "Accepted Input Trust Classes",
+      "type": "array"
+    },
     "budget_dimensions": {
       "items": {
         "type": "string"

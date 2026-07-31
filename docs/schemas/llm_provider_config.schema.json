@@ -25,6 +25,36 @@
       "title": "Timeout Sec",
       "type": "integer"
     },
+    "connect_timeout_sec": {
+      "default": 10.0,
+      "title": "Connect Timeout Sec",
+      "type": "number"
+    },
+    "write_timeout_sec": {
+      "default": 30.0,
+      "title": "Write Timeout Sec",
+      "type": "number"
+    },
+    "pool_timeout_sec": {
+      "default": 10.0,
+      "title": "Pool Timeout Sec",
+      "type": "number"
+    },
+    "total_timeout_sec": {
+      "default": 300.0,
+      "title": "Total Timeout Sec",
+      "type": "number"
+    },
+    "max_connect_retries": {
+      "default": 1,
+      "title": "Max Connect Retries",
+      "type": "integer"
+    },
+    "retry_backoff_sec": {
+      "default": 0.25,
+      "title": "Retry Backoff Sec",
+      "type": "number"
+    },
     "stub_response": {
       "additionalProperties": true,
       "title": "Stub Response",

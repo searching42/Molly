@@ -82,9 +82,26 @@
       "type": "string"
     },
     "effect_class": {
-      "default": "compute",
-      "title": "Effect Class",
-      "type": "string"
+      "anyOf": [
+        {
+          "enum": [
+            "observe",
+            "derive_local",
+            "mutate_artifacts",
+            "external_io",
+            "compute",
+            "scientific_confirm",
+            "change_objective",
+            "publish_or_promote"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Effect Class"
     },
     "required_permissions": {
       "items": {
@@ -94,15 +111,37 @@
       "type": "array"
     },
     "option_schema": {
-      "additionalProperties": true,
-      "title": "Option Schema",
-      "type": "object"
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Option Schema"
     },
     "logical_profile_requirements": {
       "items": {
         "type": "string"
       },
       "title": "Logical Profile Requirements",
+      "type": "array"
+    },
+    "accepted_input_trust_classes": {
+      "items": {
+        "enum": [
+          "content_bound_input",
+          "registered_intermediate",
+          "verified_output",
+          "confirmed_scientific_input",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "title": "Accepted Input Trust Classes",
       "type": "array"
     },
     "budget_dimensions": {
@@ -123,12 +162,12 @@
       "type": "string"
     },
     "verification_policy": {
-      "default": "server_verifier_required",
+      "default": "",
       "title": "Verification Policy",
       "type": "string"
     },
     "planner_visible": {
-      "default": true,
+      "default": false,
       "title": "Planner Visible",
       "type": "boolean"
     }
