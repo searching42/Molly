@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Iterator
+from contextlib import contextmanager
+import hashlib
 import json
 import math
+import os
 from pathlib import Path
+import threading
 from typing import Any
+
+try:  # pragma: no cover - POSIX CI exercises the cross-process lock.
+    import fcntl
+except ImportError:  # pragma: no cover - process-local locking preserves portability.
+    fcntl = None  # type: ignore[assignment]
 
 from ai4s_agent._utils import now_iso, write_json as atomic_write_json
 from ai4s_agent.schemas import (
@@ -14,6 +25,9 @@ from ai4s_agent.schemas import (
     PromotedModelAsset,
     StageState,
 )
+
+
+_PROJECT_LOCKS: dict[str, threading.RLock] = defaultdict(threading.RLock)
 
 
 def _ensure_relative(parent: Path, child: Path, label: str) -> None:
@@ -113,10 +127,76 @@ class ProjectStorage:
         self.projects_root.mkdir(parents=True, exist_ok=True)
 
     def project_dir(self, project_id: str) -> Path:
-        path = (self.projects_root / project_id).resolve()
-        _ensure_relative(self.projects_root, path, "project_id")
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        with self._projects_lock():
+            return self._project_dir_locked(project_id, create=True)
+
+    def create_project(
+        self,
+        project_id: str,
+        *,
+        name: str,
+        created_at: str,
+    ) -> dict[str, str]:
+        with self._projects_lock():
+            path = self._project_dir_locked(project_id, create=True)
+            payload = {
+                "project_id": str(project_id),
+                "name": str(name),
+                "created_at": str(created_at),
+            }
+            self._write_json(path, "project.json", payload)
+            return payload
+
+    def list_projects(self) -> list[dict[str, str]]:
+        with self._projects_lock():
+            result: list[dict[str, str]] = []
+            for child in sorted(self.projects_root.iterdir(), key=lambda item: item.name):
+                if child.is_symlink() or not child.is_dir():
+                    continue
+                tombstone = self._deleted_project_path(child.name)
+                if tombstone.exists() or tombstone.is_symlink():
+                    continue
+                metadata = self._read_json(child, "project.json")
+                metadata_project_id = metadata.get("project_id")
+                if metadata_project_id and metadata_project_id != child.name:
+                    raise ValueError("project metadata identity mismatch")
+                result.append(
+                    {
+                        "project_id": child.name,
+                        "name": str(metadata.get("name") or child.name),
+                        "created_at": str(metadata.get("created_at") or ""),
+                    }
+                )
+            return result
+
+    def delete_project(self, project_id: str) -> dict[str, str]:
+        """Remove a project from the active workspace using a recoverable rename."""
+
+        with self._projects_lock():
+            path = self._project_dir_locked(project_id, create=False)
+            metadata = self._read_json(path, "project.json")
+            metadata_project_id = metadata.get("project_id")
+            if metadata_project_id and metadata_project_id != str(project_id):
+                raise ValueError("project metadata identity mismatch")
+            if not metadata:
+                metadata = {
+                    "project_id": str(project_id),
+                    "name": str(project_id),
+                    "created_at": "",
+                }
+            archive_root = self._deleted_projects_root()
+            archive_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            archive_path = self._deleted_project_path(project_id)
+            if archive_path.exists() or archive_path.is_symlink():
+                raise FileNotFoundError("project not found")
+            os.rename(path, archive_path)
+            self._fsync_directory(self.projects_root)
+            self._fsync_directory(archive_root)
+            return {
+                "project_id": str(metadata["project_id"]),
+                "name": str(metadata.get("name") or metadata["project_id"]),
+                "created_at": str(metadata.get("created_at") or ""),
+            }
 
     def run_dir(self, project_id: str, run_id: str) -> Path:
         project = self.project_dir(project_id)
@@ -132,6 +212,61 @@ class ProjectStorage:
         _ensure_relative(project, path, "assets")
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    @contextmanager
+    def _projects_lock(self) -> Iterator[None]:
+        lock_path = (self.projects_root / ".projects.lock").resolve()
+        _ensure_relative(self.projects_root, lock_path, "projects lock")
+        with _PROJECT_LOCKS[str(lock_path)]:
+            with lock_path.open("a+", encoding="utf-8") as lock_file:
+                os.chmod(lock_path, 0o600)
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _project_dir_locked(self, project_id: str, *, create: bool) -> Path:
+        clean_id = str(project_id or "").strip()
+        raw_path = self.projects_root / clean_id
+        if raw_path.is_symlink():
+            raise ValueError("project_id resolves through a symbolic link")
+        path = raw_path.resolve()
+        _ensure_relative(self.projects_root, path, "project_id")
+        if path == self.projects_root:
+            raise ValueError("project_id required")
+        tombstone = self._deleted_project_path(clean_id)
+        if tombstone.exists() or tombstone.is_symlink():
+            if create:
+                raise ValueError("deleted project_id cannot be reused")
+            raise FileNotFoundError("project not found")
+        if create:
+            path.mkdir(parents=True, exist_ok=True)
+        elif path.is_symlink() or not path.is_dir():
+            raise FileNotFoundError("project not found")
+        return path
+
+    def _deleted_projects_root(self) -> Path:
+        path = (self.workspace_dir / ".deleted-projects").resolve()
+        _ensure_relative(self.workspace_dir, path, "deleted projects")
+        return path
+
+    def _deleted_project_path(self, project_id: str) -> Path:
+        digest = hashlib.sha256(str(project_id).encode("utf-8")).hexdigest()
+        root = self._deleted_projects_root()
+        path = (root / digest).resolve()
+        _ensure_relative(root, path, "deleted project")
+        return path
+
+    @staticmethod
+    def _fsync_directory(directory: Path) -> None:
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     def _asset_scope_dir(self, project_id: str, scope: list[str]) -> Path:
         base = self.assets_dir(project_id)

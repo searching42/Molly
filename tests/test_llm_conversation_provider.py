@@ -235,5 +235,9 @@ def test_ui_probes_llm_and_requires_explicit_external_conversation_consent(
     assert "保存并测试 API 连接" in html
     assert "未配置可用 LLM，已使用确定性决策摘要" in html
     assert "function resetExternalLLMApproval()" in html
-    assert "function selectProject(project) {\n        resetExternalLLMApproval();" in html
+    select_project = html[
+        html.index("function selectProject(project)"):
+        html.index("async function loadProjects", html.index("function selectProject(project)"))
+    ]
+    assert "resetExternalLLMApproval();" in select_project
     assert "if (nextConversationId !== currentConversationId) resetExternalLLMApproval();" in html
