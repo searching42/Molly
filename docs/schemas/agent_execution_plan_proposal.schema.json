@@ -1,0 +1,458 @@
+{
+  "$defs": {
+    "AgentExecutionPlanLLMResponse": {
+      "additionalProperties": false,
+      "description": "Only high-level planner suggestions; no execution or approval fields.",
+      "properties": {
+        "schema_version": {
+          "const": "agent_execution_plan_llm_response.v1",
+          "default": "agent_execution_plan_llm_response.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "requested_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requested Tool Ids",
+          "type": "array"
+        },
+        "selected_input_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selected Input Artifact Ids",
+          "type": "array"
+        },
+        "task_options": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Task Options",
+          "type": "object"
+        },
+        "selected_logical_profile_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selected Logical Profile Ids",
+          "type": "array"
+        },
+        "limits": {
+          "additionalProperties": true,
+          "title": "Limits",
+          "type": "object"
+        },
+        "stop_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Stop Conditions",
+          "type": "array"
+        },
+        "success_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Success Criteria",
+          "type": "array"
+        },
+        "rationales": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rationales",
+          "type": "array"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/AgentExecutionPlanQuestion"
+          },
+          "title": "Questions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requested_tool_ids",
+        "selected_input_artifact_ids",
+        "task_options",
+        "selected_logical_profile_ids",
+        "limits",
+        "stop_conditions",
+        "success_criteria",
+        "rationales",
+        "assumptions",
+        "questions"
+      ],
+      "title": "AgentExecutionPlanLLMResponse",
+      "type": "object"
+    },
+    "AgentExecutionPlanQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "blocks_proposal": {
+          "default": true,
+          "title": "Blocks Proposal",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "AgentExecutionPlanQuestion",
+      "type": "object"
+    },
+    "AgentLLMInvocationMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "prompt_version": {
+          "const": "scientific-agent-long-horizon-plan.v1",
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "response_id": {
+          "default": "",
+          "title": "Response Id",
+          "type": "string"
+        },
+        "observation_digest": {
+          "title": "Observation Digest",
+          "type": "string"
+        },
+        "tool_catalog_digest": {
+          "title": "Tool Catalog Digest",
+          "type": "string"
+        },
+        "validated_output_digest": {
+          "title": "Validated Output Digest",
+          "type": "string"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        }
+      },
+      "required": [
+        "provider",
+        "prompt_version",
+        "observation_digest",
+        "tool_catalog_digest",
+        "validated_output_digest"
+      ],
+      "title": "AgentLLMInvocationMetadata",
+      "type": "object"
+    },
+    "PlannedTask": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "required_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Artifacts",
+          "type": "array"
+        },
+        "output_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Output Artifacts",
+          "type": "array"
+        },
+        "unresolved_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unresolved Requirements",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "title": "PlannedTask",
+      "type": "object"
+    },
+    "RunPlan": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "requested_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requested Tasks",
+          "type": "array"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/PlannedTask"
+          },
+          "title": "Tasks",
+          "type": "array"
+        },
+        "available_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Available Artifacts",
+          "type": "array"
+        },
+        "missing_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Artifacts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "requested_tasks",
+        "tasks"
+      ],
+      "title": "RunPlan",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable review/control artifact.  It is never an execution authority.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_execution_plan_proposal.v1",
+      "default": "agent_execution_plan_proposal.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "proposal_id": {
+      "default": "",
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "goal": {
+      "title": "Goal",
+      "type": "string"
+    },
+    "user_constraints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "User Constraints",
+      "type": "array"
+    },
+    "planner_backend": {
+      "title": "Planner Backend",
+      "type": "string"
+    },
+    "prompt_version": {
+      "const": "scientific-agent-long-horizon-plan.v1",
+      "title": "Prompt Version",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "observation_digest": {
+      "title": "Observation Digest",
+      "type": "string"
+    },
+    "tool_catalog_digest": {
+      "title": "Tool Catalog Digest",
+      "type": "string"
+    },
+    "validated_llm_response": {
+      "$ref": "#/$defs/AgentExecutionPlanLLMResponse"
+    },
+    "run_plan": {
+      "$ref": "#/$defs/RunPlan"
+    },
+    "task_options": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Task Options",
+      "type": "object"
+    },
+    "selected_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Selected Artifacts",
+      "type": "array"
+    },
+    "selected_profiles": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Selected Profiles",
+      "type": "array"
+    },
+    "limits": {
+      "additionalProperties": true,
+      "title": "Limits",
+      "type": "object"
+    },
+    "stop_conditions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Stop Conditions",
+      "type": "array"
+    },
+    "success_criteria": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Success Criteria",
+      "type": "array"
+    },
+    "rationales": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Rationales",
+      "type": "array"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/AgentExecutionPlanQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
+      "type": "array"
+    },
+    "missing_artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Artifacts",
+      "type": "array"
+    },
+    "status": {
+      "const": "review_required",
+      "default": "review_required",
+      "title": "Status",
+      "type": "string"
+    },
+    "llm_invocation": {
+      "$ref": "#/$defs/AgentLLMInvocationMetadata"
+    },
+    "proposal_digest": {
+      "default": "",
+      "title": "Proposal Digest",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "goal",
+    "planner_backend",
+    "prompt_version",
+    "observation_id",
+    "observation_digest",
+    "tool_catalog_digest",
+    "validated_llm_response",
+    "run_plan",
+    "llm_invocation",
+    "created_at"
+  ],
+  "title": "AgentExecutionPlanProposal",
+  "type": "object"
+}

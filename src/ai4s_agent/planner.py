@@ -396,6 +396,10 @@ class AtomicTaskRegistry:
     @staticmethod
     def _validate_tasks(tasks: list[AtomicTaskSpec]) -> None:
         valid_gates = {gate.value for gate in GateName}
+        task_ids = [task.task_id for task in tasks]
+        if len(task_ids) != len(set(task_ids)):
+            duplicates = sorted({task_id for task_id in task_ids if task_ids.count(task_id) > 1})
+            raise ValueError(f"duplicate atomic task ID: {', '.join(duplicates)}")
         for task in tasks:
             if task.risk_level == RiskLevel.HIGH and not task.gates:
                 raise ValueError(f"high-risk task requires gate: {task.task_id}")

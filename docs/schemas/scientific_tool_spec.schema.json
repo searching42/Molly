@@ -1,89 +1,64 @@
 {
-  "$defs": {
-    "RiskLevel": {
+  "additionalProperties": false,
+  "description": "Strict, LLM-facing projection of one registered atomic task.",
+  "properties": {
+    "schema_version": {
+      "const": "scientific_tool_spec.v1",
+      "default": "scientific_tool_spec.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tool_id": {
+      "title": "Tool Id",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "label": {
+      "title": "Label",
+      "type": "string"
+    },
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "input_artifact_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Artifact Ids",
+      "type": "array"
+    },
+    "output_artifact_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Output Artifact Ids",
+      "type": "array"
+    },
+    "effect_class": {
+      "enum": [
+        "observe",
+        "derive_local",
+        "mutate_artifacts",
+        "external_io",
+        "compute",
+        "scientific_confirm",
+        "change_objective",
+        "publish_or_promote"
+      ],
+      "title": "Effect Class",
+      "type": "string"
+    },
+    "risk_level": {
       "enum": [
         "low",
         "medium",
         "high"
       ],
-      "title": "RiskLevel",
-      "type": "string"
-    }
-  },
-  "properties": {
-    "task_id": {
-      "title": "Task Id",
-      "type": "string"
-    },
-    "required_artifacts": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Required Artifacts",
-      "type": "array"
-    },
-    "output_artifacts": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Output Artifacts",
-      "type": "array"
-    },
-    "risk_level": {
-      "$ref": "#/$defs/RiskLevel",
-      "default": "low"
-    },
-    "gates": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Gates",
-      "type": "array"
-    },
-    "default_adapter": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Default Adapter"
-    },
-    "depends_on": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Depends On",
-      "type": "array"
-    },
-    "scientific_tool_id": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Scientific Tool Id"
-    },
-    "label": {
-      "default": "",
-      "title": "Label",
-      "type": "string"
-    },
-    "description": {
-      "default": "",
-      "title": "Description",
-      "type": "string"
-    },
-    "effect_class": {
-      "default": "compute",
-      "title": "Effect Class",
+      "title": "Risk Level",
       "type": "string"
     },
     "required_permissions": {
@@ -91,6 +66,13 @@
         "type": "string"
       },
       "title": "Required Permissions",
+      "type": "array"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
       "type": "array"
     },
     "option_schema": {
@@ -119,11 +101,15 @@
     },
     "idempotency_policy": {
       "default": "server_checked",
+      "enum": [
+        "none",
+        "replay_safe",
+        "server_checked"
+      ],
       "title": "Idempotency Policy",
       "type": "string"
     },
     "verification_policy": {
-      "default": "server_verifier_required",
       "title": "Verification Policy",
       "type": "string"
     },
@@ -134,8 +120,14 @@
     }
   },
   "required": [
-    "task_id"
+    "tool_id",
+    "task_id",
+    "label",
+    "description",
+    "effect_class",
+    "risk_level",
+    "verification_policy"
   ],
-  "title": "AtomicTaskSpec",
+  "title": "ScientificToolSpec",
   "type": "object"
 }
