@@ -487,7 +487,7 @@ def test_compute_resource_ui_guides_users_through_fixed_connection_roles(
     assert "computeProbeLabel(connection, response.probe)" in html
     assert "computeProbeLabel(payload, response.probe)" in html
     assert 'id="molly-worker-protocol-help"' in html
-    assert "当前仓库没有可直接从 PyPI 安装的 molly-worker 服务端包" in html
+    assert "当前仓库已提供固定的 <code>molly-worker</code> 入口" in html
     assert "molly-worker probe --json" in html
     assert "docs/stage6b-remote-execution-lifecycle.md" in html
 

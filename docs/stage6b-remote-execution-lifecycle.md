@@ -83,16 +83,29 @@ interpolated.
 
 ```text
 molly-worker stage --json
+molly-worker stage-input --request-id <safe-id> --path <safe-relative-path> --size <bytes> --sha256 <digest> --json
 molly-worker verify-inputs --request-id <safe-id> --json
 molly-worker execute --json
 molly-worker status --request-id <safe-id> --json
 molly-worker cancel --request-id <safe-id> --json
+molly-worker fetch-output --request-id <safe-id> --path <safe-relative-path> --size <bytes> --sha256 <digest>
 ```
 
 Request, approval, and digest bindings travel as JSON on stdin. The remote
+`stage-input` command receives only the declared raw input bytes, while
+`fetch-output` emits only the publication-bound raw output bytes on stdout. The
 deployment supplies task-specific adapters behind this protocol (for example
 REINVENT4, MinerU, or UniMol); the browser and LLM cannot select an executable,
 environment activation, command argument, output path, or Shell fragment.
+
+At execution time the worker replays every manifest digest from an
+`O_NOFOLLOW` descriptor into a private, read-only attempt snapshot. Adapters
+consume only snapshot bytes (large Uni-Mol data remains descriptor-bound while
+the adapter materializes its suffix-preserving local input), and the worker
+rechecks device, inode, size, mtime,
+ctime, and SHA-256 before and after adapter execution. Publication validation
+and output transfer each hash and consume one descriptor without reopening the
+named path; a replaced inode or in-place mutation fails closed.
 
 Transport stderr is never persisted or returned. Non-zero exits, malformed or
 oversized JSON, identity mismatches, and unavailable connections are reduced to

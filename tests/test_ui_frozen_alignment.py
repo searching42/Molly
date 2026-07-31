@@ -148,7 +148,8 @@ def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html:
     assert "probe_response_unavailable" in html
     assert "probe_response_invalid" in html
     assert 'id="molly-worker-protocol-help"' in html
-    assert "当前仓库没有可直接从 PyPI 安装的 molly-worker 服务端包" in html
+    assert "当前仓库已提供固定的 <code>molly-worker</code> 入口" in html
     assert "molly-worker probe --json" in html
-    assert "stage</code>、<code>verify-inputs</code>、<code>execute</code>、<code>status</code> 和 <code>cancel" in html
+    assert "stage-input</code>、<code>verify-inputs</code>、<code>execute" in html
+    assert "cancel</code> 和 <code>fetch-output" in html
 from pathlib import Path
