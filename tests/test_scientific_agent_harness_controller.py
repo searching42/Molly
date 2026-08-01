@@ -702,8 +702,10 @@ def test_controller_freezes_local_default_adapter_binding_before_gate(
         return {"status": "failed", "adapter": "replacement"}
 
     monkeypatch.setattr(adapters, "generate_candidates_stub_adapter", replacement)
-    controller.executor.registry.get("inspect_dataset").default_adapter = (
-        "generate_candidates_stub_adapter"
+    monkeypatch.setattr(
+        controller.executor.registry.get("inspect_dataset"),
+        "default_adapter",
+        "generate_candidates_stub_adapter",
     )
     with pytest.raises(ValueError, match="permission decision is stale|local task authority changed"):
         controller.approve_gate(

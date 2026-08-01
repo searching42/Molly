@@ -1058,7 +1058,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新计划：Permission Engine 与 Controller 共用纯 local task-authority projection，将 path-independent callable implementation digest 冻结到 local slot，并在 Gate prepare/consume、execute、adopt 前重验；Controller-driven Executor 在成功 StageState 中锚定 exact output roster，缺失 publication 时以 matching dispatch + StageState roster + Registry contract + current hashes + task-specific verifier 创建唯一 `recovered_controller_dispatch` publication 和 `RECONCILED` receipt。
 - 依据：新增 default adapter A→B、同 ID callable implementation replacement、前序任务后 callable drift、post-success/pre-publication fault、新进程与并发 reconstruction、missing output、same-path/same-size replacement、execution-record verifier failure、StageState mismatch 与 unauthorized Registry output 自动化回归。最终 PR Fast、4-shard Full CI 与 CodeQL 仍须绑定新的 review HEAD。
 - 影响任务：`M3H-008` 保持 `I/T/— / IN_PROGRESS`，`M3H-010` 保持 `I/T/— / READY`；`M3H-GATE-002` 不标 `V`；PR-BO/M3H-009 继续 `DEFERRED`，不声明 owner approval、真实 remote canary 或可合并。
-- 新增风险：callable binding 算法必须跨进程与 hash seed稳定并对不支持的 callable fail closed；reconstruction 不得重新调用 adapter，也不得把 Controller 外完成误标为 recovered dispatch。
+- 新增风险：callable binding 算法必须跨进程、hash seed、工作树路径和受支持 Python 版本稳定并对不支持的 callable fail closed；reconstruction 不得重新调用 adapter，也不得把 Controller 外完成误标为 recovered dispatch。
 - 批准人：待 repository owner review。
 
 后续路线调整必须追加：

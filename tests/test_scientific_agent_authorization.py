@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import multiprocessing
 import os
@@ -436,6 +437,41 @@ def test_local_callable_implementation_binding_is_hash_seed_stable() -> None:
     assert values == [expected, expected]
 
 
+def test_local_callable_implementation_binding_is_source_path_independent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = "def bound_adapter(*, value=1):\n    return {'value': value + 1}\n"
+    loaded = []
+    for directory in (tmp_path / "one", tmp_path / "two"):
+        directory.mkdir()
+        module_path = directory / "binding_fixture.py"
+        module_path.write_text(source, encoding="utf-8")
+        spec = importlib.util.spec_from_file_location("binding_fixture", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+            loaded.append(module.bound_adapter)
+        finally:
+            sys.modules.pop(spec.name, None)
+
+    from ai4s_agent import adapters as adapter_exports
+
+    digests = []
+    for adapter in loaded:
+        monkeypatch.setattr(adapter_exports, "inspect_dataset_service", adapter)
+        digests.append(
+            local_adapter_execution_binding_digest(
+                task_id="inspect_dataset",
+                default_adapter="inspect_dataset_service",
+            )
+        )
+    assert digests[0] is not None
+    assert digests[0] == digests[1]
+
+
 def test_frozen_permission_authorization_schemas_match_generated_models() -> None:
     schema_dir = Path(__file__).resolve().parents[1] / "docs" / "schemas"
     models = {
@@ -476,13 +512,13 @@ def test_complete_proposal_review_requires_exact_plan_authorization(
     ]
     assert decision.policy_version == "scientific-agent-permission-policy.v1"
     assert decision.policy_digest == (
-        "sha256:b47b178b5ed2cd694945d1d55757dc4fa8b5b7f072ec69f16df1333473a357bb"
+        "sha256:3ac31a2c2e5679875cf35718f59be0ecd580934df82e1e58bb6677a3bb8d2a3e"
     )
     assert decision.task_decisions[0].task_authority_digest == (
-        "sha256:09ef71ad93c4e050ddfb8c1187aa22d39656b329f470becb3668508d5c9b53a7"
+        "sha256:73d69bd602f287abae8db05f560b5ad2c54de9f23bb27cf93d6c6dbdc56dfb6f"
     )
     assert decision.decision_digest == (
-        "sha256:7787586e56f16504e30b91a5c52f0f62689c41fd7a27772d415a7b57e6ec5c1b"
+        "sha256:3dba112cbb94ee31b073bc4842ea19739ca30e33c00a7f31cf11b7d955aaa61f"
     )
     persisted = _authorization_service(storage, proposal_store).control_store.read_permission_decision(
         project_id="project-1",
@@ -1068,7 +1104,10 @@ def test_standalone_authorize_never_returns_authority_staled_during_commit(
     assert not (request_dir / "authorization_committed.json").exists()
 
 
-def test_authorization_staging_rejects_catalog_drift(tmp_path: Path) -> None:
+def test_authorization_staging_rejects_catalog_drift(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     storage, proposal_store, proposal = _workspace_with_proposal(tmp_path)
     registry = proposal_store.registry
     drifted = False
@@ -1076,8 +1115,10 @@ def test_authorization_staging_rejects_catalog_drift(tmp_path: Path) -> None:
     def drift(phase: str) -> None:
         nonlocal drifted
         if phase == "after_authorization_checkpoint" and not drifted:
-            registry.get("generate_candidates").description = (
-                "Changed catalog metadata during authorization staging."
+            monkeypatch.setattr(
+                registry.get("generate_candidates"),
+                "description",
+                "Changed catalog metadata during authorization staging.",
             )
             drifted = True
 

@@ -65,8 +65,9 @@ intent and its complete chain. The controller execution binds at least:
   artifact-input, Gate, budget, and policy digests plus their aggregate
   bindings;
 - for every local slot, the non-empty authorization-time local adapter
-  execution binding (adapter ID plus path-independent callable implementation
-  digest); remote slots must leave that local binding empty;
+  execution binding (adapter ID plus path- and interpreter-version-independent
+  callable source/defaults/closure implementation digest); remote slots must
+  leave that local binding empty;
 - the current complete remote AuthoritySet ID/digest when any task is remote;
 - a deterministic attempt-zero task-slot roster;
 - trusted actor identity/source and the request binding; and

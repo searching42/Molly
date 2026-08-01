@@ -11,13 +11,11 @@ from __future__ import annotations
 import hashlib
 import inspect
 import re
-from types import CodeType
-from typing import Any
 
 from ai4s_agent.schemas import _agent_digest
 
 
-LOCAL_ADAPTER_EXECUTION_BINDING_VERSION = "local-adapter-execution-binding.v2"
+LOCAL_ADAPTER_EXECUTION_BINDING_VERSION = "local-adapter-execution-binding.v3"
 _ADAPTER_NAME = re.compile(r"[a-z][a-z0-9_]{0,127}")
 
 
@@ -54,10 +52,12 @@ def _callable_implementation_digest(value: object) -> str | None:
     """Bind a Python adapter export to stable executable implementation bytes.
 
     Controller authority must become stale when an export is replaced without
-    changing its registered adapter ID.  Python code-object bytes bind the
-    executable body and constants, while source bytes and the owning module
-    identity bind ordinary redeploys and wrapper replacement.  Unsupported
-    callable kinds fail closed instead of falling back to a name-only binding.
+    changing its registered adapter ID.  Source bytes and the owning module
+    identity bind ordinary redeploys and wrapper replacement; stable defaults
+    and closure values bind runtime captures.  CPython bytecode is deliberately
+    excluded because opcode encodings vary across supported Python versions.
+    Unsupported callable kinds fail closed instead of falling back to a
+    name-only binding.
     """
 
     try:
@@ -71,7 +71,6 @@ def _callable_implementation_digest(value: object) -> str | None:
         return None
     try:
         source_bytes = inspect.getsource(target).encode("utf-8")
-        code_material = _code_material(code)
         defaults = _stable_callable_value(getattr(target, "__defaults__", None))
         keyword_defaults = _stable_callable_value(
             getattr(target, "__kwdefaults__", None)
@@ -85,45 +84,15 @@ def _callable_implementation_digest(value: object) -> str | None:
         return None
     return _agent_digest(
         {
-            "schema_version": "python-callable-implementation-binding.v1",
+            "schema_version": "python-callable-implementation-binding.v2",
             "module": module,
             "qualname": qualname,
-            "code_digest": _agent_digest(code_material),
             "source_sha256": "sha256:" + hashlib.sha256(source_bytes).hexdigest(),
             "defaults": defaults,
             "keyword_defaults": keyword_defaults,
             "closure": closure,
         }
     )
-
-
-def _code_material(code: CodeType) -> dict[str, Any]:
-    return {
-        "argument_counts": [
-            code.co_argcount,
-            code.co_posonlyargcount,
-            code.co_kwonlyargcount,
-        ],
-        "flags": code.co_flags,
-        "bytecode_sha256": "sha256:" + hashlib.sha256(code.co_code).hexdigest(),
-        "constants": [
-            _code_material(item)
-            if isinstance(item, CodeType)
-            else _required_stable_callable_value(item)
-            for item in code.co_consts
-        ],
-        "names": list(code.co_names),
-        "variable_names": list(code.co_varnames),
-        "free_variables": list(code.co_freevars),
-        "cell_variables": list(code.co_cellvars),
-    }
-
-
-def _required_stable_callable_value(value: object) -> Any:
-    stable = _stable_callable_value(value)
-    if stable is None:
-        raise ValueError("callable implementation contains unsupported constants")
-    return stable
 
 
 def _stable_callable_value(value: object) -> Any | None:
