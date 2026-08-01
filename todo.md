@@ -447,7 +447,7 @@ M3.5 至少支持两种用户模式：
 | `M3H-006` 实现 approve-and-start 与两种审批模式 | `I/T/—` | `DONE` | PR-BM 先提交 authorization、再提交 `not_dispatched` start intent，覆盖跨进程、fault injection、current-source revalidation 与 crash recovery，并通过 owner review |
 | `M3H-007` Permission Engine shadow mode | `I/T/—` | `DONE` | PR-BM 提供独立显式 shadow comparator/audit，不拦截或改变现有 route，并通过 owner review |
 | `M3H-007A` 建立 server-owned configured resource authority | `I/T/—` | `DONE` | PR-BM2 在 `a055a87` 获得 owner review approval，并由 PR #20 以 `5389a3c` 合并；从私有 server policy、exact connection/profile/probe、预算和完整 task roster 派生 immutable AuthoritySet，不创建 request 或 dispatch |
-| `M3H-008` Harness Controller 接入现有执行链 | `I/T/—` | `IN_PROGRESS` | PR-BN 已完成 deterministic Controller、execution-wide lock/freshness barrier、local dispatch+content evidence、explicit-only recovery、remote exact source roster、pinned input staging 与 fault/concurrency 回归；仍待 PR Fast、CI、CodeQL 和 repository-owner review，不声明真实 remote canary 或 Harness 完成 |
+| `M3H-008` Harness Controller 接入现有执行链 | `I/T/—` | `IN_PROGRESS` | PR-BN 已完成 deterministic Controller、execution-wide lock/freshness barrier、authorization-time local callable binding、dispatch 后 completion publication reconstruction、local dispatch+content evidence、explicit-only recovery、remote exact source roster、pinned input staging 与 fault/concurrency 回归；本地 PR Fast 已通过，仍待最终 HEAD 的 GitHub Full CI、CodeQL 和 repository-owner review，不声明真实 remote canary 或 Harness 完成 |
 | `M3H-009` 接入 Execution Agent LLM | `—/—/—` | `DEFERRED` | 仅输出版本化 `ToolCallProposal`，在已批准 plan/action space 内选择下一步；无任意 adapter、argv、shell、SSH 或绝对路径字段 |
 | `M3H-010` Verifier-bound feedback observation | `I/T/—` | `READY` | PR-BN 已建立 verifier-bound Controller observation prerequisite seam并覆盖 local/remote completion 验证；只有 authoritative StageState、Artifact Registry 和 verified publication 能支持 running/success/failure，LLM 文本与 telemetry 不能改变 UI 或状态 |
 | `M3H-011` Replanner 与 plan revision | `I(partial)/T(partial)/—` | `DEFERRED` | 用户反馈或运行失败产生 explicit diff、新 plan digest 与新授权；旧授权对任何实质变化失效 |
@@ -1049,6 +1049,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 依据：新增不同 request 双进程 local advance、advance 与 Gate/remote approval/cancel/recover 并发、ordinary advance recovery 零调用/零字节变化、missing dispatch、same-path/same-size output replacement、immutable record crash replay、mutable terminal telemetry、slot StageState replacement，以及 parent/slot/file symlink和 post-open replacement回归。最终 PR Fast、Full CI 与 CodeQL 仍须绑定新的 review HEAD。
 - 影响任务：`M3H-008` 保持 `I/T/— / IN_PROGRESS`，`M3H-010` 保持 `I/T/— / READY`；`M3H-GATE-002` 不标 `V`；PR-BO/M3H-009 继续 `DEFERRED`，不声明真实 remote canary、owner approval 或可合并。
 - 新增风险：只有在 target/PR Fast 通过、分支基于最新 main、GitHub 4-shard Full CI 与 CodeQL 绑定同一最终 HEAD 后，才可重新请求 owner review；后续 doc/metadata-only 变更不重复完整 suite，除非影响 evidence identity 或 reviewed commit binding。
+- 批准人：待 repository owner review。
+
+### 2026-08-01：PR-BN local authority 与 completion crash-window 收口
+
+- 决策：PR #21 继续保持 Draft；本批次只关闭 local adapter authorization binding 未冻结及 StageState/Registry 成功后、completion publication 前崩溃无法恢复两项 blocker，不修改 remote AuthoritySet、Tracing、PR-BO、Replanner 或 UI。
+- 原计划：Controller slot 只保存 task-authority digest，执行时从当前 Registry/callable 派生 binding 并自比较；local dispatch receipt 已存在但 completion callback 尚未运行时只能永久返回 recovery-required。
+- 新计划：Permission Engine 与 Controller 共用纯 local task-authority projection，将 path-independent callable implementation digest 冻结到 local slot，并在 Gate prepare/consume、execute、adopt 前重验；Controller-driven Executor 在成功 StageState 中锚定 exact output roster，缺失 publication 时以 matching dispatch + StageState roster + Registry contract + current hashes + task-specific verifier 创建唯一 `recovered_controller_dispatch` publication 和 `RECONCILED` receipt。
+- 依据：新增 default adapter A→B、同 ID callable implementation replacement、前序任务后 callable drift、post-success/pre-publication fault、新进程与并发 reconstruction、missing output、same-path/same-size replacement、execution-record verifier failure、StageState mismatch 与 unauthorized Registry output 自动化回归。最终 PR Fast、4-shard Full CI 与 CodeQL 仍须绑定新的 review HEAD。
+- 影响任务：`M3H-008` 保持 `I/T/— / IN_PROGRESS`，`M3H-010` 保持 `I/T/— / READY`；`M3H-GATE-002` 不标 `V`；PR-BO/M3H-009 继续 `DEFERRED`，不声明 owner approval、真实 remote canary 或可合并。
+- 新增风险：callable binding 算法必须跨进程与 hash seed稳定并对不支持的 callable fail closed；reconstruction 不得重新调用 adapter，也不得把 Controller 外完成误标为 recovered dispatch。
 - 批准人：待 repository owner review。
 
 后续路线调整必须追加：

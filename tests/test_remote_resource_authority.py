@@ -1935,10 +1935,10 @@ def test_frozen_remote_resource_authority_schemas_match_generated_models() -> No
 
 def test_resource_aware_permission_policy_digest_is_hash_seed_stable() -> None:
     assert PERMISSION_POLICY_DIGEST == (
-        "sha256:bcfcce7a4c1e3dba12d5f291d92f1726df431c111cf288c49acb29bd5ea3df41"
+        "sha256:b47b178b5ed2cd694945d1d55757dc4fa8b5b7f072ec69f16df1333473a357bb"
     )
     assert RESOURCE_AWARE_PERMISSION_POLICY_DIGEST == (
-        "sha256:e5279fe137409cf3490beac8b29c32c3c3212537f67e924fdd875aebe4d6d124"
+        "sha256:2b4934ed64e402c1deff4d80ca691879974a3ef0ceffebbd7056bfd591fe91bd"
     )
     script = (
         "from ai4s_agent.scientific_agent_permissions import "

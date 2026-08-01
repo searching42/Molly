@@ -557,6 +557,112 @@ def _task_authority_digest(
     return _agent_digest(material)
 
 
+@dataclass(frozen=True)
+class LocalTaskAuthorityMaterial:
+    """Pure current authority projection shared by policy and Controller."""
+
+    task_id: str
+    local_adapter_execution_binding_digest: str | None
+    execution_binding_digest: str
+    task_authority_digest: str
+
+
+def derive_local_task_authority_material(
+    *,
+    publication: ScientificAgentPlanPublication,
+    task_id: str,
+    registry: AtomicTaskRegistry,
+    policy_version: str,
+) -> LocalTaskAuthorityMaterial:
+    """Rebuild one local task's exact authority without executing anything.
+
+    This is deliberately the same pure projection consumed by the Permission
+    Engine and by post-authorization Controller checks.  In particular, the
+    callable implementation binding is server-only and is not recoverable from
+    the planner-visible tool catalog.
+    """
+
+    if policy_version not in {
+        PERMISSION_POLICY_VERSION,
+        RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    }:
+        raise ValueError("unknown scientific agent permission policy version")
+    proposal = publication.proposal
+    planned = [item for item in proposal.run_plan.tasks if item.task_id == task_id]
+    if len(planned) != 1:
+        raise ValueError("local task authority requires one exact RunPlan task")
+    dispatches = [item for item in proposal.dispatch_intents if item.task_id == task_id]
+    if len(dispatches) != 1 or dispatches[0].execution_route != "local_executor":
+        raise ValueError("local task authority requires one local dispatch intent")
+    dispatch = dispatches[0]
+    try:
+        registered = registry.get(task_id)
+    except ValueError as exc:
+        raise ValueError("local task authority requires a registered task") from exc
+    tools = [item for item in publication.catalog.tools if item.task_id == task_id]
+    if len(tools) > 1:
+        raise ValueError("local task authority has conflicting catalog entries")
+    tool = tools[0] if tools else None
+    if tool is None:
+        effect_class = str(registered.effect_class or "unavailable")
+        risk_level = str(getattr(registered.risk_level, "value", "high"))
+        permissions = [str(item) for item in registered.required_permissions]
+        gates = [str(item) for item in registered.gates]
+        supports_plan_preapproval = bool(registered.supports_plan_preapproval)
+        planner_visible = bool(registered.planner_visible)
+        idempotency_policy = str(registered.idempotency_policy or "")
+        verification_policy = str(registered.verification_policy or "")
+    else:
+        effect_class = tool.effect_class
+        risk_level = tool.risk_level
+        permissions = list(tool.required_permissions)
+        gates = list(tool.required_gates)
+        supports_plan_preapproval = tool.supports_plan_preapproval
+        planner_visible = True
+        idempotency_policy = tool.idempotency_policy
+        verification_policy = tool.verification_policy
+    adapter_binding = local_adapter_execution_binding_digest(
+        task_id=task_id,
+        default_adapter=registered.default_adapter,
+    )
+    execution_binding = adapter_binding or _unavailable_execution_binding_digest(
+        task_id=task_id,
+        execution_route=dispatch.execution_route,
+        remote_task_type=dispatch.remote_task_type,
+    )
+    resource_aware = policy_version == RESOURCE_AWARE_PERMISSION_POLICY_VERSION
+    task_authority = _task_authority_digest(
+        task_id=task_id,
+        planner_visible=planner_visible,
+        effect_class=effect_class,
+        risk_level=risk_level,
+        permissions=permissions,
+        gates=gates,
+        execution_route=dispatch.execution_route,
+        remote_task_type=dispatch.remote_task_type,
+        supports_plan_preapproval=supports_plan_preapproval,
+        idempotency_policy=idempotency_policy,
+        verification_policy=verification_policy,
+        effective_options=proposal.effective_planner_options.get(task_id),
+        compiled_options=proposal.compiled_task_options.get(task_id),
+        execution_binding_digest=execution_binding,
+        binding_version=(
+            RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
+            if resource_aware
+            else TASK_AUTHORITY_BINDING_VERSION
+        ),
+        budget_dimensions=sorted(
+            {str(item) for item in getattr(registered, "budget_dimensions", ())}
+        ),
+    )
+    return LocalTaskAuthorityMaterial(
+        task_id=task_id,
+        local_adapter_execution_binding_digest=adapter_binding,
+        execution_binding_digest=execution_binding,
+        task_authority_digest=task_authority,
+    )
+
+
 class ScientificAgentPermissionEngine:
     """Pure deterministic evaluator over one verified PR-BL publication."""
 
@@ -810,17 +916,26 @@ class ScientificAgentPermissionEngine:
             ):
                 local_runtime_task_ids.append(task_id)
 
+            local_authority_material: LocalTaskAuthorityMaterial | None = None
             if execution_route == "local_executor":
+                try:
+                    local_authority_material = derive_local_task_authority_material(
+                        publication=publication,
+                        task_id=task_id,
+                        registry=self.registry,
+                        policy_version=selected_policy_version,
+                    )
+                except ValueError:
+                    local_authority_material = None
                 resolved_local_binding = (
                     None
-                    if registered is None
-                    else local_adapter_execution_binding_digest(
-                        task_id=task_id,
-                        default_adapter=registered.default_adapter,
-                    )
+                    if local_authority_material is None
+                    else local_authority_material.local_adapter_execution_binding_digest
                 )
-                execution_binding_digest = resolved_local_binding or (
-                    _unavailable_execution_binding_digest(
+                execution_binding_digest = (
+                    local_authority_material.execution_binding_digest
+                    if local_authority_material is not None
+                    else _unavailable_execution_binding_digest(
                         task_id=task_id,
                         execution_route=execution_route,
                         remote_task_type=remote_task_type,
@@ -897,27 +1012,31 @@ class ScientificAgentPermissionEngine:
                         "remote_task_type": remote_task_type,
                     }
                 )
-            task_authority_digest = _task_authority_digest(
-                task_id=task_id,
-                planner_visible=planner_visible,
-                effect_class=effect_class,
-                risk_level=risk_level,
-                permissions=permissions,
-                gates=gates,
-                execution_route=execution_route,
-                remote_task_type=remote_task_type,
-                supports_plan_preapproval=supports_plan_preapproval,
-                idempotency_policy=idempotency_policy,
-                verification_policy=verification_policy,
-                effective_options=proposal.effective_planner_options.get(task_id),
-                compiled_options=proposal.compiled_task_options.get(task_id),
-                execution_binding_digest=execution_binding_digest,
-                binding_version=(
-                    RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
-                    if resource_aware
-                    else TASK_AUTHORITY_BINDING_VERSION
-                ),
-                budget_dimensions=budget_dimensions,
+            task_authority_digest = (
+                local_authority_material.task_authority_digest
+                if local_authority_material is not None
+                else _task_authority_digest(
+                    task_id=task_id,
+                    planner_visible=planner_visible,
+                    effect_class=effect_class,
+                    risk_level=risk_level,
+                    permissions=permissions,
+                    gates=gates,
+                    execution_route=execution_route,
+                    remote_task_type=remote_task_type,
+                    supports_plan_preapproval=supports_plan_preapproval,
+                    idempotency_policy=idempotency_policy,
+                    verification_policy=verification_policy,
+                    effective_options=proposal.effective_planner_options.get(task_id),
+                    compiled_options=proposal.compiled_task_options.get(task_id),
+                    execution_binding_digest=execution_binding_digest,
+                    binding_version=(
+                        RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
+                        if resource_aware
+                        else TASK_AUTHORITY_BINDING_VERSION
+                    ),
+                    budget_dimensions=budget_dimensions,
+                )
             )
 
             if effect_class not in RECOGNIZED_EFFECT_CLASSES:

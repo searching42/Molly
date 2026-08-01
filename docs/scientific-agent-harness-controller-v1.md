@@ -64,6 +64,9 @@ intent and its complete chain. The controller execution binds at least:
 - complete per-task compiled-options, dispatch-intent, task-authority,
   artifact-input, Gate, budget, and policy digests plus their aggregate
   bindings;
+- for every local slot, the non-empty authorization-time local adapter
+  execution binding (adapter ID plus path-independent callable implementation
+  digest); remote slots must leave that local binding empty;
 - the current complete remote AuthoritySet ID/digest when any task is remote;
 - a deterministic attempt-zero task-slot roster;
 - trusted actor identity/source and the request binding; and
@@ -120,6 +123,16 @@ decision binding. The seam:
 5. returns only after StageState and required Registry outputs can be
    exact-read.
 
+The Permission Engine and Controller use the same pure local-task authority
+projection. Controller creation recomputes the current task-authority material,
+requires it to equal the authorization and permission-decision task digests,
+and freezes the separately projected callable implementation binding in the
+task slot. Gate preparation, Gate decision consumption, local execution, and
+local adoption all recompute that material and compare it with the slot. A
+default-adapter change or same-ID callable implementation replacement therefore
+makes the old Controller execution stale before the new callable can run,
+including after an earlier task has changed StageState and Registry.
+
 Mixed plans are therefore never passed to the legacy whole-plan loop. A remote
 dispatch intent cannot reach a legacy local adapter through the Controller.
 
@@ -132,9 +145,22 @@ dispatch receipt. For legacy tasks without that older specialized roster, the
 same recorder itself is the immutable adapter-boundary authority. A successful
 local publication then binds the StageState digest, complete Registry digest,
 planned output roster, each output path/size/SHA-256/producer, verifier
-identity, and any immutable execution-record ID/digest. Crash reconciliation
-requires that publication and dispatch authority; StageState plus logical
-Registry IDs alone is insufficient.
+identity, and any immutable execution-record ID/digest. Before publishing the
+successful StageState, Controller-driven Executor runs also place an exact
+output-content roster in that StageState. If the process dies after successful
+StageState/Registry commit but before the completion callback, re-entry may
+create exactly one `recovered_controller_dispatch` publication only after it
+replays the matching Controller dispatch receipt, StageState output roster,
+complete Registry contract, current output hashes, producer/task binding, and
+the Executor's task-specific exact verifier. Immutable execution-record tasks
+invoke their established publication replay; they are not accepted from a
+verification-class label alone.
+
+Publication modes are disjoint: `controller_dispatch` is emitted by the normal
+completion callback, `recovered_controller_dispatch` reconstructs the missing
+publication for the same committed Controller dispatch, and
+`adopt_completed_task` represents completion outside that decision and cannot
+claim its dispatch. StageState plus logical Registry IDs alone is insufficient.
 
 Gate approval is deliberately a separate route and transaction. It commits an
 existing `GateDecision` against the exact current WAITING_USER execution
@@ -179,8 +205,11 @@ publication are exact-verified it cannot override terminal authority.
 A local task completes only when the exact Executor dispatch authority,
 decision-bound local execution publication, and every planned output have
 current content-bound verifier evidence. A manual completion is represented by
-`TASK_ADOPTED`, never `TASK_COMPLETED`, and cannot claim a dispatch receipt. A remote task
-completes only when its slot has the exact committed request and approval,
+`TASK_ADOPTED`, never `TASK_COMPLETED`, and cannot claim a dispatch receipt. A
+reconstructed local completion retains the original decision and dispatch,
+publishes `recovered_controller_dispatch`, and produces a `RECONCILED`
+Controller receipt without invoking the adapter again. A remote task completes
+only when its slot has the exact committed request and approval,
 immutable verified publication, complete output registrations, and matching
 success StageState. Earlier controller receipts may locate this evidence but
 cannot replace it. `details.executed_tasks`, adapter return values, job state,

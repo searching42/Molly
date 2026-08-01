@@ -117,6 +117,7 @@
     "verification_mode": {
       "enum": [
         "controller_dispatch",
+        "recovered_controller_dispatch",
         "adopt_completed_task"
       ],
       "title": "Verification Mode",

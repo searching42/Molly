@@ -82,6 +82,10 @@
           "title": "Task Authority Digest",
           "type": "string"
         },
+        "local_adapter_execution_binding_digest": {
+          "title": "Local Adapter Execution Binding Digest",
+          "type": "string"
+        },
         "dispatch_intent_digest": {
           "title": "Dispatch Intent Digest",
           "type": "string"
@@ -115,6 +119,7 @@
         "execution_route",
         "slot_id",
         "task_authority_digest",
+        "local_adapter_execution_binding_digest",
         "dispatch_intent_digest",
         "compiled_options_digest",
         "input_artifacts_digest",

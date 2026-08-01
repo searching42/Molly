@@ -3986,7 +3986,11 @@ class AgentHarnessLocalExecutionPublication(BaseModel):
     task_index: int = Field(ge=0, le=1023)
     attempt_ordinal: int = Field(default=0, ge=0, le=1023)
     slot_id: str
-    verification_mode: Literal["controller_dispatch", "adopt_completed_task"]
+    verification_mode: Literal[
+        "controller_dispatch",
+        "recovered_controller_dispatch",
+        "adopt_completed_task",
+    ]
     local_dispatch_receipt_id: str = ""
     local_dispatch_receipt_digest: str = ""
     stage_digest: str
@@ -4062,7 +4066,10 @@ class AgentHarnessLocalExecutionPublication(BaseModel):
             and self.local_dispatch_receipt_digest
         ):
             raise ValueError("local dispatch receipt ID and digest must agree")
-        if (self.verification_mode == "controller_dispatch") != has_dispatch:
+        if (
+            self.verification_mode
+            in {"controller_dispatch", "recovered_controller_dispatch"}
+        ) != has_dispatch:
             raise ValueError("local publication verification mode is inconsistent")
         expected = _agent_digest(self.semantic_material())
         if self.publication_digest and self.publication_digest != expected:
@@ -4091,6 +4098,7 @@ class AgentHarnessControllerTaskSlot(BaseModel):
     execution_route: Literal["local_executor", "remote_execution_service"]
     slot_id: str
     task_authority_digest: str
+    local_adapter_execution_binding_digest: str
     dispatch_intent_digest: str
     compiled_options_digest: str
     input_artifacts_digest: str
@@ -4123,6 +4131,15 @@ class AgentHarnessControllerTaskSlot(BaseModel):
     def validate_optional_digest(cls, value: str) -> str:
         return _agent_digest_value(value, field="remote_authority_digest", allow_empty=True)
 
+    @field_validator("local_adapter_execution_binding_digest")
+    @classmethod
+    def validate_local_adapter_digest(cls, value: str) -> str:
+        return _agent_digest_value(
+            value,
+            field="local_adapter_execution_binding_digest",
+            allow_empty=True,
+        )
+
     @model_validator(mode="after")
     def validate_remote_authority_pair(self) -> "AgentHarnessControllerTaskSlot":
         has_remote_authority = bool(self.remote_authority_id or self.remote_authority_digest)
@@ -4130,8 +4147,12 @@ class AgentHarnessControllerTaskSlot(BaseModel):
             raise ValueError("remote authority ID and digest must be present together")
         if self.execution_route == "local_executor" and has_remote_authority:
             raise ValueError("local task slots must not bind remote authority")
+        if self.execution_route == "local_executor" and not self.local_adapter_execution_binding_digest:
+            raise ValueError("local task slots require exact adapter execution authority")
         if self.execution_route == "remote_execution_service" and not has_remote_authority:
             raise ValueError("remote task slots require exact remote authority")
+        if self.execution_route == "remote_execution_service" and self.local_adapter_execution_binding_digest:
+            raise ValueError("remote task slots must not bind local adapter authority")
         return self
 
 
@@ -7470,6 +7491,9 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_harness_controller_inspection": AgentHarnessControllerInspection,
     "agent_harness_gate_approval_request": AgentHarnessGateApprovalRequest,
     "agent_harness_remote_approval_request": AgentHarnessRemoteApprovalRequest,
+    "agent_harness_local_dispatch_receipt": AgentHarnessLocalDispatchReceipt,
+    "agent_harness_local_execution_publication": AgentHarnessLocalExecutionPublication,
+    "agent_harness_verified_output_binding": AgentHarnessVerifiedOutputBinding,
     "agent_permission_shadow_record": AgentPermissionShadowRecord,
     "run_plan_diff": RunPlanDiff,
     "plan_rationale": PlanRationale,

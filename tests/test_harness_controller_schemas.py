@@ -81,6 +81,7 @@ def _execution() -> AgentHarnessControllerExecution:
                 execution_route="local_executor",
                 slot_id="task-slot-0-inspect-dataset-a0",
                 task_authority_digest=_DIGEST,
+                local_adapter_execution_binding_digest=_DIGEST,
                 dispatch_intent_digest=_DIGEST,
                 compiled_options_digest=_DIGEST,
                 input_artifacts_digest=_DIGEST,

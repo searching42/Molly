@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import multiprocessing
 import os
@@ -15,6 +16,7 @@ from typing import Mapping, Sequence
 import pytest
 from flask import Flask
 
+from ai4s_agent import adapters
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.harness_tracing import OpenTelemetryHarnessTracer
 from ai4s_agent.llm_provider import StubLLMProvider
@@ -137,7 +139,11 @@ class _NoRemoteLifecycle:
     pass
 
 
-def _local_authority_chain(tmp_path: Path):
+def _local_authority_chain(
+    tmp_path: Path,
+    *,
+    requested_tool_ids: list[str] | None = None,
+):
     storage = ProjectStorage(workspace_dir=tmp_path / "workspace")
     storage.create_project("project-1", name="Project", created_at=_NOW)
     run_dir = storage.run_dir("project-1", "run-1")
@@ -147,15 +153,16 @@ def _local_authority_chain(tmp_path: Path):
     storage.register_artifact_path(
         "project-1", "run-1", "uploaded_dataset", "inputs/dataset.csv"
     )
+    tool_ids = requested_tool_ids or ["inspect_dataset"]
     response = AgentExecutionPlanLLMResponse(
-        requested_tool_ids=["inspect_dataset"],
+        requested_tool_ids=tool_ids,
         selected_input_artifact_ids=["uploaded_dataset"],
-        task_options={"inspect_dataset": {}},
+        task_options={task_id: {} for task_id in tool_ids},
         selected_logical_profile_ids=[],
         limits={},
         stop_conditions=["stop on validation failure"],
         success_criteria=["produce a dataset profile"],
-        rationales=["Inspect the exact registered dataset."],
+        rationales=["Execute the exact registered local task roster."],
         assumptions=[],
         questions=[],
     )
@@ -236,6 +243,53 @@ def _reopen_local_controller(workspace_dir: str) -> ScientificAgentHarnessContro
     )
 
 
+def _local_prepublication_crash(tmp_path: Path):
+    storage, control_store, controller, intent = _local_authority_chain(tmp_path)
+    request = AgentHarnessControllerStartRequest(
+        expected_start_intent_digest=intent.start_intent_digest,
+        client_request_id="local-prepublication-crash-create-1",
+    )
+    original_publish = controller._publish_local_execution_publication
+
+    def fail_before_publication(**kwargs):
+        if kwargs.get("verification_mode") == "controller_dispatch":
+            raise RuntimeError("injected prepublication crash")
+        return original_publish(**kwargs)
+
+    controller._publish_local_execution_publication = fail_before_publication  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="prepublication crash"):
+            controller.create(
+                project_id="project-1",
+                start_intent_id=intent.start_intent_id,
+                request=request,
+                actor="alice",
+                actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+            )
+    finally:
+        controller._publish_local_execution_publication = original_publish  # type: ignore[method-assign]
+    executions = control_store.list_harness_controller_executions(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+    )
+    assert len(executions) == 1
+    execution = executions[0]
+    assert len(
+        control_store.list_harness_local_dispatch_receipts(
+            project_id="project-1",
+            controller_execution_id=execution.controller_execution_id,
+        )
+    ) == 1
+    assert control_store.list_harness_local_execution_publications(
+        project_id="project-1",
+        controller_execution_id=execution.controller_execution_id,
+    ) == []
+    stage = storage.read_stage_state("project-1", "run-1")
+    assert stage is not None and stage.status.value == "SUCCEEDED"
+    assert stage.details.get("controller_output_evidence")
+    return storage, control_store, intent, request, execution
+
+
 def _concurrent_create_process(
     workspace_dir: str,
     start_intent_id: str,
@@ -260,6 +314,33 @@ def _concurrent_create_process(
             (
                 "ok",
                 result.execution.controller_execution_id,
+                result.receipt.receipt_id if result.receipt else "",
+            )
+        )
+    except Exception as exc:  # pragma: no cover - surfaced in the parent assertion
+        results.put(("error", type(exc).__name__, str(exc)))
+
+
+def _local_reconstruction_process(
+    workspace_dir: str,
+    controller_execution_id: str,
+    controller_execution_digest: str,
+    results: multiprocessing.queues.Queue,
+) -> None:
+    try:
+        controller = _reopen_local_controller(workspace_dir)
+        result = controller.advance(
+            project_id="project-1",
+            controller_execution_id=controller_execution_id,
+            request=AgentHarnessControllerAdvanceRequest(
+                expected_controller_execution_digest=controller_execution_digest,
+                client_request_id="new-process-reconstruct-advance-1",
+            ),
+        )
+        results.put(
+            (
+                "ok",
+                result.receipt.outcome.value if result.receipt else "",
                 result.receipt.receipt_id if result.receipt else "",
             )
         )
@@ -591,6 +672,139 @@ def test_controller_executes_exactly_one_local_task_and_replays_receipt(tmp_path
         controller_execution_id=first.execution.controller_execution_id,
     )
     assert [item.receipt_id for item in receipts] == [first.receipt.receipt_id]
+
+
+def test_controller_freezes_local_default_adapter_binding_before_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    storage, controller, intent = _gated_local_authority_chain(tmp_path)
+    created = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="freeze-default-adapter-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    slot = created.execution.task_slots[0]
+    assert slot.local_adapter_execution_binding_digest
+    stage = storage.read_stage_state("project-1", "run-1")
+    assert stage is not None
+    snapshot = stage.details["execution_snapshot"]
+    called = False
+
+    def replacement(_payload):
+        nonlocal called
+        called = True
+        return {"status": "failed", "adapter": "replacement"}
+
+    monkeypatch.setattr(adapters, "generate_candidates_stub_adapter", replacement)
+    controller.executor.registry.get("inspect_dataset").default_adapter = (
+        "generate_candidates_stub_adapter"
+    )
+    with pytest.raises(ValueError, match="permission decision is stale|local task authority changed"):
+        controller.approve_gate(
+            project_id="project-1",
+            controller_execution_id=created.execution.controller_execution_id,
+            gate_id="gate_1_task_parse",
+            request=AgentHarnessGateApprovalRequest(
+                expected_snapshot_id=snapshot["snapshot_id"],
+                expected_snapshot_hash=f"sha256:{snapshot['snapshot_hash']}",
+                client_request_id="freeze-default-adapter-gate-1",
+                note="Must retain the authorized adapter.",
+            ),
+            actor="alice",
+        )
+    assert called is False
+
+
+def test_controller_freezes_same_id_callable_implementation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    storage, controller, intent = _gated_local_authority_chain(tmp_path)
+    created = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="freeze-callable-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    stage = storage.read_stage_state("project-1", "run-1")
+    assert stage is not None
+    snapshot = stage.details["execution_snapshot"]
+    called = False
+
+    def inspect_dataset_service(_payload):
+        nonlocal called
+        called = True
+        return {"status": "failed", "adapter": "inspect_dataset_service"}
+
+    monkeypatch.setattr(adapters, "inspect_dataset_service", inspect_dataset_service)
+    with pytest.raises(ValueError, match="permission decision is stale|local task authority changed"):
+        controller.approve_gate(
+            project_id="project-1",
+            controller_execution_id=created.execution.controller_execution_id,
+            gate_id="gate_1_task_parse",
+            request=AgentHarnessGateApprovalRequest(
+                expected_snapshot_id=snapshot["snapshot_id"],
+                expected_snapshot_hash=f"sha256:{snapshot['snapshot_hash']}",
+                client_request_id="freeze-callable-gate-1",
+                note="Must retain the authorized implementation.",
+            ),
+            actor="alice",
+        )
+    assert called is False
+
+
+def test_post_start_fallback_rejects_later_task_callable_drift(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _, _, controller, intent = _local_authority_chain(
+        tmp_path,
+        requested_tool_ids=["inspect_dataset", "check_trainability"],
+    )
+    created = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="post-start-callable-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert created.receipt is not None
+    assert created.receipt.task_id == "inspect_dataset"
+    called = False
+
+    def check_trainability_service(_payload):
+        nonlocal called
+        called = True
+        return {"status": "failed", "adapter": "check_trainability_service"}
+
+    monkeypatch.setattr(
+        adapters,
+        "check_trainability_service",
+        check_trainability_service,
+    )
+    with pytest.raises(ValueError, match="permission decision is stale|local task authority changed"):
+        controller.advance(
+            project_id="project-1",
+            controller_execution_id=created.execution.controller_execution_id,
+            request=AgentHarnessControllerAdvanceRequest(
+                expected_controller_execution_digest=created.execution.execution_digest,
+                client_request_id="post-start-callable-advance-1",
+            ),
+        )
+    assert called is False
 
 
 def test_controller_policy_digest_is_stable_across_hash_seeds() -> None:
@@ -1187,6 +1401,283 @@ def test_local_crash_after_committed_outputs_reconciles_without_second_dispatch(
     assert recovered.receipt is not None
     assert recovered.receipt.reason_codes == ["TASK_COMPLETED"]
     assert recovered.inspection.status.value == "succeeded"
+
+
+def test_local_prepublication_crash_reconstructs_without_second_dispatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    storage, control_store, intent, request, execution = (
+        _local_prepublication_crash(tmp_path)
+    )
+    run_dir = storage.run_dir("project-1", "run-1")
+    adapter_result = run_dir / "inspect_dataset" / "adapter_result.json"
+    result_bytes = adapter_result.read_bytes()
+    recovered_controller = _reopen_local_controller(str(storage.workspace_dir))
+
+    def reject_dispatch(_adapter_name):
+        raise AssertionError("reconstruction attempted a second adapter dispatch")
+
+    monkeypatch.setattr(recovered_controller.executor, "_adapter_for", reject_dispatch)
+    recovered = recovered_controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=request,
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert recovered.receipt is not None
+    assert recovered.receipt.outcome == AgentHarnessControllerReceiptOutcome.RECONCILED
+    assert recovered.receipt.reason_codes == ["TASK_COMPLETED"]
+    assert adapter_result.read_bytes() == result_bytes
+    dispatches = control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=execution.controller_execution_id,
+    )
+    publications = control_store.list_harness_local_execution_publications(
+        project_id="project-1",
+        controller_execution_id=execution.controller_execution_id,
+    )
+    assert len(dispatches) == 1
+    assert len(publications) == 1
+    assert publications[0].verification_mode == "recovered_controller_dispatch"
+    assert publications[0].local_dispatch_receipt_id == dispatches[0].dispatch_receipt_id
+
+
+def test_local_prepublication_crash_recovers_in_new_process(
+    tmp_path: Path,
+) -> None:
+    storage, control_store, _, _, execution = _local_prepublication_crash(tmp_path)
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue()
+    process = context.Process(
+        target=_local_reconstruction_process,
+        args=(
+            str(storage.workspace_dir),
+            execution.controller_execution_id,
+            execution.execution_digest,
+            results,
+        ),
+    )
+    process.start()
+    process.join(timeout=30)
+    assert process.exitcode == 0
+    assert results.get(timeout=5)[:2] == ("ok", "reconciled")
+    assert len(
+        control_store.list_harness_local_dispatch_receipts(
+            project_id="project-1",
+            controller_execution_id=execution.controller_execution_id,
+        )
+    ) == 1
+    publications = control_store.list_harness_local_execution_publications(
+        project_id="project-1",
+        controller_execution_id=execution.controller_execution_id,
+    )
+    assert len(publications) == 1
+    assert publications[0].verification_mode == "recovered_controller_dispatch"
+
+
+def test_local_prepublication_reconstruction_rejects_missing_output(
+    tmp_path: Path,
+) -> None:
+    storage, _, intent, request, _ = _local_prepublication_crash(tmp_path)
+    registry_path = storage.run_dir("project-1", "run-1") / "artifact_registry.json"
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    del payload["artifacts"]["dataset_profile"]
+    registry_path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    recovered_controller = _reopen_local_controller(str(storage.workspace_dir))
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="output contract is incomplete",
+    ):
+        recovered_controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=request,
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+
+
+def test_local_prepublication_reconstruction_rejects_same_size_replacement(
+    tmp_path: Path,
+) -> None:
+    storage, _, intent, request, _ = _local_prepublication_crash(tmp_path)
+    registry = storage.read_artifact_registry("project-1", "run-1")
+    output_path = storage.run_dir("project-1", "run-1") / registry["dataset_profile"]
+    original = output_path.read_bytes()
+    replacement = bytearray(original)
+    replacement[-2] = ord(" ") if replacement[-2] != ord(" ") else ord("\t")
+    output_path.write_bytes(bytes(replacement))
+    assert output_path.stat().st_size == len(original)
+    recovered_controller = _reopen_local_controller(str(storage.workspace_dir))
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="output evidence mismatch",
+    ):
+        recovered_controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=request,
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+
+
+def test_local_prepublication_reconstruction_calls_exact_record_verifier(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    storage, _, intent, request, _ = _local_prepublication_crash(tmp_path)
+    registry = storage.read_artifact_registry("project-1", "run-1")
+    record_path = storage.run_dir("project-1", "run-1") / registry["dataset_profile"]
+    record_payload = json.loads(record_path.read_text(encoding="utf-8"))
+    record_payload["schema_version"] = "corrupted-execution-record"
+    encoded = json.dumps(record_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    record_path.write_bytes(encoded)
+    stage = storage.read_stage_state("project-1", "run-1")
+    assert stage is not None
+    evidence = dict(stage.details["controller_output_evidence"])
+    outputs = [dict(item) for item in evidence["outputs"]]
+    record_relative_path = registry["dataset_profile"]
+    for item in outputs:
+        if item["relative_path"] == record_relative_path:
+            item["size_bytes"] = len(encoded)
+            item["content_sha256"] = "sha256:" + hashlib.sha256(encoded).hexdigest()
+    evidence["outputs"] = outputs
+    evidence["outputs_digest"] = _agent_digest(outputs)
+    storage.write_stage_state(
+        "project-1",
+        "run-1",
+        stage.model_copy(update={"details": {**stage.details, "controller_output_evidence": evidence}}),
+    )
+    recovered_controller = _reopen_local_controller(str(storage.workspace_dir))
+    original_verify = recovered_controller.executor.verify_one_task_committed_outputs
+
+    def exact_record_verifier(**kwargs):
+        original_verify(**kwargs)
+        payload = json.loads(record_path.read_text(encoding="utf-8"))
+        if payload.get("schema_version") == "corrupted-execution-record":
+            raise ValueError("exact execution record replay failed")
+
+    monkeypatch.setattr(
+        recovered_controller.executor,
+        "verify_one_task_committed_outputs",
+        exact_record_verifier,
+    )
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="exact task verification",
+    ):
+        recovered_controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=request,
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+
+
+def test_local_prepublication_reconstruction_rejects_stage_mismatch(
+    tmp_path: Path,
+) -> None:
+    storage, _, intent, request, _ = _local_prepublication_crash(tmp_path)
+    stage = storage.read_stage_state("project-1", "run-1")
+    assert stage is not None
+    storage.write_stage_state(
+        "project-1",
+        "run-1",
+        stage.model_copy(update={"stage": "different_task"}),
+    )
+    recovered_controller = _reopen_local_controller(str(storage.workspace_dir))
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="belongs to another task",
+    ):
+        recovered_controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=request,
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+
+
+def test_local_prepublication_reconstruction_rejects_extra_registry_output(
+    tmp_path: Path,
+) -> None:
+    storage, _, intent, request, _ = _local_prepublication_crash(tmp_path)
+    extra = storage.run_dir("project-1", "run-1") / "unauthorized.json"
+    extra.write_text("{}\n", encoding="utf-8")
+    storage.register_artifact_path(
+        "project-1",
+        "run-1",
+        "harness-input-forged-authority",
+        "unauthorized.json",
+    )
+    recovered_controller = _reopen_local_controller(str(storage.workspace_dir))
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="Registry mutation|unauthorized Registry output",
+    ):
+        recovered_controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=request,
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+
+
+def test_local_prepublication_reconstruction_is_concurrent_once(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    storage, control_store, _, _, execution = _local_prepublication_crash(tmp_path)
+    controllers = [
+        _reopen_local_controller(str(storage.workspace_dir)),
+        _reopen_local_controller(str(storage.workspace_dir)),
+    ]
+
+    def reject_dispatch(_adapter_name):
+        raise AssertionError("concurrent reconstruction attempted adapter dispatch")
+
+    for item in controllers:
+        monkeypatch.setattr(item.executor, "_adapter_for", reject_dispatch)
+
+    def advance(index: int):
+        return controllers[index].advance(
+            project_id="project-1",
+            controller_execution_id=execution.controller_execution_id,
+            request=AgentHarnessControllerAdvanceRequest(
+                expected_controller_execution_digest=execution.execution_digest,
+                client_request_id=f"concurrent-reconstruct-advance-{index}",
+            ),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = [pool.submit(advance, index) for index in range(2)]
+        completed = [future.result(timeout=20) for future in results]
+    assert any(
+        item.receipt is not None
+        and item.receipt.outcome == AgentHarnessControllerReceiptOutcome.RECONCILED
+        for item in completed
+    )
+    assert len(
+        control_store.list_harness_local_dispatch_receipts(
+            project_id="project-1",
+            controller_execution_id=execution.controller_execution_id,
+        )
+    ) == 1
+    publications = control_store.list_harness_local_execution_publications(
+        project_id="project-1",
+        controller_execution_id=execution.controller_execution_id,
+    )
+    assert len(publications) == 1
+    assert publications[0].verification_mode == "recovered_controller_dispatch"
 
 
 def test_local_crash_reconciliation_requires_exact_immutable_execution_record(

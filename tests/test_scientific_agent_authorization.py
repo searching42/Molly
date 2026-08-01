@@ -406,6 +406,36 @@ def test_permission_policy_identity_is_deterministic_across_hash_seeds() -> None
     assert values == [PERMISSION_POLICY_DIGEST, PERMISSION_POLICY_DIGEST]
 
 
+def test_local_callable_implementation_binding_is_hash_seed_stable() -> None:
+    expected = local_adapter_execution_binding_digest(
+        task_id="inspect_dataset",
+        default_adapter="inspect_dataset_service",
+    )
+    assert expected is not None
+    script = (
+        "from ai4s_agent.adapter_bindings import "
+        "local_adapter_execution_binding_digest as derive; "
+        "print(derive(task_id='inspect_dataset', "
+        "default_adapter='inspect_dataset_service'))"
+    )
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(
+        Path(__file__).resolve().parents[1] / "src"
+    )
+    values = []
+    for seed in ("1", "777"):
+        environment["PYTHONHASHSEED"] = seed
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        values.append(completed.stdout.strip())
+    assert values == [expected, expected]
+
+
 def test_frozen_permission_authorization_schemas_match_generated_models() -> None:
     schema_dir = Path(__file__).resolve().parents[1] / "docs" / "schemas"
     models = {
@@ -446,13 +476,13 @@ def test_complete_proposal_review_requires_exact_plan_authorization(
     ]
     assert decision.policy_version == "scientific-agent-permission-policy.v1"
     assert decision.policy_digest == (
-        "sha256:bcfcce7a4c1e3dba12d5f291d92f1726df431c111cf288c49acb29bd5ea3df41"
+        "sha256:b47b178b5ed2cd694945d1d55757dc4fa8b5b7f072ec69f16df1333473a357bb"
     )
     assert decision.task_decisions[0].task_authority_digest == (
-        "sha256:8371df28ef5b9da579264579167bc37f1c087388e42a0a49500a057fb51c4378"
+        "sha256:09ef71ad93c4e050ddfb8c1187aa22d39656b329f470becb3668508d5c9b53a7"
     )
     assert decision.decision_digest == (
-        "sha256:6013db087a171554b79d86e96a2875d3783fdf389c43bc5bf38eefa449f1ca5d"
+        "sha256:7787586e56f16504e30b91a5c52f0f62689c41fd7a27772d415a7b57e6ec5c1b"
     )
     persisted = _authorization_service(storage, proposal_store).control_store.read_permission_decision(
         project_id="project-1",

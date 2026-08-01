@@ -49,6 +49,9 @@ from ai4s_agent.schemas import (
     _agent_digest,
 )
 from ai4s_agent.scientific_agent_authorization import AgentPlanControlStore
+from ai4s_agent.scientific_agent_permissions import (
+    derive_local_task_authority_material,
+)
 from ai4s_agent.scientific_agent_plan import (
     ScientificAgentPlanPublication,
     ScientificAgentPlanSourceChanged,
@@ -104,6 +107,12 @@ _POLICY_MATERIAL: Mapping[str, Any] = {
     "adoption_policy": "verified_stage_registry_or_remote_publication_only",
     "terminal_policy": "authoritative_sources_plus_committed_controller_receipt",
     "source_binding_policy": "ids_and_sha256_digests_only",
+    "local_adapter_authority_policy": (
+        "permission_engine_shared_task_authority_and_callable_implementation_digest"
+    ),
+    "local_completion_reconstruction_policy": (
+        "exact_dispatch_stage_registry_output_and_task_verifier_replay"
+    ),
     "privacy_allowlist": "no_paths_hosts_commands_prompts_exceptions_or_trace_identity",
     "tracing_policy": "optional_fail_open_non_authoritative",
     "authority_expansion": "forbidden",
@@ -639,6 +648,7 @@ class ScientificAgentHarnessController:
                 raise ScientificAgentHarnessControllerVerificationError(
                     "preauthorized Gate cannot be approved through the stepwise route"
                 )
+            self._verify_local_task_authority(execution, slot)
             gate_decision = self.executor.commit_one_task_gate_decision(
                 project_id=project_id,
                 run_plan=authorization.run_plan,
@@ -893,7 +903,12 @@ class ScientificAgentHarnessController:
                 "proposal does not match authorization"
             )
         dispatch_by_task = {item.task_id: item for item in authorization.dispatch_intents}
+        permission_by_task = {item.task_id: item for item in permission.task_decisions}
         ordered = [item.task_id for item in authorization.run_plan.tasks]
+        if set(permission_by_task) != set(ordered):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "permission task authority roster is incomplete"
+            )
         remote_bindings: dict[str, Any] = {}
         authority_set = None
         for task_id in ordered:
@@ -920,6 +935,35 @@ class ScientificAgentHarnessController:
             dispatch_digest = _agent_digest(dispatch.model_dump(mode="json"))
             dispatch_digests[task.task_id] = dispatch_digest
             remote = remote_bindings.get(task.task_id)
+            local_adapter_binding = ""
+            if dispatch.execution_route == "local_executor":
+                try:
+                    local_material = derive_local_task_authority_material(
+                        publication=publication,
+                        task_id=task.task_id,
+                        registry=self.executor.registry,
+                        policy_version=permission.policy_version,
+                    )
+                except ValueError as exc:
+                    raise ScientificAgentHarnessControllerVerificationError(
+                        "local task authority is unavailable"
+                    ) from exc
+                permission_task = permission_by_task[task.task_id]
+                if (
+                    local_material.local_adapter_execution_binding_digest is None
+                    or local_material.execution_binding_digest
+                    != permission_task.execution_binding_digest
+                    or local_material.task_authority_digest
+                    != permission_task.task_authority_digest
+                    or local_material.task_authority_digest
+                    != authorization.task_authority_digests[task.task_id]
+                ):
+                    raise ScientificAgentHarnessControllerVerificationError(
+                        "local task authority changed after authorization"
+                    )
+                local_adapter_binding = (
+                    local_material.local_adapter_execution_binding_digest
+                )
             slot_identity = _agent_digest(
                 {
                     "schema_version": "agent_harness_task_slot_identity.v1",
@@ -937,6 +981,7 @@ class ScientificAgentHarnessController:
                     execution_route=dispatch.execution_route,
                     slot_id=f"harness-slot-{slot_identity.split(':', 1)[1][:32]}",
                     task_authority_digest=authorization.task_authority_digests[task.task_id],
+                    local_adapter_execution_binding_digest=local_adapter_binding,
                     dispatch_intent_digest=dispatch_digest,
                     compiled_options_digest=_agent_digest(
                         authorization.compiled_task_options[task.task_id]
@@ -1766,9 +1811,25 @@ class ScientificAgentHarnessController:
                 dispatch_occurred = True
                 reason = "TASK_COMPLETED"
             elif local_dispatch_receipts:
-                raise ScientificAgentHarnessControllerRecoveryRequired(
-                    "local adapter dispatch lacks a verified completion publication"
+                if len(local_dispatch_receipts) != 1:
+                    raise ScientificAgentHarnessControllerVerificationError(
+                        "local completion dispatch authority is conflicting"
+                    )
+                local_publication = self._publish_local_execution_publication(
+                    execution=execution,
+                    slot=slot,
+                    decision=decision,
+                    verification_mode="recovered_controller_dispatch",
                 )
+                self._verify_local_execution_publication(
+                    execution=execution,
+                    slot=slot,
+                    publication=local_publication,
+                )
+                outcome = AgentHarnessControllerReceiptOutcome.RECONCILED
+                execution_started = True
+                dispatch_occurred = True
+                reason = "TASK_COMPLETED"
             elif reconcile_only:
                 raise ScientificAgentHarnessControllerConflict(
                     "stale local execution decision has no verified effect"
@@ -2050,7 +2111,49 @@ class ScientificAgentHarnessController:
             created_at=self.clock(),
         )
 
+    def _verify_local_task_authority(
+        self,
+        execution: AgentHarnessControllerExecution,
+        slot: AgentHarnessControllerTaskSlot,
+    ) -> None:
+        if (
+            slot.execution_route != "local_executor"
+            or not slot.local_adapter_execution_binding_digest
+            or slot.remote_authority_id
+            or slot.remote_authority_digest
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local task slot authority is invalid"
+            )
+        publication = self.proposal_store.read(
+            project_id=execution.project_id,
+            proposal_id=execution.proposal_id,
+            verify_current=False,
+        )
+        try:
+            material = derive_local_task_authority_material(
+                publication=publication,
+                task_id=slot.task_id,
+                registry=self.executor.registry,
+                policy_version=execution.permission_policy_version,
+            )
+        except ValueError as exc:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local task authority is unavailable"
+            ) from exc
+        if (
+            material.local_adapter_execution_binding_digest
+            != slot.local_adapter_execution_binding_digest
+            or material.execution_binding_digest
+            != slot.local_adapter_execution_binding_digest
+            or material.task_authority_digest != slot.task_authority_digest
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local task authority changed after Controller creation"
+            )
+
     def _prepare_local_gate(self, execution: Any, slot: Any) -> dict[str, Any]:
+        self._verify_local_task_authority(execution, slot)
         authorization = self._authorization(execution, verify_current=False)
         binding = self.executor.derive_one_task_server_binding(
             project_id=execution.project_id, run_plan=authorization.run_plan,
@@ -2061,7 +2164,7 @@ class ScientificAgentHarnessController:
             project_id=execution.project_id, run_plan=authorization.run_plan,
             task_index=slot.planned_task_index, task_id=slot.task_id,
             task_options=authorization.compiled_task_options[slot.task_id],
-            expected_local_adapter_execution_binding_digest=binding["local_adapter_execution_binding_digest"],
+            expected_local_adapter_execution_binding_digest=slot.local_adapter_execution_binding_digest,
             expected_compiled_options_digest=slot.compiled_options_digest,
             expected_input_artifacts_digest=binding["input_artifacts_digest"],
             expected_output_contract_digest=slot.output_contract_digest,
@@ -2073,6 +2176,7 @@ class ScientificAgentHarnessController:
         slot: Any,
         decision: AgentHarnessControllerDecision,
     ) -> dict[str, Any]:
+        self._verify_local_task_authority(execution, slot)
         authorization = self._authorization(execution, verify_current=False)
         options = authorization.compiled_task_options[slot.task_id]
         binding = self.executor.derive_one_task_server_binding(
@@ -2090,7 +2194,7 @@ class ScientificAgentHarnessController:
             project_id=execution.project_id, run_plan=authorization.run_plan,
             task_index=slot.planned_task_index, task_id=slot.task_id,
             task_options=options,
-            expected_local_adapter_execution_binding_digest=binding["local_adapter_execution_binding_digest"],
+            expected_local_adapter_execution_binding_digest=slot.local_adapter_execution_binding_digest,
             expected_compiled_options_digest=slot.compiled_options_digest,
             expected_input_artifacts_digest=binding["input_artifacts_digest"],
             expected_output_contract_digest=slot.output_contract_digest,
@@ -2215,8 +2319,8 @@ class ScientificAgentHarnessController:
             ),
             before_dispatch_roster_digest=_agent_digest(before_dispatch_roster),
             after_dispatch_roster_digest=_agent_digest(after_dispatch_roster),
-            local_adapter_execution_binding_digest=str(
-                binding["local_adapter_execution_binding_digest"]
+            local_adapter_execution_binding_digest=(
+                slot.local_adapter_execution_binding_digest
             ),
             compiled_options_digest=str(binding["compiled_options_digest"]),
             input_artifacts_digest=str(binding["input_artifacts_digest"]),
@@ -2236,6 +2340,7 @@ class ScientificAgentHarnessController:
         decision: AgentHarnessControllerDecision,
         verification_mode: str,
     ) -> AgentHarnessLocalExecutionPublication:
+        self._verify_local_task_authority(execution, slot)
         existing = self._local_publications_for_decision(execution, decision)
         if existing:
             if len(existing) != 1:
@@ -2249,7 +2354,10 @@ class ScientificAgentHarnessController:
             )
             return existing[0]
         dispatches = self._local_dispatch_receipts_for_decision(execution, decision)
-        if verification_mode == "controller_dispatch":
+        if verification_mode in {
+            "controller_dispatch",
+            "recovered_controller_dispatch",
+        }:
             if len(dispatches) != 1:
                 raise ScientificAgentHarnessControllerVerificationError(
                     "local completion lacks one exact dispatch receipt"
@@ -2265,10 +2373,55 @@ class ScientificAgentHarnessController:
             raise ScientificAgentHarnessControllerVerificationError(
                 "local verification mode is unsupported"
             )
+        if dispatch is not None:
+            self._verify_executor_dispatch_binding(execution, dispatch)
         stage, registry, outputs = self._verified_local_outputs(
             execution=execution,
             slot=slot,
+            require_controller_output_evidence=(
+                verification_mode == "recovered_controller_dispatch"
+            ),
         )
+        if verification_mode == "recovered_controller_dispatch":
+            self._verify_local_reconstruction_registry(
+                execution=execution,
+                slot=slot,
+                registry=registry,
+            )
+            authorization = self._authorization(execution, verify_current=False)
+            try:
+                self.executor.verify_one_task_committed_outputs(
+                    project_id=execution.project_id,
+                    run_plan=authorization.run_plan,
+                    task_index=slot.planned_task_index,
+                    task_id=slot.task_id,
+                    task_options=authorization.compiled_task_options[slot.task_id],
+                    actor=execution.actor,
+                    expected_local_adapter_execution_binding_digest=(
+                        slot.local_adapter_execution_binding_digest
+                    ),
+                    expected_compiled_options_digest=slot.compiled_options_digest,
+                    expected_input_artifacts_digest=dispatch.input_artifacts_digest,
+                    expected_output_contract_digest=slot.output_contract_digest,
+                )
+            except ValueError as exc:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local completion reconstruction failed exact task verification"
+                ) from exc
+            replay_stage, replay_registry, replay_outputs = self._verified_local_outputs(
+                execution=execution,
+                slot=slot,
+                require_controller_output_evidence=True,
+            )
+            if (
+                self._stage_digest(replay_stage) != self._stage_digest(stage)
+                or replay_registry != registry
+                or replay_outputs != outputs
+            ):
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local completion changed during reconstruction"
+                )
+            stage, registry, outputs = replay_stage, replay_registry, replay_outputs
         publication = AgentHarnessLocalExecutionPublication(
             controller_execution_id=execution.controller_execution_id,
             controller_execution_digest=execution.execution_digest,
@@ -2305,6 +2458,7 @@ class ScientificAgentHarnessController:
         execution: AgentHarnessControllerExecution,
         slot: AgentHarnessControllerTaskSlot,
         allow_history: bool = False,
+        require_controller_output_evidence: bool = False,
     ) -> tuple[Any, dict[str, str], list[AgentHarnessVerifiedOutputBinding]]:
         authorization = self._authorization(execution, verify_current=False)
         task = authorization.run_plan.tasks[slot.planned_task_index]
@@ -2381,7 +2535,73 @@ class ScientificAgentHarnessController:
                     ),
                 )
             )
+        if require_controller_output_evidence:
+            evidence = (
+                stage.details.get("controller_output_evidence")
+                if stage is not None and isinstance(stage.details, dict)
+                else None
+            )
+            roster = [
+                {
+                    "artifact_id": item.artifact_id,
+                    "relative_path": item.relative_path,
+                    "size_bytes": item.size_bytes,
+                    "content_sha256": item.content_sha256,
+                    "producer_task_id": item.producer_task_id,
+                }
+                for item in outputs
+            ]
+            if (
+                not isinstance(evidence, dict)
+                or evidence.get("schema_version")
+                != "run-plan-controller-output-evidence.v1"
+                or evidence.get("task_id") != slot.task_id
+                or evidence.get("output_contract_digest")
+                != slot.output_contract_digest
+                or evidence.get("outputs") != roster
+                or evidence.get("outputs_digest") != _agent_digest(roster)
+            ):
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local completion reconstruction output evidence mismatch"
+                )
         return stage, registry, outputs
+
+    def _verify_local_reconstruction_registry(
+        self,
+        *,
+        execution: AgentHarnessControllerExecution,
+        slot: AgentHarnessControllerTaskSlot,
+        registry: Mapping[str, str],
+    ) -> None:
+        publication = self.proposal_store.read(
+            project_id=execution.project_id,
+            proposal_id=execution.proposal_id,
+            verify_current=False,
+        )
+        original_ids = {
+            item.artifact_id for item in publication.observation.available_artifacts
+        }
+        authorization = self._authorization(execution, verify_current=False)
+        allowed_output_ids = {
+            artifact_id
+            for task in authorization.run_plan.tasks[
+                : slot.planned_task_index + 1
+            ]
+            for artifact_id in task.output_artifacts
+        }
+        allowed_remote_publication_ids = {
+            "remote_execution_publication_"
+            + hashlib.sha256(item.slot_id.encode("utf-8")).hexdigest()[:16]
+            for item in execution.task_slots[: slot.planned_task_index]
+            if item.execution_route == "remote_execution_service"
+        }
+        unexpected = set(registry).difference(original_ids).difference(
+            allowed_output_ids
+        ).difference(allowed_remote_publication_ids)
+        if unexpected:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local completion reconstruction found unauthorized Registry output"
+            )
 
     @staticmethod
     def _executor_dispatch_roster(run_dir: Path) -> list[dict[str, str]]:
@@ -2407,6 +2627,21 @@ class ScientificAgentHarnessController:
         execution: AgentHarnessControllerExecution,
         dispatch: AgentHarnessLocalDispatchReceipt,
     ) -> None:
+        if dispatch.task_index >= len(execution.task_slots):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local dispatch task index is invalid"
+            )
+        slot = execution.task_slots[dispatch.task_index]
+        if (
+            slot.task_id != dispatch.task_id
+            or slot.slot_id != dispatch.slot_id
+            or slot.attempt != dispatch.attempt_ordinal
+            or slot.local_adapter_execution_binding_digest
+            != dispatch.local_adapter_execution_binding_digest
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local dispatch adapter authority mismatch"
+            )
         run_dir = self.storage.run_dir(execution.project_id, execution.run_id)
         roster = self._executor_dispatch_roster(run_dir)
         ordinal = dispatch.executor_dispatch_ordinal
@@ -2496,7 +2731,10 @@ class ScientificAgentHarnessController:
             raise ScientificAgentHarnessControllerVerificationError(
                 "local execution publication state anchor changed"
             )
-        if publication.verification_mode == "controller_dispatch":
+        if publication.verification_mode in {
+            "controller_dispatch",
+            "recovered_controller_dispatch",
+        }:
             try:
                 dispatch = self.control_store.read_harness_local_dispatch_receipt(
                     project_id=execution.project_id,
@@ -3055,7 +3293,10 @@ class ScientificAgentHarnessController:
             raise ScientificAgentHarnessControllerVerificationError(
                 "local completion receipt publication binding mismatch"
             )
-        if publication.verification_mode == "controller_dispatch":
+        if publication.verification_mode in {
+            "controller_dispatch",
+            "recovered_controller_dispatch",
+        }:
             try:
                 dispatch = self.control_store.read_harness_local_dispatch_receipt(
                     project_id=execution.project_id,

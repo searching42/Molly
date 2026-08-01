@@ -6,6 +6,7 @@ import math
 import os
 import re
 import stat
+import tempfile
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -18,8 +19,10 @@ from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, strict_bool, stri
 from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_directory
 from ai4s_agent.oled_experiment_batch_selection import (
     load_oled_experiment_batch_selection_inputs,
+    run_oled_experiment_batch_selection_from_files,
 )
 from ai4s_agent.oled_inverse_design import (
+    _batch_replay_options,
     _verified_oled_inverse_design_publication_from_files,
     verify_oled_inverse_design_route_from_files,
 )
@@ -730,6 +733,270 @@ class RunPlanExecutor:
                 + ", ".join(missing)
             )
 
+    def verify_one_task_committed_outputs(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        task_options: dict[str, Any],
+        actor: str,
+        expected_local_adapter_execution_binding_digest: str,
+        expected_compiled_options_digest: str,
+        expected_input_artifacts_digest: str,
+        expected_output_contract_digest: str,
+    ) -> None:
+        """Exact-replay a committed one-task success without adapter dispatch.
+
+        The Controller uses this only after its immutable dispatch receipt is
+        present but its completion publication is missing.  Ordinary tasks are
+        checked against the exact StageState and complete registered contract;
+        immutable-record tasks additionally replay their persisted adapter
+        result and the existing task-specific publication verifier.
+        """
+
+        task, spec, _, run_dir, artifact_paths = self._one_task_context(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            task_id=task_id,
+            task_options=task_options,
+            expected_local_adapter_execution_binding_digest=(
+                expected_local_adapter_execution_binding_digest
+            ),
+            expected_compiled_options_digest=expected_compiled_options_digest,
+            expected_input_artifacts_digest=expected_input_artifacts_digest,
+            expected_output_contract_digest=expected_output_contract_digest,
+        )
+        state = self.storage.read_stage_state(project_id, run_plan.run_id)
+        if (
+            state is None
+            or state.stage != task.task_id
+            or state.status != RunStatus.SUCCEEDED
+        ):
+            raise ValueError("committed local task lacks exact successful StageState")
+        registry = self.storage.read_artifact_registry(project_id, run_plan.run_id)
+        if any(artifact_id not in registry for artifact_id in task.output_artifacts):
+            raise ValueError("committed local task output contract is incomplete")
+        execution_record_id = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id, "")
+        if not execution_record_id:
+            return
+        record_path = Path(self._require_artifact(artifact_paths, execution_record_id))
+        record_bytes, _ = _read_regular_file_bound(
+            record_path,
+            max_bytes=128 * 1024 * 1024,
+            reject_symlink_components=True,
+        )
+        try:
+            record = json.loads(record_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("immutable local execution record is invalid") from exc
+        if not isinstance(record, dict) or record.get("status") != "success":
+            raise ValueError("immutable local execution record is not successful")
+        if str(record.get("adapter") or "") != str(spec.default_adapter or ""):
+            raise ValueError("immutable local execution record adapter changed")
+        outputs = record.get("outputs")
+        expected_output_ids = set(task.output_artifacts).difference(
+            {execution_record_id}
+        )
+        if not isinstance(outputs, dict) or set(outputs) != expected_output_ids:
+            raise ValueError("immutable local execution record output roster changed")
+        for artifact_id in sorted(expected_output_ids):
+            reported = str(outputs.get(artifact_id) or "").strip()
+            registered = Path(self._require_artifact(artifact_paths, artifact_id))
+            if not reported or Path(reported).expanduser().absolute() != registered.absolute():
+                raise ValueError("immutable local execution record output binding changed")
+        payload = self._payload_for(
+            task.task_id,
+            run_id=run_plan.run_id,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            actor=str(actor or "").strip(),
+            approved_gates=set(spec.gates),
+            options=dict(task_options),
+        )
+        self._verify_immutable_task_publication(
+            task_id=task.task_id,
+            payload=payload,
+            outputs={key: str(value) for key, value in outputs.items()},
+            run_dir=run_dir,
+        )
+
+    @staticmethod
+    def _verify_immutable_task_publication(
+        *,
+        task_id: str,
+        payload: dict[str, Any],
+        outputs: dict[str, str],
+        run_dir: Path,
+    ) -> None:
+        """Invoke the established task-specific exact publication replay."""
+
+        if task_id == _EXPERIMENT_BATCH_TASK_ID:
+            prepared = load_oled_experiment_batch_selection_inputs(
+                screening_receipt_json=payload["screening_receipt_json"],
+                ranked_shortlist_csv=payload["ranked_shortlist_csv"],
+                phase1_execution_dir=payload["phase1_execution_dir"],
+                dataset_snapshot_json=payload["dataset_snapshot_json"],
+                registry_snapshot_json=payload["registry_snapshot_json"],
+                candidate_cost_manifest_json=(
+                    payload.get("candidate_cost_manifest_json") or None
+                ),
+            )
+            receipt_path = Path(outputs["oled_experiment_batch_receipt"])
+            receipt_bytes, _ = _read_regular_file_bound(
+                receipt_path,
+                max_bytes=128 * 1024 * 1024,
+                reject_symlink_components=True,
+            )
+            try:
+                receipt = json.loads(receipt_bytes.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("immutable batch receipt is invalid") from exc
+            if not isinstance(receipt, dict):
+                raise ValueError("immutable batch receipt is invalid")
+            config = receipt.get("config")
+            generated_at = str(receipt.get("generated_at") or "").strip()
+            if not isinstance(config, dict) or not generated_at:
+                raise ValueError("immutable batch receipt replay authority is incomplete")
+            with tempfile.TemporaryDirectory(
+                prefix="molly-controller-batch-replay-"
+            ) as temporary:
+                replay = run_oled_experiment_batch_selection_from_files(
+                    screening_receipt_json=payload["screening_receipt_json"],
+                    ranked_shortlist_csv=payload["ranked_shortlist_csv"],
+                    phase1_execution_dir=payload["phase1_execution_dir"],
+                    dataset_snapshot_json=payload["dataset_snapshot_json"],
+                    registry_snapshot_json=payload["registry_snapshot_json"],
+                    candidate_cost_manifest_json=(
+                        payload.get("candidate_cost_manifest_json") or None
+                    ),
+                    output_root=Path(temporary) / "batch-replay",
+                    generated_at=generated_at,
+                    **_batch_replay_options(config, prepared.property_ids),
+                )
+                filenames = {
+                    "oled_experiment_batch_receipt": "batch_selection.json",
+                    "oled_experiment_batch_handoff": "experiment_batch.csv",
+                    "oled_candidate_decision_dossier": "candidate_decision_dossier.csv",
+                    "oled_experiment_batch_report": "experiment_handoff.md",
+                }
+                for artifact_id, filename in filenames.items():
+                    actual_bytes, _ = _read_regular_file_bound(
+                        Path(outputs[artifact_id]),
+                        max_bytes=128 * 1024 * 1024,
+                        reject_symlink_components=True,
+                    )
+                    if actual_bytes != (replay.output_dir / filename).read_bytes():
+                        raise ValueError(
+                            "immutable batch publication exact replay mismatch"
+                        )
+            return
+        if task_id == _INVERSE_DESIGN_TASK_ID:
+            with _verified_oled_inverse_design_publication_from_files(
+                inverse_design_json=outputs["oled_inverse_design_receipt"],
+                batch_selection_json=payload["batch_selection_json"],
+                screening_receipt_json=payload["screening_receipt_json"],
+                ranked_shortlist_csv=payload["ranked_shortlist_csv"],
+                phase1_execution_dir=payload["phase1_execution_dir"],
+                dataset_snapshot_json=payload["dataset_snapshot_json"],
+                registry_snapshot_json=payload["registry_snapshot_json"],
+                candidate_cost_manifest_json=(
+                    payload.get("candidate_cost_manifest_json") or None
+                ),
+                remote_known_hosts=payload.get("remote_known_hosts") or None,
+                controller_request_json=(
+                    payload.get("controller_request_json") or None
+                ),
+                controller_json=payload.get("controller_json") or None,
+                generation_authorization_json=(
+                    payload.get("generation_authorization_json") or None
+                ),
+                controller_report_md=payload.get("controller_report_md") or None,
+            ) as bound:
+                if bound.output_dir.parent != (run_dir / "oled_inverse_design").absolute():
+                    raise ValueError("immutable inverse-design publication root changed")
+                bound.assert_stable()
+            return
+        if task_id == _GENERATED_EVALUATION_TASK_ID:
+            with _verified_oled_generated_candidate_evaluation_from_files(
+                evaluation_json=outputs["oled_candidate_evaluation_receipt"],
+                inverse_design_json=payload["inverse_design_json"],
+                batch_selection_json=payload["batch_selection_json"],
+                screening_receipt_json=payload["screening_receipt_json"],
+                ranked_shortlist_csv=payload["ranked_shortlist_csv"],
+                phase1_execution_dir=payload["phase1_execution_dir"],
+                dataset_snapshot_json=payload["dataset_snapshot_json"],
+                registry_snapshot_json=payload["registry_snapshot_json"],
+                candidate_cost_manifest_json=(
+                    payload.get("candidate_cost_manifest_json") or None
+                ),
+                remote_known_hosts=payload.get("remote_known_hosts") or None,
+                controller_request_json=(
+                    payload.get("controller_request_json") or None
+                ),
+                controller_json=payload.get("controller_json") or None,
+                generation_authorization_json=(
+                    payload.get("generation_authorization_json") or None
+                ),
+                controller_report_md=payload.get("controller_report_md") or None,
+                generation_roster_json=(
+                    payload.get("generation_roster_json") or None
+                ),
+            ) as bound:
+                if bound.output_dir.parent != (
+                    run_dir / "oled_candidate_evaluation"
+                ).absolute():
+                    raise ValueError("immutable evaluation publication root changed")
+                bound.assert_stable()
+            return
+        if task_id == _CANDIDATE_DECISION_TASK_ID:
+            with _verified_oled_candidate_decision_from_files(
+                decision_json=outputs["oled_final_candidate_decision_receipt"],
+                evaluation_json=payload["evaluation_json"],
+                inverse_design_json=payload["inverse_design_json"],
+                batch_selection_json=payload["batch_selection_json"],
+                screening_receipt_json=payload["screening_receipt_json"],
+                ranked_shortlist_csv=payload["ranked_shortlist_csv"],
+                phase1_execution_dir=payload["phase1_execution_dir"],
+                dataset_snapshot_json=payload["dataset_snapshot_json"],
+                registry_snapshot_json=payload["registry_snapshot_json"],
+                candidate_cost_manifest_json=(
+                    payload.get("candidate_cost_manifest_json") or None
+                ),
+                remote_known_hosts=payload.get("remote_known_hosts") or None,
+                controller_request_json=(
+                    payload.get("controller_request_json") or None
+                ),
+                controller_json=payload.get("controller_json") or None,
+                generation_authorization_json=(
+                    payload.get("generation_authorization_json") or None
+                ),
+                controller_report_md=payload.get("controller_report_md") or None,
+                generation_roster_json=(
+                    payload.get("generation_roster_json") or None
+                ),
+            ) as bound:
+                if bound.output_dir.parent != (
+                    run_dir / "oled_candidate_decision"
+                ).absolute():
+                    raise ValueError("immutable decision publication root changed")
+                bound.assert_stable()
+            return
+        if task_id == _BOUNDED_CONTROLLER_TASK_ID:
+            with _verified_oled_bounded_discovery_controller_from_files(
+                controller_json=outputs["oled_bounded_controller_receipt"],
+                controller_request_json=payload["controller_request_json"],
+            ) as bound:
+                if bound.output_dir.parent != (
+                    run_dir / "oled_bounded_controller"
+                ).absolute():
+                    raise ValueError("immutable Controller publication root changed")
+                bound.assert_stable()
+            return
+        raise ValueError("immutable local task lacks a task-specific verifier")
+
     def _execute_from(
         self,
         *,
@@ -1155,6 +1422,38 @@ class RunPlanExecutor:
                 }
             executed.append(task.task_id)
             completion_details: dict[str, Any] = {"executed_tasks": executed}
+            if actual_dispatch_recorder is not None:
+                output_roster: list[dict[str, Any]] = []
+                for artifact_id in sorted(task.output_artifacts):
+                    output_path = Path(
+                        self._require_artifact(artifact_paths, artifact_id)
+                    ).absolute()
+                    output_bytes, output_sha256 = _read_regular_file_bound(
+                        output_path,
+                        max_bytes=2 * 1024 * 1024 * 1024,
+                        reject_symlink_components=True,
+                    )
+                    output_roster.append(
+                        {
+                            "artifact_id": artifact_id,
+                            "relative_path": self._relative(run_dir, output_path),
+                            "size_bytes": len(output_bytes),
+                            "content_sha256": output_sha256,
+                            "producer_task_id": task.task_id,
+                        }
+                    )
+                completion_details["controller_output_evidence"] = {
+                    "schema_version": "run-plan-controller-output-evidence.v1",
+                    "task_id": task.task_id,
+                    "output_contract_digest": _agent_digest(
+                        {
+                            "task_id": task.task_id,
+                            "output_artifact_ids": list(task.output_artifacts),
+                        }
+                    ),
+                    "outputs": output_roster,
+                    "outputs_digest": _agent_digest(output_roster),
+                }
             if task.task_id in {
                 "parse_document_pdfplumber",
                 "parse_pdf_corpus_pdfplumber",
