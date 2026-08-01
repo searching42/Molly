@@ -20,6 +20,7 @@ from ai4s_agent.resource_profiles import (
     ResourceProfileStore,
     TransferManifest,
     build_transfer_manifest,
+    build_transfer_manifest_from_payloads,
     verify_transfer_manifest_binding,
 )
 
@@ -903,6 +904,52 @@ def test_transfer_manifest_binds_complete_content_roster_and_profile_digests(
     assert manifest.execution_profile_digest == execution.digest()
     assert manifest.total_size_bytes == sum(item.size_bytes for item in manifest.artifacts)
     assert manifest.manifest_sha256.startswith("sha256:")
+
+
+def test_payload_transfer_manifest_matches_path_based_authority(tmp_path: Path) -> None:
+    root = tmp_path / "staging"
+    (root / "nested").mkdir(parents=True)
+    payloads = {
+        "request.json": b'{"seed":42}\n',
+        "nested/config.toml": b"[parameters]\n",
+    }
+    for relative_path, payload in payloads.items():
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    connection = _connection()
+    execution = EXECUTION_PROFILES["reinvent4-cpu-v1"]
+    descriptors = [
+        {
+            "relative_path": "nested/config.toml",
+            "purpose": "generator-config",
+            "media_type": "application/toml",
+        },
+        {
+            "relative_path": "request.json",
+            "purpose": "execution-request",
+            "media_type": "application/json",
+        },
+    ]
+    path_manifest = build_transfer_manifest(
+        request_id="request-001",
+        input_root=root,
+        artifacts=descriptors,
+        connection=connection,
+        execution_profile=execution,
+        target_purpose="molecular-generation",
+    )
+    payload_manifest = build_transfer_manifest_from_payloads(
+        request_id="request-001",
+        artifacts=[
+            {**item, "payload": payloads[item["relative_path"]]}
+            for item in descriptors
+        ],
+        connection=connection,
+        execution_profile=execution,
+        target_purpose="molecular-generation",
+    )
+    assert payload_manifest == path_manifest
 
 
 @pytest.mark.parametrize(

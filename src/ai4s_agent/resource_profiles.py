@@ -1300,6 +1300,84 @@ def build_transfer_manifest(
         os.close(root_parent_fd)
 
 
+def build_transfer_manifest_from_payloads(
+    *,
+    request_id: str,
+    artifacts: Sequence[Mapping[str, Any]],
+    connection: ConnectionProfile,
+    execution_profile: ExecutionProfile,
+    target_purpose: str,
+) -> TransferManifest:
+    """Build a manifest from already exact-read server-owned bytes.
+
+    This variant is for control-plane callers that must not create an
+    intermediate path-based staging tree.  The returned manifest is identical
+    in authority shape to :func:`build_transfer_manifest`; the remote service
+    later publishes these bytes through its descriptor-pinned task-slot tree.
+    """
+
+    clean_request_id = _canonical_identifier(request_id, field="request_id")
+    clean_purpose = _canonical_identifier(target_purpose, field="target_purpose")
+    if not connection.enabled:
+        raise ValueError("transfer connection profile is disabled")
+    expected_target = execution_profile.task_type.replace("_", "-")
+    if clean_purpose != expected_target:
+        raise ValueError("target_purpose does not match execution profile task type")
+    missing_capabilities = sorted(
+        set(execution_profile.required_capabilities).difference(
+            connection.declared_capabilities
+        )
+    )
+    if missing_capabilities:
+        raise ValueError(
+            "connection does not declare required execution capabilities: "
+            + ", ".join(missing_capabilities)
+        )
+    records: list[TransferArtifact] = []
+    seen: set[str] = set()
+    for raw in artifacts:
+        payload = raw.get("payload")
+        if not isinstance(payload, bytes):
+            raise ValueError("transfer artifact payload must be exact bytes")
+        candidate = TransferArtifact(
+            relative_path=raw.get("relative_path"),
+            purpose=raw.get("purpose"),
+            media_type=raw.get("media_type"),
+            size_bytes=len(payload),
+            sha256=_sha256(payload),
+        )
+        if candidate.relative_path in seen:
+            raise ValueError("transfer artifact descriptor paths must be unique")
+        seen.add(candidate.relative_path)
+        records.append(candidate)
+    records.sort(key=lambda item: item.relative_path)
+    if not records:
+        raise ValueError("transfer manifest requires at least one artifact")
+    if len(records) > _MAX_TRANSFER_ARTIFACTS:
+        raise ValueError("transfer manifest exceeds artifact count limit")
+    roster = [item.model_dump(mode="json") for item in records]
+    manifest_payload: dict[str, Any] = {
+        "schema_version": TRANSFER_MANIFEST_SCHEMA_VERSION,
+        "request_id": clean_request_id,
+        "connection_id": connection.connection_id,
+        "connection_profile_digest": connection.digest(),
+        "execution_profile_id": execution_profile.profile_id,
+        "execution_profile_digest": execution_profile.digest(),
+        "target_purpose": clean_purpose,
+        "artifacts": roster,
+        "total_size_bytes": sum(item.size_bytes for item in records),
+        "roster_sha256": _sha256(_canonical_bytes({"artifacts": roster})),
+    }
+    manifest_payload["manifest_sha256"] = _sha256(
+        _canonical_bytes(manifest_payload)
+    )
+    return verify_transfer_manifest_binding(
+        TransferManifest.model_validate(manifest_payload),
+        connection=connection,
+        execution_profile=execution_profile,
+    )
+
+
 def _reject_sensitive_keys(value: Any) -> None:
     if isinstance(value, dict):
         for key, item in value.items():

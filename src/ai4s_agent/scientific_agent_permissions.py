@@ -14,7 +14,10 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from ai4s_agent._utils import now_iso
 from ai4s_agent.adapter_bindings import (
+    CALLABLE_IMPLEMENTATION_BINDING_VERSION,
+    IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION,
     LOCAL_ADAPTER_EXECUTION_BINDING_VERSION,
+    MAX_CALLABLE_WRAPPER_DEPTH,
     local_adapter_execution_binding_digest,
 )
 from ai4s_agent.planner import AtomicTaskRegistry
@@ -34,6 +37,12 @@ from ai4s_agent.scientific_agent_plan import ScientificAgentPlanPublication
 
 PERMISSION_POLICY_VERSION = "scientific-agent-permission-policy.v1"
 RESOURCE_AWARE_PERMISSION_POLICY_VERSION = "scientific-agent-permission-policy.v2"
+IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION = (
+    "scientific-agent-permission-policy.v3"
+)
+IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION = (
+    "scientific-agent-permission-policy.v4"
+)
 TASK_EXECUTION_BINDING_VERSION = "agent-task-execution-binding.v1"
 TASK_AUTHORITY_BINDING_VERSION = "agent-task-authority-binding.v1"
 RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION = "agent-task-authority-binding.v2"
@@ -332,6 +341,64 @@ RESOURCE_AWARE_PERMISSION_POLICY_DIGEST = _agent_digest(
     RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL
 )
 
+IMPLEMENTATION_BOUND_PERMISSION_POLICY_MATERIAL: Mapping[str, Any] = {
+    **PERMISSION_POLICY_MATERIAL,
+    "schema_version": "scientific_agent_permission_policy_material.v3",
+    "policy_version": IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
+    "internal_dependency_rules": {
+        **PERMISSION_POLICY_MATERIAL["internal_dependency_rules"],
+        "execution_binding_version": (
+            IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
+        ),
+    },
+    "local_execution_binding_rules": {
+        **PERMISSION_POLICY_MATERIAL["local_execution_binding_rules"],
+        "execution_binding_version": (
+            IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
+        ),
+        "callable_identity": "bounded_complete_wrapper_chain_source_defaults_closure",
+        "callable_implementation_binding_version": (
+            CALLABLE_IMPLEMENTATION_BINDING_VERSION
+        ),
+        "max_wrapper_depth": MAX_CALLABLE_WRAPPER_DEPTH,
+        "wrapper_cycle": "deny",
+        "unsupported_callable": "deny",
+    },
+}
+IMPLEMENTATION_BOUND_PERMISSION_POLICY_DIGEST = _agent_digest(
+    IMPLEMENTATION_BOUND_PERMISSION_POLICY_MATERIAL
+)
+
+IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL: Mapping[
+    str, Any
+] = {
+    **RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL,
+    "schema_version": "scientific_agent_permission_policy_material.v4",
+    "policy_version": IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    "internal_dependency_rules": {
+        **RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL["internal_dependency_rules"],
+        "execution_binding_version": (
+            IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
+        ),
+    },
+    "local_execution_binding_rules": {
+        **RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL["local_execution_binding_rules"],
+        "execution_binding_version": (
+            IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
+        ),
+        "callable_identity": "bounded_complete_wrapper_chain_source_defaults_closure",
+        "callable_implementation_binding_version": (
+            CALLABLE_IMPLEMENTATION_BINDING_VERSION
+        ),
+        "max_wrapper_depth": MAX_CALLABLE_WRAPPER_DEPTH,
+        "wrapper_cycle": "deny",
+        "unsupported_callable": "deny",
+    },
+}
+IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST = _agent_digest(
+    IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL
+)
+
 
 _OUTCOME_PRIORITY = {
     AgentPermissionOutcome.ALLOW: 1,
@@ -361,6 +428,18 @@ def permission_policy_identity(
             version=RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
             digest=RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
             material=RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL,
+        )
+    if version == IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION:
+        return PermissionPolicyIdentity(
+            version=IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
+            digest=IMPLEMENTATION_BOUND_PERMISSION_POLICY_DIGEST,
+            material=IMPLEMENTATION_BOUND_PERMISSION_POLICY_MATERIAL,
+        )
+    if version == IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION:
+        return PermissionPolicyIdentity(
+            version=IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+            digest=IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
+            material=IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL,
         )
     raise ValueError("unknown scientific agent permission policy version")
 
@@ -484,13 +563,32 @@ def _internal_task_policy_recognized(spec: Any) -> bool:
     )
 
 
-def _internal_task_execution_binding_digest(spec: Any) -> str | None:
+def _local_adapter_binding_version(policy_version: str) -> str:
+    if policy_version in {
+        PERMISSION_POLICY_VERSION,
+        RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    }:
+        return LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
+    if policy_version in {
+        IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
+        IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    }:
+        return IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
+    raise ValueError("unknown scientific agent permission policy version")
+
+
+def _internal_task_execution_binding_digest(
+    spec: Any,
+    *,
+    policy_version: str,
+) -> str | None:
     explicitly_set = set(getattr(spec, "model_fields_set", set()))
     if not set(INTERNAL_TASK_EXECUTION_FIELDS).issubset(explicitly_set):
         return None
     return local_adapter_execution_binding_digest(
         task_id=str(spec.task_id),
         default_adapter=spec.default_adapter,
+        binding_version=_local_adapter_binding_version(policy_version),
     )
 
 
@@ -557,6 +655,118 @@ def _task_authority_digest(
     return _agent_digest(material)
 
 
+@dataclass(frozen=True)
+class LocalTaskAuthorityMaterial:
+    """Pure current authority projection shared by policy and Controller."""
+
+    task_id: str
+    local_adapter_execution_binding_digest: str | None
+    execution_binding_digest: str
+    task_authority_digest: str
+
+
+def derive_local_task_authority_material(
+    *,
+    publication: ScientificAgentPlanPublication,
+    task_id: str,
+    registry: AtomicTaskRegistry,
+    policy_version: str,
+) -> LocalTaskAuthorityMaterial:
+    """Rebuild one local task's exact authority without executing anything.
+
+    This is deliberately the same pure projection consumed by the Permission
+    Engine and by post-authorization Controller checks.  In particular, the
+    callable implementation binding is server-only and is not recoverable from
+    the planner-visible tool catalog.
+    """
+
+    if policy_version not in {
+        PERMISSION_POLICY_VERSION,
+        RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+        IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
+        IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    }:
+        raise ValueError("unknown scientific agent permission policy version")
+    proposal = publication.proposal
+    planned = [item for item in proposal.run_plan.tasks if item.task_id == task_id]
+    if len(planned) != 1:
+        raise ValueError("local task authority requires one exact RunPlan task")
+    dispatches = [item for item in proposal.dispatch_intents if item.task_id == task_id]
+    if len(dispatches) != 1 or dispatches[0].execution_route != "local_executor":
+        raise ValueError("local task authority requires one local dispatch intent")
+    dispatch = dispatches[0]
+    try:
+        registered = registry.get(task_id)
+    except ValueError as exc:
+        raise ValueError("local task authority requires a registered task") from exc
+    tools = [item for item in publication.catalog.tools if item.task_id == task_id]
+    if len(tools) > 1:
+        raise ValueError("local task authority has conflicting catalog entries")
+    tool = tools[0] if tools else None
+    if tool is None:
+        effect_class = str(registered.effect_class or "unavailable")
+        risk_level = str(getattr(registered.risk_level, "value", "high"))
+        permissions = [str(item) for item in registered.required_permissions]
+        gates = [str(item) for item in registered.gates]
+        supports_plan_preapproval = bool(registered.supports_plan_preapproval)
+        planner_visible = bool(registered.planner_visible)
+        idempotency_policy = str(registered.idempotency_policy or "")
+        verification_policy = str(registered.verification_policy or "")
+    else:
+        effect_class = tool.effect_class
+        risk_level = tool.risk_level
+        permissions = list(tool.required_permissions)
+        gates = list(tool.required_gates)
+        supports_plan_preapproval = tool.supports_plan_preapproval
+        planner_visible = True
+        idempotency_policy = tool.idempotency_policy
+        verification_policy = tool.verification_policy
+    adapter_binding = local_adapter_execution_binding_digest(
+        task_id=task_id,
+        default_adapter=registered.default_adapter,
+        binding_version=_local_adapter_binding_version(policy_version),
+    )
+    execution_binding = adapter_binding or _unavailable_execution_binding_digest(
+        task_id=task_id,
+        execution_route=dispatch.execution_route,
+        remote_task_type=dispatch.remote_task_type,
+    )
+    resource_aware = policy_version in {
+        RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+        IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    }
+    task_authority = _task_authority_digest(
+        task_id=task_id,
+        planner_visible=planner_visible,
+        effect_class=effect_class,
+        risk_level=risk_level,
+        permissions=permissions,
+        gates=gates,
+        execution_route=dispatch.execution_route,
+        remote_task_type=dispatch.remote_task_type,
+        supports_plan_preapproval=supports_plan_preapproval,
+        idempotency_policy=idempotency_policy,
+        verification_policy=verification_policy,
+        effective_options=proposal.effective_planner_options.get(task_id),
+        compiled_options=proposal.compiled_task_options.get(task_id),
+        execution_binding_digest=execution_binding,
+        binding_version=(
+            RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
+            if resource_aware
+            else TASK_AUTHORITY_BINDING_VERSION
+        ),
+        budget_dimensions=sorted(
+            {str(item) for item in getattr(registered, "budget_dimensions", ())}
+        ),
+    )
+    return LocalTaskAuthorityMaterial(
+        task_id=task_id,
+        local_adapter_execution_binding_digest=adapter_binding,
+        execution_binding_digest=execution_binding,
+        task_authority_digest=task_authority,
+    )
+
+
 class ScientificAgentPermissionEngine:
     """Pure deterministic evaluator over one verified PR-BL publication."""
 
@@ -573,7 +783,9 @@ class ScientificAgentPermissionEngine:
         self.registry = registry or AtomicTaskRegistry()
         self.resource_authority_resolver = resource_authority_resolver
         self.clock = clock
-        self.policy = permission_policy_identity()
+        self.policy = permission_policy_identity(
+            IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION
+        )
 
     def evaluate(
         self,
@@ -601,12 +813,15 @@ class ScientificAgentPermissionEngine:
             for item in proposal.dispatch_intents
         )
         selected_policy_version = policy_version or (
-            RESOURCE_AWARE_PERMISSION_POLICY_VERSION
+            IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
             if has_remote_tasks and self.resource_authority_resolver is not None
-            else PERMISSION_POLICY_VERSION
+            else IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION
         )
         policy = permission_policy_identity(selected_policy_version)
-        resource_aware = selected_policy_version == RESOURCE_AWARE_PERMISSION_POLICY_VERSION
+        resource_aware = selected_policy_version in {
+            RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+            IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+        }
 
         global_findings: list[AgentPermissionFinding] = []
         task_decisions: list[AgentTaskPermissionDecision] = []
@@ -722,7 +937,10 @@ class ScientificAgentPermissionEngine:
                 internal_execution_binding_digest = (
                     None
                     if registered is None
-                    else _internal_task_execution_binding_digest(registered)
+                    else _internal_task_execution_binding_digest(
+                        registered,
+                        policy_version=selected_policy_version,
+                    )
                 )
                 internal_complete = bool(
                     registered is not None
@@ -810,17 +1028,26 @@ class ScientificAgentPermissionEngine:
             ):
                 local_runtime_task_ids.append(task_id)
 
+            local_authority_material: LocalTaskAuthorityMaterial | None = None
             if execution_route == "local_executor":
+                try:
+                    local_authority_material = derive_local_task_authority_material(
+                        publication=publication,
+                        task_id=task_id,
+                        registry=self.registry,
+                        policy_version=selected_policy_version,
+                    )
+                except ValueError:
+                    local_authority_material = None
                 resolved_local_binding = (
                     None
-                    if registered is None
-                    else local_adapter_execution_binding_digest(
-                        task_id=task_id,
-                        default_adapter=registered.default_adapter,
-                    )
+                    if local_authority_material is None
+                    else local_authority_material.local_adapter_execution_binding_digest
                 )
-                execution_binding_digest = resolved_local_binding or (
-                    _unavailable_execution_binding_digest(
+                execution_binding_digest = (
+                    local_authority_material.execution_binding_digest
+                    if local_authority_material is not None
+                    else _unavailable_execution_binding_digest(
                         task_id=task_id,
                         execution_route=execution_route,
                         remote_task_type=remote_task_type,
@@ -897,27 +1124,31 @@ class ScientificAgentPermissionEngine:
                         "remote_task_type": remote_task_type,
                     }
                 )
-            task_authority_digest = _task_authority_digest(
-                task_id=task_id,
-                planner_visible=planner_visible,
-                effect_class=effect_class,
-                risk_level=risk_level,
-                permissions=permissions,
-                gates=gates,
-                execution_route=execution_route,
-                remote_task_type=remote_task_type,
-                supports_plan_preapproval=supports_plan_preapproval,
-                idempotency_policy=idempotency_policy,
-                verification_policy=verification_policy,
-                effective_options=proposal.effective_planner_options.get(task_id),
-                compiled_options=proposal.compiled_task_options.get(task_id),
-                execution_binding_digest=execution_binding_digest,
-                binding_version=(
-                    RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
-                    if resource_aware
-                    else TASK_AUTHORITY_BINDING_VERSION
-                ),
-                budget_dimensions=budget_dimensions,
+            task_authority_digest = (
+                local_authority_material.task_authority_digest
+                if local_authority_material is not None
+                else _task_authority_digest(
+                    task_id=task_id,
+                    planner_visible=planner_visible,
+                    effect_class=effect_class,
+                    risk_level=risk_level,
+                    permissions=permissions,
+                    gates=gates,
+                    execution_route=execution_route,
+                    remote_task_type=remote_task_type,
+                    supports_plan_preapproval=supports_plan_preapproval,
+                    idempotency_policy=idempotency_policy,
+                    verification_policy=verification_policy,
+                    effective_options=proposal.effective_planner_options.get(task_id),
+                    compiled_options=proposal.compiled_task_options.get(task_id),
+                    execution_binding_digest=execution_binding_digest,
+                    binding_version=(
+                        RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
+                        if resource_aware
+                        else TASK_AUTHORITY_BINDING_VERSION
+                    ),
+                    budget_dimensions=budget_dimensions,
+                )
             )
 
             if effect_class not in RECOGNIZED_EFFECT_CLASSES:
@@ -1321,11 +1552,18 @@ __all__ = [
     "RESOURCE_AWARE_PERMISSION_POLICY_VERSION",
     "RESOURCE_AWARE_PERMISSION_POLICY_DIGEST",
     "RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL",
+    "IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION",
+    "IMPLEMENTATION_BOUND_PERMISSION_POLICY_DIGEST",
+    "IMPLEMENTATION_BOUND_PERMISSION_POLICY_MATERIAL",
+    "IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION",
+    "IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST",
+    "IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL",
     "REASON_CODE_VOCABULARY",
     "PermissionPolicyIdentity",
     "permission_policy_identity",
     "permission_outcome_precedence",
     "compare_permission_outcomes",
     "derive_legacy_route_expectation",
+    "derive_local_task_authority_material",
     "ScientificAgentPermissionEngine",
 ]

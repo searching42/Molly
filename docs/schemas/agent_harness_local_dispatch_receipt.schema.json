@@ -1,0 +1,143 @@
+{
+  "additionalProperties": false,
+  "description": "Immutable proof that the Executor crossed one local adapter boundary.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_harness_local_dispatch_receipt.v1",
+      "default": "agent_harness_local_dispatch_receipt.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "dispatch_receipt_id": {
+      "default": "",
+      "title": "Dispatch Receipt Id",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "decision_id": {
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "decision_digest": {
+      "title": "Decision Digest",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "task_index": {
+      "maximum": 1023,
+      "minimum": 0,
+      "title": "Task Index",
+      "type": "integer"
+    },
+    "attempt_ordinal": {
+      "default": 0,
+      "maximum": 1023,
+      "minimum": 0,
+      "title": "Attempt Ordinal",
+      "type": "integer"
+    },
+    "slot_id": {
+      "title": "Slot Id",
+      "type": "string"
+    },
+    "adapter_id": {
+      "title": "Adapter Id",
+      "type": "string"
+    },
+    "executor_dispatch_receipt_id": {
+      "title": "Executor Dispatch Receipt Id",
+      "type": "string"
+    },
+    "executor_dispatch_authority_id": {
+      "title": "Executor Dispatch Authority Id",
+      "type": "string"
+    },
+    "executor_dispatch_authority_digest": {
+      "title": "Executor Dispatch Authority Digest",
+      "type": "string"
+    },
+    "executor_dispatch_attempt_id": {
+      "title": "Executor Dispatch Attempt Id",
+      "type": "string"
+    },
+    "executor_dispatch_ordinal": {
+      "default": 0,
+      "maximum": 4096,
+      "minimum": 0,
+      "title": "Executor Dispatch Ordinal",
+      "type": "integer"
+    },
+    "before_dispatch_roster_digest": {
+      "title": "Before Dispatch Roster Digest",
+      "type": "string"
+    },
+    "after_dispatch_roster_digest": {
+      "title": "After Dispatch Roster Digest",
+      "type": "string"
+    },
+    "local_adapter_execution_binding_digest": {
+      "title": "Local Adapter Execution Binding Digest",
+      "type": "string"
+    },
+    "compiled_options_digest": {
+      "title": "Compiled Options Digest",
+      "type": "string"
+    },
+    "input_artifacts_digest": {
+      "title": "Input Artifacts Digest",
+      "type": "string"
+    },
+    "output_contract_digest": {
+      "title": "Output Contract Digest",
+      "type": "string"
+    },
+    "execution_started": {
+      "const": true,
+      "default": true,
+      "title": "Execution Started",
+      "type": "boolean"
+    },
+    "dispatch_receipt_digest": {
+      "default": "",
+      "title": "Dispatch Receipt Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "controller_execution_id",
+    "controller_execution_digest",
+    "decision_id",
+    "decision_digest",
+    "task_id",
+    "task_index",
+    "slot_id",
+    "adapter_id",
+    "executor_dispatch_receipt_id",
+    "executor_dispatch_authority_id",
+    "executor_dispatch_authority_digest",
+    "executor_dispatch_attempt_id",
+    "before_dispatch_roster_digest",
+    "after_dispatch_roster_digest",
+    "local_adapter_execution_binding_digest",
+    "compiled_options_digest",
+    "input_artifacts_digest",
+    "output_contract_digest",
+    "created_at"
+  ],
+  "title": "AgentHarnessLocalDispatchReceipt",
+  "type": "object"
+}

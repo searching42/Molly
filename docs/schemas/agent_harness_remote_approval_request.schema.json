@@ -1,0 +1,31 @@
+{
+  "additionalProperties": false,
+  "description": "The only client fields accepted for one exact remote task-slot approval.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_harness_remote_approval_request.v1",
+      "default": "agent_harness_remote_approval_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "expected_remote_request_sha256": {
+      "title": "Expected Remote Request Sha256",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+    }
+  },
+  "required": [
+    "expected_remote_request_sha256",
+    "client_request_id"
+  ],
+  "title": "AgentHarnessRemoteApprovalRequest",
+  "type": "object"
+}

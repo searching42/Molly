@@ -92,6 +92,83 @@ def test_executor_registers_controller_and_retry_is_idempotent(
     assert receipt.read_bytes() == before
 
 
+def test_one_task_completion_replay_verifies_and_rejects_corrupt_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request(tmp_path, monkeypatch)
+    storage = ProjectStorage(tmp_path / "workspace")
+    executor = RunPlanExecutor(storage=storage)
+    project_id = "bounded-controller-project"
+    run_id = "bounded-controller-reconstruction"
+    plan = _plan(run_id)
+    storage.register_artifact_path(
+        project_id,
+        run_id,
+        "oled_bounded_controller_request",
+        str(request),
+    )
+    binding = executor.derive_one_task_server_binding(
+        project_id=project_id,
+        run_plan=plan,
+        task_index=0,
+        task_options={},
+    )
+    result = executor.execute_one_task(
+        project_id=project_id,
+        run_plan=plan,
+        task_index=0,
+        task_id=TASK_ID,
+        task_options={},
+        expected_local_adapter_execution_binding_digest=binding[
+            "local_adapter_execution_binding_digest"
+        ],
+        expected_compiled_options_digest=binding["compiled_options_digest"],
+        expected_input_artifacts_digest=binding["input_artifacts_digest"],
+        expected_output_contract_digest=binding["output_contract_digest"],
+        actual_dispatch_recorder=lambda _adapter_id: None,
+    )
+    assert result["status"] == RunStatus.SUCCEEDED.value
+    executor.verify_one_task_committed_outputs(
+        project_id=project_id,
+        run_plan=plan,
+        task_index=0,
+        task_id=TASK_ID,
+        task_options={},
+        actor="",
+        expected_local_adapter_execution_binding_digest=binding[
+            "local_adapter_execution_binding_digest"
+        ],
+        expected_compiled_options_digest=binding["compiled_options_digest"],
+        expected_input_artifacts_digest=binding["input_artifacts_digest"],
+        expected_output_contract_digest=binding["output_contract_digest"],
+    )
+
+    registry = storage.read_artifact_registry(project_id, run_id)
+    record_path = storage.run_dir(project_id, run_id) / registry[RECORD_ID]
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["adapter"] = "corrupted_adapter"
+    record_path.write_text(
+        json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="execution record adapter changed"):
+        executor.verify_one_task_committed_outputs(
+            project_id=project_id,
+            run_plan=plan,
+            task_index=0,
+            task_id=TASK_ID,
+            task_options={},
+            actor="",
+            expected_local_adapter_execution_binding_digest=binding[
+                "local_adapter_execution_binding_digest"
+            ],
+            expected_compiled_options_digest=binding["compiled_options_digest"],
+            expected_input_artifacts_digest=binding["input_artifacts_digest"],
+            expected_output_contract_digest=binding["output_contract_digest"],
+        )
+
+
 def test_executor_rejects_fully_resigned_controller_route_tamper(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

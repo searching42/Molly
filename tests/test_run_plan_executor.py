@@ -357,6 +357,273 @@ def test_run_plan_executor_resume_runs_waiting_task_after_gate_approval(tmp_path
     assert decisions[0]["approved_snapshot_hash"]
 
 
+def test_controller_one_task_seam_executes_only_exact_local_index(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    run_id = "r-controller-one-task"
+    project_id = "proj-controller"
+    run_dir = storage.run_dir(project_id, run_id)
+    dataset = run_dir / "inputs" / "train.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    storage.register_new_artifact_registry_paths(
+        project_id,
+        run_id,
+        {"uploaded_dataset": "inputs/train.csv"},
+    )
+    run_plan = expand_run_plan(
+        run_id=run_id,
+        requested_tasks=["clean_dataset"],
+        available_artifacts=["uploaded_dataset"],
+    )
+    assert [task.task_id for task in run_plan.tasks] == [
+        "inspect_dataset",
+        "clean_dataset",
+    ]
+    executor = RunPlanExecutor(storage=storage)
+    binding = executor.derive_one_task_server_binding(
+        project_id=project_id,
+        run_plan=run_plan,
+        task_index=0,
+        task_options={},
+    )
+    result = executor.execute_one_task(
+        project_id=project_id,
+        run_plan=run_plan,
+        task_index=0,
+        task_id="inspect_dataset",
+        task_options={},
+        expected_local_adapter_execution_binding_digest=binding[
+            "local_adapter_execution_binding_digest"
+        ],
+        expected_compiled_options_digest=binding["compiled_options_digest"],
+        expected_input_artifacts_digest=binding["input_artifacts_digest"],
+        expected_output_contract_digest=binding["output_contract_digest"],
+    )
+    assert result["completed_task"] == "inspect_dataset"
+    assert result["next_task"] == "clean_dataset"
+    registry = storage.read_artifact_registry(project_id, run_id)
+    assert "dataset_profile" in registry
+    assert "cleaned_train_dataset" not in registry
+    state = storage.read_stage_state(project_id, run_id)
+    assert state is not None
+    assert state.stage == "inspect_dataset"
+    assert state.status == RunStatus.SUCCEEDED
+    assert state.next_stage == "clean_dataset"
+
+
+def test_controller_one_task_seam_reverifies_binding_before_side_effect(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    run_id = "r-controller-binding"
+    project_id = "proj-controller"
+    run_dir = storage.run_dir(project_id, run_id)
+    dataset = run_dir / "inputs" / "train.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    storage.register_new_artifact_registry_paths(
+        project_id,
+        run_id,
+        {"uploaded_dataset": "inputs/train.csv"},
+    )
+    run_plan = expand_run_plan(
+        run_id=run_id,
+        requested_tasks=["inspect_dataset"],
+        available_artifacts=["uploaded_dataset"],
+    )
+    executor = RunPlanExecutor(storage=storage)
+    binding = executor.derive_one_task_server_binding(
+        project_id=project_id,
+        run_plan=run_plan,
+        task_index=0,
+        task_options={},
+    )
+    dataset.write_text("SMILES,plqy\nCCO,0.9\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="server binding changed"):
+        executor.execute_one_task(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=0,
+            task_id="inspect_dataset",
+            task_options={},
+            expected_local_adapter_execution_binding_digest=binding[
+                "local_adapter_execution_binding_digest"
+            ],
+            expected_compiled_options_digest=binding["compiled_options_digest"],
+            expected_input_artifacts_digest=binding["input_artifacts_digest"],
+            expected_output_contract_digest=binding["output_contract_digest"],
+        )
+    assert storage.read_stage_state(project_id, run_id) is None
+
+
+def test_controller_gate_decision_is_separate_and_consumed_exactly_once(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    dataset = tmp_path / "input" / "train.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    run_plan = expand_run_plan(
+        run_id="r-controller-gate",
+        requested_tasks=["render_report"],
+        available_artifacts=[],
+    )
+    executor = RunPlanExecutor(storage=storage)
+    started = executor.execute(
+        project_id="proj-controller",
+        run_plan=run_plan,
+        input_artifacts={"uploaded_dataset": str(dataset)},
+    )
+    assert started["waiting_task"] == "train_model"
+    task_index = next(
+        index
+        for index, task in enumerate(run_plan.tasks)
+        if task.task_id == "train_model"
+    )
+    binding = executor.derive_one_task_server_binding(
+        project_id="proj-controller",
+        run_plan=run_plan,
+        task_index=task_index,
+        task_options={},
+    )
+    state = storage.read_stage_state("proj-controller", run_plan.run_id)
+    assert state is not None
+    snapshot = state.details["execution_snapshot"]
+    snapshot_digest = f"sha256:{snapshot['snapshot_hash']}"
+
+    first = executor.commit_one_task_gate_decision(
+        project_id="proj-controller",
+        run_plan=run_plan,
+        task_index=task_index,
+        task_id="train_model",
+        gate_id=GateName.TRAIN_CONFIG.value,
+        approved=True,
+        actor="owner",
+        note="approved exact training snapshot",
+        expected_snapshot_id=snapshot["snapshot_id"],
+        expected_snapshot_digest=snapshot_digest,
+        task_options={},
+    )
+    replay = executor.commit_one_task_gate_decision(
+        project_id="proj-controller",
+        run_plan=run_plan,
+        task_index=task_index,
+        task_id="train_model",
+        gate_id=GateName.TRAIN_CONFIG.value,
+        approved=True,
+        actor="owner",
+        note="approved exact training snapshot",
+        expected_snapshot_id=snapshot["snapshot_id"],
+        expected_snapshot_digest=snapshot_digest,
+        task_options={},
+    )
+    assert replay.model_dump() == first.model_dump()
+    assert len(storage.read_gate_decisions("proj-controller", run_plan.run_id)) == 1
+    assert "trained_model" not in storage.read_artifact_registry(
+        "proj-controller", run_plan.run_id
+    )
+    waiting = storage.read_stage_state("proj-controller", run_plan.run_id)
+    assert waiting is not None and waiting.status == RunStatus.WAITING_USER
+
+    result = executor.execute_one_task_after_committed_gate(
+        project_id="proj-controller",
+        run_plan=run_plan,
+        task_index=task_index,
+        task_id="train_model",
+        task_options={},
+        actor="owner",
+        expected_snapshot_id=snapshot["snapshot_id"],
+        expected_snapshot_digest=snapshot_digest,
+        expected_local_adapter_execution_binding_digest=binding[
+            "local_adapter_execution_binding_digest"
+        ],
+        expected_compiled_options_digest=binding["compiled_options_digest"],
+        expected_input_artifacts_digest=binding["input_artifacts_digest"],
+        expected_output_contract_digest=binding["output_contract_digest"],
+    )
+    assert result["completed_task"] == "train_model"
+    assert result["next_task"] != ""
+    after = storage.read_stage_state("proj-controller", run_plan.run_id)
+    assert after is not None and after.stage == "train_model"
+    assert after.status == RunStatus.SUCCEEDED
+
+
+def test_controller_gate_rejection_cannot_be_consumed(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    dataset = tmp_path / "input" / "train.csv"
+    dataset.parent.mkdir(parents=True)
+    _write_training_csv(dataset)
+    run_plan = expand_run_plan(
+        run_id="r-controller-gate-rejected",
+        requested_tasks=["train_model"],
+        available_artifacts=[],
+    )
+    executor = RunPlanExecutor(storage=storage)
+    executor.execute(
+        project_id="proj-controller",
+        run_plan=run_plan,
+        input_artifacts={"uploaded_dataset": str(dataset)},
+    )
+    task_index = len(run_plan.tasks) - 1
+    binding = executor.derive_one_task_server_binding(
+        project_id="proj-controller",
+        run_plan=run_plan,
+        task_index=task_index,
+        task_options={},
+    )
+    state = storage.read_stage_state("proj-controller", run_plan.run_id)
+    assert state is not None
+    snapshot = state.details["execution_snapshot"]
+    executor.commit_one_task_gate_decision(
+        project_id="proj-controller",
+        run_plan=run_plan,
+        task_index=task_index,
+        task_id="train_model",
+        gate_id=GateName.TRAIN_CONFIG.value,
+        approved=False,
+        actor="owner",
+        note="rejected",
+        expected_snapshot_id=snapshot["snapshot_id"],
+        expected_snapshot_digest=f"sha256:{snapshot['snapshot_hash']}",
+        task_options={},
+    )
+    with pytest.raises(ValueError, match="rejected"):
+        executor.execute_one_task_after_committed_gate(
+            project_id="proj-controller",
+            run_plan=run_plan,
+            task_index=task_index,
+            task_id="train_model",
+            task_options={},
+            actor="owner",
+            expected_snapshot_id=snapshot["snapshot_id"],
+            expected_snapshot_digest=f"sha256:{snapshot['snapshot_hash']}",
+            expected_local_adapter_execution_binding_digest=binding[
+                "local_adapter_execution_binding_digest"
+            ],
+            expected_compiled_options_digest=binding["compiled_options_digest"],
+            expected_input_artifacts_digest=binding["input_artifacts_digest"],
+            expected_output_contract_digest=binding["output_contract_digest"],
+        )
+    assert "trained_model" not in storage.read_artifact_registry(
+        "proj-controller", run_plan.run_id
+    )
+
+
+def test_controller_one_task_seam_rejects_static_remote_route(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path)
+    run_plan = RunPlan(
+        run_id="r-controller-remote-rejected",
+        requested_tasks=["parse_document"],
+        tasks=[PlannedTask(task_id="parse_document")],
+        available_artifacts=[],
+        missing_artifacts=[],
+    )
+    with pytest.raises(ValueError, match="rejects remote"):
+        RunPlanExecutor(storage=storage).derive_one_task_server_binding(
+            project_id="proj-controller",
+            run_plan=run_plan,
+            task_index=0,
+            task_options={},
+        )
+
+
 def test_run_plan_executor_resume_rejects_changed_task_options_after_gate(tmp_path: Path) -> None:
     storage = ProjectStorage(tmp_path)
     dataset = tmp_path / "input" / "train.csv"

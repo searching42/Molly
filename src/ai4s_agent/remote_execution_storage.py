@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import secrets
 import stat
 from contextlib import contextmanager
@@ -22,6 +24,7 @@ _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _OUTPUT_ATTEMPT_PREFIX = ".molly-output-attempt-"
 _OUTPUT_COMMITTED = "committed"
 _OUTPUT_PUBLISH_HOOK: Callable[[str], None] | None = None
+_SLOT_ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,95}$")
 
 
 class OutputPublisherInterrupted(BaseException):
@@ -35,18 +38,28 @@ def _output_boundary(name: str) -> None:
 
 @dataclass(frozen=True)
 class PinnedExecutionTree:
-    """Pinned run/remote/input/output directories; all local IO is dirfd-relative."""
+    """Pinned run/remote/input/output directories; all local IO is dirfd-relative.
+
+    With no ``slot_id`` the exact legacy ``remote-execution`` tree is opened.
+    A task-scoped call instead pins ``remote-executions/<slot_id>`` and never
+    falls back to the legacy tree.
+    """
 
     root_fd: int
     project_fd: int
     runs_fd: int
     run_fd: int
+    remote_parent_fd: int
     remote_fd: int
     inputs_fd: int
     outputs_fd: int
     run_path: Path
     project_id: str
     run_id: str
+    remote_parent_name: str
+    remote_name: str
+    remote_relative_root: str
+    slot_id: str | None
 
     @classmethod
     @contextmanager
@@ -57,6 +70,7 @@ class PinnedExecutionTree:
         project_id: str,
         run_id: str,
         create_remote: bool,
+        slot_id: str | None = None,
     ) -> Iterator["PinnedExecutionTree"]:
         root_fd = os.open(projects_root, _DIR_FLAGS)
         opened: list[int] = [root_fd]
@@ -67,8 +81,24 @@ class PinnedExecutionTree:
             opened.append(runs_fd)
             run_fd = _open_child_dir(runs_fd, run_id, create=False)
             opened.append(run_fd)
+            if slot_id is None:
+                remote_parent_fd = run_fd
+                remote_parent_name = ""
+                remote_name = "remote-execution"
+                remote_relative_root = remote_name
+            else:
+                clean_slot = _safe_slot_id(slot_id)
+                remote_parent_name = "remote-executions"
+                remote_parent_fd = _open_child_dir(
+                    run_fd,
+                    remote_parent_name,
+                    create=create_remote,
+                )
+                opened.append(remote_parent_fd)
+                remote_name = clean_slot
+                remote_relative_root = f"{remote_parent_name}/{clean_slot}"
             remote_fd = _open_child_dir(
-                run_fd, "remote-execution", create=create_remote
+                remote_parent_fd, remote_name, create=create_remote
             )
             opened.append(remote_fd)
             inputs_fd = _open_child_dir(remote_fd, "inputs", create=create_remote)
@@ -80,12 +110,17 @@ class PinnedExecutionTree:
                 project_fd=project_fd,
                 runs_fd=runs_fd,
                 run_fd=run_fd,
+                remote_parent_fd=remote_parent_fd,
                 remote_fd=remote_fd,
                 inputs_fd=inputs_fd,
                 outputs_fd=outputs_fd,
                 run_path=projects_root / project_id / "runs" / run_id,
                 project_id=project_id,
                 run_id=run_id,
+                remote_parent_name=remote_parent_name,
+                remote_name=remote_name,
+                remote_relative_root=remote_relative_root,
+                slot_id=slot_id,
             )
         except OSError as exc:
             raise ValueError("remote execution directory tree is unavailable or unsafe") from exc
@@ -96,13 +131,21 @@ class PinnedExecutionTree:
     def assert_named_identity(self) -> None:
         """Ensure every still-named directory is the descriptor-pinned inode."""
 
-        bindings = (
+        bindings = [
             (self.root_fd, self.project_id, self.project_fd),
             (self.project_fd, "runs", self.runs_fd),
             (self.runs_fd, self.run_id, self.run_fd),
-            (self.run_fd, "remote-execution", self.remote_fd),
-            (self.remote_fd, "inputs", self.inputs_fd),
-            (self.remote_fd, "outputs", self.outputs_fd),
+        ]
+        if self.remote_parent_name:
+            bindings.append(
+                (self.run_fd, self.remote_parent_name, self.remote_parent_fd)
+            )
+        bindings.extend(
+            [
+                (self.remote_parent_fd, self.remote_name, self.remote_fd),
+                (self.remote_fd, "inputs", self.inputs_fd),
+                (self.remote_fd, "outputs", self.outputs_fd),
+            ]
         )
         try:
             for parent_fd, name, descriptor in bindings:
@@ -522,12 +565,21 @@ class PinnedExecutionTree:
                 self.write_json("run", "artifact_registry.json", {"artifacts": current})
 
     def read_stage(self) -> dict[str, Any] | None:
-        if not self.exists("run", "stage.json"):
+        scope = "run" if self.slot_id is None else "remote"
+        if not self.exists(scope, "stage.json"):
             return None
-        return self.read_json("run", "stage.json")
+        return self.read_json(scope, "stage.json")
 
     def write_stage(self, payload: Mapping[str, Any]) -> None:
-        self.write_json("run", "stage.json", payload)
+        scope = "run" if self.slot_id is None else "remote"
+        self.write_json(scope, "stage.json", payload)
+
+    @property
+    def publication_artifact_id(self) -> str:
+        if self.slot_id is None:
+            return "remote_execution_publication"
+        suffix = hashlib.sha256(self.slot_id.encode("utf-8")).hexdigest()[:16]
+        return f"remote_execution_publication_{suffix}"
 
     def _scope(self, scope: str) -> int:
         return {
@@ -568,6 +620,13 @@ def _safe_parts(relative_path: str) -> tuple[str, ...]:
     ):
         raise ValueError("remote execution relative path is unsafe")
     return pure.parts
+
+
+def _safe_slot_id(slot_id: str) -> str:
+    raw = str(slot_id or "")
+    if raw != raw.strip().lower() or _SLOT_ID.fullmatch(raw) is None:
+        raise ValueError("remote execution slot ID must be a canonical identifier")
+    return raw
 
 
 def _canonical_mapping_bytes(payload: Mapping[str, Any]) -> bytes:

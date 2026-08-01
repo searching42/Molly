@@ -153,10 +153,12 @@ an immutable audit but is not current authority.
 
 ## Permission, authorization, and start-intent integration
 
-The frozen PR-BM v1 permission material and digest remain unchanged for exact
-replay. Local-only proposals continue to produce byte-identical policy v1
-decisions. New remote evaluations use
-`scientific-agent-permission-policy.v2`.
+The frozen PR-BM v1 and PR-BM2 v2 permission materials and digests remain
+unchanged for exact replay. Persisted local-only v1 and resource-aware v2
+decisions continue to regenerate with their recorded readers. New remote
+authorizations use `scientific-agent-permission-policy.v4`, which preserves
+the v2 remote AuthoritySet and budget semantics while selecting the
+implementation-bound local callable algorithm introduced by policy v3.
 
 For a remote task:
 
@@ -206,14 +208,21 @@ profile, probe, capability digest, resources, budget, and full task roster.
 Any drift makes the old authorization and start intent stale.
 
 Persisted v1 local decisions are regenerated with v1. Persisted v2 remote
-decisions are regenerated with v2. Existing proposal, authorization, and start
-intent bytes are never migrated or rewritten.
+decisions are regenerated with v2. New local and resource-aware decisions use
+v3 and v4 respectively. Existing proposal, authorization, and start-intent
+bytes are never migrated or rewritten.
 
 The reviewed v2 policy semantic digest for this contract is
 `sha256:e5279fe137409cf3490beac8b29c32c3c3212537f67e924fdd875aebe4d6d124`;
 it covers complete-set execution binding, mixed/aggregate remote budget
 ownership, and the v2 exact task budget-dimension roster. The frozen
 local-only v1 digest remains unchanged.
+
+The implementation-bound resource-aware v4 policy digest is
+`sha256:f7793b493ba2d28194df21e8993651031d40c5f2c3edcca3d8dc8db39f7f027f`.
+It changes no remote resource-authority or AuthoritySet schema; its additional
+identity is limited to the version-selected complete local callable wrapper
+chain used by mixed plans.
 
 ## API and durable publication
 

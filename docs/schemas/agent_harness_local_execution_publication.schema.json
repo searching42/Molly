@@ -1,0 +1,187 @@
+{
+  "$defs": {
+    "AgentHarnessVerifiedOutputBinding": {
+      "additionalProperties": false,
+      "description": "One exact current local output accepted by the Executor verifier.",
+      "properties": {
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "relative_path": {
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "content_sha256": {
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "maximum": 2147483648,
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "producer_task_id": {
+          "title": "Producer Task Id",
+          "type": "string"
+        },
+        "verification_class": {
+          "title": "Verification Class",
+          "type": "string"
+        },
+        "verifier_version": {
+          "title": "Verifier Version",
+          "type": "string"
+        },
+        "verifier_digest": {
+          "title": "Verifier Digest",
+          "type": "string"
+        },
+        "execution_record_id": {
+          "default": "",
+          "title": "Execution Record Id",
+          "type": "string"
+        },
+        "execution_record_digest": {
+          "default": "",
+          "title": "Execution Record Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "relative_path",
+        "content_sha256",
+        "size_bytes",
+        "producer_task_id",
+        "verification_class",
+        "verifier_version",
+        "verifier_digest"
+      ],
+      "title": "AgentHarnessVerifiedOutputBinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable exact output roster for one local completion or adoption.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_harness_local_execution_publication.v1",
+      "default": "agent_harness_local_execution_publication.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "publication_id": {
+      "default": "",
+      "title": "Publication Id",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "decision_id": {
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "decision_digest": {
+      "title": "Decision Digest",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "task_index": {
+      "maximum": 1023,
+      "minimum": 0,
+      "title": "Task Index",
+      "type": "integer"
+    },
+    "attempt_ordinal": {
+      "default": 0,
+      "maximum": 1023,
+      "minimum": 0,
+      "title": "Attempt Ordinal",
+      "type": "integer"
+    },
+    "slot_id": {
+      "title": "Slot Id",
+      "type": "string"
+    },
+    "verification_mode": {
+      "enum": [
+        "controller_dispatch",
+        "recovered_controller_dispatch",
+        "adopt_completed_task"
+      ],
+      "title": "Verification Mode",
+      "type": "string"
+    },
+    "local_dispatch_receipt_id": {
+      "default": "",
+      "title": "Local Dispatch Receipt Id",
+      "type": "string"
+    },
+    "local_dispatch_receipt_digest": {
+      "default": "",
+      "title": "Local Dispatch Receipt Digest",
+      "type": "string"
+    },
+    "stage_digest": {
+      "title": "Stage Digest",
+      "type": "string"
+    },
+    "artifact_registry_digest": {
+      "title": "Artifact Registry Digest",
+      "type": "string"
+    },
+    "output_contract_digest": {
+      "title": "Output Contract Digest",
+      "type": "string"
+    },
+    "verified_outputs": {
+      "items": {
+        "$ref": "#/$defs/AgentHarnessVerifiedOutputBinding"
+      },
+      "title": "Verified Outputs",
+      "type": "array"
+    },
+    "verified_outputs_digest": {
+      "title": "Verified Outputs Digest",
+      "type": "string"
+    },
+    "publication_digest": {
+      "default": "",
+      "title": "Publication Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "controller_execution_id",
+    "controller_execution_digest",
+    "decision_id",
+    "decision_digest",
+    "task_id",
+    "task_index",
+    "slot_id",
+    "verification_mode",
+    "stage_digest",
+    "artifact_registry_digest",
+    "output_contract_digest",
+    "verified_outputs",
+    "verified_outputs_digest",
+    "created_at"
+  ],
+  "title": "AgentHarnessLocalExecutionPublication",
+  "type": "object"
+}

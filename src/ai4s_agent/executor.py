@@ -6,19 +6,26 @@ import math
 import os
 import re
 import stat
+import tempfile
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from ai4s_agent import adapters
+from ai4s_agent.adapter_bindings import (
+    IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION,
+    local_adapter_execution_binding_digest,
+)
 from ai4s_agent.agents.modeling import ModelingAgent
 from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, strict_bool, strict_smiles_cleaning_enabled, write_json
 from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_directory
 from ai4s_agent.oled_experiment_batch_selection import (
     load_oled_experiment_batch_selection_inputs,
+    run_oled_experiment_batch_selection_from_files,
 )
 from ai4s_agent.oled_inverse_design import (
+    _batch_replay_options,
     _verified_oled_inverse_design_publication_from_files,
     verify_oled_inverse_design_route_from_files,
 )
@@ -60,6 +67,7 @@ from ai4s_agent.schemas import (
     RunStatus,
     StageHistoryItem,
     StageState,
+    _agent_digest,
 )
 from ai4s_agent.storage import ProjectStorage
 
@@ -220,6 +228,781 @@ class RunPlanExecutor:
             approved_task_id=state.stage,
         )
 
+    def derive_one_task_server_binding(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Derive the current server-only binding for one local task.
+
+        The result contains only digests and registered logical IDs.  It is
+        safe for Controller authority checks and contains no adapter name or
+        filesystem path.
+        """
+
+        task = self._planned_task_at(run_plan, task_index)
+        spec = self.registry.get(task.task_id)
+        options = self._json_safe(dict(task_options))
+        option_backend = str(options.get("backend") or "")
+        if option_backend and option_backend in spec.backend_execution_routes:
+            resolved_route = spec.backend_execution_routes[option_backend]
+        elif spec.execution_route is not None:
+            resolved_route = spec.execution_route
+        elif set(spec.backend_execution_routes.values()) == {
+            "remote_execution_service"
+        }:
+            resolved_route = "remote_execution_service"
+        else:
+            # Some compiled local option contracts intentionally omit their
+            # reviewed backend (for example baseline train_model). The exact
+            # Controller dispatch intent remains the route authority; this
+            # fallback only permits the callable registered local default.
+            resolved_route = "local_executor"
+        if resolved_route != "local_executor":
+            raise ValueError("Controller one-task seam rejects remote dispatch intents")
+        adapter_name = self._adapter_name_for(
+            task.task_id,
+            spec.default_adapter,
+            options,
+        )
+        if adapter_name != spec.default_adapter:
+            raise ValueError("Controller one-task execution forbids adapter override")
+        adapter_binding = local_adapter_execution_binding_digest(
+            task_id=task.task_id,
+            default_adapter=spec.default_adapter,
+            binding_version=(
+                IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
+            ),
+        )
+        if adapter_binding is None:
+            raise ValueError("Controller local task has no callable server binding")
+        run_dir = self.storage.run_dir(project_id, run_plan.run_id)
+        artifact_paths = self._artifact_paths_from_registry(
+            project_id,
+            run_plan.run_id,
+            run_dir,
+        )
+        input_bindings: list[dict[str, Any]] = []
+        manifest = self._artifact_manifest(
+            {
+                artifact_id: self._require_artifact(artifact_paths, artifact_id)
+                for artifact_id in task.required_artifacts
+            }
+        )
+        for artifact_id in task.required_artifacts:
+            entry = dict(manifest[artifact_id])
+            entry.pop("path", None)
+            input_bindings.append(
+                {
+                    "artifact_id": artifact_id,
+                    "content_binding": entry,
+                }
+            )
+        return {
+            "schema_version": "run-plan-one-task-server-binding.v1",
+            "run_id": run_plan.run_id,
+            "task_id": task.task_id,
+            "planned_task_index": task_index,
+            "execution_route": "local_executor",
+            "local_adapter_execution_binding_digest": adapter_binding,
+            "compiled_options_digest": _agent_digest(options),
+            "input_artifacts_digest": _agent_digest(input_bindings),
+            "output_contract_digest": _agent_digest(
+                {
+                    "task_id": task.task_id,
+                    "output_artifact_ids": list(task.output_artifacts),
+                }
+            ),
+        }
+
+    def one_task_output_verifier_binding(
+        self,
+        *,
+        run_plan: RunPlan,
+        task_index: int,
+        expected_output_contract_digest: str,
+    ) -> dict[str, str]:
+        """Return the frozen verifier identity for one exact local contract."""
+
+        task = self._planned_task_at(run_plan, task_index)
+        contract_digest = _agent_digest(
+            {
+                "task_id": task.task_id,
+                "output_artifact_ids": list(task.output_artifacts),
+            }
+        )
+        if contract_digest != expected_output_contract_digest:
+            raise ValueError("Controller local output contract changed")
+        execution_record_id = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id, "")
+        verification_class = (
+            "immutable_execution_record"
+            if execution_record_id
+            else "run_plan_output_contract"
+        )
+        verifier_version = "run-plan-executor-output-verifier.v2"
+        verifier_digest = _agent_digest(
+            {
+                "schema_version": verifier_version,
+                "task_id": task.task_id,
+                "output_artifact_ids": list(task.output_artifacts),
+                "output_contract_digest": contract_digest,
+                "verification_class": verification_class,
+                "execution_record_id": execution_record_id,
+            }
+        )
+        return {
+            "verification_class": verification_class,
+            "verifier_version": verifier_version,
+            "verifier_digest": verifier_digest,
+            "execution_record_id": execution_record_id,
+        }
+
+    def prepare_one_task_gate(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        task_options: dict[str, Any],
+        expected_local_adapter_execution_binding_digest: str,
+        expected_compiled_options_digest: str,
+        expected_input_artifacts_digest: str,
+        expected_output_contract_digest: str,
+    ) -> dict[str, Any]:
+        """Prepare exactly one gated local task and stop at WAITING_USER."""
+
+        task, spec, binding, run_dir, artifact_paths = self._one_task_context(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            task_id=task_id,
+            task_options=task_options,
+            expected_local_adapter_execution_binding_digest=expected_local_adapter_execution_binding_digest,
+            expected_compiled_options_digest=expected_compiled_options_digest,
+            expected_input_artifacts_digest=expected_input_artifacts_digest,
+            expected_output_contract_digest=expected_output_contract_digest,
+        )
+        del binding
+        if not spec.gates:
+            raise ValueError("Controller Gate preparation requires a registered Gate")
+        return self._execute_from(
+            project_id=project_id,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            start_index=task_index,
+            approved_gates=set(),
+            actor="",
+            executed=self._executed_tasks_before(task_index, run_plan),
+            task_options={task.task_id: dict(task_options)},
+            stop_after_index=task_index,
+        )
+
+    def execute_one_task(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        task_options: dict[str, Any],
+        expected_local_adapter_execution_binding_digest: str,
+        expected_compiled_options_digest: str,
+        expected_input_artifacts_digest: str,
+        expected_output_contract_digest: str,
+        actual_dispatch_recorder: Callable[[str], None] | None = None,
+        task_completion_recorder: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
+        """Execute exactly one current local task that has no Gate."""
+
+        task, spec, _, run_dir, artifact_paths = self._one_task_context(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            task_id=task_id,
+            task_options=task_options,
+            expected_local_adapter_execution_binding_digest=expected_local_adapter_execution_binding_digest,
+            expected_compiled_options_digest=expected_compiled_options_digest,
+            expected_input_artifacts_digest=expected_input_artifacts_digest,
+            expected_output_contract_digest=expected_output_contract_digest,
+        )
+        if spec.gates:
+            raise ValueError("Controller must commit and consume Gate decisions separately")
+        result = self._execute_from(
+            project_id=project_id,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            start_index=task_index,
+            approved_gates=set(),
+            actor="",
+            executed=self._executed_tasks_before(task_index, run_plan),
+            task_options={task.task_id: dict(task_options)},
+            stop_after_index=task_index,
+            actual_dispatch_recorder=actual_dispatch_recorder,
+        )
+        self._verify_one_task_result_outputs(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            result=result,
+        )
+        if (
+            task_completion_recorder is not None
+            and result.get("ok") is True
+            and result.get("status") == RunStatus.SUCCEEDED.value
+        ):
+            task_completion_recorder()
+        return result
+
+    def commit_one_task_gate_decision(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        gate_id: str,
+        approved: bool,
+        actor: str,
+        note: str,
+        expected_snapshot_id: str,
+        expected_snapshot_digest: str,
+        task_options: dict[str, Any],
+    ) -> GateDecision:
+        """Commit one exact Gate decision without executing the task."""
+
+        clean_actor = str(actor or "").strip()
+        if not clean_actor:
+            raise ValueError("actor required for Gate decision")
+        task = self._planned_task_at(run_plan, task_index)
+        if task.task_id != task_id:
+            raise ValueError("Gate task does not match the exact RunPlan index")
+        spec = self.registry.get(task.task_id)
+        if gate_id not in spec.gates:
+            raise ValueError("Gate is not registered for the exact task")
+        state = self._waiting_state_for_task(
+            project_id=project_id,
+            run_plan=run_plan,
+            task=task,
+        )
+        run_dir = self.storage.run_dir(project_id, run_plan.run_id)
+        artifact_paths = self._artifact_paths_from_registry(
+            project_id,
+            run_plan.run_id,
+            run_dir,
+        )
+        _, snapshot = self._validate_waiting_execution_snapshot(
+            state=state,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            approved_gates=set(spec.gates),
+            task_options={task.task_id: dict(task_options)},
+        )
+        snapshot_id = str(snapshot.get("snapshot_id") or "")
+        snapshot_hash = str(snapshot.get("snapshot_hash") or "")
+        if (
+            snapshot_id != expected_snapshot_id
+            or f"sha256:{snapshot_hash}" != expected_snapshot_digest
+        ):
+            raise ValueError("Gate decision does not bind the current execution snapshot")
+        candidate = GateDecision(
+            gate=GateName(gate_id),
+            approved=approved,
+            actor=clean_actor,
+            note=note,
+            approved_at=now_iso(),
+            approved_snapshot_id=snapshot_id,
+            approved_snapshot_hash=snapshot_hash,
+        )
+        for raw in self.storage.read_gate_decisions(project_id, run_plan.run_id):
+            existing = GateDecision.model_validate(raw)
+            if (
+                existing.gate.value == gate_id
+                and existing.approved_snapshot_id == snapshot_id
+                and existing.approved_snapshot_hash == snapshot_hash
+            ):
+                if (
+                    existing.approved != candidate.approved
+                    or existing.actor != candidate.actor
+                    or existing.note != candidate.note
+                ):
+                    raise ValueError("Gate snapshot already has a different immutable decision")
+                return existing
+        self.storage.append_gate_decision(
+            project_id,
+            run_plan.run_id,
+            candidate,
+        )
+        return candidate
+
+    def execute_one_task_after_committed_gate(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        task_options: dict[str, Any],
+        actor: str,
+        expected_snapshot_id: str,
+        expected_snapshot_digest: str,
+        expected_local_adapter_execution_binding_digest: str,
+        expected_compiled_options_digest: str,
+        expected_input_artifacts_digest: str,
+        expected_output_contract_digest: str,
+        actual_dispatch_recorder: Callable[[str], None] | None = None,
+        task_completion_recorder: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
+        """Exact-read committed Gate decisions, then execute only that task."""
+
+        task, spec, _, run_dir, artifact_paths = self._one_task_context(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            task_id=task_id,
+            task_options=task_options,
+            expected_local_adapter_execution_binding_digest=expected_local_adapter_execution_binding_digest,
+            expected_compiled_options_digest=expected_compiled_options_digest,
+            expected_input_artifacts_digest=expected_input_artifacts_digest,
+            expected_output_contract_digest=expected_output_contract_digest,
+        )
+        if not spec.gates:
+            raise ValueError("Controller Gate consumption requires registered Gates")
+        state = self._waiting_state_for_task(
+            project_id=project_id,
+            run_plan=run_plan,
+            task=task,
+        )
+        snapshot = state.details.get("execution_snapshot")
+        if not isinstance(snapshot, dict):
+            raise ValueError("execution snapshot is unavailable")
+        snapshot_id = str(snapshot.get("snapshot_id") or "")
+        snapshot_hash = str(snapshot.get("snapshot_hash") or "")
+        if (
+            snapshot_id != expected_snapshot_id
+            or f"sha256:{snapshot_hash}" != expected_snapshot_digest
+        ):
+            raise ValueError("Gate consumption does not bind the current execution snapshot")
+        decisions: dict[str, GateDecision] = {}
+        for raw in self.storage.read_gate_decisions(project_id, run_plan.run_id):
+            decision = GateDecision.model_validate(raw)
+            if (
+                decision.gate.value in spec.gates
+                and decision.approved_snapshot_id == snapshot_id
+                and decision.approved_snapshot_hash == snapshot_hash
+            ):
+                existing = decisions.get(decision.gate.value)
+                if existing is not None and existing.model_dump() != decision.model_dump():
+                    raise ValueError("Gate snapshot has conflicting decisions")
+                decisions[decision.gate.value] = decision
+        if set(decisions) != set(spec.gates):
+            raise ValueError("all exact Gate decisions must be committed before execution")
+        if any(not decision.approved for decision in decisions.values()):
+            raise ValueError("a committed Gate decision rejected task execution")
+        _, validated_snapshot = self._validate_waiting_execution_snapshot(
+            state=state,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            approved_gates=set(spec.gates),
+            task_options={task.task_id: dict(task_options)},
+        )
+        if validated_snapshot != snapshot:
+            raise ValueError("committed Gate snapshot changed before consumption")
+        result = self._execute_from(
+            project_id=project_id,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            start_index=task_index,
+            approved_gates=set(spec.gates),
+            actor=str(actor or "").strip(),
+            executed=self._executed_tasks_before(task_index, run_plan),
+            task_options={task.task_id: dict(task_options)},
+            approved_task_id=task.task_id,
+            stop_after_index=task_index,
+            actual_dispatch_recorder=actual_dispatch_recorder,
+        )
+        self._verify_one_task_result_outputs(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            result=result,
+        )
+        if (
+            task_completion_recorder is not None
+            and result.get("ok") is True
+            and result.get("status") == RunStatus.SUCCEEDED.value
+        ):
+            task_completion_recorder()
+        return result
+
+    def _one_task_context(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        task_options: dict[str, Any],
+        expected_local_adapter_execution_binding_digest: str,
+        expected_compiled_options_digest: str,
+        expected_input_artifacts_digest: str,
+        expected_output_contract_digest: str,
+    ) -> tuple[Any, Any, dict[str, Any], Path, dict[str, str]]:
+        task = self._planned_task_at(run_plan, task_index)
+        if task.task_id != task_id:
+            raise ValueError("Controller task does not match the exact RunPlan index")
+        binding = self.derive_one_task_server_binding(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            task_options=task_options,
+        )
+        expected = {
+            "local_adapter_execution_binding_digest": expected_local_adapter_execution_binding_digest,
+            "compiled_options_digest": expected_compiled_options_digest,
+            "input_artifacts_digest": expected_input_artifacts_digest,
+            "output_contract_digest": expected_output_contract_digest,
+        }
+        if any(binding[key] != value for key, value in expected.items()):
+            raise ValueError("Controller one-task server binding changed")
+        run_dir = self.storage.run_dir(project_id, run_plan.run_id)
+        artifact_paths = self._artifact_paths_from_registry(
+            project_id,
+            run_plan.run_id,
+            run_dir,
+        )
+        missing_previous = [
+            artifact_id
+            for previous in run_plan.tasks[:task_index]
+            for artifact_id in previous.output_artifacts
+            if artifact_id not in artifact_paths
+        ]
+        if missing_previous:
+            raise ValueError(
+                "Controller one-task seam requires complete prior output contracts: "
+                + ", ".join(sorted(set(missing_previous)))
+            )
+        return task, self.registry.get(task.task_id), binding, run_dir, artifact_paths
+
+    @staticmethod
+    def _planned_task_at(run_plan: RunPlan, task_index: int) -> Any:
+        if isinstance(task_index, bool) or not isinstance(task_index, int):
+            raise ValueError("planned task index must be an integer")
+        if task_index < 0 or task_index >= len(run_plan.tasks):
+            raise ValueError("planned task index is outside the RunPlan")
+        return run_plan.tasks[task_index]
+
+    def _waiting_state_for_task(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task: Any,
+    ) -> StageState:
+        state = self.storage.read_stage_state(project_id, run_plan.run_id)
+        if (
+            state is None
+            or state.status != RunStatus.WAITING_USER
+            or state.stage != task.task_id
+        ):
+            raise ValueError("exact task is not waiting for a Gate decision")
+        return state
+
+    @staticmethod
+    def _executed_tasks_before(task_index: int, run_plan: RunPlan) -> list[str]:
+        return [task.task_id for task in run_plan.tasks[:task_index]]
+
+    def _verify_one_task_result_outputs(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        result: dict[str, Any],
+    ) -> None:
+        if result.get("ok") is not True or result.get("status") != RunStatus.SUCCEEDED.value:
+            return
+        task = self._planned_task_at(run_plan, task_index)
+        registry = self.storage.read_artifact_registry(project_id, run_plan.run_id)
+        missing = [artifact for artifact in task.output_artifacts if artifact not in registry]
+        if missing:
+            raise ValueError(
+                "Controller local task succeeded without its complete output contract: "
+                + ", ".join(missing)
+            )
+
+    def verify_one_task_committed_outputs(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        task_options: dict[str, Any],
+        actor: str,
+        expected_local_adapter_execution_binding_digest: str,
+        expected_compiled_options_digest: str,
+        expected_input_artifacts_digest: str,
+        expected_output_contract_digest: str,
+    ) -> None:
+        """Exact-replay a committed one-task success without adapter dispatch.
+
+        The Controller uses this only after its immutable dispatch receipt is
+        present but its completion publication is missing.  Ordinary tasks are
+        checked against the exact StageState and complete registered contract;
+        immutable-record tasks additionally replay their persisted adapter
+        result and the existing task-specific publication verifier.
+        """
+
+        task, spec, _, run_dir, artifact_paths = self._one_task_context(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            task_id=task_id,
+            task_options=task_options,
+            expected_local_adapter_execution_binding_digest=(
+                expected_local_adapter_execution_binding_digest
+            ),
+            expected_compiled_options_digest=expected_compiled_options_digest,
+            expected_input_artifacts_digest=expected_input_artifacts_digest,
+            expected_output_contract_digest=expected_output_contract_digest,
+        )
+        state = self.storage.read_stage_state(project_id, run_plan.run_id)
+        if (
+            state is None
+            or state.stage != task.task_id
+            or state.status != RunStatus.SUCCEEDED
+        ):
+            raise ValueError("committed local task lacks exact successful StageState")
+        registry = self.storage.read_artifact_registry(project_id, run_plan.run_id)
+        if any(artifact_id not in registry for artifact_id in task.output_artifacts):
+            raise ValueError("committed local task output contract is incomplete")
+        execution_record_id = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id, "")
+        if not execution_record_id:
+            return
+        record_path = Path(self._require_artifact(artifact_paths, execution_record_id))
+        record_bytes, _ = _read_regular_file_bound(
+            record_path,
+            max_bytes=128 * 1024 * 1024,
+            reject_symlink_components=True,
+        )
+        try:
+            record = json.loads(record_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("immutable local execution record is invalid") from exc
+        if not isinstance(record, dict) or record.get("status") != "success":
+            raise ValueError("immutable local execution record is not successful")
+        if str(record.get("adapter") or "") != str(spec.default_adapter or ""):
+            raise ValueError("immutable local execution record adapter changed")
+        outputs = record.get("outputs")
+        expected_output_ids = set(task.output_artifacts).difference(
+            {execution_record_id}
+        )
+        if not isinstance(outputs, dict) or set(outputs) != expected_output_ids:
+            raise ValueError("immutable local execution record output roster changed")
+        for artifact_id in sorted(expected_output_ids):
+            reported = str(outputs.get(artifact_id) or "").strip()
+            registered = Path(self._require_artifact(artifact_paths, artifact_id))
+            if not reported or Path(reported).expanduser().absolute() != registered.absolute():
+                raise ValueError("immutable local execution record output binding changed")
+        payload = self._payload_for(
+            task.task_id,
+            run_id=run_plan.run_id,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            actor=str(actor or "").strip(),
+            approved_gates=set(spec.gates),
+            options=dict(task_options),
+        )
+        self._verify_immutable_task_publication(
+            task_id=task.task_id,
+            payload=payload,
+            outputs={key: str(value) for key, value in outputs.items()},
+            run_dir=run_dir,
+        )
+
+    @staticmethod
+    def _verify_immutable_task_publication(
+        *,
+        task_id: str,
+        payload: dict[str, Any],
+        outputs: dict[str, str],
+        run_dir: Path,
+    ) -> None:
+        """Invoke the established task-specific exact publication replay."""
+
+        if task_id == _EXPERIMENT_BATCH_TASK_ID:
+            prepared = load_oled_experiment_batch_selection_inputs(
+                screening_receipt_json=payload["screening_receipt_json"],
+                ranked_shortlist_csv=payload["ranked_shortlist_csv"],
+                phase1_execution_dir=payload["phase1_execution_dir"],
+                dataset_snapshot_json=payload["dataset_snapshot_json"],
+                registry_snapshot_json=payload["registry_snapshot_json"],
+                candidate_cost_manifest_json=(
+                    payload.get("candidate_cost_manifest_json") or None
+                ),
+            )
+            receipt_path = Path(outputs["oled_experiment_batch_receipt"])
+            receipt_bytes, _ = _read_regular_file_bound(
+                receipt_path,
+                max_bytes=128 * 1024 * 1024,
+                reject_symlink_components=True,
+            )
+            try:
+                receipt = json.loads(receipt_bytes.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("immutable batch receipt is invalid") from exc
+            if not isinstance(receipt, dict):
+                raise ValueError("immutable batch receipt is invalid")
+            config = receipt.get("config")
+            generated_at = str(receipt.get("generated_at") or "").strip()
+            if not isinstance(config, dict) or not generated_at:
+                raise ValueError("immutable batch receipt replay authority is incomplete")
+            with tempfile.TemporaryDirectory(
+                prefix="molly-controller-batch-replay-"
+            ) as temporary:
+                replay = run_oled_experiment_batch_selection_from_files(
+                    screening_receipt_json=payload["screening_receipt_json"],
+                    ranked_shortlist_csv=payload["ranked_shortlist_csv"],
+                    phase1_execution_dir=payload["phase1_execution_dir"],
+                    dataset_snapshot_json=payload["dataset_snapshot_json"],
+                    registry_snapshot_json=payload["registry_snapshot_json"],
+                    candidate_cost_manifest_json=(
+                        payload.get("candidate_cost_manifest_json") or None
+                    ),
+                    output_root=Path(temporary) / "batch-replay",
+                    generated_at=generated_at,
+                    **_batch_replay_options(config, prepared.property_ids),
+                )
+                filenames = {
+                    "oled_experiment_batch_receipt": "batch_selection.json",
+                    "oled_experiment_batch_handoff": "experiment_batch.csv",
+                    "oled_candidate_decision_dossier": "candidate_decision_dossier.csv",
+                    "oled_experiment_batch_report": "experiment_handoff.md",
+                }
+                for artifact_id, filename in filenames.items():
+                    actual_bytes, _ = _read_regular_file_bound(
+                        Path(outputs[artifact_id]),
+                        max_bytes=128 * 1024 * 1024,
+                        reject_symlink_components=True,
+                    )
+                    if actual_bytes != (replay.output_dir / filename).read_bytes():
+                        raise ValueError(
+                            "immutable batch publication exact replay mismatch"
+                        )
+            return
+        if task_id == _INVERSE_DESIGN_TASK_ID:
+            with _verified_oled_inverse_design_publication_from_files(
+                inverse_design_json=outputs["oled_inverse_design_receipt"],
+                batch_selection_json=payload["batch_selection_json"],
+                screening_receipt_json=payload["screening_receipt_json"],
+                ranked_shortlist_csv=payload["ranked_shortlist_csv"],
+                phase1_execution_dir=payload["phase1_execution_dir"],
+                dataset_snapshot_json=payload["dataset_snapshot_json"],
+                registry_snapshot_json=payload["registry_snapshot_json"],
+                candidate_cost_manifest_json=(
+                    payload.get("candidate_cost_manifest_json") or None
+                ),
+                remote_known_hosts=payload.get("remote_known_hosts") or None,
+                controller_request_json=(
+                    payload.get("controller_request_json") or None
+                ),
+                controller_json=payload.get("controller_json") or None,
+                generation_authorization_json=(
+                    payload.get("generation_authorization_json") or None
+                ),
+                controller_report_md=payload.get("controller_report_md") or None,
+            ) as bound:
+                if bound.output_dir.parent != (run_dir / "oled_inverse_design").absolute():
+                    raise ValueError("immutable inverse-design publication root changed")
+                bound.assert_stable()
+            return
+        if task_id == _GENERATED_EVALUATION_TASK_ID:
+            with _verified_oled_generated_candidate_evaluation_from_files(
+                evaluation_json=outputs["oled_candidate_evaluation_receipt"],
+                inverse_design_json=payload["inverse_design_json"],
+                batch_selection_json=payload["batch_selection_json"],
+                screening_receipt_json=payload["screening_receipt_json"],
+                ranked_shortlist_csv=payload["ranked_shortlist_csv"],
+                phase1_execution_dir=payload["phase1_execution_dir"],
+                dataset_snapshot_json=payload["dataset_snapshot_json"],
+                registry_snapshot_json=payload["registry_snapshot_json"],
+                candidate_cost_manifest_json=(
+                    payload.get("candidate_cost_manifest_json") or None
+                ),
+                remote_known_hosts=payload.get("remote_known_hosts") or None,
+                controller_request_json=(
+                    payload.get("controller_request_json") or None
+                ),
+                controller_json=payload.get("controller_json") or None,
+                generation_authorization_json=(
+                    payload.get("generation_authorization_json") or None
+                ),
+                controller_report_md=payload.get("controller_report_md") or None,
+                generation_roster_json=(
+                    payload.get("generation_roster_json") or None
+                ),
+            ) as bound:
+                if bound.output_dir.parent != (
+                    run_dir / "oled_candidate_evaluation"
+                ).absolute():
+                    raise ValueError("immutable evaluation publication root changed")
+                bound.assert_stable()
+            return
+        if task_id == _CANDIDATE_DECISION_TASK_ID:
+            with _verified_oled_candidate_decision_from_files(
+                decision_json=outputs["oled_final_candidate_decision_receipt"],
+                evaluation_json=payload["evaluation_json"],
+                inverse_design_json=payload["inverse_design_json"],
+                batch_selection_json=payload["batch_selection_json"],
+                screening_receipt_json=payload["screening_receipt_json"],
+                ranked_shortlist_csv=payload["ranked_shortlist_csv"],
+                phase1_execution_dir=payload["phase1_execution_dir"],
+                dataset_snapshot_json=payload["dataset_snapshot_json"],
+                registry_snapshot_json=payload["registry_snapshot_json"],
+                candidate_cost_manifest_json=(
+                    payload.get("candidate_cost_manifest_json") or None
+                ),
+                remote_known_hosts=payload.get("remote_known_hosts") or None,
+                controller_request_json=(
+                    payload.get("controller_request_json") or None
+                ),
+                controller_json=payload.get("controller_json") or None,
+                generation_authorization_json=(
+                    payload.get("generation_authorization_json") or None
+                ),
+                controller_report_md=payload.get("controller_report_md") or None,
+                generation_roster_json=(
+                    payload.get("generation_roster_json") or None
+                ),
+            ) as bound:
+                if bound.output_dir.parent != (
+                    run_dir / "oled_candidate_decision"
+                ).absolute():
+                    raise ValueError("immutable decision publication root changed")
+                bound.assert_stable()
+            return
+        if task_id == _BOUNDED_CONTROLLER_TASK_ID:
+            with _verified_oled_bounded_discovery_controller_from_files(
+                controller_json=outputs["oled_bounded_controller_receipt"],
+                controller_request_json=payload["controller_request_json"],
+            ) as bound:
+                if bound.output_dir.parent != (
+                    run_dir / "oled_bounded_controller"
+                ).absolute():
+                    raise ValueError("immutable Controller publication root changed")
+                bound.assert_stable()
+            return
+        raise ValueError("immutable local task lacks a task-specific verifier")
+
     def _execute_from(
         self,
         *,
@@ -233,6 +1016,8 @@ class RunPlanExecutor:
         executed: list[str],
         task_options: TaskOptions,
         approved_task_id: str | None = None,
+        stop_after_index: int | None = None,
+        actual_dispatch_recorder: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         run_id = run_plan.run_id
 
@@ -411,6 +1196,8 @@ class RunPlanExecutor:
                     adapter_name=adapter_name,
                     approved_gates=approved_gates,
                 )
+                if actual_dispatch_recorder is not None:
+                    actual_dispatch_recorder(adapter_name or "")
                 try:
                     result = adapter(payload)
                 except ScientificAgentTypedFailure as exc:
@@ -641,6 +1428,38 @@ class RunPlanExecutor:
                 }
             executed.append(task.task_id)
             completion_details: dict[str, Any] = {"executed_tasks": executed}
+            if actual_dispatch_recorder is not None:
+                output_roster: list[dict[str, Any]] = []
+                for artifact_id in sorted(task.output_artifacts):
+                    output_path = Path(
+                        self._require_artifact(artifact_paths, artifact_id)
+                    ).absolute()
+                    output_bytes, output_sha256 = _read_regular_file_bound(
+                        output_path,
+                        max_bytes=2 * 1024 * 1024 * 1024,
+                        reject_symlink_components=True,
+                    )
+                    output_roster.append(
+                        {
+                            "artifact_id": artifact_id,
+                            "relative_path": self._relative(run_dir, output_path),
+                            "size_bytes": len(output_bytes),
+                            "content_sha256": output_sha256,
+                            "producer_task_id": task.task_id,
+                        }
+                    )
+                completion_details["controller_output_evidence"] = {
+                    "schema_version": "run-plan-controller-output-evidence.v1",
+                    "task_id": task.task_id,
+                    "output_contract_digest": _agent_digest(
+                        {
+                            "task_id": task.task_id,
+                            "output_artifact_ids": list(task.output_artifacts),
+                        }
+                    ),
+                    "outputs": output_roster,
+                    "outputs_digest": _agent_digest(output_roster),
+                }
             if task.task_id in {
                 "parse_document_pdfplumber",
                 "parse_pdf_corpus_pdfplumber",
@@ -670,6 +1489,15 @@ class RunPlanExecutor:
                 artifacts=[ArtifactRef(artifact_id=f"{task.task_id}_result", relative_path=self._relative(run_dir, result_path))],
                 details=completion_details,
             )
+            if stop_after_index is not None and index == stop_after_index:
+                return {
+                    "ok": True,
+                    "run_id": run_id,
+                    "status": RunStatus.SUCCEEDED.value,
+                    "completed_task": task.task_id,
+                    "next_task": next_stage,
+                    "executed_tasks": executed,
+                }
 
         return {"ok": True, "run_id": run_id, "status": RunStatus.SUCCEEDED.value, "executed_tasks": executed}
 

@@ -8,6 +8,8 @@ from flask import Flask
 from ai4s_agent.conversation_store import ConversationStore
 from ai4s_agent.control_plane_events import ControlPlaneEventProjector
 from ai4s_agent.dataset_workflow import DatasetWorkflowService
+from ai4s_agent.executor import RunPlanExecutor
+from ai4s_agent.harness_tracing import build_harness_tracer
 from ai4s_agent.job_manager import JobManager
 from ai4s_agent.llm_provider import LLMProviderManager
 from ai4s_agent.llm_settings import LLMSettingsStore
@@ -41,6 +43,12 @@ from ai4s_agent.routes.run_plans import register_run_plan_routes
 from ai4s_agent.routes.scientific_agent_plans import register_scientific_agent_plan_routes
 from ai4s_agent.routes.scientific_agent_permissions import (
     register_scientific_agent_permission_routes,
+)
+from ai4s_agent.routes.scientific_agent_harness_controller import (
+    register_scientific_agent_harness_controller_routes,
+)
+from ai4s_agent.scientific_agent_harness_controller import (
+    ScientificAgentHarnessController,
 )
 from ai4s_agent.routes.worker_deployment import register_worker_deployment_routes
 from ai4s_agent.storage import ProjectStorage
@@ -158,6 +166,20 @@ def register_routes(
         proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
         resource_profiles=resource_profiles,
         resource_authority_policy_store=resource_authority_policies,
+    )
+    harness_controller = ScientificAgentHarnessController(
+        storage=projects,
+        proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
+        authorization_service=app.extensions["scientific_agent_authorization_service"],
+        control_store=app.extensions["scientific_agent_plan_control_store"],
+        resource_authority_service=app.extensions["remote_resource_authority_service"],
+        executor=RunPlanExecutor(storage=projects),
+        remote_executions=remote_executions,
+        tracer=build_harness_tracer(),
+    )
+    register_scientific_agent_harness_controller_routes(
+        app,
+        controller=harness_controller,
     )
     register_llm_settings_routes(
         app,
