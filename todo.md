@@ -446,7 +446,7 @@ M3.5 至少支持两种用户模式：
 | `M3H-005` 建立 immutable plan authorization | `I/T/—` | `READY` | PR-BM Draft exact 绑定 proposal、observation、RunPlan、task options、artifact/profile、预算、actor、Gate 与 mode digest；等待 owner review |
 | `M3H-006` 实现 approve-and-start 与两种审批模式 | `I/T/—` | `READY` | PR-BM Draft 先提交 authorization、再提交 `not_dispatched` start intent，并覆盖跨进程/crash recovery；等待 owner review |
 | `M3H-007` Permission Engine shadow mode | `I/T/—` | `READY` | PR-BM Draft 提供独立显式 shadow comparator/audit，不拦截或改变现有 route；等待 owner review |
-| `M3H-008` Harness Controller 接入现有执行链 | `I(partial)/T(partial)/—` | `DEFERRED` | 复用 `RunPlanExecutor`、Gate snapshot、RemoteExecutionService、固定 worker transport、cancel/recover 与 exact replay，不建立第二套状态机 |
+| `M3H-008` Harness Controller 接入现有执行链 | `I(partial)/T(partial)/—` | `DEFERRED` | 复用 `RunPlanExecutor`、Gate snapshot、RemoteExecutionService、固定 worker transport、cancel/recover 与 exact replay，不建立第二套状态机；remote 接入前须先建立 server-owned configured resource authority |
 | `M3H-009` 接入 Execution Agent LLM | `—/—/—` | `DEFERRED` | 仅输出版本化 `ToolCallProposal`，在已批准 plan/action space 内选择下一步；无任意 adapter、argv、shell、SSH 或绝对路径字段 |
 | `M3H-010` Verifier-bound feedback observation | `I(partial)/T(partial)/—` | `DEFERRED` | 只有 authoritative StageState 和 verified publication 能支持 running/success/failure；LLM 文本不能改变 UI 或状态 |
 | `M3H-011` Replanner 与 plan revision | `I(partial)/T(partial)/—` | `DEFERRED` | 用户反馈或运行失败产生 explicit diff、新 plan digest 与新授权；旧授权对任何实质变化失效 |
@@ -935,6 +935,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 依据：新增严格 Pydantic/schema、project-scoped no-replace control store、exact verifier、cross-process request lock/checkpoint/recovery、stepwise/frozen-plan/semantic-Gate/authority-confusion/no-call/shadow/隐私与对抗测试，以及 `docs/scientific-agent-permission-authorization-v1.md`。
 - 影响任务：`M3H-004`～`M3H-007` 证据更新为 `I/T/—`，工作状态保持 `READY`；`M3H-GATE-002` 不标记 `V` 且不声明完成；PR-BN/M3H-008/M3H-010 继续 `DEFERRED`；PR-BM 保持唯一当前动作。
 - 新增风险：未来 Controller 必须在 dispatch 前重新验证 permission policy digest、authorization/start-intent exact bytes、source freshness 与 pending/preauthorized Gate roster；不得把 `ALLOW` 或 start intent 误写为 running/execution authority。
+- 批准人：待 repository owner review。
+
+### 2026-08-01：PR-BM authority blocker remediation 与 remote 前置条件
+
+- 决策：PR-BM 继续保持 Draft，并修复四项 owner review blocker：authenticated server principal 取代可伪造 `X-Actor`；共享 Gate 改为多 task binding 聚合；authorization/start intent 创建路径在最终成功 marker/response 前消费 current-source verifier；planner-hidden dependency 仅在 Registry 显式给出完整固定 local permission contract 时可授权。
+- 原计划：PR-BM 初版将每个 Gate 视为单 task binding、从 `X-Actor` 读取授权 actor、主要依靠后续 GET verifier 发现提交窗口 source drift，并拒绝所有未出现在 planner catalog 的 expanded task。
+- 新计划：保持 `M3H-004`～`M3H-007` 为 `I/T/— / READY` 等待再次 owner review；PR-BN/M3H-008/M3H-010 继续 `DEFERRED`。当前 PR-BL 对 Uni-Mol、REINVENT4、MinerU 只产生 `partial`/`not_configured` resource intent，故 PR-BM v1 只有完整 local plan 存在成功 authorization 路径；remote Controller 接入前必须另建 server-owned configured resource-authority contract。
+- 依据：新增伪造 Header 拒绝/可信 principal/request identity 测试，共享 `gate_2_data_mining` semantic 聚合测试，完整与缺失 hidden Registry permission metadata 对照测试，以及 artifact/profile/catalog 在 initial-read、candidate、staging、authorization publication、authorization-to-start、start rename 后漂移的 fault-injection 测试；最终 CI 证据在本轮修复 HEAD 生成。
+- 影响任务：不把 `M3H-GATE-002` 标为 `V`，不声明 Harness 已启动，不解锁 PR-BN；remote resource authority 作为 PR-BN 前置 blocker 记录，但本 PR 不实现 Controller、dispatch、Executor/Remote 调用、Execution Agent、Replanner 或 UI。
+- 新增风险：可信反向代理必须在认证后写入私有 principal，不能把任意 client Header 映射为 authority；原子 rename 后如 source 漂移可以留下不可变但 stale 的 audit publication，但不得写最终成功 marker或返回成功；future remote authority 不得由 profile ceiling 或客户端 resource JSON 推断。
 - 批准人：待 repository owner review。
 
 后续路线调整必须追加：

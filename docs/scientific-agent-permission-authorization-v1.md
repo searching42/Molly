@@ -121,16 +121,16 @@ scientific-agent-permission-policy.v1
 At this PR HEAD its canonical digest is:
 
 ```text
-sha256:1f3302ff90d67a992228b1471a1919a870e48749181034117a197a6135ecf3f9
+sha256:b7ede355b1a94be46dbca8a1227d48037ca9651ef5e10d8abcd7963fce1a7d6a
 ```
 
 The digest covers recognized effect classes, permissions, local/remote routes,
 logical remote task types, risk rules, semantic/operational Gate rules, budget
 dimensions and upper-bound rules, artifact trust rules, profile/resource
-completeness, authorization modes, outcome precedence, and the reason-code
-vocabulary. Dictionary order and `PYTHONHASHSEED` do not affect canonical
-bytes. A semantic rule change must change this digest and normally upgrades
-the policy version.
+completeness, the explicit hidden-internal-dependency contract, authorization
+modes, outcome precedence, and the reason-code vocabulary. Dictionary order
+and `PYTHONHASHSEED` do not affect canonical bytes. A semantic rule change must
+change this digest and normally upgrades the policy version.
 
 ### Decision rules
 
@@ -149,11 +149,14 @@ Representative fail-closed `DENY` cases are:
 - duplicate/unknown tasks or incomplete task/options/dispatch/Gate coverage;
 - blocking questions or missing artifacts;
 - unknown effect, risk, permission, Gate, route, or remote task type;
+- a planner-hidden dependency without an explicit, fixed local Registry
+  permission contract;
 - changed selected artifact content, trust, or producer lineage;
 - changed/missing profile availability or capability digest;
 - incomplete remote profile or resource intent;
 - non-empty limits without budget authority or a limit exceeding authority;
 - missing actor or invalid authorization mode;
+- actor identity supplied by an untrusted client-controlled source;
 - stepwise Gate preauthorization;
 - frozen-plan Gate outside the plan, a semantic Gate, or a task whose
   `supports_plan_preapproval` is false;
@@ -182,8 +185,13 @@ Unknown fields are rejected. In particular the client cannot supply RunPlan,
 task/options, artifacts, profiles, permission/Gate policy, adapter, command,
 path, SSH, status, approval, actor, authorization digest, or start-intent
 contents. `confirmed` must be the literal JSON boolean `true`. Actor and actor
-source are obtained with the shared server resolver; the PR-BM routes accept
-the server-facing `X-Actor` projection after the body authority-field check.
+source are obtained from a PR-BM-specific authenticated resolver. It accepts an
+authenticated middleware principal in
+`flask.g.ai4s_authenticated_principal`, a private server-populated WSGI
+principal in `ai4s.authenticated_principal`, or the fixed
+`AI4S_AGENT_AUTHORIZATION_OWNER` used by a local single-user deployment. The
+resolver ignores `X-Actor` and all body/query/form actor assertions. With no
+trusted principal configured, authorization is unavailable by default.
 
 The authorization binds:
 
@@ -221,6 +229,16 @@ Any exact field drift causes re-verification failure. A requested task/option,
 artifact, profile, backend, budget, success criterion, route, resource, or Gate
 change requires a new PR-BL proposal; authorization never patches a proposal.
 
+PR-BL may expand a planner-visible task through a non-planner-visible internal
+dependency. Such a dependency is not exposed to the LLM and still has fixed
+empty effective/compiled caller options. PR-BM accepts it only when its
+`AtomicTaskRegistry` entry explicitly declares risk, effect, permissions,
+Gates, fixed `local_executor` routing, empty option/default maps,
+preauthorization capability, idempotency policy, verification policy, and
+`planner_visible=false`. Missing or default-only metadata fails closed as
+`INTERNAL_TASK_PERMISSION_METADATA_INCOMPLETE`; hiding a task never grants it
+permission authority.
+
 ## Stepwise, frozen plan, and Gates
 
 `stepwise` authorizes the exact complete plan but preauthorizes no Gate. Every
@@ -232,6 +250,13 @@ a Gate only if the Gate belongs to the current RunPlan, its task declares
 `supports_plan_preapproval=true`, the effect is not semantic, the policy marks
 it operational, and proposal/artifact/profile/resource/budget bindings still
 match exactly.
+
+A required Gate is a unique roster entry but may have multiple task bindings.
+PR-BM preserves every binding. If any task binding has a semantic effect, the
+shared Gate is semantic for plan-preauthorization purposes. A shared Gate is
+preauthorizable only when every binding is operational and every bound task
+sets `supports_plan_preapproval=true`; sharing a Gate is not a catalog
+conflict.
 
 At the merged PR-BL catalog used by this PR, every planner-visible task has
 `supports_plan_preapproval=false`. The current legal frozen-plan
@@ -253,17 +278,21 @@ to StageState, consume a Gate, or call the resume route.
 One HTTP operation performs two visibly distinct immutable commits:
 
 ```text
-verify current proposal
+validate literal confirmation and resolve trusted server principal
+  -> reserve and lock exact client request
+  -> exact-read and verify current proposal
   -> evaluate authorization candidate
-  -> resolve actor and validate literal confirmation
   -> checkpoint exact authorization bytes
+  -> exact-read and compare current source binding again
   -> publish and fsync authorization
-  -> write AUTHORIZATION_COMMITTED marker
-  -> re-read and exactly verify authorization and current proposal
+  -> verify authorization and current proposal
+  -> write AUTHORIZATION_COMMITTED marker only after final verification
   -> evaluate authorized-start and verify proposal start slot
   -> checkpoint exact start-intent bytes
+  -> reverify authorization and current proposal immediately before commit
   -> publish and fsync start intent
-  -> write START_INTENT_COMMITTED marker
+  -> verify start intent, authorization, and current proposal
+  -> write START_INTENT_COMMITTED marker only after final verification
   -> return dispatched=false
 ```
 
@@ -282,6 +311,14 @@ directory fsync. Publications use a request-private staging directory,
 data/verification files, manifest-last, staging-directory fsync, atomic rename,
 collection-directory fsync, and exact byte re-verification. Publication IDs are
 no-replace identities.
+
+Current-source checks are deliberately consumed by the creation path, not left
+only to later GET requests. Fault injection covers source drift after the
+initial read, after candidate evaluation, after authorization staging, after
+authorization publication, between authorization and start intent, and after
+start-intent rename but before the response. A publication may remain as an
+immutable audit object if the source changes after its atomic rename, but the
+request receives no final success marker and the API does not return success.
 
 Recovery uses the immutable checkpoints:
 
@@ -326,6 +363,21 @@ It binds the exact authorization and the distinct `authorized_start`
 permission decision, plus actor, mode, proposal, and client request. It has no
 adapter, command, queue job, remote job, execution snapshot, Gate decision, or
 execution status. Only the future PR-BN Controller may reverify and consume it.
+
+## Current remote resource-authority limitation
+
+The merged PR-BL projection currently emits nullable `gpu_count` and
+`cpu_threads` and a resource status of `partial` or `not_configured` for its
+remote Uni-Mol, REINVENT4, and MinerU routes. PR-BM requires a server-owned
+remote profile plus `requested_resources.status=configured`; it does not infer
+authority from profile ceilings or fill nullable fields with defaults.
+
+Consequently, PR-BM v1 has a successful authorization path only for complete
+local plans. Current Uni-Mol, REINVENT4, and MinerU proposals fail closed with
+`REMOTE_RESOURCE_INTENT_INCOMPLETE`. Remote Controller integration is blocked
+until a separate server-owned resource-authority contract can produce and
+verify configured resource bindings. That prerequisite is recorded for the
+PR-BN handoff; PR-BM does not create it and does not relax the deny rule.
 
 ## Shadow mode
 
@@ -398,6 +450,13 @@ duplicate requests, source changes between authorization and start intent,
 unknown catalog/policy terms, incomplete remote authority, budget expansion,
 artifact/profile drift, and all client authority injection.
 
+An untrusted client actor assertion and an authenticated server principal are
+different inputs. Raw `X-Actor`, body/query/form actor aliases, and broad
+project grants cannot create authorization. Middleware or trusted proxy
+deployments must write the private server principal after authenticating the
+request; production must not translate an arbitrary client header into that
+principal. Local single-user mode may instead configure one fixed owner.
+
 Ordinary chat text such as `approved` or `继续`, assistant prose, LLM output
 approval fields, `external_llm_approved=true`, proposal
 `status=review_required`, legacy client flags, broad grants, GateDecision,
@@ -447,3 +506,7 @@ PR-BN may reuse, but must reverify immediately before any Controller action:
 PR-BN remains responsible for Controller dispatch into the existing
 RunPlanExecutor/RemoteExecutionService and for preserving Verifier, Artifact
 Registry, GateDecision, execution snapshot, worker, and StageState authority.
+Before PR-BN can dispatch a remote start intent, a server-owned resource
+authority must replace the current `partial`/`not_configured` remote projection
+with an exact `configured` binding. This is a prerequisite, not authority
+granted by the current start-intent schema.

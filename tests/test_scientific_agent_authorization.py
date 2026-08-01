@@ -11,6 +11,8 @@ import pytest
 from pydantic import ValidationError
 
 from ai4s_agent.llm_provider import StubLLMProvider
+from ai4s_agent.planner import AtomicTaskRegistry
+from ai4s_agent.resource_profiles import ConnectionProfile, ResourceProfileStore
 from ai4s_agent.schemas import (
     AgentAuthorizationMode,
     AgentBudgetObservation,
@@ -23,6 +25,8 @@ from ai4s_agent.schemas import (
     AgentPlanAuthorization,
     AgentPlanAuthorizationRequest,
     AgentPlanStartIntent,
+    AtomicTaskSpec,
+    RiskLevel,
 )
 from ai4s_agent.scientific_agent_authorization import (
     AGENT_PERMISSION_SHADOW_OBSERVATION_FLAG,
@@ -30,6 +34,7 @@ from ai4s_agent.scientific_agent_authorization import (
     ScientificAgentAuthorizationConflict,
     ScientificAgentAuthorizationDenied,
     ScientificAgentAuthorizationService,
+    ScientificAgentAuthorizationVerificationError,
 )
 from ai4s_agent.scientific_agent_permissions import (
     PERMISSION_POLICY_DIGEST,
@@ -64,6 +69,113 @@ def _response(tool_id: str = "generate_candidates") -> AgentExecutionPlanLLMResp
         assumptions=[],
         questions=[],
     )
+
+
+def _visible_task_spec(
+    task_id: str,
+    *,
+    effect_class: str = "derive_local",
+    gates: list[str] | None = None,
+    depends_on: list[str] | None = None,
+) -> AtomicTaskSpec:
+    return AtomicTaskSpec(
+        task_id=task_id,
+        required_artifacts=[],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
+        output_artifacts=[],
+        risk_level=RiskLevel.LOW,
+        gates=gates or [],
+        default_adapter="test_adapter",
+        depends_on=depends_on or [],
+        scientific_tool_id=task_id,
+        label=task_id.replace("_", " ").title(),
+        description="A deterministic review-only test task.",
+        effect_class=effect_class,
+        required_permissions=["derive_project_artifact"],
+        option_schema={
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        default_planner_backend=None,
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={},
+        budget_dimensions=[],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=True,
+    )
+
+
+def _permission_complete_hidden_task(task_id: str) -> AtomicTaskSpec:
+    return AtomicTaskSpec(
+        task_id=task_id,
+        risk_level=RiskLevel.LOW,
+        gates=[],
+        effect_class="derive_local",
+        required_permissions=["derive_project_artifact"],
+        option_schema=None,
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier",
+        planner_visible=False,
+    )
+
+
+def _workspace_with_registry_proposal(
+    tmp_path: Path,
+    *,
+    registry: AtomicTaskRegistry,
+    response: AgentExecutionPlanLLMResponse,
+    request_id: str,
+) -> tuple[ProjectStorage, ScientificAgentPlanProposalStore, object]:
+    storage = ProjectStorage(workspace_dir=tmp_path / request_id)
+    storage.create_project("project-1", name="Project", created_at=_clock())
+    builder = AgentProjectObservationBuilder(
+        storage=storage,
+        registry=registry,
+        clock=_clock,
+    )
+    proposal_store = ScientificAgentPlanProposalStore(
+        storage=storage,
+        observation_builder=builder,
+        registry=registry,
+    )
+    proposal = ScientificAgentPlanService(
+        storage=storage,
+        registry=registry,
+        observation_builder=builder,
+        proposal_store=proposal_store,
+        clock=_clock,
+    ).create_proposal(
+        project_id="project-1",
+        run_id="run-1",
+        goal="Build an exact deterministic local plan",
+        user_constraints=[],
+        provider=StubLLMProvider(response=response.model_dump(mode="json")),
+        client_request_id=request_id,
+    )
+    assert not [question for question in proposal.questions if question.blocks_proposal]
+    return storage, proposal_store, proposal
 
 
 def _workspace_with_proposal(
@@ -146,6 +258,47 @@ def _workspace_with_artifact_proposal(
     return storage, proposal_store, proposal, artifact_path
 
 
+def _workspace_with_profile_source(
+    tmp_path: Path,
+) -> tuple[
+    ProjectStorage,
+    ScientificAgentPlanProposalStore,
+    object,
+    ResourceProfileStore,
+]:
+    storage = ProjectStorage(workspace_dir=tmp_path / "profile-source-workspace")
+    storage.create_project("project-1", name="Project", created_at=_clock())
+    profiles = ResourceProfileStore(
+        workspace_dir=tmp_path / "profile-private-workspace",
+        config_dir=tmp_path / "profile-private-config",
+    )
+    builder = AgentProjectObservationBuilder(
+        storage=storage,
+        resource_profiles=profiles,
+        clock=_clock,
+    )
+    proposal_store = ScientificAgentPlanProposalStore(
+        storage=storage,
+        observation_builder=builder,
+    )
+    proposal = ScientificAgentPlanService(
+        storage=storage,
+        resource_profiles=profiles,
+        observation_builder=builder,
+        proposal_store=proposal_store,
+        clock=_clock,
+    ).create_proposal(
+        project_id="project-1",
+        run_id="run-1",
+        goal="Prepare a deterministic local candidate plan",
+        user_constraints=[],
+        provider=StubLLMProvider(response=_response().model_dump(mode="json")),
+        client_request_id="profile-source-proposal",
+    )
+    assert not [question for question in proposal.questions if question.blocks_proposal]
+    return storage, proposal_store, proposal, profiles
+
+
 def _request(
     proposal,
     *,
@@ -207,7 +360,7 @@ def _multiprocess_authorization_worker(
                 note=note,
             ),
             actor="alice",
-            actor_source="header:X-Actor",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
         )
     except Exception as exc:  # noqa: BLE001 - parent asserts the typed result.
         result_queue.put((type(exc).__name__, "", ""))
@@ -401,7 +554,7 @@ def test_permission_engine_denies_digest_mismatch_and_gate_scope_confusion(
         authorization_mode=AgentAuthorizationMode.STEPWISE,
         requested_preauthorized_gate_ids=proposal.required_gates,
         actor="alice",
-        actor_source="header:X-Actor",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
         client_request_id="stepwise-gate-confusion",
     )
     assert stepwise.outcome == AgentPermissionOutcome.DENY
@@ -414,7 +567,7 @@ def test_permission_engine_denies_digest_mismatch_and_gate_scope_confusion(
         authorization_mode=AgentAuthorizationMode.FROZEN_PLAN,
         requested_preauthorized_gate_ids=["gate_1_task_parse"],
         actor="alice",
-        actor_source="header:X-Actor",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
         client_request_id="outside-gate-confusion",
     )
     assert outside_plan.outcome == AgentPermissionOutcome.DENY
@@ -445,11 +598,156 @@ def test_semantic_effect_gates_can_never_be_plan_preauthorized(
         authorization_mode=AgentAuthorizationMode.FROZEN_PLAN,
         requested_preauthorized_gate_ids=proposal.required_gates,
         actor="alice",
-        actor_source="header:X-Actor",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
         client_request_id=f"semantic-{semantic_effect.replace('_', '-')}",
     )
     assert decision.outcome == AgentPermissionOutcome.DENY
     assert "SEMANTIC_GATE_CANNOT_BE_PREAUTHORIZED" in decision.reason_codes
+
+
+def test_shared_gate_aggregates_task_bindings_and_remains_semantic_pending(
+    tmp_path: Path,
+) -> None:
+    gate_id = "gate_2_data_mining"
+    registry = AtomicTaskRegistry(
+        [
+            _visible_task_spec(
+                "parse_document",
+                effect_class="compute",
+                gates=[gate_id],
+            ),
+            _visible_task_spec(
+                "confirm_extracted_dataset",
+                effect_class="scientific_confirm",
+                gates=[gate_id],
+            ),
+        ]
+    )
+    response = AgentExecutionPlanLLMResponse(
+        requested_tool_ids=["parse_document", "confirm_extracted_dataset"],
+        selected_input_artifact_ids=[],
+        task_options={"parse_document": {}, "confirm_extracted_dataset": {}},
+        selected_logical_profile_ids=[],
+        limits={},
+        stop_conditions=["stop on validation failure"],
+        success_criteria=["produce a confirmed dataset"],
+        rationales=[],
+        assumptions=[],
+        questions=[],
+    )
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=response,
+        request_id="shared-gate-proposal",
+    )
+    service = _authorization_service(storage, proposal_store)
+    review = service.evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert review.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
+    assert "TOOL_CATALOG_BINDING_INVALID" not in review.reason_codes
+
+    authorization = service.authorize(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=_request(proposal, client_request_id="shared-gate-stepwise"),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert authorization.pending_gates == [gate_id]
+    assert authorization.preauthorized_operational_gates == []
+    assert [
+        binding.task_id
+        for binding in authorization.gate_bindings
+        if binding.gate_id == gate_id
+    ] == ["parse_document", "confirm_extracted_dataset"]
+
+    with pytest.raises(ScientificAgentAuthorizationDenied) as exc_info:
+        service.authorize(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=_request(
+                proposal,
+                mode=AgentAuthorizationMode.FROZEN_PLAN,
+                client_request_id="shared-gate-frozen",
+                requested_gates=[gate_id],
+            ),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+    assert "SEMANTIC_GATE_CANNOT_BE_PREAUTHORIZED" in (
+        exc_info.value.decision.reason_codes
+    )
+
+
+def test_permission_complete_hidden_local_dependency_can_be_authorized(
+    tmp_path: Path,
+) -> None:
+    registry = AtomicTaskRegistry(
+        [
+            _permission_complete_hidden_task("hidden_internal"),
+            _visible_task_spec("visible_task", depends_on=["hidden_internal"]),
+        ]
+    )
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=_response("visible_task"),
+        request_id="hidden-complete-proposal",
+    )
+    assert [task.task_id for task in proposal.run_plan.tasks] == [
+        "hidden_internal",
+        "visible_task",
+    ]
+    assert proposal.effective_planner_options["hidden_internal"] == {}
+    assert proposal.compiled_task_options["hidden_internal"] == {}
+
+    service = _authorization_service(storage, proposal_store)
+    review = service.evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert review.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
+    assert "TOOL_CATALOG_BINDING_INVALID" not in review.reason_codes
+    authorization = service.authorize(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=_request(
+            proposal,
+            client_request_id="hidden-complete-authorization",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert authorization.task_ids == ["hidden_internal", "visible_task"]
+
+
+def test_hidden_dependency_without_explicit_permission_metadata_is_denied(
+    tmp_path: Path,
+) -> None:
+    registry = AtomicTaskRegistry(
+        [
+            AtomicTaskSpec(task_id="hidden_internal", planner_visible=False),
+            _visible_task_spec("visible_task", depends_on=["hidden_internal"]),
+        ]
+    )
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=_response("visible_task"),
+        request_id="hidden-incomplete-proposal",
+    )
+    decision = _authorization_service(storage, proposal_store).evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert decision.outcome == AgentPermissionOutcome.DENY
+    assert "INTERNAL_TASK_PERMISSION_METADATA_INCOMPLETE" in decision.reason_codes
 
 
 def test_stepwise_approve_and_start_commits_two_non_executable_authorities(
@@ -466,7 +764,7 @@ def test_stepwise_approve_and_start_commits_two_non_executable_authorities(
         proposal_id=proposal.proposal_id,
         request=_request(proposal),
         actor="alice",
-        actor_source="header:X-Actor",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
     )
 
     authorization = result.authorization
@@ -528,7 +826,7 @@ def test_authorization_binds_exact_selected_artifact_and_invalidates_on_source_d
             client_request_id="artifact-authorization-request",
         ),
         actor="alice",
-        actor_source="header:X-Actor",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
     )
     binding = result.authorization.artifact_bindings[0]
     assert binding.artifact_id == "uploaded_dataset"
@@ -545,6 +843,201 @@ def test_authorization_binds_exact_selected_artifact_and_invalidates_on_source_d
         )
 
 
+@pytest.mark.parametrize(
+    "drift_phase",
+    [
+        "after_initial_proposal_read",
+        "after_authorization_candidate_decision",
+        "after_authorization_checkpoint",
+        "after_authorization_commit",
+    ],
+)
+def test_standalone_authorize_never_returns_authority_staled_during_commit(
+    tmp_path: Path,
+    drift_phase: str,
+) -> None:
+    storage, proposal_store, proposal, artifact_path = _workspace_with_artifact_proposal(
+        tmp_path
+    )
+    drifted = False
+
+    def drift(phase: str) -> None:
+        nonlocal drifted
+        if phase == drift_phase and not drifted:
+            artifact_path.write_text("SMILES,value\nCCC,3.0\n", encoding="utf-8")
+            drifted = True
+
+    control_store = AgentPlanControlStore(storage=storage, fault_injector=drift)
+    service = _authorization_service(
+        storage,
+        proposal_store,
+        control_store=control_store,
+    )
+    with pytest.raises(ScientificAgentPlanSourceChanged):
+        service.authorize(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=_request(proposal),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+    request_dir = (
+        storage.projects_root
+        / "project-1"
+        / "agent_plan_control"
+        / "requests"
+        / "authorization-request-1"
+    )
+    assert not (request_dir / "authorization_committed.json").exists()
+
+
+def test_authorization_staging_rejects_catalog_drift(tmp_path: Path) -> None:
+    storage, proposal_store, proposal = _workspace_with_proposal(tmp_path)
+    registry = proposal_store.registry
+    drifted = False
+
+    def drift(phase: str) -> None:
+        nonlocal drifted
+        if phase == "after_authorization_checkpoint" and not drifted:
+            registry.get("generate_candidates").description = (
+                "Changed catalog metadata during authorization staging."
+            )
+            drifted = True
+
+    service = _authorization_service(
+        storage,
+        proposal_store,
+        control_store=AgentPlanControlStore(storage=storage, fault_injector=drift),
+    )
+    with pytest.raises(ScientificAgentPlanSourceChanged):
+        service.authorize(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=_request(proposal),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+
+
+def test_candidate_decision_rejects_profile_source_drift(tmp_path: Path) -> None:
+    storage, proposal_store, proposal, profiles = _workspace_with_profile_source(
+        tmp_path
+    )
+    drifted = False
+
+    def drift(phase: str) -> None:
+        nonlocal drifted
+        if phase == "after_authorization_candidate_decision" and not drifted:
+            profiles.save_connection(
+                ConnectionProfile(
+                    connection_id="profile-source",
+                    ssh_host_alias="profile-source-ssh",
+                    expected_hostname="profile-source",
+                    remote_root="/srv/profile-source",
+                    declared_capabilities=["mineru"],
+                )
+            )
+            drifted = True
+
+    service = _authorization_service(
+        storage,
+        proposal_store,
+        control_store=AgentPlanControlStore(storage=storage, fault_injector=drift),
+    )
+    with pytest.raises(ScientificAgentPlanSourceChanged):
+        service.authorize(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=_request(proposal),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+
+
+def test_authorization_staging_rejects_hidden_permission_metadata_drift(
+    tmp_path: Path,
+) -> None:
+    hidden = _permission_complete_hidden_task("hidden_internal")
+    registry = AtomicTaskRegistry(
+        [hidden, _visible_task_spec("visible_task", depends_on=["hidden_internal"])]
+    )
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=_response("visible_task"),
+        request_id="hidden-metadata-drift-proposal",
+    )
+
+    def drift(phase: str) -> None:
+        if phase == "after_authorization_checkpoint":
+            hidden.verification_policy = ""
+
+    service = _authorization_service(
+        storage,
+        proposal_store,
+        control_store=AgentPlanControlStore(storage=storage, fault_injector=drift),
+    )
+    with pytest.raises(
+        ScientificAgentAuthorizationVerificationError,
+        match="candidate changed",
+    ):
+        service.authorize(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=_request(proposal),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+    assert not (
+        storage.projects_root
+        / "project-1"
+        / "agent_plan_control"
+        / "authorizations"
+    ).exists()
+
+
+@pytest.mark.parametrize(
+    "drift_phase",
+    ["after_authorization_verification", "after_start_intent_commit"],
+)
+def test_approve_and_start_never_returns_an_immediately_stale_intent(
+    tmp_path: Path,
+    drift_phase: str,
+) -> None:
+    storage, proposal_store, proposal, artifact_path = _workspace_with_artifact_proposal(
+        tmp_path
+    )
+    drifted = False
+
+    def drift(phase: str) -> None:
+        nonlocal drifted
+        if phase == drift_phase and not drifted:
+            artifact_path.write_text("SMILES,value\nCCCl,4.0\n", encoding="utf-8")
+            drifted = True
+
+    service = _authorization_service(
+        storage,
+        proposal_store,
+        control_store=AgentPlanControlStore(storage=storage, fault_injector=drift),
+    )
+    with pytest.raises(ScientificAgentPlanSourceChanged):
+        service.approve_and_start(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=_request(proposal),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+    request_dir = (
+        storage.projects_root
+        / "project-1"
+        / "agent_plan_control"
+        / "requests"
+        / "authorization-request-1"
+    )
+    assert not (request_dir / "start_intent_committed.json").exists()
+
+
 def test_different_request_cannot_create_second_start_intent_for_same_proposal(
     tmp_path: Path,
 ) -> None:
@@ -555,7 +1048,7 @@ def test_different_request_cannot_create_second_start_intent_for_same_proposal(
         proposal_id=proposal.proposal_id,
         request=_request(proposal, client_request_id="first-start-request"),
         actor="alice",
-        actor_source="header:X-Actor",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
     )
     with pytest.raises(ScientificAgentAuthorizationDenied) as exc_info:
         service.approve_and_start(
@@ -563,7 +1056,7 @@ def test_different_request_cannot_create_second_start_intent_for_same_proposal(
             proposal_id=proposal.proposal_id,
             request=_request(proposal, client_request_id="second-start-request"),
             actor="alice",
-            actor_source="header:X-Actor",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
         )
     assert "START_INTENT_SLOT_CONFLICT" in exc_info.value.decision.reason_codes
     start_root = (
@@ -586,7 +1079,7 @@ def test_frozen_plan_allows_empty_current_preauthorization_roster(tmp_path: Path
             client_request_id="frozen-request-1",
         ),
         actor="alice",
-        actor_source="header:X-Actor",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
     )
     assert authorization.authorization_mode == AgentAuthorizationMode.FROZEN_PLAN
     assert authorization.preauthorized_operational_gates == []
@@ -607,7 +1100,7 @@ def test_frozen_plan_rejects_non_preauthorizable_registered_gate(tmp_path: Path)
                 requested_gates=[gate],
             ),
             actor="alice",
-            actor_source="header:X-Actor",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
         )
     assert exc_info.value.decision.outcome == AgentPermissionOutcome.DENY
     assert "GATE_NOT_PREAUTHORIZABLE" in exc_info.value.decision.reason_codes
@@ -653,14 +1146,14 @@ def test_same_request_replays_exact_bytes_and_different_payload_conflicts(
         proposal_id=proposal.proposal_id,
         request=request,
         actor="alice",
-        actor_source="header:X-Actor",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
     )
     replay = service.approve_and_start(
         project_id="project-1",
         proposal_id=proposal.proposal_id,
         request=request,
         actor="alice",
-        actor_source="header:X-Actor",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
     )
     assert replay.authorization.model_dump(mode="json") == first.authorization.model_dump(mode="json")
     assert replay.start_intent.model_dump(mode="json") == first.start_intent.model_dump(mode="json")
@@ -672,7 +1165,7 @@ def test_same_request_replays_exact_bytes_and_different_payload_conflicts(
             proposal_id=proposal.proposal_id,
             request=changed,
             actor="alice",
-            actor_source="header:X-Actor",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
         )
 
 
@@ -741,7 +1234,7 @@ def test_new_service_recovers_approve_and_start_faults_without_duplicate_authori
             proposal_id=proposal.proposal_id,
             request=_request(proposal),
             actor="alice",
-            actor_source="header:X-Actor",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
         )
 
     recovered = _authorization_service(storage, proposal_store).approve_and_start(
@@ -749,7 +1242,7 @@ def test_new_service_recovers_approve_and_start_faults_without_duplicate_authori
         proposal_id=proposal.proposal_id,
         request=_request(proposal),
         actor="alice",
-        actor_source="header:X-Actor",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
     )
     control = storage.projects_root / "project-1" / "agent_plan_control"
     assert len(list((control / "authorizations").glob("authorization-*"))) == 1
@@ -835,7 +1328,7 @@ def test_cross_process_same_request_different_payload_fails_closed(tmp_path: Pat
     ]
 
 
-def _api_with_proposal(tmp_path: Path):
+def _api_with_proposal(tmp_path: Path, *, trusted_owner: str | None = "alice"):
     from ai4s_agent.app import create_app
 
     workspace = tmp_path / "api-workspace"
@@ -846,6 +1339,8 @@ def _api_with_proposal(tmp_path: Path):
         workspace_dir=workspace,
         user_config_dir=tmp_path / "config",
     )
+    if trusted_owner is not None:
+        app.config["AI4S_AGENT_AUTHORIZATION_OWNER"] = trusted_owner
     client = app.test_client()
     created = client.post(
         "/api/projects/project-1/agent-plan-proposals",
@@ -912,7 +1407,7 @@ def test_shadow_observation_is_disabled_and_cannot_change_existing_route_or_scie
 
 
 def test_project_scoped_api_separates_authorization_and_start_intent(tmp_path: Path) -> None:
-    _, client, _, proposal = _api_with_proposal(tmp_path)
+    app, client, _, proposal = _api_with_proposal(tmp_path)
     proposal_id = proposal["proposal_id"]
     permission = client.post(
         f"/api/projects/project-1/agent-plan-proposals/{proposal_id}/permission-evaluations",
@@ -929,26 +1424,37 @@ def test_project_scoped_api_separates_authorization_and_start_intent(tmp_path: P
         "client_request_id": "api-approve-start-request",
         "note": "approve exact plan",
     }
+    app.config.pop("AI4S_AGENT_AUTHORIZATION_OWNER")
     missing_actor = client.post(
         f"/api/projects/project-1/agent-plan-proposals/{proposal_id}/approve-and-start",
         json=payload,
     )
     assert missing_actor.status_code == 403
+    spoofed_header = client.post(
+        f"/api/projects/project-1/agent-plan-proposals/{proposal_id}/approve-and-start",
+        headers={"X-Actor": "searching42"},
+        json=payload,
+    )
+    assert spoofed_header.status_code == 403
     injected_actor = client.post(
         f"/api/projects/project-1/agent-plan-proposals/{proposal_id}/approve-and-start",
         json=payload | {"actor": "mallory"},
     )
     assert injected_actor.status_code == 400
 
+    app.config["AI4S_AGENT_AUTHORIZATION_OWNER"] = "alice"
     approved = client.post(
         f"/api/projects/project-1/agent-plan-proposals/{proposal_id}/approve-and-start",
-        headers={"X-Actor": "alice"},
         json=payload,
     )
     assert approved.status_code == 200, approved.get_json()
     assert approved.json["authorized"] is True
     assert approved.json["start_intent_created"] is True
     assert approved.json["dispatched"] is False
+    assert approved.json["authorization"]["actor"] == "alice"
+    assert approved.json["authorization"]["actor_source"] == (
+        "config:AI4S_AGENT_AUTHORIZATION_OWNER"
+    )
     assert approved.json["start_intent"]["dispatch_state"] == "not_dispatched"
     for forbidden in (
         "started",
@@ -970,6 +1476,61 @@ def test_project_scoped_api_separates_authorization_and_start_intent(tmp_path: P
     assert fetched_authorization.status_code == 200
     assert fetched_intent.status_code == 200
     assert fetched_intent.json["dispatched"] is False
+
+
+def test_service_rejects_untrusted_actor_source_before_authorization(
+    tmp_path: Path,
+) -> None:
+    storage, proposal_store, proposal = _workspace_with_proposal(tmp_path)
+    service = _authorization_service(storage, proposal_store)
+    with pytest.raises(ScientificAgentAuthorizationDenied) as exc_info:
+        service.authorize(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=_request(
+                proposal,
+                client_request_id="untrusted-actor-source-request",
+            ),
+            actor="searching42",
+            actor_source="header:X-Actor",
+        )
+    assert "AUTHORIZATION_ACTOR_UNTRUSTED" in (
+        exc_info.value.decision.reason_codes
+    )
+    assert not (
+        storage.projects_root
+        / "project-1"
+        / "agent_plan_control"
+        / "authorizations"
+    ).exists()
+
+
+def test_authenticated_principal_change_conflicts_with_same_request_id(
+    tmp_path: Path,
+) -> None:
+    app, client, _, proposal = _api_with_proposal(tmp_path, trusted_owner="alice")
+    payload = {
+        "expected_proposal_digest": proposal["proposal_digest"],
+        "authorization_mode": "stepwise",
+        "requested_preauthorized_gate_ids": [],
+        "confirmed": True,
+        "client_request_id": "principal-bound-request",
+        "note": "",
+    }
+    first = client.post(
+        f"/api/projects/project-1/agent-plan-proposals/{proposal['proposal_id']}/authorizations",
+        json=payload,
+    )
+    assert first.status_code == 200
+    assert first.json["authorization"]["actor"] == "alice"
+
+    app.config["AI4S_AGENT_AUTHORIZATION_OWNER"] = "bob"
+    changed = client.post(
+        f"/api/projects/project-1/agent-plan-proposals/{proposal['proposal_id']}/authorizations",
+        headers={"X-Actor": "alice"},
+        json=payload,
+    )
+    assert changed.status_code == 409
 
 
 def test_api_rejects_explicit_request_schema_or_proposal_content_injection(
@@ -1058,7 +1619,7 @@ def test_api_fails_closed_after_authorization_or_proposal_byte_replacement(
 
 
 def test_broad_grant_and_authority_like_client_fields_cannot_authorize(tmp_path: Path) -> None:
-    _, client, workspace, proposal = _api_with_proposal(tmp_path)
+    app, client, workspace, proposal = _api_with_proposal(tmp_path)
     proposal_id = proposal["proposal_id"]
     grant = client.post(
         "/api/projects/project-1/permissions/grants",
@@ -1077,6 +1638,7 @@ def test_broad_grant_and_authority_like_client_fields_cannot_authorize(tmp_path:
         "client_request_id": "authority-confusion-request",
         "note": "",
     }
+    app.config.pop("AI4S_AGENT_AUTHORIZATION_OWNER")
     without_exact_actor = client.post(
         f"/api/projects/project-1/agent-plan-proposals/{proposal_id}/authorizations",
         json=base,

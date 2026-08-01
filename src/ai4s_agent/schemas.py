@@ -2734,10 +2734,16 @@ class AgentPlanAuthorization(BaseModel):
             raise ValueError("authorization Gate rosters must partition required gates")
         if self.authorization_mode == AgentAuthorizationMode.STEPWISE and self.preauthorized_operational_gates:
             raise ValueError("stepwise authorization must not preauthorize Gates")
-        binding_by_gate = {item.gate_id: item for item in self.gate_bindings}
+        bindings_by_gate: dict[str, list[AgentAuthorizationGateBinding]] = {}
+        for binding in self.gate_bindings:
+            bindings_by_gate.setdefault(binding.gate_id, []).append(binding)
         for gate_id in self.preauthorized_operational_gates:
-            binding = binding_by_gate[gate_id]
-            if binding.gate_class != "operational" or not binding.supports_plan_preapproval:
+            bindings = bindings_by_gate[gate_id]
+            if any(
+                binding.gate_class != "operational"
+                or not binding.supports_plan_preapproval
+                for binding in bindings
+            ):
                 raise ValueError("authorization contains an ineligible preauthorized Gate")
         expected = _agent_digest(self.semantic_material())
         if self.authorization_digest and self.authorization_digest != expected:

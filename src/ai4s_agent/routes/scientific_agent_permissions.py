@@ -5,7 +5,7 @@ from typing import Any
 from flask import Flask, jsonify, request
 from pydantic import ValidationError
 
-from ai4s_agent.actor_identity import resolve_actor
+from ai4s_agent.actor_identity import resolve_authenticated_actor
 from ai4s_agent.schemas import AgentPlanAuthorizationRequest, _agent_digest_value
 from ai4s_agent.scientific_agent_authorization import (
     AgentPlanControlStore,
@@ -62,12 +62,11 @@ def _authorization_payload() -> AgentPlanAuthorizationRequest:
 
 
 def _server_actor() -> tuple[str, str]:
-    actor = resolve_actor(request, required=True)
-    # The body schema rejects actor aliases before this resolver is called.
-    # Query/form actor sources are also client-controlled payload authority and
-    # therefore cannot authorize PR-BM.  X-Actor is the current server-facing
-    # authenticated identity projection used by project-scoped APIs.
-    if not actor.actor or actor.source != "header:X-Actor":
+    actor = resolve_authenticated_actor(request, required=True)
+    # The strict body schema rejects actor aliases before this resolver is
+    # called.  The authenticated resolver also excludes body/query/form and
+    # X-Actor assertions, so only server-owned principals reach this route.
+    if not actor.actor:
         return "", "missing"
     return actor.actor, actor.source
 

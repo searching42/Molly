@@ -75,11 +75,35 @@ RECOGNIZED_ARTIFACT_TRUST_CLASSES = (
     "verified_output",
     "confirmed_scientific_input",
 )
+TRUSTED_AUTHORIZATION_ACTOR_SOURCES = (
+    "config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    "flask.g:ai4s_authenticated_principal",
+    "wsgi.environ:ai4s.authenticated_principal",
+)
+INTERNAL_TASK_PERMISSION_FIELDS = (
+    "risk_level",
+    "gates",
+    "effect_class",
+    "required_permissions",
+    "option_schema",
+    "default_planner_options",
+    "backend_default_planner_options",
+    "review_required_option_ids",
+    "execution_route",
+    "remote_task_type",
+    "backend_execution_routes",
+    "backend_remote_task_types",
+    "supports_plan_preapproval",
+    "idempotency_policy",
+    "verification_policy",
+    "planner_visible",
+)
 
 REASON_CODE_VOCABULARY = (
     "ARTIFACT_BINDING_DRIFT",
     "ARTIFACT_TRUST_DRIFT",
     "AUTHORIZATION_ACTOR_REQUIRED",
+    "AUTHORIZATION_ACTOR_UNTRUSTED",
     "AUTHORIZATION_BINDING_INVALID",
     "AUTHORIZATION_MODE_INVALID",
     "BLOCKING_QUESTION_PRESENT",
@@ -94,6 +118,7 @@ REASON_CODE_VOCABULARY = (
     "GATE_COVERAGE_MISMATCH",
     "GATE_NOT_PREAUTHORIZABLE",
     "HIGH_RISK_TASK_REQUIRES_USER",
+    "INTERNAL_TASK_PERMISSION_METADATA_INCOMPLETE",
     "MISSING_ARTIFACT_PRESENT",
     "OPERATIONAL_GATE_REQUIRES_USER",
     "OPTIONS_COVERAGE_MISMATCH",
@@ -166,6 +191,18 @@ PERMISSION_POLICY_MATERIAL: Mapping[str, Any] = {
         "capability_digest_exact_match": True,
         "remote_resource_status": "configured",
         "remote_profile_binding_required": True,
+    },
+    "internal_dependency_rules": {
+        "required_explicit_fields": list(INTERNAL_TASK_PERMISSION_FIELDS),
+        "planner_visible": False,
+        "execution_route": "local_executor",
+        "caller_options": "fixed_empty",
+        "verification_policy_required": True,
+    },
+    "authorization_actor_rules": {
+        "trusted_sources": list(TRUSTED_AUTHORIZATION_ACTOR_SOURCES),
+        "client_assertions": "deny",
+        "missing_principal": "deny",
     },
     "authorization_mode_rules": {
         "stepwise": "all_gates_pending",
@@ -257,6 +294,48 @@ def derive_legacy_route_expectation(
         None,
         ["LEGACY_EXPECTATION_INCOMPARABLE"],
     )
+
+
+def _internal_task_permission_metadata_complete(
+    spec: Any,
+    *,
+    effective_options: Mapping[str, Any] | None,
+    compiled_options: Mapping[str, Any] | None,
+    dispatch: Any | None,
+) -> bool:
+    """Return whether a hidden dependency has explicit non-LLM authority."""
+
+    explicitly_set = set(getattr(spec, "model_fields_set", set()))
+    if not set(INTERNAL_TASK_PERMISSION_FIELDS).issubset(explicitly_set):
+        return False
+    if spec.planner_visible or spec.effect_class is None:
+        return False
+    if spec.execution_route != "local_executor" or spec.remote_task_type is not None:
+        return False
+    if spec.backend_execution_routes or spec.backend_remote_task_types:
+        return False
+    # PR-BL represents a fixed empty hidden-task caller contract by explicitly
+    # setting option_schema=None and all option/default maps to empty values.
+    if (
+        spec.option_schema is not None
+        or spec.default_planner_options
+        or spec.backend_default_planner_options
+        or spec.review_required_option_ids
+        or effective_options != {}
+        or compiled_options != {}
+    ):
+        return False
+    if not str(spec.verification_policy or "").strip():
+        return False
+    if (
+        dispatch is None
+        or dispatch.execution_route != "local_executor"
+        or dispatch.remote_task_type is not None
+        or dispatch.logical_profile_id is not None
+        or dispatch.requested_resources is not None
+    ):
+        return False
+    return True
 
 
 class ScientificAgentPermissionEngine:
@@ -358,7 +437,7 @@ class ScientificAgentPermissionEngine:
 
         catalog_by_task = {item.task_id: item for item in catalog.tools}
         known_gates = {item.value for item in GateName}
-        gate_bindings: dict[str, tuple[str, str, bool]] = {}
+        gate_bindings: dict[str, list[tuple[str, str, bool]]] = {}
 
         for planned_task in proposal.run_plan.tasks:
             task_id = planned_task.task_id
@@ -386,16 +465,35 @@ class ScientificAgentPermissionEngine:
             if registered is None:
                 add_task("task_unknown", AgentPermissionOutcome.DENY, "Task is not registered.")
             if tool is None:
-                add_task(
-                    "tool_catalog_binding_invalid",
-                    AgentPermissionOutcome.DENY,
-                    "RunPlan task has no permission-complete catalog binding.",
+                dispatch = dispatch_by_task.get(task_id)
+                internal_complete = bool(
+                    registered is not None
+                    and _internal_task_permission_metadata_complete(
+                        registered,
+                        effective_options=proposal.effective_planner_options.get(task_id),
+                        compiled_options=proposal.compiled_task_options.get(task_id),
+                        dispatch=dispatch,
+                    )
                 )
+                if registered is not None and registered.planner_visible:
+                    add_task(
+                        "tool_catalog_binding_invalid",
+                        AgentPermissionOutcome.DENY,
+                        "Planner-visible RunPlan task is absent from the exact catalog.",
+                    )
+                elif registered is not None and not internal_complete:
+                    add_task(
+                        "internal_task_permission_metadata_incomplete",
+                        AgentPermissionOutcome.DENY,
+                        "Hidden dependency lacks an explicit fixed local permission contract.",
+                    )
                 effect_class = str(getattr(registered, "effect_class", None) or "unavailable")
                 risk_level = str(getattr(getattr(registered, "risk_level", None), "value", "high"))
                 permissions = [str(item) for item in getattr(registered, "required_permissions", ())]
                 gates = [str(item) for item in getattr(registered, "gates", ())]
-                execution_route = str(getattr(registered, "execution_route", None) or "unavailable")
+                execution_route = (
+                    dispatch.execution_route if dispatch is not None else "unavailable"
+                )
                 remote_task_type = getattr(registered, "remote_task_type", None)
                 supports_plan_preapproval = bool(
                     getattr(registered, "supports_plan_preapproval", False)
@@ -461,16 +559,8 @@ class ScientificAgentPermissionEngine:
                     )
                     continue
                 gate_class = "semantic" if effect_class in SEMANTIC_EFFECT_CLASSES else "operational"
-                prior = gate_bindings.get(gate_id)
                 current = (task_id, gate_class, supports_plan_preapproval)
-                if prior is not None and prior != current:
-                    add_task(
-                        "tool_catalog_binding_invalid",
-                        AgentPermissionOutcome.DENY,
-                        "One Gate maps to conflicting task policy metadata.",
-                    )
-                else:
-                    gate_bindings[gate_id] = current
+                gate_bindings.setdefault(gate_id, []).append(current)
                 if phase == AgentPermissionPhase.AUTHORIZED_START:
                     if gate_class == "semantic":
                         add_task(
@@ -655,6 +745,12 @@ class ScientificAgentPermissionEngine:
                     AgentPermissionOutcome.DENY,
                     "Authorization requires a server-resolved actor.",
                 )
+            elif actor_source not in TRUSTED_AUTHORIZATION_ACTOR_SOURCES:
+                add_global(
+                    "authorization_actor_untrusted",
+                    AgentPermissionOutcome.DENY,
+                    "Authorization actor source is not a trusted server principal.",
+                )
             if authorization_mode is None:
                 add_global(
                     "authorization_mode_invalid",
@@ -669,22 +765,27 @@ class ScientificAgentPermissionEngine:
                 )
             if authorization_mode == AgentAuthorizationMode.FROZEN_PLAN:
                 for gate_id in requested_gates:
-                    binding = gate_bindings.get(gate_id)
-                    if binding is None:
+                    bindings = gate_bindings.get(gate_id)
+                    if not bindings:
                         add_global(
                             "frozen_plan_gate_not_in_plan",
                             AgentPermissionOutcome.DENY,
                             "Requested frozen-plan Gate is not in the proposal.",
                         )
                         continue
-                    _, gate_class, supports_preapproval = binding
-                    if gate_class == "semantic":
+                    if any(
+                        gate_class == "semantic"
+                        for _, gate_class, _ in bindings
+                    ):
                         add_global(
                             "semantic_gate_cannot_be_preauthorized",
                             AgentPermissionOutcome.DENY,
                             "Semantic Gate cannot be plan-preauthorized.",
                         )
-                    elif not supports_preapproval:
+                    elif not all(
+                        supports_preapproval
+                        for _, _, supports_preapproval in bindings
+                    ):
                         add_global(
                             "gate_not_preauthorizable",
                             AgentPermissionOutcome.DENY,

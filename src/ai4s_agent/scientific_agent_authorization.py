@@ -951,22 +951,25 @@ class ScientificAgentAuthorizationService:
         actor_source: str,
         operation: str,
     ) -> AgentPlanAuthorization | ApproveAndStartResult:
-        publication = self._verified_publication(project_id, proposal_id)
         request_digest = _authorization_request_digest(
-            project_id=publication.proposal.project_id,
-            proposal_id=publication.proposal.proposal_id,
+            project_id=project_id,
+            proposal_id=proposal_id,
             operation=operation,
             request=request,
             actor=actor,
             actor_source=actor_source,
         )
         with self.control_store.request_session(
-            project_id=publication.proposal.project_id,
-            proposal_id=publication.proposal.proposal_id,
+            project_id=project_id,
+            proposal_id=proposal_id,
             client_request_id=request.client_request_id,
             operation=operation,
             request_digest=request_digest,
         ) as session:
+            # The first current-source read occurs only after the immutable
+            # request reservation holds the cross-process request lock.
+            publication = self._verified_publication(project_id, proposal_id)
+            self.control_store._fault("after_initial_proposal_read")
             authorization_decision = self.permission_engine.evaluate(
                 publication=publication,
                 phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
@@ -980,6 +983,7 @@ class ScientificAgentAuthorizationService:
             authorization_decision = self.control_store.publish_permission_decision(
                 authorization_decision
             )
+            self.control_store._fault("after_authorization_candidate_decision")
             if authorization_decision.outcome == AgentPermissionOutcome.DENY:
                 raise ScientificAgentAuthorizationDenied(authorization_decision)
 
@@ -991,11 +995,41 @@ class ScientificAgentAuthorizationService:
                 actor_source=actor_source,
                 decision=authorization_decision,
             )
+            self.control_store._fault("after_authorization_checkpoint")
+            # Fail closed if any authoritative source changed after the
+            # candidate decision or while the authorization was staged.
+            current_publication = self._verified_publication(project_id, proposal_id)
+            current_candidate = self.permission_engine.evaluate(
+                publication=current_publication,
+                phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
+                expected_proposal_digest=request.expected_proposal_digest,
+                authorization_mode=request.authorization_mode,
+                requested_preauthorized_gate_ids=request.requested_preauthorized_gate_ids,
+                actor=actor,
+                actor_source=actor_source,
+                client_request_id=request.client_request_id,
+            )
+            if current_candidate.decision_digest != authorization_decision.decision_digest:
+                raise ScientificAgentAuthorizationVerificationError(
+                    "authorization candidate changed before immutable commit"
+                )
+            self.control_store._fault("before_authorization_commit")
             authorization = self.control_store.publish_authorization(
                 authorization,
                 staging_parent=session.request_dir,
             )
             self.control_store._fault("after_authorization_commit")
+            verified_authorization = self.verify_authorization(
+                project_id=publication.proposal.project_id,
+                authorization_id=authorization.authorization_id,
+                verify_current=True,
+            )
+            self.control_store._fault("after_authorization_verification")
+            verified_authorization = self.verify_authorization(
+                project_id=publication.proposal.project_id,
+                authorization_id=authorization.authorization_id,
+                verify_current=True,
+            )
             self.control_store.write_request_marker(
                 session,
                 filename="authorization_committed.json",
@@ -1008,7 +1042,7 @@ class ScientificAgentAuthorizationService:
                 },
             )
             if operation == "authorize":
-                return authorization
+                return verified_authorization
 
             # Durability boundary: the authorization publication and marker
             # are fsynced before this exact re-read can create a start intent.
@@ -1017,12 +1051,13 @@ class ScientificAgentAuthorizationService:
                 authorization_id=authorization.authorization_id,
                 verify_current=True,
             )
+            current_publication = self._verified_publication(project_id, proposal_id)
             slot_available = self._start_slot_available(
                 authorization=verified_authorization,
                 client_request_id=request.client_request_id,
             )
             start_decision = self.permission_engine.evaluate(
-                publication=publication,
+                publication=current_publication,
                 phase=AgentPermissionPhase.AUTHORIZED_START,
                 expected_proposal_digest=request.expected_proposal_digest,
                 authorization_mode=request.authorization_mode,
@@ -1044,11 +1079,31 @@ class ScientificAgentAuthorizationService:
                 authorization=verified_authorization,
                 permission_decision=start_decision,
             )
+            self.control_store._fault("after_start_intent_checkpoint")
+            # Reverify the complete authorization/source binding immediately
+            # before the second authority commit.
+            verified_authorization = self.verify_authorization(
+                project_id=publication.proposal.project_id,
+                authorization_id=authorization.authorization_id,
+                verify_current=True,
+            )
+            self.control_store._fault("before_start_intent_commit")
             start_intent = self.control_store.publish_start_intent(
                 start_intent,
                 staging_parent=session.request_dir,
             )
             self.control_store._fault("after_start_intent_commit")
+            verified_start_intent = self.verify_start_intent(
+                project_id=publication.proposal.project_id,
+                start_intent_id=start_intent.start_intent_id,
+                verify_current=True,
+            )
+            self.control_store._fault("after_start_intent_verification")
+            verified_start_intent = self.verify_start_intent(
+                project_id=publication.proposal.project_id,
+                start_intent_id=start_intent.start_intent_id,
+                verify_current=True,
+            )
             self.control_store.write_request_marker(
                 session,
                 filename="start_intent_committed.json",
@@ -1064,7 +1119,7 @@ class ScientificAgentAuthorizationService:
             )
             return ApproveAndStartResult(
                 authorization=verified_authorization,
-                start_intent=start_intent,
+                start_intent=verified_start_intent,
                 authorization_decision=authorization_decision,
                 start_decision=start_decision,
             )
@@ -1245,10 +1300,17 @@ class ScientificAgentAuthorizationService:
         for task in proposal.run_plan.tasks:
             tool = tools_by_task.get(task.task_id)
             if tool is None:
-                continue
+                internal = self.registry.get(task.task_id)
+                effect_class = str(internal.effect_class or "")
+                required_gates = list(internal.gates)
+                supports_plan_preapproval = internal.supports_plan_preapproval
+            else:
+                effect_class = tool.effect_class
+                required_gates = list(tool.required_gates)
+                supports_plan_preapproval = tool.supports_plan_preapproval
             gate_class = (
                 "semantic"
-                if tool.effect_class
+                if effect_class
                 in {"scientific_confirm", "change_objective", "publish_or_promote"}
                 else "operational"
             )
@@ -1256,11 +1318,11 @@ class ScientificAgentAuthorizationService:
                 AgentAuthorizationGateBinding(
                     task_id=task.task_id,
                     gate_id=gate_id,
-                    effect_class=tool.effect_class,
+                    effect_class=effect_class,
                     gate_class=gate_class,
-                    supports_plan_preapproval=tool.supports_plan_preapproval,
+                    supports_plan_preapproval=supports_plan_preapproval,
                 )
-                for gate_id in tool.required_gates
+                for gate_id in required_gates
             )
         preauthorized = sorted(request.requested_preauthorized_gate_ids)
         pending = sorted(set(proposal.required_gates).difference(preauthorized))
