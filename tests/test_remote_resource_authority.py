@@ -70,6 +70,7 @@ from ai4s_agent.storage import ProjectStorage
 
 
 NOW = "2026-08-01T00:00:00Z"
+_NO_HIDDEN_DEPENDENCY = object()
 
 
 class _ConfiguredBudgetObservationBuilder(AgentProjectObservationBuilder):
@@ -160,6 +161,34 @@ def _remote_task(
     )
 
 
+def _hidden_local_dependency(
+    *, budget_dimensions: list[str] | None
+) -> AtomicTaskSpec:
+    metadata = {
+        "task_id": "hidden_prepare_task",
+        "default_adapter": "inspect_dataset_service",
+        "risk_level": RiskLevel.LOW,
+        "gates": [],
+        "effect_class": "derive_local",
+        "required_permissions": ["derive_project_artifact"],
+        "option_schema": None,
+        "default_planner_options": {},
+        "backend_default_planner_options": {},
+        "review_required_option_ids": [],
+        "execution_route": "local_executor",
+        "remote_task_type": None,
+        "backend_execution_routes": {},
+        "backend_remote_task_types": {},
+        "supports_plan_preapproval": False,
+        "idempotency_policy": "server_checked",
+        "verification_policy": "artifact_registry_and_stage_verifier",
+        "planner_visible": False,
+    }
+    if budget_dimensions is not None:
+        metadata["budget_dimensions"] = budget_dimensions
+    return AtomicTaskSpec(**metadata)
+
+
 def _configured_case(
     tmp_path: Path,
     *,
@@ -168,6 +197,8 @@ def _configured_case(
     capabilities: list[str] | None = None,
     resources: tuple[int, int, int] = (0, 1, 600),
     cuda_status: str = "unknown",
+    hidden_budget_dimensions: object = _NO_HIDDEN_DEPENDENCY,
+    legacy_runtime_limit: int | None = None,
 ):
     capabilities = capabilities or ["cpu", "reinvent4"]
     storage = ProjectStorage(workspace_dir=tmp_path / "workspace")
@@ -203,13 +234,42 @@ def _configured_case(
             ),
         )
     )
-    registry = AtomicTaskRegistry([_remote_task(task_type, profile_id)])
-    builder = AgentProjectObservationBuilder(
-        storage=storage,
-        registry=registry,
-        resource_profiles=profiles,
-        clock=lambda: NOW,
+    include_hidden_dependency = hidden_budget_dimensions is not _NO_HIDDEN_DEPENDENCY
+    remote_task = _remote_task(
+        task_type,
+        profile_id,
+        depends_on=["hidden_prepare_task"] if include_hidden_dependency else None,
     )
+    tasks = [remote_task]
+    if include_hidden_dependency:
+        if hidden_budget_dimensions is not None and not isinstance(
+            hidden_budget_dimensions, list
+        ):
+            raise AssertionError("hidden budget dimensions must be a list or None")
+        tasks.insert(
+            0,
+            _hidden_local_dependency(
+                budget_dimensions=hidden_budget_dimensions,
+            ),
+        )
+    registry = AtomicTaskRegistry(tasks)
+    builder_kwargs = {
+        "storage": storage,
+        "registry": registry,
+        "resource_profiles": profiles,
+        "clock": lambda: NOW,
+    }
+    if legacy_runtime_limit is None:
+        builder = AgentProjectObservationBuilder(**builder_kwargs)
+    else:
+        builder = _ConfiguredBudgetObservationBuilder(
+            **builder_kwargs,
+            budget_limits=AgentBudgetObservation(
+                status="configured",
+                limits={"max_runtime_sec": legacy_runtime_limit},
+                dimensions=["max_runtime_sec"],
+            ),
+        )
     proposal_store = ScientificAgentPlanProposalStore(
         storage=storage,
         registry=registry,
@@ -862,6 +922,126 @@ def test_remote_permission_without_published_authority_denies(tmp_path: Path) ->
     )
     assert decision.outcome == AgentPermissionOutcome.DENY
     assert "REMOTE_RESOURCE_AUTHORITY_REQUIRED" in decision.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("initial_budget_dimensions", "changed_budget_dimensions"),
+    [
+        (["max_runtime_sec"], []),
+        ([], ["max_runtime_sec"]),
+    ],
+)
+def test_hidden_local_budget_dimension_drift_invalidates_authorization_and_start(
+    tmp_path: Path,
+    initial_budget_dimensions: list[str],
+    changed_budget_dimensions: list[str],
+) -> None:
+    (
+        _,
+        _,
+        _,
+        proposal_store,
+        proposal,
+        resource_service,
+        authorization_service,
+    ) = _configured_case(
+        tmp_path,
+        hidden_budget_dimensions=initial_budget_dimensions,
+        legacy_runtime_limit=600,
+    )
+    resource_service.publish(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            client_request_id="hidden-budget-resource-request",
+        ),
+    )
+    result = authorization_service.approve_and_start(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentPlanAuthorizationRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            authorization_mode=AgentAuthorizationMode.STEPWISE,
+            requested_preauthorized_gate_ids=[],
+            confirmed=True,
+            client_request_id="hidden-budget-approve-start-request",
+            note="authorize the exact hidden budget contract",
+        ),
+        actor="owner",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert result.start_intent.dispatch_state == "not_dispatched"
+    before = result.authorization.task_authority_digests["hidden_prepare_task"]
+
+    hidden = proposal_store.registry.get("hidden_prepare_task")
+    hidden.budget_dimensions = changed_budget_dimensions
+    changed = authorization_service.permission_engine.evaluate(
+        publication=proposal_store.read(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            verify_current=True,
+        ),
+        phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
+        expected_proposal_digest=proposal.proposal_digest,
+        authorization_mode=AgentAuthorizationMode.STEPWISE,
+        actor="owner",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        client_request_id=result.authorization.client_request_id,
+    )
+    changed_hidden = next(
+        item
+        for item in changed.task_decisions
+        if item.task_id == "hidden_prepare_task"
+    )
+    assert changed.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
+    assert changed_hidden.task_authority_digest != before
+    with pytest.raises(ScientificAgentAuthorizationVerificationError):
+        authorization_service.verify_authorization(
+            project_id="project-1",
+            authorization_id=result.authorization.authorization_id,
+            verify_current=True,
+        )
+    with pytest.raises(ScientificAgentAuthorizationVerificationError):
+        authorization_service.verify_start_intent(
+            project_id="project-1",
+            start_intent_id=result.start_intent.start_intent_id,
+            verify_current=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("hidden_budget_dimensions", "expected_reason"),
+    [
+        (None, "INTERNAL_TASK_PERMISSION_METADATA_INCOMPLETE"),
+        (["unknown_budget_dimension"], "TASK_BUDGET_DIMENSION_UNKNOWN"),
+    ],
+)
+def test_resource_aware_hidden_budget_contract_is_explicit_and_recognized(
+    tmp_path: Path,
+    hidden_budget_dimensions: list[str] | None,
+    expected_reason: str,
+) -> None:
+    _, _, _, _, proposal, resource_service, authorization_service = _configured_case(
+        tmp_path,
+        hidden_budget_dimensions=hidden_budget_dimensions,
+        legacy_runtime_limit=600,
+    )
+    resource_service.publish(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            client_request_id="hidden-budget-contract-resource-request",
+        ),
+    )
+    decision = authorization_service.evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert decision.outcome == AgentPermissionOutcome.DENY
+    assert expected_reason in decision.reason_codes
 
 
 def test_resource_ceiling_device_probe_budget_and_cost_rules_fail_closed(
@@ -1758,7 +1938,7 @@ def test_resource_aware_permission_policy_digest_is_hash_seed_stable() -> None:
         "sha256:bcfcce7a4c1e3dba12d5f291d92f1726df431c111cf288c49acb29bd5ea3df41"
     )
     assert RESOURCE_AWARE_PERMISSION_POLICY_DIGEST == (
-        "sha256:c39034ef5a541482fe15918202cbd5d378a7d45a471658f44f63bee6288bf879"
+        "sha256:e5279fe137409cf3490beac8b29c32c3c3212537f67e924fdd875aebe4d6d124"
     )
     script = (
         "from ai4s_agent.scientific_agent_permissions import "

@@ -185,6 +185,20 @@ resource authority digest + AuthoritySet digest
 -> start-intent current verifier
 ```
 
+Resource-aware evaluations use `agent-task-authority-binding.v2` for every
+planner-visible and planner-hidden task. In addition to the frozen v1 task
+material, v2 exact-binds the Registry task's canonical, sorted, unique
+`budget_dimensions` roster. A hidden dependency must explicitly declare that
+field, including an explicit empty roster when it owns no budget dimension;
+an omitted field or an unrecognized dimension is denied. Consequently a
+change such as `max_runtime_sec -> none`, or the reverse, changes the task
+authority digest and makes the old authorization and start intent stale.
+Planner visibility does not create two different budget-identity rules.
+
+The local-only policy continues to use the byte-identical
+`agent-task-authority-binding.v1`; its policy, decision, authorization, and
+start-intent replay identities are not migrated.
+
 Authorization and approve-and-start payloads remain unchanged and cannot name
 an authority, connection, profile override, or resource value. Current
 verification re-reads the proposal, private policy, connection, execution
@@ -196,9 +210,10 @@ decisions are regenerated with v2. Existing proposal, authorization, and start
 intent bytes are never migrated or rewritten.
 
 The reviewed v2 policy semantic digest for this contract is
-`sha256:c39034ef5a541482fe15918202cbd5d378a7d45a471658f44f63bee6288bf879`;
-it covers complete-set execution binding and mixed/aggregate remote budget
-ownership. The frozen local-only v1 digest remains unchanged.
+`sha256:e5279fe137409cf3490beac8b29c32c3c3212537f67e924fdd875aebe4d6d124`;
+it covers complete-set execution binding, mixed/aggregate remote budget
+ownership, and the v2 exact task budget-dimension roster. The frozen
+local-only v1 digest remains unchanged.
 
 ## API and durable publication
 

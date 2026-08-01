@@ -1012,6 +1012,15 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 影响任务：`M3H-007A` 继续 `I/T/— / READY` 等待 owner review；`M3H-GATE-002` 不标 `V`；PR-BN/M3H-008/M3H-010继续 `DEFERRED`，不创建 RemoteExecutionRequest或 dispatch。
 - 批准人：待 repository owner review。
 
+### 2026-08-01：PR-BM2 review 精确绑定 task budget dimensions
+
+- 决策：resource-aware Permission v2 对 planner-visible 与 planner-hidden 的全部 task 统一使用 `agent-task-authority-binding.v2`，在冻结的 v1 task material 之外 exact-bind Registry 的 canonical `budget_dimensions` roster；hidden dependency 必须显式声明该字段，遗漏或未知维度均 fail closed。
+- 原计划：Permission v2 用 `budget_dimensions` 派生 mixed-plan local runtime ownership，但 task-authority digest 未覆盖该字段，hidden dependency 的非空到空或空到非空漂移可能改变预算权威要求而不改变旧 authorization identity。
+- 新计划：v2 对 `budget_dimensions` 排序去重后进入 task digest，并沿 `permission decision -> authorization -> start intent` current verifier 传播；任意预算维度漂移使旧 authorization/start intent stale。local-only Permission v1 继续使用 byte-identical `agent-task-authority-binding.v1` 与冻结摘要，不迁移历史 authority。
+- 依据：新增 hidden local dependency 的 configured-runtime 正常授权/启动意图、`max_runtime_sec -> []` 与反向漂移、字段未显式声明、未知维度拒绝，以及 v1 policy/task/decision digest 固定 fixture；最终 PR Fast、Full CI 与 CodeQL 证据将在本 Draft review HEAD 生成。
+- 影响任务：`M3H-007A` 继续 `I/T/— / READY` 等待 owner review；`M3H-GATE-002` 不标 `V`；PR-BN/M3H-008/M3H-010 继续 `DEFERRED`，不创建 RemoteExecutionRequest 或 dispatch。
+- 批准人：待 repository owner review。
+
 后续路线调整必须追加：
 
 ```text

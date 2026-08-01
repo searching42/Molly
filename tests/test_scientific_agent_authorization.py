@@ -10,6 +10,7 @@ import sys
 import pytest
 from pydantic import ValidationError
 
+from ai4s_agent import scientific_agent_plan as scientific_agent_plan_module
 from ai4s_agent.adapter_bindings import local_adapter_execution_binding_digest
 from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.planner import AtomicTaskRegistry
@@ -421,7 +422,15 @@ def test_frozen_permission_authorization_schemas_match_generated_models() -> Non
         assert frozen == model.model_json_schema()
 
 
-def test_complete_proposal_review_requires_exact_plan_authorization(tmp_path: Path) -> None:
+def test_complete_proposal_review_requires_exact_plan_authorization(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class _FixedUuid:
+        hex = "0" * 32
+
+    monkeypatch.setattr(scientific_agent_plan_module.uuid, "uuid4", _FixedUuid)
+    monkeypatch.setattr(scientific_agent_plan_module.time, "monotonic", lambda: 0.0)
     storage, proposal_store, proposal = _workspace_with_proposal(tmp_path)
     decision = _authorization_service(storage, proposal_store).evaluate_permission(
         project_id="project-1",
@@ -435,6 +444,16 @@ def test_complete_proposal_review_requires_exact_plan_authorization(tmp_path: Pa
     assert [item.task_id for item in decision.task_decisions] == [
         item.task_id for item in proposal.run_plan.tasks
     ]
+    assert decision.policy_version == "scientific-agent-permission-policy.v1"
+    assert decision.policy_digest == (
+        "sha256:bcfcce7a4c1e3dba12d5f291d92f1726df431c111cf288c49acb29bd5ea3df41"
+    )
+    assert decision.task_decisions[0].task_authority_digest == (
+        "sha256:8371df28ef5b9da579264579167bc37f1c087388e42a0a49500a057fb51c4378"
+    )
+    assert decision.decision_digest == (
+        "sha256:6013db087a171554b79d86e96a2875d3783fdf389c43bc5bf38eefa449f1ca5d"
+    )
     persisted = _authorization_service(storage, proposal_store).control_store.read_permission_decision(
         project_id="project-1",
         decision_id=decision.decision_id,

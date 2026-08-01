@@ -36,6 +36,7 @@ PERMISSION_POLICY_VERSION = "scientific-agent-permission-policy.v1"
 RESOURCE_AWARE_PERMISSION_POLICY_VERSION = "scientific-agent-permission-policy.v2"
 TASK_EXECUTION_BINDING_VERSION = "agent-task-execution-binding.v1"
 TASK_AUTHORITY_BINDING_VERSION = "agent-task-authority-binding.v1"
+RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION = "agent-task-authority-binding.v2"
 
 RECOGNIZED_EFFECT_CLASSES = (
     "observe",
@@ -105,6 +106,10 @@ INTERNAL_TASK_PERMISSION_FIELDS = (
     "idempotency_policy",
     "verification_policy",
     "planner_visible",
+)
+RESOURCE_AWARE_INTERNAL_TASK_PERMISSION_FIELDS = (
+    *INTERNAL_TASK_PERMISSION_FIELDS,
+    "budget_dimensions",
 )
 INTERNAL_TASK_EXECUTION_FIELDS = ("default_adapter",)
 RECOGNIZED_INTERNAL_IDEMPOTENCY_POLICIES = (
@@ -190,6 +195,7 @@ RESOURCE_AUTHORITY_REASON_CODES = (
     "REMOTE_RESOURCE_AGGREGATE_BUDGET_EXCEEDED",
     "REMOTE_RESOURCE_COST_AUTHORITY_UNAVAILABLE",
     "REMOTE_RESOURCE_SOURCE_CHANGED",
+    "TASK_BUDGET_DIMENSION_UNKNOWN",
 )
 
 
@@ -290,6 +296,22 @@ RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL: Mapping[str, Any] = {
         "execution_binding": (
             "route_type_profile_resource_authority_and_complete_set_digests"
         ),
+    },
+    "internal_dependency_rules": {
+        **PERMISSION_POLICY_MATERIAL["internal_dependency_rules"],
+        "required_explicit_fields": list(
+            RESOURCE_AWARE_INTERNAL_TASK_PERMISSION_FIELDS
+        ),
+        "recognized_budget_dimensions": list(RECOGNIZED_BUDGET_DIMENSIONS),
+        "task_authority_binding_version": (
+            RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
+        ),
+    },
+    "task_authority_binding_rules": {
+        "scope": "all_resource_aware_tasks",
+        "binding_version": RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION,
+        "budget_dimensions": "sorted_unique_exact_registry_roster",
+        "unknown_budget_dimension": "deny",
     },
     "remote_budget_ownership_rules": {
         "remote_only_dimensions": ["max_gpu_hours", "max_cost_usd"],
@@ -408,11 +430,17 @@ def _internal_task_permission_metadata_complete(
     effective_options: Mapping[str, Any] | None,
     compiled_options: Mapping[str, Any] | None,
     dispatch: Any | None,
+    resource_aware: bool = False,
 ) -> bool:
     """Return whether a hidden dependency has explicit non-LLM authority."""
 
     explicitly_set = set(getattr(spec, "model_fields_set", set()))
-    if not set(INTERNAL_TASK_PERMISSION_FIELDS).issubset(explicitly_set):
+    required_fields = (
+        RESOURCE_AWARE_INTERNAL_TASK_PERMISSION_FIELDS
+        if resource_aware
+        else INTERNAL_TASK_PERMISSION_FIELDS
+    )
+    if not set(required_fields).issubset(explicitly_set):
         return False
     if spec.planner_visible or spec.effect_class is None:
         return False
@@ -499,29 +527,34 @@ def _task_authority_digest(
     effective_options: Mapping[str, Any] | None,
     compiled_options: Mapping[str, Any] | None,
     execution_binding_digest: str,
+    binding_version: str = TASK_AUTHORITY_BINDING_VERSION,
+    budget_dimensions: Sequence[str] = (),
 ) -> str:
-    return _agent_digest(
-        {
-            "schema_version": TASK_AUTHORITY_BINDING_VERSION,
-            "task_id": task_id,
-            "planner_visible": planner_visible,
-            "effect_class": effect_class,
-            "risk_level": risk_level,
-            "required_permissions": sorted(set(permissions)),
-            "gates": sorted(set(gates)),
-            "execution_route": execution_route,
-            "remote_task_type": remote_task_type,
-            "supports_plan_preapproval": supports_plan_preapproval,
-            "idempotency_policy": idempotency_policy,
-            "verification_policy": verification_policy,
-            "caller_option_contract": {
-                "kind": "planner_compiled" if planner_visible else "fixed_empty",
-                "effective_options": effective_options,
-                "compiled_options": compiled_options,
-            },
-            "execution_binding_digest": execution_binding_digest,
-        }
-    )
+    material: dict[str, Any] = {
+        "schema_version": binding_version,
+        "task_id": task_id,
+        "planner_visible": planner_visible,
+        "effect_class": effect_class,
+        "risk_level": risk_level,
+        "required_permissions": sorted(set(permissions)),
+        "gates": sorted(set(gates)),
+        "execution_route": execution_route,
+        "remote_task_type": remote_task_type,
+        "supports_plan_preapproval": supports_plan_preapproval,
+        "idempotency_policy": idempotency_policy,
+        "verification_policy": verification_policy,
+        "caller_option_contract": {
+            "kind": "planner_compiled" if planner_visible else "fixed_empty",
+            "effective_options": effective_options,
+            "compiled_options": compiled_options,
+        },
+        "execution_binding_digest": execution_binding_digest,
+    }
+    if binding_version == RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION:
+        material["budget_dimensions"] = sorted(set(budget_dimensions))
+    elif binding_version != TASK_AUTHORITY_BINDING_VERSION:
+        raise ValueError("unknown task authority binding version")
+    return _agent_digest(material)
 
 
 class ScientificAgentPermissionEngine:
@@ -676,6 +709,12 @@ class ScientificAgentPermissionEngine:
                 registered = self.registry.get(task_id)
             except ValueError:
                 registered = None
+            budget_dimensions = sorted(
+                {
+                    str(item)
+                    for item in getattr(registered, "budget_dimensions", ())
+                }
+            )
             if registered is None:
                 add_task("task_unknown", AgentPermissionOutcome.DENY, "Task is not registered.")
             if tool is None:
@@ -692,6 +731,7 @@ class ScientificAgentPermissionEngine:
                         effective_options=proposal.effective_planner_options.get(task_id),
                         compiled_options=proposal.compiled_task_options.get(task_id),
                         dispatch=dispatch,
+                        resource_aware=resource_aware,
                     )
                 )
                 if registered is not None and registered.planner_visible:
@@ -753,10 +793,20 @@ class ScientificAgentPermissionEngine:
                 idempotency_policy = tool.idempotency_policy
                 verification_policy = tool.verification_policy
 
+            if resource_aware:
+                for unknown_dimension in sorted(
+                    set(budget_dimensions).difference(RECOGNIZED_BUDGET_DIMENSIONS)
+                ):
+                    add_task(
+                        "task_budget_dimension_unknown",
+                        AgentPermissionOutcome.DENY,
+                        f"Task declares an unknown budget dimension: {unknown_dimension}.",
+                    )
+
             if (
                 execution_route == "local_executor"
                 and registered is not None
-                and "max_runtime_sec" in registered.budget_dimensions
+                and "max_runtime_sec" in budget_dimensions
             ):
                 local_runtime_task_ids.append(task_id)
 
@@ -862,6 +912,12 @@ class ScientificAgentPermissionEngine:
                 effective_options=proposal.effective_planner_options.get(task_id),
                 compiled_options=proposal.compiled_task_options.get(task_id),
                 execution_binding_digest=execution_binding_digest,
+                binding_version=(
+                    RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
+                    if resource_aware
+                    else TASK_AUTHORITY_BINDING_VERSION
+                ),
+                budget_dimensions=budget_dimensions,
             )
 
             if effect_class not in RECOGNIZED_EFFECT_CLASSES:
