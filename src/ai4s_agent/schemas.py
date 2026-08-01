@@ -3708,10 +3708,20 @@ class AgentHarnessControllerGateApprovalRequest(BaseModel):
     def validate_digests(cls, value: str, info: Any) -> str:
         return _agent_digest_value(value, field=info.field_name)
 
-    @field_validator("gate_id", "expected_execution_snapshot_id", "client_request_id")
+    @field_validator("gate_id", "client_request_id")
     @classmethod
     def validate_identifiers(cls, value: str, info: Any) -> str:
         return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("expected_execution_snapshot_id")
+    @classmethod
+    def validate_snapshot_id(cls, value: str) -> str:
+        return _agent_safe_text(
+            value,
+            field="expected_execution_snapshot_id",
+            max_length=300,
+            allow_empty=False,
+        )
 
     @field_validator("note")
     @classmethod

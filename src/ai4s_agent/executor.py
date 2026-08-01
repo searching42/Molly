@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ai4s_agent import adapters
+from ai4s_agent.adapter_bindings import local_adapter_execution_binding_digest
 from ai4s_agent.agents.modeling import ModelingAgent
 from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, strict_bool, strict_smiles_cleaning_enabled, write_json
 from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_directory
@@ -60,6 +61,7 @@ from ai4s_agent.schemas import (
     RunStatus,
     StageHistoryItem,
     StageState,
+    _agent_digest,
 )
 from ai4s_agent.storage import ProjectStorage
 
@@ -220,6 +222,454 @@ class RunPlanExecutor:
             approved_task_id=state.stage,
         )
 
+    def derive_one_task_server_binding(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Derive the current server-only binding for one local task.
+
+        The result contains only digests and registered logical IDs.  It is
+        safe for Controller authority checks and contains no adapter name or
+        filesystem path.
+        """
+
+        task = self._planned_task_at(run_plan, task_index)
+        spec = self.registry.get(task.task_id)
+        options = self._json_safe(dict(task_options))
+        option_backend = str(options.get("backend") or "")
+        if option_backend and option_backend in spec.backend_execution_routes:
+            resolved_route = spec.backend_execution_routes[option_backend]
+        elif spec.execution_route is not None:
+            resolved_route = spec.execution_route
+        elif set(spec.backend_execution_routes.values()) == {
+            "remote_execution_service"
+        }:
+            resolved_route = "remote_execution_service"
+        else:
+            # Some compiled local option contracts intentionally omit their
+            # reviewed backend (for example baseline train_model). The exact
+            # Controller dispatch intent remains the route authority; this
+            # fallback only permits the callable registered local default.
+            resolved_route = "local_executor"
+        if resolved_route != "local_executor":
+            raise ValueError("Controller one-task seam rejects remote dispatch intents")
+        adapter_name = self._adapter_name_for(
+            task.task_id,
+            spec.default_adapter,
+            options,
+        )
+        if adapter_name != spec.default_adapter:
+            raise ValueError("Controller one-task execution forbids adapter override")
+        adapter_binding = local_adapter_execution_binding_digest(
+            task_id=task.task_id,
+            default_adapter=spec.default_adapter,
+        )
+        if adapter_binding is None:
+            raise ValueError("Controller local task has no callable server binding")
+        run_dir = self.storage.run_dir(project_id, run_plan.run_id)
+        artifact_paths = self._artifact_paths_from_registry(
+            project_id,
+            run_plan.run_id,
+            run_dir,
+        )
+        input_bindings: list[dict[str, Any]] = []
+        manifest = self._artifact_manifest(
+            {
+                artifact_id: self._require_artifact(artifact_paths, artifact_id)
+                for artifact_id in task.required_artifacts
+            }
+        )
+        for artifact_id in task.required_artifacts:
+            entry = dict(manifest[artifact_id])
+            entry.pop("path", None)
+            input_bindings.append(
+                {
+                    "artifact_id": artifact_id,
+                    "content_binding": entry,
+                }
+            )
+        return {
+            "schema_version": "run-plan-one-task-server-binding.v1",
+            "run_id": run_plan.run_id,
+            "task_id": task.task_id,
+            "planned_task_index": task_index,
+            "execution_route": "local_executor",
+            "local_adapter_execution_binding_digest": adapter_binding,
+            "compiled_options_digest": _agent_digest(options),
+            "input_artifacts_digest": _agent_digest(input_bindings),
+            "output_contract_digest": _agent_digest(
+                {
+                    "task_id": task.task_id,
+                    "output_artifact_ids": list(task.output_artifacts),
+                }
+            ),
+        }
+
+    def prepare_one_task_gate(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        task_options: dict[str, Any],
+        expected_local_adapter_execution_binding_digest: str,
+        expected_compiled_options_digest: str,
+        expected_input_artifacts_digest: str,
+        expected_output_contract_digest: str,
+    ) -> dict[str, Any]:
+        """Prepare exactly one gated local task and stop at WAITING_USER."""
+
+        task, spec, binding, run_dir, artifact_paths = self._one_task_context(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            task_id=task_id,
+            task_options=task_options,
+            expected_local_adapter_execution_binding_digest=expected_local_adapter_execution_binding_digest,
+            expected_compiled_options_digest=expected_compiled_options_digest,
+            expected_input_artifacts_digest=expected_input_artifacts_digest,
+            expected_output_contract_digest=expected_output_contract_digest,
+        )
+        del binding
+        if not spec.gates:
+            raise ValueError("Controller Gate preparation requires a registered Gate")
+        return self._execute_from(
+            project_id=project_id,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            start_index=task_index,
+            approved_gates=set(),
+            actor="",
+            executed=self._executed_tasks_before(task_index, run_plan),
+            task_options={task.task_id: dict(task_options)},
+            stop_after_index=task_index,
+        )
+
+    def execute_one_task(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        task_options: dict[str, Any],
+        expected_local_adapter_execution_binding_digest: str,
+        expected_compiled_options_digest: str,
+        expected_input_artifacts_digest: str,
+        expected_output_contract_digest: str,
+    ) -> dict[str, Any]:
+        """Execute exactly one current local task that has no Gate."""
+
+        task, spec, _, run_dir, artifact_paths = self._one_task_context(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            task_id=task_id,
+            task_options=task_options,
+            expected_local_adapter_execution_binding_digest=expected_local_adapter_execution_binding_digest,
+            expected_compiled_options_digest=expected_compiled_options_digest,
+            expected_input_artifacts_digest=expected_input_artifacts_digest,
+            expected_output_contract_digest=expected_output_contract_digest,
+        )
+        if spec.gates:
+            raise ValueError("Controller must commit and consume Gate decisions separately")
+        result = self._execute_from(
+            project_id=project_id,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            start_index=task_index,
+            approved_gates=set(),
+            actor="",
+            executed=self._executed_tasks_before(task_index, run_plan),
+            task_options={task.task_id: dict(task_options)},
+            stop_after_index=task_index,
+        )
+        self._verify_one_task_result_outputs(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            result=result,
+        )
+        return result
+
+    def commit_one_task_gate_decision(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        gate_id: str,
+        approved: bool,
+        actor: str,
+        note: str,
+        expected_snapshot_id: str,
+        expected_snapshot_digest: str,
+        task_options: dict[str, Any],
+    ) -> GateDecision:
+        """Commit one exact Gate decision without executing the task."""
+
+        clean_actor = str(actor or "").strip()
+        if not clean_actor:
+            raise ValueError("actor required for Gate decision")
+        task = self._planned_task_at(run_plan, task_index)
+        if task.task_id != task_id:
+            raise ValueError("Gate task does not match the exact RunPlan index")
+        spec = self.registry.get(task.task_id)
+        if gate_id not in spec.gates:
+            raise ValueError("Gate is not registered for the exact task")
+        state = self._waiting_state_for_task(
+            project_id=project_id,
+            run_plan=run_plan,
+            task=task,
+        )
+        run_dir = self.storage.run_dir(project_id, run_plan.run_id)
+        artifact_paths = self._artifact_paths_from_registry(
+            project_id,
+            run_plan.run_id,
+            run_dir,
+        )
+        _, snapshot = self._validate_waiting_execution_snapshot(
+            state=state,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            approved_gates=set(spec.gates),
+            task_options={task.task_id: dict(task_options)},
+        )
+        snapshot_id = str(snapshot.get("snapshot_id") or "")
+        snapshot_hash = str(snapshot.get("snapshot_hash") or "")
+        if (
+            snapshot_id != expected_snapshot_id
+            or f"sha256:{snapshot_hash}" != expected_snapshot_digest
+        ):
+            raise ValueError("Gate decision does not bind the current execution snapshot")
+        candidate = GateDecision(
+            gate=GateName(gate_id),
+            approved=approved,
+            actor=clean_actor,
+            note=note,
+            approved_at=now_iso(),
+            approved_snapshot_id=snapshot_id,
+            approved_snapshot_hash=snapshot_hash,
+        )
+        for raw in self.storage.read_gate_decisions(project_id, run_plan.run_id):
+            existing = GateDecision.model_validate(raw)
+            if (
+                existing.gate.value == gate_id
+                and existing.approved_snapshot_id == snapshot_id
+                and existing.approved_snapshot_hash == snapshot_hash
+            ):
+                if (
+                    existing.approved != candidate.approved
+                    or existing.actor != candidate.actor
+                    or existing.note != candidate.note
+                ):
+                    raise ValueError("Gate snapshot already has a different immutable decision")
+                return existing
+        self.storage.append_gate_decision(
+            project_id,
+            run_plan.run_id,
+            candidate,
+        )
+        return candidate
+
+    def execute_one_task_after_committed_gate(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        task_options: dict[str, Any],
+        actor: str,
+        expected_snapshot_id: str,
+        expected_snapshot_digest: str,
+        expected_local_adapter_execution_binding_digest: str,
+        expected_compiled_options_digest: str,
+        expected_input_artifacts_digest: str,
+        expected_output_contract_digest: str,
+    ) -> dict[str, Any]:
+        """Exact-read committed Gate decisions, then execute only that task."""
+
+        task, spec, _, run_dir, artifact_paths = self._one_task_context(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            task_id=task_id,
+            task_options=task_options,
+            expected_local_adapter_execution_binding_digest=expected_local_adapter_execution_binding_digest,
+            expected_compiled_options_digest=expected_compiled_options_digest,
+            expected_input_artifacts_digest=expected_input_artifacts_digest,
+            expected_output_contract_digest=expected_output_contract_digest,
+        )
+        if not spec.gates:
+            raise ValueError("Controller Gate consumption requires registered Gates")
+        state = self._waiting_state_for_task(
+            project_id=project_id,
+            run_plan=run_plan,
+            task=task,
+        )
+        snapshot = state.details.get("execution_snapshot")
+        if not isinstance(snapshot, dict):
+            raise ValueError("execution snapshot is unavailable")
+        snapshot_id = str(snapshot.get("snapshot_id") or "")
+        snapshot_hash = str(snapshot.get("snapshot_hash") or "")
+        if (
+            snapshot_id != expected_snapshot_id
+            or f"sha256:{snapshot_hash}" != expected_snapshot_digest
+        ):
+            raise ValueError("Gate consumption does not bind the current execution snapshot")
+        decisions: dict[str, GateDecision] = {}
+        for raw in self.storage.read_gate_decisions(project_id, run_plan.run_id):
+            decision = GateDecision.model_validate(raw)
+            if (
+                decision.gate.value in spec.gates
+                and decision.approved_snapshot_id == snapshot_id
+                and decision.approved_snapshot_hash == snapshot_hash
+            ):
+                existing = decisions.get(decision.gate.value)
+                if existing is not None and existing.model_dump() != decision.model_dump():
+                    raise ValueError("Gate snapshot has conflicting decisions")
+                decisions[decision.gate.value] = decision
+        if set(decisions) != set(spec.gates):
+            raise ValueError("all exact Gate decisions must be committed before execution")
+        if any(not decision.approved for decision in decisions.values()):
+            raise ValueError("a committed Gate decision rejected task execution")
+        _, validated_snapshot = self._validate_waiting_execution_snapshot(
+            state=state,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            approved_gates=set(spec.gates),
+            task_options={task.task_id: dict(task_options)},
+        )
+        if validated_snapshot != snapshot:
+            raise ValueError("committed Gate snapshot changed before consumption")
+        result = self._execute_from(
+            project_id=project_id,
+            run_plan=run_plan,
+            run_dir=run_dir,
+            artifact_paths=artifact_paths,
+            start_index=task_index,
+            approved_gates=set(spec.gates),
+            actor=str(actor or "").strip(),
+            executed=self._executed_tasks_before(task_index, run_plan),
+            task_options={task.task_id: dict(task_options)},
+            approved_task_id=task.task_id,
+            stop_after_index=task_index,
+        )
+        self._verify_one_task_result_outputs(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            result=result,
+        )
+        return result
+
+    def _one_task_context(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        task_id: str,
+        task_options: dict[str, Any],
+        expected_local_adapter_execution_binding_digest: str,
+        expected_compiled_options_digest: str,
+        expected_input_artifacts_digest: str,
+        expected_output_contract_digest: str,
+    ) -> tuple[Any, Any, dict[str, Any], Path, dict[str, str]]:
+        task = self._planned_task_at(run_plan, task_index)
+        if task.task_id != task_id:
+            raise ValueError("Controller task does not match the exact RunPlan index")
+        binding = self.derive_one_task_server_binding(
+            project_id=project_id,
+            run_plan=run_plan,
+            task_index=task_index,
+            task_options=task_options,
+        )
+        expected = {
+            "local_adapter_execution_binding_digest": expected_local_adapter_execution_binding_digest,
+            "compiled_options_digest": expected_compiled_options_digest,
+            "input_artifacts_digest": expected_input_artifacts_digest,
+            "output_contract_digest": expected_output_contract_digest,
+        }
+        if any(binding[key] != value for key, value in expected.items()):
+            raise ValueError("Controller one-task server binding changed")
+        run_dir = self.storage.run_dir(project_id, run_plan.run_id)
+        artifact_paths = self._artifact_paths_from_registry(
+            project_id,
+            run_plan.run_id,
+            run_dir,
+        )
+        missing_previous = [
+            artifact_id
+            for previous in run_plan.tasks[:task_index]
+            for artifact_id in previous.output_artifacts
+            if artifact_id not in artifact_paths
+        ]
+        if missing_previous:
+            raise ValueError(
+                "Controller one-task seam requires complete prior output contracts: "
+                + ", ".join(sorted(set(missing_previous)))
+            )
+        return task, self.registry.get(task.task_id), binding, run_dir, artifact_paths
+
+    @staticmethod
+    def _planned_task_at(run_plan: RunPlan, task_index: int) -> Any:
+        if isinstance(task_index, bool) or not isinstance(task_index, int):
+            raise ValueError("planned task index must be an integer")
+        if task_index < 0 or task_index >= len(run_plan.tasks):
+            raise ValueError("planned task index is outside the RunPlan")
+        return run_plan.tasks[task_index]
+
+    def _waiting_state_for_task(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task: Any,
+    ) -> StageState:
+        state = self.storage.read_stage_state(project_id, run_plan.run_id)
+        if (
+            state is None
+            or state.status != RunStatus.WAITING_USER
+            or state.stage != task.task_id
+        ):
+            raise ValueError("exact task is not waiting for a Gate decision")
+        return state
+
+    @staticmethod
+    def _executed_tasks_before(task_index: int, run_plan: RunPlan) -> list[str]:
+        return [task.task_id for task in run_plan.tasks[:task_index]]
+
+    def _verify_one_task_result_outputs(
+        self,
+        *,
+        project_id: str,
+        run_plan: RunPlan,
+        task_index: int,
+        result: dict[str, Any],
+    ) -> None:
+        if result.get("ok") is not True or result.get("status") != RunStatus.SUCCEEDED.value:
+            return
+        task = self._planned_task_at(run_plan, task_index)
+        registry = self.storage.read_artifact_registry(project_id, run_plan.run_id)
+        missing = [artifact for artifact in task.output_artifacts if artifact not in registry]
+        if missing:
+            raise ValueError(
+                "Controller local task succeeded without its complete output contract: "
+                + ", ".join(missing)
+            )
+
     def _execute_from(
         self,
         *,
@@ -233,6 +683,7 @@ class RunPlanExecutor:
         executed: list[str],
         task_options: TaskOptions,
         approved_task_id: str | None = None,
+        stop_after_index: int | None = None,
     ) -> dict[str, Any]:
         run_id = run_plan.run_id
 
@@ -670,6 +1121,15 @@ class RunPlanExecutor:
                 artifacts=[ArtifactRef(artifact_id=f"{task.task_id}_result", relative_path=self._relative(run_dir, result_path))],
                 details=completion_details,
             )
+            if stop_after_index is not None and index == stop_after_index:
+                return {
+                    "ok": True,
+                    "run_id": run_id,
+                    "status": RunStatus.SUCCEEDED.value,
+                    "completed_task": task.task_id,
+                    "next_task": next_stage,
+                    "executed_tasks": executed,
+                }
 
         return {"ok": True, "run_id": run_id, "status": RunStatus.SUCCEEDED.value, "executed_tasks": executed}
 
