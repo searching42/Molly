@@ -13,7 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from ai4s_agent import adapters
-from ai4s_agent.adapter_bindings import local_adapter_execution_binding_digest
+from ai4s_agent.adapter_bindings import (
+    IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION,
+    local_adapter_execution_binding_digest,
+)
 from ai4s_agent.agents.modeling import ModelingAgent
 from ai4s_agent._utils import PROTECTED_PAYLOAD_KEYS, now_iso, strict_bool, strict_smiles_cleaning_enabled, write_json
 from ai4s_agent.oled_categorical_dataset_execution import _publish_payload_directory
@@ -270,6 +273,9 @@ class RunPlanExecutor:
         adapter_binding = local_adapter_execution_binding_digest(
             task_id=task.task_id,
             default_adapter=spec.default_adapter,
+            binding_version=(
+                IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
+            ),
         )
         if adapter_binding is None:
             raise ValueError("Controller local task has no callable server binding")

@@ -66,8 +66,8 @@ intent and its complete chain. The controller execution binds at least:
   bindings;
 - for every local slot, the non-empty authorization-time local adapter
   execution binding (adapter ID plus path- and interpreter-version-independent
-  callable source/defaults/closure implementation digest); remote slots must
-  leave that local binding empty;
+  callable wrapper-chain source/defaults/closure implementation digest);
+  remote slots must leave that local binding empty;
 - the current complete remote AuthoritySet ID/digest when any task is remote;
 - a deterministic attempt-zero task-slot roster;
 - trusted actor identity/source and the request binding; and
@@ -133,6 +133,13 @@ local adoption all recompute that material and compare it with the slot. A
 default-adapter change or same-ID callable implementation replacement therefore
 makes the old Controller execution stale before the new callable can run,
 including after an earlier task has changed StageState and Registry.
+
+Local Controller slots require implementation-bound Permission v3 or v4.
+Historical Permission v1/v2 authority remains exact-verifiable by its recorded
+reader, but its legacy name/presence binding cannot create a new local
+Controller execution. The implementation reader starts at the callable export
+that Executor will invoke and binds every bounded `__wrapped__` layer; it does
+not use `inspect.unwrap()` as a substitute for the executed wrapper.
 
 Mixed plans are therefore never passed to the legacy whole-plan loop. A remote
 dispatch intent cannot reach a legacy local adapter through the Controller.

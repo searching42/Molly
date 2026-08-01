@@ -50,6 +50,8 @@ from ai4s_agent.schemas import (
 )
 from ai4s_agent.scientific_agent_authorization import AgentPlanControlStore
 from ai4s_agent.scientific_agent_permissions import (
+    IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
+    IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
     derive_local_task_authority_material,
 )
 from ai4s_agent.scientific_agent_plan import (
@@ -937,6 +939,13 @@ class ScientificAgentHarnessController:
             remote = remote_bindings.get(task.task_id)
             local_adapter_binding = ""
             if dispatch.execution_route == "local_executor":
+                if permission.policy_version not in {
+                    IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
+                    IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+                }:
+                    raise ScientificAgentHarnessControllerVerificationError(
+                        "local Controller tasks require implementation-bound permission authority"
+                    )
                 try:
                     local_material = derive_local_task_authority_material(
                         publication=publication,

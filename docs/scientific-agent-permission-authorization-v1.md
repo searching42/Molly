@@ -112,7 +112,7 @@ The precedence is global and deterministic. Any task-level or proposal-level
 
 ### Policy identity
 
-The fixed policy semantic material is versioned as:
+The frozen PR-BM policy semantic material is versioned as:
 
 ```text
 scientific-agent-permission-policy.v1
@@ -133,6 +133,24 @@ authority digest versions, authorization modes, outcome precedence, and the
 reason-code vocabulary. Dictionary order and `PYTHONHASHSEED` do not affect
 canonical bytes. A semantic rule change must change this digest and normally
 upgrades the policy version.
+
+That historical reader remains byte-identical: policy v1 continues to use
+`local-adapter-execution-binding.v1`, which binds task ID and registered
+default-adapter name after callable-presence verification. Existing v1
+decision, authorization, and start-intent publications are regenerated with
+that exact algorithm and are never migrated.
+
+New local authorizations use
+`scientific-agent-permission-policy.v3`, whose reviewed digest is
+`sha256:5a8f37a6d35be67a6532267d79ab7aca21cd53ddd30c0dcceb8457b620a66dff`.
+Policy v3 selects `local-adapter-execution-binding.v2`: it binds the actual
+export callable and every bounded `__wrapped__` layer in invocation order.
+Each layer binds module, qualname, source hash, defaults, keyword defaults,
+and stable closure values. Wrapper cycles, more than 16 wrapper layers,
+unsupported callable kinds, unavailable source, and unsupported runtime
+captures fail closed. Consequently a same-ID implementation or decorator
+wrapper replacement makes new authority stale, while v1 remains an exact
+historical reader only.
 
 ### Decision rules
 

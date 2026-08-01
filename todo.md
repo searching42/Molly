@@ -1061,6 +1061,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：callable binding 算法必须跨进程、hash seed、工作树路径和受支持 Python 版本稳定并对不支持的 callable fail closed；reconstruction 不得重新调用 adapter，也不得把 Controller 外完成误标为 recovered dispatch。
 - 批准人：待 repository owner review。
 
+### 2026-08-01：PR-BN Permission 历史 reader 与 wrapper identity 收口
+
+- 决策：PR #21 继续保持 Draft；恢复已合并 Permission v1/v2 的冻结 material、local binding 语义和固定 digest，新增默认写入的 implementation-bound v3/v4 policy，不迁移或重写历史 authority。
+- 原计划：将全局 local binding 常量原地升级并让 v1/v2 material继承新 callable 实现语义，同时通过 `inspect.unwrap()` 只绑定底层函数；这会使 PR-BM/PR-BM2 历史 decision、authorization、start intent失去 exact replay，且 decorator wrapper 漂移不改变 identity。
+- 新计划：policy-version reader显式路由 v1/v2 的 legacy name/callable-presence binding 与 v3/v4 的 implementation binding；新 binding从实际 export开始绑定最多 16 层完整 `__wrapped__` chain 的 source/defaults/kwdefaults/closure，cycle、unsupported callable/source/capture均 fail closed；local Controller slot只接受 v3/v4 authority。
+- 依据：固定 v1/v2 policy digest、v1/v2 decision/task-authority/authorization/start-intent digest fixture 与 current exact replay测试，以及同 underlying function但 wrapper实现变化、wrapper cycle/depth拒绝、hash-seed和source-path稳定回归；本地 PR Fast 为 `1120 passed, 5345 deselected`。GitHub PR Fast、4-shard Full CI 与 CodeQL仍须绑定新的 review HEAD。
+- 影响任务：`M3H-008` 保持 `I/T/— / IN_PROGRESS`，`M3H-010` 保持 `I/T/— / READY`；`M3H-GATE-002` 不标 `V`；PR-BO/M3H-009 继续 `DEFERRED`，不声明 owner approval、真实 remote canary或可合并。
+- 新增风险：任何未来 callable identity语义变化必须新增 binding/policy version；不得通过更新旧固定 fixture重新定义已发布 authority。
+- 批准人：待 repository owner review。
+
 后续路线调整必须追加：
 
 ```text

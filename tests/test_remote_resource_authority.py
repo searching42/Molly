@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from ai4s_agent import scientific_agent_plan as scientific_agent_plan_module
 from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.remote_resource_authority import (
@@ -62,8 +63,11 @@ from ai4s_agent.scientific_agent_plan import (
     ScientificAgentPlanSourceChanged,
 )
 from ai4s_agent.scientific_agent_permissions import (
+    IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
+    IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
     PERMISSION_POLICY_DIGEST,
     RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
+    RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
     ScientificAgentPermissionEngine,
 )
 from ai4s_agent.storage import ProjectStorage
@@ -883,7 +887,9 @@ def test_configured_authority_enables_exact_non_dispatched_authorization_chain(
         expected_proposal_digest=proposal.proposal_digest,
     )
     assert permission.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
-    assert permission.policy_version == "scientific-agent-permission-policy.v2"
+    assert permission.policy_version == (
+        IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
+    )
     request = AgentPlanAuthorizationRequest(
         expected_proposal_digest=proposal.proposal_digest,
         authorization_mode=AgentAuthorizationMode.STEPWISE,
@@ -911,6 +917,119 @@ def test_configured_authority_enables_exact_non_dispatched_authorization_chain(
         start_intent_id=result.start_intent.start_intent_id,
         verify_current=True,
     )
+
+
+def test_pr_bm2_v2_decision_authorization_and_start_intent_exact_replay(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class _FixedUuid:
+        hex = "0" * 32
+
+    monkeypatch.setattr(scientific_agent_plan_module.uuid, "uuid4", _FixedUuid)
+    monkeypatch.setattr(scientific_agent_plan_module.time, "monotonic", lambda: 0.0)
+    (
+        _,
+        _,
+        _,
+        proposal_store,
+        proposal,
+        resource_service,
+        authorization_service,
+    ) = _configured_case(tmp_path)
+    resource_service.publish(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            client_request_id="pr-bm2-v2-resources",
+        ),
+    )
+    publication = proposal_store.read(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        verify_current=True,
+    )
+    request = AgentPlanAuthorizationRequest(
+        expected_proposal_digest=proposal.proposal_digest,
+        authorization_mode=AgentAuthorizationMode.STEPWISE,
+        requested_preauthorized_gate_ids=[],
+        confirmed=True,
+        client_request_id="pr-bm2-v2-authority",
+        note="replay frozen resource-aware authority",
+    )
+    authorization_decision = authorization_service.permission_engine.evaluate(
+        publication=publication,
+        phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
+        expected_proposal_digest=proposal.proposal_digest,
+        authorization_mode=request.authorization_mode,
+        requested_preauthorized_gate_ids=request.requested_preauthorized_gate_ids,
+        actor="owner",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        client_request_id=request.client_request_id,
+        policy_version=RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    )
+    assert authorization_decision.policy_digest == (
+        "sha256:e5279fe137409cf3490beac8b29c32c3c3212537f67e924fdd875aebe4d6d124"
+    )
+    assert authorization_decision.task_decisions[0].task_authority_digest == (
+        "sha256:24acc3e767361f83490a4c0b17341b03d5e7f35d181a5f58c129fdc679516ae0"
+    )
+    assert authorization_decision.decision_digest == (
+        "sha256:07a366c61dfcc547fe8265bebc0fb52df2fcf217919e2ebe033e7f2bb22081b9"
+    )
+    authorization_service.control_store.publish_permission_decision(
+        authorization_decision
+    )
+    authorization = authorization_service._build_authorization(
+        publication=publication,
+        request=request,
+        actor="owner",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        decision=authorization_decision,
+        created_at=NOW,
+    )
+    authorization_service.control_store.publish_authorization(authorization)
+    start_decision = authorization_service.permission_engine.evaluate(
+        publication=publication,
+        phase=AgentPermissionPhase.AUTHORIZED_START,
+        expected_proposal_digest=proposal.proposal_digest,
+        authorization_mode=authorization.authorization_mode,
+        requested_preauthorized_gate_ids=authorization.preauthorized_operational_gates,
+        actor=authorization.actor,
+        actor_source=authorization.actor_source,
+        client_request_id=request.client_request_id,
+        authorization_id=authorization.authorization_id,
+        authorization_digest=authorization.authorization_digest,
+        authorization_verified=True,
+        start_intent_slot_available=True,
+        policy_version=RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    )
+    assert start_decision.outcome == AgentPermissionOutcome.ALLOW
+    authorization_service.control_store.publish_permission_decision(start_decision)
+    start_intent = authorization_service._build_start_intent(
+        authorization=authorization,
+        permission_decision=start_decision,
+        client_request_id=request.client_request_id,
+        created_at=NOW,
+    )
+    authorization_service.control_store.publish_start_intent(start_intent)
+    assert authorization.authorization_digest == (
+        "sha256:39318e0b268d4dd70836be756b7152c9d3dd57108c7b6f12877255dc2f85b3bd"
+    )
+    assert start_intent.start_intent_digest == (
+        "sha256:f09d3283927c0cee00d0ab971e7ef5521d61f0d5260044886ccd07a4e31fdca8"
+    )
+    assert authorization_service.verify_authorization(
+        project_id="project-1",
+        authorization_id=authorization.authorization_id,
+        verify_current=True,
+    ) == authorization
+    assert authorization_service.verify_start_intent(
+        project_id="project-1",
+        start_intent_id=start_intent.start_intent_id,
+        verify_current=True,
+    ) == start_intent
 
 
 def test_remote_permission_without_published_authority_denies(tmp_path: Path) -> None:
@@ -1935,15 +2054,19 @@ def test_frozen_remote_resource_authority_schemas_match_generated_models() -> No
 
 def test_resource_aware_permission_policy_digest_is_hash_seed_stable() -> None:
     assert PERMISSION_POLICY_DIGEST == (
-        "sha256:3ac31a2c2e5679875cf35718f59be0ecd580934df82e1e58bb6677a3bb8d2a3e"
+        "sha256:bcfcce7a4c1e3dba12d5f291d92f1726df431c111cf288c49acb29bd5ea3df41"
     )
     assert RESOURCE_AWARE_PERMISSION_POLICY_DIGEST == (
-        "sha256:9946d0abf45fc38d9443a90bc660475b69ffd5e5b190ddd86c8ae3423c8318ef"
+        "sha256:e5279fe137409cf3490beac8b29c32c3c3212537f67e924fdd875aebe4d6d124"
+    )
+    assert IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST == (
+        "sha256:f7793b493ba2d28194df21e8993651031d40c5f2c3edcca3d8dc8db39f7f027f"
     )
     script = (
         "from ai4s_agent.scientific_agent_permissions import "
-        "RESOURCE_AWARE_PERMISSION_POLICY_DIGEST; "
-        "print(RESOURCE_AWARE_PERMISSION_POLICY_DIGEST)"
+        "IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST as current, "
+        "RESOURCE_AWARE_PERMISSION_POLICY_DIGEST as legacy; "
+        "print(legacy); print(current)"
     )
     values = []
     for seed in ("1", "777"):
@@ -1958,7 +2081,11 @@ def test_resource_aware_permission_policy_digest_is_hash_seed_stable() -> None:
             env=environment,
         )
         values.append(completed.stdout.strip())
-    assert len(set(values)) == 1
+    expected = (
+        f"{RESOURCE_AWARE_PERMISSION_POLICY_DIGEST}\n"
+        f"{IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST}"
+    )
+    assert values == [expected, expected]
 
 
 def test_resource_authority_api_rejects_injection_and_local_evaluation_is_empty(

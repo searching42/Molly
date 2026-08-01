@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import multiprocessing
@@ -12,7 +13,10 @@ import pytest
 from pydantic import ValidationError
 
 from ai4s_agent import scientific_agent_plan as scientific_agent_plan_module
-from ai4s_agent.adapter_bindings import local_adapter_execution_binding_digest
+from ai4s_agent.adapter_bindings import (
+    IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION,
+    local_adapter_execution_binding_digest,
+)
 from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.resource_profiles import ConnectionProfile, ResourceProfileStore
@@ -40,12 +44,22 @@ from ai4s_agent.scientific_agent_authorization import (
     ScientificAgentAuthorizationVerificationError,
 )
 from ai4s_agent.scientific_agent_permissions import (
+    IMPLEMENTATION_BOUND_PERMISSION_POLICY_DIGEST,
+    IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
     PERMISSION_POLICY_DIGEST,
     PERMISSION_POLICY_MATERIAL,
     PERMISSION_POLICY_VERSION,
     ScientificAgentPermissionEngine,
     compare_permission_outcomes,
 )
+
+
+def _implementation_binding(*, task_id: str, default_adapter: str | None) -> str | None:
+    return local_adapter_execution_binding_digest(
+        task_id=task_id,
+        default_adapter=default_adapter,
+        binding_version=IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION,
+    )
 from ai4s_agent.scientific_agent_plan import (
     AgentProjectObservationBuilder,
     ScientificAgentPlanProposalStore,
@@ -381,7 +395,15 @@ def _multiprocess_authorization_worker(
 
 def test_permission_policy_identity_is_deterministic_across_hash_seeds() -> None:
     assert PERMISSION_POLICY_VERSION == "scientific-agent-permission-policy.v1"
-    assert PERMISSION_POLICY_DIGEST.startswith("sha256:")
+    assert PERMISSION_POLICY_DIGEST == (
+        "sha256:bcfcce7a4c1e3dba12d5f291d92f1726df431c111cf288c49acb29bd5ea3df41"
+    )
+    assert IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION == (
+        "scientific-agent-permission-policy.v3"
+    )
+    assert IMPLEMENTATION_BOUND_PERMISSION_POLICY_DIGEST == (
+        "sha256:5a8f37a6d35be67a6532267d79ab7aca21cd53ddd30c0dcceb8457b620a66dff"
+    )
     assert PERMISSION_POLICY_MATERIAL["outcome_precedence"] == [
         "DENY",
         "REQUIRE_APPROVAL",
@@ -389,7 +411,8 @@ def test_permission_policy_identity_is_deterministic_across_hash_seeds() -> None
     ]
     script = (
         "from ai4s_agent.scientific_agent_permissions import "
-        "PERMISSION_POLICY_DIGEST; print(PERMISSION_POLICY_DIGEST)"
+        "IMPLEMENTATION_BOUND_PERMISSION_POLICY_DIGEST as current, "
+        "PERMISSION_POLICY_DIGEST as legacy; print(legacy); print(current)"
     )
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
@@ -404,20 +427,25 @@ def test_permission_policy_identity_is_deterministic_across_hash_seeds() -> None
             env=env,
         )
         values.append(completed.stdout.strip())
-    assert values == [PERMISSION_POLICY_DIGEST, PERMISSION_POLICY_DIGEST]
+    expected = (
+        f"{PERMISSION_POLICY_DIGEST}\n"
+        f"{IMPLEMENTATION_BOUND_PERMISSION_POLICY_DIGEST}"
+    )
+    assert values == [expected, expected]
 
 
 def test_local_callable_implementation_binding_is_hash_seed_stable() -> None:
-    expected = local_adapter_execution_binding_digest(
+    expected = _implementation_binding(
         task_id="inspect_dataset",
         default_adapter="inspect_dataset_service",
     )
     assert expected is not None
     script = (
         "from ai4s_agent.adapter_bindings import "
+        "IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION as v, "
         "local_adapter_execution_binding_digest as derive; "
         "print(derive(task_id='inspect_dataset', "
-        "default_adapter='inspect_dataset_service'))"
+        "default_adapter='inspect_dataset_service', binding_version=v))"
     )
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(
@@ -463,13 +491,116 @@ def test_local_callable_implementation_binding_is_source_path_independent(
     for adapter in loaded:
         monkeypatch.setattr(adapter_exports, "inspect_dataset_service", adapter)
         digests.append(
-            local_adapter_execution_binding_digest(
+            _implementation_binding(
                 task_id="inspect_dataset",
                 default_adapter="inspect_dataset_service",
             )
         )
     assert digests[0] is not None
     assert digests[0] == digests[1]
+
+
+def test_local_callable_binding_includes_exported_wrapper_implementation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sources = (
+        """import functools
+
+def base_adapter(payload):
+    return payload
+
+@functools.wraps(base_adapter)
+def guarded_adapter(payload):
+    if not isinstance(payload, dict):
+        raise TypeError("payload must be a mapping")
+    return base_adapter(payload)
+""",
+        """import functools
+
+def base_adapter(payload):
+    return payload
+
+@functools.wraps(base_adapter)
+def guarded_adapter(payload):
+    return base_adapter(payload)
+""",
+    )
+    loaded = []
+    for index, source in enumerate(sources):
+        directory = tmp_path / str(index)
+        directory.mkdir()
+        module_path = directory / "binding_wrapper_fixture.py"
+        module_path.write_text(source, encoding="utf-8")
+        spec = importlib.util.spec_from_file_location(
+            "binding_wrapper_fixture", module_path
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+            loaded.append(module.guarded_adapter)
+        finally:
+            sys.modules.pop(spec.name, None)
+
+    from ai4s_agent import adapters as adapter_exports
+
+    digests = []
+    for adapter in loaded:
+        monkeypatch.setattr(adapter_exports, "inspect_dataset_service", adapter)
+        digests.append(
+            _implementation_binding(
+                task_id="inspect_dataset",
+                default_adapter="inspect_dataset_service",
+            )
+        )
+    assert all(digest is not None for digest in digests)
+    assert digests[0] != digests[1]
+
+
+def test_local_callable_binding_rejects_wrapped_cycle(monkeypatch) -> None:
+    def cyclic_adapter(payload):
+        return payload
+
+    cyclic_adapter.__wrapped__ = cyclic_adapter  # type: ignore[attr-defined]
+    from ai4s_agent import adapters as adapter_exports
+
+    monkeypatch.setattr(adapter_exports, "inspect_dataset_service", cyclic_adapter)
+    assert (
+        _implementation_binding(
+            task_id="inspect_dataset",
+            default_adapter="inspect_dataset_service",
+        )
+        is None
+    )
+
+
+def test_local_callable_binding_rejects_excessive_wrapper_depth(monkeypatch) -> None:
+    def base_adapter(payload):
+        return payload
+
+    def decorate(target):
+        @functools.wraps(target)
+        def wrapper(payload):
+            return target(payload)
+
+        return wrapper
+
+    adapter = base_adapter
+    for _ in range(17):
+        adapter = decorate(adapter)
+
+    from ai4s_agent import adapters as adapter_exports
+
+    monkeypatch.setattr(adapter_exports, "inspect_dataset_service", adapter)
+    assert (
+        _implementation_binding(
+            task_id="inspect_dataset",
+            default_adapter="inspect_dataset_service",
+        )
+        is None
+    )
 
 
 def test_frozen_permission_authorization_schemas_match_generated_models() -> None:
@@ -510,21 +641,131 @@ def test_complete_proposal_review_requires_exact_plan_authorization(
     assert [item.task_id for item in decision.task_decisions] == [
         item.task_id for item in proposal.run_plan.tasks
     ]
-    assert decision.policy_version == "scientific-agent-permission-policy.v1"
+    assert decision.policy_version == IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION
     assert decision.policy_digest == (
-        "sha256:3ac31a2c2e5679875cf35718f59be0ecd580934df82e1e58bb6677a3bb8d2a3e"
+        "sha256:5a8f37a6d35be67a6532267d79ab7aca21cd53ddd30c0dcceb8457b620a66dff"
     )
     assert decision.task_decisions[0].task_authority_digest == (
-        "sha256:73d69bd602f287abae8db05f560b5ad2c54de9f23bb27cf93d6c6dbdc56dfb6f"
+        "sha256:89fb2a426f7452ad71e685c001aeb84e39c893f70c980080d64a86a859ec851c"
     )
     assert decision.decision_digest == (
-        "sha256:3dba112cbb94ee31b073bc4842ea19739ca30e33c00a7f31cf11b7d955aaa61f"
+        "sha256:46839949f82aa8473e0f6e9024121e406ad6152d9bbd95dcb1d40ece224d0724"
     )
     persisted = _authorization_service(storage, proposal_store).control_store.read_permission_decision(
         project_id="project-1",
         decision_id=decision.decision_id,
     )
     assert persisted.model_dump(mode="json") == decision.model_dump(mode="json")
+
+
+def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class _FixedUuid:
+        hex = "0" * 32
+
+    monkeypatch.setattr(scientific_agent_plan_module.uuid, "uuid4", _FixedUuid)
+    monkeypatch.setattr(scientific_agent_plan_module.time, "monotonic", lambda: 0.0)
+    storage, proposal_store, proposal = _workspace_with_proposal(tmp_path)
+    service = _authorization_service(storage, proposal_store)
+    publication = proposal_store.read(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        verify_current=True,
+    )
+    legacy_review = service.permission_engine.evaluate(
+        publication=publication,
+        phase=AgentPermissionPhase.PROPOSAL_REVIEW,
+        expected_proposal_digest=proposal.proposal_digest,
+        policy_version=PERMISSION_POLICY_VERSION,
+    )
+    assert legacy_review.policy_digest == (
+        "sha256:bcfcce7a4c1e3dba12d5f291d92f1726df431c111cf288c49acb29bd5ea3df41"
+    )
+    assert legacy_review.task_decisions[0].task_authority_digest == (
+        "sha256:8371df28ef5b9da579264579167bc37f1c087388e42a0a49500a057fb51c4378"
+    )
+    assert legacy_review.decision_digest == (
+        "sha256:6013db087a171554b79d86e96a2875d3783fdf389c43bc5bf38eefa449f1ca5d"
+    )
+
+    request = _request(proposal, client_request_id="pr-bm-v1-authority")
+    authorization_decision = service.permission_engine.evaluate(
+        publication=publication,
+        phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
+        expected_proposal_digest=proposal.proposal_digest,
+        authorization_mode=request.authorization_mode,
+        requested_preauthorized_gate_ids=request.requested_preauthorized_gate_ids,
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        client_request_id=request.client_request_id,
+        policy_version=PERMISSION_POLICY_VERSION,
+    )
+    service.control_store.publish_permission_decision(authorization_decision)
+    authorization = service._build_authorization(
+        publication=publication,
+        request=request,
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        decision=authorization_decision,
+        created_at=_clock(),
+    )
+    service.control_store.publish_authorization(authorization)
+    start_decision = service.permission_engine.evaluate(
+        publication=publication,
+        phase=AgentPermissionPhase.AUTHORIZED_START,
+        expected_proposal_digest=proposal.proposal_digest,
+        authorization_mode=authorization.authorization_mode,
+        requested_preauthorized_gate_ids=authorization.preauthorized_operational_gates,
+        actor=authorization.actor,
+        actor_source=authorization.actor_source,
+        client_request_id=request.client_request_id,
+        authorization_id=authorization.authorization_id,
+        authorization_digest=authorization.authorization_digest,
+        authorization_verified=True,
+        start_intent_slot_available=True,
+        policy_version=PERMISSION_POLICY_VERSION,
+    )
+    assert start_decision.outcome == AgentPermissionOutcome.ALLOW
+    service.control_store.publish_permission_decision(start_decision)
+    start_intent = service._build_start_intent(
+        authorization=authorization,
+        permission_decision=start_decision,
+        client_request_id=request.client_request_id,
+        created_at=_clock(),
+    )
+    service.control_store.publish_start_intent(start_intent)
+
+    assert authorization.authorization_digest == (
+        "sha256:f1aed1c4c30546bf92a7a070bb6428091c2bb5cc9c503d178e83adbb964f3994"
+    )
+    assert start_intent.start_intent_digest == (
+        "sha256:ae05c41980d451bb45c3fb3ee5964eb420fb498363ea640757b5ed1e1d7b586f"
+    )
+
+    def replacement_adapter(payload):
+        return {"replacement": payload}
+
+    from ai4s_agent import adapters as adapter_exports
+
+    # Historical v1 intentionally replays its frozen name/presence binding.
+    # New Controller local execution requires implementation-bound v3/v4.
+    monkeypatch.setattr(
+        adapter_exports,
+        "generate_candidates_stub_adapter",
+        replacement_adapter,
+    )
+    assert service.verify_authorization(
+        project_id="project-1",
+        authorization_id=authorization.authorization_id,
+        verify_current=True,
+    ) == authorization
+    assert service.verify_start_intent(
+        project_id="project-1",
+        start_intent_id=start_intent.start_intent_id,
+        verify_current=True,
+    ) == start_intent
 
 
 @pytest.mark.parametrize(
@@ -740,7 +981,7 @@ def test_shared_gate_aggregates_task_bindings_and_remains_semantic_pending(
     for task_decision in review.task_decisions:
         registered = registry.get(task_decision.task_id)
         assert task_decision.execution_binding_digest == (
-            local_adapter_execution_binding_digest(
+            _implementation_binding(
                 task_id=task_decision.task_id,
                 default_adapter=registered.default_adapter,
             )
@@ -892,7 +1133,7 @@ def test_visible_local_task_with_callable_default_adapter_can_be_authorized(
     assert review.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
     visible_decision = review.task_decisions[0]
     assert visible_decision.execution_binding_digest == (
-        local_adapter_execution_binding_digest(
+        _implementation_binding(
             task_id="visible_task",
             default_adapter=task.default_adapter,
         )
@@ -1335,10 +1576,56 @@ def test_registered_visible_adapter_drift_invalidates_authorization(
     assert changed_decision.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
     assert changed_visible.task_authority_digest != before
     assert changed_visible.execution_binding_digest == (
-        local_adapter_execution_binding_digest(
+        _implementation_binding(
             task_id="visible_task",
             default_adapter="generate_candidates_stub_adapter",
         )
+    )
+    with pytest.raises(
+        ScientificAgentAuthorizationVerificationError,
+        match="permission decision is stale",
+    ):
+        service.verify_authorization(
+            project_id="project-1",
+            authorization_id=authorization.authorization_id,
+            verify_current=True,
+        )
+
+
+def test_same_id_callable_implementation_drift_invalidates_v3_authorization(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    visible = _visible_task_spec("visible_task")
+    registry = AtomicTaskRegistry([visible])
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=_response("visible_task"),
+        request_id="visible-same-id-implementation-drift-proposal",
+    )
+    service = _authorization_service(storage, proposal_store)
+    authorization = service.authorize(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=_request(proposal),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert (
+        authorization.permission_policy_version
+        == IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION
+    )
+
+    def inspect_dataset_service(payload):
+        return {"replacement": payload}
+
+    from ai4s_agent import adapters as adapter_exports
+
+    monkeypatch.setattr(
+        adapter_exports,
+        "inspect_dataset_service",
+        inspect_dataset_service,
     )
     with pytest.raises(
         ScientificAgentAuthorizationVerificationError,
