@@ -380,18 +380,10 @@ def build_remote_execution_request(
         connection=connection,
         execution_profile=execution_profile,
     )
-    resources = RequestedResources.model_validate(requested_resources)
-    limits = execution_profile.resource_limits
-    if (
-        resources.gpu_count > limits.gpu_count_max
-        or resources.cpu_threads > limits.cpu_threads_max
-        or resources.walltime_sec > limits.walltime_sec_max
-    ):
-        raise ValueError("requested resources exceed the execution profile contract")
-    if execution_profile.device_policy == "cpu_only" and resources.gpu_count != 0:
-        raise ValueError("CPU-only execution profile cannot request a GPU")
-    if execution_profile.device_policy == "gpu_required" and resources.gpu_count < 1:
-        raise ValueError("execution profile requires a GPU")
+    resources = validate_requested_resources_against_execution_profile(
+        requested_resources,
+        execution_profile=execution_profile,
+    )
     payload: dict[str, Any] = {
         "schema_version": EXECUTION_REQUEST_VERSION,
         "request_id": manifest.request_id,
@@ -409,6 +401,34 @@ def build_remote_execution_request(
     }
     payload["request_sha256"] = _digest(_canonical_bytes(payload))
     return RemoteExecutionRequest.model_validate(payload)
+
+
+def validate_requested_resources_against_execution_profile(
+    requested_resources: RequestedResources | Mapping[str, Any],
+    *,
+    execution_profile: ExecutionProfile,
+) -> RequestedResources:
+    """Validate complete resources against a fixed profile without executing.
+
+    This is the single pure resource-contract check shared by remote request
+    construction and the Scientific Agent resource-authority control plane. It
+    deliberately creates no request, transport, worker action, or execution
+    state.
+    """
+
+    resources = RequestedResources.model_validate(requested_resources)
+    limits = execution_profile.resource_limits
+    if execution_profile.device_policy == "cpu_only" and resources.gpu_count != 0:
+        raise ValueError("CPU-only execution profile cannot request a GPU")
+    if execution_profile.device_policy == "gpu_required" and resources.gpu_count < 1:
+        raise ValueError("execution profile requires a GPU")
+    if (
+        resources.gpu_count > limits.gpu_count_max
+        or resources.cpu_threads > limits.cpu_threads_max
+        or resources.walltime_sec > limits.walltime_sec_max
+    ):
+        raise ValueError("requested resources exceed the execution profile contract")
+    return resources
 
 
 def build_remote_execution_approval(

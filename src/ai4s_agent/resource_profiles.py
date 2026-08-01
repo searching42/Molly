@@ -465,6 +465,16 @@ class CapabilityProbeResult(BaseModel):
         return clean
 
 
+@dataclass(frozen=True)
+class ResourceProfileAuthoritySnapshot:
+    """One non-mixed private snapshot used by resource authorization."""
+
+    connection: ConnectionProfile
+    probe: CapabilityProbeResult | None
+    source_digest: str
+    profile_capability_digest: str = ""
+
+
 class TransferArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -705,6 +715,117 @@ class ResourceProfileStore:
             return CapabilityProbeResult.model_validate(payload)
         except ValueError:
             return None
+
+    def authority_snapshot(
+        self,
+        connection_id: str,
+        *,
+        execution_profile_id: str | None = None,
+    ) -> ResourceProfileAuthoritySnapshot:
+        """Read one connection and its last probe under the same process lock.
+
+        Unlike the public convenience getters, corrupt probe bytes fail closed
+        instead of being projected as a missing probe.
+        """
+
+        clean = _safe_identifier(connection_id, field="connection_id")
+        with self._lock, self._process_lock() as config_fd:
+            profiles = self._read_profiles_locked(config_fd)
+            raw_probes = self._read_probe_payload_locked(config_fd)
+            connection = next(
+                (
+                    profile
+                    for profile in profiles
+                    if profile.connection_id == clean
+                ),
+                None,
+            )
+            if connection is None:
+                raise ValueError(f"connection profile not found: {clean}")
+            raw_probe = raw_probes.get(clean)
+            probe = (
+                None
+                if raw_probe is None
+                else CapabilityProbeResult.model_validate(raw_probe)
+            )
+            source_material = {
+                "schema_version": "resource_profile_authority_snapshot.v1",
+                "connection_id": clean,
+                "connection_profile_digest": connection.digest(),
+                "capability_probe_digest": (
+                    "" if probe is None else _sha256(_canonical_bytes(probe.model_dump(mode="json")))
+                ),
+            }
+            profile_capability_digest = ""
+            if execution_profile_id is not None:
+                execution_profile = self.resolve_execution_profile(execution_profile_id)
+                required = set(execution_profile.required_capabilities)
+                matching_connections: list[dict[str, Any]] = []
+                for candidate in profiles:
+                    candidate_raw_probe = raw_probes.get(candidate.connection_id)
+                    candidate_probe = (
+                        None
+                        if candidate_raw_probe is None
+                        else CapabilityProbeResult.model_validate(candidate_raw_probe)
+                    )
+                    probe_matches = bool(
+                        candidate_probe is not None
+                        and candidate_probe.connection_profile_digest == candidate.digest()
+                    )
+                    declared_ready = bool(
+                        candidate.enabled
+                        and required.issubset(candidate.declared_capabilities)
+                    )
+                    verified_ready = bool(
+                        declared_ready
+                        and probe_matches
+                        and candidate_probe is not None
+                        and candidate_probe.status == "available"
+                        and required.issubset(candidate_probe.verified_capabilities)
+                    )
+                    matching_connections.append(
+                        {
+                            "connection_digest": candidate.digest(),
+                            "enabled": bool(candidate.enabled),
+                            "declared_capabilities": sorted(candidate.declared_capabilities),
+                            "probe_digest": (
+                                _sha256(
+                                    _canonical_bytes(
+                                        candidate_probe.model_dump(mode="json")
+                                    )
+                                )
+                                if probe_matches and candidate_probe is not None
+                                else ""
+                            ),
+                            "probe_status": (
+                                candidate_probe.status
+                                if probe_matches and candidate_probe is not None
+                                else "unknown"
+                            ),
+                            "probe_matches_connection_digest": probe_matches,
+                            "declared_ready": declared_ready,
+                            "verified_ready": verified_ready,
+                        }
+                    )
+                profile_capability_digest = _sha256(
+                    _canonical_bytes(
+                        {
+                            "profile_id": execution_profile.profile_id,
+                            "profile_digest": execution_profile.digest(),
+                            "connections": sorted(
+                                matching_connections,
+                                key=lambda item: item["connection_digest"],
+                            ),
+                        }
+                    )
+                )
+                source_material["profile_capability_digest"] = profile_capability_digest
+        return ResourceProfileAuthoritySnapshot(
+            connection=connection,
+            probe=probe,
+            source_digest=_sha256(_canonical_bytes(source_material)),
+            profile_capability_digest=profile_capability_digest,
+        )
 
     def save_probe(self, result: CapabilityProbeResult) -> CapabilityProbeResult:
         validated = CapabilityProbeResult.model_validate(result.model_dump(mode="json"))

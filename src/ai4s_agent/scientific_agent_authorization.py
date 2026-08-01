@@ -34,6 +34,9 @@ from ai4s_agent.schemas import (
     AgentPermissionOutcome,
     AgentPermissionPhase,
     AgentPermissionShadowRecord,
+    AgentRemoteResourceAuthority,
+    AgentRemoteResourceAuthorityDecision,
+    AgentRemoteResourceAuthoritySet,
     AgentPlanAuthorization,
     AgentPlanAuthorizationRequest,
     AgentPlanStartIntent,
@@ -94,12 +97,33 @@ _CONTROL_LAYOUT: Mapping[str, tuple[str, str, str, type[BaseModel]]] = {
         "shadow_record_digest",
         AgentPermissionShadowRecord,
     ),
+    "remote_resource_authority_decision": (
+        "remote_resource_authority_decisions",
+        "remote_resource_authority_decision.json",
+        "decision_digest",
+        AgentRemoteResourceAuthorityDecision,
+    ),
+    "remote_resource_authority": (
+        "remote_resource_authorities",
+        "remote_resource_authority.json",
+        "authority_digest",
+        AgentRemoteResourceAuthority,
+    ),
+    "remote_resource_authority_set": (
+        "remote_resource_authority_sets",
+        "remote_resource_authority_set.json",
+        "authority_set_digest",
+        AgentRemoteResourceAuthoritySet,
+    ),
 }
 _CONTROL_ID_FIELDS = {
     "permission_decision": "decision_id",
     "authorization": "authorization_id",
     "start_intent": "start_intent_id",
     "shadow_record": "shadow_record_id",
+    "remote_resource_authority_decision": "decision_id",
+    "remote_resource_authority": "authority_id",
+    "remote_resource_authority_set": "authority_set_id",
 }
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -269,6 +293,74 @@ class AgentPlanControlStore:
             kind="shadow_record",
             artifact_id=record.shadow_record_id,
             model=record,
+        )
+
+    def publish_remote_resource_authority_decision(
+        self, decision: AgentRemoteResourceAuthorityDecision
+    ) -> AgentRemoteResourceAuthorityDecision:
+        return self._publish_model(
+            project_id=decision.project_id,
+            kind="remote_resource_authority_decision",
+            artifact_id=decision.decision_id,
+            model=decision,
+        )
+
+    def read_remote_resource_authority_decision(
+        self, *, project_id: str, decision_id: str
+    ) -> AgentRemoteResourceAuthorityDecision:
+        return self._read_model(
+            project_id=project_id,
+            kind="remote_resource_authority_decision",
+            artifact_id=decision_id,
+            expected_type=AgentRemoteResourceAuthorityDecision,
+        )
+
+    def publish_remote_resource_authority(
+        self,
+        authority: AgentRemoteResourceAuthority,
+        *,
+        staging_parent: Path | None = None,
+    ) -> AgentRemoteResourceAuthority:
+        return self._publish_model(
+            project_id=authority.project_id,
+            kind="remote_resource_authority",
+            artifact_id=authority.authority_id,
+            model=authority,
+            staging_parent=staging_parent,
+        )
+
+    def read_remote_resource_authority(
+        self, *, project_id: str, authority_id: str
+    ) -> AgentRemoteResourceAuthority:
+        return self._read_model(
+            project_id=project_id,
+            kind="remote_resource_authority",
+            artifact_id=authority_id,
+            expected_type=AgentRemoteResourceAuthority,
+        )
+
+    def publish_remote_resource_authority_set(
+        self,
+        authority_set: AgentRemoteResourceAuthoritySet,
+        *,
+        staging_parent: Path | None = None,
+    ) -> AgentRemoteResourceAuthoritySet:
+        return self._publish_model(
+            project_id=authority_set.project_id,
+            kind="remote_resource_authority_set",
+            artifact_id=authority_set.authority_set_id,
+            model=authority_set,
+            staging_parent=staging_parent,
+        )
+
+    def read_remote_resource_authority_set(
+        self, *, project_id: str, authority_set_id: str
+    ) -> AgentRemoteResourceAuthoritySet:
+        return self._read_model(
+            project_id=project_id,
+            kind="remote_resource_authority_set",
+            artifact_id=authority_set_id,
+            expected_type=AgentRemoteResourceAuthoritySet,
         )
 
     def read_shadow_record(
@@ -676,6 +768,8 @@ class ScientificAgentAuthorizationService:
         registry: AtomicTaskRegistry | None = None,
         control_store: AgentPlanControlStore | None = None,
         permission_engine: ScientificAgentPermissionEngine | None = None,
+        resource_authority_resolver: Callable[[ScientificAgentPlanPublication, str], Any]
+        | None = None,
         clock: Callable[[], str] = now_iso,
     ) -> None:
         self.storage = storage
@@ -684,6 +778,7 @@ class ScientificAgentAuthorizationService:
         self.control_store = control_store or AgentPlanControlStore(storage=storage)
         self.permission_engine = permission_engine or ScientificAgentPermissionEngine(
             registry=self.registry,
+            resource_authority_resolver=resource_authority_resolver,
             clock=clock,
         )
         self.clock = clock
@@ -793,6 +888,7 @@ class ScientificAgentAuthorizationService:
             actor=authorization.actor,
             actor_source=authorization.actor_source,
             client_request_id=authorization.client_request_id,
+            policy_version=decision.policy_version,
         )
         if regenerated_decision.decision_digest != decision.decision_digest:
             raise ScientificAgentAuthorizationVerificationError(
@@ -882,6 +978,7 @@ class ScientificAgentAuthorizationService:
             authorization_digest=authorization.authorization_digest,
             authorization_verified=True,
             start_intent_slot_available=True,
+            policy_version=decision.policy_version,
         )
         if regenerated.decision_digest != decision.decision_digest:
             raise ScientificAgentAuthorizationVerificationError(

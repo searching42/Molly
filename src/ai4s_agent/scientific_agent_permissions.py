@@ -33,8 +33,10 @@ from ai4s_agent.scientific_agent_plan import ScientificAgentPlanPublication
 
 
 PERMISSION_POLICY_VERSION = "scientific-agent-permission-policy.v1"
+RESOURCE_AWARE_PERMISSION_POLICY_VERSION = "scientific-agent-permission-policy.v2"
 TASK_EXECUTION_BINDING_VERSION = "agent-task-execution-binding.v1"
 TASK_AUTHORITY_BINDING_VERSION = "agent-task-authority-binding.v1"
+RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION = "agent-task-authority-binding.v2"
 
 RECOGNIZED_EFFECT_CLASSES = (
     "observe",
@@ -105,6 +107,10 @@ INTERNAL_TASK_PERMISSION_FIELDS = (
     "verification_policy",
     "planner_visible",
 )
+RESOURCE_AWARE_INTERNAL_TASK_PERMISSION_FIELDS = (
+    *INTERNAL_TASK_PERMISSION_FIELDS,
+    "budget_dimensions",
+)
 INTERNAL_TASK_EXECUTION_FIELDS = ("default_adapter",)
 RECOGNIZED_INTERNAL_IDEMPOTENCY_POLICIES = (
     "replay_safe",
@@ -162,6 +168,34 @@ REASON_CODE_VOCABULARY = (
     "UNKNOWN_DISPATCH_ROUTE",
     "UNKNOWN_GATE",
     "UNKNOWN_RISK_LEVEL",
+)
+
+RESOURCE_AUTHORITY_REASON_CODES = (
+    "MIXED_PLAN_RUNTIME_AUTHORITY_REQUIRED",
+    "REMOTE_RESOURCE_AUTHORITY_REQUIRED",
+    "REMOTE_RESOURCE_POLICY_MISSING",
+    "REMOTE_RESOURCE_POLICY_AMBIGUOUS",
+    "REMOTE_RESOURCE_POLICY_DISABLED",
+    "REMOTE_RESOURCE_POLICY_STALE",
+    "REMOTE_RESOURCE_TASK_NOT_ALLOWED",
+    "REMOTE_RESOURCE_TASK_TYPE_MISMATCH",
+    "REMOTE_RESOURCE_PROFILE_MISMATCH",
+    "REMOTE_RESOURCE_CONNECTION_MISSING",
+    "REMOTE_RESOURCE_CONNECTION_DISABLED",
+    "REMOTE_RESOURCE_PROBE_MISSING",
+    "REMOTE_RESOURCE_PROBE_STALE",
+    "REMOTE_RESOURCE_PROBE_UNAVAILABLE",
+    "REMOTE_RESOURCE_CAPABILITY_MISSING",
+    "REMOTE_RESOURCE_EXECUTION_PROFILE_UNKNOWN",
+    "REMOTE_RESOURCE_EXECUTION_PROFILE_DRIFT",
+    "REMOTE_RESOURCE_LIMIT_EXCEEDED",
+    "REMOTE_RESOURCE_DEVICE_POLICY_MISMATCH",
+    "REMOTE_RESOURCE_BUDGET_UNAVAILABLE",
+    "REMOTE_RESOURCE_BUDGET_EXCEEDED",
+    "REMOTE_RESOURCE_AGGREGATE_BUDGET_EXCEEDED",
+    "REMOTE_RESOURCE_COST_AUTHORITY_UNAVAILABLE",
+    "REMOTE_RESOURCE_SOURCE_CHANGED",
+    "TASK_BUDGET_DIMENSION_UNKNOWN",
 )
 
 
@@ -249,6 +283,55 @@ PERMISSION_POLICY_MATERIAL: Mapping[str, Any] = {
 
 PERMISSION_POLICY_DIGEST = _agent_digest(PERMISSION_POLICY_MATERIAL)
 
+RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL: Mapping[str, Any] = {
+    **PERMISSION_POLICY_MATERIAL,
+    "schema_version": "scientific_agent_permission_policy_material.v2",
+    "policy_version": RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    "profile_resource_completeness_rules": {
+        "selected_profile_must_be_available": True,
+        "capability_digest_exact_match": True,
+        "remote_resource_authority": "current_exact_server_owned_authority_required",
+        "proposal_resource_intent": "reviewed_constraint_not_authority",
+        "remote_profile_binding_required": True,
+        "execution_binding": (
+            "route_type_profile_resource_authority_and_complete_set_digests"
+        ),
+    },
+    "internal_dependency_rules": {
+        **PERMISSION_POLICY_MATERIAL["internal_dependency_rules"],
+        "required_explicit_fields": list(
+            RESOURCE_AWARE_INTERNAL_TASK_PERMISSION_FIELDS
+        ),
+        "recognized_budget_dimensions": list(RECOGNIZED_BUDGET_DIMENSIONS),
+        "task_authority_binding_version": (
+            RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
+        ),
+    },
+    "task_authority_binding_rules": {
+        "scope": "all_resource_aware_tasks",
+        "binding_version": RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION,
+        "budget_dimensions": "sorted_unique_exact_registry_roster",
+        "unknown_budget_dimension": "deny",
+    },
+    "remote_budget_ownership_rules": {
+        "remote_only_dimensions": ["max_gpu_hours", "max_cost_usd"],
+        "shared_plan_dimensions": ["max_runtime_sec"],
+        "remote_owner": "current_exact_remote_resource_authority_set",
+        "mixed_plan_runtime_behavior": (
+            "remote_subtotal_in_authority_set_and_local_runtime_requires_legacy_authority"
+        ),
+        "gpu_hour_aggregation": "sum_per_task",
+        "walltime_aggregation": "sequential_sum.v1",
+        "local_fixed_task_dimensions": "non_resource_dimensions_remain_legacy_budget_owned",
+    },
+    "reason_code_vocabulary": sorted(
+        {*REASON_CODE_VOCABULARY, *RESOURCE_AUTHORITY_REASON_CODES}
+    ),
+}
+RESOURCE_AWARE_PERMISSION_POLICY_DIGEST = _agent_digest(
+    RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL
+)
+
 
 _OUTCOME_PRIORITY = {
     AgentPermissionOutcome.ALLOW: 1,
@@ -266,10 +349,20 @@ class PermissionPolicyIdentity:
     )
 
 
-def permission_policy_identity() -> PermissionPolicyIdentity:
+def permission_policy_identity(
+    version: str = PERMISSION_POLICY_VERSION,
+) -> PermissionPolicyIdentity:
     """Return stable policy identity shared by decisions and authorizations."""
 
-    return PermissionPolicyIdentity()
+    if version == PERMISSION_POLICY_VERSION:
+        return PermissionPolicyIdentity()
+    if version == RESOURCE_AWARE_PERMISSION_POLICY_VERSION:
+        return PermissionPolicyIdentity(
+            version=RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+            digest=RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
+            material=RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL,
+        )
+    raise ValueError("unknown scientific agent permission policy version")
 
 
 def permission_outcome_precedence(outcomes: Iterable[AgentPermissionOutcome]) -> AgentPermissionOutcome:
@@ -337,11 +430,17 @@ def _internal_task_permission_metadata_complete(
     effective_options: Mapping[str, Any] | None,
     compiled_options: Mapping[str, Any] | None,
     dispatch: Any | None,
+    resource_aware: bool = False,
 ) -> bool:
     """Return whether a hidden dependency has explicit non-LLM authority."""
 
     explicitly_set = set(getattr(spec, "model_fields_set", set()))
-    if not set(INTERNAL_TASK_PERMISSION_FIELDS).issubset(explicitly_set):
+    required_fields = (
+        RESOURCE_AWARE_INTERNAL_TASK_PERMISSION_FIELDS
+        if resource_aware
+        else INTERNAL_TASK_PERMISSION_FIELDS
+    )
+    if not set(required_fields).issubset(explicitly_set):
         return False
     if spec.planner_visible or spec.effect_class is None:
         return False
@@ -428,29 +527,34 @@ def _task_authority_digest(
     effective_options: Mapping[str, Any] | None,
     compiled_options: Mapping[str, Any] | None,
     execution_binding_digest: str,
+    binding_version: str = TASK_AUTHORITY_BINDING_VERSION,
+    budget_dimensions: Sequence[str] = (),
 ) -> str:
-    return _agent_digest(
-        {
-            "schema_version": TASK_AUTHORITY_BINDING_VERSION,
-            "task_id": task_id,
-            "planner_visible": planner_visible,
-            "effect_class": effect_class,
-            "risk_level": risk_level,
-            "required_permissions": sorted(set(permissions)),
-            "gates": sorted(set(gates)),
-            "execution_route": execution_route,
-            "remote_task_type": remote_task_type,
-            "supports_plan_preapproval": supports_plan_preapproval,
-            "idempotency_policy": idempotency_policy,
-            "verification_policy": verification_policy,
-            "caller_option_contract": {
-                "kind": "planner_compiled" if planner_visible else "fixed_empty",
-                "effective_options": effective_options,
-                "compiled_options": compiled_options,
-            },
-            "execution_binding_digest": execution_binding_digest,
-        }
-    )
+    material: dict[str, Any] = {
+        "schema_version": binding_version,
+        "task_id": task_id,
+        "planner_visible": planner_visible,
+        "effect_class": effect_class,
+        "risk_level": risk_level,
+        "required_permissions": sorted(set(permissions)),
+        "gates": sorted(set(gates)),
+        "execution_route": execution_route,
+        "remote_task_type": remote_task_type,
+        "supports_plan_preapproval": supports_plan_preapproval,
+        "idempotency_policy": idempotency_policy,
+        "verification_policy": verification_policy,
+        "caller_option_contract": {
+            "kind": "planner_compiled" if planner_visible else "fixed_empty",
+            "effective_options": effective_options,
+            "compiled_options": compiled_options,
+        },
+        "execution_binding_digest": execution_binding_digest,
+    }
+    if binding_version == RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION:
+        material["budget_dimensions"] = sorted(set(budget_dimensions))
+    elif binding_version != TASK_AUTHORITY_BINDING_VERSION:
+        raise ValueError("unknown task authority binding version")
+    return _agent_digest(material)
 
 
 class ScientificAgentPermissionEngine:
@@ -460,9 +564,14 @@ class ScientificAgentPermissionEngine:
         self,
         *,
         registry: AtomicTaskRegistry | None = None,
+        resource_authority_resolver: Callable[
+            [ScientificAgentPlanPublication, str], Any
+        ]
+        | None = None,
         clock: Callable[[], str] = now_iso,
     ) -> None:
         self.registry = registry or AtomicTaskRegistry()
+        self.resource_authority_resolver = resource_authority_resolver
         self.clock = clock
         self.policy = permission_policy_identity()
 
@@ -481,11 +590,23 @@ class ScientificAgentPermissionEngine:
         authorization_digest: str = "",
         authorization_verified: bool = False,
         start_intent_slot_available: bool = True,
+        policy_version: str | None = None,
     ) -> AgentPermissionDecision:
         proposal = publication.proposal
         observation = publication.observation
         catalog = publication.catalog
         requested_gates = sorted(set(str(item) for item in requested_preauthorized_gate_ids))
+        has_remote_tasks = any(
+            item.execution_route == "remote_execution_service"
+            for item in proposal.dispatch_intents
+        )
+        selected_policy_version = policy_version or (
+            RESOURCE_AWARE_PERMISSION_POLICY_VERSION
+            if has_remote_tasks and self.resource_authority_resolver is not None
+            else PERMISSION_POLICY_VERSION
+        )
+        policy = permission_policy_identity(selected_policy_version)
+        resource_aware = selected_policy_version == RESOURCE_AWARE_PERMISSION_POLICY_VERSION
 
         global_findings: list[AgentPermissionFinding] = []
         task_decisions: list[AgentTaskPermissionDecision] = []
@@ -537,7 +658,17 @@ class ScientificAgentPermissionEngine:
                 AgentPermissionOutcome.DENY,
                 "Dispatch intents must cover every RunPlan task exactly once.",
             )
-        if any(item.blocks_proposal for item in proposal.questions):
+        blocking_questions = [item for item in proposal.questions if item.blocks_proposal]
+        if resource_aware:
+            resource_question_ids = {
+                f"remote_resources_{item.task_id}"
+                for item in proposal.dispatch_intents
+                if item.execution_route == "remote_execution_service"
+            }
+            blocking_questions = [
+                item for item in blocking_questions if item.question_id not in resource_question_ids
+            ]
+        if blocking_questions:
             add_global(
                 "blocking_question_present",
                 AgentPermissionOutcome.DENY,
@@ -553,6 +684,7 @@ class ScientificAgentPermissionEngine:
         catalog_by_task = {item.task_id: item for item in catalog.tools}
         known_gates = {item.value for item in GateName}
         gate_bindings: dict[str, list[tuple[str, str, bool]]] = {}
+        local_runtime_task_ids: list[str] = []
 
         for planned_task in proposal.run_plan.tasks:
             task_id = planned_task.task_id
@@ -577,6 +709,12 @@ class ScientificAgentPermissionEngine:
                 registered = self.registry.get(task_id)
             except ValueError:
                 registered = None
+            budget_dimensions = sorted(
+                {
+                    str(item)
+                    for item in getattr(registered, "budget_dimensions", ())
+                }
+            )
             if registered is None:
                 add_task("task_unknown", AgentPermissionOutcome.DENY, "Task is not registered.")
             if tool is None:
@@ -593,6 +731,7 @@ class ScientificAgentPermissionEngine:
                         effective_options=proposal.effective_planner_options.get(task_id),
                         compiled_options=proposal.compiled_task_options.get(task_id),
                         dispatch=dispatch,
+                        resource_aware=resource_aware,
                     )
                 )
                 if registered is not None and registered.planner_visible:
@@ -654,6 +793,23 @@ class ScientificAgentPermissionEngine:
                 idempotency_policy = tool.idempotency_policy
                 verification_policy = tool.verification_policy
 
+            if resource_aware:
+                for unknown_dimension in sorted(
+                    set(budget_dimensions).difference(RECOGNIZED_BUDGET_DIMENSIONS)
+                ):
+                    add_task(
+                        "task_budget_dimension_unknown",
+                        AgentPermissionOutcome.DENY,
+                        f"Task declares an unknown budget dimension: {unknown_dimension}.",
+                    )
+
+            if (
+                execution_route == "local_executor"
+                and registered is not None
+                and "max_runtime_sec" in budget_dimensions
+            ):
+                local_runtime_task_ids.append(task_id)
+
             if execution_route == "local_executor":
                 resolved_local_binding = (
                     None
@@ -676,6 +832,62 @@ class ScientificAgentPermissionEngine:
                         AgentPermissionOutcome.DENY,
                         "Local task lacks a callable registered default adapter binding.",
                     )
+            elif execution_route == "remote_execution_service" and resource_aware:
+                authority = None
+                authority_reason = "REMOTE_RESOURCE_AUTHORITY_REQUIRED"
+                if self.resource_authority_resolver is not None:
+                    try:
+                        authority = self.resource_authority_resolver(publication, task_id)
+                    except (FileNotFoundError, ValueError) as exc:
+                        authority_reason = str(
+                            getattr(exc, "reason_code", "REMOTE_RESOURCE_AUTHORITY_REQUIRED")
+                        ).upper()
+                if authority is None:
+                    execution_binding_digest = _unavailable_execution_binding_digest(
+                        task_id=task_id,
+                        execution_route=execution_route,
+                        remote_task_type=remote_task_type,
+                    )
+                    add_task(
+                        authority_reason,
+                        AgentPermissionOutcome.DENY,
+                        "Remote task lacks a current exact server-owned resource authority.",
+                    )
+                else:
+                    authority_set_digest = str(
+                        getattr(authority, "authority_set_digest", "") or ""
+                    )
+                    if not authority_set_digest:
+                        execution_binding_digest = _unavailable_execution_binding_digest(
+                            task_id=task_id,
+                            execution_route=execution_route,
+                            remote_task_type=remote_task_type,
+                        )
+                        add_task(
+                            "remote_resource_authority_required",
+                            AgentPermissionOutcome.DENY,
+                            "Remote task authority is not activated by a complete current set.",
+                        )
+                    else:
+                        execution_binding_digest = _agent_digest(
+                            {
+                                "schema_version": "agent-remote-task-execution-binding.v2",
+                                "task_id": task_id,
+                                "execution_route": execution_route,
+                                "remote_task_type": remote_task_type,
+                                "logical_profile_id": getattr(
+                                    dispatch_by_task.get(task_id),
+                                    "logical_profile_id",
+                                    None,
+                                ),
+                                "remote_resource_authority_digest": (
+                                    authority.authority_digest
+                                ),
+                                "remote_resource_authority_set_digest": (
+                                    authority_set_digest
+                                ),
+                            }
+                        )
             else:
                 execution_binding_digest = _agent_digest(
                     {
@@ -700,6 +912,12 @@ class ScientificAgentPermissionEngine:
                 effective_options=proposal.effective_planner_options.get(task_id),
                 compiled_options=proposal.compiled_task_options.get(task_id),
                 execution_binding_digest=execution_binding_digest,
+                binding_version=(
+                    RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
+                    if resource_aware
+                    else TASK_AUTHORITY_BINDING_VERSION
+                ),
+                budget_dimensions=budget_dimensions,
             )
 
             if effect_class not in RECOGNIZED_EFFECT_CLASSES:
@@ -788,7 +1006,7 @@ class ScientificAgentPermissionEngine:
                     )
                 dispatch = dispatch_by_task.get(task_id)
                 resources = None if dispatch is None else dispatch.requested_resources
-                if (
+                if not resource_aware and (
                     dispatch is None
                     or dispatch.logical_profile_id is None
                     or resources is None
@@ -799,7 +1017,9 @@ class ScientificAgentPermissionEngine:
                         AgentPermissionOutcome.DENY,
                         "Remote profile and resource intent must be fully configured.",
                     )
-                elif phase != AgentPermissionPhase.AUTHORIZED_START:
+                elif phase != AgentPermissionPhase.AUTHORIZED_START and not any(
+                    item.outcome == AgentPermissionOutcome.DENY for item in task_findings
+                ):
                     add_task(
                         "remote_compute_requires_user",
                         AgentPermissionOutcome.REQUIRE_APPROVAL,
@@ -910,17 +1130,49 @@ class ScientificAgentPermissionEngine:
                 "Remote dispatch profile is not in the selected exact profile roster.",
             )
 
-        if proposal.limits:
+        limits_requiring_legacy_budget = dict(proposal.limits)
+        mixed_plan_runtime_requires_legacy = bool(
+            resource_aware
+            and has_remote_tasks
+            and local_runtime_task_ids
+            and "max_runtime_sec" in proposal.limits
+        )
+        if resource_aware and has_remote_tasks:
+            for resource_dimension in ("max_gpu_hours", "max_cost_usd"):
+                limits_requiring_legacy_budget.pop(resource_dimension, None)
+            if not mixed_plan_runtime_requires_legacy:
+                limits_requiring_legacy_budget.pop("max_runtime_sec", None)
+        if limits_requiring_legacy_budget:
             if observation.budget_limits.status != "configured":
-                add_global(
-                    "budget_authority_unavailable",
-                    AgentPermissionOutcome.DENY,
-                    "Non-empty proposal limits require configured server budget authority.",
-                )
+                if mixed_plan_runtime_requires_legacy:
+                    add_global(
+                        "mixed_plan_runtime_authority_required",
+                        AgentPermissionOutcome.DENY,
+                        "Mixed local/remote runtime tasks require configured legacy "
+                        "server authority for the plan-level max_runtime_sec limit; "
+                        f"local runtime task roster: {local_runtime_task_ids}.",
+                    )
+                else:
+                    add_global(
+                        "budget_authority_unavailable",
+                        AgentPermissionOutcome.DENY,
+                        "Non-empty proposal limits require configured server budget authority.",
+                    )
             else:
-                for dimension, proposed in proposal.limits.items():
+                for dimension, proposed in limits_requiring_legacy_budget.items():
                     authority = observation.budget_limits.limits.get(dimension)
-                    if authority is None or (
+                    if (
+                        dimension == "max_runtime_sec"
+                        and mixed_plan_runtime_requires_legacy
+                        and authority is None
+                    ):
+                        add_global(
+                            "mixed_plan_runtime_authority_required",
+                            AgentPermissionOutcome.DENY,
+                            "Configured legacy server budget authority does not bind "
+                            "max_runtime_sec for the mixed-plan local runtime roster.",
+                        )
+                    elif authority is None or (
                         proposed is not None and float(proposed) > float(authority)
                     ):
                         add_global(
@@ -1032,8 +1284,8 @@ class ScientificAgentPermissionEngine:
             observation_digest=proposal.observation_digest,
             tool_catalog_digest=proposal.tool_catalog_digest,
             phase=phase,
-            policy_version=self.policy.version,
-            policy_digest=self.policy.digest,
+            policy_version=policy.version,
+            policy_digest=policy.digest,
             authorization_mode=authorization_mode,
             requested_preauthorized_gate_ids=requested_gates,
             actor=actor,
@@ -1066,6 +1318,9 @@ __all__ = [
     "PERMISSION_POLICY_VERSION",
     "PERMISSION_POLICY_DIGEST",
     "PERMISSION_POLICY_MATERIAL",
+    "RESOURCE_AWARE_PERMISSION_POLICY_VERSION",
+    "RESOURCE_AWARE_PERMISSION_POLICY_DIGEST",
+    "RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL",
     "REASON_CODE_VOCABULARY",
     "PermissionPolicyIdentity",
     "permission_policy_identity",
