@@ -1,5 +1,13 @@
 {
   "$defs": {
+    "AgentAuthorizationMode": {
+      "enum": [
+        "stepwise",
+        "frozen_plan"
+      ],
+      "title": "AgentAuthorizationMode",
+      "type": "string"
+    },
     "AgentHarnessAuthorityClass": {
       "enum": [
         "authoritative",
@@ -154,12 +162,23 @@
       "title": "Authorization Digest",
       "type": "string"
     },
+    "authorization_mode": {
+      "$ref": "#/$defs/AgentAuthorizationMode"
+    },
     "permission_decision_id": {
       "title": "Permission Decision Id",
       "type": "string"
     },
     "permission_decision_digest": {
       "title": "Permission Decision Digest",
+      "type": "string"
+    },
+    "permission_policy_version": {
+      "title": "Permission Policy Version",
+      "type": "string"
+    },
+    "permission_policy_digest": {
+      "title": "Permission Policy Digest",
       "type": "string"
     },
     "proposal_id": {
@@ -205,28 +224,34 @@
       "title": "Task Roster Digest",
       "type": "string"
     },
-    "task_authorities_digest": {
-      "title": "Task Authorities Digest",
+    "task_authority_digests": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Task Authority Digests",
+      "type": "object"
+    },
+    "dispatch_intent_digests": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Dispatch Intent Digests",
+      "type": "object"
+    },
+    "compiled_task_options_digest": {
+      "title": "Compiled Task Options Digest",
       "type": "string"
     },
-    "compiled_options_digest": {
-      "title": "Compiled Options Digest",
+    "artifact_binding_digest": {
+      "title": "Artifact Binding Digest",
       "type": "string"
     },
-    "dispatch_intents_digest": {
-      "title": "Dispatch Intents Digest",
+    "gate_binding_digest": {
+      "title": "Gate Binding Digest",
       "type": "string"
     },
-    "artifact_bindings_digest": {
-      "title": "Artifact Bindings Digest",
-      "type": "string"
-    },
-    "gate_bindings_digest": {
-      "title": "Gate Bindings Digest",
-      "type": "string"
-    },
-    "budget_bindings_digest": {
-      "title": "Budget Bindings Digest",
+    "budget_binding_digest": {
+      "title": "Budget Binding Digest",
       "type": "string"
     },
     "remote_authority_set_id": {
@@ -237,6 +262,15 @@
     "remote_authority_set_digest": {
       "default": "",
       "title": "Remote Authority Set Digest",
+      "type": "string"
+    },
+    "remote_authority_roster_digest": {
+      "default": "",
+      "title": "Remote Authority Roster Digest",
+      "type": "string"
+    },
+    "aggregate_budget_digest": {
+      "title": "Aggregate Budget Digest",
       "type": "string"
     },
     "task_slots": {
@@ -306,8 +340,11 @@
     "start_intent_digest",
     "authorization_id",
     "authorization_digest",
+    "authorization_mode",
     "permission_decision_id",
     "permission_decision_digest",
+    "permission_policy_version",
+    "permission_policy_digest",
     "proposal_id",
     "proposal_digest",
     "semantic_plan_id",
@@ -318,12 +355,13 @@
     "run_plan_digest",
     "ordered_task_ids",
     "task_roster_digest",
-    "task_authorities_digest",
-    "compiled_options_digest",
-    "dispatch_intents_digest",
-    "artifact_bindings_digest",
-    "gate_bindings_digest",
-    "budget_bindings_digest",
+    "task_authority_digests",
+    "dispatch_intent_digests",
+    "compiled_task_options_digest",
+    "artifact_binding_digest",
+    "gate_binding_digest",
+    "budget_binding_digest",
+    "aggregate_budget_digest",
     "task_slots",
     "source_bindings",
     "source_bindings_digest",

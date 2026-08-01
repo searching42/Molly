@@ -89,7 +89,7 @@
       "title": "Inspection Digest",
       "type": "string"
     },
-    "action": {
+    "action_kind": {
       "$ref": "#/$defs/AgentHarnessControllerAction"
     },
     "task_id": {
@@ -97,7 +97,7 @@
       "title": "Task Id",
       "type": "string"
     },
-    "planned_task_index": {
+    "task_index": {
       "anyOf": [
         {
           "maximum": 1023,
@@ -109,7 +109,14 @@
         }
       ],
       "default": null,
-      "title": "Planned Task Index"
+      "title": "Task Index"
+    },
+    "attempt_ordinal": {
+      "default": 0,
+      "maximum": 1023,
+      "minimum": 0,
+      "title": "Attempt Ordinal",
+      "type": "integer"
     },
     "slot_id": {
       "default": "",
@@ -127,9 +134,17 @@
       "title": "Source Bindings Digest",
       "type": "string"
     },
-    "reason_code": {
-      "title": "Reason Code",
+    "predecessor_receipt_id": {
+      "default": "",
+      "title": "Predecessor Receipt Id",
       "type": "string"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
     },
     "decision_digest": {
       "default": "",
@@ -139,6 +154,10 @@
     "created_at": {
       "title": "Created At",
       "type": "string"
+    },
+    "executable": {
+      "title": "Executable",
+      "type": "boolean"
     }
   },
   "required": [
@@ -146,11 +165,12 @@
     "controller_execution_digest",
     "client_request_id",
     "inspection_digest",
-    "action",
+    "action_kind",
     "source_bindings",
     "source_bindings_digest",
-    "reason_code",
-    "created_at"
+    "reason_codes",
+    "created_at",
+    "executable"
   ],
   "title": "AgentHarnessControllerDecision",
   "type": "object"

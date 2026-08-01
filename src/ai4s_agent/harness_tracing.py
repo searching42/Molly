@@ -11,7 +11,7 @@ import os
 import re
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, Sequence
 
 
 _SPAN_NAMES = frozenset(
@@ -75,6 +75,9 @@ _SAFE_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_ATTRIBUTES = 32
 _MAX_EVENTS = 32
+_MAX_LINKS = 16
+_TRACE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+_SPAN_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
 
 
 class HarnessTracingError(ValueError):
@@ -90,12 +93,30 @@ class HarnessSpan(Protocol):
         attributes: Mapping[str, str | int] | None = None,
     ) -> None: ...
 
+    def record_error(self, reason_code: str) -> None: ...
+
+
+@dataclass(frozen=True)
+class HarnessSpanLink:
+    """Non-authoritative safe correlation to a completed Harness action."""
+
+    trace_id: str
+    span_id: str
+
+    def __post_init__(self) -> None:
+        if _TRACE_ID_PATTERN.fullmatch(self.trace_id) is None:
+            raise HarnessTracingError("tracing link trace ID is invalid")
+        if _SPAN_ID_PATTERN.fullmatch(self.span_id) is None:
+            raise HarnessTracingError("tracing link span ID is invalid")
+
 
 class HarnessTracer(Protocol):
     def start_span(
         self,
         name: str,
+        *,
         attributes: Mapping[str, str | int] | None = None,
+        links: Sequence[HarnessSpanLink] = (),
     ) -> AbstractContextManager[HarnessSpan]: ...
 
     def shutdown(self) -> None: ...
@@ -118,6 +139,9 @@ class _NoopSpan:
         except HarnessTracingError:
             return None
 
+    def record_error(self, reason_code: str) -> None:
+        self.add_event("controller.failure", {"reason_code": reason_code})
+
 
 class _NoopSpanContext(AbstractContextManager[HarnessSpan]):
     def __init__(self, span: HarnessSpan | None = None) -> None:
@@ -136,10 +160,13 @@ class NoopHarnessTracer:
     def start_span(
         self,
         name: str,
+        *,
         attributes: Mapping[str, str | int] | None = None,
+        links: Sequence[HarnessSpanLink] = (),
     ) -> AbstractContextManager[HarnessSpan]:
         try:
             _validate_span(name, attributes)
+            _validate_links(links)
         except HarnessTracingError:
             return _NoopSpanContext()
         return _NoopSpanContext()
@@ -190,6 +217,14 @@ def _validate_event(
     return _validate_attributes(attributes)
 
 
+def _validate_links(links: Sequence[HarnessSpanLink]) -> tuple[HarnessSpanLink, ...]:
+    if not isinstance(links, Sequence) or isinstance(links, (str, bytes)):
+        raise HarnessTracingError("tracing links must be a bounded sequence")
+    if len(links) > _MAX_LINKS or any(not isinstance(item, HarnessSpanLink) for item in links):
+        raise HarnessTracingError("tracing links must be bounded safe Harness links")
+    return tuple(links)
+
+
 class _OpenTelemetrySpan:
     def __init__(self, span: Any) -> None:
         self._span = span
@@ -216,20 +251,43 @@ class _OpenTelemetrySpan:
         except Exception:
             return None
 
+    def record_error(self, reason_code: str) -> None:
+        self.add_event("controller.failure", {"reason_code": reason_code})
+
 
 class _OpenTelemetrySpanContext(AbstractContextManager[HarnessSpan]):
-    def __init__(self, tracer: Any, name: str, attributes: dict[str, str | int]) -> None:
+    def __init__(
+        self,
+        tracer: Any,
+        name: str,
+        attributes: dict[str, str | int],
+        links: tuple[HarnessSpanLink, ...],
+    ) -> None:
         self._tracer = tracer
         self._name = name
         self._attributes = attributes
+        self._links = links
         self._delegate: Any = None
         self._span: HarnessSpan = _NoopSpan()
 
     def __enter__(self) -> HarnessSpan:
         try:
+            otel_links = []
+            if self._links:
+                from opentelemetry.trace import Link, NonRecordingSpan, SpanContext, TraceFlags
+
+                for item in self._links:
+                    context = SpanContext(
+                        trace_id=int(item.trace_id, 16),
+                        span_id=int(item.span_id, 16),
+                        is_remote=False,
+                        trace_flags=TraceFlags(0),
+                    )
+                    otel_links.append(Link(NonRecordingSpan(context).get_span_context()))
             self._delegate = self._tracer.start_as_current_span(
                 self._name,
                 attributes=self._attributes,
+                links=otel_links,
                 record_exception=False,
                 set_status_on_exception=False,
             )
@@ -259,13 +317,21 @@ class OpenTelemetryHarnessTracer:
     def start_span(
         self,
         name: str,
+        *,
         attributes: Mapping[str, str | int] | None = None,
+        links: Sequence[HarnessSpanLink] = (),
     ) -> AbstractContextManager[HarnessSpan]:
         try:
             validated = _validate_span(name, attributes)
+            validated_links = _validate_links(links)
         except HarnessTracingError:
             return _NoopSpanContext()
-        return _OpenTelemetrySpanContext(self.tracer, name, validated)
+        return _OpenTelemetrySpanContext(
+            self.tracer,
+            name,
+            validated,
+            validated_links,
+        )
 
     def shutdown(self) -> None:
         try:
@@ -301,6 +367,7 @@ def build_harness_tracer(
 
 __all__ = [
     "HarnessSpan",
+    "HarnessSpanLink",
     "HarnessTracer",
     "HarnessTracingError",
     "NoopHarnessTracer",

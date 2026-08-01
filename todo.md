@@ -447,9 +447,9 @@ M3.5 至少支持两种用户模式：
 | `M3H-006` 实现 approve-and-start 与两种审批模式 | `I/T/—` | `DONE` | PR-BM 先提交 authorization、再提交 `not_dispatched` start intent，覆盖跨进程、fault injection、current-source revalidation 与 crash recovery，并通过 owner review |
 | `M3H-007` Permission Engine shadow mode | `I/T/—` | `DONE` | PR-BM 提供独立显式 shadow comparator/audit，不拦截或改变现有 route，并通过 owner review |
 | `M3H-007A` 建立 server-owned configured resource authority | `I/T/—` | `DONE` | PR-BM2 在 `a055a87` 获得 owner review approval，并由 PR #20 以 `5389a3c` 合并；从私有 server policy、exact connection/profile/probe、预算和完整 task roster 派生 immutable AuthoritySet，不创建 request 或 dispatch |
-| `M3H-008` Harness Controller 接入现有执行链 | `I(partial)/T(partial)/—` | `IN_PROGRESS` | PR-BN 已解锁；复用 `RunPlanExecutor`、Gate snapshot、RemoteExecutionService、固定 worker transport、cancel/recover 与 exact replay，不建立第二套状态机；尚未产生 Controller runtime validation |
+| `M3H-008` Harness Controller 接入现有执行链 | `I/T/—` | `IN_PROGRESS` | PR-BN 已完成 deterministic Controller、exact start-intent consumption、local one-task seam、Gate/remote approval separation、task-attempt slot 与 crash replay 的代表性自动化验证；仍待 PR Fast、CI 和 repository-owner review，不声明真实 remote canary 或 Harness 完成 |
 | `M3H-009` 接入 Execution Agent LLM | `—/—/—` | `DEFERRED` | 仅输出版本化 `ToolCallProposal`，在已批准 plan/action space 内选择下一步；无任意 adapter、argv、shell、SSH 或绝对路径字段 |
-| `M3H-010` Verifier-bound feedback observation | `I(partial)/T(partial)/—` | `READY` | PR-BN 只建立 verifier-bound Controller observation prerequisite seam；只有 authoritative StageState、Artifact Registry 和 verified publication 能支持 running/success/failure，LLM 文本与 telemetry 不能改变 UI 或状态 |
+| `M3H-010` Verifier-bound feedback observation | `I/T/—` | `READY` | PR-BN 已建立 verifier-bound Controller observation prerequisite seam并覆盖 local/remote completion 验证；只有 authoritative StageState、Artifact Registry 和 verified publication 能支持 running/success/failure，LLM 文本与 telemetry 不能改变 UI 或状态 |
 | `M3H-011` Replanner 与 plan revision | `I(partial)/T(partial)/—` | `DEFERRED` | 用户反馈或运行失败产生 explicit diff、新 plan digest 与新授权；旧授权对任何实质变化失效 |
 | `M3H-012` 统一 Plan/Tool/Permission/Replan UI | `I(partial)/T(partial)/—` | `DEFERRED` | 支持批准并启动、修改后重规划、拒绝、atomic task 与端到端模式；保留高级诊断入口 |
 | `M3H-013` confirmed CSV → fresh model → Top-N Harness 验收 | `I/T(partial)/—` | `DEFERRED` | 不复用既有模型或预测；在批准范围内完成训练、生成、预测、排序、Top-N 与报告 |
@@ -500,7 +500,7 @@ PR-BR  M3H-013～M3H-015
 PR-BL 已在 commit `fa13e6727ab50dabf30c0eaa7a63e0d63aa43da5` 获得 owner review approval；`M3H-001`～`M3H-003` 标记为 `I/T/— / DONE`，`M3H-GATE-001` 的 implementation/test 要求已达到，但仍不标记 `V`。代表性 runtime、真实外部 provider 与后续 Harness authorization/execution validation 留给 PR-BM～PR-BR，且不得由本次状态同步提前宣称完成。
 - `M3H-GATE-002`：用户可通过 `stepwise` 或 `frozen_plan` 批准 exact plan 并由同一操作启动；external LLM consent、普通聊天文字和 LLM 自身输出均不能产生执行权限。
 
-PR-BM 已在 commit `95db9a958525709b3af4e7d091ebf3076549e78d` 获得 owner review approval；`M3H-004`～`M3H-007` 标记为 `I/T/— / DONE`。PR-BM2 随后在 commit `a055a87d1e83671aead9e9b9f31de9ddfc894414` 获得 owner review approval，并由 PR #20 以 `5389a3c25df454dc61246fa6bb58d4ec41e3584f` 合并，解除 remote configured-resource authority blocker。但 `M3H-GATE-002` 仍不标记 `V`：start intent 固定为 `not_dispatched`，尚无 Harness Controller representative runtime validation。
+PR-BM 已在 commit `95db9a958525709b3af4e7d091ebf3076549e78d` 获得 owner review approval；`M3H-004`～`M3H-007` 标记为 `I/T/— / DONE`。PR-BM2 随后在 commit `a055a87d1e83671aead9e9b9f31de9ddfc894414` 获得 owner review approval，并由 PR #20 以 `5389a3c25df454dc61246fa6bb58d4ec41e3584f` 合并，解除 remote configured-resource authority blocker。PR-BN 已产生 local/Gate/remote/multi-remote 与 cross-process 的代表性自动化 Controller 证据，但尚无真实 remote canary、完整 M3.5 验收或 repository-owner review，因此 `M3H-GATE-002` 仍不标记 `V`。
 - `M3H-GATE-003`：Execution Agent 只能发起 allowlisted `ToolCallProposal`；Controller 能证明每次 dispatch 属于当前有效授权、预算、profile 和 artifact lineage。
 - `M3H-GATE-004`：Executor、RemoteExecutionService、`molly-worker`、Verifier 和 Artifact Registry 保持唯一真实执行与结果权威；Harness/LLM 不能伪造 `RUNNING`、`SUCCEEDED` 或 verified artifact。
 - `M3H-GATE-005`：Replanner 对用户反馈、失败或计划漂移生成 explicit diff；任何实质变更创建新 digest 并要求新授权，不自动重试或扩大预算。
@@ -1031,6 +1031,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：Controller 必须复用现有 Executor、GateDecision、StageState、Artifact Registry、RemoteExecutionService 与 publication verifier，且 OpenTelemetry 只能作为 non-authoritative observability seam；trace/span 状态不得成为执行、授权、StageState 或科学 publication 权威。
 - 批准人：searching42（repository owner）；PR-BN implementation 待 review。
 
+### 2026-08-01：PR-BN Controller 代表性自动化链完成，保持待 review
+
+- 决策：PR-BN 已实现 current-verified start intent 到 deterministic single-action Controller 的主链，并通过真实 `RunPlanExecutor`/Gate/Registry 与 `RemoteExecutionService` task-slot 服务级 fixture 覆盖 local、Gate、remote approval/dispatch/publication、source drift、duplicate replay 和 local receipt crash reconciliation。
+- 原计划：`M3H-008` 保持 `I(partial)/T(partial)/— / IN_PROGRESS`，直到产生 Controller runtime validation；`M3H-010` 仅记录 partial prerequisite seam。
+- 新计划：将 `M3H-008` 与 `M3H-010` 的当前实现/测试证据更新为 `I/T/—`；`M3H-008` 继续 `IN_PROGRESS`，`M3H-010` 继续 `READY`，等待 PR Fast、GitHub CI 与 repository-owner review。
+- 依据：Controller schema/policy、严格 route、immutable decision/receipt、local one-task Gate 链、remote task-attempt slot 与 crash replay 已有代表性自动化测试；这些证据不等于真实 remote canary、完整 cross-process fault matrix或 owner validation。
+- 影响任务：`M3H-GATE-002` 仍不标 `V`，`M3H-008` 不标 `DONE`；`M3H-009`/PR-BO 继续 `DEFERRED`，PR-BP/PR-BQ/PR-BR 不解锁；不声明 Execution Agent、Replanner、完整 Harness 或 UI 已完成。
+- 新增风险：异构 multi-remote、同请求跨进程 create/advance、tracing authoritative-equivalence/privacy 已有自动化证据；仍需关闭代表性默认 Uni-Mol/MinerU/REINVENT4 全链、cancel/recover 完整 fault matrix、tracing extra 安装、PR Fast、4-shard Full CI 与 CodeQL 证据，且远程 fixture 不得表述为真实基础设施 canary。
+- 批准人：待 repository owner review。
+
 后续路线调整必须追加：
 
 ```text
@@ -1060,7 +1070,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 - crash/replay/concurrency 必须采用 current authoritative state、dispatch/recovery receipt 与 verified publication，避免重复 local computation 或 remote dispatch；不得自动 retry、扩大预算、切换 profile 或修改 task graph；
 - OpenTelemetry 默认关闭并保持可选、lazy、fail-open；固定 privacy allowlist，trace/span/link 不进入任何 authority digest，也不能决定 task 状态或科学成功。
 
-当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`；PR-BL、PR-BM 与 PR-BM2 的 `M3H-001`～`M3H-007A` 均为 `I/T/— / DONE`、已通过 owner review并合并；`M3H-008` 为 `IN_PROGRESS`，`M3H-010` 为 `READY`，`M3H-009`/PR-BO 继续 `DEFERRED`，M4/PR-BK 继续暂缓。尚无 Controller representative runtime validation，`M3H-GATE-002` 不标 `V`。
+当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`；PR-BL、PR-BM 与 PR-BM2 的 `M3H-001`～`M3H-007A` 均为 `I/T/— / DONE`、已通过 owner review并合并；`M3H-008` 为 `I/T/— / IN_PROGRESS`，`M3H-010` 为 `I/T/— / READY`，已有代表性自动化 Controller 链但尚无真实 remote canary、完整 fault matrix 或 owner review；`M3H-009`/PR-BO 继续 `DEFERRED`，M4/PR-BK 继续暂缓，`M3H-GATE-002` 不标 `V`。
 
 必须验证：
 

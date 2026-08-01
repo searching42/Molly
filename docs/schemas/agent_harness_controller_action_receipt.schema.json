@@ -115,7 +115,7 @@
       "title": "Decision Digest",
       "type": "string"
     },
-    "action": {
+    "action_kind": {
       "$ref": "#/$defs/AgentHarnessControllerAction"
     },
     "task_id": {
@@ -123,7 +123,7 @@
       "title": "Task Id",
       "type": "string"
     },
-    "planned_task_index": {
+    "task_index": {
       "anyOf": [
         {
           "maximum": 1023,
@@ -135,11 +135,93 @@
         }
       ],
       "default": null,
-      "title": "Planned Task Index"
+      "title": "Task Index"
+    },
+    "attempt_ordinal": {
+      "default": 0,
+      "maximum": 1023,
+      "minimum": 0,
+      "title": "Attempt Ordinal",
+      "type": "integer"
     },
     "slot_id": {
       "default": "",
       "title": "Slot Id",
+      "type": "string"
+    },
+    "execution_started": {
+      "title": "Execution Started",
+      "type": "boolean"
+    },
+    "dispatch_occurred": {
+      "title": "Dispatch Occurred",
+      "type": "boolean"
+    },
+    "before_stage_digest": {
+      "default": "",
+      "title": "Before Stage Digest",
+      "type": "string"
+    },
+    "after_stage_digest": {
+      "default": "",
+      "title": "After Stage Digest",
+      "type": "string"
+    },
+    "before_artifact_registry_digest": {
+      "default": "",
+      "title": "Before Artifact Registry Digest",
+      "type": "string"
+    },
+    "after_artifact_registry_digest": {
+      "default": "",
+      "title": "After Artifact Registry Digest",
+      "type": "string"
+    },
+    "local_dispatch_receipt_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Local Dispatch Receipt Ids",
+      "type": "array"
+    },
+    "remote_execution_slot_id": {
+      "default": "",
+      "title": "Remote Execution Slot Id",
+      "type": "string"
+    },
+    "remote_request_id": {
+      "default": "",
+      "title": "Remote Request Id",
+      "type": "string"
+    },
+    "remote_request_sha256": {
+      "default": "",
+      "title": "Remote Request Sha256",
+      "type": "string"
+    },
+    "remote_approval_digest": {
+      "default": "",
+      "title": "Remote Approval Digest",
+      "type": "string"
+    },
+    "remote_publication_digest": {
+      "default": "",
+      "title": "Remote Publication Digest",
+      "type": "string"
+    },
+    "gate_snapshot_id": {
+      "default": "",
+      "title": "Gate Snapshot Id",
+      "type": "string"
+    },
+    "gate_snapshot_hash": {
+      "default": "",
+      "title": "Gate Snapshot Hash",
+      "type": "string"
+    },
+    "gate_decision_digest": {
+      "default": "",
+      "title": "Gate Decision Digest",
       "type": "string"
     },
     "outcome": {
@@ -148,20 +230,23 @@
     "status_after": {
       "$ref": "#/$defs/AgentHarnessControllerStatus"
     },
-    "result_bindings": {
+    "source_bindings": {
       "items": {
         "$ref": "#/$defs/AgentHarnessControllerSourceBinding"
       },
-      "title": "Result Bindings",
+      "title": "Source Bindings",
       "type": "array"
     },
-    "result_bindings_digest": {
-      "title": "Result Bindings Digest",
+    "source_bindings_digest": {
+      "title": "Source Bindings Digest",
       "type": "string"
     },
-    "reason_code": {
-      "title": "Reason Code",
-      "type": "string"
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
     },
     "receipt_digest": {
       "default": "",
@@ -178,12 +263,14 @@
     "controller_execution_digest",
     "decision_id",
     "decision_digest",
-    "action",
+    "action_kind",
+    "execution_started",
+    "dispatch_occurred",
     "outcome",
     "status_after",
-    "result_bindings",
-    "result_bindings_digest",
-    "reason_code",
+    "source_bindings",
+    "source_bindings_digest",
+    "reason_codes",
     "created_at"
   ],
   "title": "AgentHarnessControllerActionReceipt",

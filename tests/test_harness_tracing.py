@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ai4s_agent.harness_tracing import (
+    HarnessSpanLink,
     NoopHarnessTracer,
     OpenTelemetryHarnessTracer,
     build_harness_tracer,
@@ -63,7 +64,10 @@ def test_noop_is_default_and_invalid_telemetry_never_changes_business_flow() -> 
     assert isinstance(tracer, NoopHarnessTracer)
 
     completed = False
-    with tracer.start_span("not-allowlisted", {"raw_path": "/private/data"}) as span:
+    with tracer.start_span(
+        "not-allowlisted",
+        attributes={"raw_path": "/private/data"},
+    ) as span:
         span.set_attribute("raw_path", "/private/data")
         span.add_event("not-allowlisted", {"raw_path": "/private/data"})
         completed = True
@@ -74,7 +78,10 @@ def test_missing_optional_opentelemetry_dependencies_degrade_to_noop() -> None:
     tracer = build_harness_tracer({"AI4S_HARNESS_OTEL_ENABLED": "true"})
     # The test environment may or may not install the optional extra. Either
     # result must expose the narrow HarnessTracer surface and stay usable.
-    with tracer.start_span("controller.execution", {"run_id": "run-a"}):
+    with tracer.start_span(
+        "controller.execution",
+        attributes={"run_id": "run-a"},
+    ):
         pass
     tracer.shutdown()
 
@@ -85,7 +92,10 @@ def test_exporter_and_context_failures_are_non_authoritative() -> None:
         provider=_FailingProvider(),
     )
     completed = False
-    with tracer.start_span("controller.advance", {"task_index": 0}) as span:
+    with tracer.start_span(
+        "controller.advance",
+        attributes={"task_index": 0},
+    ) as span:
         span.add_event("controller.failure", {"reason_code": "EXPORT_FAILED"})
         completed = True
     tracer.shutdown()
@@ -99,7 +109,7 @@ def test_only_allowlisted_bounded_attributes_and_events_reach_delegate() -> None
 
     with tracer.start_span(
         "controller.action",
-        {"task_id": "inspect_dataset", "task_index": 0},
+        attributes={"task_id": "inspect_dataset", "task_index": 0},
     ) as span:
         span.set_attribute("outcome", "committed")
         span.set_attribute("receipt_digest", "sha256:" + "b" * 64)
@@ -118,3 +128,30 @@ def test_only_allowlisted_bounded_attributes_and_events_reach_delegate() -> None
     }
     assert delegate.calls[0][1]["record_exception"] is False
     assert delegate.calls[0][1]["set_status_on_exception"] is False
+
+
+def test_safe_links_and_event_bounds_do_not_accept_private_payloads() -> None:
+    link = HarnessSpanLink(trace_id="a" * 32, span_id="b" * 16)
+    with NoopHarnessTracer().start_span(
+        "controller.advance",
+        attributes={"controller_execution_id": "controller-a"},
+        links=[link],
+    ):
+        pass
+
+    recorded = _RecordingSpan()
+    delegate = _RecordingTracer(recorded)
+    tracer = OpenTelemetryHarnessTracer(tracer=delegate, provider=_FailingProvider())
+
+    with tracer.start_span(
+        "controller.advance",
+        attributes={"controller_execution_id": "controller-a"},
+    ) as span:
+        for index in range(40):
+            span.add_event("controller.waiting", {"retry_count": index})
+        span.set_attribute("task_id", "/private/secret.csv")
+        span.set_attribute("task_id", "user@example.com")
+
+    assert len(recorded.events) == 32
+    assert "task_id" not in recorded.attributes
+    assert delegate.calls[0][1]["links"] == []

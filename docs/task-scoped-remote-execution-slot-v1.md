@@ -38,16 +38,19 @@ attempt
 ```
 
 The slot publishes an immutable server-owned binding before a remote request.
-Its semantic digest covers:
+Its semantic digest directly covers:
 
 - project/run/controller execution and exact planned task/index/attempt;
-- start intent, authorization, RunPlan, task-authority, Controller policy,
-  and remote AuthoritySet IDs/digests;
-- dispatch-intent and compiled-options digests;
+- task-authority, remote AuthoritySet, and Controller execution digests;
 - exact input artifact IDs/content digests and transfer-manifest digest;
-- remote task type, logical connection, execution profile, configured
-  resource, and output-contract digests; and
+- remote task type and output-contract digest; and
 - the remote request ID/digest once prepared.
+
+The immutable Controller execution digest transitively binds the start intent,
+authorization, RunPlan, Controller policy, dispatch intent, compiled options,
+logical connection, execution profile, configured resources, and full remote
+authority roster. The lifecycle compares the complete direct binding; the
+Controller separately re-verifies all transitive sources before using it.
 
 Hosts, paths, SSH aliases, commands, environment data, credentials, raw
 payloads, and mutable job state are excluded from the public binding. Private
@@ -94,11 +97,13 @@ fixed remote task protocol. The public Controller request never accepts a
 manifest, input/output path, connection, resources, adapter, command,
 environment, or worker override.
 
-Approval is immutable and slot-specific. It binds the exact request digest,
-slot binding, trusted actor, literal decision, canonical client request ID,
-and bounded note. Approval is rechecked immediately before dispatch. A Gate
-decision, plan authorization, start intent, approval for another attempt, or
-legacy run-scoped approval cannot substitute.
+Approval is immutable, positive, and slot-specific. The lifecycle approval
+binds the exact request digest, slot binding, trusted actor, and bounded note.
+The Controller's immutable request checkpoint separately binds the canonical
+client request ID to that approval operation. Approval is rechecked
+immediately before dispatch. A Gate decision, plan authorization, start
+intent, approval for another attempt, or legacy run-scoped approval cannot
+substitute.
 
 ## Crash, retry, concurrency, and recovery
 

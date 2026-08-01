@@ -3680,45 +3680,35 @@ class AgentHarnessControllerAdvanceRequest(BaseModel):
         return _agent_identifier(value, field="client_request_id")
 
 
-class AgentHarnessControllerGateApprovalRequest(BaseModel):
+class AgentHarnessGateApprovalRequest(BaseModel):
     """The only client fields accepted for an exact Controller Gate decision."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["agent_harness_controller_gate_approval_request.v1"] = (
-        "agent_harness_controller_gate_approval_request.v1"
+    schema_version: Literal["agent_harness_gate_approval_request.v1"] = (
+        "agent_harness_gate_approval_request.v1"
     )
-    expected_controller_execution_digest: str
-    gate_id: str
-    expected_execution_snapshot_id: str
-    expected_execution_snapshot_hash: str
-    approved: bool
+    expected_snapshot_id: str
+    expected_snapshot_hash: str
     client_request_id: str
     note: str = ""
 
-    @field_validator("approved", mode="before")
+    @field_validator("expected_snapshot_hash")
     @classmethod
-    def validate_literal_decision(cls, value: Any) -> bool:
-        if not isinstance(value, bool):
-            raise ValueError("approved must be a literal JSON boolean")
-        return value
+    def validate_snapshot_hash(cls, value: str) -> str:
+        return _agent_digest_value(value, field="expected_snapshot_hash")
 
-    @field_validator("expected_controller_execution_digest", "expected_execution_snapshot_hash")
-    @classmethod
-    def validate_digests(cls, value: str, info: Any) -> str:
-        return _agent_digest_value(value, field=info.field_name)
-
-    @field_validator("gate_id", "client_request_id")
+    @field_validator("client_request_id")
     @classmethod
     def validate_identifiers(cls, value: str, info: Any) -> str:
         return _agent_identifier(value, field=info.field_name)
 
-    @field_validator("expected_execution_snapshot_id")
+    @field_validator("expected_snapshot_id")
     @classmethod
     def validate_snapshot_id(cls, value: str) -> str:
         return _agent_safe_text(
             value,
-            field="expected_execution_snapshot_id",
+            field="expected_snapshot_id",
             max_length=300,
             allow_empty=False,
         )
@@ -3729,37 +3719,24 @@ class AgentHarnessControllerGateApprovalRequest(BaseModel):
         return _agent_safe_text(value, field="note", max_length=2000)
 
 
-class AgentHarnessControllerRemoteApprovalRequest(BaseModel):
+class AgentHarnessRemoteApprovalRequest(BaseModel):
     """The only client fields accepted for one exact remote task-slot approval."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["agent_harness_controller_remote_approval_request.v1"] = (
-        "agent_harness_controller_remote_approval_request.v1"
+    schema_version: Literal["agent_harness_remote_approval_request.v1"] = (
+        "agent_harness_remote_approval_request.v1"
     )
-    expected_controller_execution_digest: str
-    slot_id: str
-    expected_remote_execution_request_digest: str
-    approved: bool
+    expected_remote_request_sha256: str
     client_request_id: str
     note: str = ""
 
-    @field_validator("approved", mode="before")
+    @field_validator("expected_remote_request_sha256")
     @classmethod
-    def validate_literal_decision(cls, value: Any) -> bool:
-        if not isinstance(value, bool):
-            raise ValueError("approved must be a literal JSON boolean")
-        return value
+    def validate_request_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="expected_remote_request_sha256")
 
-    @field_validator(
-        "expected_controller_execution_digest",
-        "expected_remote_execution_request_digest",
-    )
-    @classmethod
-    def validate_digests(cls, value: str, info: Any) -> str:
-        return _agent_digest_value(value, field=info.field_name)
-
-    @field_validator("slot_id", "client_request_id")
+    @field_validator("client_request_id")
     @classmethod
     def validate_identifiers(cls, value: str, info: Any) -> str:
         return _agent_identifier(value, field=info.field_name)
@@ -3966,8 +3943,11 @@ class AgentHarnessControllerExecution(BaseModel):
     start_intent_digest: str
     authorization_id: str
     authorization_digest: str
+    authorization_mode: AgentAuthorizationMode
     permission_decision_id: str
     permission_decision_digest: str
+    permission_policy_version: str
+    permission_policy_digest: str
     proposal_id: str
     proposal_digest: str
     semantic_plan_id: str
@@ -3978,14 +3958,16 @@ class AgentHarnessControllerExecution(BaseModel):
     run_plan_digest: str
     ordered_task_ids: list[str]
     task_roster_digest: str
-    task_authorities_digest: str
-    compiled_options_digest: str
-    dispatch_intents_digest: str
-    artifact_bindings_digest: str
-    gate_bindings_digest: str
-    budget_bindings_digest: str
+    task_authority_digests: dict[str, str]
+    dispatch_intent_digests: dict[str, str]
+    compiled_task_options_digest: str
+    artifact_binding_digest: str
+    gate_binding_digest: str
+    budget_binding_digest: str
     remote_authority_set_id: str = ""
     remote_authority_set_digest: str = ""
+    remote_authority_roster_digest: str = ""
+    aggregate_budget_digest: str
     task_slots: list[AgentHarnessControllerTaskSlot]
     source_bindings: list[AgentHarnessControllerSourceBinding]
     source_bindings_digest: str
@@ -4012,6 +3994,7 @@ class AgentHarnessControllerExecution(BaseModel):
         "semantic_plan_id",
         "observation_id",
         "remote_authority_set_id",
+        "permission_policy_version",
         "controller_policy_version",
         "client_request_id",
     )
@@ -4033,12 +4016,12 @@ class AgentHarnessControllerExecution(BaseModel):
         "tool_catalog_digest",
         "run_plan_digest",
         "task_roster_digest",
-        "task_authorities_digest",
-        "compiled_options_digest",
-        "dispatch_intents_digest",
-        "artifact_bindings_digest",
-        "gate_bindings_digest",
-        "budget_bindings_digest",
+        "compiled_task_options_digest",
+        "artifact_binding_digest",
+        "gate_binding_digest",
+        "budget_binding_digest",
+        "aggregate_budget_digest",
+        "permission_policy_digest",
         "source_bindings_digest",
         "controller_policy_digest",
         "request_digest",
@@ -4047,7 +4030,11 @@ class AgentHarnessControllerExecution(BaseModel):
     def validate_required_digests(cls, value: str, info: Any) -> str:
         return _agent_digest_value(value, field=info.field_name)
 
-    @field_validator("remote_authority_set_digest", "execution_digest")
+    @field_validator(
+        "remote_authority_set_digest",
+        "remote_authority_roster_digest",
+        "execution_digest",
+    )
     @classmethod
     def validate_optional_digests(cls, value: str, info: Any) -> str:
         return _agent_digest_value(value, field=info.field_name, allow_empty=True)
@@ -4059,6 +4046,18 @@ class AgentHarnessControllerExecution(BaseModel):
         if not cleaned or len(cleaned) != len(set(cleaned)) or len(cleaned) > 1024:
             raise ValueError("ordered_task_ids must be a non-empty unique bounded roster")
         return cleaned
+
+    @field_validator("task_authority_digests", "dispatch_intent_digests")
+    @classmethod
+    def validate_task_digest_maps(cls, value: dict[str, str], info: Any) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for raw_task_id, raw_digest in value.items():
+            task_id = _agent_identifier(raw_task_id, field=f"{info.field_name} key")
+            normalized[task_id] = _agent_digest_value(
+                raw_digest,
+                field=f"{info.field_name}.{task_id}",
+            )
+        return normalized
 
     @field_validator("actor", "actor_source")
     @classmethod
@@ -4077,6 +4076,16 @@ class AgentHarnessControllerExecution(BaseModel):
         for index, (task_id, slot) in enumerate(zip(self.ordered_task_ids, self.task_slots, strict=True)):
             if slot.planned_task_index != index or slot.task_id != task_id:
                 raise ValueError("task slots must follow exact RunPlan order and index")
+        expected_task_ids = set(self.ordered_task_ids)
+        if set(self.task_authority_digests) != expected_task_ids:
+            raise ValueError("task authority digests must exactly cover the ordered task roster")
+        if set(self.dispatch_intent_digests) != expected_task_ids:
+            raise ValueError("dispatch intent digests must exactly cover the ordered task roster")
+        for slot in self.task_slots:
+            if self.task_authority_digests[slot.task_id] != slot.task_authority_digest:
+                raise ValueError("task slot authority digest must match the execution roster")
+            if self.dispatch_intent_digests[slot.task_id] != slot.dispatch_intent_digest:
+                raise ValueError("task slot dispatch intent digest must match the execution roster")
         source_names = [item.name for item in self.source_bindings]
         if not source_names or len(source_names) != len(set(source_names)):
             raise ValueError("source bindings must be non-empty with unique names")
@@ -4089,6 +4098,8 @@ class AgentHarnessControllerExecution(BaseModel):
             raise ValueError("remote AuthoritySet ID and digest must be present together")
         if any(slot.execution_route == "remote_execution_service" for slot in self.task_slots) != has_remote_set:
             raise ValueError("remote task roster and AuthoritySet binding must agree")
+        if has_remote_set != bool(self.remote_authority_roster_digest):
+            raise ValueError("remote AuthoritySet and authority roster digest must agree")
         expected = _agent_digest(self.semantic_material())
         if self.execution_digest and self.execution_digest != expected:
             raise ValueError("controller execution digest mismatch")
@@ -4224,23 +4235,34 @@ class AgentHarnessControllerDecision(BaseModel):
     controller_execution_digest: str
     client_request_id: str
     inspection_digest: str
-    action: AgentHarnessControllerAction
+    action_kind: AgentHarnessControllerAction
     task_id: str = ""
-    planned_task_index: int | None = Field(default=None, ge=0, le=1023)
+    task_index: int | None = Field(default=None, ge=0, le=1023)
+    attempt_ordinal: int = Field(default=0, ge=0, le=1023)
     slot_id: str = ""
     source_bindings: list[AgentHarnessControllerSourceBinding]
     source_bindings_digest: str
-    reason_code: str
+    predecessor_receipt_id: str = ""
+    reason_codes: list[str]
     decision_digest: str = ""
     created_at: str
+    executable: bool
 
-    @field_validator("decision_id", "controller_execution_id", "client_request_id", "task_id", "slot_id")
+    @field_validator(
+        "decision_id",
+        "controller_execution_id",
+        "client_request_id",
+        "task_id",
+        "slot_id",
+        "predecessor_receipt_id",
+    )
     @classmethod
     def validate_identifiers(cls, value: str, info: Any) -> str:
         return _agent_identifier(
             value,
             field=info.field_name,
-            allow_empty=info.field_name in {"decision_id", "task_id", "slot_id"},
+            allow_empty=info.field_name
+            in {"decision_id", "task_id", "slot_id", "predecessor_receipt_id"},
         )
 
     @field_validator("controller_execution_digest", "inspection_digest", "source_bindings_digest")
@@ -4253,13 +4275,13 @@ class AgentHarnessControllerDecision(BaseModel):
     def validate_decision_digest(cls, value: str) -> str:
         return _agent_digest_value(value, field="decision_digest", allow_empty=True)
 
-    @field_validator("reason_code")
+    @field_validator("reason_codes")
     @classmethod
-    def validate_reason_code(cls, value: str) -> str:
-        clean = str(value or "").strip()
-        if re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", clean) is None:
-            raise ValueError("reason_code must be an uppercase canonical code")
-        return clean
+    def validate_reason_codes(cls, value: list[str]) -> list[str]:
+        cleaned = _agent_string_list(value, field="reason_codes", sort_values=True, max_items=64)
+        if not cleaned or any(re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None for item in cleaned):
+            raise ValueError("reason_codes must contain uppercase canonical codes")
+        return cleaned
 
     @field_validator("created_at")
     @classmethod
@@ -4268,7 +4290,7 @@ class AgentHarnessControllerDecision(BaseModel):
 
     @model_validator(mode="after")
     def validate_decision(self) -> "AgentHarnessControllerDecision":
-        has_task = self.planned_task_index is not None
+        has_task = self.task_index is not None
         if has_task != bool(self.task_id and self.slot_id):
             raise ValueError("decision task index, task ID, and slot ID must agree")
         names = [item.name for item in self.source_bindings]
@@ -4309,48 +4331,105 @@ class AgentHarnessControllerActionReceipt(BaseModel):
     controller_execution_digest: str
     decision_id: str
     decision_digest: str
-    action: AgentHarnessControllerAction
+    action_kind: AgentHarnessControllerAction
     task_id: str = ""
-    planned_task_index: int | None = Field(default=None, ge=0, le=1023)
+    task_index: int | None = Field(default=None, ge=0, le=1023)
+    attempt_ordinal: int = Field(default=0, ge=0, le=1023)
     slot_id: str = ""
+    execution_started: bool
+    dispatch_occurred: bool
+    before_stage_digest: str = ""
+    after_stage_digest: str = ""
+    before_artifact_registry_digest: str = ""
+    after_artifact_registry_digest: str = ""
+    local_dispatch_receipt_ids: list[str] = Field(default_factory=list)
+    remote_execution_slot_id: str = ""
+    remote_request_id: str = ""
+    remote_request_sha256: str = ""
+    remote_approval_digest: str = ""
+    remote_publication_digest: str = ""
+    gate_snapshot_id: str = ""
+    gate_snapshot_hash: str = ""
+    gate_decision_digest: str = ""
     outcome: AgentHarnessControllerReceiptOutcome
     status_after: AgentHarnessControllerStatus
-    result_bindings: list[AgentHarnessControllerSourceBinding]
-    result_bindings_digest: str
-    reason_code: str
+    source_bindings: list[AgentHarnessControllerSourceBinding]
+    source_bindings_digest: str
+    reason_codes: list[str]
     receipt_digest: str = ""
     created_at: str
 
-    @field_validator("receipt_id", "controller_execution_id", "decision_id", "task_id", "slot_id")
+    @field_validator(
+        "receipt_id",
+        "controller_execution_id",
+        "decision_id",
+        "task_id",
+        "slot_id",
+        "remote_execution_slot_id",
+        "remote_request_id",
+    )
     @classmethod
     def validate_identifiers(cls, value: str, info: Any) -> str:
         return _agent_identifier(
             value,
             field=info.field_name,
-            allow_empty=info.field_name in {"receipt_id", "task_id", "slot_id"},
+            allow_empty=info.field_name
+            in {
+                "receipt_id",
+                "task_id",
+                "slot_id",
+                "remote_execution_slot_id",
+                "remote_request_id",
+            },
         )
 
     @field_validator(
         "controller_execution_digest",
         "decision_digest",
-        "result_bindings_digest",
+        "source_bindings_digest",
     )
     @classmethod
     def validate_required_digests(cls, value: str, info: Any) -> str:
         return _agent_digest_value(value, field=info.field_name)
 
-    @field_validator("receipt_digest")
+    @field_validator(
+        "before_stage_digest",
+        "after_stage_digest",
+        "before_artifact_registry_digest",
+        "after_artifact_registry_digest",
+        "remote_request_sha256",
+        "remote_approval_digest",
+        "remote_publication_digest",
+        "gate_snapshot_hash",
+        "gate_decision_digest",
+        "receipt_digest",
+    )
     @classmethod
-    def validate_receipt_digest(cls, value: str) -> str:
-        return _agent_digest_value(value, field="receipt_digest", allow_empty=True)
+    def validate_optional_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name, allow_empty=True)
 
-    @field_validator("reason_code")
+    @field_validator("local_dispatch_receipt_ids")
     @classmethod
-    def validate_reason_code(cls, value: str) -> str:
-        clean = str(value or "").strip()
-        if re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", clean) is None:
-            raise ValueError("reason_code must be an uppercase canonical code")
-        return clean
+    def validate_dispatch_receipt_ids(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(
+            value,
+            field="local_dispatch_receipt_ids",
+            sort_values=False,
+            max_items=1024,
+        )
+
+    @field_validator("reason_codes")
+    @classmethod
+    def validate_reason_codes(cls, value: list[str]) -> list[str]:
+        cleaned = _agent_string_list(value, field="reason_codes", sort_values=True, max_items=64)
+        if not cleaned or any(re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None for item in cleaned):
+            raise ValueError("reason_codes must contain uppercase canonical codes")
+        return cleaned
+
+    @field_validator("gate_snapshot_id")
+    @classmethod
+    def validate_gate_snapshot_id(cls, value: str) -> str:
+        return _agent_safe_text(value, field="gate_snapshot_id", max_length=300)
 
     @field_validator("created_at")
     @classmethod
@@ -4359,16 +4438,22 @@ class AgentHarnessControllerActionReceipt(BaseModel):
 
     @model_validator(mode="after")
     def validate_receipt(self) -> "AgentHarnessControllerActionReceipt":
-        has_task = self.planned_task_index is not None
+        has_task = self.task_index is not None
         if has_task != bool(self.task_id and self.slot_id):
             raise ValueError("receipt task index, task ID, and slot ID must agree")
-        names = [item.name for item in self.result_bindings]
+        names = [item.name for item in self.source_bindings]
         if not names or len(names) != len(set(names)):
-            raise ValueError("receipt result bindings must be non-empty and unique")
-        if self.result_bindings_digest != _agent_digest(
-            [item.model_dump(mode="json") for item in self.result_bindings]
+            raise ValueError("receipt source bindings must be non-empty and unique")
+        if self.source_bindings_digest != _agent_digest(
+            [item.model_dump(mode="json") for item in self.source_bindings]
         ):
-            raise ValueError("receipt result binding digest mismatch")
+            raise ValueError("receipt source binding digest mismatch")
+        if bool(self.remote_request_id) != bool(self.remote_request_sha256):
+            raise ValueError("remote request ID and digest must be present together")
+        if bool(self.gate_snapshot_id) != bool(self.gate_snapshot_hash):
+            raise ValueError("Gate snapshot ID and digest must be present together")
+        if self.dispatch_occurred and not self.execution_started:
+            raise ValueError("dispatch cannot occur before execution starts")
         expected = _agent_digest(self.semantic_material())
         if self.receipt_digest and self.receipt_digest != expected:
             raise ValueError("controller action receipt digest mismatch")
@@ -7000,8 +7085,8 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_harness_controller_decision": AgentHarnessControllerDecision,
     "agent_harness_controller_action_receipt": AgentHarnessControllerActionReceipt,
     "agent_harness_controller_inspection": AgentHarnessControllerInspection,
-    "agent_harness_controller_gate_approval_request": AgentHarnessControllerGateApprovalRequest,
-    "agent_harness_controller_remote_approval_request": AgentHarnessControllerRemoteApprovalRequest,
+    "agent_harness_gate_approval_request": AgentHarnessGateApprovalRequest,
+    "agent_harness_remote_approval_request": AgentHarnessRemoteApprovalRequest,
     "agent_permission_shadow_record": AgentPermissionShadowRecord,
     "run_plan_diff": RunPlanDiff,
     "plan_rationale": PlanRationale,

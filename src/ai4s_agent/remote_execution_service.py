@@ -482,6 +482,26 @@ class DescriptorRemoteExecutionLifecycleService:
             self._verify_slot_access(tree, request, expected_slot_binding_digest)
             return self._inspect_tree(tree, request)
 
+    def inspect_slot_binding(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        slot_id: str,
+    ) -> AgentHarnessRemoteExecutionSlotBinding:
+        """Read one server-selected slot binding before client-visible access.
+
+        This seam is intentionally server-only.  Controller code must compare
+        every returned authority field with its immutable execution before it
+        may use the binding digest for lifecycle calls.
+        """
+
+        with self._lock, self._tree(
+            project_id, run_id, create=False, slot_id=slot_id
+        ) as tree:
+            request = self._read_request(tree, project_id, run_id)
+            return self._read_slot_binding(tree, request)
+
     def _publish_or_verify_slot_binding(
         self,
         tree: PinnedExecutionTree,

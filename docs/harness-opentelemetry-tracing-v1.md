@@ -16,6 +16,10 @@ and export are fail-open. Every exception is contained by the tracing adapter
 and may increment a bounded local diagnostic counter; it cannot change a
 Controller decision, HTTP status, receipt, StageState, Artifact Registry,
 remote lifecycle state, retry/recovery choice, or process exit status.
+The narrow protocol exposes bounded `set_attribute`, `add_event`, and
+reason-code-only `record_error` operations. Optional links accept only exact
+hex trace/span identifiers through `HarnessSpanLink`; links remain private,
+non-authoritative correlation and are never persisted by the Controller.
 
 ## Span hierarchy
 

@@ -1,7 +1,7 @@
 # Scientific Agent Harness Controller v1
 
-Status: PR-BN design freeze for `M3H-008`; implementation and validation are
-not yet owner-approved.
+Status: PR-BN implementation with representative automated validation for
+`M3H-008`; repository-owner review is still pending.
 
 The Controller is the only PR-BN component allowed to turn an immutable
 `AgentPlanStartIntent` into one bounded execution-side effect. It does not
@@ -61,8 +61,9 @@ intent and its complete chain. The controller execution binds at least:
 - project, run, start intent, authorization, permission decision, proposal,
   semantic plan, observation, catalog, and RunPlan IDs/digests;
 - the complete RunPlan-order task roster and digest;
-- complete compiled-options, dispatch-intent, task-authority, artifact-input,
-  Gate, budget, and policy digests;
+- complete per-task compiled-options, dispatch-intent, task-authority,
+  artifact-input, Gate, budget, and policy digests plus their aggregate
+  bindings;
 - the current complete remote AuthoritySet ID/digest when any task is remote;
 - a deterministic attempt-zero task-slot roster;
 - trusted actor identity/source and the request binding; and
@@ -136,13 +137,13 @@ output contract, connection/profile, AuthoritySet/task authority, configured
 resources, dispatch intent, options, and input artifacts. See
 `task-scoped-remote-execution-slot-v1.md`.
 
-Remote approval is also a separate strict route. The client supplies only the
-expected request digest, literal decision, canonical client request ID, and an
-optional bounded note. The server supplies the trusted actor and re-verifies
-the exact request and all current authority immediately before immutable
-approval. A later `advance` re-reads the approval; it cannot accept approval
-words from plan prose, authorization notes, Gate decisions, query parameters,
-headers, or mutable transport state.
+Remote approval is also a separate strict positive-approval route. The client
+supplies only the expected request digest, canonical client request ID, and an
+optional bounded note. It cannot select a decision or dispatch. The server
+supplies the trusted actor and re-verifies the exact request and all current
+authority immediately before immutable approval. A later `advance` re-reads
+the approval; it cannot accept approval words from plan prose, authorization
+notes, Gate decisions, query parameters, headers, or mutable transport state.
 
 ## Completion and inspection
 
@@ -180,7 +181,12 @@ The immutable decision is committed before the side effect. Re-entry then:
 - completes the receipt without repeating the effect when reconciliation
   proves the exact result; or
 - stops in explicit recovery/conflict state when exact reconciliation is not
-  possible.
+possible.
+
+Explicit cancel and recover routes use the same decision-before-effect and
+receipt-after-exact-read protocol. Cancel is limited to the current exact
+remote slot. Recover invokes one existing remote lifecycle recovery transition
+and never reruns an unknown local scientific effect.
 
 This is exactly-once *effect selection and reconciliation*, not a claim that
 an arbitrary external transport is transactional. Remote idempotency remains
@@ -192,7 +198,7 @@ owned by the existing request/job protocol and task-attempt slot.
 POST /api/projects/<project_id>/agent-plan-start-intents/<start_intent_id>/controller-executions
 GET  /api/projects/<project_id>/agent-harness-controller-executions/<controller_execution_id>
 POST /api/projects/<project_id>/agent-harness-controller-executions/<controller_execution_id>/advance
-POST /api/projects/<project_id>/agent-harness-controller-executions/<controller_execution_id>/gate-approvals
+POST /api/projects/<project_id>/agent-harness-controller-executions/<controller_execution_id>/gates/<gate_id>/approve
 POST /api/projects/<project_id>/agent-harness-controller-executions/<controller_execution_id>/remote-approvals
 POST /api/projects/<project_id>/agent-harness-controller-executions/<controller_execution_id>/cancel
 POST /api/projects/<project_id>/agent-harness-controller-executions/<controller_execution_id>/recover

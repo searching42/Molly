@@ -30,6 +30,9 @@ from ai4s_agent.schemas import (
     AgentAuthorizationGateBinding,
     AgentAuthorizationMode,
     AgentAuthorizationProfileBinding,
+    AgentHarnessControllerActionReceipt,
+    AgentHarnessControllerDecision,
+    AgentHarnessControllerExecution,
     AgentPermissionDecision,
     AgentPermissionOutcome,
     AgentPermissionPhase,
@@ -115,6 +118,24 @@ _CONTROL_LAYOUT: Mapping[str, tuple[str, str, str, type[BaseModel]]] = {
         "authority_set_digest",
         AgentRemoteResourceAuthoritySet,
     ),
+    "harness_controller_execution": (
+        "harness_controller_executions",
+        "controller_execution.json",
+        "execution_digest",
+        AgentHarnessControllerExecution,
+    ),
+    "harness_controller_decision": (
+        "harness_controller_decisions",
+        "controller_decision.json",
+        "decision_digest",
+        AgentHarnessControllerDecision,
+    ),
+    "harness_controller_action_receipt": (
+        "harness_controller_action_receipts",
+        "controller_action_receipt.json",
+        "receipt_digest",
+        AgentHarnessControllerActionReceipt,
+    ),
 }
 _CONTROL_ID_FIELDS = {
     "permission_decision": "decision_id",
@@ -124,6 +145,9 @@ _CONTROL_ID_FIELDS = {
     "remote_resource_authority_decision": "decision_id",
     "remote_resource_authority": "authority_id",
     "remote_resource_authority_set": "authority_set_id",
+    "harness_controller_execution": "controller_execution_id",
+    "harness_controller_decision": "decision_id",
+    "harness_controller_action_receipt": "receipt_id",
 }
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -372,6 +396,156 @@ class AgentPlanControlStore:
             artifact_id=shadow_record_id,
             expected_type=AgentPermissionShadowRecord,
         )
+
+    def publish_harness_controller_execution(
+        self, execution: AgentHarnessControllerExecution
+    ) -> AgentHarnessControllerExecution:
+        return self._publish_model(
+            project_id=execution.project_id,
+            kind="harness_controller_execution",
+            artifact_id=execution.controller_execution_id,
+            model=execution,
+        )
+
+    def read_harness_controller_execution(
+        self, *, project_id: str, controller_execution_id: str
+    ) -> AgentHarnessControllerExecution:
+        return self._read_model(
+            project_id=project_id,
+            kind="harness_controller_execution",
+            artifact_id=controller_execution_id,
+            expected_type=AgentHarnessControllerExecution,
+        )
+
+    def list_harness_controller_executions(
+        self, *, project_id: str, start_intent_id: str | None = None
+    ) -> list[AgentHarnessControllerExecution]:
+        root = self._collection_root(
+            project_id=project_id,
+            kind="harness_controller_execution",
+            create=False,
+        )
+        if root is None:
+            return []
+        executions: list[AgentHarnessControllerExecution] = []
+        children = sorted(root.iterdir(), key=lambda item: item.name)
+        if len(children) > 4096:
+            raise ScientificAgentAuthorizationVerificationError(
+                "controller execution collection exceeds its bounded roster"
+            )
+        for child in children:
+            if child.is_symlink() or not child.is_dir():
+                raise ScientificAgentAuthorizationVerificationError(
+                    "controller execution collection contains an unsafe entry"
+                )
+            execution = self.read_harness_controller_execution(
+                project_id=project_id,
+                controller_execution_id=child.name,
+            )
+            if start_intent_id is None or execution.start_intent_id == start_intent_id:
+                executions.append(execution)
+        return sorted(
+            executions,
+            key=lambda item: (item.created_at, item.controller_execution_id),
+        )
+
+    def publish_harness_controller_decision(
+        self, *, project_id: str, decision: AgentHarnessControllerDecision
+    ) -> AgentHarnessControllerDecision:
+        return self._publish_model(
+            project_id=project_id,
+            kind="harness_controller_decision",
+            artifact_id=decision.decision_id,
+            model=decision,
+        )
+
+    def read_harness_controller_decision(
+        self, *, project_id: str, decision_id: str
+    ) -> AgentHarnessControllerDecision:
+        return self._read_model(
+            project_id=project_id,
+            kind="harness_controller_decision",
+            artifact_id=decision_id,
+            expected_type=AgentHarnessControllerDecision,
+        )
+
+    def list_harness_controller_decisions(
+        self, *, project_id: str, controller_execution_id: str
+    ) -> list[AgentHarnessControllerDecision]:
+        root = self._collection_root(
+            project_id=project_id,
+            kind="harness_controller_decision",
+            create=False,
+        )
+        if root is None:
+            return []
+        decisions: list[AgentHarnessControllerDecision] = []
+        children = sorted(root.iterdir(), key=lambda item: item.name)
+        if len(children) > 4096:
+            raise ScientificAgentAuthorizationVerificationError(
+                "controller decision collection exceeds its bounded roster"
+            )
+        for child in children:
+            if child.is_symlink() or not child.is_dir():
+                raise ScientificAgentAuthorizationVerificationError(
+                    "controller decision collection contains an unsafe entry"
+                )
+            decision = self.read_harness_controller_decision(
+                project_id=project_id,
+                decision_id=child.name,
+            )
+            if decision.controller_execution_id == controller_execution_id:
+                decisions.append(decision)
+        return sorted(decisions, key=lambda item: (item.created_at, item.decision_id))
+
+    def publish_harness_controller_action_receipt(
+        self, *, project_id: str, receipt: AgentHarnessControllerActionReceipt
+    ) -> AgentHarnessControllerActionReceipt:
+        return self._publish_model(
+            project_id=project_id,
+            kind="harness_controller_action_receipt",
+            artifact_id=receipt.receipt_id,
+            model=receipt,
+        )
+
+    def read_harness_controller_action_receipt(
+        self, *, project_id: str, receipt_id: str
+    ) -> AgentHarnessControllerActionReceipt:
+        return self._read_model(
+            project_id=project_id,
+            kind="harness_controller_action_receipt",
+            artifact_id=receipt_id,
+            expected_type=AgentHarnessControllerActionReceipt,
+        )
+
+    def list_harness_controller_action_receipts(
+        self, *, project_id: str, controller_execution_id: str
+    ) -> list[AgentHarnessControllerActionReceipt]:
+        root = self._collection_root(
+            project_id=project_id,
+            kind="harness_controller_action_receipt",
+            create=False,
+        )
+        if root is None:
+            return []
+        receipts: list[AgentHarnessControllerActionReceipt] = []
+        children = sorted(root.iterdir(), key=lambda item: item.name)
+        if len(children) > 4096:
+            raise ScientificAgentAuthorizationVerificationError(
+                "controller receipt collection exceeds its bounded roster"
+            )
+        for child in children:
+            if child.is_symlink() or not child.is_dir():
+                raise ScientificAgentAuthorizationVerificationError(
+                    "controller receipt collection contains an unsafe entry"
+                )
+            receipt = self.read_harness_controller_action_receipt(
+                project_id=project_id,
+                receipt_id=child.name,
+            )
+            if receipt.controller_execution_id == controller_execution_id:
+                receipts.append(receipt)
+        return sorted(receipts, key=lambda item: (item.created_at, item.receipt_id))
 
     @contextmanager
     def request_session(

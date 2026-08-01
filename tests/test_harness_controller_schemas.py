@@ -7,17 +7,18 @@ import pytest
 from pydantic import ValidationError
 
 from ai4s_agent.schemas import (
+    AgentAuthorizationMode,
     AgentHarnessAuthorityClass,
     AgentHarnessControllerAction,
     AgentHarnessControllerActionReceipt,
     AgentHarnessControllerAdvanceRequest,
     AgentHarnessControllerDecision,
     AgentHarnessControllerExecution,
-    AgentHarnessControllerGateApprovalRequest,
+    AgentHarnessGateApprovalRequest,
     AgentHarnessControllerInspection,
     AgentHarnessControllerInspectionFact,
     AgentHarnessControllerReceiptOutcome,
-    AgentHarnessControllerRemoteApprovalRequest,
+    AgentHarnessRemoteApprovalRequest,
     AgentHarnessControllerSourceBinding,
     AgentHarnessControllerStartRequest,
     AgentHarnessControllerStatus,
@@ -48,8 +49,11 @@ def _execution() -> AgentHarnessControllerExecution:
         start_intent_digest=_DIGEST,
         authorization_id="authorization-a",
         authorization_digest=_DIGEST,
+        authorization_mode=AgentAuthorizationMode.STEPWISE,
         permission_decision_id="permission-a",
         permission_decision_digest=_DIGEST,
+        permission_policy_version="permission-policy-v1",
+        permission_policy_digest=_DIGEST,
         proposal_id="proposal-a",
         proposal_digest=_DIGEST,
         semantic_plan_id="semantic-plan-a",
@@ -60,12 +64,13 @@ def _execution() -> AgentHarnessControllerExecution:
         run_plan_digest=_DIGEST,
         ordered_task_ids=["inspect_dataset"],
         task_roster_digest=_DIGEST,
-        task_authorities_digest=_DIGEST,
-        compiled_options_digest=_DIGEST,
-        dispatch_intents_digest=_DIGEST,
-        artifact_bindings_digest=_DIGEST,
-        gate_bindings_digest=_DIGEST,
-        budget_bindings_digest=_DIGEST,
+        task_authority_digests={"inspect_dataset": _DIGEST},
+        dispatch_intent_digests={"inspect_dataset": _DIGEST},
+        compiled_task_options_digest=_DIGEST,
+        artifact_binding_digest=_DIGEST,
+        gate_binding_digest=_DIGEST,
+        budget_binding_digest=_DIGEST,
+        aggregate_budget_digest=_DIGEST,
         task_slots=[
             AgentHarnessControllerTaskSlot(
                 planned_task_index=0,
@@ -110,24 +115,20 @@ def test_controller_request_models_reject_client_authority_fields_and_coercion()
             }
         )
     with pytest.raises(ValidationError):
-        AgentHarnessControllerGateApprovalRequest.model_validate(
+        AgentHarnessGateApprovalRequest.model_validate(
             {
-                "expected_controller_execution_digest": _DIGEST,
-                "gate_id": "gate-1",
-                "expected_execution_snapshot_id": "snapshot-a",
-                "expected_execution_snapshot_hash": _DIGEST,
-                "approved": 1,
+                "expected_snapshot_id": "snapshot-a",
+                "expected_snapshot_hash": _DIGEST,
                 "client_request_id": "request-a",
+                "gate_id": "injected",
             }
         )
     with pytest.raises(ValidationError):
-        AgentHarnessControllerRemoteApprovalRequest.model_validate(
+        AgentHarnessRemoteApprovalRequest.model_validate(
             {
-                "expected_controller_execution_digest": _DIGEST,
-                "slot_id": "slot-a",
-                "expected_remote_execution_request_digest": _DIGEST,
-                "approved": "true",
+                "expected_remote_request_sha256": _DIGEST,
                 "client_request_id": "request-a",
+                "slot_id": "injected",
             }
         )
 
@@ -170,16 +171,18 @@ def test_controller_decision_receipt_and_inspection_bind_exact_sources() -> None
         controller_execution_digest=execution.execution_digest,
         client_request_id="advance-a",
         inspection_digest=inspection.inspection_digest,
-        action=inspection.next_action,
+        action_kind=inspection.next_action,
         task_id=inspection.current_task_id,
-        planned_task_index=inspection.current_task_index,
+        task_index=inspection.current_task_index,
+        attempt_ordinal=0,
         slot_id=inspection.current_slot_id,
         source_bindings=sources,
         source_bindings_digest=_agent_digest(
             [item.model_dump(mode="json") for item in sources]
         ),
-        reason_code="LOCAL_TASK_READY",
+        reason_codes=["LOCAL_TASK_READY"],
         created_at=_NOW,
+        executable=True,
     )
     results = [_source("stage_state")]
     receipt = AgentHarnessControllerActionReceipt(
@@ -187,17 +190,24 @@ def test_controller_decision_receipt_and_inspection_bind_exact_sources() -> None
         controller_execution_digest=execution.execution_digest,
         decision_id=decision.decision_id,
         decision_digest=decision.decision_digest,
-        action=decision.action,
+        action_kind=decision.action_kind,
         task_id=decision.task_id,
-        planned_task_index=decision.planned_task_index,
+        task_index=decision.task_index,
+        attempt_ordinal=decision.attempt_ordinal,
         slot_id=decision.slot_id,
+        execution_started=True,
+        dispatch_occurred=True,
+        before_stage_digest=_DIGEST,
+        after_stage_digest=_DIGEST,
+        before_artifact_registry_digest=_DIGEST,
+        after_artifact_registry_digest=_DIGEST,
         outcome=AgentHarnessControllerReceiptOutcome.COMMITTED,
         status_after=AgentHarnessControllerStatus.ACTIVE,
-        result_bindings=results,
-        result_bindings_digest=_agent_digest(
+        source_bindings=results,
+        source_bindings_digest=_agent_digest(
             [item.model_dump(mode="json") for item in results]
         ),
-        reason_code="LOCAL_TASK_COMMITTED",
+        reason_codes=["LOCAL_TASK_COMMITTED"],
         created_at=_NOW,
     )
 
@@ -208,16 +218,17 @@ def test_controller_decision_receipt_and_inspection_bind_exact_sources() -> None
 
 def test_controller_json_schemas_are_strict_and_published() -> None:
     schemas = Path(__file__).resolve().parents[1] / "docs" / "schemas"
-    names = (
-        "agent_harness_controller_start_request",
-        "agent_harness_controller_execution",
-        "agent_harness_controller_advance_request",
-        "agent_harness_controller_decision",
-        "agent_harness_controller_action_receipt",
-        "agent_harness_controller_inspection",
-        "agent_harness_controller_gate_approval_request",
-        "agent_harness_controller_remote_approval_request",
-    )
-    for name in names:
+    models = {
+        "agent_harness_controller_start_request": AgentHarnessControllerStartRequest,
+        "agent_harness_controller_execution": AgentHarnessControllerExecution,
+        "agent_harness_controller_advance_request": AgentHarnessControllerAdvanceRequest,
+        "agent_harness_controller_decision": AgentHarnessControllerDecision,
+        "agent_harness_controller_action_receipt": AgentHarnessControllerActionReceipt,
+        "agent_harness_controller_inspection": AgentHarnessControllerInspection,
+        "agent_harness_gate_approval_request": AgentHarnessGateApprovalRequest,
+        "agent_harness_remote_approval_request": AgentHarnessRemoteApprovalRequest,
+    }
+    for name, model in models.items():
         payload = json.loads((schemas / f"{name}.schema.json").read_text(encoding="utf-8"))
         assert payload["additionalProperties"] is False
+        assert payload == model.model_json_schema()
