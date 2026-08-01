@@ -1,0 +1,165 @@
+{
+  "$defs": {
+    "AgentHarnessAuthorityClass": {
+      "enum": [
+        "authoritative",
+        "derived",
+        "observational",
+        "unverified"
+      ],
+      "title": "AgentHarnessAuthorityClass",
+      "type": "string"
+    },
+    "AgentHarnessControllerAction": {
+      "enum": [
+        "prepare_local_gate",
+        "wait_for_gate",
+        "stop_gate_rejected",
+        "execute_local_task",
+        "prepare_remote_request",
+        "wait_for_remote_approval",
+        "stop_remote_rejected",
+        "dispatch_remote_task",
+        "refresh_remote_task",
+        "recover_remote_task",
+        "adopt_remote_outputs",
+        "stop_task_terminal",
+        "cancel_execution",
+        "complete_execution"
+      ],
+      "title": "AgentHarnessControllerAction",
+      "type": "string"
+    },
+    "AgentHarnessControllerInspectionFact": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "authority_class": {
+          "$ref": "#/$defs/AgentHarnessAuthorityClass"
+        },
+        "source_id": {
+          "default": "",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_digest": {
+          "default": "",
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "authority_class",
+        "state"
+      ],
+      "title": "AgentHarnessControllerInspectionFact",
+      "type": "object"
+    },
+    "AgentHarnessControllerStatus": {
+      "enum": [
+        "active",
+        "waiting_gate",
+        "waiting_remote_approval",
+        "running_remote",
+        "recovery_required",
+        "cancelled",
+        "failed",
+        "succeeded"
+      ],
+      "title": "AgentHarnessControllerStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Fresh deterministic inspection with explicit authority labels.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_harness_controller_inspection.v1",
+      "default": "agent_harness_controller_inspection.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/AgentHarnessControllerStatus"
+    },
+    "current_task_index": {
+      "anyOf": [
+        {
+          "maximum": 1023,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Current Task Index"
+    },
+    "current_task_id": {
+      "default": "",
+      "title": "Current Task Id",
+      "type": "string"
+    },
+    "current_slot_id": {
+      "default": "",
+      "title": "Current Slot Id",
+      "type": "string"
+    },
+    "next_action": {
+      "$ref": "#/$defs/AgentHarnessControllerAction"
+    },
+    "facts": {
+      "items": {
+        "$ref": "#/$defs/AgentHarnessControllerInspectionFact"
+      },
+      "title": "Facts",
+      "type": "array"
+    },
+    "source_roster_digest": {
+      "title": "Source Roster Digest",
+      "type": "string"
+    },
+    "inspection_digest": {
+      "default": "",
+      "title": "Inspection Digest",
+      "type": "string"
+    },
+    "inspected_at": {
+      "title": "Inspected At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "controller_execution_id",
+    "controller_execution_digest",
+    "status",
+    "next_action",
+    "facts",
+    "source_roster_digest",
+    "inspected_at"
+  ],
+  "title": "AgentHarnessControllerInspection",
+  "type": "object"
+}

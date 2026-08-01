@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "description": "A strict retry-safe request to select at most one Controller action.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_harness_controller_advance_request.v1",
+      "default": "agent_harness_controller_advance_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "expected_controller_execution_digest": {
+      "title": "Expected Controller Execution Digest",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "expected_controller_execution_digest",
+    "client_request_id"
+  ],
+  "title": "AgentHarnessControllerAdvanceRequest",
+  "type": "object"
+}

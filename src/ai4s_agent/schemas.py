@@ -3592,6 +3592,682 @@ class AgentPlanStartIntent(BaseModel):
         return payload
 
 
+class AgentHarnessControllerAction(str, Enum):
+    PREPARE_LOCAL_GATE = "prepare_local_gate"
+    WAIT_FOR_GATE = "wait_for_gate"
+    STOP_GATE_REJECTED = "stop_gate_rejected"
+    EXECUTE_LOCAL_TASK = "execute_local_task"
+    PREPARE_REMOTE_REQUEST = "prepare_remote_request"
+    WAIT_FOR_REMOTE_APPROVAL = "wait_for_remote_approval"
+    STOP_REMOTE_REJECTED = "stop_remote_rejected"
+    DISPATCH_REMOTE_TASK = "dispatch_remote_task"
+    REFRESH_REMOTE_TASK = "refresh_remote_task"
+    RECOVER_REMOTE_TASK = "recover_remote_task"
+    ADOPT_REMOTE_OUTPUTS = "adopt_remote_outputs"
+    STOP_TASK_TERMINAL = "stop_task_terminal"
+    CANCEL_EXECUTION = "cancel_execution"
+    COMPLETE_EXECUTION = "complete_execution"
+
+
+class AgentHarnessControllerStatus(str, Enum):
+    ACTIVE = "active"
+    WAITING_GATE = "waiting_gate"
+    WAITING_REMOTE_APPROVAL = "waiting_remote_approval"
+    RUNNING_REMOTE = "running_remote"
+    RECOVERY_REQUIRED = "recovery_required"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    SUCCEEDED = "succeeded"
+
+
+class AgentHarnessAuthorityClass(str, Enum):
+    AUTHORITATIVE = "authoritative"
+    DERIVED = "derived"
+    OBSERVATIONAL = "observational"
+    UNVERIFIED = "unverified"
+
+
+class AgentHarnessControllerReceiptOutcome(str, Enum):
+    COMMITTED = "committed"
+    RECONCILED = "reconciled"
+    WAITING = "waiting"
+    REJECTED = "rejected"
+    FAILED = "failed"
+    CONFLICT = "conflict"
+
+
+class AgentHarnessControllerStartRequest(BaseModel):
+    """The complete client-controlled Controller creation request."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_harness_controller_start_request.v1"] = (
+        "agent_harness_controller_start_request.v1"
+    )
+    expected_start_intent_digest: str
+    client_request_id: str
+
+    @field_validator("expected_start_intent_digest")
+    @classmethod
+    def validate_expected_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="expected_start_intent_digest")
+
+    @field_validator("client_request_id")
+    @classmethod
+    def validate_request_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="client_request_id")
+
+
+class AgentHarnessControllerAdvanceRequest(BaseModel):
+    """A strict retry-safe request to select at most one Controller action."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_harness_controller_advance_request.v1"] = (
+        "agent_harness_controller_advance_request.v1"
+    )
+    expected_controller_execution_digest: str
+    client_request_id: str
+
+    @field_validator("expected_controller_execution_digest")
+    @classmethod
+    def validate_expected_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="expected_controller_execution_digest")
+
+    @field_validator("client_request_id")
+    @classmethod
+    def validate_request_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="client_request_id")
+
+
+class AgentHarnessControllerGateApprovalRequest(BaseModel):
+    """The only client fields accepted for an exact Controller Gate decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_harness_controller_gate_approval_request.v1"] = (
+        "agent_harness_controller_gate_approval_request.v1"
+    )
+    expected_controller_execution_digest: str
+    gate_id: str
+    expected_execution_snapshot_id: str
+    expected_execution_snapshot_hash: str
+    approved: bool
+    client_request_id: str
+    note: str = ""
+
+    @field_validator("approved", mode="before")
+    @classmethod
+    def validate_literal_decision(cls, value: Any) -> bool:
+        if not isinstance(value, bool):
+            raise ValueError("approved must be a literal JSON boolean")
+        return value
+
+    @field_validator("expected_controller_execution_digest", "expected_execution_snapshot_hash")
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("gate_id", "expected_execution_snapshot_id", "client_request_id")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("note")
+    @classmethod
+    def validate_note(cls, value: str) -> str:
+        return _agent_safe_text(value, field="note", max_length=2000)
+
+
+class AgentHarnessControllerRemoteApprovalRequest(BaseModel):
+    """The only client fields accepted for one exact remote task-slot approval."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_harness_controller_remote_approval_request.v1"] = (
+        "agent_harness_controller_remote_approval_request.v1"
+    )
+    expected_controller_execution_digest: str
+    slot_id: str
+    expected_remote_execution_request_digest: str
+    approved: bool
+    client_request_id: str
+    note: str = ""
+
+    @field_validator("approved", mode="before")
+    @classmethod
+    def validate_literal_decision(cls, value: Any) -> bool:
+        if not isinstance(value, bool):
+            raise ValueError("approved must be a literal JSON boolean")
+        return value
+
+    @field_validator(
+        "expected_controller_execution_digest",
+        "expected_remote_execution_request_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("slot_id", "client_request_id")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("note")
+    @classmethod
+    def validate_note(cls, value: str) -> str:
+        return _agent_safe_text(value, field="note", max_length=2000)
+
+
+class AgentHarnessControllerSourceBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    source_id: str
+    source_digest: str
+    authority_class: AgentHarnessAuthorityClass = AgentHarnessAuthorityClass.AUTHORITATIVE
+
+    @field_validator("name", "source_id")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("source_digest")
+    @classmethod
+    def validate_source_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="source_digest")
+
+
+class AgentHarnessControllerTaskSlot(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    planned_task_index: int = Field(ge=0, le=1023)
+    task_id: str
+    attempt: int = Field(default=0, ge=0, le=1023)
+    execution_route: Literal["local_executor", "remote_execution_service"]
+    slot_id: str
+    task_authority_digest: str
+    dispatch_intent_digest: str
+    compiled_options_digest: str
+    input_artifacts_digest: str
+    output_contract_digest: str
+    remote_authority_id: str = ""
+    remote_authority_digest: str = ""
+
+    @field_validator("task_id", "slot_id", "remote_authority_id")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "remote_authority_id",
+        )
+
+    @field_validator(
+        "task_authority_digest",
+        "dispatch_intent_digest",
+        "compiled_options_digest",
+        "input_artifacts_digest",
+        "output_contract_digest",
+    )
+    @classmethod
+    def validate_required_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("remote_authority_digest")
+    @classmethod
+    def validate_optional_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="remote_authority_digest", allow_empty=True)
+
+    @model_validator(mode="after")
+    def validate_remote_authority_pair(self) -> "AgentHarnessControllerTaskSlot":
+        has_remote_authority = bool(self.remote_authority_id or self.remote_authority_digest)
+        if has_remote_authority != bool(self.remote_authority_id and self.remote_authority_digest):
+            raise ValueError("remote authority ID and digest must be present together")
+        if self.execution_route == "local_executor" and has_remote_authority:
+            raise ValueError("local task slots must not bind remote authority")
+        if self.execution_route == "remote_execution_service" and not has_remote_authority:
+            raise ValueError("remote task slots require exact remote authority")
+        return self
+
+
+class AgentHarnessControllerExecution(BaseModel):
+    """Immutable authority binding for one exact authorized plan execution."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_harness_controller_execution.v1"] = (
+        "agent_harness_controller_execution.v1"
+    )
+    controller_execution_id: str = ""
+    project_id: str
+    run_id: str
+    start_intent_id: str
+    start_intent_digest: str
+    authorization_id: str
+    authorization_digest: str
+    permission_decision_id: str
+    permission_decision_digest: str
+    proposal_id: str
+    proposal_digest: str
+    semantic_plan_id: str
+    semantic_plan_digest: str
+    observation_id: str
+    observation_digest: str
+    tool_catalog_digest: str
+    run_plan_digest: str
+    ordered_task_ids: list[str]
+    task_roster_digest: str
+    task_authorities_digest: str
+    compiled_options_digest: str
+    dispatch_intents_digest: str
+    artifact_bindings_digest: str
+    gate_bindings_digest: str
+    budget_bindings_digest: str
+    remote_authority_set_id: str = ""
+    remote_authority_set_digest: str = ""
+    task_slots: list[AgentHarnessControllerTaskSlot]
+    source_bindings: list[AgentHarnessControllerSourceBinding]
+    source_bindings_digest: str
+    controller_policy_version: Literal["scientific-agent-harness-controller-policy.v1"] = (
+        "scientific-agent-harness-controller-policy.v1"
+    )
+    controller_policy_digest: str
+    actor: str
+    actor_source: str
+    client_request_id: str
+    request_digest: str
+    execution_digest: str = ""
+    created_at: str
+    executable: Literal[True] = True
+
+    @field_validator(
+        "controller_execution_id",
+        "project_id",
+        "run_id",
+        "start_intent_id",
+        "authorization_id",
+        "permission_decision_id",
+        "proposal_id",
+        "semantic_plan_id",
+        "observation_id",
+        "remote_authority_set_id",
+        "controller_policy_version",
+        "client_request_id",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"controller_execution_id", "remote_authority_set_id"},
+        )
+
+    @field_validator(
+        "start_intent_digest",
+        "authorization_digest",
+        "permission_decision_digest",
+        "proposal_digest",
+        "semantic_plan_digest",
+        "observation_digest",
+        "tool_catalog_digest",
+        "run_plan_digest",
+        "task_roster_digest",
+        "task_authorities_digest",
+        "compiled_options_digest",
+        "dispatch_intents_digest",
+        "artifact_bindings_digest",
+        "gate_bindings_digest",
+        "budget_bindings_digest",
+        "source_bindings_digest",
+        "controller_policy_digest",
+        "request_digest",
+    )
+    @classmethod
+    def validate_required_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("remote_authority_set_digest", "execution_digest")
+    @classmethod
+    def validate_optional_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name, allow_empty=True)
+
+    @field_validator("ordered_task_ids")
+    @classmethod
+    def validate_task_ids(cls, value: list[str]) -> list[str]:
+        cleaned = [_agent_identifier(item, field="ordered_task_ids item") for item in value]
+        if not cleaned or len(cleaned) != len(set(cleaned)) or len(cleaned) > 1024:
+            raise ValueError("ordered_task_ids must be a non-empty unique bounded roster")
+        return cleaned
+
+    @field_validator("actor", "actor_source")
+    @classmethod
+    def validate_actor(cls, value: str, info: Any) -> str:
+        return _agent_safe_text(value, field=info.field_name, max_length=256, allow_empty=False)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_execution(self) -> "AgentHarnessControllerExecution":
+        if len(self.task_slots) != len(self.ordered_task_ids):
+            raise ValueError("task slots must exactly cover the ordered task roster")
+        for index, (task_id, slot) in enumerate(zip(self.ordered_task_ids, self.task_slots, strict=True)):
+            if slot.planned_task_index != index or slot.task_id != task_id:
+                raise ValueError("task slots must follow exact RunPlan order and index")
+        source_names = [item.name for item in self.source_bindings]
+        if not source_names or len(source_names) != len(set(source_names)):
+            raise ValueError("source bindings must be non-empty with unique names")
+        if self.source_bindings_digest != _agent_digest(
+            [item.model_dump(mode="json") for item in self.source_bindings]
+        ):
+            raise ValueError("controller source binding digest mismatch")
+        has_remote_set = bool(self.remote_authority_set_id or self.remote_authority_set_digest)
+        if has_remote_set != bool(self.remote_authority_set_id and self.remote_authority_set_digest):
+            raise ValueError("remote AuthoritySet ID and digest must be present together")
+        if any(slot.execution_route == "remote_execution_service" for slot in self.task_slots) != has_remote_set:
+            raise ValueError("remote task roster and AuthoritySet binding must agree")
+        expected = _agent_digest(self.semantic_material())
+        if self.execution_digest and self.execution_digest != expected:
+            raise ValueError("controller execution digest mismatch")
+        object.__setattr__(self, "execution_digest", expected)
+        expected_id = f"controller-{expected.split(':', 1)[1][:32]}"
+        if self.controller_execution_id and self.controller_execution_id != expected_id:
+            raise ValueError("controller execution ID must derive from its semantic digest")
+        object.__setattr__(self, "controller_execution_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("controller_execution_id", None)
+        payload.pop("execution_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentHarnessControllerInspectionFact(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    authority_class: AgentHarnessAuthorityClass
+    source_id: str = ""
+    source_digest: str = ""
+    state: str
+    detail: str = ""
+
+    @field_validator("name", "source_id", "state")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "source_id",
+        )
+
+    @field_validator("source_digest")
+    @classmethod
+    def validate_source_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="source_digest", allow_empty=True)
+
+    @field_validator("detail")
+    @classmethod
+    def validate_detail(cls, value: str) -> str:
+        return _agent_safe_text(value, field="detail", max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_source_pair(self) -> "AgentHarnessControllerInspectionFact":
+        if bool(self.source_id) != bool(self.source_digest):
+            raise ValueError("inspection fact source ID and digest must be present together")
+        return self
+
+
+class AgentHarnessControllerInspection(BaseModel):
+    """Fresh deterministic inspection with explicit authority labels."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_harness_controller_inspection.v1"] = (
+        "agent_harness_controller_inspection.v1"
+    )
+    controller_execution_id: str
+    controller_execution_digest: str
+    status: AgentHarnessControllerStatus
+    current_task_index: int | None = Field(default=None, ge=0, le=1023)
+    current_task_id: str = ""
+    current_slot_id: str = ""
+    next_action: AgentHarnessControllerAction
+    facts: list[AgentHarnessControllerInspectionFact]
+    source_roster_digest: str
+    inspection_digest: str = ""
+    inspected_at: str
+
+    @field_validator("controller_execution_id", "current_task_id", "current_slot_id")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"current_task_id", "current_slot_id"},
+        )
+
+    @field_validator("controller_execution_digest", "source_roster_digest")
+    @classmethod
+    def validate_required_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("inspection_digest")
+    @classmethod
+    def validate_inspection_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="inspection_digest", allow_empty=True)
+
+    @field_validator("inspected_at")
+    @classmethod
+    def validate_inspected_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="inspected_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_inspection(self) -> "AgentHarnessControllerInspection":
+        has_task = self.current_task_index is not None
+        if has_task != bool(self.current_task_id and self.current_slot_id):
+            raise ValueError("inspection current task index, task ID, and slot ID must agree")
+        if not self.facts or len(self.facts) > 1024:
+            raise ValueError("inspection facts must be non-empty and bounded")
+        if self.source_roster_digest != _agent_digest(
+            [item.model_dump(mode="json") for item in self.facts]
+        ):
+            raise ValueError("inspection source roster digest mismatch")
+        expected = _agent_digest(self.semantic_material())
+        if self.inspection_digest and self.inspection_digest != expected:
+            raise ValueError("controller inspection digest mismatch")
+        object.__setattr__(self, "inspection_digest", expected)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("inspection_digest", None)
+        payload.pop("inspected_at", None)
+        return payload
+
+
+class AgentHarnessControllerDecision(BaseModel):
+    """Immutable deterministic selection of one bounded Controller action."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_harness_controller_decision.v1"] = (
+        "agent_harness_controller_decision.v1"
+    )
+    decision_id: str = ""
+    controller_execution_id: str
+    controller_execution_digest: str
+    client_request_id: str
+    inspection_digest: str
+    action: AgentHarnessControllerAction
+    task_id: str = ""
+    planned_task_index: int | None = Field(default=None, ge=0, le=1023)
+    slot_id: str = ""
+    source_bindings: list[AgentHarnessControllerSourceBinding]
+    source_bindings_digest: str
+    reason_code: str
+    decision_digest: str = ""
+    created_at: str
+
+    @field_validator("decision_id", "controller_execution_id", "client_request_id", "task_id", "slot_id")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"decision_id", "task_id", "slot_id"},
+        )
+
+    @field_validator("controller_execution_digest", "inspection_digest", "source_bindings_digest")
+    @classmethod
+    def validate_required_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("decision_digest")
+    @classmethod
+    def validate_decision_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="decision_digest", allow_empty=True)
+
+    @field_validator("reason_code")
+    @classmethod
+    def validate_reason_code(cls, value: str) -> str:
+        clean = str(value or "").strip()
+        if re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", clean) is None:
+            raise ValueError("reason_code must be an uppercase canonical code")
+        return clean
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> "AgentHarnessControllerDecision":
+        has_task = self.planned_task_index is not None
+        if has_task != bool(self.task_id and self.slot_id):
+            raise ValueError("decision task index, task ID, and slot ID must agree")
+        names = [item.name for item in self.source_bindings]
+        if not names or len(names) != len(set(names)):
+            raise ValueError("decision source bindings must be non-empty and unique")
+        if self.source_bindings_digest != _agent_digest(
+            [item.model_dump(mode="json") for item in self.source_bindings]
+        ):
+            raise ValueError("decision source binding digest mismatch")
+        expected = _agent_digest(self.semantic_material())
+        if self.decision_digest and self.decision_digest != expected:
+            raise ValueError("controller decision digest mismatch")
+        object.__setattr__(self, "decision_digest", expected)
+        expected_id = f"controller-decision-{expected.split(':', 1)[1][:32]}"
+        if self.decision_id and self.decision_id != expected_id:
+            raise ValueError("controller decision ID must derive from its semantic digest")
+        object.__setattr__(self, "decision_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("decision_id", None)
+        payload.pop("decision_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentHarnessControllerActionReceipt(BaseModel):
+    """Immutable exact-read result for one selected Controller action."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_harness_controller_action_receipt.v1"] = (
+        "agent_harness_controller_action_receipt.v1"
+    )
+    receipt_id: str = ""
+    controller_execution_id: str
+    controller_execution_digest: str
+    decision_id: str
+    decision_digest: str
+    action: AgentHarnessControllerAction
+    task_id: str = ""
+    planned_task_index: int | None = Field(default=None, ge=0, le=1023)
+    slot_id: str = ""
+    outcome: AgentHarnessControllerReceiptOutcome
+    status_after: AgentHarnessControllerStatus
+    result_bindings: list[AgentHarnessControllerSourceBinding]
+    result_bindings_digest: str
+    reason_code: str
+    receipt_digest: str = ""
+    created_at: str
+
+    @field_validator("receipt_id", "controller_execution_id", "decision_id", "task_id", "slot_id")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"receipt_id", "task_id", "slot_id"},
+        )
+
+    @field_validator(
+        "controller_execution_digest",
+        "decision_digest",
+        "result_bindings_digest",
+    )
+    @classmethod
+    def validate_required_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("receipt_digest")
+    @classmethod
+    def validate_receipt_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="receipt_digest", allow_empty=True)
+
+    @field_validator("reason_code")
+    @classmethod
+    def validate_reason_code(cls, value: str) -> str:
+        clean = str(value or "").strip()
+        if re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", clean) is None:
+            raise ValueError("reason_code must be an uppercase canonical code")
+        return clean
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_receipt(self) -> "AgentHarnessControllerActionReceipt":
+        has_task = self.planned_task_index is not None
+        if has_task != bool(self.task_id and self.slot_id):
+            raise ValueError("receipt task index, task ID, and slot ID must agree")
+        names = [item.name for item in self.result_bindings]
+        if not names or len(names) != len(set(names)):
+            raise ValueError("receipt result bindings must be non-empty and unique")
+        if self.result_bindings_digest != _agent_digest(
+            [item.model_dump(mode="json") for item in self.result_bindings]
+        ):
+            raise ValueError("receipt result binding digest mismatch")
+        expected = _agent_digest(self.semantic_material())
+        if self.receipt_digest and self.receipt_digest != expected:
+            raise ValueError("controller action receipt digest mismatch")
+        object.__setattr__(self, "receipt_digest", expected)
+        expected_id = f"controller-receipt-{expected.split(':', 1)[1][:32]}"
+        if self.receipt_id and self.receipt_id != expected_id:
+            raise ValueError("controller receipt ID must derive from its semantic digest")
+        object.__setattr__(self, "receipt_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("receipt_id", None)
+        payload.pop("receipt_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
 class AgentPermissionShadowRecord(BaseModel):
     """Independent audit-only comparison with the existing route expectation."""
 
@@ -6198,6 +6874,14 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_plan_authorization_request": AgentPlanAuthorizationRequest,
     "agent_plan_authorization": AgentPlanAuthorization,
     "agent_plan_start_intent": AgentPlanStartIntent,
+    "agent_harness_controller_start_request": AgentHarnessControllerStartRequest,
+    "agent_harness_controller_execution": AgentHarnessControllerExecution,
+    "agent_harness_controller_advance_request": AgentHarnessControllerAdvanceRequest,
+    "agent_harness_controller_decision": AgentHarnessControllerDecision,
+    "agent_harness_controller_action_receipt": AgentHarnessControllerActionReceipt,
+    "agent_harness_controller_inspection": AgentHarnessControllerInspection,
+    "agent_harness_controller_gate_approval_request": AgentHarnessControllerGateApprovalRequest,
+    "agent_harness_controller_remote_approval_request": AgentHarnessControllerRemoteApprovalRequest,
     "agent_permission_shadow_record": AgentPermissionShadowRecord,
     "run_plan_diff": RunPlanDiff,
     "plan_rationale": PlanRationale,

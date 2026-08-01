@@ -1,0 +1,191 @@
+{
+  "$defs": {
+    "AgentHarnessAuthorityClass": {
+      "enum": [
+        "authoritative",
+        "derived",
+        "observational",
+        "unverified"
+      ],
+      "title": "AgentHarnessAuthorityClass",
+      "type": "string"
+    },
+    "AgentHarnessControllerAction": {
+      "enum": [
+        "prepare_local_gate",
+        "wait_for_gate",
+        "stop_gate_rejected",
+        "execute_local_task",
+        "prepare_remote_request",
+        "wait_for_remote_approval",
+        "stop_remote_rejected",
+        "dispatch_remote_task",
+        "refresh_remote_task",
+        "recover_remote_task",
+        "adopt_remote_outputs",
+        "stop_task_terminal",
+        "cancel_execution",
+        "complete_execution"
+      ],
+      "title": "AgentHarnessControllerAction",
+      "type": "string"
+    },
+    "AgentHarnessControllerReceiptOutcome": {
+      "enum": [
+        "committed",
+        "reconciled",
+        "waiting",
+        "rejected",
+        "failed",
+        "conflict"
+      ],
+      "title": "AgentHarnessControllerReceiptOutcome",
+      "type": "string"
+    },
+    "AgentHarnessControllerSourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_digest": {
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "authority_class": {
+          "$ref": "#/$defs/AgentHarnessAuthorityClass",
+          "default": "authoritative"
+        }
+      },
+      "required": [
+        "name",
+        "source_id",
+        "source_digest"
+      ],
+      "title": "AgentHarnessControllerSourceBinding",
+      "type": "object"
+    },
+    "AgentHarnessControllerStatus": {
+      "enum": [
+        "active",
+        "waiting_gate",
+        "waiting_remote_approval",
+        "running_remote",
+        "recovery_required",
+        "cancelled",
+        "failed",
+        "succeeded"
+      ],
+      "title": "AgentHarnessControllerStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable exact-read result for one selected Controller action.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_harness_controller_action_receipt.v1",
+      "default": "agent_harness_controller_action_receipt.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "receipt_id": {
+      "default": "",
+      "title": "Receipt Id",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "decision_id": {
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "decision_digest": {
+      "title": "Decision Digest",
+      "type": "string"
+    },
+    "action": {
+      "$ref": "#/$defs/AgentHarnessControllerAction"
+    },
+    "task_id": {
+      "default": "",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "planned_task_index": {
+      "anyOf": [
+        {
+          "maximum": 1023,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Planned Task Index"
+    },
+    "slot_id": {
+      "default": "",
+      "title": "Slot Id",
+      "type": "string"
+    },
+    "outcome": {
+      "$ref": "#/$defs/AgentHarnessControllerReceiptOutcome"
+    },
+    "status_after": {
+      "$ref": "#/$defs/AgentHarnessControllerStatus"
+    },
+    "result_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentHarnessControllerSourceBinding"
+      },
+      "title": "Result Bindings",
+      "type": "array"
+    },
+    "result_bindings_digest": {
+      "title": "Result Bindings Digest",
+      "type": "string"
+    },
+    "reason_code": {
+      "title": "Reason Code",
+      "type": "string"
+    },
+    "receipt_digest": {
+      "default": "",
+      "title": "Receipt Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "controller_execution_id",
+    "controller_execution_digest",
+    "decision_id",
+    "decision_digest",
+    "action",
+    "outcome",
+    "status_after",
+    "result_bindings",
+    "result_bindings_digest",
+    "reason_code",
+    "created_at"
+  ],
+  "title": "AgentHarnessControllerActionReceipt",
+  "type": "object"
+}

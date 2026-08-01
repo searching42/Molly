@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "description": "The complete client-controlled Controller creation request.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_harness_controller_start_request.v1",
+      "default": "agent_harness_controller_start_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "expected_start_intent_digest": {
+      "title": "Expected Start Intent Digest",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "expected_start_intent_digest",
+    "client_request_id"
+  ],
+  "title": "AgentHarnessControllerStartRequest",
+  "type": "object"
+}

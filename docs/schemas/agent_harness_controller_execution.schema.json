@@ -1,0 +1,339 @@
+{
+  "$defs": {
+    "AgentHarnessAuthorityClass": {
+      "enum": [
+        "authoritative",
+        "derived",
+        "observational",
+        "unverified"
+      ],
+      "title": "AgentHarnessAuthorityClass",
+      "type": "string"
+    },
+    "AgentHarnessControllerSourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_digest": {
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "authority_class": {
+          "$ref": "#/$defs/AgentHarnessAuthorityClass",
+          "default": "authoritative"
+        }
+      },
+      "required": [
+        "name",
+        "source_id",
+        "source_digest"
+      ],
+      "title": "AgentHarnessControllerSourceBinding",
+      "type": "object"
+    },
+    "AgentHarnessControllerTaskSlot": {
+      "additionalProperties": false,
+      "properties": {
+        "planned_task_index": {
+          "maximum": 1023,
+          "minimum": 0,
+          "title": "Planned Task Index",
+          "type": "integer"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "default": 0,
+          "maximum": 1023,
+          "minimum": 0,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "execution_route": {
+          "enum": [
+            "local_executor",
+            "remote_execution_service"
+          ],
+          "title": "Execution Route",
+          "type": "string"
+        },
+        "slot_id": {
+          "title": "Slot Id",
+          "type": "string"
+        },
+        "task_authority_digest": {
+          "title": "Task Authority Digest",
+          "type": "string"
+        },
+        "dispatch_intent_digest": {
+          "title": "Dispatch Intent Digest",
+          "type": "string"
+        },
+        "compiled_options_digest": {
+          "title": "Compiled Options Digest",
+          "type": "string"
+        },
+        "input_artifacts_digest": {
+          "title": "Input Artifacts Digest",
+          "type": "string"
+        },
+        "output_contract_digest": {
+          "title": "Output Contract Digest",
+          "type": "string"
+        },
+        "remote_authority_id": {
+          "default": "",
+          "title": "Remote Authority Id",
+          "type": "string"
+        },
+        "remote_authority_digest": {
+          "default": "",
+          "title": "Remote Authority Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "planned_task_index",
+        "task_id",
+        "execution_route",
+        "slot_id",
+        "task_authority_digest",
+        "dispatch_intent_digest",
+        "compiled_options_digest",
+        "input_artifacts_digest",
+        "output_contract_digest"
+      ],
+      "title": "AgentHarnessControllerTaskSlot",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable authority binding for one exact authorized plan execution.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_harness_controller_execution.v1",
+      "default": "agent_harness_controller_execution.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "default": "",
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "start_intent_id": {
+      "title": "Start Intent Id",
+      "type": "string"
+    },
+    "start_intent_digest": {
+      "title": "Start Intent Digest",
+      "type": "string"
+    },
+    "authorization_id": {
+      "title": "Authorization Id",
+      "type": "string"
+    },
+    "authorization_digest": {
+      "title": "Authorization Digest",
+      "type": "string"
+    },
+    "permission_decision_id": {
+      "title": "Permission Decision Id",
+      "type": "string"
+    },
+    "permission_decision_digest": {
+      "title": "Permission Decision Digest",
+      "type": "string"
+    },
+    "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "proposal_digest": {
+      "title": "Proposal Digest",
+      "type": "string"
+    },
+    "semantic_plan_id": {
+      "title": "Semantic Plan Id",
+      "type": "string"
+    },
+    "semantic_plan_digest": {
+      "title": "Semantic Plan Digest",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "observation_digest": {
+      "title": "Observation Digest",
+      "type": "string"
+    },
+    "tool_catalog_digest": {
+      "title": "Tool Catalog Digest",
+      "type": "string"
+    },
+    "run_plan_digest": {
+      "title": "Run Plan Digest",
+      "type": "string"
+    },
+    "ordered_task_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Ordered Task Ids",
+      "type": "array"
+    },
+    "task_roster_digest": {
+      "title": "Task Roster Digest",
+      "type": "string"
+    },
+    "task_authorities_digest": {
+      "title": "Task Authorities Digest",
+      "type": "string"
+    },
+    "compiled_options_digest": {
+      "title": "Compiled Options Digest",
+      "type": "string"
+    },
+    "dispatch_intents_digest": {
+      "title": "Dispatch Intents Digest",
+      "type": "string"
+    },
+    "artifact_bindings_digest": {
+      "title": "Artifact Bindings Digest",
+      "type": "string"
+    },
+    "gate_bindings_digest": {
+      "title": "Gate Bindings Digest",
+      "type": "string"
+    },
+    "budget_bindings_digest": {
+      "title": "Budget Bindings Digest",
+      "type": "string"
+    },
+    "remote_authority_set_id": {
+      "default": "",
+      "title": "Remote Authority Set Id",
+      "type": "string"
+    },
+    "remote_authority_set_digest": {
+      "default": "",
+      "title": "Remote Authority Set Digest",
+      "type": "string"
+    },
+    "task_slots": {
+      "items": {
+        "$ref": "#/$defs/AgentHarnessControllerTaskSlot"
+      },
+      "title": "Task Slots",
+      "type": "array"
+    },
+    "source_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentHarnessControllerSourceBinding"
+      },
+      "title": "Source Bindings",
+      "type": "array"
+    },
+    "source_bindings_digest": {
+      "title": "Source Bindings Digest",
+      "type": "string"
+    },
+    "controller_policy_version": {
+      "const": "scientific-agent-harness-controller-policy.v1",
+      "default": "scientific-agent-harness-controller-policy.v1",
+      "title": "Controller Policy Version",
+      "type": "string"
+    },
+    "controller_policy_digest": {
+      "title": "Controller Policy Digest",
+      "type": "string"
+    },
+    "actor": {
+      "title": "Actor",
+      "type": "string"
+    },
+    "actor_source": {
+      "title": "Actor Source",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "request_digest": {
+      "title": "Request Digest",
+      "type": "string"
+    },
+    "execution_digest": {
+      "default": "",
+      "title": "Execution Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable": {
+      "const": true,
+      "default": true,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "start_intent_id",
+    "start_intent_digest",
+    "authorization_id",
+    "authorization_digest",
+    "permission_decision_id",
+    "permission_decision_digest",
+    "proposal_id",
+    "proposal_digest",
+    "semantic_plan_id",
+    "semantic_plan_digest",
+    "observation_id",
+    "observation_digest",
+    "tool_catalog_digest",
+    "run_plan_digest",
+    "ordered_task_ids",
+    "task_roster_digest",
+    "task_authorities_digest",
+    "compiled_options_digest",
+    "dispatch_intents_digest",
+    "artifact_bindings_digest",
+    "gate_bindings_digest",
+    "budget_bindings_digest",
+    "task_slots",
+    "source_bindings",
+    "source_bindings_digest",
+    "controller_policy_digest",
+    "actor",
+    "actor_source",
+    "client_request_id",
+    "request_digest",
+    "created_at"
+  ],
+  "title": "AgentHarnessControllerExecution",
+  "type": "object"
+}

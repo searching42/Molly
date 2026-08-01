@@ -1,0 +1,51 @@
+{
+  "additionalProperties": false,
+  "description": "The only client fields accepted for an exact Controller Gate decision.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_harness_controller_gate_approval_request.v1",
+      "default": "agent_harness_controller_gate_approval_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "expected_controller_execution_digest": {
+      "title": "Expected Controller Execution Digest",
+      "type": "string"
+    },
+    "gate_id": {
+      "title": "Gate Id",
+      "type": "string"
+    },
+    "expected_execution_snapshot_id": {
+      "title": "Expected Execution Snapshot Id",
+      "type": "string"
+    },
+    "expected_execution_snapshot_hash": {
+      "title": "Expected Execution Snapshot Hash",
+      "type": "string"
+    },
+    "approved": {
+      "title": "Approved",
+      "type": "boolean"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+    }
+  },
+  "required": [
+    "expected_controller_execution_digest",
+    "gate_id",
+    "expected_execution_snapshot_id",
+    "expected_execution_snapshot_hash",
+    "approved",
+    "client_request_id"
+  ],
+  "title": "AgentHarnessControllerGateApprovalRequest",
+  "type": "object"
+}
