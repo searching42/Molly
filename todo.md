@@ -446,10 +446,10 @@ M3.5 至少支持两种用户模式：
 | `M3H-005` 建立 immutable plan authorization | `I/T/—` | `DONE` | PR-BM exact 绑定 proposal、observation、RunPlan、effective/compiled options、dispatch intents、task authority、artifact/profile、预算、actor、Gate 与 mode digest，并通过 owner review |
 | `M3H-006` 实现 approve-and-start 与两种审批模式 | `I/T/—` | `DONE` | PR-BM 先提交 authorization、再提交 `not_dispatched` start intent，覆盖跨进程、fault injection、current-source revalidation 与 crash recovery，并通过 owner review |
 | `M3H-007` Permission Engine shadow mode | `I/T/—` | `DONE` | PR-BM 提供独立显式 shadow comparator/audit，不拦截或改变现有 route，并通过 owner review |
-| `M3H-007A` 建立 server-owned configured resource authority | `I/T/—` | `READY` | PR-BM2 Draft 从私有 server policy、exact connection/profile/probe、预算和完整 task roster 派生 immutable per-task authority，并接入 PR-BM task-authority verifier；等待 owner review，不创建 request 或 dispatch |
-| `M3H-008` Harness Controller 接入现有执行链 | `I(partial)/T(partial)/—` | `DEFERRED` | 在 `M3H-007A` 完成后复用 `RunPlanExecutor`、Gate snapshot、RemoteExecutionService、固定 worker transport、cancel/recover 与 exact replay，不建立第二套状态机 |
+| `M3H-007A` 建立 server-owned configured resource authority | `I/T/—` | `DONE` | PR-BM2 在 `a055a87` 获得 owner review approval，并由 PR #20 以 `5389a3c` 合并；从私有 server policy、exact connection/profile/probe、预算和完整 task roster 派生 immutable AuthoritySet，不创建 request 或 dispatch |
+| `M3H-008` Harness Controller 接入现有执行链 | `I(partial)/T(partial)/—` | `IN_PROGRESS` | PR-BN 已解锁；复用 `RunPlanExecutor`、Gate snapshot、RemoteExecutionService、固定 worker transport、cancel/recover 与 exact replay，不建立第二套状态机；尚未产生 Controller runtime validation |
 | `M3H-009` 接入 Execution Agent LLM | `—/—/—` | `DEFERRED` | 仅输出版本化 `ToolCallProposal`，在已批准 plan/action space 内选择下一步；无任意 adapter、argv、shell、SSH 或绝对路径字段 |
-| `M3H-010` Verifier-bound feedback observation | `I(partial)/T(partial)/—` | `DEFERRED` | 只有 authoritative StageState 和 verified publication 能支持 running/success/failure；LLM 文本不能改变 UI 或状态 |
+| `M3H-010` Verifier-bound feedback observation | `I(partial)/T(partial)/—` | `READY` | PR-BN 只建立 verifier-bound Controller observation prerequisite seam；只有 authoritative StageState、Artifact Registry 和 verified publication 能支持 running/success/failure，LLM 文本与 telemetry 不能改变 UI 或状态 |
 | `M3H-011` Replanner 与 plan revision | `I(partial)/T(partial)/—` | `DEFERRED` | 用户反馈或运行失败产生 explicit diff、新 plan digest 与新授权；旧授权对任何实质变化失效 |
 | `M3H-012` 统一 Plan/Tool/Permission/Replan UI | `I(partial)/T(partial)/—` | `DEFERRED` | 支持批准并启动、修改后重规划、拒绝、atomic task 与端到端模式；保留高级诊断入口 |
 | `M3H-013` confirmed CSV → fresh model → Top-N Harness 验收 | `I/T(partial)/—` | `DEFERRED` | 不复用既有模型或预测；在批准范围内完成训练、生成、预测、排序、Top-N 与报告 |
@@ -500,7 +500,7 @@ PR-BR  M3H-013～M3H-015
 PR-BL 已在 commit `fa13e6727ab50dabf30c0eaa7a63e0d63aa43da5` 获得 owner review approval；`M3H-001`～`M3H-003` 标记为 `I/T/— / DONE`，`M3H-GATE-001` 的 implementation/test 要求已达到，但仍不标记 `V`。代表性 runtime、真实外部 provider 与后续 Harness authorization/execution validation 留给 PR-BM～PR-BR，且不得由本次状态同步提前宣称完成。
 - `M3H-GATE-002`：用户可通过 `stepwise` 或 `frozen_plan` 批准 exact plan 并由同一操作启动；external LLM consent、普通聊天文字和 LLM 自身输出均不能产生执行权限。
 
-PR-BM 已在 commit `95db9a958525709b3af4e7d091ebf3076549e78d` 获得 owner review approval；`M3H-004`～`M3H-007` 标记为 `I/T/— / DONE`。Permission、authorization、approve-and-start 与 shadow contract 的 implementation/test 要求已达到，但 `M3H-GATE-002` 仍不标记 `V`：start intent 固定为 `not_dispatched`，尚无 Harness Controller representative runtime；remote execution 还必须先完成 `M3H-007A` 的 server-owned configured resource authority。
+PR-BM 已在 commit `95db9a958525709b3af4e7d091ebf3076549e78d` 获得 owner review approval；`M3H-004`～`M3H-007` 标记为 `I/T/— / DONE`。PR-BM2 随后在 commit `a055a87d1e83671aead9e9b9f31de9ddfc894414` 获得 owner review approval，并由 PR #20 以 `5389a3c25df454dc61246fa6bb58d4ec41e3584f` 合并，解除 remote configured-resource authority blocker。但 `M3H-GATE-002` 仍不标记 `V`：start intent 固定为 `not_dispatched`，尚无 Harness Controller representative runtime validation。
 - `M3H-GATE-003`：Execution Agent 只能发起 allowlisted `ToolCallProposal`；Controller 能证明每次 dispatch 属于当前有效授权、预算、profile 和 artifact lineage。
 - `M3H-GATE-004`：Executor、RemoteExecutionService、`molly-worker`、Verifier 和 Artifact Registry 保持唯一真实执行与结果权威；Harness/LLM 不能伪造 `RUNNING`、`SUCCEEDED` 或 verified artifact。
 - `M3H-GATE-005`：Replanner 对用户反馈、失败或计划漂移生成 explicit diff；任何实质变更创建新 digest 并要求新授权，不自动重试或扩大预算。
@@ -1021,6 +1021,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 影响任务：`M3H-007A` 继续 `I/T/— / READY` 等待 owner review；`M3H-GATE-002` 不标 `V`；PR-BN/M3H-008/M3H-010 继续 `DEFERRED`，不创建 RemoteExecutionRequest 或 dispatch。
 - 批准人：待 repository owner review。
 
+### 2026-08-01：PR-BM2 owner review approved，PR-BN 启动
+
+- 决策：repository owner 批准 PR #20 最终 review HEAD `a055a87d1e83671aead9e9b9f31de9ddfc894414`；PR #20 由 merge commit `5389a3c25df454dc61246fa6bb58d4ec41e3584f` 合入 `main`。`M3H-007A` 更新为 `I/T/— / DONE`，remote configured-resource authority blocker 已解除，PR-BN 可以开始消费 `intent_type=start_authorized_plan`、`handoff_target=scientific_agent_harness_controller.v1`、`dispatch_state=not_dispatched` 的 current-verified start intent。
+- 原计划：PR-BM2 保持唯一当前动作，`M3H-007A` 等待 owner review，PR-BN、`M3H-008` 与 `M3H-010` 继续 `DEFERRED`。
+- 新计划：PR-BN 成为唯一当前动作；`M3H-008` 先解锁为 `READY` 并随独立实现分支启动进入 `IN_PROGRESS`；`M3H-010` 更新为 `READY`，本 PR 只建立 verifier-bound observation prerequisite seam；`M3H-009` 与 PR-BO 继续 `DEFERRED`。
+- 依据：PR-BM2 的 server-owned policy、完整 remote task roster、AuthoritySet、聚合预算及 PR-BM current verifier 已在 owner-approved HEAD 固定并合并；`todo.md` 继续是规范状态源，PR conversation comment 不能替代仓库状态。
+- 影响任务：PR-BN 可以重新验证并消费 start intent，但尚未发生 Controller runtime validation，`M3H-GATE-002` 不标 `V`；未创建 Execution Agent、Replanner 或完整 Harness UI；PR-BP、PR-BQ、PR-BR 不解锁。
+- 新增风险：Controller 必须复用现有 Executor、GateDecision、StageState、Artifact Registry、RemoteExecutionService 与 publication verifier，且 OpenTelemetry 只能作为 non-authoritative observability seam；trace/span 状态不得成为执行、授权、StageState 或科学 publication 权威。
+- 批准人：searching42（repository owner）；PR-BN implementation 待 review。
+
 后续路线调整必须追加：
 
 ```text
@@ -1038,27 +1048,27 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 唯一当前动作：PR-BM2 server-owned configured resource-authority contract
+### 唯一当前动作：PR-BN Scientific Agent Harness Controller v1
 
-任务：完成 `M3H-007A`，为 PR-BL/PR-BM 已冻结的 remote dispatch intent 建立可信、确定性、不可变且可 exact-reverify 的 configured resource authority；本 PR 不创建 remote execution request，不调用 RemoteExecutionService、worker、SSH、adapter 或 Controller。
+任务：完成 `M3H-008`，由 deterministic Controller current-verify 并消费已授权的 non-dispatched start intent，按 RunPlan 顺序把 exact local task 交给现有 `RunPlanExecutor` 单任务 seam、把 exact remote task 交给现有 `RemoteExecutionService` task-attempt slot，并只从现有 Gate、StageState、Artifact Registry、dispatch/recovery receipt 与 verified publication 派生 observation；同时只建立 `M3H-010` 所需的最小 verifier-bound seam。
 
 范围：
 
-- resource authority 必须从 server-owned logical profile、capability probe、resource policy、budget authority 与 task remote type 派生，不接受客户端或 LLM 提供的 GPU/CPU/walltime/queue/path/host/command 字段；
-- 输出必须绑定 project/run/proposal、task ID、remote task type、profile ID/capability digest、configured `gpu_count`/`cpu_threads`/`walltime_sec`、预算上限、policy version/digest、source freshness 与完整 task roster；
-- profile ceiling、nullable proposal intent、环境默认值和历史 request 不能自动升级为 authority；缺少 probe、预算、task/profile compatibility 或 exact source binding 时必须 `DENY`；
-- publication 必须保持 project-scoped、no-replace、manifest-last、fsync、cross-process request lock、crash recovery 与 current-source revalidation；
-- PR-BM authorization/start-intent verifier 必须能够消费新 binding，但 PR-BM2 不 dispatch、不写 StageState/Gate、不创建 queue/remote job。
+- Controller 每次 advance 必须 exact-verify execution root 与全部当前 source，确定性派生一个 next action，并最多执行一个外部副作用；客户端不得选择 task、route、adapter、resources、Gate actor、remote job、retry 或 trace identity；
+- local task 只能进入现有 `RunPlanExecutor` 单任务 seam，remote task 只能进入复用现有 lifecycle 的 task-attempt slot；不得建立第二套 Executor、RemoteExecutionService、StageState、GateDecision、Artifact Registry 或 scientific publication；
+- GateDecision 与 remote execution approval 保持独立权威，plan authorization 或 frozen-plan mode 不能替代 semantic Gate，也不能替代 remote approval；
+- crash/replay/concurrency 必须采用 current authoritative state、dispatch/recovery receipt 与 verified publication，避免重复 local computation 或 remote dispatch；不得自动 retry、扩大预算、切换 profile 或修改 task graph；
+- OpenTelemetry 默认关闭并保持可选、lazy、fail-open；固定 privacy allowlist，trace/span/link 不进入任何 authority digest，也不能决定 task 状态或科学成功。
 
-当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`；PR-BL 与 PR-BM 的 `M3H-001`～`M3H-007` 均为 `I/T/— / DONE`、已通过 owner review；`M3H-007A` 为 `READY`；PR-BN 继续 `DEFERRED`，M4/PR-BK 继续暂缓。
+当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`；PR-BL、PR-BM 与 PR-BM2 的 `M3H-001`～`M3H-007A` 均为 `I/T/— / DONE`、已通过 owner review并合并；`M3H-008` 为 `IN_PROGRESS`，`M3H-010` 为 `READY`，`M3H-009`/PR-BO 继续 `DEFERRED`，M4/PR-BK 继续暂缓。尚无 Controller representative runtime validation，`M3H-GATE-002` 不标 `V`。
 
 必须验证：
 
-1. 相同 server-owned profile/capability/resource-policy/budget input 跨进程生成逐字节一致的 configured binding；
-2. client/LLM resource injection、profile ceiling 推断、unknown remote task type、missing capability、budget escalation 和 stale source fail closed；
-3. resource binding 任一字段、policy digest、profile capability digest、task roster 或 source binding 漂移后，PR-BM authorization/start intent 立即 stale；
-4. crash/replay 只产生一个 immutable resource authority publication，相同 request 幂等、不同 payload conflict；
-5. no-call/no-state evidence 证明未创建 remote execution request、未调用 transport/worker/adapter、未写 Gate 或 StageState。
+1. exact authorized start 只产生一个 immutable Controller execution，并按 RunPlan order确定唯一下一动作；
+2. local/remote route confusion、客户端 authority/action 注入及任何 bound source drift 均 fail closed且无副作用；
+3. Gate approval、remote approval、StageState、Artifact Registry、dispatch/recovery receipt与 publication继续由现有 authority创建、验证和消费；
+4. crash/replay/cross-process recovery不重复调用 local adapter或 remote dispatch，多 remote task使用不同 task-attempt slot；
+5. tracing on/off与 exporter故障不改变 Controller、execution、Gate、artifact、remote或 scientific publication authoritative bytes。
 
 ### 主线队列
 
@@ -1072,10 +1082,10 @@ PR-BJ  authoritative M3 failure source evidence contract v1（已完成）
 PR-BI  representative inspection validation evidence（machine + owner review complete）
 
 PR-BL  ScientificToolSpec、AgentProjectObservation、LLM long-horizon plan proposal（owner review approved；已合并）
-PR-BM  Permission Engine、immutable plan authorization、approve-and-start contract（owner review approved；可合并）
-PR-BM2 server-owned configured resource-authority contract（唯一当前动作）
-PR-BN  Harness Controller 接入现有 Executor/remote/verifier 链（等待 PR-BM2）
-PR-BO  Execution Agent LLM 与受约束 ToolCallProposal
+PR-BM  Permission Engine、immutable plan authorization、approve-and-start contract（owner review approved；已合并）
+PR-BM2 server-owned configured resource-authority contract（owner review approved；PR #20 已合并）
+PR-BN  Harness Controller 接入现有 Executor/remote/verifier 链（唯一当前动作；IN_PROGRESS）
+PR-BO  Execution Agent LLM 与受约束 ToolCallProposal（DEFERRED）
 PR-BP  Replanner、plan diff 与重新授权
 PR-BQ  统一 Harness UI 与 atomic/end-to-end 入口
 PR-BR  CSV/PDF acceptance、恢复、exact replay、隐私与对抗 evidence
