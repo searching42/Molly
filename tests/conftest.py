@@ -180,6 +180,10 @@ _PR_FAST_FILES = frozenset(
         # surface with adversarial storage/privacy coverage. Keep it in the
         # PR-fast canary so a change cannot bypass its non-execution boundary.
         "tests/test_scientific_agent_plan.py",
+        # Permission, exact authorization, and start-intent publication are a
+        # compact control-plane boundary. Keep the full contract in PR Fast so
+        # no future change can blur authorization into execution authority.
+        "tests/test_scientific_agent_authorization.py",
     }
 )
 _PR_FAST_NODE_PREFIXES = (

@@ -1,0 +1,584 @@
+{
+  "$defs": {
+    "AgentAuthorizationArtifactBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "content_digest": {
+          "title": "Content Digest",
+          "type": "string"
+        },
+        "trust_class": {
+          "enum": [
+            "content_bound_input",
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input",
+            "unavailable"
+          ],
+          "title": "Trust Class",
+          "type": "string"
+        },
+        "verification_state": {
+          "enum": [
+            "verified",
+            "registered"
+          ],
+          "title": "Verification State",
+          "type": "string"
+        },
+        "producer_task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Producer Task Id"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "content_digest",
+        "trust_class",
+        "verification_state"
+      ],
+      "title": "AgentAuthorizationArtifactBinding",
+      "type": "object"
+    },
+    "AgentAuthorizationGateBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "gate_id": {
+          "title": "Gate Id",
+          "type": "string"
+        },
+        "effect_class": {
+          "title": "Effect Class",
+          "type": "string"
+        },
+        "gate_class": {
+          "enum": [
+            "operational",
+            "semantic"
+          ],
+          "title": "Gate Class",
+          "type": "string"
+        },
+        "supports_plan_preapproval": {
+          "title": "Supports Plan Preapproval",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "task_id",
+        "gate_id",
+        "effect_class",
+        "gate_class",
+        "supports_plan_preapproval"
+      ],
+      "title": "AgentAuthorizationGateBinding",
+      "type": "object"
+    },
+    "AgentAuthorizationMode": {
+      "enum": [
+        "stepwise",
+        "frozen_plan"
+      ],
+      "title": "AgentAuthorizationMode",
+      "type": "string"
+    },
+    "AgentAuthorizationProfileBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "profile_id": {
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_type": {
+          "title": "Profile Type",
+          "type": "string"
+        },
+        "capability_digest": {
+          "title": "Capability Digest",
+          "type": "string"
+        },
+        "availability_state": {
+          "const": "available",
+          "default": "available",
+          "title": "Availability State",
+          "type": "string"
+        },
+        "verified_capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Verified Capabilities",
+          "type": "array"
+        },
+        "supported_logical_task_types": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Supported Logical Task Types",
+          "type": "array"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_type",
+        "capability_digest"
+      ],
+      "title": "AgentAuthorizationProfileBinding",
+      "type": "object"
+    },
+    "AgentRemoteResourceRequestIntent": {
+      "additionalProperties": false,
+      "description": "Review-only resource intent; nullable fields are never invented authority.",
+      "properties": {
+        "status": {
+          "default": "not_configured",
+          "enum": [
+            "not_configured",
+            "partial",
+            "configured"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "gpu_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Count"
+        },
+        "cpu_threads": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Threads"
+        },
+        "walltime_sec": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Walltime Sec"
+        }
+      },
+      "title": "AgentRemoteResourceRequestIntent",
+      "type": "object"
+    },
+    "AgentTaskDispatchIntent": {
+      "additionalProperties": false,
+      "description": "Non-executing route binding for one canonical RunPlan task.",
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "execution_route": {
+          "enum": [
+            "local_executor",
+            "remote_execution_service"
+          ],
+          "title": "Execution Route",
+          "type": "string"
+        },
+        "remote_task_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "document_parsing",
+                "model_training",
+                "molecular_generation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Task Type"
+        },
+        "logical_profile_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Logical Profile Id"
+        },
+        "requested_resources": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRemoteResourceRequestIntent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "task_id",
+        "execution_route"
+      ],
+      "title": "AgentTaskDispatchIntent",
+      "type": "object"
+    },
+    "PlannedTask": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "required_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Artifacts",
+          "type": "array"
+        },
+        "output_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Output Artifacts",
+          "type": "array"
+        },
+        "unresolved_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unresolved Requirements",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "title": "PlannedTask",
+      "type": "object"
+    },
+    "RunPlan": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "requested_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requested Tasks",
+          "type": "array"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/PlannedTask"
+          },
+          "title": "Tasks",
+          "type": "array"
+        },
+        "available_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Available Artifacts",
+          "type": "array"
+        },
+        "missing_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Artifacts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "requested_tasks",
+        "tasks"
+      ],
+      "title": "RunPlan",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Exact immutable user authority for one verified proposal; never executable.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_plan_authorization.v1",
+      "default": "agent_plan_authorization.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "authorization_id": {
+      "default": "",
+      "title": "Authorization Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "proposal_digest": {
+      "title": "Proposal Digest",
+      "type": "string"
+    },
+    "semantic_plan_id": {
+      "title": "Semantic Plan Id",
+      "type": "string"
+    },
+    "semantic_plan_digest": {
+      "title": "Semantic Plan Digest",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "observation_digest": {
+      "title": "Observation Digest",
+      "type": "string"
+    },
+    "tool_catalog_digest": {
+      "title": "Tool Catalog Digest",
+      "type": "string"
+    },
+    "run_plan_digest": {
+      "title": "Run Plan Digest",
+      "type": "string"
+    },
+    "run_plan": {
+      "$ref": "#/$defs/RunPlan"
+    },
+    "task_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Task Ids",
+      "type": "array"
+    },
+    "task_authority_digests": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Task Authority Digests",
+      "type": "object"
+    },
+    "effective_planner_options": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Effective Planner Options",
+      "type": "object"
+    },
+    "compiled_task_options": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Compiled Task Options",
+      "type": "object"
+    },
+    "dispatch_intents": {
+      "items": {
+        "$ref": "#/$defs/AgentTaskDispatchIntent"
+      },
+      "title": "Dispatch Intents",
+      "type": "array"
+    },
+    "artifact_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentAuthorizationArtifactBinding"
+      },
+      "title": "Artifact Bindings",
+      "type": "array"
+    },
+    "profile_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentAuthorizationProfileBinding"
+      },
+      "title": "Profile Bindings",
+      "type": "array"
+    },
+    "limits": {
+      "additionalProperties": true,
+      "title": "Limits",
+      "type": "object"
+    },
+    "stop_conditions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Stop Conditions",
+      "type": "array"
+    },
+    "success_criteria": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Success Criteria",
+      "type": "array"
+    },
+    "required_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Gates",
+      "type": "array"
+    },
+    "gate_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentAuthorizationGateBinding"
+      },
+      "title": "Gate Bindings",
+      "type": "array"
+    },
+    "preauthorized_operational_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Preauthorized Operational Gates",
+      "type": "array"
+    },
+    "pending_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Pending Gates",
+      "type": "array"
+    },
+    "permission_policy_version": {
+      "title": "Permission Policy Version",
+      "type": "string"
+    },
+    "permission_policy_digest": {
+      "title": "Permission Policy Digest",
+      "type": "string"
+    },
+    "permission_decision_id": {
+      "title": "Permission Decision Id",
+      "type": "string"
+    },
+    "permission_decision_digest": {
+      "title": "Permission Decision Digest",
+      "type": "string"
+    },
+    "authorization_mode": {
+      "$ref": "#/$defs/AgentAuthorizationMode"
+    },
+    "actor": {
+      "title": "Actor",
+      "type": "string"
+    },
+    "actor_source": {
+      "title": "Actor Source",
+      "type": "string"
+    },
+    "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "authorization_digest": {
+      "default": "",
+      "title": "Authorization Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "proposal_id",
+    "proposal_digest",
+    "semantic_plan_id",
+    "semantic_plan_digest",
+    "observation_id",
+    "observation_digest",
+    "tool_catalog_digest",
+    "run_plan_digest",
+    "run_plan",
+    "task_ids",
+    "task_authority_digests",
+    "effective_planner_options",
+    "compiled_task_options",
+    "dispatch_intents",
+    "permission_policy_version",
+    "permission_policy_digest",
+    "permission_decision_id",
+    "permission_decision_digest",
+    "authorization_mode",
+    "actor",
+    "actor_source",
+    "client_request_id",
+    "created_at"
+  ],
+  "title": "AgentPlanAuthorization",
+  "type": "object"
+}

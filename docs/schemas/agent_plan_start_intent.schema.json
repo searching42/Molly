@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "AgentAuthorizationMode": {
+      "enum": [
+        "stepwise",
+        "frozen_plan"
+      ],
+      "title": "AgentAuthorizationMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable request for a future Controller action; never a dispatch.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_plan_start_intent.v1",
+      "default": "agent_plan_start_intent.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "start_intent_id": {
+      "default": "",
+      "title": "Start Intent Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "proposal_digest": {
+      "title": "Proposal Digest",
+      "type": "string"
+    },
+    "authorization_id": {
+      "title": "Authorization Id",
+      "type": "string"
+    },
+    "authorization_digest": {
+      "title": "Authorization Digest",
+      "type": "string"
+    },
+    "permission_decision_id": {
+      "title": "Permission Decision Id",
+      "type": "string"
+    },
+    "permission_decision_digest": {
+      "title": "Permission Decision Digest",
+      "type": "string"
+    },
+    "authorization_mode": {
+      "$ref": "#/$defs/AgentAuthorizationMode"
+    },
+    "requested_by": {
+      "title": "Requested By",
+      "type": "string"
+    },
+    "requested_by_source": {
+      "title": "Requested By Source",
+      "type": "string"
+    },
+    "intent_type": {
+      "const": "start_authorized_plan",
+      "default": "start_authorized_plan",
+      "title": "Intent Type",
+      "type": "string"
+    },
+    "handoff_target": {
+      "const": "scientific_agent_harness_controller.v1",
+      "default": "scientific_agent_harness_controller.v1",
+      "title": "Handoff Target",
+      "type": "string"
+    },
+    "dispatch_state": {
+      "const": "not_dispatched",
+      "default": "not_dispatched",
+      "title": "Dispatch State",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "start_intent_digest": {
+      "default": "",
+      "title": "Start Intent Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "proposal_id",
+    "proposal_digest",
+    "authorization_id",
+    "authorization_digest",
+    "permission_decision_id",
+    "permission_decision_digest",
+    "authorization_mode",
+    "requested_by",
+    "requested_by_source",
+    "client_request_id",
+    "created_at"
+  ],
+  "title": "AgentPlanStartIntent",
+  "type": "object"
+}

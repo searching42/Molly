@@ -1,0 +1,58 @@
+{
+  "$defs": {
+    "AgentAuthorizationMode": {
+      "enum": [
+        "stepwise",
+        "frozen_plan"
+      ],
+      "title": "AgentAuthorizationMode",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The complete and only client-controlled exact-authorization payload.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_plan_authorization_request.v1",
+      "default": "agent_plan_authorization_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "expected_proposal_digest": {
+      "title": "Expected Proposal Digest",
+      "type": "string"
+    },
+    "authorization_mode": {
+      "$ref": "#/$defs/AgentAuthorizationMode"
+    },
+    "requested_preauthorized_gate_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Requested Preauthorized Gate Ids",
+      "type": "array"
+    },
+    "confirmed": {
+      "const": true,
+      "title": "Confirmed",
+      "type": "boolean"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+    }
+  },
+  "required": [
+    "expected_proposal_digest",
+    "authorization_mode",
+    "confirmed",
+    "client_request_id"
+  ],
+  "title": "AgentPlanAuthorizationRequest",
+  "type": "object"
+}

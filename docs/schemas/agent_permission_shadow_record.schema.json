@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "AgentPermissionOutcome": {
+      "enum": [
+        "ALLOW",
+        "REQUIRE_APPROVAL",
+        "DENY"
+      ],
+      "title": "AgentPermissionOutcome",
+      "type": "string"
+    },
+    "AgentPermissionShadowAlignment": {
+      "enum": [
+        "MATCH",
+        "NEW_STRICTER",
+        "NEW_LOOSER",
+        "INCOMPARABLE"
+      ],
+      "title": "AgentPermissionShadowAlignment",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Independent audit-only comparison with the existing route expectation.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_permission_shadow_record.v1",
+      "default": "agent_permission_shadow_record.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "shadow_record_id": {
+      "default": "",
+      "title": "Shadow Record Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "permission_decision_id": {
+      "title": "Permission Decision Id",
+      "type": "string"
+    },
+    "new_outcome": {
+      "$ref": "#/$defs/AgentPermissionOutcome"
+    },
+    "legacy_action": {
+      "title": "Legacy Action",
+      "type": "string"
+    },
+    "legacy_outcome": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentPermissionOutcome"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "alignment": {
+      "$ref": "#/$defs/AgentPermissionShadowAlignment"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "policy_digest": {
+      "title": "Policy Digest",
+      "type": "string"
+    },
+    "source_digest": {
+      "title": "Source Digest",
+      "type": "string"
+    },
+    "shadow_record_digest": {
+      "default": "",
+      "title": "Shadow Record Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "proposal_id",
+    "permission_decision_id",
+    "new_outcome",
+    "legacy_action",
+    "alignment",
+    "policy_digest",
+    "source_digest",
+    "created_at"
+  ],
+  "title": "AgentPermissionShadowRecord",
+  "type": "object"
+}

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from flask import Flask, request
+from flask import Flask, g, request
 
-from ai4s_agent.actor_identity import resolve_actor
+from ai4s_agent.actor_identity import resolve_actor, resolve_authenticated_actor
 
 
 def _resolve_with_request(*, headers=None, json=None, data=None, query_string=None, method: str = "POST", required: bool = False):
@@ -54,3 +54,35 @@ def test_resolve_actor_missing_required_records_required_context() -> None:
     assert required_actor.actor == ""
     assert required_actor.source == "missing"
     assert required_actor.required is True
+
+
+def test_authenticated_actor_rejects_all_client_assertions_by_default() -> None:
+    app = Flask(__name__)
+    with app.test_request_context(
+        "/actor?actor=query-user",
+        method="POST",
+        headers={"X-Actor": "header-user"},
+        json={"actor": "body-user"},
+    ):
+        actor = resolve_authenticated_actor(request, required=True)
+    assert actor.actor == ""
+    assert actor.source == "missing"
+    assert actor.required is True
+
+
+def test_authenticated_actor_uses_middleware_environ_or_fixed_server_owner() -> None:
+    app = Flask(__name__)
+    app.config["AI4S_AGENT_AUTHORIZATION_OWNER"] = "configured-owner"
+    with app.test_request_context("/actor", headers={"X-Actor": "spoofed"}):
+        configured = resolve_authenticated_actor(request, required=True)
+        request.environ["ai4s.authenticated_principal"] = "proxy-principal"
+        environ = resolve_authenticated_actor(request, required=True)
+        g.ai4s_authenticated_principal = "middleware-principal"
+        middleware = resolve_authenticated_actor(request, required=True)
+
+    assert configured.actor == "configured-owner"
+    assert configured.source == "config:AI4S_AGENT_AUTHORIZATION_OWNER"
+    assert environ.actor == "proxy-principal"
+    assert environ.source == "wsgi.environ:ai4s.authenticated_principal"
+    assert middleware.actor == "middleware-principal"
+    assert middleware.source == "flask.g:ai4s_authenticated_principal"
