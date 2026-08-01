@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "description": "The complete client surface for resource-authority publication.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_remote_resource_authority_request.v1",
+      "default": "agent_remote_resource_authority_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "expected_proposal_digest": {
+      "title": "Expected Proposal Digest",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "expected_proposal_digest",
+    "client_request_id"
+  ],
+  "title": "AgentRemoteResourceAuthorityRequest",
+  "type": "object"
+}

@@ -18,6 +18,7 @@ from ai4s_agent.oled_bounded_discovery_session_actions import (
 )
 from ai4s_agent.orchestrator import Orchestrator
 from ai4s_agent.remote_execution_lifecycle import RemoteExecutionLifecycleService
+from ai4s_agent.remote_resource_authority import RemoteResourceAuthorityPolicyStore
 from ai4s_agent.resource_profiles import ResourceProfileStore
 from ai4s_agent.routes import run_control as run_control_routes
 from ai4s_agent.routes.agents import _as_bool, register_agent_routes
@@ -104,6 +105,9 @@ def register_routes(
         workspace_dir=workspace,
         config_dir=user_config_dir,
     )
+    resource_authority_policies = RemoteResourceAuthorityPolicyStore(
+        config_dir=user_config_dir,
+    )
     remote_executions = RemoteExecutionLifecycleService(
         projects=projects,
         profiles=resource_profiles,
@@ -152,6 +156,8 @@ def register_routes(
         app,
         projects=projects,
         proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
+        resource_profiles=resource_profiles,
+        resource_authority_policy_store=resource_authority_policies,
     )
     register_llm_settings_routes(
         app,

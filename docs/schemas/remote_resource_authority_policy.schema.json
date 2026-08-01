@@ -1,0 +1,141 @@
+{
+  "$defs": {
+    "AgentConfiguredRemoteResources": {
+      "additionalProperties": false,
+      "description": "Complete server-configured resources; no nullable/default dimensions.",
+      "properties": {
+        "gpu_count": {
+          "title": "Gpu Count",
+          "type": "integer"
+        },
+        "cpu_threads": {
+          "title": "Cpu Threads",
+          "type": "integer"
+        },
+        "walltime_sec": {
+          "title": "Walltime Sec",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "gpu_count",
+        "cpu_threads",
+        "walltime_sec"
+      ],
+      "title": "AgentConfiguredRemoteResources",
+      "type": "object"
+    },
+    "AgentRemoteResourceBudgetLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_runtime_sec": {
+          "title": "Max Runtime Sec",
+          "type": "integer"
+        },
+        "max_gpu_hours": {
+          "title": "Max Gpu Hours",
+          "type": "number"
+        },
+        "max_cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Cost Usd"
+        }
+      },
+      "required": [
+        "max_runtime_sec",
+        "max_gpu_hours"
+      ],
+      "title": "AgentRemoteResourceBudgetLimits",
+      "type": "object"
+    },
+    "RemoteResourceAuthorityPolicyEntry": {
+      "additionalProperties": false,
+      "description": "One private owner-authored remote resource grant template.",
+      "properties": {
+        "policy_id": {
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "connection_id": {
+          "title": "Connection Id",
+          "type": "string"
+        },
+        "execution_profile_id": {
+          "title": "Execution Profile Id",
+          "type": "string"
+        },
+        "remote_task_type": {
+          "title": "Remote Task Type",
+          "type": "string"
+        },
+        "allowed_task_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Task Ids",
+          "type": "array"
+        },
+        "configured_resources": {
+          "$ref": "#/$defs/AgentConfiguredRemoteResources"
+        },
+        "budget_limits": {
+          "$ref": "#/$defs/AgentRemoteResourceBudgetLimits"
+        }
+      },
+      "required": [
+        "policy_id",
+        "enabled",
+        "connection_id",
+        "execution_profile_id",
+        "remote_task_type",
+        "allowed_task_ids",
+        "configured_resources",
+        "budget_limits"
+      ],
+      "title": "RemoteResourceAuthorityPolicyEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Private server-owned policy roster; never a project/LLM artifact.",
+  "properties": {
+    "schema_version": {
+      "const": "molly_remote_resource_authority_policy.v1",
+      "default": "molly_remote_resource_authority_policy.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "policy_version": {
+      "const": "remote-resource-authority-policy.v1",
+      "default": "remote-resource-authority-policy.v1",
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/RemoteResourceAuthorityPolicyEntry"
+      },
+      "title": "Entries",
+      "type": "array"
+    },
+    "policy_digest": {
+      "default": "",
+      "title": "Policy Digest",
+      "type": "string"
+    }
+  },
+  "title": "RemoteResourceAuthorityPolicy",
+  "type": "object"
+}

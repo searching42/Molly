@@ -446,7 +446,7 @@ M3.5 至少支持两种用户模式：
 | `M3H-005` 建立 immutable plan authorization | `I/T/—` | `DONE` | PR-BM exact 绑定 proposal、observation、RunPlan、effective/compiled options、dispatch intents、task authority、artifact/profile、预算、actor、Gate 与 mode digest，并通过 owner review |
 | `M3H-006` 实现 approve-and-start 与两种审批模式 | `I/T/—` | `DONE` | PR-BM 先提交 authorization、再提交 `not_dispatched` start intent，覆盖跨进程、fault injection、current-source revalidation 与 crash recovery，并通过 owner review |
 | `M3H-007` Permission Engine shadow mode | `I/T/—` | `DONE` | PR-BM 提供独立显式 shadow comparator/audit，不拦截或改变现有 route，并通过 owner review |
-| `M3H-007A` 建立 server-owned configured resource authority | `—/—/—` | `READY` | 从可信 server profile、capability、预算与资源 policy 确定性派生 exact configured remote resource binding；客户端、LLM、profile ceiling 或默认值均不得成为资源权限 |
+| `M3H-007A` 建立 server-owned configured resource authority | `I/T/—` | `READY` | PR-BM2 Draft 从私有 server policy、exact connection/profile/probe、预算和完整 task roster 派生 immutable per-task authority，并接入 PR-BM task-authority verifier；等待 owner review，不创建 request 或 dispatch |
 | `M3H-008` Harness Controller 接入现有执行链 | `I(partial)/T(partial)/—` | `DEFERRED` | 在 `M3H-007A` 完成后复用 `RunPlanExecutor`、Gate snapshot、RemoteExecutionService、固定 worker transport、cancel/recover 与 exact replay，不建立第二套状态机 |
 | `M3H-009` 接入 Execution Agent LLM | `—/—/—` | `DEFERRED` | 仅输出版本化 `ToolCallProposal`，在已批准 plan/action space 内选择下一步；无任意 adapter、argv、shell、SSH 或绝对路径字段 |
 | `M3H-010` Verifier-bound feedback observation | `I(partial)/T(partial)/—` | `DEFERRED` | 只有 authoritative StageState 和 verified publication 能支持 running/success/failure；LLM 文本不能改变 UI 或状态 |
@@ -983,6 +983,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 影响任务：PR-BM 完成 owner review并可合并；`M3H-007A` 更新为 `READY` 并成为唯一当前动作；PR-BN/M3H-008/M3H-010 继续 `DEFERRED`；M4/PR-BK 继续策略性暂缓。
 - 新增风险：resource authority 若从客户端 JSON、LLM、profile ceiling 或隐式默认值推断，会绕过 PR-BM exact authorization；PR-BM2 必须仅从 server-owned profile/capability/budget/resource policy 派生 configured binding，并保持 no-dispatch、no-remote-request 边界。
 - 批准人：searching42（repository owner）。
+
+### 2026-08-01：PR-BM2 Draft 冻结 server-owned configured resource authority
+
+- 决策：PR-BM2 仅新增私有 Resource Authority Policy、确定性 `CONFIGURED`/`DENY` decision、immutable per-remote-task authority，以及 resource-aware Permission policy v2；不创建 RemoteExecutionRequest、不调用 remote lifecycle/worker/SSH/adapter/Gate/StageState/Controller。
+- 原计划：PR-BL remote intent 只包含 nullable GPU/CPU 和可选 walltime，PR-BM v1 因 `partial`/`not_configured` 统一拒绝，Uni-Mol、REINVENT4 与 MinerU 没有可 exact-verify 的 remote authorization 路径。
+- 新计划：以显式私有 policy选择完整 GPU/CPU/walltime和预算，用单锁 connection/probe snapshot、固定 Execution Profile ceiling/device rule及 PR-BL capability digest验证；authority digest进入 `execution_binding_digest -> task_authority_digest -> permission decision -> authorization -> start intent` 链。local-only及旧 publication继续按冻结 policy v1逐字节重放。
+- 依据：新增三类固定 profile正常路径、policy/probe/capability/resource/budget fail-closed、client injection、symlink/private config、same-request replay/conflict、current-source drift、fault recovery、schema freeze和 no-dispatch测试；最终 PR Fast、Full CI 与 CodeQL 证据将在本 Draft review HEAD生成。
+- 影响任务：`M3H-007A` 更新为 `I/T/— / READY` 等待 owner review；`M3H-GATE-002` 不标 `V`；PR-BN/M3H-008/M3H-010继续 `DEFERRED`；PR-BM2仍为唯一当前动作。
+- 新增风险：v1没有版本化 monetary cost model或 probe TTL，因此任何非空 cost authority请求 fail closed，probe freshness只由 exact connection/probe/profile/capability digest与available状态约束；PR-BN消费前必须再次current-verify全部binding。
+- 批准人：待 repository owner review。
 
 后续路线调整必须追加：
 

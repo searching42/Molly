@@ -1,0 +1,282 @@
+{
+  "$defs": {
+    "AgentConfiguredRemoteResources": {
+      "additionalProperties": false,
+      "description": "Complete server-configured resources; no nullable/default dimensions.",
+      "properties": {
+        "gpu_count": {
+          "title": "Gpu Count",
+          "type": "integer"
+        },
+        "cpu_threads": {
+          "title": "Cpu Threads",
+          "type": "integer"
+        },
+        "walltime_sec": {
+          "title": "Walltime Sec",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "gpu_count",
+        "cpu_threads",
+        "walltime_sec"
+      ],
+      "title": "AgentConfiguredRemoteResources",
+      "type": "object"
+    },
+    "AgentRemoteResourceBudgetLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_runtime_sec": {
+          "title": "Max Runtime Sec",
+          "type": "integer"
+        },
+        "max_gpu_hours": {
+          "title": "Max Gpu Hours",
+          "type": "number"
+        },
+        "max_cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Cost Usd"
+        }
+      },
+      "required": [
+        "max_runtime_sec",
+        "max_gpu_hours"
+      ],
+      "title": "AgentRemoteResourceBudgetLimits",
+      "type": "object"
+    },
+    "AgentRemoteResourceSourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_digest": {
+          "title": "Source Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_digest"
+      ],
+      "title": "AgentRemoteResourceSourceBinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Exact immutable resources for one remote RunPlan task; never executable.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_remote_resource_authority.v1",
+      "default": "agent_remote_resource_authority.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "authority_id": {
+      "default": "",
+      "title": "Authority Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "proposal_digest": {
+      "title": "Proposal Digest",
+      "type": "string"
+    },
+    "semantic_plan_id": {
+      "title": "Semantic Plan Id",
+      "type": "string"
+    },
+    "semantic_plan_digest": {
+      "title": "Semantic Plan Digest",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "observation_digest": {
+      "title": "Observation Digest",
+      "type": "string"
+    },
+    "tool_catalog_digest": {
+      "title": "Tool Catalog Digest",
+      "type": "string"
+    },
+    "run_plan_digest": {
+      "title": "Run Plan Digest",
+      "type": "string"
+    },
+    "ordered_task_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Ordered Task Ids",
+      "type": "array"
+    },
+    "task_roster_digest": {
+      "title": "Task Roster Digest",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "dispatch_intent_digest": {
+      "title": "Dispatch Intent Digest",
+      "type": "string"
+    },
+    "remote_task_type": {
+      "title": "Remote Task Type",
+      "type": "string"
+    },
+    "logical_profile_id": {
+      "title": "Logical Profile Id",
+      "type": "string"
+    },
+    "connection_id": {
+      "title": "Connection Id",
+      "type": "string"
+    },
+    "connection_profile_digest": {
+      "title": "Connection Profile Digest",
+      "type": "string"
+    },
+    "execution_profile_id": {
+      "title": "Execution Profile Id",
+      "type": "string"
+    },
+    "execution_profile_digest": {
+      "title": "Execution Profile Digest",
+      "type": "string"
+    },
+    "capability_probe_digest": {
+      "title": "Capability Probe Digest",
+      "type": "string"
+    },
+    "capability_probe_status": {
+      "const": "available",
+      "default": "available",
+      "title": "Capability Probe Status",
+      "type": "string"
+    },
+    "verified_capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Verified Capabilities",
+      "type": "array"
+    },
+    "configured_resources": {
+      "$ref": "#/$defs/AgentConfiguredRemoteResources"
+    },
+    "budget_policy_digest": {
+      "title": "Budget Policy Digest",
+      "type": "string"
+    },
+    "budget_limits": {
+      "$ref": "#/$defs/AgentRemoteResourceBudgetLimits"
+    },
+    "derived_gpu_hours": {
+      "title": "Derived Gpu Hours",
+      "type": "number"
+    },
+    "resource_policy_id": {
+      "title": "Resource Policy Id",
+      "type": "string"
+    },
+    "resource_policy_digest": {
+      "title": "Resource Policy Digest",
+      "type": "string"
+    },
+    "authority_policy_version": {
+      "title": "Authority Policy Version",
+      "type": "string"
+    },
+    "authority_policy_digest": {
+      "title": "Authority Policy Digest",
+      "type": "string"
+    },
+    "source_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentRemoteResourceSourceBinding"
+      },
+      "title": "Source Bindings",
+      "type": "array"
+    },
+    "authority_digest": {
+      "default": "",
+      "title": "Authority Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "proposal_id",
+    "proposal_digest",
+    "semantic_plan_id",
+    "semantic_plan_digest",
+    "observation_id",
+    "observation_digest",
+    "tool_catalog_digest",
+    "run_plan_digest",
+    "ordered_task_ids",
+    "task_roster_digest",
+    "task_id",
+    "dispatch_intent_digest",
+    "remote_task_type",
+    "logical_profile_id",
+    "connection_id",
+    "connection_profile_digest",
+    "execution_profile_id",
+    "execution_profile_digest",
+    "capability_probe_digest",
+    "verified_capabilities",
+    "configured_resources",
+    "budget_policy_digest",
+    "budget_limits",
+    "derived_gpu_hours",
+    "resource_policy_id",
+    "resource_policy_digest",
+    "authority_policy_version",
+    "authority_policy_digest",
+    "source_bindings",
+    "created_at"
+  ],
+  "title": "AgentRemoteResourceAuthority",
+  "type": "object"
+}

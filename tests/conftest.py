@@ -184,6 +184,10 @@ _PR_FAST_FILES = frozenset(
         # compact control-plane boundary. Keep the full contract in PR Fast so
         # no future change can blur authorization into execution authority.
         "tests/test_scientific_agent_authorization.py",
+        # Server-owned configured resources are the exact remote prerequisite
+        # for authorization; retain the complete no-request/no-dispatch
+        # contract as a reviewed PR-fast control-plane canary.
+        "tests/test_remote_resource_authority.py",
     }
 )
 _PR_FAST_NODE_PREFIXES = (

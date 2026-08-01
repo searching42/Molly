@@ -6,6 +6,14 @@ from flask import Flask, jsonify, request
 from pydantic import ValidationError
 
 from ai4s_agent.actor_identity import resolve_authenticated_actor
+from ai4s_agent.remote_resource_authority import (
+    RemoteResourceAuthorityPolicyStore,
+    RemoteResourceAuthorityService,
+)
+from ai4s_agent.resource_profiles import ResourceProfileStore
+from ai4s_agent.routes.remote_resource_authorities import (
+    register_remote_resource_authority_routes,
+)
 from ai4s_agent.schemas import AgentPlanAuthorizationRequest, _agent_digest_value
 from ai4s_agent.scientific_agent_authorization import (
     AgentPlanControlStore,
@@ -76,15 +84,38 @@ def register_scientific_agent_permission_routes(
     *,
     projects: ProjectStorage,
     proposal_store: ScientificAgentPlanProposalStore,
+    resource_profiles: ResourceProfileStore,
+    resource_authority_policy_store: RemoteResourceAuthorityPolicyStore,
 ) -> None:
     control_store = AgentPlanControlStore(storage=projects)
+    resource_authorities = RemoteResourceAuthorityService(
+        proposal_store=proposal_store,
+        resource_profiles=resource_profiles,
+        policy_store=resource_authority_policy_store,
+        control_store=control_store,
+    )
     service = ScientificAgentAuthorizationService(
         storage=projects,
         proposal_store=proposal_store,
         control_store=control_store,
+        resource_authority_resolver=lambda publication, task_id: (
+            resource_authorities.current_authority(
+                publication=publication,
+                task_id=task_id,
+            )
+        ),
     )
     app.extensions["scientific_agent_plan_control_store"] = control_store
     app.extensions["scientific_agent_authorization_service"] = service
+    app.extensions["remote_resource_authority_policy_store"] = (
+        resource_authority_policy_store
+    )
+    app.extensions["remote_resource_authority_service"] = resource_authorities
+    register_remote_resource_authority_routes(
+        app,
+        service=resource_authorities,
+        control_store=control_store,
+    )
 
     @app.post(
         "/api/projects/<project_id>/agent-plan-proposals/<proposal_id>/permission-evaluations"
