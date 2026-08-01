@@ -29,11 +29,13 @@ from ai4s_agent.resource_profiles import (
 )
 from ai4s_agent.schemas import (
     AgentAuthorizationMode,
+    AgentBudgetObservation,
     AgentConfiguredRemoteResources,
     AgentExecutionPlanLLMResponse,
     AgentPermissionOutcome,
     AgentPermissionPhase,
     AgentPlanAuthorizationRequest,
+    AgentProjectObservation,
     AgentRemoteResourceAuthority,
     AgentRemoteResourceAuthorityDecision,
     AgentRemoteResourceAuthorityOutcome,
@@ -59,11 +61,45 @@ from ai4s_agent.scientific_agent_plan import (
     ScientificAgentPlanService,
     ScientificAgentPlanSourceChanged,
 )
-from ai4s_agent.scientific_agent_permissions import ScientificAgentPermissionEngine
+from ai4s_agent.scientific_agent_permissions import (
+    PERMISSION_POLICY_DIGEST,
+    RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
+    ScientificAgentPermissionEngine,
+)
 from ai4s_agent.storage import ProjectStorage
 
 
 NOW = "2026-08-01T00:00:00Z"
+
+
+class _ConfiguredBudgetObservationBuilder(AgentProjectObservationBuilder):
+    """Test-only server projection for an exact configured legacy budget."""
+
+    def __init__(self, *, budget_limits: AgentBudgetObservation, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._configured_budget_limits = budget_limits
+
+    def build(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        goal: str,
+        user_constraints: list[str] | None = None,
+    ) -> AgentProjectObservation:
+        observation = super().build(
+            project_id=project_id,
+            run_id=run_id,
+            goal=goal,
+            user_constraints=user_constraints,
+        )
+        payload = observation.model_dump(mode="json")
+        payload["budget_limits"] = self._configured_budget_limits.model_dump(
+            mode="json"
+        )
+        payload["observation_id"] = ""
+        payload["observation_digest"] = ""
+        return AgentProjectObservation.model_validate(payload)
 
 
 def _remote_task(
@@ -397,7 +433,12 @@ def _multi_remote_case(
     return storage, profiles, policy_store, proposal_store, proposal, service, authorization
 
 
-def _default_registry_mixed_case(tmp_path: Path, *, workflow: str):
+def _default_registry_mixed_case(
+    tmp_path: Path,
+    *,
+    workflow: str,
+    legacy_runtime_limit: int | None = None,
+):
     storage = ProjectStorage(workspace_dir=tmp_path / "workspace")
     storage.create_project("project-1", name="Project", created_at=NOW)
     run_dir = storage.run_dir("project-1", "run-1")
@@ -485,6 +526,69 @@ def _default_registry_mixed_case(tmp_path: Path, *, workflow: str):
             assumptions=[],
             questions=[],
         )
+    elif workflow == "reinvent":
+        model_metadata = run_dir / "models" / "model_metadata.json"
+        model_metadata.parent.mkdir(parents=True, exist_ok=True)
+        model_metadata.write_text(
+            json.dumps(
+                {
+                    "model_id": "reviewed-model",
+                    "property_ids": ["plqy"],
+                    "verification_state": "verified",
+                }
+            ),
+            encoding="utf-8",
+        )
+        storage.register_artifact_path(
+            "project-1",
+            "run-1",
+            "model_metadata",
+            "models/model_metadata.json",
+        )
+        storage.write_stage_state(
+            "project-1",
+            "run-1",
+            StageState(
+                stage="train_model",
+                next_stage="generate_candidates",
+                status=RunStatus.SUCCEEDED,
+                started_at=NOW,
+                updated_at=NOW,
+                artifacts=[
+                    ArtifactRef(
+                        artifact_id="model_metadata",
+                        relative_path="models/model_metadata.json",
+                        producer_task_id="train_model",
+                    )
+                ],
+            ),
+        )
+        profile_id = "reinvent4-cpu-v1"
+        task_type = "molecular_generation"
+        remote_task_id = "generate_candidates"
+        capabilities = ["cpu", "reinvent4"]
+        resources = (0, 1, 600)
+        response = AgentExecutionPlanLLMResponse(
+            requested_tool_ids=["generate_candidates", "predict_candidates"],
+            selected_input_artifact_ids=["model_metadata"],
+            task_options={
+                "generate_candidates": {
+                    "backend": "reinvent4",
+                    "count": 32,
+                    "seed": 0,
+                },
+                "predict_candidates": {"property_id": "plqy"},
+            },
+            selected_logical_profile_ids=[profile_id],
+            limits={"max_runtime_sec": 600, "max_gpu_hours": 1.0},
+            stop_conditions=["stop on verification failure"],
+            success_criteria=["produce reviewable candidate predictions"],
+            rationales=[
+                "Use remote REINVENT4 generation before local prediction."
+            ],
+            assumptions=[],
+            questions=[],
+        )
     else:  # pragma: no cover - helper is called with a frozen test matrix.
         raise AssertionError(f"unknown workflow: {workflow}")
 
@@ -515,12 +619,23 @@ def _default_registry_mixed_case(tmp_path: Path, *, workflow: str):
         )
     )
     registry = AtomicTaskRegistry()
-    builder = AgentProjectObservationBuilder(
-        storage=storage,
-        registry=registry,
-        resource_profiles=profiles,
-        clock=lambda: NOW,
-    )
+    builder_kwargs = {
+        "storage": storage,
+        "registry": registry,
+        "resource_profiles": profiles,
+        "clock": lambda: NOW,
+    }
+    if legacy_runtime_limit is None:
+        builder = AgentProjectObservationBuilder(**builder_kwargs)
+    else:
+        builder = _ConfiguredBudgetObservationBuilder(
+            **builder_kwargs,
+            budget_limits=AgentBudgetObservation(
+                status="configured",
+                limits={"max_runtime_sec": legacy_runtime_limit},
+                dimensions=["max_runtime_sec"],
+            ),
+        )
     proposal_store = ScientificAgentPlanProposalStore(
         storage=storage,
         registry=registry,
@@ -1404,6 +1519,63 @@ def test_default_registry_mixed_remote_chain_uses_resource_set_budget_authority(
     assert "BUDGET_AUTHORITY_UNAVAILABLE" not in permission.reason_codes
 
 
+def test_reinvent_mixed_chain_requires_legacy_local_runtime_authority(
+    tmp_path: Path,
+) -> None:
+    _, proposal, service, authorization_service = _default_registry_mixed_case(
+        tmp_path,
+        workflow="reinvent",
+    )
+    dispatch_by_task = {item.task_id: item for item in proposal.dispatch_intents}
+    assert dispatch_by_task["generate_candidates"].execution_route == (
+        "remote_execution_service"
+    )
+    assert dispatch_by_task["predict_candidates"].execution_route == "local_executor"
+    result = service.publish(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            client_request_id="reinvent-mixed-resource-request",
+        ),
+    )
+    assert result.authority_set.aggregate_budget.total_walltime_upper_bound_sec == 600
+    permission = authorization_service.evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert permission.outcome == AgentPermissionOutcome.DENY
+    assert "MIXED_PLAN_RUNTIME_AUTHORITY_REQUIRED" in permission.reason_codes
+    assert "REMOTE_RESOURCE_AUTHORITY_REQUIRED" not in permission.reason_codes
+
+
+def test_reinvent_mixed_chain_accepts_exact_configured_legacy_runtime_authority(
+    tmp_path: Path,
+) -> None:
+    _, proposal, service, authorization_service = _default_registry_mixed_case(
+        tmp_path,
+        workflow="reinvent",
+        legacy_runtime_limit=600,
+    )
+    service.publish(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            client_request_id="reinvent-configured-runtime-request",
+        ),
+    )
+    permission = authorization_service.evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert permission.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
+    assert "MIXED_PLAN_RUNTIME_AUTHORITY_REQUIRED" not in permission.reason_codes
+    assert "BUDGET_AUTHORITY_UNAVAILABLE" not in permission.reason_codes
+
+
 def test_policy_change_after_candidate_is_rejected_before_commit(tmp_path: Path) -> None:
     storage, profiles, policy_store, proposal_store, proposal, _, _ = _configured_case(
         tmp_path
@@ -1580,7 +1752,14 @@ def test_frozen_remote_resource_authority_schemas_match_generated_models() -> No
         )
         assert frozen == model.model_json_schema()
 
+
 def test_resource_aware_permission_policy_digest_is_hash_seed_stable() -> None:
+    assert PERMISSION_POLICY_DIGEST == (
+        "sha256:bcfcce7a4c1e3dba12d5f291d92f1726df431c111cf288c49acb29bd5ea3df41"
+    )
+    assert RESOURCE_AWARE_PERMISSION_POLICY_DIGEST == (
+        "sha256:c39034ef5a541482fe15918202cbd5d378a7d45a471658f44f63bee6288bf879"
+    )
     script = (
         "from ai4s_agent.scientific_agent_permissions import "
         "RESOURCE_AWARE_PERMISSION_POLICY_DIGEST; "

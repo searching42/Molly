@@ -166,6 +166,7 @@ REASON_CODE_VOCABULARY = (
 )
 
 RESOURCE_AUTHORITY_REASON_CODES = (
+    "MIXED_PLAN_RUNTIME_AUTHORITY_REQUIRED",
     "REMOTE_RESOURCE_AUTHORITY_REQUIRED",
     "REMOTE_RESOURCE_POLICY_MISSING",
     "REMOTE_RESOURCE_POLICY_AMBIGUOUS",
@@ -291,13 +292,12 @@ RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL: Mapping[str, Any] = {
         ),
     },
     "remote_budget_ownership_rules": {
-        "resource_dimensions": [
-            "max_runtime_sec",
-            "max_gpu_hours",
-            "max_cost_usd",
-        ],
-        "owner": "current_exact_remote_resource_authority_set",
-        "mixed_plan_behavior": "remote_dimensions_are_not_legacy_budget_dimensions",
+        "remote_only_dimensions": ["max_gpu_hours", "max_cost_usd"],
+        "shared_plan_dimensions": ["max_runtime_sec"],
+        "remote_owner": "current_exact_remote_resource_authority_set",
+        "mixed_plan_runtime_behavior": (
+            "remote_subtotal_in_authority_set_and_local_runtime_requires_legacy_authority"
+        ),
         "gpu_hour_aggregation": "sum_per_task",
         "walltime_aggregation": "sequential_sum.v1",
         "local_fixed_task_dimensions": "non_resource_dimensions_remain_legacy_budget_owned",
@@ -651,6 +651,7 @@ class ScientificAgentPermissionEngine:
         catalog_by_task = {item.task_id: item for item in catalog.tools}
         known_gates = {item.value for item in GateName}
         gate_bindings: dict[str, list[tuple[str, str, bool]]] = {}
+        local_runtime_task_ids: list[str] = []
 
         for planned_task in proposal.run_plan.tasks:
             task_id = planned_task.task_id
@@ -751,6 +752,13 @@ class ScientificAgentPermissionEngine:
                 planner_visible = True
                 idempotency_policy = tool.idempotency_policy
                 verification_policy = tool.verification_policy
+
+            if (
+                execution_route == "local_executor"
+                and registered is not None
+                and "max_runtime_sec" in registered.budget_dimensions
+            ):
+                local_runtime_task_ids.append(task_id)
 
             if execution_route == "local_executor":
                 resolved_local_binding = (
@@ -1067,24 +1075,48 @@ class ScientificAgentPermissionEngine:
             )
 
         limits_requiring_legacy_budget = dict(proposal.limits)
+        mixed_plan_runtime_requires_legacy = bool(
+            resource_aware
+            and has_remote_tasks
+            and local_runtime_task_ids
+            and "max_runtime_sec" in proposal.limits
+        )
         if resource_aware and has_remote_tasks:
-            for resource_dimension in (
-                "max_runtime_sec",
-                "max_gpu_hours",
-                "max_cost_usd",
-            ):
+            for resource_dimension in ("max_gpu_hours", "max_cost_usd"):
                 limits_requiring_legacy_budget.pop(resource_dimension, None)
+            if not mixed_plan_runtime_requires_legacy:
+                limits_requiring_legacy_budget.pop("max_runtime_sec", None)
         if limits_requiring_legacy_budget:
             if observation.budget_limits.status != "configured":
-                add_global(
-                    "budget_authority_unavailable",
-                    AgentPermissionOutcome.DENY,
-                    "Non-empty proposal limits require configured server budget authority.",
-                )
+                if mixed_plan_runtime_requires_legacy:
+                    add_global(
+                        "mixed_plan_runtime_authority_required",
+                        AgentPermissionOutcome.DENY,
+                        "Mixed local/remote runtime tasks require configured legacy "
+                        "server authority for the plan-level max_runtime_sec limit; "
+                        f"local runtime task roster: {local_runtime_task_ids}.",
+                    )
+                else:
+                    add_global(
+                        "budget_authority_unavailable",
+                        AgentPermissionOutcome.DENY,
+                        "Non-empty proposal limits require configured server budget authority.",
+                    )
             else:
                 for dimension, proposed in limits_requiring_legacy_budget.items():
                     authority = observation.budget_limits.limits.get(dimension)
-                    if authority is None or (
+                    if (
+                        dimension == "max_runtime_sec"
+                        and mixed_plan_runtime_requires_legacy
+                        and authority is None
+                    ):
+                        add_global(
+                            "mixed_plan_runtime_authority_required",
+                            AgentPermissionOutcome.DENY,
+                            "Configured legacy server budget authority does not bind "
+                            "max_runtime_sec for the mixed-plan local runtime roster.",
+                        )
+                    elif authority is None or (
                         proposed is not None and float(proposed) > float(authority)
                     ):
                         add_global(

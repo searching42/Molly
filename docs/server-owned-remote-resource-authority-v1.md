@@ -106,12 +106,16 @@ allocation.
 
 `derived_gpu_hours = gpu_count * walltime_sec / 3600`. A non-null proposal or
 policy `max_cost_usd` is denied because v1 has no versioned server cost model;
-cost is never assumed to be zero. For Permission v2, the three remote resource
-dimensions (`max_runtime_sec`, `max_gpu_hours`, `max_cost_usd`) are owned by
-the current exact AuthoritySet even in a mixed local/remote plan. Other
+cost is never assumed to be zero. For Permission v2, `max_gpu_hours` is owned
+by the current exact AuthoritySet. The set always validates the remote
+`max_runtime_sec` subtotal. If a mixed plan also contains a `local_executor`
+task whose Registry contract declares `max_runtime_sec`, that same plan-level
+limit must additionally be covered by configured legacy server budget
+authority; otherwise Permission denies with
+`MIXED_PLAN_RUNTIME_AUTHORITY_REQUIRED`. This prevents AuthoritySet from
+silently turning a global runtime limit into a remote-only limit. Other local
 dimensions such as `max_steps` and `max_records` retain the existing PR-BM
-budget semantics. Fixed local dependencies do not acquire remote resources or
-silently reclassify those remote dimensions as legacy budget facts.
+budget semantics.
 
 The compiler-generated `remote_resources_<task_id>` question is satisfied only
 for Permission policy v2 by a current exact authority for that same task. No
@@ -192,7 +196,7 @@ decisions are regenerated with v2. Existing proposal, authorization, and start
 intent bytes are never migrated or rewritten.
 
 The reviewed v2 policy semantic digest for this contract is
-`sha256:6a95cecce70427418a617fb52250122094e9cd8d774861615e927289f753eccf`;
+`sha256:c39034ef5a541482fe15918202cbd5d378a7d45a471658f44f63bee6288bf879`;
 it covers complete-set execution binding and mixed/aggregate remote budget
 ownership. The frozen local-only v1 digest remains unchanged.
 

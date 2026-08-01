@@ -998,8 +998,17 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 - 决策：裸 per-task resource authority 只保留为不可执行审计；只有按 RunPlan 顺序覆盖全部 remote task、绑定完整 authority/budget roster 且 current-verified 的 immutable AuthoritySet 才能进入 Permission v2。远程 walltime 采用版本化 `sequential_sum.v1`，GPU-hour 按 task 求和后与 plan limit比较。
 - 原计划：逐个 authority rename 后由 Permission 直接读取单文件；request marker 才记录完整 roster；proposal remote budget只在全 remote plan中脱离 legacy budget检查，且 plan limit按每个 task重复校验。
-- 新计划：per-task publication → 完整 roster verification → AuthoritySet manifest-last → set current verification → marker前 fault/mutation opportunity → final source rederive → request success marker。mixed plan中的 `max_runtime_sec`、`max_gpu_hours`、`max_cost_usd` 由 AuthoritySet覆盖，其他 local维度仍由现有 budget authority处理。
+- 新计划：per-task publication → 完整 roster verification → AuthoritySet manifest-last → set current verification → marker前 fault/mutation opportunity → final source rederive → request success marker。AuthoritySet覆盖 remote runtime subtotal与 aggregate GPU-hours；mixed plan若同时包含声明 `max_runtime_sec` 的 local task，plan-level runtime仍必须由 legacy server budget authority覆盖。其他 local维度继续由现有 budget authority处理。
 - 依据：新增 first/final authority rename crash 后 Permission仍 `DENY`、set rename后 policy/probe drift无 success marker/response、非字典序 multi-remote roster、aggregate GPU-hour超限、默认 Registry Uni-Mol/MinerU mixed chain和 strict policy boolean测试。
+- 影响任务：`M3H-007A` 继续 `I/T/— / READY` 等待 owner review；`M3H-GATE-002` 不标 `V`；PR-BN/M3H-008/M3H-010继续 `DEFERRED`，不创建 RemoteExecutionRequest或 dispatch。
+- 批准人：待 repository owner review。
+
+### 2026-08-01：PR-BM2 review 修复 mixed-plan runtime authority 空洞
+
+- 决策：Permission v2 仅在没有声明 `max_runtime_sec` 的 local task 时由 AuthoritySet独占 plan runtime检查；若 remote plan同时包含此类 local task，AuthoritySet继续验证 remote subtotal，且 exact observation必须提供 configured legacy `max_runtime_sec` authority，否则稳定拒绝为 `MIXED_PLAN_RUNTIME_AUTHORITY_REQUIRED`。
+- 原计划：任意 remote task都会从 legacy budget检查中移除 `max_runtime_sec`，使 REINVENT4 generation → local prediction 等默认 Registry计划的本地 runtime失去权威覆盖。
+- 新计划：按 RunPlan顺序从 Registry与 dispatch派生 local runtime task roster；`max_gpu_hours`继续由完整 AuthoritySet聚合管理，非空 cost继续因无版本化 cost model而 fail closed，不扩展 AuthoritySet schema。
+- 依据：新增默认 Registry REINVENT4 remote generation → local prediction测试；legacy budget `not_configured` 时即使 remote subtotal合格仍 `DENY`，configured exact runtime ceiling时才返回 `REQUIRE_APPROVAL`。Permission v1 digest保持不变。
 - 影响任务：`M3H-007A` 继续 `I/T/— / READY` 等待 owner review；`M3H-GATE-002` 不标 `V`；PR-BN/M3H-008/M3H-010继续 `DEFERRED`，不创建 RemoteExecutionRequest或 dispatch。
 - 批准人：待 repository owner review。
 
