@@ -121,7 +121,7 @@ scientific-agent-permission-policy.v1
 At this PR HEAD its canonical digest is:
 
 ```text
-sha256:08f76cffc76dd1c0ba58cfcc401198c12106ef19abd0b29e75129ca5b510dd7c
+sha256:bcfcce7a4c1e3dba12d5f291d92f1726df431c111cf288c49acb29bd5ea3df41
 ```
 
 The digest covers recognized effect classes, permissions, local/remote routes,
@@ -153,8 +153,12 @@ Representative fail-closed `DENY` cases are:
 - unknown effect, risk, permission, Gate, route, or remote task type;
 - a planner-hidden dependency without an explicit, fixed local Registry
   permission contract;
+- any planner-visible or planner-hidden `local_executor` task whose registered
+  default adapter does not resolve to a callable Executor export
+  (`LOCAL_TASK_EXECUTION_BINDING_INCOMPLETE`);
 - a hidden local dependency without a non-empty callable registered default
-  adapter binding;
+  adapter binding (`INTERNAL_TASK_EXECUTION_BINDING_INCOMPLETE`, in addition to
+  the all-local reason);
 - an unrecognized hidden-task idempotency or verification policy;
 - changed selected artifact content, trust, or producer lineage;
 - changed/missing profile availability or capability digest;
@@ -249,6 +253,15 @@ read-only and never invokes the adapter. Missing permission metadata fails as
 `INTERNAL_TASK_PERMISSION_METADATA_INCOMPLETE`; an unknown policy fails as
 `INTERNAL_TASK_POLICY_UNRECOGNIZED`; and a missing/unknown adapter fails as
 `INTERNAL_TASK_EXECUTION_BINDING_INCOMPLETE`.
+
+Callable execution binding is not a hidden-task-only rule. Every task whose
+exact dispatch route is `local_executor`, including every planner-visible
+task, must resolve its Registry `default_adapter` to a callable export used by
+the existing Executor. A missing or unknown binding adds
+`LOCAL_TASK_EXECUTION_BINDING_INCOMPLETE` and makes the task decision `DENY`.
+The deterministic unavailable-binding digest remains useful audit material,
+but can never support authorization. This prevents a proposal from being
+authorized when the current Executor would immediately reject its local task.
 
 Each per-task decision stores two server-derived digests:
 
@@ -475,8 +488,9 @@ The contract fails closed for stale/replaced proposal or source bytes,
 symlink/path escape, partial publications, request-ID reuse, concurrent
 duplicate requests, source changes between authorization and start intent,
 unknown catalog/policy terms, incomplete remote authority, budget expansion,
-artifact/profile drift, hidden adapter/policy drift, missing/replaced task
-authority digests, and all client authority injection.
+artifact/profile drift, visible or hidden local-adapter drift, hidden policy
+drift, missing/replaced task authority digests, and all client authority
+injection.
 
 An untrusted client actor assertion and an authenticated server principal are
 different inputs. Raw `X-Actor`, body/query/form actor aliases, and broad
@@ -521,7 +535,8 @@ PR-BN may reuse, but must reverify immediately before any Controller action:
 - deterministic permission-decision verifier and policy version/digest;
 - exact authorization verifier and authorization digest;
 - exact canonical RunPlan and ordered task roster;
-- per-task execution-binding and task-authority digests;
+- per-task execution-binding and task-authority digests, including a current
+  callable binding for every `local_executor` task;
 - effective and compiled options;
 - dispatch-intent binding;
 - artifact digest/trust/producer bindings;

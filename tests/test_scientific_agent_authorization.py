@@ -10,6 +10,7 @@ import sys
 import pytest
 from pydantic import ValidationError
 
+from ai4s_agent.adapter_bindings import local_adapter_execution_binding_digest
 from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.resource_profiles import ConnectionProfile, ResourceProfileStore
@@ -77,6 +78,7 @@ def _visible_task_spec(
     effect_class: str = "derive_local",
     gates: list[str] | None = None,
     depends_on: list[str] | None = None,
+    default_adapter: str | None = "inspect_dataset_service",
 ) -> AtomicTaskSpec:
     return AtomicTaskSpec(
         task_id=task_id,
@@ -86,7 +88,7 @@ def _visible_task_spec(
         output_artifacts=[],
         risk_level=RiskLevel.LOW,
         gates=gates or [],
-        default_adapter="test_adapter",
+        default_adapter=default_adapter,
         depends_on=depends_on or [],
         scientific_tool_id=task_id,
         label=task_id.replace("_", " ").title(),
@@ -650,6 +652,14 @@ def test_shared_gate_aggregates_task_bindings_and_remains_semantic_pending(
     )
     assert review.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
     assert "TOOL_CATALOG_BINDING_INVALID" not in review.reason_codes
+    for task_decision in review.task_decisions:
+        registered = registry.get(task_decision.task_id)
+        assert task_decision.execution_binding_digest == (
+            local_adapter_execution_binding_digest(
+                task_id=task_decision.task_id,
+                default_adapter=registered.default_adapter,
+            )
+        )
 
     authorization = service.authorize(
         project_id="project-1",
@@ -753,6 +763,71 @@ def test_permission_complete_hidden_local_dependency_can_be_authorized(
     assert "inspect_dataset_service" not in persisted_control_bytes
 
 
+@pytest.mark.parametrize("default_adapter", [None, "missing_visible_adapter"])
+def test_visible_local_task_without_callable_default_adapter_is_denied(
+    tmp_path: Path,
+    default_adapter: str | None,
+) -> None:
+    registry = AtomicTaskRegistry(
+        [_visible_task_spec("visible_task", default_adapter=default_adapter)]
+    )
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=_response("visible_task"),
+        request_id="visible-execution-binding-incomplete",
+    )
+    decision = _authorization_service(storage, proposal_store).evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert decision.outcome == AgentPermissionOutcome.DENY
+    assert "LOCAL_TASK_EXECUTION_BINDING_INCOMPLETE" in decision.reason_codes
+    assert "INTERNAL_TASK_EXECUTION_BINDING_INCOMPLETE" not in decision.reason_codes
+
+
+def test_visible_local_task_with_callable_default_adapter_can_be_authorized(
+    tmp_path: Path,
+) -> None:
+    task = _visible_task_spec("visible_task")
+    registry = AtomicTaskRegistry([task])
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=_response("visible_task"),
+        request_id="visible-callable-binding-proposal",
+    )
+    service = _authorization_service(storage, proposal_store)
+    review = service.evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert review.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
+    visible_decision = review.task_decisions[0]
+    assert visible_decision.execution_binding_digest == (
+        local_adapter_execution_binding_digest(
+            task_id="visible_task",
+            default_adapter=task.default_adapter,
+        )
+    )
+
+    authorization = service.authorize(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=_request(
+            proposal,
+            client_request_id="visible-callable-binding-authorization",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert authorization.task_authority_digests == {
+        "visible_task": visible_decision.task_authority_digest,
+    }
+
+
 @pytest.mark.parametrize("default_adapter", [None, "missing_hidden_adapter"])
 def test_hidden_dependency_without_callable_default_adapter_is_denied(
     tmp_path: Path,
@@ -776,6 +851,7 @@ def test_hidden_dependency_without_callable_default_adapter_is_denied(
     )
     assert decision.outcome == AgentPermissionOutcome.DENY
     assert "INTERNAL_TASK_EXECUTION_BINDING_INCOMPLETE" in decision.reason_codes
+    assert "LOCAL_TASK_EXECUTION_BINDING_INCOMPLETE" in decision.reason_codes
 
 
 def test_hidden_dependency_without_explicit_permission_metadata_is_denied(
@@ -1088,6 +1164,101 @@ def test_authorization_staging_rejects_registered_hidden_adapter_drift(
         / "agent_plan_control"
         / "authorizations"
     ).exists()
+
+
+def test_authorization_staging_rejects_visible_adapter_becoming_unavailable(
+    tmp_path: Path,
+) -> None:
+    visible = _visible_task_spec("visible_task")
+    registry = AtomicTaskRegistry([visible])
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=_response("visible_task"),
+        request_id="visible-adapter-unavailable-proposal",
+    )
+
+    def drift(phase: str) -> None:
+        if phase == "after_authorization_checkpoint":
+            visible.default_adapter = "missing_visible_adapter"
+
+    service = _authorization_service(
+        storage,
+        proposal_store,
+        control_store=AgentPlanControlStore(storage=storage, fault_injector=drift),
+    )
+    with pytest.raises(
+        ScientificAgentAuthorizationVerificationError,
+        match="candidate changed",
+    ):
+        service.authorize(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=_request(proposal),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+    assert not (
+        storage.projects_root
+        / "project-1"
+        / "agent_plan_control"
+        / "authorizations"
+    ).exists()
+
+
+def test_registered_visible_adapter_drift_invalidates_authorization(
+    tmp_path: Path,
+) -> None:
+    visible = _visible_task_spec("visible_task")
+    registry = AtomicTaskRegistry([visible])
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=_response("visible_task"),
+        request_id="visible-callable-adapter-drift-proposal",
+    )
+    service = _authorization_service(storage, proposal_store)
+    authorization = service.authorize(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=_request(proposal),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    before = authorization.task_authority_digests["visible_task"]
+
+    visible.default_adapter = "generate_candidates_stub_adapter"
+    changed_decision = service.permission_engine.evaluate(
+        publication=proposal_store.read(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            verify_current=True,
+        ),
+        phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
+        expected_proposal_digest=proposal.proposal_digest,
+        authorization_mode=AgentAuthorizationMode.STEPWISE,
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        client_request_id=authorization.client_request_id,
+    )
+    changed_visible = changed_decision.task_decisions[0]
+    assert changed_decision.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
+    assert changed_visible.task_authority_digest != before
+    assert changed_visible.execution_binding_digest == (
+        local_adapter_execution_binding_digest(
+            task_id="visible_task",
+            default_adapter="generate_candidates_stub_adapter",
+        )
+    )
+    with pytest.raises(
+        ScientificAgentAuthorizationVerificationError,
+        match="permission decision is stale",
+    ):
+        service.verify_authorization(
+            project_id="project-1",
+            authorization_id=authorization.authorization_id,
+            verify_current=True,
+        )
 
 
 @pytest.mark.parametrize(

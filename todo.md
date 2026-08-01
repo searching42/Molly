@@ -957,6 +957,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：adapter callable identity 只证明当前 Executor 可解析绑定，不代表已执行或成功；未来 Controller 必须同时 reverify task authority digest、authorization、start intent 和 current source，不能从 digest 反推出或接受客户端 adapter 名称。
 - 批准人：待 repository owner review。
 
+### 2026-08-01：PR-BM all-local callable execution binding
+
+- 决策：PR-BM 继续保持 Draft；callable execution binding 从 planner-hidden 专用完整性检查提升为所有 `local_executor` task 的统一 fail-closed 契约。planner-visible 或 hidden task 的 Registry `default_adapter` 缺失、未知或不可调用时均不得授权。
+- 原计划：hidden dependency 缺失 callable adapter 会以 `INTERNAL_TASK_EXECUTION_BINDING_INCOMPLETE` 拒绝；planner-visible task 虽生成 unavailable execution-binding digest，却未产生 `DENY`，因此仍可能形成 Executor 无法消费的 authorization。
+- 新计划：统一以 `LOCAL_TASK_EXECUTION_BINDING_INCOMPLETE` 拒绝所有 local binding 缺口，并为 hidden task 保留更具体的 internal reason；unavailable digest 仅作拒绝审计，不能支持 authorization。既有 `execution_binding_digest -> task_authority_digest -> permission decision -> authorization -> start intent` 链保持不变。
+- 依据：visible task 的缺失/未知 adapter DENY、callable adapter 正常授权、checkpoint 后 binding 失效、authorization 后 callable A→B stale、shared Gate 全 task callable binding 精确值测试，以及本 review HEAD 的 PR Fast、Full CI 与 CodeQL。
+- 影响任务：`M3H-004`～`M3H-007` 继续 `I/T/— / READY`；`M3H-GATE-002` 不标 `V`；PR-BN/M3H-008/M3H-010 继续 `DEFERRED`。本轮不实现 remote resource authority、Controller、dispatch、Executor 调用或 UI。
+- 新增风险：callable resolution 只证明当前 Executor export 可解析，不等于 adapter 已调用或任务已启动；future Controller 必须在 dispatch 前 reverify 每个 local task 的 execution/task authority binding，不能消费 unavailable digest。
+- 批准人：待 repository owner review。
+
 后续路线调整必须追加：
 
 ```text

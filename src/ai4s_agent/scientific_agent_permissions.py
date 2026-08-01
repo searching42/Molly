@@ -136,6 +136,7 @@ REASON_CODE_VOCABULARY = (
     "INTERNAL_TASK_EXECUTION_BINDING_INCOMPLETE",
     "INTERNAL_TASK_PERMISSION_METADATA_INCOMPLETE",
     "INTERNAL_TASK_POLICY_UNRECOGNIZED",
+    "LOCAL_TASK_EXECUTION_BINDING_INCOMPLETE",
     "MISSING_ARTIFACT_PRESENT",
     "OPERATIONAL_GATE_REQUIRES_USER",
     "OPTIONS_COVERAGE_MISMATCH",
@@ -225,6 +226,13 @@ PERMISSION_POLICY_MATERIAL: Mapping[str, Any] = {
         "execution_binding_version": LOCAL_ADAPTER_EXECUTION_BINDING_VERSION,
         "task_execution_binding_version": TASK_EXECUTION_BINDING_VERSION,
         "task_authority_binding_version": TASK_AUTHORITY_BINDING_VERSION,
+    },
+    "local_execution_binding_rules": {
+        "scope": "all_local_executor_tasks",
+        "callable_default_adapter_required": True,
+        "missing_or_unknown_binding": "deny",
+        "execution_binding_version": LOCAL_ADAPTER_EXECUTION_BINDING_VERSION,
+        "task_execution_binding_version": TASK_EXECUTION_BINDING_VERSION,
     },
     "authorization_actor_rules": {
         "trusted_sources": list(TRUSTED_AUTHORIZATION_ACTOR_SOURCES),
@@ -662,6 +670,12 @@ class ScientificAgentPermissionEngine:
                         remote_task_type=remote_task_type,
                     )
                 )
+                if resolved_local_binding is None:
+                    add_task(
+                        "local_task_execution_binding_incomplete",
+                        AgentPermissionOutcome.DENY,
+                        "Local task lacks a callable registered default adapter binding.",
+                    )
             else:
                 execution_binding_digest = _agent_digest(
                     {
