@@ -122,6 +122,7 @@ def _visible_task_spec(
 def _permission_complete_hidden_task(task_id: str) -> AtomicTaskSpec:
     return AtomicTaskSpec(
         task_id=task_id,
+        default_adapter="inspect_dataset_service",
         risk_level=RiskLevel.LOW,
         gates=[],
         effect_class="derive_local",
@@ -686,9 +687,14 @@ def test_shared_gate_aggregates_task_bindings_and_remains_semantic_pending(
 def test_permission_complete_hidden_local_dependency_can_be_authorized(
     tmp_path: Path,
 ) -> None:
+    from ai4s_agent.executor import RunPlanExecutor
+
+    hidden = _permission_complete_hidden_task("hidden_internal")
+    resolved_adapter = RunPlanExecutor._adapter_for(hidden.default_adapter)
+    assert callable(resolved_adapter)
     registry = AtomicTaskRegistry(
         [
-            _permission_complete_hidden_task("hidden_internal"),
+            hidden,
             _visible_task_spec("visible_task", depends_on=["hidden_internal"]),
         ]
     )
@@ -724,6 +730,52 @@ def test_permission_complete_hidden_local_dependency_can_be_authorized(
         actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
     )
     assert authorization.task_ids == ["hidden_internal", "visible_task"]
+    assert set(authorization.task_authority_digests) == {
+        "hidden_internal",
+        "visible_task",
+    }
+    hidden_decision = next(
+        item
+        for item in review.task_decisions
+        if item.task_id == "hidden_internal"
+    )
+    assert authorization.task_authority_digests["hidden_internal"] == (
+        hidden_decision.task_authority_digest
+    )
+    assert hidden_decision.execution_binding_digest.startswith("sha256:")
+    persisted_control_bytes = json.dumps(
+        {
+            "decision": review.model_dump(mode="json"),
+            "authorization": authorization.model_dump(mode="json"),
+        },
+        sort_keys=True,
+    )
+    assert "inspect_dataset_service" not in persisted_control_bytes
+
+
+@pytest.mark.parametrize("default_adapter", [None, "missing_hidden_adapter"])
+def test_hidden_dependency_without_callable_default_adapter_is_denied(
+    tmp_path: Path,
+    default_adapter: str | None,
+) -> None:
+    hidden = _permission_complete_hidden_task("hidden_internal")
+    hidden.default_adapter = default_adapter
+    registry = AtomicTaskRegistry(
+        [hidden, _visible_task_spec("visible_task", depends_on=["hidden_internal"])]
+    )
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=_response("visible_task"),
+        request_id="hidden-execution-binding-incomplete",
+    )
+    decision = _authorization_service(storage, proposal_store).evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert decision.outcome == AgentPermissionOutcome.DENY
+    assert "INTERNAL_TASK_EXECUTION_BINDING_INCOMPLETE" in decision.reason_codes
 
 
 def test_hidden_dependency_without_explicit_permission_metadata_is_denied(
@@ -994,6 +1046,160 @@ def test_authorization_staging_rejects_hidden_permission_metadata_drift(
         / "agent_plan_control"
         / "authorizations"
     ).exists()
+
+
+def test_authorization_staging_rejects_registered_hidden_adapter_drift(
+    tmp_path: Path,
+) -> None:
+    hidden = _permission_complete_hidden_task("hidden_internal")
+    registry = AtomicTaskRegistry(
+        [hidden, _visible_task_spec("visible_task", depends_on=["hidden_internal"])]
+    )
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=_response("visible_task"),
+        request_id="hidden-adapter-drift-proposal",
+    )
+
+    def drift(phase: str) -> None:
+        if phase == "after_authorization_checkpoint":
+            hidden.default_adapter = "generate_candidates_stub_adapter"
+
+    service = _authorization_service(
+        storage,
+        proposal_store,
+        control_store=AgentPlanControlStore(storage=storage, fault_injector=drift),
+    )
+    with pytest.raises(
+        ScientificAgentAuthorizationVerificationError,
+        match="candidate changed",
+    ):
+        service.authorize(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=_request(proposal),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+    assert not (
+        storage.projects_root
+        / "project-1"
+        / "agent_plan_control"
+        / "authorizations"
+    ).exists()
+
+
+@pytest.mark.parametrize(
+    ("policy_field", "changed_value"),
+    [
+        ("verification_policy", "alternative_nonempty_verifier"),
+        ("idempotency_policy", "replay_safe"),
+    ],
+)
+def test_nonempty_hidden_policy_drift_invalidates_authorization(
+    tmp_path: Path,
+    policy_field: str,
+    changed_value: str,
+) -> None:
+    hidden = _permission_complete_hidden_task("hidden_internal")
+    registry = AtomicTaskRegistry(
+        [hidden, _visible_task_spec("visible_task", depends_on=["hidden_internal"])]
+    )
+    storage, proposal_store, proposal = _workspace_with_registry_proposal(
+        tmp_path,
+        registry=registry,
+        response=_response("visible_task"),
+        request_id=f"hidden-{policy_field}-drift-proposal",
+    )
+    service = _authorization_service(storage, proposal_store)
+    authorization = service.authorize(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=_request(proposal),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    before = authorization.task_authority_digests["hidden_internal"]
+
+    setattr(hidden, policy_field, changed_value)
+    changed_decision = service.permission_engine.evaluate(
+        publication=proposal_store.read(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            verify_current=True,
+        ),
+        phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
+        expected_proposal_digest=proposal.proposal_digest,
+        authorization_mode=AgentAuthorizationMode.STEPWISE,
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        client_request_id=authorization.client_request_id,
+    )
+    changed_hidden = next(
+        item
+        for item in changed_decision.task_decisions
+        if item.task_id == "hidden_internal"
+    )
+    assert changed_hidden.task_authority_digest != before
+    if policy_field == "verification_policy":
+        assert changed_decision.outcome == AgentPermissionOutcome.DENY
+        assert "INTERNAL_TASK_POLICY_UNRECOGNIZED" in changed_decision.reason_codes
+    else:
+        assert changed_decision.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
+        assert "INTERNAL_TASK_POLICY_UNRECOGNIZED" not in changed_decision.reason_codes
+    with pytest.raises(
+        ScientificAgentAuthorizationVerificationError,
+        match="permission decision is stale",
+    ):
+        service.verify_authorization(
+            project_id="project-1",
+            authorization_id=authorization.authorization_id,
+            verify_current=True,
+        )
+
+
+def test_task_authority_digest_is_required_and_exact_in_decision_and_authorization(
+    tmp_path: Path,
+) -> None:
+    storage, proposal_store, proposal = _workspace_with_proposal(tmp_path)
+    service = _authorization_service(storage, proposal_store)
+    authorization = service.authorize(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=_request(proposal),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    decision = service.control_store.read_permission_decision(
+        project_id="project-1",
+        decision_id=authorization.permission_decision_id,
+    )
+
+    missing_decision = decision.model_dump(mode="json")
+    missing_decision["task_decisions"][0].pop("task_authority_digest")
+    with pytest.raises(ValidationError):
+        AgentPermissionDecision.model_validate(missing_decision)
+
+    replaced_decision = decision.model_dump(mode="json")
+    replaced_decision["task_decisions"][0]["task_authority_digest"] = (
+        "sha256:" + "f" * 64
+    )
+    with pytest.raises(ValidationError, match="decision digest mismatch"):
+        AgentPermissionDecision.model_validate(replaced_decision)
+
+    missing_authorization = authorization.model_dump(mode="json")
+    missing_authorization.pop("task_authority_digests")
+    with pytest.raises(ValidationError):
+        AgentPlanAuthorization.model_validate(missing_authorization)
+
+    replaced_authorization = authorization.model_dump(mode="json")
+    first_task = authorization.task_ids[0]
+    replaced_authorization["task_authority_digests"][first_task] = (
+        "sha256:" + "e" * 64
+    )
+    with pytest.raises(ValidationError, match="authorization digest mismatch"):
+        AgentPlanAuthorization.model_validate(replaced_authorization)
 
 
 @pytest.mark.parametrize(
@@ -1672,6 +1878,7 @@ def test_approve_and_start_api_calls_no_execution_authority(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    from ai4s_agent import adapters as adapter_exports
     from ai4s_agent.executor import RunPlanExecutor
     from ai4s_agent.remote_execution_service import DescriptorRemoteExecutionLifecycleService
     from ai4s_agent.worker_queue import WorkerQueue
@@ -1685,6 +1892,11 @@ def test_approve_and_start_api_calls_no_execution_authority(
     monkeypatch.setattr(RunPlanExecutor, "execute", forbidden)
     monkeypatch.setattr(RunPlanExecutor, "resume_after_gate", forbidden)
     monkeypatch.setattr(RunPlanExecutor, "_adapter_for", staticmethod(forbidden))
+    monkeypatch.setattr(
+        adapter_exports,
+        "generate_candidates_stub_adapter",
+        forbidden,
+    )
     monkeypatch.setattr(DescriptorRemoteExecutionLifecycleService, "prepare", forbidden)
     monkeypatch.setattr(DescriptorRemoteExecutionLifecycleService, "approve", forbidden)
     monkeypatch.setattr(DescriptorRemoteExecutionLifecycleService, "refresh", forbidden)

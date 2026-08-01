@@ -947,6 +947,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：可信反向代理必须在认证后写入私有 principal，不能把任意 client Header 映射为 authority；原子 rename 后如 source 漂移可以留下不可变但 stale 的 audit publication，但不得写最终成功 marker或返回成功；future remote authority 不得由 profile ceiling 或客户端 resource JSON 推断。
 - 批准人：待 repository owner review。
 
+### 2026-08-01：PR-BM hidden execution binding 与 task authority digest
+
+- 决策：PR-BM 继续保持 Draft；planner-hidden local dependency 只有在 `default_adapter` 非空且可由现有 Executor adapter export 解析时才可授权。Permission decision 新增 server-only execution-binding/task-authority digest，authorization exact 绑定完整 task digest roster。
+- 原计划：hidden completeness 只要求 effect/risk/permission/Gate/route/idempotency/verifier 等字段显式或非空；adapter 缺失仍可授权，且 idempotency/verifier/default-adapter 的实际值未进入 task decision 或 authorization digest。
+- 新计划：以 `INTERNAL_TASK_EXECUTION_BINDING_INCOMPLETE` 拒绝缺失/未知 adapter，以 `INTERNAL_TASK_POLICY_UNRECOGNIZED` 拒绝未知策略；task authority digest 覆盖 fixed caller options、精确策略值和 server-only execution binding。adapter 只做 callable identity resolution，不调用、不暴露名称给 LLM/客户端。
+- 依据：新增缺失/未知 adapter DENY、Executor resolve-without-call、两个已注册 adapter 间 checkpoint drift、nonempty verification/idempotency drift、decision/authorization authority digest 缺失与替换测试；最终 PR Fast、Full CI 和 CodeQL 证据在本轮 review HEAD 生成。
+- 影响任务：`M3H-004`～`M3H-007` 继续 `I/T/— / READY`；`M3H-GATE-002` 不标 `V`；PR-BN/M3H-008/M3H-010 继续 `DEFERRED`，不实现 remote resource authority、Controller 或真实 dispatch。
+- 新增风险：adapter callable identity 只证明当前 Executor 可解析绑定，不代表已执行或成功；未来 Controller 必须同时 reverify task authority digest、authorization、start intent 和 current source，不能从 digest 反推出或接受客户端 adapter 名称。
+- 批准人：待 repository owner review。
+
 后续路线调整必须追加：
 
 ```text

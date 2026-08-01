@@ -107,6 +107,14 @@
           "default": null,
           "title": "Remote Task Type"
         },
+        "execution_binding_digest": {
+          "title": "Execution Binding Digest",
+          "type": "string"
+        },
+        "task_authority_digest": {
+          "title": "Task Authority Digest",
+          "type": "string"
+        },
         "outcome": {
           "$ref": "#/$defs/AgentPermissionOutcome"
         },
@@ -130,6 +138,8 @@
         "effect_class",
         "risk_level",
         "execution_route",
+        "execution_binding_digest",
+        "task_authority_digest",
         "outcome"
       ],
       "title": "AgentTaskPermissionDecision",

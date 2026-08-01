@@ -1,9 +1,10 @@
 """Deterministic Scientific Agent permission policy and evaluator v1.
 
-This module is deliberately control-plane only.  It imports no Executor,
+This module is deliberately control-plane only.  It calls no Executor,
 RemoteExecutionService, adapter, worker, queue, Gate writer, or StageState
-writer.  ``ALLOW`` in the authorized-start phase permits only creation of the
-separate non-executable start-intent artifact by the authorization service.
+writer.  It may inspect the server's adapter exports to bind a callable local
+adapter identity without invoking it.  ``ALLOW`` in the authorized-start phase
+permits only creation of the separate non-executable start-intent artifact.
 """
 
 from __future__ import annotations
@@ -12,6 +13,10 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from ai4s_agent._utils import now_iso
+from ai4s_agent.adapter_bindings import (
+    LOCAL_ADAPTER_EXECUTION_BINDING_VERSION,
+    local_adapter_execution_binding_digest,
+)
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import (
     AgentAuthorizationMode,
@@ -28,6 +33,8 @@ from ai4s_agent.scientific_agent_plan import ScientificAgentPlanPublication
 
 
 PERMISSION_POLICY_VERSION = "scientific-agent-permission-policy.v1"
+TASK_EXECUTION_BINDING_VERSION = "agent-task-execution-binding.v1"
+TASK_AUTHORITY_BINDING_VERSION = "agent-task-authority-binding.v1"
 
 RECOGNIZED_EFFECT_CLASSES = (
     "observe",
@@ -98,6 +105,14 @@ INTERNAL_TASK_PERMISSION_FIELDS = (
     "verification_policy",
     "planner_visible",
 )
+INTERNAL_TASK_EXECUTION_FIELDS = ("default_adapter",)
+RECOGNIZED_INTERNAL_IDEMPOTENCY_POLICIES = (
+    "replay_safe",
+    "server_checked",
+)
+RECOGNIZED_INTERNAL_VERIFICATION_POLICIES = (
+    "artifact_registry_and_stage_verifier",
+)
 
 REASON_CODE_VOCABULARY = (
     "ARTIFACT_BINDING_DRIFT",
@@ -118,7 +133,9 @@ REASON_CODE_VOCABULARY = (
     "GATE_COVERAGE_MISMATCH",
     "GATE_NOT_PREAUTHORIZABLE",
     "HIGH_RISK_TASK_REQUIRES_USER",
+    "INTERNAL_TASK_EXECUTION_BINDING_INCOMPLETE",
     "INTERNAL_TASK_PERMISSION_METADATA_INCOMPLETE",
+    "INTERNAL_TASK_POLICY_UNRECOGNIZED",
     "MISSING_ARTIFACT_PRESENT",
     "OPERATIONAL_GATE_REQUIRES_USER",
     "OPTIONS_COVERAGE_MISMATCH",
@@ -194,10 +211,20 @@ PERMISSION_POLICY_MATERIAL: Mapping[str, Any] = {
     },
     "internal_dependency_rules": {
         "required_explicit_fields": list(INTERNAL_TASK_PERMISSION_FIELDS),
+        "required_execution_fields": list(INTERNAL_TASK_EXECUTION_FIELDS),
         "planner_visible": False,
         "execution_route": "local_executor",
         "caller_options": "fixed_empty",
-        "verification_policy_required": True,
+        "recognized_idempotency_policies": list(
+            RECOGNIZED_INTERNAL_IDEMPOTENCY_POLICIES
+        ),
+        "recognized_verification_policies": list(
+            RECOGNIZED_INTERNAL_VERIFICATION_POLICIES
+        ),
+        "callable_default_adapter_required": True,
+        "execution_binding_version": LOCAL_ADAPTER_EXECUTION_BINDING_VERSION,
+        "task_execution_binding_version": TASK_EXECUTION_BINDING_VERSION,
+        "task_authority_binding_version": TASK_AUTHORITY_BINDING_VERSION,
     },
     "authorization_actor_rules": {
         "trusted_sources": list(TRUSTED_AUTHORIZATION_ACTOR_SOURCES),
@@ -325,7 +352,10 @@ def _internal_task_permission_metadata_complete(
         or compiled_options != {}
     ):
         return False
-    if not str(spec.verification_policy or "").strip():
+    if (
+        not str(spec.idempotency_policy or "").strip()
+        or not str(spec.verification_policy or "").strip()
+    ):
         return False
     if (
         dispatch is None
@@ -336,6 +366,83 @@ def _internal_task_permission_metadata_complete(
     ):
         return False
     return True
+
+
+def _internal_task_policy_recognized(spec: Any) -> bool:
+    return bool(
+        str(spec.idempotency_policy or "")
+        in RECOGNIZED_INTERNAL_IDEMPOTENCY_POLICIES
+        and str(spec.verification_policy or "")
+        in RECOGNIZED_INTERNAL_VERIFICATION_POLICIES
+    )
+
+
+def _internal_task_execution_binding_digest(spec: Any) -> str | None:
+    explicitly_set = set(getattr(spec, "model_fields_set", set()))
+    if not set(INTERNAL_TASK_EXECUTION_FIELDS).issubset(explicitly_set):
+        return None
+    return local_adapter_execution_binding_digest(
+        task_id=str(spec.task_id),
+        default_adapter=spec.default_adapter,
+    )
+
+
+def _unavailable_execution_binding_digest(
+    *,
+    task_id: str,
+    execution_route: str,
+    remote_task_type: str | None,
+) -> str:
+    return _agent_digest(
+        {
+            "schema_version": TASK_EXECUTION_BINDING_VERSION,
+            "task_id": task_id,
+            "execution_route": execution_route,
+            "remote_task_type": remote_task_type,
+            "binding_status": "unavailable",
+        }
+    )
+
+
+def _task_authority_digest(
+    *,
+    task_id: str,
+    planner_visible: bool,
+    effect_class: str,
+    risk_level: str,
+    permissions: Sequence[str],
+    gates: Sequence[str],
+    execution_route: str,
+    remote_task_type: str | None,
+    supports_plan_preapproval: bool,
+    idempotency_policy: str,
+    verification_policy: str,
+    effective_options: Mapping[str, Any] | None,
+    compiled_options: Mapping[str, Any] | None,
+    execution_binding_digest: str,
+) -> str:
+    return _agent_digest(
+        {
+            "schema_version": TASK_AUTHORITY_BINDING_VERSION,
+            "task_id": task_id,
+            "planner_visible": planner_visible,
+            "effect_class": effect_class,
+            "risk_level": risk_level,
+            "required_permissions": sorted(set(permissions)),
+            "gates": sorted(set(gates)),
+            "execution_route": execution_route,
+            "remote_task_type": remote_task_type,
+            "supports_plan_preapproval": supports_plan_preapproval,
+            "idempotency_policy": idempotency_policy,
+            "verification_policy": verification_policy,
+            "caller_option_contract": {
+                "kind": "planner_compiled" if planner_visible else "fixed_empty",
+                "effective_options": effective_options,
+                "compiled_options": compiled_options,
+            },
+            "execution_binding_digest": execution_binding_digest,
+        }
+    )
 
 
 class ScientificAgentPermissionEngine:
@@ -466,6 +573,11 @@ class ScientificAgentPermissionEngine:
                 add_task("task_unknown", AgentPermissionOutcome.DENY, "Task is not registered.")
             if tool is None:
                 dispatch = dispatch_by_task.get(task_id)
+                internal_execution_binding_digest = (
+                    None
+                    if registered is None
+                    else _internal_task_execution_binding_digest(registered)
+                )
                 internal_complete = bool(
                     registered is not None
                     and _internal_task_permission_metadata_complete(
@@ -487,6 +599,20 @@ class ScientificAgentPermissionEngine:
                         AgentPermissionOutcome.DENY,
                         "Hidden dependency lacks an explicit fixed local permission contract.",
                     )
+                elif registered is not None and not _internal_task_policy_recognized(
+                    registered
+                ):
+                    add_task(
+                        "internal_task_policy_unrecognized",
+                        AgentPermissionOutcome.DENY,
+                        "Hidden dependency declares an unrecognized idempotency or verification policy.",
+                    )
+                elif registered is not None and internal_execution_binding_digest is None:
+                    add_task(
+                        "internal_task_execution_binding_incomplete",
+                        AgentPermissionOutcome.DENY,
+                        "Hidden local dependency lacks a callable registered default adapter binding.",
+                    )
                 effect_class = str(getattr(registered, "effect_class", None) or "unavailable")
                 risk_level = str(getattr(getattr(registered, "risk_level", None), "value", "high"))
                 permissions = [str(item) for item in getattr(registered, "required_permissions", ())]
@@ -497,6 +623,13 @@ class ScientificAgentPermissionEngine:
                 remote_task_type = getattr(registered, "remote_task_type", None)
                 supports_plan_preapproval = bool(
                     getattr(registered, "supports_plan_preapproval", False)
+                )
+                planner_visible = bool(getattr(registered, "planner_visible", False))
+                idempotency_policy = str(
+                    getattr(registered, "idempotency_policy", "") or ""
+                )
+                verification_policy = str(
+                    getattr(registered, "verification_policy", "") or ""
                 )
             else:
                 effect_class = tool.effect_class
@@ -509,6 +642,51 @@ class ScientificAgentPermissionEngine:
                 )
                 remote_task_type = dispatch.remote_task_type if dispatch is not None else None
                 supports_plan_preapproval = tool.supports_plan_preapproval
+                planner_visible = True
+                idempotency_policy = tool.idempotency_policy
+                verification_policy = tool.verification_policy
+
+            if execution_route == "local_executor":
+                resolved_local_binding = (
+                    None
+                    if registered is None
+                    else local_adapter_execution_binding_digest(
+                        task_id=task_id,
+                        default_adapter=registered.default_adapter,
+                    )
+                )
+                execution_binding_digest = resolved_local_binding or (
+                    _unavailable_execution_binding_digest(
+                        task_id=task_id,
+                        execution_route=execution_route,
+                        remote_task_type=remote_task_type,
+                    )
+                )
+            else:
+                execution_binding_digest = _agent_digest(
+                    {
+                        "schema_version": TASK_EXECUTION_BINDING_VERSION,
+                        "task_id": task_id,
+                        "execution_route": execution_route,
+                        "remote_task_type": remote_task_type,
+                    }
+                )
+            task_authority_digest = _task_authority_digest(
+                task_id=task_id,
+                planner_visible=planner_visible,
+                effect_class=effect_class,
+                risk_level=risk_level,
+                permissions=permissions,
+                gates=gates,
+                execution_route=execution_route,
+                remote_task_type=remote_task_type,
+                supports_plan_preapproval=supports_plan_preapproval,
+                idempotency_policy=idempotency_policy,
+                verification_policy=verification_policy,
+                effective_options=proposal.effective_planner_options.get(task_id),
+                compiled_options=proposal.compiled_task_options.get(task_id),
+                execution_binding_digest=execution_binding_digest,
+            )
 
             if effect_class not in RECOGNIZED_EFFECT_CLASSES:
                 add_task(
@@ -639,6 +817,8 @@ class ScientificAgentPermissionEngine:
                     required_gates=gates,
                     execution_route=execution_route,
                     remote_task_type=remote_task_type,
+                    execution_binding_digest=execution_binding_digest,
+                    task_authority_digest=task_authority_digest,
                     outcome=task_outcome,
                     reason_codes=sorted({item.reason_code for item in task_findings}),
                     findings=task_findings,

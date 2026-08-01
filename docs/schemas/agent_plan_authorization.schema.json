@@ -409,6 +409,13 @@
       "title": "Task Ids",
       "type": "array"
     },
+    "task_authority_digests": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Task Authority Digests",
+      "type": "object"
+    },
     "effective_planner_options": {
       "additionalProperties": {
         "additionalProperties": true,
@@ -558,6 +565,7 @@
     "run_plan_digest",
     "run_plan",
     "task_ids",
+    "task_authority_digests",
     "effective_planner_options",
     "compiled_task_options",
     "dispatch_intents",

@@ -121,16 +121,18 @@ scientific-agent-permission-policy.v1
 At this PR HEAD its canonical digest is:
 
 ```text
-sha256:b7ede355b1a94be46dbca8a1227d48037ca9651ef5e10d8abcd7963fce1a7d6a
+sha256:08f76cffc76dd1c0ba58cfcc401198c12106ef19abd0b29e75129ca5b510dd7c
 ```
 
 The digest covers recognized effect classes, permissions, local/remote routes,
 logical remote task types, risk rules, semantic/operational Gate rules, budget
 dimensions and upper-bound rules, artifact trust rules, profile/resource
-completeness, the explicit hidden-internal-dependency contract, authorization
-modes, outcome precedence, and the reason-code vocabulary. Dictionary order
-and `PYTHONHASHSEED` do not affect canonical bytes. A semantic rule change must
-change this digest and normally upgrades the policy version.
+completeness, the explicit hidden-internal-dependency contract, recognized
+idempotency/verifier policies, callable local execution binding rules, task
+authority digest versions, authorization modes, outcome precedence, and the
+reason-code vocabulary. Dictionary order and `PYTHONHASHSEED` do not affect
+canonical bytes. A semantic rule change must change this digest and normally
+upgrades the policy version.
 
 ### Decision rules
 
@@ -151,6 +153,9 @@ Representative fail-closed `DENY` cases are:
 - unknown effect, risk, permission, Gate, route, or remote task type;
 - a planner-hidden dependency without an explicit, fixed local Registry
   permission contract;
+- a hidden local dependency without a non-empty callable registered default
+  adapter binding;
+- an unrecognized hidden-task idempotency or verification policy;
 - changed selected artifact content, trust, or producer lineage;
 - changed/missing profile availability or capability digest;
 - incomplete remote profile or resource intent;
@@ -202,6 +207,9 @@ The authorization binds:
 - tool catalog digest;
 - a digest of the complete canonical RunPlan plus the full RunPlan object;
 - the complete ordered task roster;
+- a complete task-keyed authority-digest roster, where each digest binds the
+  task's permission policy, fixed caller option contract, and server-only
+  execution binding digest;
 - task-keyed effective planner options;
 - task-keyed compiled task options;
 - every per-task dispatch intent;
@@ -235,9 +243,28 @@ empty effective/compiled caller options. PR-BM accepts it only when its
 `AtomicTaskRegistry` entry explicitly declares risk, effect, permissions,
 Gates, fixed `local_executor` routing, empty option/default maps,
 preauthorization capability, idempotency policy, verification policy, and
-`planner_visible=false`. Missing or default-only metadata fails closed as
-`INTERNAL_TASK_PERMISSION_METADATA_INCOMPLETE`; hiding a task never grants it
-permission authority.
+`planner_visible=false`. Its `default_adapter` must also be explicitly set and
+resolve to a callable export accepted by the existing Executor. Resolution is
+read-only and never invokes the adapter. Missing permission metadata fails as
+`INTERNAL_TASK_PERMISSION_METADATA_INCOMPLETE`; an unknown policy fails as
+`INTERNAL_TASK_POLICY_UNRECOGNIZED`; and a missing/unknown adapter fails as
+`INTERNAL_TASK_EXECUTION_BINDING_INCOMPLETE`.
+
+Each per-task decision stores two server-derived digests:
+
+- `execution_binding_digest` binds the server-only default-adapter identity for
+  local execution, or the logical route/type for non-local execution; and
+- `task_authority_digest` binds task ID, visibility, effect, risk, permissions,
+  Gates, route/type, preapproval capability, exact idempotency and verification
+  policy values, fixed/effective/compiled option contract, and the execution
+  binding digest.
+
+Adapter names remain absent from proposal, authorization request, and LLM
+material. The authorization persists the exact task-to-authority-digest map;
+its digest and the start-intent verifier transitively bind every value. A
+non-empty-to-non-empty policy or registered-adapter change therefore changes
+the decision and authorization authority rather than passing completeness
+unchanged.
 
 ## Stepwise, frozen plan, and Gates
 
@@ -448,7 +475,8 @@ The contract fails closed for stale/replaced proposal or source bytes,
 symlink/path escape, partial publications, request-ID reuse, concurrent
 duplicate requests, source changes between authorization and start intent,
 unknown catalog/policy terms, incomplete remote authority, budget expansion,
-artifact/profile drift, and all client authority injection.
+artifact/profile drift, hidden adapter/policy drift, missing/replaced task
+authority digests, and all client authority injection.
 
 An untrusted client actor assertion and an authenticated server principal are
 different inputs. Raw `X-Actor`, body/query/form actor aliases, and broad
@@ -493,6 +521,7 @@ PR-BN may reuse, but must reverify immediately before any Controller action:
 - deterministic permission-decision verifier and policy version/digest;
 - exact authorization verifier and authorization digest;
 - exact canonical RunPlan and ordered task roster;
+- per-task execution-binding and task-authority digests;
 - effective and compiled options;
 - dispatch-intent binding;
 - artifact digest/trust/producer bindings;

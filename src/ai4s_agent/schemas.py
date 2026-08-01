@@ -2350,6 +2350,8 @@ class AgentTaskPermissionDecision(BaseModel):
     required_gates: list[str] = Field(default_factory=list)
     execution_route: str
     remote_task_type: str | None = None
+    execution_binding_digest: str
+    task_authority_digest: str
     outcome: AgentPermissionOutcome
     reason_codes: list[str] = Field(default_factory=list)
     findings: list[AgentPermissionFinding] = Field(default_factory=list)
@@ -2363,6 +2365,11 @@ class AgentTaskPermissionDecision(BaseModel):
     @classmethod
     def validate_remote_task_type(cls, value: str | None) -> str | None:
         return None if value is None else _agent_identifier(value, field="remote_task_type")
+
+    @field_validator("execution_binding_digest", "task_authority_digest")
+    @classmethod
+    def validate_authority_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
 
     @field_validator("required_permissions", "required_gates", "reason_codes")
     @classmethod
@@ -2610,6 +2617,7 @@ class AgentPlanAuthorization(BaseModel):
     run_plan_digest: str
     run_plan: RunPlan
     task_ids: list[str]
+    task_authority_digests: dict[str, str]
     effective_planner_options: dict[str, dict[str, Any]]
     compiled_task_options: dict[str, dict[str, Any]]
     dispatch_intents: list[AgentTaskDispatchIntent]
@@ -2673,6 +2681,18 @@ class AgentPlanAuthorization(BaseModel):
     def validate_task_ids(cls, value: list[str]) -> list[str]:
         return _agent_string_list(value, field="task_ids", sort_values=False, max_items=1024)
 
+    @field_validator("task_authority_digests")
+    @classmethod
+    def validate_task_authority_digests(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for task_id, digest in value.items():
+            clean_task = _agent_identifier(task_id, field="task_authority_digests key")
+            normalized[clean_task] = _agent_digest_value(
+                digest,
+                field=f"task_authority_digests.{clean_task}",
+            )
+        return {key: normalized[key] for key in sorted(normalized)}
+
     @field_validator("required_gates", "preauthorized_operational_gates", "pending_gates")
     @classmethod
     def validate_gate_ids(cls, value: list[str], info: Any) -> list[str]:
@@ -2722,6 +2742,8 @@ class AgentPlanAuthorization(BaseModel):
         if self.run_plan_digest != _agent_digest(self.run_plan.model_dump(mode="json")):
             raise ValueError("authorization RunPlan digest mismatch")
         roster = set(self.task_ids)
+        if set(self.task_authority_digests) != roster:
+            raise ValueError("authorization task authority digests must exactly cover the RunPlan")
         if set(self.effective_planner_options) != roster or set(self.compiled_task_options) != roster:
             raise ValueError("authorization option maps must exactly cover the RunPlan")
         if {item.task_id for item in self.dispatch_intents} != roster:

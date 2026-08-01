@@ -1339,6 +1339,10 @@ class ScientificAgentAuthorizationService:
             run_plan_digest=_agent_digest(proposal.run_plan.model_dump(mode="json")),
             run_plan=proposal.run_plan,
             task_ids=[item.task_id for item in proposal.run_plan.tasks],
+            task_authority_digests={
+                item.task_id: item.task_authority_digest
+                for item in decision.task_decisions
+            },
             effective_planner_options=proposal.effective_planner_options,
             compiled_task_options=proposal.compiled_task_options,
             dispatch_intents=proposal.dispatch_intents,
