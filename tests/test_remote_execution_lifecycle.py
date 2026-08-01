@@ -218,6 +218,41 @@ def _prepare(service, manifest):
     )
 
 
+def _slot_authority(index: int = 0) -> dict[str, Any]:
+    digest = "sha256:" + "a" * 64
+    return {
+        "controller_execution_id": "controller-execution-a",
+        "controller_execution_digest": digest,
+        "planned_task_index": index,
+        "attempt": 0,
+        "task_authority_digest": digest,
+        "dispatch_intent_digest": digest,
+        "compiled_options_digest": digest,
+        "input_artifacts_digest": digest,
+        "output_contract_digest": digest,
+        "remote_authority_id": "remote-authority-a",
+        "remote_authority_digest": digest,
+        "remote_authority_set_id": "remote-authority-set-a",
+        "remote_authority_set_digest": digest,
+    }
+
+
+def _prepare_slot(service, manifest, *, slot_id: str, index: int = 0):
+    return service.prepare(
+        project_id="project-a",
+        run_id="remote-run-001",
+        task_id="generate-candidates",
+        transfer_manifest=manifest,
+        requested_resources={"gpu_count": 0, "cpu_threads": 1, "walltime_sec": 600},
+        input_artifacts={
+            "request.json": "generator_request",
+            "sampling.toml": "generator_config",
+        },
+        slot_id=slot_id,
+        slot_binding_authority=_slot_authority(index),
+    )
+
+
 def test_request_binds_resources_and_rejects_resigned_profile_escalation(tmp_path: Path) -> None:
     _, _, _, profiles, manifest = _fixture(tmp_path)
     connection = profiles.get_connection("compute-worker-main")
@@ -268,6 +303,172 @@ def test_exact_approval_dispatches_once_and_projects_existing_stage_state(tmp_pa
     assert transport.dispatches == 1
     assert approved["state"]["status"] == "ACCEPTED"
     assert projects.read_stage_state("project-a", "remote-run-001").status == RunStatus.RUNNING
+
+
+def test_task_slots_isolate_authority_stage_and_approval_from_dispatch(tmp_path: Path) -> None:
+    _, _, projects, profiles, manifest = _fixture(tmp_path)
+    transport = FakeTransport()
+    service = _service(projects, profiles, transport)
+    slot_a = "controller-a-task-0-attempt-0"
+    slot_b = "controller-a-task-1-attempt-0"
+
+    prepared_a = _prepare_slot(service, manifest, slot_id=slot_a, index=0)
+    prepared_b = _prepare_slot(service, manifest, slot_id=slot_b, index=1)
+    binding_a = prepared_a["slot_binding"]
+    binding_b = prepared_b["slot_binding"]
+    assert binding_a["slot_binding_digest"] != binding_b["slot_binding_digest"]
+    run_dir = projects.run_dir("project-a", "remote-run-001")
+    assert not (run_dir / "remote-execution").exists()
+    assert (run_dir / "remote-executions" / slot_a / "stage.json").is_file()
+    assert (run_dir / "remote-executions" / slot_b / "stage.json").is_file()
+    assert projects.read_stage_state("project-a", "remote-run-001") is None
+
+    with pytest.raises(ValueError, match="slot binding digest"):
+        service.inspect(
+            project_id="project-a",
+            run_id="remote-run-001",
+            slot_id=slot_a,
+            expected_slot_binding_digest=binding_b["slot_binding_digest"],
+        )
+
+    approved = service.record_approval(
+        project_id="project-a",
+        run_id="remote-run-001",
+        request_sha256=prepared_a["request"]["request_sha256"],
+        actor="reviewer",
+        slot_id=slot_a,
+        expected_slot_binding_digest=binding_a["slot_binding_digest"],
+    )
+    assert approved["state"]["status"] == "APPROVED"
+    assert transport.dispatches == 0
+
+    dispatched = service.dispatch(
+        project_id="project-a",
+        run_id="remote-run-001",
+        request_sha256=prepared_a["request"]["request_sha256"],
+        slot_id=slot_a,
+        expected_slot_binding_digest=binding_a["slot_binding_digest"],
+    )
+    assert dispatched["state"]["status"] == "ACCEPTED"
+    assert transport.dispatches == 1
+    replay = service.dispatch(
+        project_id="project-a",
+        run_id="remote-run-001",
+        request_sha256=prepared_a["request"]["request_sha256"],
+        slot_id=slot_a,
+        expected_slot_binding_digest=binding_a["slot_binding_digest"],
+    )
+    assert replay["state"]["status"] == "ACCEPTED"
+    assert transport.dispatches == 1
+    assert service.inspect(
+        project_id="project-a",
+        run_id="remote-run-001",
+        slot_id=slot_b,
+        expected_slot_binding_digest=binding_b["slot_binding_digest"],
+    )["state"]["status"] == "WAITING_APPROVAL"
+
+
+def test_task_slot_success_uses_slot_paths_and_remains_exactly_inspectable(tmp_path: Path) -> None:
+    _, _, projects, profiles, manifest = _fixture(tmp_path)
+    transport = FakeTransport()
+    service = _service(projects, profiles, transport)
+    slot_id = "controller-a-task-0-attempt-0"
+    prepared = _prepare_slot(service, manifest, slot_id=slot_id)
+    binding_digest = prepared["slot_binding"]["slot_binding_digest"]
+    service.record_approval(
+        project_id="project-a",
+        run_id="remote-run-001",
+        request_sha256=prepared["request"]["request_sha256"],
+        actor="reviewer",
+        slot_id=slot_id,
+        expected_slot_binding_digest=binding_digest,
+    )
+    service.dispatch(
+        project_id="project-a",
+        run_id="remote-run-001",
+        request_sha256=prepared["request"]["request_sha256"],
+        slot_id=slot_id,
+        expected_slot_binding_digest=binding_digest,
+    )
+    transport.status = "SUCCEEDED"
+    completed = service.refresh(
+        project_id="project-a",
+        run_id="remote-run-001",
+        slot_id=slot_id,
+        expected_slot_binding_digest=binding_digest,
+    )
+    assert completed["state"]["status"] == "SUCCEEDED"
+    registry = projects.read_artifact_registry("project-a", "remote-run-001")
+    assert registry["reinvent4_candidates"] == (
+        f"remote-executions/{slot_id}/outputs/committed/payload/candidates.csv"
+    )
+    publication_ids = [
+        key for key in registry if key.startswith("remote_execution_publication_")
+    ]
+    assert len(publication_ids) == 1
+    assert registry[publication_ids[0]] == f"remote-executions/{slot_id}/publication.json"
+    assert service.inspect(
+        project_id="project-a",
+        run_id="remote-run-001",
+        slot_id=slot_id,
+        expected_slot_binding_digest=binding_digest,
+    )["state"]["status"] == "SUCCEEDED"
+
+
+def test_task_slot_retry_requires_same_authority_and_recovers_binding_commit(tmp_path: Path) -> None:
+    _, _, projects, profiles, manifest = _fixture(tmp_path)
+    slot_id = "controller-a-task-0-attempt-0"
+    service = _service(projects, profiles, FakeTransport())
+
+    def fail(name: str) -> None:
+        if name == "prepare.slot_binding":
+            raise RuntimeError("simulated process exit")
+
+    lifecycle_module._COMMIT_BOUNDARY_HOOK = fail
+    try:
+        with pytest.raises(RuntimeError, match="simulated"):
+            _prepare_slot(service, manifest, slot_id=slot_id)
+    finally:
+        lifecycle_module._COMMIT_BOUNDARY_HOOK = None
+    recovered = _prepare_slot(
+        _service(projects, profiles, FakeTransport()),
+        manifest,
+        slot_id=slot_id,
+    )
+    assert recovered["state"]["status"] == "WAITING_APPROVAL"
+
+    changed = _slot_authority()
+    changed["remote_authority_digest"] = "sha256:" + "b" * 64
+    with pytest.raises(ValueError, match="different authority"):
+        service.prepare(
+            project_id="project-a",
+            run_id="remote-run-001",
+            task_id="generate-candidates",
+            transfer_manifest=manifest,
+            requested_resources={"gpu_count": 0, "cpu_threads": 1, "walltime_sec": 600},
+            input_artifacts={
+                "request.json": "generator_request",
+                "sampling.toml": "generator_config",
+            },
+            slot_id=slot_id,
+            slot_binding_authority=changed,
+        )
+
+
+@pytest.mark.parametrize("slot_id", ["../escape", "slot/escape", "SLOT-UPPER", ""])
+def test_task_slot_identity_is_strict_and_cannot_fall_back_to_legacy(
+    tmp_path: Path,
+    slot_id: str,
+) -> None:
+    _, _, projects, profiles, manifest = _fixture(tmp_path)
+    with pytest.raises(ValueError, match="slot ID"):
+        _prepare_slot(
+            _service(projects, profiles, FakeTransport()),
+            manifest,
+            slot_id=slot_id,
+        )
+    run_dir = projects.run_dir("project-a", "remote-run-001")
+    assert not (run_dir / "remote-execution").exists()
 
 
 def test_success_requires_content_bound_outputs_and_exact_replay(tmp_path: Path) -> None:

@@ -18,12 +18,37 @@ from ai4s_agent.resource_profiles import (
     TransferManifest,
     verify_transfer_manifest_binding,
 )
-from ai4s_agent.schemas import ArtifactRef, RunStatus, StageHistoryItem, StageState
+from ai4s_agent.schemas import (
+    AgentHarnessRemoteExecutionSlotBinding,
+    ArtifactRef,
+    RunStatus,
+    StageHistoryItem,
+    StageState,
+    _agent_digest,
+)
 from ai4s_agent.storage import ProjectStorage
 
 
 class DescriptorRemoteExecutionLifecycleService:
     """Remote lifecycle whose local authority IO is pinned to directory fds."""
+
+    _SLOT_AUTHORITY_FIELDS = frozenset(
+        {
+            "controller_execution_id",
+            "controller_execution_digest",
+            "planned_task_index",
+            "attempt",
+            "task_authority_digest",
+            "dispatch_intent_digest",
+            "compiled_options_digest",
+            "input_artifacts_digest",
+            "output_contract_digest",
+            "remote_authority_id",
+            "remote_authority_digest",
+            "remote_authority_set_id",
+            "remote_authority_set_digest",
+        }
+    )
 
     def __init__(
         self,
@@ -48,7 +73,14 @@ class DescriptorRemoteExecutionLifecycleService:
         return lifecycle
 
     @contextmanager
-    def _tree(self, project_id: str, run_id: str, *, create: bool):
+    def _tree(
+        self,
+        project_id: str,
+        run_id: str,
+        *,
+        create: bool,
+        slot_id: str | None = None,
+    ):
         lifecycle = self._types()
         project = lifecycle._identifier(project_id, "project_id")
         run = lifecycle._identifier(run_id, "run_id")
@@ -57,6 +89,7 @@ class DescriptorRemoteExecutionLifecycleService:
             project_id=project,
             run_id=run,
             create_remote=create,
+            slot_id=slot_id,
         ) as tree:
             yield tree
 
@@ -69,6 +102,8 @@ class DescriptorRemoteExecutionLifecycleService:
         transfer_manifest: TransferManifest | Mapping[str, Any],
         requested_resources: Mapping[str, Any] | Any,
         input_artifacts: Mapping[str, str],
+        slot_id: str | None = None,
+        slot_binding_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         lifecycle = self._types()
         manifest = TransferManifest.model_validate(transfer_manifest)
@@ -83,13 +118,20 @@ class DescriptorRemoteExecutionLifecycleService:
             execution_profile=profile,
             requested_resources=requested_resources,
         )
-        with self._lock, self._tree(project_id, run_id, create=True) as tree, tree.lifecycle_lock():
+        with self._lock, self._tree(
+            project_id, run_id, create=True, slot_id=slot_id
+        ) as tree, tree.lifecycle_lock():
             lifecycle._local_io_boundary("prepare.tree_pinned")
             tree.assert_named_identity()
             if tree.exists("remote", "execution_request.json"):
                 request = self._read_request(tree, project_id, run_id)
                 if not self._same_preparation(request, candidate):
                     raise ValueError("remote execution run already has a different request")
+                self._publish_or_verify_slot_binding(
+                    tree,
+                    request,
+                    slot_binding_authority,
+                )
                 if not tree.exists("remote", "approval.json") and not tree.exists("remote", "publication.json"):
                     self._repair_waiting_authority(tree, request)
                 return self._inspect_tree(tree, request)
@@ -100,6 +142,13 @@ class DescriptorRemoteExecutionLifecycleService:
             tree.assert_named_identity()
             tree.publish_immutable_json("remote", "execution_request.json", candidate.model_dump(mode="json"))
             lifecycle._commit_boundary("prepare.request")
+            tree.assert_named_identity()
+            self._publish_or_verify_slot_binding(
+                tree,
+                candidate,
+                slot_binding_authority,
+            )
+            lifecycle._commit_boundary("prepare.slot_binding")
             tree.assert_named_identity()
             self._write_stage(tree, candidate, RunStatus.WAITING_USER, "remote_execution_approval")
             lifecycle._commit_boundary("prepare.stage")
@@ -117,50 +166,180 @@ class DescriptorRemoteExecutionLifecycleService:
         request_sha256: str,
         actor: str,
         note: str = "",
+        slot_id: str | None = None,
+        expected_slot_binding_digest: str | None = None,
     ) -> dict[str, Any]:
-        lifecycle = self._types()
-        with self._lock, self._tree(project_id, run_id, create=False) as tree, tree.lifecycle_lock():
-            lifecycle._local_io_boundary("approval.tree_pinned")
+        with self._lock, self._tree(
+            project_id, run_id, create=False, slot_id=slot_id
+        ) as tree, tree.lifecycle_lock():
             tree.assert_named_identity()
             request = self._read_request(tree, project_id, run_id)
+            self._verify_slot_access(tree, request, expected_slot_binding_digest)
             if request.request_sha256 != request_sha256:
                 raise ValueError("approval does not bind the exact execution request")
-            if tree.exists("remote", "publication.json"):
-                self._recover_success(tree, request)
-                return self._inspect_tree(tree, request)
-            if tree.exists("remote", "approval.json"):
-                self._read_approval(tree, request)
-                state = self._read_state(tree, request, required=False)
-                if state is None or state["status"] == "WAITING_APPROVAL":
-                    self._mark_recovery(tree, request, "dispatch_outcome_unknown")
-                return self._inspect_tree(tree, request)
-            approval = lifecycle.build_remote_execution_approval(
-                request, request_sha256=request_sha256, actor=actor, note=note
+            self._record_approval_tree(
+                tree,
+                request,
+                request_sha256=request_sha256,
+                actor=actor,
+                note=note,
             )
-            connection, _ = self._verify_current_profiles(request)
-            self._run_submission_preflight(request, connection)
-            self._verify_staged_inputs(tree, request)
-            lifecycle._local_io_boundary("approval.before_record")
-            tree.assert_named_identity()
-            tree.publish_immutable_json("remote", "approval.json", approval.model_dump(mode="json"))
-            lifecycle._commit_boundary("approval.record")
-            tree.assert_named_identity()
-            try:
-                observation = self.transport.dispatch(
-                    connection=connection, request=request, approval=approval, tree=tree
-                )
-                self._validate_observation(request, observation)
-            except lifecycle.RemoteTransportError:
-                self._mark_recovery(tree, request, "dispatch_outcome_unknown")
-                return self._inspect_tree(tree, request)
-            self._apply_observation(tree, request, approval, observation)
-            return self._inspect_tree(tree, request)
+            return self._dispatch_tree(tree, request)
 
-    def refresh(self, *, project_id: str, run_id: str) -> dict[str, Any]:
-        lifecycle = self._types()
-        with self._lock, self._tree(project_id, run_id, create=False) as tree, tree.lifecycle_lock():
+    def record_approval(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        request_sha256: str,
+        actor: str,
+        note: str = "",
+        slot_id: str,
+        expected_slot_binding_digest: str,
+    ) -> dict[str, Any]:
+        """Commit approval for one exact task slot without dispatching it."""
+
+        with self._lock, self._tree(
+            project_id, run_id, create=False, slot_id=slot_id
+        ) as tree, tree.lifecycle_lock():
             tree.assert_named_identity()
             request = self._read_request(tree, project_id, run_id)
+            self._verify_slot_access(tree, request, expected_slot_binding_digest)
+            if request.request_sha256 != request_sha256:
+                raise ValueError("approval does not bind the exact execution request")
+            self._record_approval_tree(
+                tree,
+                request,
+                request_sha256=request_sha256,
+                actor=actor,
+                note=note,
+            )
+            return self._inspect_tree(tree, request)
+
+    def dispatch(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        request_sha256: str,
+        slot_id: str,
+        expected_slot_binding_digest: str,
+    ) -> dict[str, Any]:
+        """Dispatch one already-approved exact task slot at most once."""
+
+        with self._lock, self._tree(
+            project_id, run_id, create=False, slot_id=slot_id
+        ) as tree, tree.lifecycle_lock():
+            tree.assert_named_identity()
+            request = self._read_request(tree, project_id, run_id)
+            self._verify_slot_access(tree, request, expected_slot_binding_digest)
+            if request.request_sha256 != request_sha256:
+                raise ValueError("dispatch does not bind the exact execution request")
+            return self._dispatch_tree(tree, request)
+
+    def _record_approval_tree(
+        self,
+        tree: PinnedExecutionTree,
+        request: Any,
+        *,
+        request_sha256: str,
+        actor: str,
+        note: str,
+    ) -> Any:
+        lifecycle = self._types()
+        lifecycle._local_io_boundary("approval.tree_pinned")
+        if tree.exists("remote", "publication.json"):
+            self._recover_success(tree, request)
+            return self._read_approval(tree, request)
+        if tree.exists("remote", "approval.json"):
+            return self._read_approval(tree, request)
+        approval = lifecycle.build_remote_execution_approval(
+            request,
+            request_sha256=request_sha256,
+            actor=actor,
+            note=note,
+        )
+        connection, _ = self._verify_current_profiles(request)
+        self._run_submission_preflight(request, connection)
+        self._verify_staged_inputs(tree, request)
+        lifecycle._local_io_boundary("approval.before_record")
+        tree.assert_named_identity()
+        tree.publish_immutable_json(
+            "remote",
+            "approval.json",
+            approval.model_dump(mode="json"),
+        )
+        lifecycle._commit_boundary("approval.record")
+        tree.assert_named_identity()
+        self._write_stage(
+            tree,
+            request,
+            RunStatus.WAITING_USER,
+            "remote_execution_dispatch",
+        )
+        self._write_state(tree, request, status="APPROVED")
+        return approval
+
+    def _dispatch_tree(
+        self,
+        tree: PinnedExecutionTree,
+        request: Any,
+    ) -> dict[str, Any]:
+        lifecycle = self._types()
+        if tree.exists("remote", "publication.json"):
+            self._recover_success(tree, request)
+            return self._inspect_tree(tree, request)
+        approval = self._read_approval(tree, request)
+        stage = self._read_stage(tree)
+        if stage is not None and stage.status in {
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }:
+            return self._inspect_tree(tree, request)
+        state = self._read_state(tree, request, required=False)
+        if state is not None and state["status"] in {
+            "ACCEPTED",
+            "RUNNING",
+            "CANCEL_REQUESTED",
+            "RECOVERY_REQUIRED",
+        }:
+            return self._inspect_tree(tree, request)
+        if state is None or state["status"] == "WAITING_APPROVAL":
+            self._write_state(tree, request, status="APPROVED")
+        connection, _ = self._verify_current_profiles(request)
+        self._run_submission_preflight(request, connection)
+        self._verify_staged_inputs(tree, request)
+        tree.assert_named_identity()
+        try:
+            observation = self.transport.dispatch(
+                connection=connection,
+                request=request,
+                approval=approval,
+                tree=tree,
+            )
+            self._validate_observation(request, observation)
+        except lifecycle.RemoteTransportError:
+            self._mark_recovery(tree, request, "dispatch_outcome_unknown")
+            return self._inspect_tree(tree, request)
+        self._apply_observation(tree, request, approval, observation)
+        return self._inspect_tree(tree, request)
+
+    def refresh(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        slot_id: str | None = None,
+        expected_slot_binding_digest: str | None = None,
+    ) -> dict[str, Any]:
+        lifecycle = self._types()
+        with self._lock, self._tree(
+            project_id, run_id, create=False, slot_id=slot_id
+        ) as tree, tree.lifecycle_lock():
+            tree.assert_named_identity()
+            request = self._read_request(tree, project_id, run_id)
+            self._verify_slot_access(tree, request, expected_slot_binding_digest)
             stage = self._read_stage(tree)
             if stage is not None and stage.status in {
                 RunStatus.SUCCEEDED,
@@ -192,11 +371,22 @@ class DescriptorRemoteExecutionLifecycleService:
             )
             return self._inspect_tree(tree, request)
 
-    def cancel(self, *, project_id: str, run_id: str, request_sha256: str) -> dict[str, Any]:
+    def cancel(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        request_sha256: str,
+        slot_id: str | None = None,
+        expected_slot_binding_digest: str | None = None,
+    ) -> dict[str, Any]:
         lifecycle = self._types()
-        with self._lock, self._tree(project_id, run_id, create=False) as tree, tree.lifecycle_lock():
+        with self._lock, self._tree(
+            project_id, run_id, create=False, slot_id=slot_id
+        ) as tree, tree.lifecycle_lock():
             tree.assert_named_identity()
             request = self._read_request(tree, project_id, run_id)
+            self._verify_slot_access(tree, request, expected_slot_binding_digest)
             if request.request_sha256 != request_sha256:
                 raise ValueError("cancel does not bind the exact execution request")
             approval = self._read_approval(tree, request)
@@ -229,11 +419,21 @@ class DescriptorRemoteExecutionLifecycleService:
             self._apply_observation(tree, request, approval, observation, cancellation_pending=True)
             return self._inspect_tree(tree, request)
 
-    def recover(self, *, project_id: str, run_id: str) -> dict[str, Any]:
+    def recover(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        slot_id: str | None = None,
+        expected_slot_binding_digest: str | None = None,
+    ) -> dict[str, Any]:
         lifecycle = self._types()
-        with self._lock, self._tree(project_id, run_id, create=False) as tree, tree.lifecycle_lock():
+        with self._lock, self._tree(
+            project_id, run_id, create=False, slot_id=slot_id
+        ) as tree, tree.lifecycle_lock():
             tree.assert_named_identity()
             request = self._read_request(tree, project_id, run_id)
+            self._verify_slot_access(tree, request, expected_slot_binding_digest)
             stage = self._read_stage(tree)
             if stage is not None and stage.status in {
                 RunStatus.SUCCEEDED,
@@ -267,12 +467,135 @@ class DescriptorRemoteExecutionLifecycleService:
             )
             return self._inspect_tree(tree, request)
 
-    def inspect(self, *, project_id: str, run_id: str) -> dict[str, Any]:
-        with self._lock, self._tree(project_id, run_id, create=False) as tree:
+    def inspect(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        slot_id: str | None = None,
+        expected_slot_binding_digest: str | None = None,
+    ) -> dict[str, Any]:
+        with self._lock, self._tree(
+            project_id, run_id, create=False, slot_id=slot_id
+        ) as tree:
             request = self._read_request(tree, project_id, run_id)
+            self._verify_slot_access(tree, request, expected_slot_binding_digest)
             return self._inspect_tree(tree, request)
 
+    def _publish_or_verify_slot_binding(
+        self,
+        tree: PinnedExecutionTree,
+        request: Any,
+        authority: Mapping[str, Any] | None,
+    ) -> AgentHarnessRemoteExecutionSlotBinding | None:
+        if tree.slot_id is None:
+            if authority is not None:
+                raise ValueError("legacy remote execution must not receive slot authority")
+            return None
+        if authority is None or set(authority) != self._SLOT_AUTHORITY_FIELDS:
+            raise ValueError("task-scoped remote execution requires exact slot authority")
+        for field in ("planned_task_index", "attempt"):
+            value = authority[field]
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError("remote execution slot indexes must be integers")
+        binding = AgentHarnessRemoteExecutionSlotBinding(
+            slot_id=tree.slot_id,
+            project_id=request.project_id,
+            run_id=request.run_id,
+            controller_execution_id=authority["controller_execution_id"],
+            controller_execution_digest=authority["controller_execution_digest"],
+            planned_task_index=authority["planned_task_index"],
+            task_id=request.task_id,
+            attempt=authority["attempt"],
+            task_authority_digest=authority["task_authority_digest"],
+            dispatch_intent_digest=authority["dispatch_intent_digest"],
+            compiled_options_digest=authority["compiled_options_digest"],
+            input_artifacts_digest=authority["input_artifacts_digest"],
+            output_contract_digest=authority["output_contract_digest"],
+            remote_authority_id=authority["remote_authority_id"],
+            remote_authority_digest=authority["remote_authority_digest"],
+            remote_authority_set_id=authority["remote_authority_set_id"],
+            remote_authority_set_digest=authority["remote_authority_set_digest"],
+            request_id=request.request_id,
+            request_sha256=request.request_sha256,
+            input_manifest_sha256=request.input_manifest.manifest_sha256,
+            connection_id=request.connection_id,
+            connection_profile_digest=request.connection_profile_digest,
+            execution_profile_id=request.execution_profile_id,
+            execution_profile_digest=request.execution_profile_digest,
+            requested_resources_digest=_agent_digest(
+                request.requested_resources.model_dump(mode="json")
+            ),
+            output_contract=request.output_contract,
+            created_at=request.created_at,
+        )
+        if tree.exists("remote", "slot_binding.json"):
+            existing = self._read_slot_binding(tree, request)
+            if existing.model_dump(mode="json") != binding.model_dump(mode="json"):
+                raise ValueError("remote execution slot is bound to different authority")
+            return existing
+        tree.publish_immutable_json(
+            "remote",
+            "slot_binding.json",
+            binding.model_dump(mode="json"),
+        )
+        return self._read_slot_binding(tree, request)
+
+    @staticmethod
+    def _read_slot_binding(
+        tree: PinnedExecutionTree,
+        request: Any,
+    ) -> AgentHarnessRemoteExecutionSlotBinding:
+        if tree.slot_id is None:
+            raise ValueError("legacy remote execution has no task slot binding")
+        binding = AgentHarnessRemoteExecutionSlotBinding.model_validate(
+            tree.read_json("remote", "slot_binding.json")
+        )
+        if (
+            binding.slot_id != tree.slot_id
+            or binding.project_id != request.project_id
+            or binding.run_id != request.run_id
+            or binding.task_id != request.task_id
+            or binding.request_id != request.request_id
+            or binding.request_sha256 != request.request_sha256
+            or binding.input_manifest_sha256
+            != request.input_manifest.manifest_sha256
+            or binding.connection_id != request.connection_id
+            or binding.connection_profile_digest
+            != request.connection_profile_digest
+            or binding.execution_profile_id != request.execution_profile_id
+            or binding.execution_profile_digest
+            != request.execution_profile_digest
+            or binding.requested_resources_digest
+            != _agent_digest(request.requested_resources.model_dump(mode="json"))
+            or binding.output_contract != request.output_contract
+        ):
+            raise ValueError("remote execution slot binding does not match its request")
+        return binding
+
+    def _verify_slot_access(
+        self,
+        tree: PinnedExecutionTree,
+        request: Any,
+        expected_slot_binding_digest: str | None,
+    ) -> AgentHarnessRemoteExecutionSlotBinding | None:
+        if tree.slot_id is None:
+            if expected_slot_binding_digest is not None:
+                raise ValueError("legacy remote execution has no slot binding digest")
+            return None
+        if not expected_slot_binding_digest:
+            raise ValueError("task-scoped remote execution requires its slot binding digest")
+        binding = self._read_slot_binding(tree, request)
+        if binding.slot_binding_digest != expected_slot_binding_digest:
+            raise ValueError("remote execution slot binding digest mismatch")
+        return binding
+
     def _inspect_tree(self, tree: PinnedExecutionTree, request: Any) -> dict[str, Any]:
+        slot_binding = (
+            self._read_slot_binding(tree, request)
+            if tree.slot_id is not None
+            else None
+        )
         stage = self._read_stage(tree)
         if stage is not None and stage.stage == request.task_id:
             expected_authority = {
@@ -316,6 +639,9 @@ class DescriptorRemoteExecutionLifecycleService:
             "state": state,
             "approval": approval.model_dump(mode="json") if approval else None,
             "publication": publication.model_dump(mode="json") if publication else None,
+            "slot_binding": (
+                slot_binding.model_dump(mode="json") if slot_binding else None
+            ),
         }
 
     def _apply_observation(
@@ -371,7 +697,7 @@ class DescriptorRemoteExecutionLifecycleService:
             tree.publish_immutable_json("remote", "publication.json", publication.model_dump(mode="json"))
             lifecycle._commit_boundary("success.publication")
             tree.assert_named_identity()
-            registry = self._publication_registry(publication)
+            registry = self._publication_registry(tree, publication)
             tree.add_registry_group(registry)
             lifecycle._commit_boundary("success.registry")
             tree.assert_named_identity()
@@ -416,7 +742,7 @@ class DescriptorRemoteExecutionLifecycleService:
             tree, request, approval, publication
         )
         self._verify_local_publication(tree, request, approval, publication)
-        registry = self._publication_registry(publication)
+        registry = self._publication_registry(tree, publication)
         tree.add_registry_group(registry)
         lifecycle._commit_boundary("recovery.registry")
         self._write_success_stage(
@@ -508,14 +834,19 @@ class DescriptorRemoteExecutionLifecycleService:
         return expected
 
     @staticmethod
-    def _publication_registry(publication: Any) -> dict[str, str]:
+    def _publication_registry(
+        tree: PinnedExecutionTree,
+        publication: Any,
+    ) -> dict[str, str]:
         registry = {
             item.artifact_id: (
-                f"remote-execution/outputs/committed/payload/{item.relative_path}"
+                f"{tree.remote_relative_root}/outputs/committed/payload/{item.relative_path}"
             )
             for item in publication.artifacts
         }
-        registry["remote_execution_publication"] = "remote-execution/publication.json"
+        registry[tree.publication_artifact_id] = (
+            f"{tree.remote_relative_root}/publication.json"
+        )
         return registry
 
     def _write_success_stage(
@@ -536,7 +867,7 @@ class DescriptorRemoteExecutionLifecycleService:
             None,
             artifacts=[ArtifactRef(artifact_id=key, relative_path=value) for key, value in sorted(registry.items())],
             publication_anchor={
-                "relative_path": "remote-execution/publication.json",
+                "relative_path": f"{tree.remote_relative_root}/publication.json",
                 "size_bytes": len(payload),
                 "sha256": lifecycle._digest(payload),
             },
@@ -627,12 +958,13 @@ class DescriptorRemoteExecutionLifecycleService:
             raise ValueError("remote publication StageState anchor is invalid")
         payload = tree.read_file("remote", "publication.json")
         if (
-            anchor.get("relative_path") != "remote-execution/publication.json"
+            anchor.get("relative_path")
+            != f"{tree.remote_relative_root}/publication.json"
             or anchor.get("size_bytes") != len(payload)
             or anchor.get("sha256") != lifecycle._digest(payload)
         ):
             raise ValueError("remote publication StageState anchor mismatch")
-        expected = self._publication_registry(publication)
+        expected = self._publication_registry(tree, publication)
         registry = tree.read_registry()
         if any(registry.get(key) != value for key, value in expected.items()):
             raise ValueError("remote publication Artifact Registry binding mismatch")
@@ -737,7 +1069,11 @@ class DescriptorRemoteExecutionLifecycleService:
                 raise ValueError
             if state["request_id"] != request.request_id or state["request_sha256"] != request.request_sha256:
                 raise ValueError
-            if state["status"] not in lifecycle._REMOTE_STATUSES | {"WAITING_APPROVAL", "RECOVERY_REQUIRED"}:
+            if state["status"] not in lifecycle._REMOTE_STATUSES | {
+                "WAITING_APPROVAL",
+                "APPROVED",
+                "RECOVERY_REQUIRED",
+            }:
                 raise ValueError
             return state
         except (ValueError, TypeError):

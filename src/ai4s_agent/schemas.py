@@ -3832,6 +3832,115 @@ class AgentHarnessControllerTaskSlot(BaseModel):
         return self
 
 
+class AgentHarnessRemoteExecutionSlotBinding(BaseModel):
+    """Immutable server-owned binding for one remote Controller task attempt."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_harness_remote_execution_slot_binding.v1"] = (
+        "agent_harness_remote_execution_slot_binding.v1"
+    )
+    slot_binding_id: str = ""
+    slot_id: str
+    project_id: str
+    run_id: str
+    controller_execution_id: str
+    controller_execution_digest: str
+    planned_task_index: int = Field(ge=0, le=1023)
+    task_id: str
+    attempt: int = Field(ge=0, le=1023)
+    task_authority_digest: str
+    dispatch_intent_digest: str
+    compiled_options_digest: str
+    input_artifacts_digest: str
+    output_contract_digest: str
+    remote_authority_id: str
+    remote_authority_digest: str
+    remote_authority_set_id: str
+    remote_authority_set_digest: str
+    request_id: str
+    request_sha256: str
+    input_manifest_sha256: str
+    connection_id: str
+    connection_profile_digest: str
+    execution_profile_id: str
+    execution_profile_digest: str
+    requested_resources_digest: str
+    output_contract: str
+    slot_binding_digest: str = ""
+    created_at: str
+
+    @field_validator(
+        "slot_binding_id",
+        "slot_id",
+        "project_id",
+        "run_id",
+        "controller_execution_id",
+        "task_id",
+        "remote_authority_id",
+        "remote_authority_set_id",
+        "request_id",
+        "connection_id",
+        "execution_profile_id",
+        "output_contract",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "slot_binding_id",
+        )
+
+    @field_validator(
+        "controller_execution_digest",
+        "task_authority_digest",
+        "dispatch_intent_digest",
+        "compiled_options_digest",
+        "input_artifacts_digest",
+        "output_contract_digest",
+        "remote_authority_digest",
+        "remote_authority_set_digest",
+        "request_sha256",
+        "input_manifest_sha256",
+        "connection_profile_digest",
+        "execution_profile_digest",
+        "requested_resources_digest",
+    )
+    @classmethod
+    def validate_required_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("slot_binding_digest")
+    @classmethod
+    def validate_slot_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="slot_binding_digest", allow_empty=True)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_slot_binding(self) -> "AgentHarnessRemoteExecutionSlotBinding":
+        expected = _agent_digest(self.semantic_material())
+        if self.slot_binding_digest and self.slot_binding_digest != expected:
+            raise ValueError("remote execution slot binding digest mismatch")
+        object.__setattr__(self, "slot_binding_digest", expected)
+        expected_id = f"slot-binding-{expected.split(':', 1)[1][:32]}"
+        if self.slot_binding_id and self.slot_binding_id != expected_id:
+            raise ValueError("remote execution slot binding ID must derive from its digest")
+        object.__setattr__(self, "slot_binding_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("slot_binding_id", None)
+        payload.pop("slot_binding_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
 class AgentHarnessControllerExecution(BaseModel):
     """Immutable authority binding for one exact authorized plan execution."""
 
@@ -6876,6 +6985,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_plan_start_intent": AgentPlanStartIntent,
     "agent_harness_controller_start_request": AgentHarnessControllerStartRequest,
     "agent_harness_controller_execution": AgentHarnessControllerExecution,
+    "agent_harness_remote_execution_slot_binding": AgentHarnessRemoteExecutionSlotBinding,
     "agent_harness_controller_advance_request": AgentHarnessControllerAdvanceRequest,
     "agent_harness_controller_decision": AgentHarnessControllerDecision,
     "agent_harness_controller_action_receipt": AgentHarnessControllerActionReceipt,

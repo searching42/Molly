@@ -1,0 +1,165 @@
+{
+  "additionalProperties": false,
+  "description": "Immutable server-owned binding for one remote Controller task attempt.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_harness_remote_execution_slot_binding.v1",
+      "default": "agent_harness_remote_execution_slot_binding.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "slot_binding_id": {
+      "default": "",
+      "title": "Slot Binding Id",
+      "type": "string"
+    },
+    "slot_id": {
+      "title": "Slot Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "planned_task_index": {
+      "maximum": 1023,
+      "minimum": 0,
+      "title": "Planned Task Index",
+      "type": "integer"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "attempt": {
+      "maximum": 1023,
+      "minimum": 0,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "task_authority_digest": {
+      "title": "Task Authority Digest",
+      "type": "string"
+    },
+    "dispatch_intent_digest": {
+      "title": "Dispatch Intent Digest",
+      "type": "string"
+    },
+    "compiled_options_digest": {
+      "title": "Compiled Options Digest",
+      "type": "string"
+    },
+    "input_artifacts_digest": {
+      "title": "Input Artifacts Digest",
+      "type": "string"
+    },
+    "output_contract_digest": {
+      "title": "Output Contract Digest",
+      "type": "string"
+    },
+    "remote_authority_id": {
+      "title": "Remote Authority Id",
+      "type": "string"
+    },
+    "remote_authority_digest": {
+      "title": "Remote Authority Digest",
+      "type": "string"
+    },
+    "remote_authority_set_id": {
+      "title": "Remote Authority Set Id",
+      "type": "string"
+    },
+    "remote_authority_set_digest": {
+      "title": "Remote Authority Set Digest",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "request_sha256": {
+      "title": "Request Sha256",
+      "type": "string"
+    },
+    "input_manifest_sha256": {
+      "title": "Input Manifest Sha256",
+      "type": "string"
+    },
+    "connection_id": {
+      "title": "Connection Id",
+      "type": "string"
+    },
+    "connection_profile_digest": {
+      "title": "Connection Profile Digest",
+      "type": "string"
+    },
+    "execution_profile_id": {
+      "title": "Execution Profile Id",
+      "type": "string"
+    },
+    "execution_profile_digest": {
+      "title": "Execution Profile Digest",
+      "type": "string"
+    },
+    "requested_resources_digest": {
+      "title": "Requested Resources Digest",
+      "type": "string"
+    },
+    "output_contract": {
+      "title": "Output Contract",
+      "type": "string"
+    },
+    "slot_binding_digest": {
+      "default": "",
+      "title": "Slot Binding Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "slot_id",
+    "project_id",
+    "run_id",
+    "controller_execution_id",
+    "controller_execution_digest",
+    "planned_task_index",
+    "task_id",
+    "attempt",
+    "task_authority_digest",
+    "dispatch_intent_digest",
+    "compiled_options_digest",
+    "input_artifacts_digest",
+    "output_contract_digest",
+    "remote_authority_id",
+    "remote_authority_digest",
+    "remote_authority_set_id",
+    "remote_authority_set_digest",
+    "request_id",
+    "request_sha256",
+    "input_manifest_sha256",
+    "connection_id",
+    "connection_profile_digest",
+    "execution_profile_id",
+    "execution_profile_digest",
+    "requested_resources_digest",
+    "output_contract",
+    "created_at"
+  ],
+  "title": "AgentHarnessRemoteExecutionSlotBinding",
+  "type": "object"
+}
