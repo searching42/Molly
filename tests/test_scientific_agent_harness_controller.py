@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
 import shutil
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -29,6 +32,7 @@ from ai4s_agent.schemas import (
     AgentRemoteResourceAuthorityRequest,
     AtomicTaskSpec,
     RiskLevel,
+    _agent_digest,
 )
 from ai4s_agent.scientific_agent_authorization import (
     AgentPlanControlStore,
@@ -422,6 +426,7 @@ def _concurrent_advance_process(
     workspace_dir: str,
     controller_execution_id: str,
     controller_execution_digest: str,
+    client_request_id: str,
     ready: multiprocessing.synchronize.Event,
     results: multiprocessing.queues.Queue,
 ) -> None:
@@ -433,7 +438,7 @@ def _concurrent_advance_process(
             controller_execution_id=controller_execution_id,
             request=AgentHarnessControllerAdvanceRequest(
                 expected_controller_execution_digest=controller_execution_digest,
-                client_request_id="controller-cross-process-advance-1",
+                client_request_id=client_request_id,
             ),
         )
         results.put(
@@ -445,6 +450,109 @@ def _concurrent_advance_process(
         )
     except Exception as exc:  # pragma: no cover - surfaced in the parent assertion
         results.put(("error", type(exc).__name__, str(exc)))
+
+
+def _assert_controller_receipt_chain_is_linear(
+    controller: ScientificAgentHarnessController,
+    *,
+    controller_execution_id: str,
+) -> None:
+    receipts = controller.control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=controller_execution_id,
+    )
+    referenced_predecessors = {
+        controller.control_store.read_harness_controller_decision(
+            project_id="project-1",
+            decision_id=item.decision_id,
+        ).predecessor_receipt_id
+        for item in receipts
+    }
+    leaves = [
+        item for item in receipts if item.receipt_id not in referenced_predecessors
+    ]
+    assert len(leaves) == 1
+
+
+def _remote_controller_authority_chain(tmp_path: Path, monkeypatch):
+    import test_remote_resource_authority as authority_fixtures
+    from test_remote_execution_lifecycle import FakeProbe, FakeTransport
+
+    from ai4s_agent.remote_execution_lifecycle import (
+        RemoteExecutionLifecycleService,
+        RemoteTransportError,
+    )
+
+    original_remote_task = authority_fixtures._remote_task
+
+    def remote_task_with_exact_output(*args, **kwargs):
+        kwargs["output_artifacts"] = ["reinvent4_candidates"]
+        return original_remote_task(*args, **kwargs)
+
+    monkeypatch.setattr(
+        authority_fixtures,
+        "_remote_task",
+        remote_task_with_exact_output,
+    )
+
+    class ControllerTransport(FakeTransport):
+        def dispatch(self, *, connection, request, approval, tree):
+            del connection
+            assert tree.scan_files("inputs") == {"execution-request.json"}
+            self.dispatches += 1
+            self.approval_sha256 = approval.approval_sha256
+            if self.fail_dispatch:
+                raise RemoteTransportError("unknown")
+            return self._observation(request, "ACCEPTED")
+
+    (
+        storage,
+        profiles,
+        _,
+        proposal_store,
+        proposal,
+        resource_authorities,
+        authorizations,
+    ) = authority_fixtures._configured_case(tmp_path)
+    resource_authorities.publish(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            client_request_id="remote-resource-request-1",
+        ),
+    )
+    approved = authorizations.approve_and_start(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentPlanAuthorizationRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            authorization_mode=AgentAuthorizationMode.STEPWISE,
+            requested_preauthorized_gate_ids=[],
+            confirmed=True,
+            client_request_id="remote-authorization-request-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    transport = ControllerTransport()
+    remote = RemoteExecutionLifecycleService(
+        projects=storage,
+        profiles=profiles,
+        transport=transport,
+        capability_probe=FakeProbe(profiles),
+    )
+    controller = ScientificAgentHarnessController(
+        storage=storage,
+        proposal_store=proposal_store,
+        authorization_service=authorizations,
+        control_store=authorizations.control_store,
+        resource_authority_service=resource_authorities,
+        executor=RunPlanExecutor(storage=storage, registry=proposal_store.registry),
+        remote_executions=remote,
+        clock=lambda: _NOW,
+    )
+    return storage, controller, approved.start_intent, transport, remote
 
 
 def test_controller_executes_exactly_one_local_task_and_replays_receipt(tmp_path: Path) -> None:
@@ -622,6 +730,7 @@ def test_same_local_advance_is_cross_process_exactly_once(tmp_path: Path) -> Non
         str(storage.workspace_dir),
         created.execution.controller_execution_id,
         created.execution.execution_digest,
+        "controller-cross-process-advance-1",
         ready,
         results,
     )
@@ -644,6 +753,264 @@ def test_same_local_advance_is_cross_process_exactly_once(tmp_path: Path) -> Non
     assert completed is not None
     assert [item.status.value for item in completed.history].count("RUNNING") == 1
     assert [item.status.value for item in completed.history].count("SUCCEEDED") == 1
+
+
+def test_different_local_advance_requests_share_one_execution_lock_and_chain(
+    tmp_path: Path,
+) -> None:
+    storage, controller, intent = _gated_local_authority_chain(tmp_path)
+    created = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="different-advance-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    stage = storage.read_stage_state("project-1", "run-1")
+    assert stage is not None
+    snapshot = stage.details["execution_snapshot"]
+    controller.approve_gate(
+        project_id="project-1",
+        controller_execution_id=created.execution.controller_execution_id,
+        gate_id="gate_1_task_parse",
+        request=AgentHarnessGateApprovalRequest(
+            expected_snapshot_id=snapshot["snapshot_id"],
+            expected_snapshot_hash=f"sha256:{snapshot['snapshot_hash']}",
+            client_request_id="different-advance-gate-1",
+            note="Approve the exact concurrent task.",
+        ),
+        actor="alice",
+    )
+
+    context = multiprocessing.get_context("spawn")
+    ready = context.Event()
+    results = context.Queue()
+    common = (
+        str(storage.workspace_dir),
+        created.execution.controller_execution_id,
+        created.execution.execution_digest,
+    )
+    processes = [
+        context.Process(
+            target=_concurrent_advance_process,
+            args=(*common, f"different-advance-{index}", ready, results),
+        )
+        for index in range(2)
+    ]
+    for process in processes:
+        process.start()
+    ready.set()
+    for process in processes:
+        process.join(timeout=20)
+        assert process.exitcode == 0
+    observed = [results.get(timeout=2) for _ in processes]
+    assert all(item[0] == "ok" for item in observed), observed
+
+    completed = storage.read_stage_state("project-1", "run-1")
+    assert completed is not None
+    assert [item.status.value for item in completed.history].count("RUNNING") == 1
+    assert [item.status.value for item in completed.history].count("SUCCEEDED") == 1
+    dispatches = controller.control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=created.execution.controller_execution_id,
+    )
+    assert len(dispatches) == 1
+    receipts = controller.control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=created.execution.controller_execution_id,
+    )
+    referenced_predecessors = {
+        controller.control_store.read_harness_controller_decision(
+            project_id="project-1",
+            decision_id=item.decision_id,
+        ).predecessor_receipt_id
+        for item in receipts
+    }
+    leaves = [
+        item for item in receipts if item.receipt_id not in referenced_predecessors
+    ]
+    assert len(leaves) == 1
+
+
+def test_advance_and_gate_approval_share_execution_lock_and_linear_chain(
+    tmp_path: Path,
+) -> None:
+    storage, controller, intent = _gated_local_authority_chain(tmp_path)
+    created = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="gate-race-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    stage = storage.read_stage_state("project-1", "run-1")
+    assert stage is not None
+    snapshot = stage.details["execution_snapshot"]
+    barrier = threading.Barrier(2)
+
+    def advance():
+        barrier.wait(timeout=5)
+        return controller.advance(
+            project_id="project-1",
+            controller_execution_id=created.execution.controller_execution_id,
+            request=AgentHarnessControllerAdvanceRequest(
+                expected_controller_execution_digest=created.execution.execution_digest,
+                client_request_id="gate-race-advance-1",
+            ),
+        )
+
+    def approve_gate():
+        barrier.wait(timeout=5)
+        return controller.approve_gate(
+            project_id="project-1",
+            controller_execution_id=created.execution.controller_execution_id,
+            gate_id="gate_1_task_parse",
+            request=AgentHarnessGateApprovalRequest(
+                expected_snapshot_id=snapshot["snapshot_id"],
+                expected_snapshot_hash=f"sha256:{snapshot['snapshot_hash']}",
+                client_request_id="gate-race-approval-1",
+                note="Approve the exact concurrent task.",
+            ),
+            actor="alice",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(advance), pool.submit(approve_gate)]
+        assert all(future.result(timeout=10) is not None for future in futures)
+
+    observed = controller.get(
+        project_id="project-1",
+        controller_execution_id=created.execution.controller_execution_id,
+    )
+    if observed.inspection.status.value != "succeeded":
+        observed = controller.advance(
+            project_id="project-1",
+            controller_execution_id=created.execution.controller_execution_id,
+            request=AgentHarnessControllerAdvanceRequest(
+                expected_controller_execution_digest=created.execution.execution_digest,
+                client_request_id="gate-race-finish-1",
+            ),
+        )
+    assert observed.inspection.status.value == "succeeded"
+    dispatches = controller.control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=created.execution.controller_execution_id,
+    )
+    assert len(dispatches) == 1
+    _assert_controller_receipt_chain_is_linear(
+        controller,
+        controller_execution_id=created.execution.controller_execution_id,
+    )
+
+
+@pytest.mark.parametrize("peer_operation", ["remote-approval", "cancel", "recover"])
+def test_advance_and_remote_control_operation_share_one_linear_chain(
+    tmp_path: Path,
+    monkeypatch,
+    peer_operation: str,
+) -> None:
+    _, controller, intent, transport, remote = _remote_controller_authority_chain(
+        tmp_path,
+        monkeypatch,
+    )
+    created = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id=f"{peer_operation}-race-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    slot = created.execution.task_slots[0]
+    binding = remote.inspect_slot_binding(
+        project_id="project-1",
+        run_id="run-1",
+        slot_id=slot.slot_id,
+    )
+
+    if peer_operation != "remote-approval":
+        controller.approve_remote(
+            project_id="project-1",
+            controller_execution_id=created.execution.controller_execution_id,
+            request=AgentHarnessRemoteApprovalRequest(
+                expected_remote_request_sha256=binding.request_sha256,
+                client_request_id=f"{peer_operation}-race-prerequisite-approval-1",
+                note="Approve the exact task slot request.",
+            ),
+            actor="alice",
+        )
+    if peer_operation == "recover":
+        transport.fail_dispatch = True
+        controller.advance(
+            project_id="project-1",
+            controller_execution_id=created.execution.controller_execution_id,
+            request=AgentHarnessControllerAdvanceRequest(
+                expected_controller_execution_digest=created.execution.execution_digest,
+                client_request_id="recover-race-enter-recovery-1",
+            ),
+        )
+        transport.fail_dispatch = False
+        transport.status = "RUNNING"
+
+    barrier = threading.Barrier(2)
+
+    def advance():
+        barrier.wait(timeout=5)
+        return controller.advance(
+            project_id="project-1",
+            controller_execution_id=created.execution.controller_execution_id,
+            request=AgentHarnessControllerAdvanceRequest(
+                expected_controller_execution_digest=created.execution.execution_digest,
+                client_request_id=f"{peer_operation}-race-advance-1",
+            ),
+        )
+
+    def peer():
+        barrier.wait(timeout=5)
+        if peer_operation == "remote-approval":
+            return controller.approve_remote(
+                project_id="project-1",
+                controller_execution_id=created.execution.controller_execution_id,
+                request=AgentHarnessRemoteApprovalRequest(
+                    expected_remote_request_sha256=binding.request_sha256,
+                    client_request_id="remote-approval-race-peer-1",
+                    note="Approve the exact concurrent task slot request.",
+                ),
+                actor="alice",
+            )
+        request = AgentHarnessControllerAdvanceRequest(
+            expected_controller_execution_digest=created.execution.execution_digest,
+            client_request_id=f"{peer_operation}-race-peer-1",
+        )
+        if peer_operation == "cancel":
+            return controller.cancel(
+                project_id="project-1",
+                controller_execution_id=created.execution.controller_execution_id,
+                request=request,
+            )
+        return controller.recover(
+            project_id="project-1",
+            controller_execution_id=created.execution.controller_execution_id,
+            request=request,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(advance), pool.submit(peer)]
+        assert all(future.result(timeout=10) is not None for future in futures)
+
+    _assert_controller_receipt_chain_is_linear(
+        controller,
+        controller_execution_id=created.execution.controller_execution_id,
+    )
+    assert transport.dispatches <= 1
 
 
 def test_tracing_on_off_preserves_authoritative_bytes_and_emits_bounded_hierarchy(
@@ -822,6 +1189,287 @@ def test_local_crash_after_committed_outputs_reconciles_without_second_dispatch(
     assert recovered.inspection.status.value == "succeeded"
 
 
+def test_local_crash_reconciliation_requires_exact_immutable_execution_record(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    storage, control_store, controller, intent = _local_authority_chain(tmp_path)
+    verifier_digest = _agent_digest(
+        {
+            "schema_version": "test-immutable-output-verifier.v1",
+            "task_id": "inspect_dataset",
+            "execution_record_id": "dataset_profile",
+        }
+    )
+
+    def immutable_verifier_binding(**_):
+        return {
+            "verification_class": "immutable_execution_record",
+            "verifier_version": "test-immutable-output-verifier.v1",
+            "verifier_digest": verifier_digest,
+            "execution_record_id": "dataset_profile",
+        }
+
+    monkeypatch.setattr(
+        controller.executor,
+        "one_task_output_verifier_binding",
+        immutable_verifier_binding,
+    )
+    original_write_marker = controller.requests.write_marker
+    failed_once = False
+
+    def fail_before_effect_checkpoint(
+        session,
+        *,
+        filename,
+        status,
+        values,
+    ):
+        nonlocal failed_once
+        if not failed_once and filename == "side_effect_observed.json":
+            failed_once = True
+            raise RuntimeError("injected immutable receipt publication crash")
+        return original_write_marker(
+            session,
+            filename=filename,
+            status=status,
+            values=values,
+        )
+
+    monkeypatch.setattr(
+        controller.requests,
+        "write_marker",
+        fail_before_effect_checkpoint,
+    )
+    request = AgentHarnessControllerStartRequest(
+        expected_start_intent_digest=intent.start_intent_digest,
+        client_request_id="immutable-record-crash-create-1",
+    )
+    with pytest.raises(RuntimeError, match="immutable receipt publication crash"):
+        controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=request,
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+
+    executions = control_store.list_harness_controller_executions(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+    )
+    assert len(executions) == 1
+    publications = control_store.list_harness_local_execution_publications(
+        project_id="project-1",
+        controller_execution_id=executions[0].controller_execution_id,
+    )
+    assert len(publications) == 1
+    binding = publications[0].verified_outputs[0]
+    assert binding.verification_class == "immutable_execution_record"
+    assert binding.execution_record_id == "dataset_profile"
+    assert binding.execution_record_digest == binding.content_sha256
+
+    registry_path = storage.run_dir("project-1", "run-1") / "artifact_registry.json"
+    registry_bytes = registry_path.read_bytes()
+    registry_payload = json.loads(registry_bytes.decode("utf-8"))
+    del registry_payload["artifacts"]["dataset_profile"]
+    registry_path.write_text(
+        json.dumps(registry_payload, ensure_ascii=False, sort_keys=True, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="local output contract is incomplete",
+    ):
+        controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=request,
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+
+    registry_path.write_bytes(registry_bytes)
+    recovered = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=request,
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert recovered.receipt is not None
+    assert recovered.receipt.outcome == AgentHarnessControllerReceiptOutcome.RECONCILED
+    assert recovered.receipt.verified_output_bindings[0].execution_record_digest
+    assert len(
+        control_store.list_harness_local_dispatch_receipts(
+            project_id="project-1",
+            controller_execution_id=recovered.execution.controller_execution_id,
+        )
+    ) == 1
+
+
+def test_local_completion_fails_closed_without_exact_dispatch_receipt(
+    tmp_path: Path,
+) -> None:
+    _, control_store, controller, intent = _local_authority_chain(tmp_path)
+    completed = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="missing-dispatch-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert completed.receipt is not None
+    assert completed.receipt.local_dispatch_receipt_ids
+    controller_dispatches = control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=completed.execution.controller_execution_id,
+    )
+    assert len(controller_dispatches) == 1
+    assert completed.receipt.local_dispatch_receipt_ids == [
+        controller_dispatches[0].executor_dispatch_receipt_id
+        or controller_dispatches[0].dispatch_receipt_id
+    ]
+    dispatch_id = controller_dispatches[0].dispatch_receipt_id
+    dispatch_root = control_store._collection_root(
+        project_id="project-1",
+        kind="harness_local_dispatch_receipt",
+        create=False,
+    )
+    assert dispatch_root is not None
+    (dispatch_root / dispatch_id).rename(dispatch_root / f"hidden-{dispatch_id}")
+
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="dispatch receipt is unavailable",
+    ):
+        controller.get(
+            project_id="project-1",
+            controller_execution_id=completed.execution.controller_execution_id,
+        )
+
+
+def test_manual_local_success_without_controller_dispatch_is_explicitly_adopted(
+    tmp_path: Path,
+) -> None:
+    storage, controller, intent = _gated_local_authority_chain(tmp_path)
+    created = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="adopt-manual-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    authorization = controller.authorization_service.verify_authorization(
+        project_id="project-1",
+        authorization_id=intent.authorization_id,
+        verify_current=False,
+    )
+    stage = storage.read_stage_state("project-1", "run-1")
+    assert stage is not None
+    snapshot = stage.details["execution_snapshot"]
+    controller.approve_gate(
+        project_id="project-1",
+        controller_execution_id=created.execution.controller_execution_id,
+        gate_id="gate_1_task_parse",
+        request=AgentHarnessGateApprovalRequest(
+            expected_snapshot_id=snapshot["snapshot_id"],
+            expected_snapshot_hash=f"sha256:{snapshot['snapshot_hash']}",
+            client_request_id="adopt-manual-gate-1",
+            note="Approve the exact manual task.",
+        ),
+        actor="alice",
+    )
+    binding = controller.executor.derive_one_task_server_binding(
+        project_id="project-1",
+        run_plan=authorization.run_plan,
+        task_index=0,
+        task_options=authorization.compiled_task_options["inspect_dataset"],
+    )
+    manual = controller.executor.execute_one_task_after_committed_gate(
+        project_id="project-1",
+        run_plan=authorization.run_plan,
+        task_index=0,
+        task_id="inspect_dataset",
+        task_options=authorization.compiled_task_options["inspect_dataset"],
+        actor="alice",
+        expected_snapshot_id=snapshot["snapshot_id"],
+        expected_snapshot_digest=f"sha256:{snapshot['snapshot_hash']}",
+        expected_local_adapter_execution_binding_digest=binding[
+            "local_adapter_execution_binding_digest"
+        ],
+        expected_compiled_options_digest=binding["compiled_options_digest"],
+        expected_input_artifacts_digest=binding["input_artifacts_digest"],
+        expected_output_contract_digest=binding["output_contract_digest"],
+    )
+    assert manual["status"] == "SUCCEEDED"
+
+    adopted = controller.advance(
+        project_id="project-1",
+        controller_execution_id=created.execution.controller_execution_id,
+        request=AgentHarnessControllerAdvanceRequest(
+            expected_controller_execution_digest=created.execution.execution_digest,
+            client_request_id="adopt-manual-advance-1",
+        ),
+    )
+    assert adopted.decision is not None
+    assert (
+        adopted.decision.action_kind
+        == AgentHarnessControllerAction.ADOPT_COMPLETED_TASK
+    )
+    assert adopted.receipt is not None
+    assert adopted.receipt.reason_codes == ["TASK_ADOPTED"]
+    assert adopted.receipt.local_dispatch_receipt_ids == []
+    assert adopted.receipt.execution_started is False
+    assert adopted.receipt.dispatch_occurred is False
+    assert (
+        controller.control_store.list_harness_local_dispatch_receipts(
+            project_id="project-1",
+            controller_execution_id=adopted.execution.controller_execution_id,
+        )
+        == []
+    )
+
+
+def test_local_output_same_path_same_size_replacement_fails_closed(
+    tmp_path: Path,
+) -> None:
+    storage, _, controller, intent = _local_authority_chain(tmp_path)
+    completed = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="tampered-output-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    registry = storage.read_artifact_registry("project-1", "run-1")
+    output_path = storage.run_dir("project-1", "run-1") / registry["dataset_profile"]
+    original = output_path.read_bytes()
+    replacement = bytearray(original)
+    replacement[-2] = ord(" ") if replacement[-2] != ord(" ") else ord("\t")
+    output_path.write_bytes(bytes(replacement))
+    assert output_path.stat().st_size == len(original)
+
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="no longer verifies current outputs",
+    ):
+        controller.get(
+            project_id="project-1",
+            controller_execution_id=completed.execution.controller_execution_id,
+        )
+
+
 def test_input_drift_after_gate_snapshot_fails_closed_before_task_dispatch(
     tmp_path: Path,
 ) -> None:
@@ -850,6 +1498,57 @@ def test_input_drift_after_gate_snapshot_fails_closed_before_task_dispatch(
             ),
         )
     assert "dataset_profile" not in storage.read_artifact_registry("project-1", "run-1")
+
+
+def test_decision_freshness_barrier_rechecks_input_after_decision_commit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    storage, control_store, controller, intent = _local_authority_chain(tmp_path)
+    dataset = storage.run_dir("project-1", "run-1") / "inputs" / "dataset.csv"
+    original_publish = control_store.publish_harness_controller_decision
+    mutated = False
+
+    def publish_then_mutate(*, project_id, decision):
+        nonlocal mutated
+        published = original_publish(project_id=project_id, decision=decision)
+        if not mutated:
+            mutated = True
+            original = dataset.read_bytes()
+            replacement = bytearray(original)
+            replacement[-2] = ord("2") if replacement[-2] != ord("2") else ord("3")
+            dataset.write_bytes(bytes(replacement))
+        return published
+
+    monkeypatch.setattr(
+        control_store,
+        "publish_harness_controller_decision",
+        publish_then_mutate,
+    )
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="pre-existing artifact authority changed|input artifact content changed",
+    ):
+        controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=AgentHarnessControllerStartRequest(
+                expected_start_intent_digest=intent.start_intent_digest,
+                client_request_id="freshness-race-create-1",
+            ),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+    executions = control_store.list_harness_controller_executions(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+    )
+    assert len(executions) == 1
+    assert control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=executions[0].controller_execution_id,
+    ) == []
+    assert storage.read_stage_state("project-1", "run-1") is None
 
 
 def test_gate_approval_commits_decision_without_executing_then_advance_runs_task(
@@ -1037,6 +1736,15 @@ def test_remote_controller_separates_prepare_approval_dispatch_refresh_and_adopt
         clock=lambda: _NOW,
     )
 
+    external_controller_inputs = tmp_path / "external-controller-inputs"
+    external_controller_inputs.mkdir()
+    sentinel = external_controller_inputs / "sentinel.txt"
+    sentinel.write_bytes(b"unchanged")
+    (
+        storage.run_dir("project-1", "run-1")
+        / "agent-harness-controller-inputs"
+    ).symlink_to(external_controller_inputs, target_is_directory=True)
+
     prepared = controller.create(
         project_id="project-1",
         start_intent_id=approved.start_intent.start_intent_id,
@@ -1051,6 +1759,10 @@ def test_remote_controller_separates_prepare_approval_dispatch_refresh_and_adopt
     assert prepared.decision.action_kind == AgentHarnessControllerAction.PREPARE_REMOTE_REQUEST
     assert prepared.inspection.status.value == "waiting_remote_approval"
     assert transport.dispatches == 0
+    assert {path.name for path in external_controller_inputs.iterdir()} == {
+        "sentinel.txt"
+    }
+    assert sentinel.read_bytes() == b"unchanged"
     remote_request = remote.inspect(
         project_id="project-1",
         run_id="run-1",
@@ -1150,6 +1862,41 @@ def test_remote_controller_separates_prepare_approval_dispatch_refresh_and_adopt
     transport.fail_dispatch = False
     transport.status = "RUNNING"
     inspections_before_recovery = transport.inspections
+    slot_root = (
+        storage.run_dir("project-1", "run-1")
+        / "remote-executions"
+        / prepared.execution.task_slots[0].slot_id
+    )
+    slot_bytes_before = {
+        str(path.relative_to(slot_root)): path.read_bytes()
+        for path in sorted(slot_root.rglob("*"))
+        if path.is_file()
+    }
+    ordinary_recovery_observation = controller.advance(
+        project_id="project-1",
+        controller_execution_id=prepared.execution.controller_execution_id,
+        request=AgentHarnessControllerAdvanceRequest(
+            expected_controller_execution_digest=prepared.execution.execution_digest,
+            client_request_id="remote-recovery-observation-1",
+        ),
+    )
+    assert ordinary_recovery_observation.decision is not None
+    assert (
+        ordinary_recovery_observation.decision.action_kind
+        == AgentHarnessControllerAction.RECOVER_REMOTE_TASK
+    )
+    assert ordinary_recovery_observation.decision.executable is False
+    assert ordinary_recovery_observation.receipt is not None
+    assert (
+        ordinary_recovery_observation.receipt.outcome
+        == AgentHarnessControllerReceiptOutcome.WAITING
+    )
+    assert transport.inspections == inspections_before_recovery
+    assert {
+        str(path.relative_to(slot_root)): path.read_bytes()
+        for path in sorted(slot_root.rglob("*"))
+        if path.is_file()
+    } == slot_bytes_before
     recover_request = AgentHarnessControllerAdvanceRequest(
         expected_controller_execution_digest=prepared.execution.execution_digest,
         client_request_id="remote-recover-1",
@@ -1245,6 +1992,37 @@ def test_remote_controller_separates_prepare_approval_dispatch_refresh_and_adopt
     assert adopted.receipt.remote_publication_digest.startswith("sha256:")
     assert adopted.inspection.status.value == "succeeded"
     assert transport.dispatches == 1
+
+    telemetry_path = slot_root / "state.json"
+    telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+    telemetry["status"] = "FAILED"
+    telemetry["error_code"] = "mutable-telemetry-only"
+    telemetry["updated_at"] = "2026-08-02T00:00:00Z"
+    telemetry_path.write_text(
+        json.dumps(telemetry, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    terminal_after_telemetry_change = controller.get(
+        project_id="project-1",
+        controller_execution_id=prepared.execution.controller_execution_id,
+    )
+    assert terminal_after_telemetry_change.inspection.status.value == "succeeded"
+
+    stage_path = slot_root / "stage.json"
+    slot_stage = json.loads(stage_path.read_text(encoding="utf-8"))
+    slot_stage["details"]["untrusted-extra-observation"] = "tampered"
+    stage_path.write_text(
+        json.dumps(slot_stage, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="remote completion receipt no longer verifies current authority",
+    ):
+        controller.get(
+            project_id="project-1",
+            controller_execution_id=prepared.execution.controller_execution_id,
+        )
 
 
 def test_two_remote_tasks_use_distinct_slots_and_run_in_plan_order(

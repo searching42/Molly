@@ -16,6 +16,7 @@
         "wait_for_gate",
         "stop_gate_rejected",
         "execute_local_task",
+        "adopt_completed_task",
         "prepare_remote_request",
         "wait_for_remote_approval",
         "stop_remote_rejected",
@@ -83,6 +84,68 @@
       ],
       "title": "AgentHarnessControllerStatus",
       "type": "string"
+    },
+    "AgentHarnessVerifiedOutputBinding": {
+      "additionalProperties": false,
+      "description": "One exact current local output accepted by the Executor verifier.",
+      "properties": {
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "relative_path": {
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "content_sha256": {
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "maximum": 2147483648,
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "producer_task_id": {
+          "title": "Producer Task Id",
+          "type": "string"
+        },
+        "verification_class": {
+          "title": "Verification Class",
+          "type": "string"
+        },
+        "verifier_version": {
+          "title": "Verifier Version",
+          "type": "string"
+        },
+        "verifier_digest": {
+          "title": "Verifier Digest",
+          "type": "string"
+        },
+        "execution_record_id": {
+          "default": "",
+          "title": "Execution Record Id",
+          "type": "string"
+        },
+        "execution_record_digest": {
+          "default": "",
+          "title": "Execution Record Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "relative_path",
+        "content_sha256",
+        "size_bytes",
+        "producer_task_id",
+        "verification_class",
+        "verifier_version",
+        "verifier_digest"
+      ],
+      "title": "AgentHarnessVerifiedOutputBinding",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -184,6 +247,28 @@
       "title": "Local Dispatch Receipt Ids",
       "type": "array"
     },
+    "verified_output_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentHarnessVerifiedOutputBinding"
+      },
+      "title": "Verified Output Bindings",
+      "type": "array"
+    },
+    "verified_output_bindings_digest": {
+      "default": "",
+      "title": "Verified Output Bindings Digest",
+      "type": "string"
+    },
+    "local_execution_publication_id": {
+      "default": "",
+      "title": "Local Execution Publication Id",
+      "type": "string"
+    },
+    "local_execution_publication_digest": {
+      "default": "",
+      "title": "Local Execution Publication Digest",
+      "type": "string"
+    },
     "remote_execution_slot_id": {
       "default": "",
       "title": "Remote Execution Slot Id",
@@ -207,6 +292,31 @@
     "remote_publication_digest": {
       "default": "",
       "title": "Remote Publication Digest",
+      "type": "string"
+    },
+    "before_remote_stage_digest": {
+      "default": "",
+      "title": "Before Remote Stage Digest",
+      "type": "string"
+    },
+    "after_remote_stage_digest": {
+      "default": "",
+      "title": "After Remote Stage Digest",
+      "type": "string"
+    },
+    "before_remote_state_digest": {
+      "default": "",
+      "title": "Before Remote State Digest",
+      "type": "string"
+    },
+    "after_remote_state_digest": {
+      "default": "",
+      "title": "After Remote State Digest",
+      "type": "string"
+    },
+    "remote_status_source_roster_digest": {
+      "default": "",
+      "title": "Remote Status Source Roster Digest",
       "type": "string"
     },
     "gate_snapshot_id": {

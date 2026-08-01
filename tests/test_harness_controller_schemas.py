@@ -15,10 +15,13 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerDecision,
     AgentHarnessControllerExecution,
     AgentHarnessGateApprovalRequest,
+    AgentHarnessLocalDispatchReceipt,
+    AgentHarnessLocalExecutionPublication,
     AgentHarnessControllerInspection,
     AgentHarnessControllerInspectionFact,
     AgentHarnessControllerReceiptOutcome,
     AgentHarnessRemoteApprovalRequest,
+    AgentHarnessVerifiedOutputBinding,
     AgentHarnessControllerSourceBinding,
     AgentHarnessControllerStartRequest,
     AgentHarnessControllerStatus,
@@ -227,6 +230,9 @@ def test_controller_json_schemas_are_strict_and_published() -> None:
         "agent_harness_controller_inspection": AgentHarnessControllerInspection,
         "agent_harness_gate_approval_request": AgentHarnessGateApprovalRequest,
         "agent_harness_remote_approval_request": AgentHarnessRemoteApprovalRequest,
+        "agent_harness_local_dispatch_receipt": AgentHarnessLocalDispatchReceipt,
+        "agent_harness_local_execution_publication": AgentHarnessLocalExecutionPublication,
+        "agent_harness_verified_output_binding": AgentHarnessVerifiedOutputBinding,
     }
     for name, model in models.items():
         payload = json.loads((schemas / f"{name}.schema.json").read_text(encoding="utf-8"))

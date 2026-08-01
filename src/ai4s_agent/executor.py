@@ -309,6 +309,48 @@ class RunPlanExecutor:
             ),
         }
 
+    def one_task_output_verifier_binding(
+        self,
+        *,
+        run_plan: RunPlan,
+        task_index: int,
+        expected_output_contract_digest: str,
+    ) -> dict[str, str]:
+        """Return the frozen verifier identity for one exact local contract."""
+
+        task = self._planned_task_at(run_plan, task_index)
+        contract_digest = _agent_digest(
+            {
+                "task_id": task.task_id,
+                "output_artifact_ids": list(task.output_artifacts),
+            }
+        )
+        if contract_digest != expected_output_contract_digest:
+            raise ValueError("Controller local output contract changed")
+        execution_record_id = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id, "")
+        verification_class = (
+            "immutable_execution_record"
+            if execution_record_id
+            else "run_plan_output_contract"
+        )
+        verifier_version = "run-plan-executor-output-verifier.v2"
+        verifier_digest = _agent_digest(
+            {
+                "schema_version": verifier_version,
+                "task_id": task.task_id,
+                "output_artifact_ids": list(task.output_artifacts),
+                "output_contract_digest": contract_digest,
+                "verification_class": verification_class,
+                "execution_record_id": execution_record_id,
+            }
+        )
+        return {
+            "verification_class": verification_class,
+            "verifier_version": verifier_version,
+            "verifier_digest": verifier_digest,
+            "execution_record_id": execution_record_id,
+        }
+
     def prepare_one_task_gate(
         self,
         *,
@@ -363,6 +405,8 @@ class RunPlanExecutor:
         expected_compiled_options_digest: str,
         expected_input_artifacts_digest: str,
         expected_output_contract_digest: str,
+        actual_dispatch_recorder: Callable[[str], None] | None = None,
+        task_completion_recorder: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """Execute exactly one current local task that has no Gate."""
 
@@ -390,6 +434,7 @@ class RunPlanExecutor:
             executed=self._executed_tasks_before(task_index, run_plan),
             task_options={task.task_id: dict(task_options)},
             stop_after_index=task_index,
+            actual_dispatch_recorder=actual_dispatch_recorder,
         )
         self._verify_one_task_result_outputs(
             project_id=project_id,
@@ -397,6 +442,12 @@ class RunPlanExecutor:
             task_index=task_index,
             result=result,
         )
+        if (
+            task_completion_recorder is not None
+            and result.get("ok") is True
+            and result.get("status") == RunStatus.SUCCEEDED.value
+        ):
+            task_completion_recorder()
         return result
 
     def commit_one_task_gate_decision(
@@ -496,6 +547,8 @@ class RunPlanExecutor:
         expected_compiled_options_digest: str,
         expected_input_artifacts_digest: str,
         expected_output_contract_digest: str,
+        actual_dispatch_recorder: Callable[[str], None] | None = None,
+        task_completion_recorder: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """Exact-read committed Gate decisions, then execute only that task."""
 
@@ -565,6 +618,7 @@ class RunPlanExecutor:
             task_options={task.task_id: dict(task_options)},
             approved_task_id=task.task_id,
             stop_after_index=task_index,
+            actual_dispatch_recorder=actual_dispatch_recorder,
         )
         self._verify_one_task_result_outputs(
             project_id=project_id,
@@ -572,6 +626,12 @@ class RunPlanExecutor:
             task_index=task_index,
             result=result,
         )
+        if (
+            task_completion_recorder is not None
+            and result.get("ok") is True
+            and result.get("status") == RunStatus.SUCCEEDED.value
+        ):
+            task_completion_recorder()
         return result
 
     def _one_task_context(
@@ -684,6 +744,7 @@ class RunPlanExecutor:
         task_options: TaskOptions,
         approved_task_id: str | None = None,
         stop_after_index: int | None = None,
+        actual_dispatch_recorder: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         run_id = run_plan.run_id
 
@@ -862,6 +923,8 @@ class RunPlanExecutor:
                     adapter_name=adapter_name,
                     approved_gates=approved_gates,
                 )
+                if actual_dispatch_recorder is not None:
+                    actual_dispatch_recorder(adapter_name or "")
                 try:
                     result = adapter(payload)
                 except ScientificAgentTypedFailure as exc:

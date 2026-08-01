@@ -1,0 +1,62 @@
+{
+  "additionalProperties": false,
+  "description": "One exact current local output accepted by the Executor verifier.",
+  "properties": {
+    "artifact_id": {
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "relative_path": {
+      "title": "Relative Path",
+      "type": "string"
+    },
+    "content_sha256": {
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "size_bytes": {
+      "maximum": 2147483648,
+      "minimum": 0,
+      "title": "Size Bytes",
+      "type": "integer"
+    },
+    "producer_task_id": {
+      "title": "Producer Task Id",
+      "type": "string"
+    },
+    "verification_class": {
+      "title": "Verification Class",
+      "type": "string"
+    },
+    "verifier_version": {
+      "title": "Verifier Version",
+      "type": "string"
+    },
+    "verifier_digest": {
+      "title": "Verifier Digest",
+      "type": "string"
+    },
+    "execution_record_id": {
+      "default": "",
+      "title": "Execution Record Id",
+      "type": "string"
+    },
+    "execution_record_digest": {
+      "default": "",
+      "title": "Execution Record Digest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "artifact_id",
+    "relative_path",
+    "content_sha256",
+    "size_bytes",
+    "producer_task_id",
+    "verification_class",
+    "verifier_version",
+    "verifier_digest"
+  ],
+  "title": "AgentHarnessVerifiedOutputBinding",
+  "type": "object"
+}

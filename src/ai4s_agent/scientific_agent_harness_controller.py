@@ -21,7 +21,8 @@ from typing import Any, Callable, Mapping
 from ai4s_agent._utils import now_iso
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.harness_tracing import HarnessTracer, NoopHarnessTracer
-from ai4s_agent.resource_profiles import build_transfer_manifest
+from ai4s_agent.oled_scientific_agent_source_evidence import read_dispatch_receipts
+from ai4s_agent.resource_profiles import build_transfer_manifest_from_payloads
 from ai4s_agent.schemas import (
     AgentHarnessAuthorityClass,
     AgentHarnessControllerAction,
@@ -37,7 +38,10 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerStatus,
     AgentHarnessControllerTaskSlot,
     AgentHarnessGateApprovalRequest,
+    AgentHarnessLocalDispatchReceipt,
+    AgentHarnessLocalExecutionPublication,
     AgentHarnessRemoteApprovalRequest,
+    AgentHarnessVerifiedOutputBinding,
     AgentPermissionOutcome,
     AgentPermissionPhase,
     AgentPlanAuthorization,
@@ -124,6 +128,7 @@ _POLICY_MATERIAL: Mapping[str, Any] = {
             "REMOTE_REQUEST_PREPARED",
             "REMOTE_REQUEST_READY",
             "TASK_COMPLETED",
+            "TASK_ADOPTED",
             "TASK_INPUTS_UNAVAILABLE",
             "TERMINAL_OBSERVED",
         }
@@ -196,6 +201,39 @@ class AgentHarnessControllerStore:
         lock = scope_root / "scope.lock"
         if lock.is_symlink():
             raise ScientificAgentHarnessControllerError("Controller scope lock is unsafe")
+        with _CONTROLLER_REQUEST_LOCKS[str(lock.resolve())], _exclusive_process_lock(lock):
+            yield
+
+    @contextmanager
+    def execution_session(
+        self,
+        *,
+        project_id: str,
+        controller_execution_id: str,
+    ):
+        """Serialize every mutating operation for one Controller execution.
+
+        Callers acquire this after the create-only start-intent scope lock and
+        before any client-request lock.  Keeping the lock through immutable
+        receipt publication prevents different request IDs and operations from
+        selecting the same receipt predecessor or repeating one side effect.
+        """
+
+        project = _safe_scope_id(project_id, field="project_id")
+        execution_id = _safe_scope_id(
+            controller_execution_id,
+            field="controller_execution_id",
+        )
+        control = self.control_store._control_root(project_id=project, create=True)
+        if control is None:  # pragma: no cover
+            raise ScientificAgentHarnessControllerError("Controller storage unavailable")
+        root = self._directory(control, "controller_execution_locks")
+        execution_root = self._directory(root, execution_id)
+        lock = execution_root / "controller_execution.lock"
+        if lock.is_symlink():
+            raise ScientificAgentHarnessControllerError(
+                "Controller execution lock is unsafe"
+            )
         with _CONTROLLER_REQUEST_LOCKS[str(lock.resolve())], _exclusive_process_lock(lock):
             yield
 
@@ -383,89 +421,107 @@ class ScientificAgentHarnessController:
                 project_id=project_id,
                 operation="create",
                 scope_id=scope,
-            ), self.requests.request_session(
-                project_id=project_id,
-                operation="create",
-                scope_id=scope,
-                client_request_id=request.client_request_id,
-                request_digest=request_digest,
-            ) as session:
-                marker = self.requests.read_marker(session.request_dir / "execution.json")
-                if marker is not None:
-                    execution = self.verify_execution(
-                        project_id=project_id,
-                        controller_execution_id=str(marker.get("controller_execution_id") or ""),
+            ):
+                publish_execution = False
+                existing = self.control_store.list_harness_controller_executions(
+                    project_id=project_id,
+                    start_intent_id=start_intent_id,
+                )
+                if len(existing) > 1:
+                    raise ScientificAgentHarnessControllerVerificationError(
+                        "start intent has multiple Controller executions"
                     )
+                if existing:
+                    execution = existing[0]
+                    if (
+                        execution.request_digest != request_digest
+                        or execution.client_request_id != request.client_request_id
+                        or execution.actor != actor
+                        or execution.actor_source != actor_source
+                    ):
+                        raise ScientificAgentHarnessControllerConflict(
+                            "start intent is already consumed by another request"
+                        )
                 else:
-                    existing = self.control_store.list_harness_controller_executions(
+                    intent = self.authorization_service.verify_start_intent(
                         project_id=project_id,
                         start_intent_id=start_intent_id,
+                        verify_current=True,
                     )
-                    if len(existing) > 1:
-                        raise ScientificAgentHarnessControllerVerificationError(
-                            "start intent has multiple Controller executions"
+                    if intent.start_intent_digest != request.expected_start_intent_digest:
+                        raise ScientificAgentHarnessControllerConflict(
+                            "start intent digest does not match the current authority"
                         )
-                    if existing:
-                        execution = existing[0]
-                        if (
-                            execution.request_digest != request_digest
-                            or execution.client_request_id != request.client_request_id
-                            or execution.actor != actor
-                            or execution.actor_source != actor_source
+                    authorization = self.authorization_service.verify_authorization(
+                        project_id=project_id,
+                        authorization_id=intent.authorization_id,
+                        verify_current=True,
+                    )
+                    publication = self.proposal_store.read(
+                        project_id=project_id,
+                        proposal_id=intent.proposal_id,
+                        verify_current=True,
+                    )
+                    permission = self.control_store.read_permission_decision(
+                        project_id=project_id,
+                        decision_id=intent.permission_decision_id,
+                    )
+                    execution = self._build_execution(
+                        intent=intent,
+                        authorization=authorization,
+                        publication=publication,
+                        permission=permission,
+                        actor=actor,
+                        actor_source=actor_source,
+                        client_request_id=request.client_request_id,
+                        request_digest=request_digest,
+                        created_at=self.clock(),
+                    )
+                    publish_execution = True
+                with self.requests.execution_session(
+                    project_id=project_id,
+                    controller_execution_id=execution.controller_execution_id,
+                ):
+                    if publish_execution:
+                        self.control_store.publish_harness_controller_execution(
+                            execution
+                        )
+                    execution = self.verify_execution(
+                        project_id=project_id,
+                        controller_execution_id=execution.controller_execution_id,
+                    )
+                    with self.requests.request_session(
+                        project_id=project_id,
+                        operation="create",
+                        scope_id=scope,
+                        client_request_id=request.client_request_id,
+                        request_digest=request_digest,
+                    ) as session:
+                        marker = self.requests.read_marker(
+                            session.request_dir / "execution.json"
+                        )
+                        if marker is not None and (
+                            marker.get("controller_execution_id")
+                            != execution.controller_execution_id
+                            or marker.get("controller_execution_digest")
+                            != execution.execution_digest
                         ):
                             raise ScientificAgentHarnessControllerConflict(
-                                "start intent is already consumed by another request"
+                                "Controller create checkpoint authority mismatch"
                             )
-                        execution = self.verify_execution(
-                            project_id=project_id,
-                            controller_execution_id=execution.controller_execution_id,
+                        self.requests.write_marker(
+                            session,
+                            filename="execution.json",
+                            status="EXECUTION_COMMITTED",
+                            values={
+                                "controller_execution_id": execution.controller_execution_id,
+                                "controller_execution_digest": execution.execution_digest,
+                            },
                         )
-                    else:
-                        intent = self.authorization_service.verify_start_intent(
-                            project_id=project_id,
-                            start_intent_id=start_intent_id,
-                            verify_current=True,
+                        return self._advance_in_session(
+                            execution=execution,
+                            session=session,
                         )
-                        if intent.start_intent_digest != request.expected_start_intent_digest:
-                            raise ScientificAgentHarnessControllerConflict(
-                                "start intent digest does not match the current authority"
-                            )
-                        authorization = self.authorization_service.verify_authorization(
-                            project_id=project_id,
-                            authorization_id=intent.authorization_id,
-                            verify_current=True,
-                        )
-                        publication = self.proposal_store.read(
-                            project_id=project_id,
-                            proposal_id=intent.proposal_id,
-                            verify_current=True,
-                        )
-                        permission = self.control_store.read_permission_decision(
-                            project_id=project_id,
-                            decision_id=intent.permission_decision_id,
-                        )
-                        execution = self._build_execution(
-                            intent=intent,
-                            authorization=authorization,
-                            publication=publication,
-                            permission=permission,
-                            actor=actor,
-                            actor_source=actor_source,
-                            client_request_id=request.client_request_id,
-                            request_digest=request_digest,
-                            created_at=self.clock(),
-                        )
-                        self.control_store.publish_harness_controller_execution(execution)
-                    self.requests.write_marker(
-                        session,
-                        filename="execution.json",
-                        status="EXECUTION_COMMITTED",
-                        values={
-                            "controller_execution_id": execution.controller_execution_id,
-                            "controller_execution_digest": execution.execution_digest,
-                        },
-                    )
-                return self._advance_in_session(execution=execution, session=session)
 
     def get(
         self, *, project_id: str, controller_execution_id: str
@@ -476,6 +532,33 @@ class ScientificAgentHarnessController:
         )
         return ControllerAdvanceResult(execution=execution, inspection=self._inspect(execution))
 
+    @contextmanager
+    def _verified_execution_session(
+        self,
+        *,
+        project_id: str,
+        controller_execution_id: str,
+        expected_execution_digest: str = "",
+    ):
+        """Pin the execution-wide lock before reading mutable run authority."""
+
+        with self.requests.execution_session(
+            project_id=project_id,
+            controller_execution_id=controller_execution_id,
+        ):
+            execution = self.verify_execution(
+                project_id=project_id,
+                controller_execution_id=controller_execution_id,
+            )
+            if (
+                expected_execution_digest
+                and execution.execution_digest != expected_execution_digest
+            ):
+                raise ScientificAgentHarnessControllerConflict(
+                    "Controller execution digest does not match the current authority"
+                )
+            yield execution
+
     def advance(
         self,
         *,
@@ -483,14 +566,6 @@ class ScientificAgentHarnessController:
         controller_execution_id: str,
         request: AgentHarnessControllerAdvanceRequest,
     ) -> ControllerAdvanceResult:
-        execution = self.verify_execution(
-            project_id=project_id,
-            controller_execution_id=controller_execution_id,
-        )
-        if execution.execution_digest != request.expected_controller_execution_digest:
-            raise ScientificAgentHarnessControllerConflict(
-                "Controller execution digest does not match the current authority"
-            )
         request_digest = self._request_digest(
             project_id=project_id,
             operation="advance",
@@ -499,9 +574,13 @@ class ScientificAgentHarnessController:
         )
         with self.tracer.start_span(
             "controller.advance",
-            attributes={"controller_execution_id": execution.controller_execution_id},
+            attributes={"controller_execution_id": controller_execution_id},
         ):
-            with self.requests.request_session(
+            with self._verified_execution_session(
+                project_id=project_id,
+                controller_execution_id=controller_execution_id,
+                expected_execution_digest=request.expected_controller_execution_digest,
+            ) as execution, self.requests.request_session(
                 project_id=project_id,
                 operation="advance",
                 scope_id=self._scope_id("advance", controller_execution_id),
@@ -519,10 +598,6 @@ class ScientificAgentHarnessController:
         request: AgentHarnessGateApprovalRequest,
         actor: str,
     ) -> ControllerAdvanceResult:
-        execution = self.verify_execution(
-            project_id=project_id,
-            controller_execution_id=controller_execution_id,
-        )
         request_digest = self._request_digest(
             project_id=project_id,
             operation="gate-approval",
@@ -530,7 +605,10 @@ class ScientificAgentHarnessController:
             request=request.model_dump(mode="json"),
             actor=actor,
         )
-        with self.requests.request_session(
+        with self._verified_execution_session(
+            project_id=project_id,
+            controller_execution_id=controller_execution_id,
+        ) as execution, self.requests.request_session(
             project_id=project_id,
             operation="gate-approval",
             scope_id=self._scope_id("gate-approval", f"{controller_execution_id}:{gate_id}"),
@@ -596,10 +674,6 @@ class ScientificAgentHarnessController:
         request: AgentHarnessRemoteApprovalRequest,
         actor: str,
     ) -> ControllerAdvanceResult:
-        execution = self.verify_execution(
-            project_id=project_id,
-            controller_execution_id=controller_execution_id,
-        )
         request_digest = self._request_digest(
             project_id=project_id,
             operation="remote-approval",
@@ -607,7 +681,10 @@ class ScientificAgentHarnessController:
             request=request.model_dump(mode="json"),
             actor=actor,
         )
-        with self.requests.request_session(
+        with self._verified_execution_session(
+            project_id=project_id,
+            controller_execution_id=controller_execution_id,
+        ) as execution, self.requests.request_session(
             project_id=project_id,
             operation="remote-approval",
             scope_id=self._scope_id("remote-approval", controller_execution_id),
@@ -666,16 +743,17 @@ class ScientificAgentHarnessController:
         controller_execution_id: str,
         request: AgentHarnessControllerAdvanceRequest,
     ) -> ControllerAdvanceResult:
-        execution = self._verified_request_execution(
-            project_id, controller_execution_id, request
-        )
         request_digest = self._request_digest(
             project_id=project_id,
             operation="cancel",
             scope_id=controller_execution_id,
             request=request.model_dump(mode="json"),
         )
-        with self.requests.request_session(
+        with self._verified_execution_session(
+            project_id=project_id,
+            controller_execution_id=controller_execution_id,
+            expected_execution_digest=request.expected_controller_execution_digest,
+        ) as execution, self.requests.request_session(
             project_id=project_id,
             operation="cancel",
             scope_id=self._scope_id("cancel", controller_execution_id),
@@ -696,16 +774,17 @@ class ScientificAgentHarnessController:
         controller_execution_id: str,
         request: AgentHarnessControllerAdvanceRequest,
     ) -> ControllerAdvanceResult:
-        execution = self._verified_request_execution(
-            project_id, controller_execution_id, request
-        )
         request_digest = self._request_digest(
             project_id=project_id,
             operation="recover",
             scope_id=controller_execution_id,
             request=request.model_dump(mode="json"),
         )
-        with self.requests.request_session(
+        with self._verified_execution_session(
+            project_id=project_id,
+            controller_execution_id=controller_execution_id,
+            expected_execution_digest=request.expected_controller_execution_digest,
+        ) as execution, self.requests.request_session(
             project_id=project_id,
             operation="recover",
             scope_id=self._scope_id("recover", controller_execution_id),
@@ -978,6 +1057,37 @@ class ScientificAgentHarnessController:
                 state="verified",
             ),
         ]
+        run_dir = self.storage.run_dir(execution.project_id, execution.run_id)
+        for binding in authorization.artifact_bindings:
+            relative = registry.get(binding.artifact_id)
+            if not relative:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "authorized Controller input is no longer registered"
+                )
+            source = _safe_artifact_path(
+                run_dir,
+                _safe_relative_artifact_path(relative),
+                label="authorized Controller input",
+            )
+            payload, present = _read_stable_file(
+                source,
+                label="authorized Controller input",
+                max_bytes=2 * 1024 * 1024 * 1024,
+            )
+            current_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+            if not present or current_digest != binding.content_digest:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "authorized Controller input content changed"
+                )
+            facts.append(
+                AgentHarnessControllerInspectionFact(
+                    name="authorized_input_artifact",
+                    authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+                    source_id=binding.artifact_id,
+                    source_digest=current_digest,
+                    state="verified",
+                )
+            )
         if stage is not None:
             facts.append(
                 AgentHarnessControllerInspectionFact(
@@ -991,7 +1101,14 @@ class ScientificAgentHarnessController:
         completed = 0
         for slot in execution.task_slots:
             task = authorization.run_plan.tasks[slot.planned_task_index]
-            if self._local_task_completed(slot, task, stage, registry, receipts):
+            if self._local_task_completed(
+                execution,
+                slot,
+                task,
+                stage,
+                registry,
+                receipts,
+            ):
                 completed += 1
                 continue
             if slot.execution_route == "remote_execution_service":
@@ -1036,6 +1153,54 @@ class ScientificAgentHarnessController:
             if stage.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
                 status = AgentHarnessControllerStatus.FAILED if stage.status == RunStatus.FAILED else AgentHarnessControllerStatus.CANCELLED
                 return self._inspection(execution, status, slot, AgentHarnessControllerAction.STOP_TASK_TERMINAL, facts)
+            if stage.status == RunStatus.SUCCEEDED:
+                publications = [
+                    item
+                    for item in self.control_store.list_harness_local_execution_publications(
+                        project_id=execution.project_id,
+                        controller_execution_id=execution.controller_execution_id,
+                    )
+                    if item.slot_id == slot.slot_id
+                    and item.task_id == slot.task_id
+                    and item.attempt_ordinal == slot.attempt
+                ]
+                dispatches = [
+                    item
+                    for item in self.control_store.list_harness_local_dispatch_receipts(
+                        project_id=execution.project_id,
+                        controller_execution_id=execution.controller_execution_id,
+                    )
+                    if item.slot_id == slot.slot_id
+                    and item.task_id == slot.task_id
+                    and item.attempt_ordinal == slot.attempt
+                ]
+                if dispatches and not publications:
+                    return self._inspection(
+                        execution,
+                        AgentHarnessControllerStatus.RECOVERY_REQUIRED,
+                        slot,
+                        AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+                        facts,
+                    )
+                if len(publications) > 1:
+                    raise ScientificAgentHarnessControllerVerificationError(
+                        "local task has conflicting execution publications"
+                    )
+                if publications:
+                    self._verify_local_execution_publication(
+                        execution=execution,
+                        slot=slot,
+                        publication=publications[0],
+                    )
+                else:
+                    self._verified_local_outputs(execution=execution, slot=slot)
+                return self._inspection(
+                    execution,
+                    AgentHarnessControllerStatus.ACTIVE,
+                    slot,
+                    AgentHarnessControllerAction.ADOPT_COMPLETED_TASK,
+                    facts,
+                )
         if spec.gates:
             if stage is None or stage.stage != task.task_id or stage.status != RunStatus.WAITING_USER:
                 return self._inspection(execution, AgentHarnessControllerStatus.ACTIVE, slot, AgentHarnessControllerAction.PREPARE_LOCAL_GATE, facts)
@@ -1053,12 +1218,78 @@ class ScientificAgentHarnessController:
         remote = self._remote_inspection_or_none(execution, slot)
         if remote is None:
             return self._inspection(execution, AgentHarnessControllerStatus.ACTIVE, slot, AgentHarnessControllerAction.PREPARE_REMOTE_REQUEST, facts)
-        state = str(remote["state"]["status"])
+        state = str(remote["effective_status"])
         request = remote["request"]
         facts.append(AgentHarnessControllerInspectionFact(
             name="remote_request", authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
-            source_id=str(request["request_id"]), source_digest=str(request["request_sha256"]), state=state.lower()
+            source_id=str(request["request_id"]),
+            source_digest=str(remote["request_digest"]),
+            state="verified",
         ))
+        slot_binding = remote.get("slot_binding")
+        if isinstance(slot_binding, dict):
+            facts.append(
+                AgentHarnessControllerInspectionFact(
+                    name="remote_slot_binding",
+                    authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+                    source_id=str(slot_binding["slot_id"]),
+                    source_digest=str(remote["slot_binding_digest"]),
+                    state="verified",
+                )
+            )
+        approval = remote.get("approval")
+        if isinstance(approval, dict):
+            facts.append(
+                AgentHarnessControllerInspectionFact(
+                    name="remote_approval",
+                    authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+                    source_id=f"remote-approval-{slot.slot_id}",
+                    source_digest=str(remote["approval_digest"]),
+                    state="approved",
+                )
+            )
+        remote_stage = remote.get("slot_stage_state")
+        if isinstance(remote_stage, dict):
+            facts.append(
+                AgentHarnessControllerInspectionFact(
+                    name="remote_stage_state",
+                    authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+                    source_id=f"remote-stage-{slot.slot_id}",
+                    source_digest=str(remote["slot_stage_digest"]),
+                    state=str(remote_stage["status"]).lower(),
+                )
+            )
+        publication = remote.get("publication")
+        if isinstance(publication, dict):
+            facts.append(
+                AgentHarnessControllerInspectionFact(
+                    name="remote_publication",
+                    authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+                    source_id=f"remote-publication-{slot.slot_id}",
+                    source_digest=str(remote["publication_digest"]),
+                    state="verified",
+                )
+            )
+        transport_state = remote.get("transport_state")
+        if isinstance(transport_state, dict):
+            facts.append(
+                AgentHarnessControllerInspectionFact(
+                    name="remote_transport_state",
+                    authority_class=AgentHarnessAuthorityClass.OBSERVATIONAL,
+                    source_id=f"remote-transport-{slot.slot_id}",
+                    source_digest=str(remote["transport_state_digest"]),
+                    state=str(transport_state["status"]).lower(),
+                )
+            )
+        facts.append(
+            AgentHarnessControllerInspectionFact(
+                name="remote_effective_status",
+                authority_class=AgentHarnessAuthorityClass.DERIVED,
+                source_id=f"remote-status-{slot.slot_id}",
+                source_digest=str(remote["status_source_roster_digest"]),
+                state=state.lower(),
+            )
+        )
         if state == "WAITING_APPROVAL":
             return self._inspection(execution, AgentHarnessControllerStatus.WAITING_REMOTE_APPROVAL, slot, AgentHarnessControllerAction.WAIT_FOR_REMOTE_APPROVAL, facts)
         if state == "APPROVED":
@@ -1087,37 +1318,80 @@ class ScientificAgentHarnessController:
                 decision_id=str(decision_marker.get("decision_id") or ""),
             )
         else:
-            inspection = self._inspect(execution)
-            predecessor = self._latest_receipt(execution)
-            sources = self._bindings_from_facts(inspection.facts)
-            slot = None if inspection.current_task_index is None else execution.task_slots[inspection.current_task_index]
-            decision = AgentHarnessControllerDecision(
-                controller_execution_id=execution.controller_execution_id,
-                controller_execution_digest=execution.execution_digest,
-                client_request_id=session.client_request_id,
-                inspection_digest=inspection.inspection_digest,
-                action_kind=inspection.next_action,
-                task_id=slot.task_id if slot else "",
-                task_index=slot.planned_task_index if slot else None,
-                attempt_ordinal=slot.attempt if slot else 0,
-                slot_id=slot.slot_id if slot else "",
-                source_bindings=sources,
-                source_bindings_digest=_agent_digest([item.model_dump(mode="json") for item in sources]),
-                predecessor_receipt_id=predecessor.receipt_id if predecessor else "",
-                reason_codes=[self._decision_reason(inspection.next_action)],
-                created_at=self.clock(),
-                executable=inspection.next_action not in {
-                    AgentHarnessControllerAction.WAIT_FOR_GATE,
-                    AgentHarnessControllerAction.WAIT_FOR_REMOTE_APPROVAL,
-                    AgentHarnessControllerAction.RECOVER_REMOTE_TASK,
-                },
-            )
-            self.control_store.publish_harness_controller_decision(
-                project_id=execution.project_id, decision=decision
-            )
+            pending = self._unreceipted_decisions(execution)
+            if len(pending) > 1:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "multiple Controller decisions lack receipts"
+                )
+            if pending:
+                decision = pending[0]
+            else:
+                inspection = self._inspect(execution)
+                predecessor = self._latest_receipt(execution)
+                sources = self._bindings_from_facts(inspection.facts)
+                slot = None if inspection.current_task_index is None else execution.task_slots[inspection.current_task_index]
+                decision = AgentHarnessControllerDecision(
+                    controller_execution_id=execution.controller_execution_id,
+                    controller_execution_digest=execution.execution_digest,
+                    client_request_id=session.client_request_id,
+                    inspection_digest=inspection.inspection_digest,
+                    action_kind=inspection.next_action,
+                    task_id=slot.task_id if slot else "",
+                    task_index=slot.planned_task_index if slot else None,
+                    attempt_ordinal=slot.attempt if slot else 0,
+                    slot_id=slot.slot_id if slot else "",
+                    source_bindings=sources,
+                    source_bindings_digest=_agent_digest([item.model_dump(mode="json") for item in sources]),
+                    predecessor_receipt_id=predecessor.receipt_id if predecessor else "",
+                    reason_codes=[self._decision_reason(inspection.next_action)],
+                    created_at=self.clock(),
+                    executable=inspection.next_action not in {
+                        AgentHarnessControllerAction.WAIT_FOR_GATE,
+                        AgentHarnessControllerAction.WAIT_FOR_REMOTE_APPROVAL,
+                        AgentHarnessControllerAction.RECOVER_REMOTE_TASK,
+                    },
+                )
+                self.control_store.publish_harness_controller_decision(
+                    project_id=execution.project_id, decision=decision
+                )
             self.requests.write_marker(
                 session, filename="decision.json", status="DECISION_COMMITTED",
                 values={"decision_id": decision.decision_id, "decision_digest": decision.decision_digest}
+            )
+        existing_receipts = [
+            item
+            for item in self.control_store.list_harness_controller_action_receipts(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            )
+            if item.decision_id == decision.decision_id
+        ]
+        if existing_receipts:
+            if len(existing_receipts) != 1:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "Controller decision has conflicting receipts"
+                )
+            receipt = existing_receipts[0]
+            self.requests.write_marker(
+                session,
+                filename="side_effect_observed.json",
+                status="SIDE_EFFECT_OBSERVED",
+                values={"receipt": receipt.model_dump(mode="json")},
+            )
+            self.requests.write_marker(
+                session,
+                filename="receipt.json",
+                status="RECEIPT_COMMITTED",
+                values={
+                    "receipt_id": receipt.receipt_id,
+                    "receipt_digest": receipt.receipt_digest,
+                },
+            )
+            return ControllerAdvanceResult(
+                execution,
+                self._inspect(execution),
+                decision,
+                receipt,
             )
         effect_marker = self.requests.read_marker(
             session.request_dir / "side_effect_observed.json"
@@ -1165,7 +1439,15 @@ class ScientificAgentHarnessController:
                     },
                 )
                 try:
-                    receipt = self._execute_decision(execution, decision)
+                    current_inspection = self._inspect(execution)
+                    receipt = self._execute_decision(
+                        execution,
+                        decision,
+                        reconcile_only=not self._decision_is_fresh(
+                            decision,
+                            current_inspection,
+                        ),
+                    )
                 except Exception:
                     span.record_error("CONTROLLER_ACTION_FAILED")
                     raise
@@ -1223,55 +1505,67 @@ class ScientificAgentHarnessController:
                     "Controller control request is bound to another action"
                 )
         else:
-            inspection = self._inspect(execution)
-            if require_recovery and inspection.status != AgentHarnessControllerStatus.RECOVERY_REQUIRED:
-                raise ScientificAgentHarnessControllerConflict("Controller is not in recovery")
-            if (
-                not require_recovery
-                and inspection.status
-                in {
-                    AgentHarnessControllerStatus.SUCCEEDED,
-                    AgentHarnessControllerStatus.FAILED,
-                    AgentHarnessControllerStatus.CANCELLED,
-                }
-            ):
-                raise ScientificAgentHarnessControllerConflict(
-                    "terminal Controller execution cannot be cancelled"
+            pending = self._unreceipted_decisions(execution)
+            if len(pending) > 1:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "multiple Controller decisions lack receipts"
                 )
-            slot = self._current_slot(execution, inspection)
-            if slot.execution_route != "remote_execution_service":
-                if require_recovery:
-                    raise ScientificAgentHarnessControllerRecoveryRequired(
-                        "local unknown outcomes cannot be rerun automatically"
+            if pending:
+                decision = pending[0]
+                if decision.action_kind != action:
+                    raise ScientificAgentHarnessControllerConflict(
+                        "another Controller action awaits reconciliation"
                     )
-                raise ScientificAgentHarnessControllerConflict(
-                    "only the current exact remote slot can be cancelled"
+            else:
+                inspection = self._inspect(execution)
+                if require_recovery and inspection.status != AgentHarnessControllerStatus.RECOVERY_REQUIRED:
+                    raise ScientificAgentHarnessControllerConflict("Controller is not in recovery")
+                if (
+                    not require_recovery
+                    and inspection.status
+                    in {
+                        AgentHarnessControllerStatus.SUCCEEDED,
+                        AgentHarnessControllerStatus.FAILED,
+                        AgentHarnessControllerStatus.CANCELLED,
+                    }
+                ):
+                    raise ScientificAgentHarnessControllerConflict(
+                        "terminal Controller execution cannot be cancelled"
+                    )
+                slot = self._current_slot(execution, inspection)
+                if slot.execution_route != "remote_execution_service":
+                    if require_recovery:
+                        raise ScientificAgentHarnessControllerRecoveryRequired(
+                            "local unknown outcomes cannot be rerun automatically"
+                        )
+                    raise ScientificAgentHarnessControllerConflict(
+                        "only the current exact remote slot can be cancelled"
+                    )
+                predecessor = self._latest_receipt(execution)
+                sources = self._bindings_from_facts(inspection.facts)
+                decision = AgentHarnessControllerDecision(
+                    controller_execution_id=execution.controller_execution_id,
+                    controller_execution_digest=execution.execution_digest,
+                    client_request_id=session.client_request_id,
+                    inspection_digest=inspection.inspection_digest,
+                    action_kind=action,
+                    task_id=slot.task_id,
+                    task_index=slot.planned_task_index,
+                    attempt_ordinal=slot.attempt,
+                    slot_id=slot.slot_id,
+                    source_bindings=sources,
+                    source_bindings_digest=_agent_digest(
+                        [item.model_dump(mode="json") for item in sources]
+                    ),
+                    predecessor_receipt_id=predecessor.receipt_id if predecessor else "",
+                    reason_codes=[self._decision_reason(action)],
+                    created_at=self.clock(),
+                    executable=True,
                 )
-            predecessor = self._latest_receipt(execution)
-            sources = self._bindings_from_facts(inspection.facts)
-            decision = AgentHarnessControllerDecision(
-                controller_execution_id=execution.controller_execution_id,
-                controller_execution_digest=execution.execution_digest,
-                client_request_id=session.client_request_id,
-                inspection_digest=inspection.inspection_digest,
-                action_kind=action,
-                task_id=slot.task_id,
-                task_index=slot.planned_task_index,
-                attempt_ordinal=slot.attempt,
-                slot_id=slot.slot_id,
-                source_bindings=sources,
-                source_bindings_digest=_agent_digest(
-                    [item.model_dump(mode="json") for item in sources]
-                ),
-                predecessor_receipt_id=predecessor.receipt_id if predecessor else "",
-                reason_codes=[self._decision_reason(action)],
-                created_at=self.clock(),
-                executable=True,
-            )
-            self.control_store.publish_harness_controller_decision(
-                project_id=execution.project_id,
-                decision=decision,
-            )
+                self.control_store.publish_harness_controller_decision(
+                    project_id=execution.project_id,
+                    decision=decision,
+                )
             self.requests.write_marker(
                 session,
                 filename="decision.json",
@@ -1280,6 +1574,41 @@ class ScientificAgentHarnessController:
                     "decision_id": decision.decision_id,
                     "decision_digest": decision.decision_digest,
                 },
+            )
+        existing_receipts = [
+            item
+            for item in self.control_store.list_harness_controller_action_receipts(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            )
+            if item.decision_id == decision.decision_id
+        ]
+        if existing_receipts:
+            if len(existing_receipts) != 1:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "Controller control decision has conflicting receipts"
+                )
+            receipt = existing_receipts[0]
+            self.requests.write_marker(
+                session,
+                filename="side_effect_observed.json",
+                status="SIDE_EFFECT_OBSERVED",
+                values={"receipt": receipt.model_dump(mode="json")},
+            )
+            self.requests.write_marker(
+                session,
+                filename="receipt.json",
+                status="RECEIPT_COMMITTED",
+                values={
+                    "receipt_id": receipt.receipt_id,
+                    "receipt_digest": receipt.receipt_digest,
+                },
+            )
+            return ControllerAdvanceResult(
+                execution=execution,
+                inspection=self._inspect(execution),
+                decision=decision,
+                receipt=receipt,
             )
         effect_marker = self.requests.read_marker(
             session.request_dir / "side_effect_observed.json"
@@ -1317,7 +1646,15 @@ class ScientificAgentHarnessController:
                     },
                 )
                 try:
-                    receipt = self._execute_decision(execution, decision)
+                    current_inspection = self._inspect(execution)
+                    receipt = self._execute_decision(
+                        execution,
+                        decision,
+                        reconcile_only=not self._decision_is_fresh(
+                            decision,
+                            current_inspection,
+                        ),
+                    )
                 except Exception:
                     span.record_error("CONTROLLER_ACTION_FAILED")
                     raise
@@ -1364,35 +1701,82 @@ class ScientificAgentHarnessController:
             receipt=receipt,
         )
 
-    def _execute_decision(self, execution: Any, decision: AgentHarnessControllerDecision) -> AgentHarnessControllerActionReceipt:
+    def _execute_decision(
+        self,
+        execution: Any,
+        decision: AgentHarnessControllerDecision,
+        *,
+        reconcile_only: bool = False,
+    ) -> AgentHarnessControllerActionReceipt:
         before_stage = self.storage.read_stage_state(execution.project_id, execution.run_id)
         before_registry = self.storage.read_artifact_registry(execution.project_id, execution.run_id)
         slot = execution.task_slots[decision.task_index] if decision.task_index is not None else None
+        before_remote = (
+            self._remote_inspection_or_none(execution, slot)
+            if slot is not None
+            and slot.execution_route == "remote_execution_service"
+            else None
+        )
         action = decision.action_kind
         result: dict[str, Any] = {}
         outcome = AgentHarnessControllerReceiptOutcome.COMMITTED
         execution_started = False
         dispatch_occurred = False
+        local_dispatch_receipts: list[AgentHarnessLocalDispatchReceipt] = []
+        local_publication: AgentHarnessLocalExecutionPublication | None = None
         reason = self._receipt_reason(action)
-        if action in {AgentHarnessControllerAction.WAIT_FOR_GATE, AgentHarnessControllerAction.WAIT_FOR_REMOTE_APPROVAL}:
+        if not decision.executable:
+            # Ordinary advance may observe a wait or recovery boundary, but it
+            # must never cross an authority boundary explicitly marked
+            # non-executable.  The immutable WAITING receipt keeps the
+            # Controller chain linear while /recover remains the only route
+            # that may invoke lifecycle recovery.
             outcome = AgentHarnessControllerReceiptOutcome.WAITING
         elif action == AgentHarnessControllerAction.PREPARE_LOCAL_GATE:
             assert slot is not None
             current = self.storage.read_stage_state(execution.project_id, execution.run_id)
             if current is not None and current.stage == slot.task_id and current.status == RunStatus.WAITING_USER:
                 outcome = AgentHarnessControllerReceiptOutcome.RECONCILED
+            elif reconcile_only:
+                raise ScientificAgentHarnessControllerConflict(
+                    "stale local Gate decision has no exact committed effect"
+                )
             else:
                 result = self._prepare_local_gate(execution, slot)
         elif action == AgentHarnessControllerAction.EXECUTE_LOCAL_TASK:
             assert slot is not None
-            if self._local_outputs_committed(execution, slot):
+            publications = self._local_publications_for_decision(execution, decision)
+            local_dispatch_receipts = self._local_dispatch_receipts_for_decision(
+                execution,
+                decision,
+            )
+            if publications:
+                if len(publications) != 1 or len(local_dispatch_receipts) != 1:
+                    raise ScientificAgentHarnessControllerVerificationError(
+                        "local completion authority is conflicting"
+                    )
+                local_publication = publications[0]
+                self._verify_local_execution_publication(
+                    execution=execution,
+                    slot=slot,
+                    publication=local_publication,
+                )
                 outcome = AgentHarnessControllerReceiptOutcome.RECONCILED
+                execution_started = True
+                dispatch_occurred = True
+                reason = "TASK_COMPLETED"
+            elif local_dispatch_receipts:
+                raise ScientificAgentHarnessControllerRecoveryRequired(
+                    "local adapter dispatch lacks a verified completion publication"
+                )
+            elif reconcile_only:
+                raise ScientificAgentHarnessControllerConflict(
+                    "stale local execution decision has no verified effect"
+                )
             else:
                 current = self.storage.read_stage_state(execution.project_id, execution.run_id)
                 if current is not None and current.stage == slot.task_id and current.status == RunStatus.RUNNING:
                     raise ScientificAgentHarnessControllerRecoveryRequired("local task outcome is unknown")
-                execution_started = True
-                dispatch_occurred = True
                 with self.tracer.start_span(
                     "executor.local_task",
                     attributes={
@@ -1403,18 +1787,57 @@ class ScientificAgentHarnessController:
                         "execution_route": slot.execution_route,
                     },
                 ):
-                    result = self._execute_local(execution, slot)
+                    result = self._execute_local(execution, slot, decision)
+                local_dispatch_receipts = self._local_dispatch_receipts_for_decision(
+                    execution,
+                    decision,
+                )
+                execution_started = bool(local_dispatch_receipts)
+                dispatch_occurred = execution_started
                 if result.get("status") != RunStatus.SUCCEEDED.value:
                     outcome = AgentHarnessControllerReceiptOutcome.FAILED
                     reason = "LOCAL_TASK_FAILED"
                 else:
+                    publications = self._local_publications_for_decision(
+                        execution,
+                        decision,
+                    )
+                    if len(local_dispatch_receipts) != 1 or len(publications) != 1:
+                        raise ScientificAgentHarnessControllerVerificationError(
+                            "successful local task lacks exact dispatch and output evidence"
+                        )
+                    local_publication = publications[0]
+                    self._verify_local_execution_publication(
+                        execution=execution,
+                        slot=slot,
+                        publication=local_publication,
+                    )
                     reason = "TASK_COMPLETED"
+        elif action == AgentHarnessControllerAction.ADOPT_COMPLETED_TASK:
+            assert slot is not None
+            local_publication = self._publish_local_execution_publication(
+                execution=execution,
+                slot=slot,
+                decision=decision,
+                verification_mode="adopt_completed_task",
+            )
+            self._verify_local_execution_publication(
+                execution=execution,
+                slot=slot,
+                publication=local_publication,
+            )
+            outcome = AgentHarnessControllerReceiptOutcome.RECONCILED
+            reason = "TASK_ADOPTED"
         elif action == AgentHarnessControllerAction.PREPARE_REMOTE_REQUEST:
             assert slot is not None
             remote = self._remote_inspection_or_none(execution, slot)
             if remote is not None:
                 result = remote
                 outcome = AgentHarnessControllerReceiptOutcome.RECONCILED
+            elif reconcile_only:
+                raise ScientificAgentHarnessControllerConflict(
+                    "stale remote preparation decision has no exact request"
+                )
             else:
                 with self.tracer.start_span(
                     "remote.prepare",
@@ -1430,40 +1853,57 @@ class ScientificAgentHarnessController:
         elif action == AgentHarnessControllerAction.DISPATCH_REMOTE_TASK:
             assert slot is not None
             binding = self._remote_slot_binding(execution, slot)
-            execution_started = True
-            dispatch_occurred = True
-            with self.tracer.start_span(
-                "remote.dispatch",
-                attributes={
-                    "controller_execution_id": execution.controller_execution_id,
-                    "task_id": slot.task_id,
-                    "task_index": slot.planned_task_index,
-                    "attempt": slot.attempt,
-                    "slot_id": slot.slot_id,
-                },
-            ):
-                result = self.remote_executions.dispatch(
-                    project_id=execution.project_id, run_id=execution.run_id,
-                    request_sha256=binding.request_sha256, slot_id=slot.slot_id,
-                    expected_slot_binding_digest=binding.slot_binding_digest,
-                )
+            if reconcile_only:
+                result = self._remote_inspection(execution, slot)
+                if str(result["effective_status"]) in {
+                    "WAITING_APPROVAL",
+                    "APPROVED",
+                }:
+                    raise ScientificAgentHarnessControllerConflict(
+                        "stale remote dispatch decision has no dispatch evidence"
+                    )
+                outcome = AgentHarnessControllerReceiptOutcome.RECONCILED
+                execution_started = True
+                dispatch_occurred = True
+            else:
+                execution_started = True
+                dispatch_occurred = True
+                with self.tracer.start_span(
+                    "remote.dispatch",
+                    attributes={
+                        "controller_execution_id": execution.controller_execution_id,
+                        "task_id": slot.task_id,
+                        "task_index": slot.planned_task_index,
+                        "attempt": slot.attempt,
+                        "slot_id": slot.slot_id,
+                    },
+                ):
+                    result = self.remote_executions.dispatch(
+                        project_id=execution.project_id, run_id=execution.run_id,
+                        request_sha256=binding.request_sha256, slot_id=slot.slot_id,
+                        expected_slot_binding_digest=binding.slot_binding_digest,
+                    )
         elif action == AgentHarnessControllerAction.REFRESH_REMOTE_TASK:
             assert slot is not None
             binding = self._remote_slot_binding(execution, slot)
-            with self.tracer.start_span(
-                "remote.refresh",
-                attributes={
-                    "controller_execution_id": execution.controller_execution_id,
-                    "task_id": slot.task_id,
-                    "task_index": slot.planned_task_index,
-                    "attempt": slot.attempt,
-                    "slot_id": slot.slot_id,
-                },
-            ):
-                result = self.remote_executions.refresh(
-                    project_id=execution.project_id, run_id=execution.run_id,
-                    slot_id=slot.slot_id, expected_slot_binding_digest=binding.slot_binding_digest,
-                )
+            if reconcile_only:
+                result = self._remote_inspection(execution, slot)
+                outcome = AgentHarnessControllerReceiptOutcome.RECONCILED
+            else:
+                with self.tracer.start_span(
+                    "remote.refresh",
+                    attributes={
+                        "controller_execution_id": execution.controller_execution_id,
+                        "task_id": slot.task_id,
+                        "task_index": slot.planned_task_index,
+                        "attempt": slot.attempt,
+                        "slot_id": slot.slot_id,
+                    },
+                ):
+                    result = self.remote_executions.refresh(
+                        project_id=execution.project_id, run_id=execution.run_id,
+                        slot_id=slot.slot_id, expected_slot_binding_digest=binding.slot_binding_digest,
+                    )
         elif action == AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS:
             assert slot is not None
             result = self._remote_inspection(execution, slot)
@@ -1473,44 +1913,77 @@ class ScientificAgentHarnessController:
         elif action == AgentHarnessControllerAction.RECOVER_REMOTE_TASK:
             assert slot is not None
             binding = self._remote_slot_binding(execution, slot)
-            with self.tracer.start_span(
-                "remote.recover",
-                attributes={
-                    "controller_execution_id": execution.controller_execution_id,
-                    "task_id": slot.task_id,
-                    "task_index": slot.planned_task_index,
-                    "attempt": slot.attempt,
-                    "slot_id": slot.slot_id,
-                },
-            ):
-                result = self.remote_executions.recover(
-                    project_id=execution.project_id,
-                    run_id=execution.run_id,
-                    slot_id=slot.slot_id,
-                    expected_slot_binding_digest=binding.slot_binding_digest,
-                )
+            if reconcile_only:
+                result = self._remote_inspection(execution, slot)
+                if str(result["effective_status"]) == "RECOVERY_REQUIRED":
+                    raise ScientificAgentHarnessControllerConflict(
+                        "stale recovery decision has no completed recovery effect"
+                    )
+                outcome = AgentHarnessControllerReceiptOutcome.RECONCILED
+            else:
+                with self.tracer.start_span(
+                    "remote.recover",
+                    attributes={
+                        "controller_execution_id": execution.controller_execution_id,
+                        "task_id": slot.task_id,
+                        "task_index": slot.planned_task_index,
+                        "attempt": slot.attempt,
+                        "slot_id": slot.slot_id,
+                    },
+                ):
+                    result = self.remote_executions.recover(
+                        project_id=execution.project_id,
+                        run_id=execution.run_id,
+                        slot_id=slot.slot_id,
+                        expected_slot_binding_digest=binding.slot_binding_digest,
+                    )
             reason = "REMOTE_RECOVERY_ATTEMPTED"
         elif action == AgentHarnessControllerAction.CANCEL_EXECUTION:
             assert slot is not None
             binding = self._remote_slot_binding(execution, slot)
-            result = self.remote_executions.cancel(
-                project_id=execution.project_id,
-                run_id=execution.run_id,
-                request_sha256=binding.request_sha256,
-                slot_id=slot.slot_id,
-                expected_slot_binding_digest=binding.slot_binding_digest,
-            )
+            if reconcile_only:
+                result = self._remote_inspection(execution, slot)
+                if str(result["effective_status"]) not in {
+                    "CANCEL_REQUESTED",
+                    "CANCELLED",
+                    "FAILED",
+                    "SUCCEEDED",
+                }:
+                    raise ScientificAgentHarnessControllerConflict(
+                        "stale cancellation decision has no cancellation evidence"
+                    )
+                outcome = AgentHarnessControllerReceiptOutcome.RECONCILED
+            else:
+                result = self.remote_executions.cancel(
+                    project_id=execution.project_id,
+                    run_id=execution.run_id,
+                    request_sha256=binding.request_sha256,
+                    slot_id=slot.slot_id,
+                    expected_slot_binding_digest=binding.slot_binding_digest,
+                )
             reason = "REMOTE_EXECUTION_CANCELLED"
         elif action in {AgentHarnessControllerAction.STOP_TASK_TERMINAL, AgentHarnessControllerAction.STOP_GATE_REJECTED, AgentHarnessControllerAction.STOP_REMOTE_REJECTED}:
             outcome = AgentHarnessControllerReceiptOutcome.FAILED
             reason = "TERMINAL_OBSERVED"
         after_stage = self.storage.read_stage_state(execution.project_id, execution.run_id)
         after_registry = self.storage.read_artifact_registry(execution.project_id, execution.run_id)
+        after_remote = (
+            self._remote_inspection_or_none(execution, slot)
+            if slot is not None
+            and slot.execution_route == "remote_execution_service"
+            else None
+        )
         after_inspection = self._inspect(execution, verify_authority=False)
         sources = self._bindings_from_facts(after_inspection.facts)
-        remote_request = result.get("request") if isinstance(result, dict) else None
-        remote_approval = result.get("approval") if isinstance(result, dict) else None
-        remote_publication = result.get("publication") if isinstance(result, dict) else None
+        remote_request = (
+            result.get("request") if isinstance(result, dict) else None
+        ) or (after_remote or {}).get("request")
+        remote_approval = (
+            result.get("approval") if isinstance(result, dict) else None
+        ) or (after_remote or {}).get("approval")
+        remote_publication = (
+            result.get("publication") if isinstance(result, dict) else None
+        ) or (after_remote or {}).get("publication")
         gate_snapshot = self._stage_snapshot(after_stage, slot.task_id if slot else "") or self._stage_snapshot(
             before_stage, slot.task_id if slot else ""
         )
@@ -1530,12 +2003,42 @@ class ScientificAgentHarnessController:
             after_stage_digest=self._stage_digest(after_stage),
             before_artifact_registry_digest=_agent_digest(before_registry),
             after_artifact_registry_digest=_agent_digest(after_registry),
-            local_dispatch_receipt_ids=[],
+            local_dispatch_receipt_ids=[
+                item.executor_dispatch_receipt_id or item.dispatch_receipt_id
+                for item in local_dispatch_receipts
+            ],
+            verified_output_bindings=(
+                local_publication.verified_outputs if local_publication else []
+            ),
+            verified_output_bindings_digest=(
+                local_publication.verified_outputs_digest if local_publication else ""
+            ),
+            local_execution_publication_id=(
+                local_publication.publication_id if local_publication else ""
+            ),
+            local_execution_publication_digest=(
+                local_publication.publication_digest if local_publication else ""
+            ),
             remote_execution_slot_id=slot.slot_id if slot and slot.execution_route == "remote_execution_service" else "",
             remote_request_id=str((remote_request or {}).get("request_id") or ""),
             remote_request_sha256=str((remote_request or {}).get("request_sha256") or ""),
             remote_approval_digest=str((remote_approval or {}).get("approval_sha256") or ""),
             remote_publication_digest=str((remote_publication or {}).get("publication_sha256") or ""),
+            before_remote_stage_digest=str(
+                (before_remote or {}).get("slot_stage_digest") or ""
+            ),
+            after_remote_stage_digest=str(
+                (after_remote or {}).get("slot_stage_digest") or ""
+            ),
+            before_remote_state_digest=str(
+                (before_remote or {}).get("transport_state_digest") or ""
+            ),
+            after_remote_state_digest=str(
+                (after_remote or {}).get("transport_state_digest") or ""
+            ),
+            remote_status_source_roster_digest=str(
+                (after_remote or {}).get("status_source_roster_digest") or ""
+            ),
             gate_snapshot_id=str(gate_snapshot.get("snapshot_id") or ""),
             gate_snapshot_hash=str(gate_snapshot.get("snapshot_digest") or ""),
             gate_decision_digest=self._gate_decision_roster_digest(execution, slot, gate_snapshot),
@@ -1564,7 +2067,12 @@ class ScientificAgentHarnessController:
             expected_output_contract_digest=slot.output_contract_digest,
         )
 
-    def _execute_local(self, execution: Any, slot: Any) -> dict[str, Any]:
+    def _execute_local(
+        self,
+        execution: Any,
+        slot: Any,
+        decision: AgentHarnessControllerDecision,
+    ) -> dict[str, Any]:
         authorization = self._authorization(execution, verify_current=False)
         options = authorization.compiled_task_options[slot.task_id]
         binding = self.executor.derive_one_task_server_binding(
@@ -1573,6 +2081,11 @@ class ScientificAgentHarnessController:
         )
         stage = self.storage.read_stage_state(execution.project_id, execution.run_id)
         snapshot = self._stage_snapshot(stage, slot.task_id)
+        run_dir = self.storage.run_dir(execution.project_id, execution.run_id)
+        before_dispatch_roster = self._executor_dispatch_roster(run_dir)
+        approved_gates = (
+            set(self.executor.registry.get(slot.task_id).gates) if snapshot else set()
+        )
         common = dict(
             project_id=execution.project_id, run_plan=authorization.run_plan,
             task_index=slot.planned_task_index, task_id=slot.task_id,
@@ -1581,6 +2094,21 @@ class ScientificAgentHarnessController:
             expected_compiled_options_digest=slot.compiled_options_digest,
             expected_input_artifacts_digest=binding["input_artifacts_digest"],
             expected_output_contract_digest=slot.output_contract_digest,
+            actual_dispatch_recorder=lambda adapter_id: self._publish_local_dispatch_receipt(
+                execution=execution,
+                slot=slot,
+                decision=decision,
+                adapter_id=adapter_id,
+                binding=binding,
+                before_dispatch_roster=before_dispatch_roster,
+                approved_gates=approved_gates,
+            ),
+            task_completion_recorder=lambda: self._publish_local_execution_publication(
+                execution=execution,
+                slot=slot,
+                decision=decision,
+                verification_mode="controller_dispatch",
+            ),
         )
         if snapshot:
             return self.executor.execute_one_task_after_committed_gate(
@@ -1589,6 +2117,436 @@ class ScientificAgentHarnessController:
                 expected_snapshot_digest=snapshot["snapshot_digest"],
             )
         return self.executor.execute_one_task(**common)
+
+    def _publish_local_dispatch_receipt(
+        self,
+        *,
+        execution: AgentHarnessControllerExecution,
+        slot: AgentHarnessControllerTaskSlot,
+        decision: AgentHarnessControllerDecision,
+        adapter_id: str,
+        binding: Mapping[str, Any],
+        before_dispatch_roster: list[dict[str, str]],
+        approved_gates: set[str],
+    ) -> AgentHarnessLocalDispatchReceipt:
+        existing = self._local_dispatch_receipts_for_decision(execution, decision)
+        if existing:
+            if len(existing) != 1 or existing[0].adapter_id != adapter_id:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local dispatch authority is conflicting"
+                )
+            self._verify_executor_dispatch_binding(execution, existing[0])
+            return existing[0]
+        run_dir = self.storage.run_dir(execution.project_id, execution.run_id)
+        after_dispatch_roster = self._executor_dispatch_roster(run_dir)
+        before_ids = {item["receipt_id"] for item in before_dispatch_roster}
+        new_ids = [
+            item["receipt_id"]
+            for item in after_dispatch_roster
+            if item["receipt_id"] not in before_ids
+        ]
+        source = None
+        authority = None
+        if self.executor._source_evidence_enabled(execution.run_id):
+            if len(new_ids) != 1:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local adapter boundary lacks one new Executor dispatch receipt"
+                )
+            source_receipts = read_dispatch_receipts(run_dir=run_dir)
+            matching = [
+                item
+                for item in source_receipts
+                if item.payload["receipt_id"] == new_ids[0]
+            ]
+            if len(matching) != 1 or matching[0].authority_payload is None:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "Executor dispatch receipt authority is unavailable"
+                )
+            source = matching[0]
+            authority = source.authority_payload
+            expected_boundary_digest = self.executor._dispatch_source_digest(
+                run_id=execution.run_id,
+                task_id=slot.task_id,
+                adapter_name=adapter_id,
+                approved_gates=approved_gates,
+            )
+            if (
+                source.payload["child_run_id"] != execution.run_id
+                or source.payload["task_id"] != slot.task_id
+                or source.payload["execution_started"] is not True
+                or source.payload["dispatch_kind"] not in {"initial", "retry"}
+                or authority["boundary_material_sha256"]
+                != expected_boundary_digest
+                or source.authority_sha256 is None
+            ):
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "Executor dispatch receipt does not bind the actual adapter boundary"
+                )
+        elif new_ids:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "unexpected Executor dispatch authority appeared at adapter boundary"
+            )
+        receipt = AgentHarnessLocalDispatchReceipt(
+            controller_execution_id=execution.controller_execution_id,
+            controller_execution_digest=execution.execution_digest,
+            decision_id=decision.decision_id,
+            decision_digest=decision.decision_digest,
+            task_id=slot.task_id,
+            task_index=slot.planned_task_index,
+            attempt_ordinal=slot.attempt,
+            slot_id=slot.slot_id,
+            adapter_id=adapter_id,
+            executor_dispatch_receipt_id=(
+                str(source.payload["receipt_id"]) if source is not None else ""
+            ),
+            executor_dispatch_authority_id=(
+                str(authority["authority_id"]) if authority is not None else ""
+            ),
+            executor_dispatch_authority_digest=(
+                str(source.authority_sha256) if source is not None else ""
+            ),
+            executor_dispatch_attempt_id=(
+                str(source.payload["attempt_id"]) if source is not None else ""
+            ),
+            executor_dispatch_ordinal=(
+                int(source.payload["dispatch_ordinal"])
+                if source is not None
+                else 0
+            ),
+            before_dispatch_roster_digest=_agent_digest(before_dispatch_roster),
+            after_dispatch_roster_digest=_agent_digest(after_dispatch_roster),
+            local_adapter_execution_binding_digest=str(
+                binding["local_adapter_execution_binding_digest"]
+            ),
+            compiled_options_digest=str(binding["compiled_options_digest"]),
+            input_artifacts_digest=str(binding["input_artifacts_digest"]),
+            output_contract_digest=str(binding["output_contract_digest"]),
+            created_at=self.clock(),
+        )
+        return self.control_store.publish_harness_local_dispatch_receipt(
+            project_id=execution.project_id,
+            receipt=receipt,
+        )
+
+    def _publish_local_execution_publication(
+        self,
+        *,
+        execution: AgentHarnessControllerExecution,
+        slot: AgentHarnessControllerTaskSlot,
+        decision: AgentHarnessControllerDecision,
+        verification_mode: str,
+    ) -> AgentHarnessLocalExecutionPublication:
+        existing = self._local_publications_for_decision(execution, decision)
+        if existing:
+            if len(existing) != 1:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local execution has conflicting publications"
+                )
+            self._verify_local_execution_publication(
+                execution=execution,
+                slot=slot,
+                publication=existing[0],
+            )
+            return existing[0]
+        dispatches = self._local_dispatch_receipts_for_decision(execution, decision)
+        if verification_mode == "controller_dispatch":
+            if len(dispatches) != 1:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local completion lacks one exact dispatch receipt"
+                )
+            dispatch = dispatches[0]
+        elif verification_mode == "adopt_completed_task":
+            if dispatches:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "adopted local completion has Controller dispatch authority"
+                )
+            dispatch = None
+        else:  # pragma: no cover - internal fixed call sites only.
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local verification mode is unsupported"
+            )
+        stage, registry, outputs = self._verified_local_outputs(
+            execution=execution,
+            slot=slot,
+        )
+        publication = AgentHarnessLocalExecutionPublication(
+            controller_execution_id=execution.controller_execution_id,
+            controller_execution_digest=execution.execution_digest,
+            decision_id=decision.decision_id,
+            decision_digest=decision.decision_digest,
+            task_id=slot.task_id,
+            task_index=slot.planned_task_index,
+            attempt_ordinal=slot.attempt,
+            slot_id=slot.slot_id,
+            verification_mode=verification_mode,
+            local_dispatch_receipt_id=(
+                dispatch.dispatch_receipt_id if dispatch is not None else ""
+            ),
+            local_dispatch_receipt_digest=(
+                dispatch.dispatch_receipt_digest if dispatch is not None else ""
+            ),
+            stage_digest=self._stage_digest(stage),
+            artifact_registry_digest=_agent_digest(registry),
+            output_contract_digest=slot.output_contract_digest,
+            verified_outputs=outputs,
+            verified_outputs_digest=_agent_digest(
+                [item.model_dump(mode="json") for item in outputs]
+            ),
+            created_at=self.clock(),
+        )
+        return self.control_store.publish_harness_local_execution_publication(
+            project_id=execution.project_id,
+            publication=publication,
+        )
+
+    def _verified_local_outputs(
+        self,
+        *,
+        execution: AgentHarnessControllerExecution,
+        slot: AgentHarnessControllerTaskSlot,
+        allow_history: bool = False,
+    ) -> tuple[Any, dict[str, str], list[AgentHarnessVerifiedOutputBinding]]:
+        authorization = self._authorization(execution, verify_current=False)
+        task = authorization.run_plan.tasks[slot.planned_task_index]
+        stage = self.storage.read_stage_state(execution.project_id, execution.run_id)
+        current_success = bool(
+            stage is not None
+            and stage.stage == slot.task_id
+            and stage.status == RunStatus.SUCCEEDED
+        )
+        history_success = bool(
+            allow_history
+            and stage is not None
+            and any(
+                item.stage == slot.task_id and item.status == RunStatus.SUCCEEDED
+                for item in stage.history
+            )
+        )
+        if not current_success and not history_success:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local output publication lacks exact successful StageState"
+            )
+        registry = self.storage.read_artifact_registry(
+            execution.project_id,
+            execution.run_id,
+        )
+        verifier = self.executor.one_task_output_verifier_binding(
+            run_plan=authorization.run_plan,
+            task_index=slot.planned_task_index,
+            expected_output_contract_digest=slot.output_contract_digest,
+        )
+        execution_record_id = str(verifier["execution_record_id"])
+        if execution_record_id and execution_record_id not in task.output_artifacts:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "immutable execution record is outside the output contract"
+            )
+        run_dir = self.storage.run_dir(execution.project_id, execution.run_id)
+        outputs: list[AgentHarnessVerifiedOutputBinding] = []
+        for artifact_id in sorted(task.output_artifacts):
+            registered = registry.get(artifact_id)
+            if not registered:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local output contract is incomplete"
+                )
+            relative = _safe_relative_artifact_path(registered)
+            path = _safe_artifact_path(
+                run_dir,
+                relative,
+                label="Controller local output",
+            )
+            payload, present = _read_stable_file(
+                path,
+                label="Controller local output",
+                max_bytes=2 * 1024 * 1024 * 1024,
+            )
+            if not present:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local output is unavailable"
+                )
+            content_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+            is_execution_record = artifact_id == execution_record_id
+            outputs.append(
+                AgentHarnessVerifiedOutputBinding(
+                    artifact_id=artifact_id,
+                    relative_path=str(relative),
+                    content_sha256=content_digest,
+                    size_bytes=len(payload),
+                    producer_task_id=slot.task_id,
+                    verification_class=str(verifier["verification_class"]),
+                    verifier_version=str(verifier["verifier_version"]),
+                    verifier_digest=str(verifier["verifier_digest"]),
+                    execution_record_id=(artifact_id if is_execution_record else ""),
+                    execution_record_digest=(
+                        content_digest if is_execution_record else ""
+                    ),
+                )
+            )
+        return stage, registry, outputs
+
+    @staticmethod
+    def _executor_dispatch_roster(run_dir: Path) -> list[dict[str, str]]:
+        roster: list[dict[str, str]] = []
+        for item in read_dispatch_receipts(run_dir=run_dir, allow_missing=True):
+            authority = item.authority_payload
+            if authority is None or item.authority_sha256 is None:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "Executor dispatch authority roster is incomplete"
+                )
+            roster.append(
+                {
+                    "receipt_id": str(item.payload["receipt_id"]),
+                    "receipt_digest": str(item.sha256),
+                    "dispatch_authority_id": str(authority["authority_id"]),
+                    "dispatch_authority_digest": str(item.authority_sha256),
+                }
+            )
+        return roster
+
+    def _verify_executor_dispatch_binding(
+        self,
+        execution: AgentHarnessControllerExecution,
+        dispatch: AgentHarnessLocalDispatchReceipt,
+    ) -> None:
+        run_dir = self.storage.run_dir(execution.project_id, execution.run_id)
+        roster = self._executor_dispatch_roster(run_dir)
+        ordinal = dispatch.executor_dispatch_ordinal
+        if not ordinal:
+            if (
+                _agent_digest(roster) != dispatch.after_dispatch_roster_digest
+                or dispatch.before_dispatch_roster_digest
+                != dispatch.after_dispatch_roster_digest
+            ):
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "unexpected Executor dispatch authority roster changed"
+                )
+            return
+        if (
+            len(roster) < ordinal
+            or _agent_digest(roster[: ordinal - 1])
+            != dispatch.before_dispatch_roster_digest
+            or _agent_digest(roster[:ordinal])
+            != dispatch.after_dispatch_roster_digest
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "Executor dispatch authority roster changed"
+            )
+        matches = [
+            item
+            for item in read_dispatch_receipts(run_dir=run_dir)
+            if item.payload["receipt_id"]
+            == dispatch.executor_dispatch_receipt_id
+        ]
+        if len(matches) != 1 or matches[0].authority_payload is None:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "Executor dispatch receipt is unavailable"
+            )
+        source = matches[0]
+        authority = source.authority_payload
+        if (
+            source.payload["task_id"] != dispatch.task_id
+            or source.payload["attempt_id"]
+            != dispatch.executor_dispatch_attempt_id
+            or source.payload["execution_started"] is not True
+            or authority["authority_id"]
+            != dispatch.executor_dispatch_authority_id
+            or source.authority_sha256
+            != dispatch.executor_dispatch_authority_digest
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "Executor dispatch receipt authority mismatch"
+            )
+
+    def _verify_local_execution_publication(
+        self,
+        *,
+        execution: AgentHarnessControllerExecution,
+        slot: AgentHarnessControllerTaskSlot,
+        publication: AgentHarnessLocalExecutionPublication,
+        allow_later_state: bool = False,
+    ) -> None:
+        if (
+            publication.controller_execution_id != execution.controller_execution_id
+            or publication.controller_execution_digest != execution.execution_digest
+            or publication.task_id != slot.task_id
+            or publication.task_index != slot.planned_task_index
+            or publication.attempt_ordinal != slot.attempt
+            or publication.slot_id != slot.slot_id
+            or publication.output_contract_digest != slot.output_contract_digest
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local execution publication authority mismatch"
+            )
+        stage, registry, outputs = self._verified_local_outputs(
+            execution=execution,
+            slot=slot,
+            allow_history=allow_later_state,
+        )
+        if (
+            publication.verified_outputs != outputs
+            or publication.verified_outputs_digest
+            != _agent_digest([item.model_dump(mode="json") for item in outputs])
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local execution publication no longer verifies current outputs"
+            )
+        if not allow_later_state and (
+            publication.stage_digest != self._stage_digest(stage)
+            or publication.artifact_registry_digest != _agent_digest(registry)
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local execution publication state anchor changed"
+            )
+        if publication.verification_mode == "controller_dispatch":
+            try:
+                dispatch = self.control_store.read_harness_local_dispatch_receipt(
+                    project_id=execution.project_id,
+                    dispatch_receipt_id=publication.local_dispatch_receipt_id,
+                )
+            except FileNotFoundError as exc:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local publication dispatch receipt is unavailable"
+                ) from exc
+            if (
+                dispatch.dispatch_receipt_digest
+                != publication.local_dispatch_receipt_digest
+                or dispatch.decision_id != publication.decision_id
+                or dispatch.task_id != publication.task_id
+                or not dispatch.execution_started
+            ):
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local publication dispatch authority mismatch"
+                )
+            self._verify_executor_dispatch_binding(execution, dispatch)
+
+    def _local_dispatch_receipts_for_decision(
+        self,
+        execution: AgentHarnessControllerExecution,
+        decision: AgentHarnessControllerDecision,
+    ) -> list[AgentHarnessLocalDispatchReceipt]:
+        return [
+            item
+            for item in self.control_store.list_harness_local_dispatch_receipts(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            )
+            if item.decision_id == decision.decision_id
+            and item.decision_digest == decision.decision_digest
+        ]
+
+    def _local_publications_for_decision(
+        self,
+        execution: AgentHarnessControllerExecution,
+        decision: AgentHarnessControllerDecision,
+    ) -> list[AgentHarnessLocalExecutionPublication]:
+        return [
+            item
+            for item in self.control_store.list_harness_local_execution_publications(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            )
+            if item.decision_id == decision.decision_id
+            and item.decision_digest == decision.decision_digest
+        ]
 
     def _prepare_remote(self, execution: Any, slot: Any) -> dict[str, Any]:
         authorization = self._authorization(execution, verify_current=False)
@@ -1606,10 +2564,9 @@ class ScientificAgentHarnessController:
         task = authorization.run_plan.tasks[slot.planned_task_index]
         registry = self.storage.read_artifact_registry(execution.project_id, execution.run_id)
         run_dir = self.storage.run_dir(execution.project_id, execution.run_id)
-        input_root = run_dir / "agent-harness-controller-inputs" / slot.slot_id
-        input_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        descriptors: list[dict[str, str]] = []
+        descriptors: list[dict[str, Any]] = []
         bindings: dict[str, str] = {}
+        input_payloads: dict[str, bytes] = {}
         for index, artifact_id in enumerate(task.required_artifacts):
             registered = registry.get(artifact_id)
             if not registered:
@@ -1622,9 +2579,16 @@ class ScientificAgentHarnessController:
             suffix = source.suffix.lower() or ".json"
             destination_name = f"input-{index:04d}{suffix}"
             purpose, media_type = self._remote_input_contract(profile.task_type, suffix)
-            self._write_exact(input_root / destination_name, payload)
-            descriptors.append({"relative_path": destination_name, "purpose": purpose, "media_type": media_type})
+            descriptors.append(
+                {
+                    "relative_path": destination_name,
+                    "purpose": purpose,
+                    "media_type": media_type,
+                    "payload": payload,
+                }
+            )
             bindings[destination_name] = artifact_id
+            input_payloads[destination_name] = payload
         if not descriptors:
             payload = _pretty_json_bytes({
                 "schema_version": "agent_harness_remote_execution_input.v1",
@@ -1633,23 +2597,21 @@ class ScientificAgentHarnessController:
             })
             destination_name = "execution-request.json"
             purpose, media_type = self._remote_input_contract(profile.task_type, ".json")
-            self._write_exact(input_root / destination_name, payload)
             artifact_identity = _agent_digest({"slot_id": slot.slot_id, "payload": json.loads(payload)})
             artifact_id = f"harness-input-{artifact_identity.split(':', 1)[1][:32]}"
-            relative = str((input_root / destination_name).relative_to(run_dir))
-            current_path = registry.get(artifact_id)
-            if current_path is None:
-                self.storage.register_new_artifact_registry_paths(
-                    execution.project_id, execution.run_id, {artifact_id: relative}
-                )
-            elif current_path != relative:
-                raise ScientificAgentHarnessControllerConflict("remote synthetic input binding changed")
-            descriptors.append({"relative_path": destination_name, "purpose": purpose, "media_type": media_type})
+            descriptors.append(
+                {
+                    "relative_path": destination_name,
+                    "purpose": purpose,
+                    "media_type": media_type,
+                    "payload": payload,
+                }
+            )
             bindings[destination_name] = artifact_id
+            input_payloads[destination_name] = payload
         request_identity = _agent_digest({"controller_execution_id": execution.controller_execution_id, "slot_id": slot.slot_id})
-        manifest = build_transfer_manifest(
+        manifest = build_transfer_manifest_from_payloads(
             request_id=f"remote-{request_identity.split(':', 1)[1][:32]}",
-            input_root=input_root,
             artifacts=descriptors,
             connection=connection,
             execution_profile=profile,
@@ -1659,7 +2621,9 @@ class ScientificAgentHarnessController:
             project_id=execution.project_id, run_id=execution.run_id, task_id=slot.task_id,
             transfer_manifest=manifest,
             requested_resources=authority.configured_resources.model_dump(mode="json"),
-            input_artifacts=bindings, slot_id=slot.slot_id,
+            input_artifacts=bindings,
+            input_payloads=input_payloads,
+            slot_id=slot.slot_id,
             slot_binding_authority={
                 "controller_execution_id": execution.controller_execution_id,
                 "controller_execution_digest": execution.execution_digest,
@@ -1783,6 +2747,38 @@ class ScientificAgentHarnessController:
             )
         return candidates[0]
 
+    def _unreceipted_decisions(
+        self,
+        execution: AgentHarnessControllerExecution,
+    ) -> list[AgentHarnessControllerDecision]:
+        decisions = self.control_store.list_harness_controller_decisions(
+            project_id=execution.project_id,
+            controller_execution_id=execution.controller_execution_id,
+        )
+        receipted = {
+            item.decision_id
+            for item in self.control_store.list_harness_controller_action_receipts(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            )
+        }
+        return [item for item in decisions if item.decision_id not in receipted]
+
+    def _decision_is_fresh(
+        self,
+        decision: AgentHarnessControllerDecision,
+        inspection: AgentHarnessControllerInspection,
+    ) -> bool:
+        current_sources = self._bindings_from_facts(inspection.facts)
+        return bool(
+            inspection.inspection_digest == decision.inspection_digest
+            and current_sources == decision.source_bindings
+            and _agent_digest(
+                [item.model_dump(mode="json") for item in current_sources]
+            )
+            == decision.source_bindings_digest
+        )
+
     def _verify_post_start_sources(
         self,
         execution: AgentHarnessControllerExecution,
@@ -1872,6 +2868,15 @@ class ScientificAgentHarnessController:
                 latest.after_stage_digest != stage_digest
                 or latest.after_artifact_registry_digest != registry_digest
             ):
+                if self._manual_first_local_completion_is_adoptable(
+                    execution=execution,
+                    authorization=authorization,
+                    latest=latest,
+                    stage=stage,
+                    registry=registry,
+                    original_artifact_ids=set(original_artifacts),
+                ):
+                    return
                 raise ScientificAgentHarnessControllerVerificationError(
                     "execution sources differ from the latest immutable receipt"
                 )
@@ -1885,36 +2890,199 @@ class ScientificAgentHarnessController:
             raise ScientificAgentHarnessControllerVerificationError(
                 "unreceipted StageState belongs to another task"
             )
+        task_limit = (
+            len(authorization.run_plan.tasks)
+            if decision.task_index is None
+            else decision.task_index + 1
+        )
         allowed_new_ids = {
             artifact_id
-            for task in authorization.run_plan.tasks[: (decision.task_index or 0) + 1]
+            for task in authorization.run_plan.tasks[:task_limit]
             for artifact_id in task.output_artifacts
         }
+        verified_output_paths = {
+            output.relative_path
+            for receipt in self.control_store.list_harness_controller_action_receipts(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            )
+            for output in receipt.verified_output_bindings
+        }
+        verified_output_paths.update(
+            output.relative_path
+            for local_publication in self.control_store.list_harness_local_execution_publications(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            )
+            for output in local_publication.verified_outputs
+        )
+        if decision.action_kind == AgentHarnessControllerAction.ADOPT_COMPLETED_TASK:
+            slot = execution.task_slots[decision.task_index or 0]
+            _, _, current_outputs = self._verified_local_outputs(
+                execution=execution,
+                slot=slot,
+            )
+            verified_output_paths.update(
+                output.relative_path for output in current_outputs
+            )
         unexpected = set(registry).difference(original_artifacts).difference(allowed_new_ids)
         if any(
             not item.startswith("harness-input-")
             and not item.startswith("remote_execution_publication_")
+            and registry[item] not in verified_output_paths
             for item in unexpected
         ):
             raise ScientificAgentHarnessControllerVerificationError(
                 "unreceipted Registry mutation is outside the selected task contract"
             )
 
-    @staticmethod
-    def _local_task_completed(slot: Any, task: Any, stage: Any, registry: dict[str, str], receipts: list[Any]) -> bool:
+    def _manual_first_local_completion_is_adoptable(
+        self,
+        *,
+        execution: AgentHarnessControllerExecution,
+        authorization: AgentPlanAuthorization,
+        latest: AgentHarnessControllerActionReceipt,
+        stage: Any,
+        registry: dict[str, str],
+        original_artifact_ids: set[str],
+    ) -> bool:
+        """Allow only exact first-task manual completion to reach ADOPT."""
+
+        slot = execution.task_slots[0]
+        task = authorization.run_plan.tasks[0]
+        if (
+            slot.execution_route != "local_executor"
+            or stage is None
+            or stage.stage != slot.task_id
+            or stage.status != RunStatus.SUCCEEDED
+            or latest.task_index not in {0, None}
+            or latest.action_kind
+            not in {
+                AgentHarnessControllerAction.PREPARE_LOCAL_GATE,
+                AgentHarnessControllerAction.WAIT_FOR_GATE,
+            }
+        ):
+            return False
+        if self.control_store.list_harness_local_dispatch_receipts(
+            project_id=execution.project_id,
+            controller_execution_id=execution.controller_execution_id,
+        ) or self.control_store.list_harness_local_execution_publications(
+            project_id=execution.project_id,
+            controller_execution_id=execution.controller_execution_id,
+        ):
+            return False
+        spec = self.executor.registry.get(slot.task_id)
+        if not spec.gates or not latest.gate_snapshot_id or not latest.gate_snapshot_hash:
+            return False
+        snapshot = {
+            "snapshot_id": latest.gate_snapshot_id,
+            "snapshot_hash": latest.gate_snapshot_hash.removeprefix("sha256:"),
+        }
+        decisions = self._gate_decisions(execution, slot, snapshot, spec.gates)
+        if set(decisions) != set(spec.gates) or any(
+            not item.approved for item in decisions.values()
+        ):
+            return False
+        _, _, outputs = self._verified_local_outputs(
+            execution=execution,
+            slot=slot,
+        )
+        verified_paths = {item.relative_path for item in outputs}
+        allowed_ids = original_artifact_ids.union(task.output_artifacts)
+        unexpected = {
+            artifact_id
+            for artifact_id, relative_path in registry.items()
+            if artifact_id not in allowed_ids
+            and relative_path not in verified_paths
+            and not artifact_id.startswith("harness-input-")
+        }
+        if unexpected:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "manual local completion added unverified Registry authority"
+            )
+        return True
+
+    def _local_task_completed(
+        self,
+        execution: AgentHarnessControllerExecution,
+        slot: Any,
+        task: Any,
+        stage: Any,
+        registry: dict[str, str],
+        receipts: list[Any],
+    ) -> bool:
         if slot.execution_route != "local_executor":
             return False
-        receipt = any(item.task_id == slot.task_id and "TASK_COMPLETED" in item.reason_codes and item.outcome in {AgentHarnessControllerReceiptOutcome.COMMITTED, AgentHarnessControllerReceiptOutcome.RECONCILED} for item in receipts)
-        history_ok = bool(stage and any(item.stage == slot.task_id and item.status == RunStatus.SUCCEEDED for item in stage.history))
-        current_ok = bool(stage and stage.stage == slot.task_id and stage.status == RunStatus.SUCCEEDED)
-        outputs_ok = all(item in registry for item in task.output_artifacts)
-        return receipt and outputs_ok and (history_ok or current_ok)
-
-    def _local_outputs_committed(self, execution: Any, slot: Any) -> bool:
-        task = self._authorization(execution, verify_current=False).run_plan.tasks[slot.planned_task_index]
-        registry = self.storage.read_artifact_registry(execution.project_id, execution.run_id)
-        stage = self.storage.read_stage_state(execution.project_id, execution.run_id)
-        return bool(stage and stage.stage == slot.task_id and stage.status == RunStatus.SUCCEEDED and all(item in registry for item in task.output_artifacts))
+        candidates = [
+            item
+            for item in receipts
+            if item.task_id == slot.task_id
+            and item.outcome
+            in {
+                AgentHarnessControllerReceiptOutcome.COMMITTED,
+                AgentHarnessControllerReceiptOutcome.RECONCILED,
+            }
+            and set(item.reason_codes).intersection(
+                {"TASK_COMPLETED", "TASK_ADOPTED"}
+            )
+        ]
+        if not candidates:
+            return False
+        if len(candidates) != 1:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local task has conflicting completion receipts"
+            )
+        receipt = candidates[0]
+        if (
+            not receipt.local_execution_publication_id
+            or not receipt.local_execution_publication_digest
+            or not receipt.verified_output_bindings
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local completion receipt lacks verified output authority"
+            )
+        publication = self.control_store.read_harness_local_execution_publication(
+            project_id=execution.project_id,
+            publication_id=receipt.local_execution_publication_id,
+        )
+        if (
+            publication.publication_digest
+            != receipt.local_execution_publication_digest
+            or publication.verified_outputs != receipt.verified_output_bindings
+            or publication.verified_outputs_digest
+            != receipt.verified_output_bindings_digest
+        ):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "local completion receipt publication binding mismatch"
+            )
+        if publication.verification_mode == "controller_dispatch":
+            try:
+                dispatch = self.control_store.read_harness_local_dispatch_receipt(
+                    project_id=execution.project_id,
+                    dispatch_receipt_id=publication.local_dispatch_receipt_id,
+                )
+            except FileNotFoundError as exc:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local publication dispatch receipt is unavailable"
+                ) from exc
+            if receipt.local_dispatch_receipt_ids != [
+                dispatch.executor_dispatch_receipt_id
+                or dispatch.dispatch_receipt_id
+            ]:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "local completion receipt lacks exact Executor dispatch authority"
+                )
+        elif receipt.local_dispatch_receipt_ids:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "adopted local completion claims an Executor dispatch"
+            )
+        self._verify_local_execution_publication(
+            execution=execution,
+            slot=slot,
+            publication=publication,
+            allow_later_state=True,
+        )
+        return True
 
     def _remote_task_completed(
         self,
@@ -1935,10 +3103,40 @@ class ScientificAgentHarnessController:
         outputs_ok = all(
             item in registry and item in publication_ids for item in task.output_artifacts
         )
-        return str(remote["state"]["status"]) == "SUCCEEDED" and publication is not None and outputs_ok and any(
-            item.task_id == slot.task_id and "TASK_COMPLETED" in item.reason_codes and item.outcome in {AgentHarnessControllerReceiptOutcome.COMMITTED, AgentHarnessControllerReceiptOutcome.RECONCILED}
+        matching = [
+            item
             for item in receipts
+            if item.task_id == slot.task_id
+            and "TASK_COMPLETED" in item.reason_codes
+            and item.outcome
+            in {
+                AgentHarnessControllerReceiptOutcome.COMMITTED,
+                AgentHarnessControllerReceiptOutcome.RECONCILED,
+            }
+        ]
+        if not matching:
+            return False
+        if len(matching) != 1:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "remote task has conflicting completion receipts"
+            )
+        receipt = matching[0]
+        verifies = bool(
+            str(remote["effective_status"]) == "SUCCEEDED"
+            and publication is not None
+            and outputs_ok
+            and receipt.remote_publication_digest
+            == str(remote.get("publication_digest") or "")
+            and receipt.after_remote_stage_digest
+            == str(remote.get("slot_stage_digest") or "")
+            and receipt.remote_status_source_roster_digest
+            == str(remote.get("status_source_roster_digest") or "")
         )
+        if not verifies:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "remote completion receipt no longer verifies current authority"
+            )
+        return True
 
     def _gate_decisions(self, execution: Any, slot: Any, snapshot: Mapping[str, Any], gates: list[str]):
         snapshot_id = str(snapshot.get("snapshot_id") or "")
@@ -1985,6 +3183,7 @@ class ScientificAgentHarnessController:
             AgentHarnessControllerAction.PREPARE_LOCAL_GATE: "GATE_SNAPSHOT_READY",
             AgentHarnessControllerAction.WAIT_FOR_GATE: "GATE_APPROVAL_REQUIRED",
             AgentHarnessControllerAction.EXECUTE_LOCAL_TASK: "LOCAL_TASK_READY",
+            AgentHarnessControllerAction.ADOPT_COMPLETED_TASK: "TASK_ADOPTED",
             AgentHarnessControllerAction.PREPARE_REMOTE_REQUEST: "REMOTE_REQUEST_READY",
             AgentHarnessControllerAction.WAIT_FOR_REMOTE_APPROVAL: "REMOTE_APPROVAL_REQUIRED",
             AgentHarnessControllerAction.DISPATCH_REMOTE_TASK: "REMOTE_DISPATCH_READY",
@@ -2000,6 +3199,7 @@ class ScientificAgentHarnessController:
         return {
             AgentHarnessControllerAction.PREPARE_LOCAL_GATE: "GATE_SNAPSHOT_READY",
             AgentHarnessControllerAction.WAIT_FOR_GATE: "GATE_APPROVAL_REQUIRED",
+            AgentHarnessControllerAction.ADOPT_COMPLETED_TASK: "TASK_ADOPTED",
             AgentHarnessControllerAction.PREPARE_REMOTE_REQUEST: "REMOTE_REQUEST_PREPARED",
             AgentHarnessControllerAction.WAIT_FOR_REMOTE_APPROVAL: "REMOTE_APPROVAL_REQUIRED",
             AgentHarnessControllerAction.DISPATCH_REMOTE_TASK: "REMOTE_EXECUTION_RUNNING",
@@ -2025,21 +3225,6 @@ class ScientificAgentHarnessController:
                 return "training-config", "application/json"
             return "execution-request", "application/json"
         raise ScientificAgentHarnessControllerVerificationError("remote input media type is not allowed")
-
-    @staticmethod
-    def _write_exact(path: Path, payload: bytes) -> None:
-        if path.exists():
-            actual, exists = _read_stable_file(path, label="Controller remote input", max_bytes=2 * 1024 * 1024 * 1024)
-            if not exists or actual != payload:
-                raise ScientificAgentHarnessControllerConflict("Controller remote input changed")
-            return
-        _write_exclusive(path, payload)
-
-    def _verified_request_execution(self, project_id: str, execution_id: str, request: AgentHarnessControllerAdvanceRequest):
-        execution = self.verify_execution(project_id=project_id, controller_execution_id=execution_id)
-        if execution.execution_digest != request.expected_controller_execution_digest:
-            raise ScientificAgentHarnessControllerConflict("Controller execution digest does not match")
-        return execution
 
     @staticmethod
     def _current_slot(execution: Any, inspection: AgentHarnessControllerInspection):

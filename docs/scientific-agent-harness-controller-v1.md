@@ -88,12 +88,13 @@ remote worker.
 | Current task is local, Gate snapshot is waiting, no exact committed decision exists | `WAIT_FOR_GATE` | No execution mutation; publish observation receipt |
 | Current task is local, required exact Gate decision is rejected | `STOP_GATE_REJECTED` | Publish terminal controller receipt only |
 | Current task is local and executable without a Gate, or with exact committed Gate approval | `EXECUTE_LOCAL_TASK` | Executor executes exactly that one task |
+| Current local task was completed through an exact manual/legacy seam without this Controller decision's dispatch authority | `ADOPT_COMPLETED_TASK` | Exact-verify outputs and publish an explicit adoption publication/receipt; never claim Controller dispatch |
 | Current task is remote and no slot request exists | `PREPARE_REMOTE_REQUEST` | Create one server-derived request in the exact task-attempt slot |
 | Exact remote request exists and no approval exists | `WAIT_FOR_REMOTE_APPROVAL` | No dispatch; publish observation receipt |
 | Exact remote approval rejects | `STOP_REMOTE_REJECTED` | Publish terminal controller receipt only |
 | Exact approved request is prepared | `DISPATCH_REMOTE_TASK` | Dispatch the already approved exact request once |
 | Exact remote job is mutable running/submitted | `REFRESH_REMOTE_TASK` | One transport status refresh; no polling loop |
-| Slot requires recovery | `RECOVER_REMOTE_TASK` | One remote lifecycle recovery transition |
+| Slot requires recovery during ordinary `advance` | `RECOVER_REMOTE_TASK` with `executable=false` | No lifecycle mutation; return inspection/decision and publish a WAITING observation receipt |
 | Slot is cancelled or terminal failure is authoritative | `STOP_TASK_TERMINAL` | Publish terminal controller receipt only |
 | Slot has immutable publication, exact registered outputs, and success StageState | `ADOPT_REMOTE_OUTPUTS` | Register frozen logical output bindings if required by the plan |
 
@@ -121,6 +122,19 @@ decision binding. The seam:
 
 Mixed plans are therefore never passed to the legacy whole-plan loop. A remote
 dispatch intent cannot reach a legacy local adapter through the Controller.
+
+At the actual adapter boundary, the Executor first publishes its established
+dispatch receipt/authority when that evidence contract applies, then invokes a
+Controller-only recorder before calling the adapter. The Controller exact-reads
+the before/after dispatch roster, requires exactly one new matching
+`execution_started=true` authority, and publishes a decision-bound local
+dispatch receipt. For legacy tasks without that older specialized roster, the
+same recorder itself is the immutable adapter-boundary authority. A successful
+local publication then binds the StageState digest, complete Registry digest,
+planned output roster, each output path/size/SHA-256/producer, verifier
+identity, and any immutable execution-record ID/digest. Crash reconciliation
+requires that publication and dispatch authority; StageState plus logical
+Registry IDs alone is insufficient.
 
 Gate approval is deliberately a separate route and transaction. It commits an
 existing `GateDecision` against the exact current WAITING_USER execution
@@ -156,8 +170,16 @@ The inspection response labels every fact as one of:
 - `OBSERVATIONAL`: mutable transport status or safe tracing/latency data; or
 - `UNVERIFIED`: missing, stale, conflicting, or otherwise unusable evidence.
 
-A local task completes only when the exact Executor transition and every
-planned output have current verified Registry bindings. A remote task
+Remote inspection exposes separate exact bindings for the request, task-slot
+binding, approval, slot StageState, mutable transport state, and publication.
+The effective remote status is `DERIVED` from a digest of that complete source
+roster. Transport state is always `OBSERVATIONAL`; once success StageState and
+publication are exact-verified it cannot override terminal authority.
+
+A local task completes only when the exact Executor dispatch authority,
+decision-bound local execution publication, and every planned output have
+current content-bound verifier evidence. A manual completion is represented by
+`TASK_ADOPTED`, never `TASK_COMPLETED`, and cannot claim a dispatch receipt. A remote task
 completes only when its slot has the exact committed request and approval,
 immutable verified publication, complete output registrations, and matching
 success StageState. Earlier controller receipts may locate this evidence but
@@ -166,14 +188,23 @@ and trace spans are observational corroboration only.
 
 ## Crash safety and exactly-once effects
 
-Controller requests are serialized by a request-scoped inter-process lock.
+All mutating operations for one Controller execution share one
+`controller_execution.lock`. The fixed order is create-only start-intent scope
+lock, Controller-execution lock, client-request lock, then local/remote
+lifecycle lock. The execution lock is held from current verification through
+immutable receipt publication, so different client request IDs and different
+operations cannot select the same predecessor or overlap effects.
 Publications use private staging, bounded strict JSON, regular-file/no-symlink
 checks, per-file fsync, staging-directory fsync, no-replace rename,
 collection-directory fsync, manifest-last activation, and exact-byte reread.
 
 Each advance has a deterministic action ID derived from the execution,
 inspection digest, selected action, task slot, and expected source digests.
-The immutable decision is committed before the side effect. Re-entry then:
+The immutable decision is committed before the side effect. Immediately before
+execution, the Controller rebuilds the inspection and requires both its digest
+and complete source-binding roster to equal the decision. A stale decision may
+only enter exact-authority reconciliation; it is never executed against new
+state. Re-entry then:
 
 - returns the exact receipt if it exists;
 - reconciles the action's authoritative target if the process crashed after
@@ -186,7 +217,9 @@ possible.
 Explicit cancel and recover routes use the same decision-before-effect and
 receipt-after-exact-read protocol. Cancel is limited to the current exact
 remote slot. Recover invokes one existing remote lifecycle recovery transition
-and never reruns an unknown local scientific effect.
+and never reruns an unknown local scientific effect. Ordinary `advance` never
+calls recovery; only the explicit recover route creates an executable recovery
+control decision.
 
 This is exactly-once *effect selection and reconciliation*, not a claim that
 an arbitrary external transport is transactional. Remote idempotency remains

@@ -447,7 +447,7 @@ M3.5 至少支持两种用户模式：
 | `M3H-006` 实现 approve-and-start 与两种审批模式 | `I/T/—` | `DONE` | PR-BM 先提交 authorization、再提交 `not_dispatched` start intent，覆盖跨进程、fault injection、current-source revalidation 与 crash recovery，并通过 owner review |
 | `M3H-007` Permission Engine shadow mode | `I/T/—` | `DONE` | PR-BM 提供独立显式 shadow comparator/audit，不拦截或改变现有 route，并通过 owner review |
 | `M3H-007A` 建立 server-owned configured resource authority | `I/T/—` | `DONE` | PR-BM2 在 `a055a87` 获得 owner review approval，并由 PR #20 以 `5389a3c` 合并；从私有 server policy、exact connection/profile/probe、预算和完整 task roster 派生 immutable AuthoritySet，不创建 request 或 dispatch |
-| `M3H-008` Harness Controller 接入现有执行链 | `I/T/—` | `IN_PROGRESS` | PR-BN 已完成 deterministic Controller、exact start-intent consumption、local one-task seam、Gate/remote approval separation、task-attempt slot 与 crash replay 的代表性自动化验证；仍待 PR Fast、CI 和 repository-owner review，不声明真实 remote canary 或 Harness 完成 |
+| `M3H-008` Harness Controller 接入现有执行链 | `I/T/—` | `IN_PROGRESS` | PR-BN 已完成 deterministic Controller、execution-wide lock/freshness barrier、local dispatch+content evidence、explicit-only recovery、remote exact source roster、pinned input staging 与 fault/concurrency 回归；仍待 PR Fast、CI、CodeQL 和 repository-owner review，不声明真实 remote canary 或 Harness 完成 |
 | `M3H-009` 接入 Execution Agent LLM | `—/—/—` | `DEFERRED` | 仅输出版本化 `ToolCallProposal`，在已批准 plan/action space 内选择下一步；无任意 adapter、argv、shell、SSH 或绝对路径字段 |
 | `M3H-010` Verifier-bound feedback observation | `I/T/—` | `READY` | PR-BN 已建立 verifier-bound Controller observation prerequisite seam并覆盖 local/remote completion 验证；只有 authoritative StageState、Artifact Registry 和 verified publication 能支持 running/success/failure，LLM 文本与 telemetry 不能改变 UI 或状态 |
 | `M3H-011` Replanner 与 plan revision | `I(partial)/T(partial)/—` | `DEFERRED` | 用户反馈或运行失败产生 explicit diff、新 plan digest 与新授权；旧授权对任何实质变化失效 |
@@ -1039,6 +1039,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 依据：Controller schema/policy、严格 route、immutable decision/receipt、local one-task Gate 链、remote task-attempt slot 与 crash replay 已有代表性自动化测试；这些证据不等于真实 remote canary、完整 cross-process fault matrix或 owner validation。
 - 影响任务：`M3H-GATE-002` 仍不标 `V`，`M3H-008` 不标 `DONE`；`M3H-009`/PR-BO 继续 `DEFERRED`，PR-BP/PR-BQ/PR-BR 不解锁；不声明 Execution Agent、Replanner、完整 Harness 或 UI 已完成。
 - 新增风险：异构 multi-remote、同请求跨进程 create/advance、tracing authoritative-equivalence/privacy 已有自动化证据；仍需关闭代表性默认 Uni-Mol/MinerU/REINVENT4 全链、cancel/recover 完整 fault matrix、tracing extra 安装、PR Fast、4-shard Full CI 与 CodeQL 证据，且远程 fixture 不得表述为真实基础设施 canary。
+- 批准人：待 repository owner review。
+
+### 2026-08-01：PR-BN code review blockers 修复批次
+
+- 决策：保持 PR #21 为 Draft；本批次只关闭 Controller execution-wide serialization/freshness、ordinary advance 禁止自动 recovery、local dispatch/output exact evidence、remote StageState/telemetry source classification，以及 pinned no-symlink input staging 五类 blocker，不启动 PR-BO。
+- 原计划：PR-BN 已有代表性主链，但不同 request/operation 只持有分离的 request lock，local completion 未绑定 dispatch/content roster，remote effective status 误借 request digest，Controller remote inputs 仍经普通 path staging。
+- 新计划：所有 mutating route 固定采用 start-intent（仅 create）→ execution → request → lifecycle 锁序并持锁至 receipt publication；decision 执行前重建完整 inspection/source roster；ordinary recovery decision 固定 `executable=false`；local completion绑定 adapter-boundary dispatch、verified output与 execution-record publication；remote inspection分离 authoritative/derived/observational sources；input bytes直接进入 pinned task-slot tree。
+- 依据：新增不同 request 双进程 local advance、advance 与 Gate/remote approval/cancel/recover 并发、ordinary advance recovery 零调用/零字节变化、missing dispatch、same-path/same-size output replacement、immutable record crash replay、mutable terminal telemetry、slot StageState replacement，以及 parent/slot/file symlink和 post-open replacement回归。最终 PR Fast、Full CI 与 CodeQL 仍须绑定新的 review HEAD。
+- 影响任务：`M3H-008` 保持 `I/T/— / IN_PROGRESS`，`M3H-010` 保持 `I/T/— / READY`；`M3H-GATE-002` 不标 `V`；PR-BO/M3H-009 继续 `DEFERRED`，不声明真实 remote canary、owner approval 或可合并。
+- 新增风险：只有在 target/PR Fast 通过、分支基于最新 main、GitHub 4-shard Full CI 与 CodeQL 绑定同一最终 HEAD 后，才可重新请求 owner review；后续 doc/metadata-only 变更不重复完整 suite，除非影响 evidence identity 或 reviewed commit binding。
 - 批准人：待 repository owner review。
 
 后续路线调整必须追加：

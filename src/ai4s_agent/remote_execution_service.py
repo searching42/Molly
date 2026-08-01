@@ -102,6 +102,7 @@ class DescriptorRemoteExecutionLifecycleService:
         transfer_manifest: TransferManifest | Mapping[str, Any],
         requested_resources: Mapping[str, Any] | Any,
         input_artifacts: Mapping[str, str],
+        input_payloads: Mapping[str, bytes] | None = None,
         slot_id: str | None = None,
         slot_binding_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -132,12 +133,18 @@ class DescriptorRemoteExecutionLifecycleService:
                     request,
                     slot_binding_authority,
                 )
+                self._verify_staged_inputs(tree, request)
                 if not tree.exists("remote", "approval.json") and not tree.exists("remote", "publication.json"):
                     self._repair_waiting_authority(tree, request)
                 return self._inspect_tree(tree, request)
             if tree.exists("remote", "approval.json") or tree.exists("remote", "publication.json"):
                 raise ValueError("remote execution authority exists without its request")
-            self._stage_registered_inputs(tree, candidate, input_artifacts)
+            self._stage_registered_inputs(
+                tree,
+                candidate,
+                input_artifacts,
+                input_payloads=input_payloads,
+            )
             lifecycle._commit_boundary("prepare.inputs")
             tree.assert_named_identity()
             tree.publish_immutable_json("remote", "execution_request.json", candidate.model_dump(mode="json"))
@@ -617,7 +624,9 @@ class DescriptorRemoteExecutionLifecycleService:
             else None
         )
         stage = self._read_stage(tree)
-        if stage is not None and stage.stage == request.task_id:
+        if stage is not None:
+            if stage.stage != request.task_id:
+                raise ValueError("StageState task does not match remote execution request")
             expected_authority = {
                 "request_id": request.request_id,
                 "request_sha256": request.request_sha256,
@@ -640,9 +649,13 @@ class DescriptorRemoteExecutionLifecycleService:
                 authority_succeeded = True
         elif stage is not None and stage.status == RunStatus.SUCCEEDED:
             raise ValueError("successful remote execution publication is unavailable")
-        state = self._read_state(tree, request, required=False)
+        transport_state = self._read_state(tree, request, required=False)
         if authority_succeeded:
-            state = self._state_payload(request, status="SUCCEEDED", remote_job_id=str((state or {}).get("remote_job_id") or ""))
+            state = self._state_payload(
+                request,
+                status="SUCCEEDED",
+                remote_job_id=str((transport_state or {}).get("remote_job_id") or ""),
+            )
         elif publication is not None or stage is None:
             state = self._state_payload(request, status="RECOVERY_REQUIRED", error_code="authority_commit_incomplete")
         elif stage.status == RunStatus.FAILED:
@@ -652,16 +665,59 @@ class DescriptorRemoteExecutionLifecycleService:
             state = self._state_payload(request, status="CANCELLED")
         elif approval is None:
             state = self._state_payload(request, status="WAITING_APPROVAL")
-        elif state is None or state["status"] in {"SUCCEEDED", "FAILED", "CANCELLED"}:
+        elif transport_state is None or transport_state["status"] in {
+            "SUCCEEDED",
+            "FAILED",
+            "CANCELLED",
+        }:
             state = self._state_payload(request, status="RECOVERY_REQUIRED", error_code="telemetry_unavailable")
+        else:
+            state = dict(transport_state)
+        request_digest = str(request.request_sha256)
+        slot_binding_digest = (
+            str(slot_binding.slot_binding_digest) if slot_binding is not None else ""
+        )
+        approval_digest = str(approval.approval_sha256) if approval is not None else ""
+        stage_digest = (
+            _agent_digest(stage.model_dump(mode="json")) if stage is not None else ""
+        )
+        transport_state_digest = (
+            _agent_digest(transport_state) if transport_state is not None else ""
+        )
+        publication_digest = (
+            str(publication.publication_sha256) if publication is not None else ""
+        )
+        status_transport_digest = (
+            "" if authority_succeeded else transport_state_digest
+        )
+        status_source_roster = {
+            "request_digest": request_digest,
+            "slot_binding_digest": slot_binding_digest,
+            "approval_digest": approval_digest,
+            "slot_stage_digest": stage_digest,
+            "transport_state_digest": status_transport_digest,
+            "publication_digest": publication_digest,
+        }
         return {
             "request": request.model_dump(mode="json"),
             "state": state,
+            "effective_status": str(state["status"]),
+            "request_digest": request_digest,
             "approval": approval.model_dump(mode="json") if approval else None,
+            "approval_digest": approval_digest,
             "publication": publication.model_dump(mode="json") if publication else None,
+            "publication_digest": publication_digest,
             "slot_binding": (
                 slot_binding.model_dump(mode="json") if slot_binding else None
             ),
+            "slot_binding_digest": slot_binding_digest,
+            "slot_stage_state": (
+                stage.model_dump(mode="json") if stage is not None else None
+            ),
+            "slot_stage_digest": stage_digest,
+            "transport_state": transport_state,
+            "transport_state_digest": transport_state_digest,
+            "status_source_roster_digest": _agent_digest(status_source_roster),
         }
 
     def _apply_observation(
@@ -999,6 +1055,8 @@ class DescriptorRemoteExecutionLifecycleService:
         tree: PinnedExecutionTree,
         request: Any,
         input_artifacts: Mapping[str, str],
+        *,
+        input_payloads: Mapping[str, bytes] | None = None,
     ) -> None:
         lifecycle = self._types()
         bindings = {
@@ -1008,20 +1066,50 @@ class DescriptorRemoteExecutionLifecycleService:
         expected = {item.relative_path for item in request.input_manifest.artifacts}
         if set(bindings) != expected or len(set(bindings.values())) != len(bindings):
             raise ValueError("input artifact bindings must exactly cover the transfer roster")
+        payloads: dict[str, bytes] | None = None
+        if input_payloads is not None:
+            payloads = {}
+            for path, payload in input_payloads.items():
+                if not isinstance(path, str) or not isinstance(payload, bytes):
+                    raise ValueError("inline input payload bindings are invalid")
+                payloads[path] = payload
+            if set(payloads) != expected:
+                raise ValueError(
+                    "inline input payloads must exactly cover the transfer roster"
+                )
         registry = tree.read_registry()
         for artifact in request.input_manifest.artifacts:
-            registered = registry.get(bindings[artifact.relative_path])
-            if not registered:
-                raise ValueError("input artifact is not registered")
             lifecycle._local_io_boundary("inputs.before_copy")
             tree.assert_named_identity()
-            tree.copy_run_artifact_to_inputs(
-                source_relative_path=lifecycle._relative_path(registered, "registered artifact path"),
-                destination_relative_path=artifact.relative_path,
-                expected_size=artifact.size_bytes,
-                expected_sha256=artifact.sha256,
-                digest=lifecycle._digest,
-            )
+            if payloads is not None:
+                payload = payloads[artifact.relative_path]
+                if (
+                    len(payload) != artifact.size_bytes
+                    or lifecycle._digest(payload) != artifact.sha256
+                ):
+                    raise ValueError(
+                        "inline input payload does not match transfer manifest"
+                    )
+                tree.publish_immutable_bytes(
+                    "inputs",
+                    artifact.relative_path,
+                    payload,
+                )
+            else:
+                registered = registry.get(bindings[artifact.relative_path])
+                if not registered:
+                    raise ValueError("input artifact is not registered")
+                tree.copy_run_artifact_to_inputs(
+                    source_relative_path=lifecycle._relative_path(
+                        registered,
+                        "registered artifact path",
+                    ),
+                    destination_relative_path=artifact.relative_path,
+                    expected_size=artifact.size_bytes,
+                    expected_sha256=artifact.sha256,
+                    digest=lifecycle._digest,
+                )
+            tree.assert_named_identity()
         self._verify_staged_inputs(tree, request)
 
     def _verify_staged_inputs(self, tree: PinnedExecutionTree, request: Any) -> None:

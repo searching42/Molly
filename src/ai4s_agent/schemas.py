@@ -3597,6 +3597,7 @@ class AgentHarnessControllerAction(str, Enum):
     WAIT_FOR_GATE = "wait_for_gate"
     STOP_GATE_REJECTED = "stop_gate_rejected"
     EXECUTE_LOCAL_TASK = "execute_local_task"
+    ADOPT_COMPLETED_TASK = "adopt_completed_task"
     PREPARE_REMOTE_REQUEST = "prepare_remote_request"
     WAIT_FOR_REMOTE_APPROVAL = "wait_for_remote_approval"
     STOP_REMOTE_REJECTED = "stop_remote_rejected"
@@ -3764,6 +3765,321 @@ class AgentHarnessControllerSourceBinding(BaseModel):
     @classmethod
     def validate_source_digest(cls, value: str) -> str:
         return _agent_digest_value(value, field="source_digest")
+
+
+class AgentHarnessVerifiedOutputBinding(BaseModel):
+    """One exact current local output accepted by the Executor verifier."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact_id: str
+    relative_path: str
+    content_sha256: str
+    size_bytes: int = Field(ge=0, le=2 * 1024 * 1024 * 1024)
+    producer_task_id: str
+    verification_class: str
+    verifier_version: str
+    verifier_digest: str
+    execution_record_id: str = ""
+    execution_record_digest: str = ""
+
+    @field_validator(
+        "artifact_id",
+        "producer_task_id",
+        "verification_class",
+        "verifier_version",
+        "execution_record_id",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "execution_record_id",
+        )
+
+    @field_validator("relative_path")
+    @classmethod
+    def validate_relative_path(cls, value: str) -> str:
+        clean = _agent_safe_text(
+            value,
+            field="relative_path",
+            max_length=1000,
+            allow_empty=False,
+        )
+        path = Path(clean)
+        if (
+            path.is_absolute()
+            or clean != path.as_posix()
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or "\\" in clean
+        ):
+            raise ValueError("verified output path must be canonical and relative")
+        return clean
+
+    @field_validator(
+        "content_sha256",
+        "verifier_digest",
+        "execution_record_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "execution_record_digest",
+        )
+
+    @model_validator(mode="after")
+    def validate_execution_record_pair(self) -> "AgentHarnessVerifiedOutputBinding":
+        if bool(self.execution_record_id) != bool(self.execution_record_digest):
+            raise ValueError(
+                "execution record ID and digest must be present together"
+            )
+        return self
+
+
+class AgentHarnessLocalDispatchReceipt(BaseModel):
+    """Immutable proof that the Executor crossed one local adapter boundary."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_harness_local_dispatch_receipt.v1"] = (
+        "agent_harness_local_dispatch_receipt.v1"
+    )
+    dispatch_receipt_id: str = ""
+    controller_execution_id: str
+    controller_execution_digest: str
+    decision_id: str
+    decision_digest: str
+    task_id: str
+    task_index: int = Field(ge=0, le=1023)
+    attempt_ordinal: int = Field(default=0, ge=0, le=1023)
+    slot_id: str
+    adapter_id: str
+    executor_dispatch_receipt_id: str
+    executor_dispatch_authority_id: str
+    executor_dispatch_authority_digest: str
+    executor_dispatch_attempt_id: str
+    executor_dispatch_ordinal: int = Field(default=0, ge=0, le=4096)
+    before_dispatch_roster_digest: str
+    after_dispatch_roster_digest: str
+    local_adapter_execution_binding_digest: str
+    compiled_options_digest: str
+    input_artifacts_digest: str
+    output_contract_digest: str
+    execution_started: Literal[True] = True
+    dispatch_receipt_digest: str = ""
+    created_at: str
+
+    @field_validator(
+        "dispatch_receipt_id",
+        "controller_execution_id",
+        "decision_id",
+        "task_id",
+        "slot_id",
+        "adapter_id",
+        "executor_dispatch_receipt_id",
+        "executor_dispatch_authority_id",
+        "executor_dispatch_attempt_id",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name
+            in {
+                "dispatch_receipt_id",
+                "executor_dispatch_receipt_id",
+                "executor_dispatch_authority_id",
+                "executor_dispatch_attempt_id",
+            },
+        )
+
+    @field_validator(
+        "controller_execution_digest",
+        "decision_digest",
+        "before_dispatch_roster_digest",
+        "after_dispatch_roster_digest",
+        "local_adapter_execution_binding_digest",
+        "compiled_options_digest",
+        "input_artifacts_digest",
+        "output_contract_digest",
+    )
+    @classmethod
+    def validate_required_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("executor_dispatch_authority_digest")
+    @classmethod
+    def validate_optional_authority_digest(cls, value: str) -> str:
+        return _agent_digest_value(
+            value,
+            field="executor_dispatch_authority_digest",
+            allow_empty=True,
+        )
+
+    @field_validator("dispatch_receipt_digest")
+    @classmethod
+    def validate_receipt_digest(cls, value: str) -> str:
+        return _agent_digest_value(
+            value,
+            field="dispatch_receipt_digest",
+            allow_empty=True,
+        )
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(
+            value,
+            field="created_at",
+            max_length=64,
+            allow_empty=False,
+        )
+
+    @model_validator(mode="after")
+    def validate_receipt(self) -> "AgentHarnessLocalDispatchReceipt":
+        executor_fields = (
+            self.executor_dispatch_receipt_id,
+            self.executor_dispatch_authority_id,
+            self.executor_dispatch_authority_digest,
+            self.executor_dispatch_attempt_id,
+        )
+        if any(executor_fields) != all(executor_fields):
+            raise ValueError("Executor dispatch receipt authority is incomplete")
+        if bool(self.executor_dispatch_ordinal) != all(executor_fields):
+            raise ValueError("Executor dispatch receipt ordinal is inconsistent")
+        expected = _agent_digest(self.semantic_material())
+        if self.dispatch_receipt_digest and self.dispatch_receipt_digest != expected:
+            raise ValueError("local dispatch receipt digest mismatch")
+        object.__setattr__(self, "dispatch_receipt_digest", expected)
+        expected_id = f"local-dispatch-{expected.split(':', 1)[1][:32]}"
+        if self.dispatch_receipt_id and self.dispatch_receipt_id != expected_id:
+            raise ValueError("local dispatch receipt ID mismatch")
+        object.__setattr__(self, "dispatch_receipt_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("dispatch_receipt_id", None)
+        payload.pop("dispatch_receipt_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentHarnessLocalExecutionPublication(BaseModel):
+    """Immutable exact output roster for one local completion or adoption."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_harness_local_execution_publication.v1"] = (
+        "agent_harness_local_execution_publication.v1"
+    )
+    publication_id: str = ""
+    controller_execution_id: str
+    controller_execution_digest: str
+    decision_id: str
+    decision_digest: str
+    task_id: str
+    task_index: int = Field(ge=0, le=1023)
+    attempt_ordinal: int = Field(default=0, ge=0, le=1023)
+    slot_id: str
+    verification_mode: Literal["controller_dispatch", "adopt_completed_task"]
+    local_dispatch_receipt_id: str = ""
+    local_dispatch_receipt_digest: str = ""
+    stage_digest: str
+    artifact_registry_digest: str
+    output_contract_digest: str
+    verified_outputs: list[AgentHarnessVerifiedOutputBinding]
+    verified_outputs_digest: str
+    publication_digest: str = ""
+    created_at: str
+
+    @field_validator(
+        "publication_id",
+        "controller_execution_id",
+        "decision_id",
+        "task_id",
+        "slot_id",
+        "local_dispatch_receipt_id",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name
+            in {"publication_id", "local_dispatch_receipt_id"},
+        )
+
+    @field_validator(
+        "controller_execution_digest",
+        "decision_digest",
+        "stage_digest",
+        "artifact_registry_digest",
+        "output_contract_digest",
+        "verified_outputs_digest",
+    )
+    @classmethod
+    def validate_required_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("local_dispatch_receipt_digest", "publication_digest")
+    @classmethod
+    def validate_optional_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name, allow_empty=True)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(
+            value,
+            field="created_at",
+            max_length=64,
+            allow_empty=False,
+        )
+
+    @model_validator(mode="after")
+    def validate_publication(self) -> "AgentHarnessLocalExecutionPublication":
+        if not self.verified_outputs:
+            raise ValueError("local execution publication requires verified outputs")
+        artifact_ids = [item.artifact_id for item in self.verified_outputs]
+        if artifact_ids != sorted(artifact_ids) or len(artifact_ids) != len(
+            set(artifact_ids)
+        ):
+            raise ValueError("verified outputs must be unique and sorted")
+        if self.verified_outputs_digest != _agent_digest(
+            [item.model_dump(mode="json") for item in self.verified_outputs]
+        ):
+            raise ValueError("verified output roster digest mismatch")
+        has_dispatch = bool(
+            self.local_dispatch_receipt_id or self.local_dispatch_receipt_digest
+        )
+        if has_dispatch != bool(
+            self.local_dispatch_receipt_id
+            and self.local_dispatch_receipt_digest
+        ):
+            raise ValueError("local dispatch receipt ID and digest must agree")
+        if (self.verification_mode == "controller_dispatch") != has_dispatch:
+            raise ValueError("local publication verification mode is inconsistent")
+        expected = _agent_digest(self.semantic_material())
+        if self.publication_digest and self.publication_digest != expected:
+            raise ValueError("local execution publication digest mismatch")
+        object.__setattr__(self, "publication_digest", expected)
+        expected_id = f"local-publication-{expected.split(':', 1)[1][:32]}"
+        if self.publication_id and self.publication_id != expected_id:
+            raise ValueError("local execution publication ID mismatch")
+        object.__setattr__(self, "publication_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("publication_id", None)
+        payload.pop("publication_digest", None)
+        payload.pop("created_at", None)
+        return payload
 
 
 class AgentHarnessControllerTaskSlot(BaseModel):
@@ -4343,11 +4659,22 @@ class AgentHarnessControllerActionReceipt(BaseModel):
     before_artifact_registry_digest: str = ""
     after_artifact_registry_digest: str = ""
     local_dispatch_receipt_ids: list[str] = Field(default_factory=list)
+    verified_output_bindings: list[AgentHarnessVerifiedOutputBinding] = Field(
+        default_factory=list
+    )
+    verified_output_bindings_digest: str = ""
+    local_execution_publication_id: str = ""
+    local_execution_publication_digest: str = ""
     remote_execution_slot_id: str = ""
     remote_request_id: str = ""
     remote_request_sha256: str = ""
     remote_approval_digest: str = ""
     remote_publication_digest: str = ""
+    before_remote_stage_digest: str = ""
+    after_remote_stage_digest: str = ""
+    before_remote_state_digest: str = ""
+    after_remote_state_digest: str = ""
+    remote_status_source_roster_digest: str = ""
     gate_snapshot_id: str = ""
     gate_snapshot_hash: str = ""
     gate_decision_digest: str = ""
@@ -4367,6 +4694,7 @@ class AgentHarnessControllerActionReceipt(BaseModel):
         "slot_id",
         "remote_execution_slot_id",
         "remote_request_id",
+        "local_execution_publication_id",
     )
     @classmethod
     def validate_identifiers(cls, value: str, info: Any) -> str:
@@ -4380,6 +4708,7 @@ class AgentHarnessControllerActionReceipt(BaseModel):
                 "slot_id",
                 "remote_execution_slot_id",
                 "remote_request_id",
+                "local_execution_publication_id",
             },
         )
 
@@ -4400,6 +4729,13 @@ class AgentHarnessControllerActionReceipt(BaseModel):
         "remote_request_sha256",
         "remote_approval_digest",
         "remote_publication_digest",
+        "before_remote_stage_digest",
+        "after_remote_stage_digest",
+        "before_remote_state_digest",
+        "after_remote_state_digest",
+        "remote_status_source_roster_digest",
+        "verified_output_bindings_digest",
+        "local_execution_publication_digest",
         "gate_snapshot_hash",
         "gate_decision_digest",
         "receipt_digest",
@@ -4417,6 +4753,19 @@ class AgentHarnessControllerActionReceipt(BaseModel):
             sort_values=False,
             max_items=1024,
         )
+
+    @field_validator("verified_output_bindings")
+    @classmethod
+    def validate_verified_output_bindings(
+        cls,
+        value: list[AgentHarnessVerifiedOutputBinding],
+    ) -> list[AgentHarnessVerifiedOutputBinding]:
+        artifact_ids = [item.artifact_id for item in value]
+        if artifact_ids != sorted(artifact_ids) or len(artifact_ids) != len(
+            set(artifact_ids)
+        ):
+            raise ValueError("verified output bindings must be unique and sorted")
+        return value
 
     @field_validator("reason_codes")
     @classmethod
@@ -4452,6 +4801,40 @@ class AgentHarnessControllerActionReceipt(BaseModel):
             raise ValueError("remote request ID and digest must be present together")
         if bool(self.gate_snapshot_id) != bool(self.gate_snapshot_hash):
             raise ValueError("Gate snapshot ID and digest must be present together")
+        if bool(self.verified_output_bindings) != bool(
+            self.verified_output_bindings_digest
+        ):
+            raise ValueError("verified output bindings and digest must agree")
+        if self.verified_output_bindings and self.verified_output_bindings_digest != _agent_digest(
+            [item.model_dump(mode="json") for item in self.verified_output_bindings]
+        ):
+            raise ValueError("verified output binding digest mismatch")
+        if bool(self.local_execution_publication_id) != bool(
+            self.local_execution_publication_digest
+        ):
+            raise ValueError("local execution publication ID and digest must agree")
+        if set(self.reason_codes).intersection({"TASK_COMPLETED", "TASK_ADOPTED"}) and self.action_kind in {
+            AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+            AgentHarnessControllerAction.ADOPT_COMPLETED_TASK,
+        }:
+            if (
+                not self.local_execution_publication_id
+                or not self.verified_output_bindings
+            ):
+                raise ValueError(
+                    "local completion receipt requires exact output publication evidence"
+                )
+        if (
+            self.action_kind == AgentHarnessControllerAction.EXECUTE_LOCAL_TASK
+            and "TASK_COMPLETED" in self.reason_codes
+            and not self.local_dispatch_receipt_ids
+        ):
+            raise ValueError("executed local completion requires dispatch receipts")
+        if (
+            self.action_kind == AgentHarnessControllerAction.ADOPT_COMPLETED_TASK
+            and self.local_dispatch_receipt_ids
+        ):
+            raise ValueError("adopted local completion cannot claim Controller dispatch")
         if self.dispatch_occurred and not self.execution_started:
             raise ValueError("dispatch cannot occur before execution starts")
         expected = _agent_digest(self.semantic_material())

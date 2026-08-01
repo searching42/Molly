@@ -368,6 +368,34 @@ def test_task_slots_isolate_authority_stage_and_approval_from_dispatch(tmp_path:
     )["state"]["status"] == "WAITING_APPROVAL"
 
 
+def test_remote_status_roster_changes_when_same_request_has_new_state(
+    tmp_path: Path,
+) -> None:
+    _, _, projects, profiles, manifest = _fixture(tmp_path)
+    transport = FakeTransport()
+    service = _service(projects, profiles, transport)
+    slot_id = "controller-a-task-0-attempt-0"
+    prepared = _prepare_slot(service, manifest, slot_id=slot_id)
+    binding_digest = prepared["slot_binding"]["slot_binding_digest"]
+    approved = service.record_approval(
+        project_id="project-a",
+        run_id="remote-run-001",
+        request_sha256=prepared["request"]["request_sha256"],
+        actor="reviewer",
+        slot_id=slot_id,
+        expected_slot_binding_digest=binding_digest,
+    )
+
+    assert prepared["request_digest"] == approved["request_digest"]
+    assert prepared["transport_state_digest"] != approved["transport_state_digest"]
+    assert (
+        prepared["status_source_roster_digest"]
+        != approved["status_source_roster_digest"]
+    )
+    assert prepared["effective_status"] == "WAITING_APPROVAL"
+    assert approved["effective_status"] == "APPROVED"
+
+
 def test_task_slot_success_uses_slot_paths_and_remains_exactly_inspectable(tmp_path: Path) -> None:
     _, _, projects, profiles, manifest = _fixture(tmp_path)
     transport = FakeTransport()
@@ -413,6 +441,68 @@ def test_task_slot_success_uses_slot_paths_and_remains_exactly_inspectable(tmp_p
         slot_id=slot_id,
         expected_slot_binding_digest=binding_digest,
     )["state"]["status"] == "SUCCEEDED"
+
+
+def test_terminal_slot_authority_overrides_mutable_transport_telemetry(
+    tmp_path: Path,
+) -> None:
+    _, _, projects, profiles, manifest = _fixture(tmp_path)
+    transport = FakeTransport()
+    service = _service(projects, profiles, transport)
+    slot_id = "controller-a-task-0-attempt-0"
+    prepared = _prepare_slot(service, manifest, slot_id=slot_id)
+    binding_digest = prepared["slot_binding"]["slot_binding_digest"]
+    service.record_approval(
+        project_id="project-a",
+        run_id="remote-run-001",
+        request_sha256=prepared["request"]["request_sha256"],
+        actor="reviewer",
+        slot_id=slot_id,
+        expected_slot_binding_digest=binding_digest,
+    )
+    service.dispatch(
+        project_id="project-a",
+        run_id="remote-run-001",
+        request_sha256=prepared["request"]["request_sha256"],
+        slot_id=slot_id,
+        expected_slot_binding_digest=binding_digest,
+    )
+    transport.status = "SUCCEEDED"
+    completed = service.refresh(
+        project_id="project-a",
+        run_id="remote-run-001",
+        slot_id=slot_id,
+        expected_slot_binding_digest=binding_digest,
+    )
+    slot_root = (
+        projects.run_dir("project-a", "remote-run-001")
+        / "remote-executions"
+        / slot_id
+    )
+    telemetry_path = slot_root / "state.json"
+    telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+    telemetry["status"] = "FAILED"
+    telemetry["error_code"] = "mutable-telemetry-only"
+    telemetry["updated_at"] = "2026-07-27T00:00:00Z"
+    telemetry_path.write_text(
+        json.dumps(telemetry, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    inspected = service.inspect(
+        project_id="project-a",
+        run_id="remote-run-001",
+        slot_id=slot_id,
+        expected_slot_binding_digest=binding_digest,
+    )
+    assert inspected["transport_state"]["status"] == "FAILED"
+    assert inspected["effective_status"] == "SUCCEEDED"
+    assert inspected["slot_stage_digest"] == completed["slot_stage_digest"]
+    assert (
+        inspected["status_source_roster_digest"]
+        == completed["status_source_roster_digest"]
+    )
+    assert inspected["transport_state_digest"] != completed["transport_state_digest"]
 
 
 def test_task_slot_retry_requires_same_authority_and_recovers_binding_commit(tmp_path: Path) -> None:
@@ -1169,6 +1259,110 @@ def test_input_directory_replacement_never_writes_external_tree(tmp_path: Path) 
     assert {path.name for path in external.iterdir()} == {"sentinel.txt"}
     assert sentinel.read_bytes() == b"unchanged"
     assert not (remote / "execution_request.json").exists()
+
+
+def test_task_slot_remote_parent_symlink_never_writes_external_tree(
+    tmp_path: Path,
+) -> None:
+    _, _, projects, profiles, manifest = _fixture(tmp_path)
+    run_dir = projects.run_dir("project-a", "remote-run-001")
+    external = tmp_path / "external-parent"
+    external.mkdir()
+    sentinel = external / "sentinel.txt"
+    sentinel.write_bytes(b"unchanged")
+    (run_dir / "remote-executions").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="unavailable or unsafe"):
+        _prepare_slot(
+            _service(projects, profiles, FakeTransport()),
+            manifest,
+            slot_id="controller-a-task-0-attempt-0",
+        )
+    assert {path.name for path in external.iterdir()} == {"sentinel.txt"}
+    assert sentinel.read_bytes() == b"unchanged"
+
+
+def test_task_slot_directory_symlink_never_writes_external_tree(
+    tmp_path: Path,
+) -> None:
+    _, _, projects, profiles, manifest = _fixture(tmp_path)
+    run_dir = projects.run_dir("project-a", "remote-run-001")
+    parent = run_dir / "remote-executions"
+    parent.mkdir()
+    external = tmp_path / "external-slot"
+    external.mkdir()
+    sentinel = external / "sentinel.txt"
+    sentinel.write_bytes(b"unchanged")
+    slot_id = "controller-a-task-0-attempt-0"
+    (parent / slot_id).symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="unavailable or unsafe"):
+        _prepare_slot(
+            _service(projects, profiles, FakeTransport()),
+            manifest,
+            slot_id=slot_id,
+        )
+    assert {path.name for path in external.iterdir()} == {"sentinel.txt"}
+    assert sentinel.read_bytes() == b"unchanged"
+
+
+def test_task_slot_destination_file_symlink_never_modifies_target(
+    tmp_path: Path,
+) -> None:
+    _, _, projects, profiles, manifest = _fixture(tmp_path)
+    run_dir = projects.run_dir("project-a", "remote-run-001")
+    slot_id = "controller-a-task-0-attempt-0"
+    slot_root = run_dir / "remote-executions" / slot_id
+    inputs = slot_root / "inputs"
+    inputs.mkdir(parents=True)
+    (slot_root / "outputs").mkdir()
+    external = tmp_path / "external-file.json"
+    external.write_bytes(b"unchanged")
+    (inputs / "request.json").symlink_to(external)
+
+    with pytest.raises(ValueError, match="unavailable or unsafe|symbolic link"):
+        _prepare_slot(
+            _service(projects, profiles, FakeTransport()),
+            manifest,
+            slot_id=slot_id,
+        )
+    assert external.read_bytes() == b"unchanged"
+    assert (inputs / "request.json").is_symlink()
+
+
+def test_task_slot_parent_replacement_after_open_never_writes_external_tree(
+    tmp_path: Path,
+) -> None:
+    _, _, projects, profiles, manifest = _fixture(tmp_path)
+    run_dir = projects.run_dir("project-a", "remote-run-001")
+    parent = run_dir / "remote-executions"
+    pinned_parent = run_dir / "remote-executions-pinned"
+    external = tmp_path / "external-replacement"
+    external.mkdir()
+    sentinel = external / "sentinel.txt"
+    sentinel.write_bytes(b"unchanged")
+    replaced = False
+
+    def replace(name: str) -> None:
+        nonlocal replaced
+        if name == "prepare.tree_pinned" and not replaced:
+            replaced = True
+            parent.rename(pinned_parent)
+            parent.symlink_to(external, target_is_directory=True)
+
+    lifecycle_module._LOCAL_IO_HOOK = replace
+    try:
+        with pytest.raises(ValueError, match="identity"):
+            _prepare_slot(
+                _service(projects, profiles, FakeTransport()),
+                manifest,
+                slot_id="controller-a-task-0-attempt-0",
+            )
+    finally:
+        lifecycle_module._LOCAL_IO_HOOK = None
+    assert {path.name for path in external.iterdir()} == {"sentinel.txt"}
+    assert sentinel.read_bytes() == b"unchanged"
+    assert not (pinned_parent / "controller-a-task-0-attempt-0" / "execution_request.json").exists()
 
 
 def test_approval_directory_replacement_never_writes_external_tree(tmp_path: Path) -> None:

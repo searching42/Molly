@@ -77,6 +77,15 @@ bounded JSON reads, private modes, inter-process file locks, fsync discipline,
 and no-replace immutable publication. Slot IDs are validated before any path
 operation; separators, traversal, aliases, and symlinks fail closed.
 
+Controller-authorized input bytes are never staged through a separate
+path-based directory. The Controller content-verifies each source, derives the
+transfer manifest directly from those exact bytes, and hands the payload roster
+to the lifecycle. The lifecycle publishes every input through the pinned slot
+tree using dirfd-relative `O_NOFOLLOW`/exclusive operations and rechecks named
+directory identity before and after each write. A symlink at the remote parent,
+slot, input directory, or destination file, and a parent replacement after
+open, all fail before bytes can escape the run scope.
+
 ## Lifecycle and remote approval
 
 ```text
@@ -119,6 +128,13 @@ publication, Registry, and StageState in that authority order. Mutable
 transport status is observational when stronger evidence exists. Recovery is
 explicit and bounded to one lifecycle call; the Controller never polls or
 automatically increments the attempt.
+
+The server-only inspection seam returns the exact slot binding, request,
+approval, slot StageState, mutable transport state, publication, and each
+digest, plus a derived effective-status source-roster digest. Request digest is
+never reused as proof of a dynamic state. Authoritative terminal StageState and
+publication outrank mutable telemetry; replacing StageState changes the source
+roster and invalidates the Controller's prior receipt.
 
 A later attempt receives a new slot and cannot overwrite or reinterpret the
 previous attempt. Attempt creation is a Controller recovery decision with an

@@ -16,6 +16,7 @@
         "wait_for_gate",
         "stop_gate_rejected",
         "execute_local_task",
+        "adopt_completed_task",
         "prepare_remote_request",
         "wait_for_remote_approval",
         "stop_remote_rejected",

@@ -33,6 +33,8 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerActionReceipt,
     AgentHarnessControllerDecision,
     AgentHarnessControllerExecution,
+    AgentHarnessLocalDispatchReceipt,
+    AgentHarnessLocalExecutionPublication,
     AgentPermissionDecision,
     AgentPermissionOutcome,
     AgentPermissionPhase,
@@ -136,6 +138,18 @@ _CONTROL_LAYOUT: Mapping[str, tuple[str, str, str, type[BaseModel]]] = {
         "receipt_digest",
         AgentHarnessControllerActionReceipt,
     ),
+    "harness_local_dispatch_receipt": (
+        "harness_local_dispatch_receipts",
+        "local_dispatch_receipt.json",
+        "dispatch_receipt_digest",
+        AgentHarnessLocalDispatchReceipt,
+    ),
+    "harness_local_execution_publication": (
+        "harness_local_execution_publications",
+        "local_execution_publication.json",
+        "publication_digest",
+        AgentHarnessLocalExecutionPublication,
+    ),
 }
 _CONTROL_ID_FIELDS = {
     "permission_decision": "decision_id",
@@ -148,6 +162,8 @@ _CONTROL_ID_FIELDS = {
     "harness_controller_execution": "controller_execution_id",
     "harness_controller_decision": "decision_id",
     "harness_controller_action_receipt": "receipt_id",
+    "harness_local_dispatch_receipt": "dispatch_receipt_id",
+    "harness_local_execution_publication": "publication_id",
 }
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -546,6 +562,128 @@ class AgentPlanControlStore:
             if receipt.controller_execution_id == controller_execution_id:
                 receipts.append(receipt)
         return sorted(receipts, key=lambda item: (item.created_at, item.receipt_id))
+
+    def publish_harness_local_dispatch_receipt(
+        self,
+        *,
+        project_id: str,
+        receipt: AgentHarnessLocalDispatchReceipt,
+    ) -> AgentHarnessLocalDispatchReceipt:
+        return self._publish_model(
+            project_id=project_id,
+            kind="harness_local_dispatch_receipt",
+            artifact_id=receipt.dispatch_receipt_id,
+            model=receipt,
+        )
+
+    def read_harness_local_dispatch_receipt(
+        self,
+        *,
+        project_id: str,
+        dispatch_receipt_id: str,
+    ) -> AgentHarnessLocalDispatchReceipt:
+        return self._read_model(
+            project_id=project_id,
+            kind="harness_local_dispatch_receipt",
+            artifact_id=dispatch_receipt_id,
+            expected_type=AgentHarnessLocalDispatchReceipt,
+        )
+
+    def list_harness_local_dispatch_receipts(
+        self,
+        *,
+        project_id: str,
+        controller_execution_id: str,
+    ) -> list[AgentHarnessLocalDispatchReceipt]:
+        root = self._collection_root(
+            project_id=project_id,
+            kind="harness_local_dispatch_receipt",
+            create=False,
+        )
+        if root is None:
+            return []
+        result: list[AgentHarnessLocalDispatchReceipt] = []
+        children = sorted(root.iterdir(), key=lambda item: item.name)
+        if len(children) > 4096:
+            raise ScientificAgentAuthorizationVerificationError(
+                "local dispatch receipt collection exceeds its bounded roster"
+            )
+        for child in children:
+            if child.is_symlink() or not child.is_dir():
+                raise ScientificAgentAuthorizationVerificationError(
+                    "local dispatch receipt collection contains an unsafe entry"
+                )
+            receipt = self.read_harness_local_dispatch_receipt(
+                project_id=project_id,
+                dispatch_receipt_id=child.name,
+            )
+            if receipt.controller_execution_id == controller_execution_id:
+                result.append(receipt)
+        return sorted(
+            result,
+            key=lambda item: (item.created_at, item.dispatch_receipt_id),
+        )
+
+    def publish_harness_local_execution_publication(
+        self,
+        *,
+        project_id: str,
+        publication: AgentHarnessLocalExecutionPublication,
+    ) -> AgentHarnessLocalExecutionPublication:
+        return self._publish_model(
+            project_id=project_id,
+            kind="harness_local_execution_publication",
+            artifact_id=publication.publication_id,
+            model=publication,
+        )
+
+    def read_harness_local_execution_publication(
+        self,
+        *,
+        project_id: str,
+        publication_id: str,
+    ) -> AgentHarnessLocalExecutionPublication:
+        return self._read_model(
+            project_id=project_id,
+            kind="harness_local_execution_publication",
+            artifact_id=publication_id,
+            expected_type=AgentHarnessLocalExecutionPublication,
+        )
+
+    def list_harness_local_execution_publications(
+        self,
+        *,
+        project_id: str,
+        controller_execution_id: str,
+    ) -> list[AgentHarnessLocalExecutionPublication]:
+        root = self._collection_root(
+            project_id=project_id,
+            kind="harness_local_execution_publication",
+            create=False,
+        )
+        if root is None:
+            return []
+        result: list[AgentHarnessLocalExecutionPublication] = []
+        children = sorted(root.iterdir(), key=lambda item: item.name)
+        if len(children) > 4096:
+            raise ScientificAgentAuthorizationVerificationError(
+                "local execution publication collection exceeds its bounded roster"
+            )
+        for child in children:
+            if child.is_symlink() or not child.is_dir():
+                raise ScientificAgentAuthorizationVerificationError(
+                    "local execution publication collection contains an unsafe entry"
+                )
+            publication = self.read_harness_local_execution_publication(
+                project_id=project_id,
+                publication_id=child.name,
+            )
+            if publication.controller_execution_id == controller_execution_id:
+                result.append(publication)
+        return sorted(
+            result,
+            key=lambda item: (item.created_at, item.publication_id),
+        )
 
     @contextmanager
     def request_session(
