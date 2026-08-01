@@ -2389,6 +2389,13 @@ class RemoteResourceAuthorityPolicyEntry(BaseModel):
     configured_resources: AgentConfiguredRemoteResources
     budget_limits: AgentRemoteResourceBudgetLimits
 
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def validate_enabled(cls, value: Any) -> bool:
+        if not isinstance(value, bool):
+            raise ValueError("enabled must be a strict boolean")
+        return value
+
     @field_validator(
         "policy_id", "connection_id", "execution_profile_id", "remote_task_type"
     )
@@ -2552,6 +2559,135 @@ class AgentRemoteResourceSourceBinding(BaseModel):
         return _agent_digest_value(value, field="source_digest")
 
 
+class AgentRemoteResourceTaskBudgetBinding(BaseModel):
+    """Exact resource and budget material for one remote task in a set."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    task_id: str
+    authority_id: str
+    authority_digest: str
+    configured_resources: AgentConfiguredRemoteResources
+    budget_limits: AgentRemoteResourceBudgetLimits
+    budget_policy_digest: str
+    derived_gpu_hours: float
+
+    @field_validator("task_id", "authority_id")
+    @classmethod
+    def validate_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("authority_digest", "budget_policy_digest")
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("derived_gpu_hours", mode="before")
+    @classmethod
+    def validate_derived_gpu_hours(cls, value: Any) -> float:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError("derived_gpu_hours must be a non-negative finite number")
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed < 0:
+            raise ValueError("derived_gpu_hours must be a non-negative finite number")
+        return parsed
+
+
+class AgentRemoteResourceAggregateBudget(BaseModel):
+    """Versioned conservative plan-level aggregation over the remote roster."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_remote_resource_aggregate_budget.v1"] = (
+        "agent_remote_resource_aggregate_budget.v1"
+    )
+    remote_task_ids: list[str]
+    per_task_budget_bindings: list[AgentRemoteResourceTaskBudgetBinding]
+    walltime_aggregation_policy: Literal["sequential_sum.v1"] = "sequential_sum.v1"
+    total_derived_gpu_hours: float
+    total_configured_cpu_threads: int
+    total_walltime_upper_bound_sec: int
+    plan_max_runtime_sec: float | None = None
+    plan_max_gpu_hours: float | None = None
+    plan_max_cost_usd: float | None = None
+    aggregate_budget_digest: str = ""
+
+    @field_validator("remote_task_ids")
+    @classmethod
+    def validate_remote_task_ids(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="remote_task_ids", sort_values=False)
+
+    @field_validator("total_derived_gpu_hours", mode="before")
+    @classmethod
+    def validate_total_gpu_hours(cls, value: Any) -> float:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError("total_derived_gpu_hours must be non-negative and finite")
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed < 0:
+            raise ValueError("total_derived_gpu_hours must be non-negative and finite")
+        return parsed
+
+    @field_validator("total_configured_cpu_threads", "total_walltime_upper_bound_sec", mode="before")
+    @classmethod
+    def validate_non_negative_totals(cls, value: Any, info: Any) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{info.field_name} must be a non-negative integer")
+        return value
+
+    @field_validator(
+        "plan_max_runtime_sec", "plan_max_gpu_hours", "plan_max_cost_usd", mode="before"
+    )
+    @classmethod
+    def validate_plan_limits(cls, value: Any, info: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError(f"{info.field_name} must be a positive finite number or null")
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed <= 0:
+            raise ValueError(f"{info.field_name} must be a positive finite number or null")
+        return parsed
+
+    @field_validator("aggregate_budget_digest")
+    @classmethod
+    def validate_aggregate_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="aggregate_budget_digest", allow_empty=True)
+
+    @model_validator(mode="after")
+    def validate_aggregate(self) -> "AgentRemoteResourceAggregateBudget":
+        binding_ids = [item.task_id for item in self.per_task_budget_bindings]
+        if len(binding_ids) != len(set(binding_ids)):
+            raise ValueError("remote aggregate budget task bindings must be unique")
+        positions = {task_id: index for index, task_id in enumerate(self.remote_task_ids)}
+        if any(task_id not in positions for task_id in binding_ids):
+            raise ValueError("remote aggregate budget binding is outside the remote roster")
+        if binding_ids != sorted(binding_ids, key=positions.__getitem__):
+            raise ValueError("remote aggregate budget bindings must follow RunPlan order")
+        expected_gpu_hours = sum(item.derived_gpu_hours for item in self.per_task_budget_bindings)
+        expected_cpu_threads = sum(
+            item.configured_resources.cpu_threads for item in self.per_task_budget_bindings
+        )
+        expected_walltime = sum(
+            item.configured_resources.walltime_sec for item in self.per_task_budget_bindings
+        )
+        if not math.isclose(self.total_derived_gpu_hours, expected_gpu_hours, rel_tol=0, abs_tol=1e-12):
+            raise ValueError("remote aggregate GPU-hour total mismatch")
+        if self.total_configured_cpu_threads != expected_cpu_threads:
+            raise ValueError("remote aggregate CPU-thread total mismatch")
+        if self.total_walltime_upper_bound_sec != expected_walltime:
+            raise ValueError("remote aggregate walltime total mismatch")
+        expected = _agent_digest(self.semantic_material())
+        if self.aggregate_budget_digest and self.aggregate_budget_digest != expected:
+            raise ValueError("remote aggregate budget digest mismatch")
+        object.__setattr__(self, "aggregate_budget_digest", expected)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("aggregate_budget_digest", None)
+        return payload
+
+
 class AgentRemoteResourceAuthority(BaseModel):
     """Exact immutable resources for one remote RunPlan task; never executable."""
 
@@ -2687,6 +2823,112 @@ class AgentRemoteResourceAuthority(BaseModel):
         return payload
 
 
+class AgentRemoteResourceAuthoritySet(BaseModel):
+    """Manifest-last activation boundary for one complete remote task roster."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_remote_resource_authority_set.v1"] = (
+        "agent_remote_resource_authority_set.v1"
+    )
+    authority_set_id: str = ""
+    project_id: str
+    run_id: str
+    proposal_id: str
+    proposal_digest: str
+    decision_id: str
+    decision_digest: str
+    ordered_task_ids: list[str]
+    remote_task_ids: list[str]
+    authority_bindings: list[AgentRemoteResourceTaskBudgetBinding]
+    complete_roster_digest: str
+    aggregate_budget: AgentRemoteResourceAggregateBudget
+    aggregate_budget_digest: str
+    authority_set_digest: str = ""
+    created_at: str
+    executable: Literal[False] = False
+
+    @field_validator(
+        "authority_set_id", "project_id", "run_id", "proposal_id", "decision_id"
+    )
+    @classmethod
+    def validate_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "authority_set_id",
+        )
+
+    @field_validator(
+        "proposal_digest",
+        "decision_digest",
+        "complete_roster_digest",
+        "aggregate_budget_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name)
+
+    @field_validator("authority_set_digest")
+    @classmethod
+    def validate_set_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="authority_set_digest", allow_empty=True)
+
+    @field_validator("ordered_task_ids", "remote_task_ids")
+    @classmethod
+    def validate_task_rosters(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=False)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_authority_set(self) -> "AgentRemoteResourceAuthoritySet":
+        if any(task_id not in self.ordered_task_ids for task_id in self.remote_task_ids):
+            raise ValueError("remote authority set roster is outside the RunPlan")
+        positions = {task_id: index for index, task_id in enumerate(self.ordered_task_ids)}
+        if self.remote_task_ids != sorted(self.remote_task_ids, key=positions.__getitem__):
+            raise ValueError("remote authority set roster must follow RunPlan order")
+        binding_ids = [item.task_id for item in self.authority_bindings]
+        if binding_ids != self.remote_task_ids:
+            raise ValueError("remote authority set must exactly cover its remote task roster")
+        if self.aggregate_budget.remote_task_ids != self.remote_task_ids:
+            raise ValueError("remote authority set aggregate budget roster mismatch")
+        if self.aggregate_budget.per_task_budget_bindings != self.authority_bindings:
+            raise ValueError("remote authority set aggregate bindings mismatch")
+        if self.aggregate_budget_digest != self.aggregate_budget.aggregate_budget_digest:
+            raise ValueError("remote authority set aggregate budget digest mismatch")
+        expected_roster = _agent_digest(
+            {
+                "schema_version": "agent_remote_resource_authority_complete_roster.v1",
+                "remote_task_ids": self.remote_task_ids,
+                "authority_bindings": [
+                    item.model_dump(mode="json") for item in self.authority_bindings
+                ],
+            }
+        )
+        if self.complete_roster_digest != expected_roster:
+            raise ValueError("remote authority set complete roster digest mismatch")
+        expected = _agent_digest(self.semantic_material())
+        if self.authority_set_digest and self.authority_set_digest != expected:
+            raise ValueError("remote authority set digest mismatch")
+        object.__setattr__(self, "authority_set_digest", expected)
+        expected_id = f"remote-resource-authority-set-{expected.split(':', 1)[1][:32]}"
+        if self.authority_set_id and self.authority_set_id != expected_id:
+            raise ValueError("remote authority set ID must derive from its digest")
+        object.__setattr__(self, "authority_set_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("authority_set_id", None)
+        payload.pop("authority_set_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
 class AgentRemoteResourceAuthorityDecision(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -2703,6 +2945,7 @@ class AgentRemoteResourceAuthorityDecision(BaseModel):
     ordered_task_ids: list[str]
     remote_task_ids: list[str]
     task_decisions: list[AgentRemoteResourceTaskDecision]
+    aggregate_budget: AgentRemoteResourceAggregateBudget
     outcome: AgentRemoteResourceAuthorityOutcome
     reason_codes: list[str]
     findings: list[AgentRemoteResourceAuthorityFinding] = Field(default_factory=list)
@@ -2748,6 +2991,13 @@ class AgentRemoteResourceAuthorityDecision(BaseModel):
     def validate_decision(self) -> "AgentRemoteResourceAuthorityDecision":
         if [item.task_id for item in self.task_decisions] != self.remote_task_ids:
             raise ValueError("resource task decisions must equal the ordered remote roster")
+        if self.aggregate_budget.remote_task_ids != self.remote_task_ids:
+            raise ValueError("resource decision aggregate budget roster mismatch")
+        if self.outcome == AgentRemoteResourceAuthorityOutcome.CONFIGURED and (
+            [item.task_id for item in self.aggregate_budget.per_task_budget_bindings]
+            != self.remote_task_ids
+        ):
+            raise ValueError("configured resource decision requires complete aggregate bindings")
         if any(item.task_id not in self.ordered_task_ids for item in self.task_decisions):
             raise ValueError("remote resource decision task is outside the RunPlan roster")
         expected_outcome = (
@@ -5943,6 +6193,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_remote_resource_authority_request": AgentRemoteResourceAuthorityRequest,
     "agent_remote_resource_authority_decision": AgentRemoteResourceAuthorityDecision,
     "agent_remote_resource_authority": AgentRemoteResourceAuthority,
+    "agent_remote_resource_authority_set": AgentRemoteResourceAuthoritySet,
     "remote_resource_authority_policy": RemoteResourceAuthorityPolicy,
     "agent_plan_authorization_request": AgentPlanAuthorizationRequest,
     "agent_plan_authorization": AgentPlanAuthorization,

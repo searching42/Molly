@@ -76,6 +76,8 @@ def register_remote_resource_authority_routes(
                 "decision": result.decision.model_dump(mode="json"),
                 "authority_ids": [item.authority_id for item in result.authorities],
                 "authorities": [item.model_dump(mode="json") for item in result.authorities],
+                "authority_set_id": "",
+                "authority_set": None,
                 "executable": False,
                 "dispatched": False,
             }
@@ -133,6 +135,8 @@ def register_remote_resource_authority_routes(
                 "decision_id": result.decision.decision_id,
                 "authority_ids": [item.authority_id for item in result.authorities],
                 "authorities": [item.model_dump(mode="json") for item in result.authorities],
+                "authority_set_id": result.authority_set.authority_set_id,
+                "authority_set": result.authority_set.model_dump(mode="json"),
                 "executable": False,
                 "dispatched": False,
             }
@@ -179,6 +183,38 @@ def register_remote_resource_authority_routes(
                 "ok": True,
                 "authority_id": authority.authority_id,
                 "authority": authority.model_dump(mode="json"),
+                "executable": False,
+                "dispatched": False,
+            }
+        )
+
+    @app.get(
+        "/api/projects/<project_id>/agent-remote-resource-authority-sets/<authority_set_id>"
+    )
+    def read_remote_resource_authority_set(project_id: str, authority_set_id: str):
+        try:
+            authority_set = service.verify_authority_set(
+                project_id=project_id,
+                authority_set_id=authority_set_id,
+                verify_current=True,
+            )
+        except FileNotFoundError:
+            return _error(
+                "remote resource authority set not found",
+                404,
+                "REMOTE_RESOURCE_AUTHORITY_REQUIRED",
+            )
+        except (RemoteResourceAuthorityError, ScientificAgentPlanSourceChanged, ValueError):
+            return _error(
+                "remote resource authority set is stale",
+                409,
+                "REMOTE_RESOURCE_SOURCE_CHANGED",
+            )
+        return jsonify(
+            {
+                "ok": True,
+                "authority_set_id": authority_set.authority_set_id,
+                "authority_set": authority_set.model_dump(mode="json"),
                 "executable": False,
                 "dispatched": False,
             }

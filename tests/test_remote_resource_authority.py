@@ -32,14 +32,21 @@ from ai4s_agent.schemas import (
     AgentConfiguredRemoteResources,
     AgentExecutionPlanLLMResponse,
     AgentPermissionOutcome,
+    AgentPermissionPhase,
     AgentPlanAuthorizationRequest,
+    AgentRemoteResourceAuthority,
+    AgentRemoteResourceAuthorityDecision,
     AgentRemoteResourceAuthorityOutcome,
+    AgentRemoteResourceAuthoritySet,
     AgentRemoteResourceAuthorityRequest,
     AgentRemoteResourceBudgetLimits,
     AtomicTaskSpec,
+    ArtifactRef,
     RemoteResourceAuthorityPolicy,
     RemoteResourceAuthorityPolicyEntry,
     RiskLevel,
+    RunStatus,
+    StageState,
 )
 from ai4s_agent.scientific_agent_authorization import (
     AgentPlanControlStore,
@@ -52,29 +59,38 @@ from ai4s_agent.scientific_agent_plan import (
     ScientificAgentPlanService,
     ScientificAgentPlanSourceChanged,
 )
+from ai4s_agent.scientific_agent_permissions import ScientificAgentPermissionEngine
 from ai4s_agent.storage import ProjectStorage
 
 
 NOW = "2026-08-01T00:00:00Z"
 
 
-def _remote_task(task_type: str, profile_id: str) -> AtomicTaskSpec:
+def _remote_task(
+    task_type: str,
+    profile_id: str,
+    *,
+    task_id: str = "remote_task",
+    depends_on: list[str] | None = None,
+    required_artifacts: list[str] | None = None,
+    output_artifacts: list[str] | None = None,
+) -> AtomicTaskSpec:
     permission = {
         "document_parsing": "external_document_processing",
         "model_training": "model_training_compute",
         "molecular_generation": "candidate_generation_compute",
     }[task_type]
     return AtomicTaskSpec(
-        task_id="remote_task",
-        required_artifacts=[],
+        task_id=task_id,
+        required_artifacts=required_artifacts or [],
         optional_input_artifacts=[],
         input_artifact_alternatives=[],
-        output_artifacts=["remote_output"],
+        output_artifacts=output_artifacts or [f"{task_id}_output"],
         risk_level=RiskLevel.MEDIUM,
         gates=[],
         default_adapter=None,
-        depends_on=[],
-        scientific_tool_id="remote_task",
+        depends_on=depends_on or [],
+        scientific_tool_id=task_id,
         label="Remote Task",
         description="A review-only remote scientific task.",
         effect_class="compute",
@@ -96,7 +112,10 @@ def _remote_task(task_type: str, profile_id: str) -> AtomicTaskSpec:
         remote_task_type=task_type,
         backend_execution_routes={},
         backend_remote_task_types={},
-        accepted_input_trust_classes_by_artifact={},
+        accepted_input_trust_classes_by_artifact={
+            artifact_id: ["registered_intermediate", "verified_output"]
+            for artifact_id in required_artifacts or []
+        },
         budget_dimensions=["max_runtime_sec", "max_gpu_hours"],
         supports_plan_preapproval=False,
         idempotency_policy="server_checked",
@@ -239,6 +258,333 @@ def _configured_case(
     )
 
 
+def _multi_remote_case(
+    tmp_path: Path,
+    *,
+    resources: tuple[int, int, int] = (1, 2, 1800),
+    max_runtime_sec: int = 4000,
+    max_gpu_hours: float = 2.0,
+):
+    storage = ProjectStorage(workspace_dir=tmp_path / "workspace")
+    storage.create_project("project-1", name="Project", created_at=NOW)
+    config = tmp_path / "config"
+    profiles = ResourceProfileStore(
+        workspace_dir=storage.workspace_dir,
+        config_dir=config,
+    )
+    connection = profiles.save_connection(
+        ConnectionProfile(
+            connection_id="multi-worker",
+            ssh_host_alias="multi-worker",
+            expected_hostname="multi-worker",
+            remote_root="/srv/molly",
+            declared_capabilities=["gpu", "unimol"],
+        )
+    )
+    profiles.save_probe(
+        CapabilityProbeResult(
+            connection_id=connection.connection_id,
+            connection_profile_digest=connection.digest(),
+            status="available",
+            checked_at=NOW,
+            verified_capabilities=["gpu", "unimol"],
+            details=CapabilityDetails(
+                cpu_threads=32,
+                cuda=CudaCapabilityDetails(status="available"),
+            ),
+        )
+    )
+    registry = AtomicTaskRegistry(
+        [
+            _remote_task(
+                "model_training",
+                "unimol-train-v1",
+                task_id="train_model",
+                output_artifacts=["trained_remote_model"],
+            ),
+            _remote_task(
+                "model_training",
+                "unimol-train-v1",
+                task_id="generate_candidates",
+                depends_on=["train_model"],
+                required_artifacts=["trained_remote_model"],
+                output_artifacts=["generated_candidates"],
+            ),
+        ]
+    )
+    builder = AgentProjectObservationBuilder(
+        storage=storage,
+        registry=registry,
+        resource_profiles=profiles,
+        clock=lambda: NOW,
+    )
+    proposal_store = ScientificAgentPlanProposalStore(
+        storage=storage,
+        registry=registry,
+        observation_builder=builder,
+    )
+    response = AgentExecutionPlanLLMResponse(
+        requested_tool_ids=["train_model", "generate_candidates"],
+        selected_input_artifact_ids=[],
+        task_options={"train_model": {}, "generate_candidates": {}},
+        selected_logical_profile_ids=["unimol-train-v1"],
+        limits={
+            "max_runtime_sec": max_runtime_sec,
+            "max_gpu_hours": max_gpu_hours,
+        },
+        stop_conditions=["stop on verification failure"],
+        success_criteria=["produce a complete remote roster"],
+        rationales=["Exercise canonical multi-remote ordering."],
+        assumptions=[],
+        questions=[],
+    )
+    proposal = ScientificAgentPlanService(
+        storage=storage,
+        registry=registry,
+        observation_builder=builder,
+        proposal_store=proposal_store,
+        clock=lambda: NOW,
+    ).create_proposal(
+        project_id="project-1",
+        run_id="run-1",
+        goal="Prepare two ordered remote tasks",
+        user_constraints=[],
+        provider=StubLLMProvider(response=response.model_dump(mode="json")),
+        client_request_id="proposal-request",
+    )
+    policy_store = RemoteResourceAuthorityPolicyStore(config_dir=config)
+    policy_store.save(
+        RemoteResourceAuthorityPolicy(
+            entries=[
+                RemoteResourceAuthorityPolicyEntry(
+                    policy_id="multi-remote-policy",
+                    enabled=True,
+                    connection_id=connection.connection_id,
+                    execution_profile_id="unimol-train-v1",
+                    remote_task_type="model_training",
+                    allowed_task_ids=["train_model", "generate_candidates"],
+                    configured_resources=AgentConfiguredRemoteResources(
+                        gpu_count=resources[0],
+                        cpu_threads=resources[1],
+                        walltime_sec=resources[2],
+                    ),
+                    budget_limits=AgentRemoteResourceBudgetLimits(
+                        max_runtime_sec=resources[2],
+                        max_gpu_hours=max(1.0, resources[0] * resources[2] / 3600),
+                    ),
+                )
+            ]
+        )
+    )
+    control = AgentPlanControlStore(storage=storage)
+    service = RemoteResourceAuthorityService(
+        proposal_store=proposal_store,
+        resource_profiles=profiles,
+        policy_store=policy_store,
+        control_store=control,
+        clock=lambda: NOW,
+    )
+    authorization = ScientificAgentAuthorizationService(
+        storage=storage,
+        proposal_store=proposal_store,
+        registry=registry,
+        control_store=control,
+        resource_authority_resolver=lambda publication, task_id: service.current_authority(
+            publication=publication, task_id=task_id
+        ),
+        clock=lambda: NOW,
+    )
+    return storage, profiles, policy_store, proposal_store, proposal, service, authorization
+
+
+def _default_registry_mixed_case(tmp_path: Path, *, workflow: str):
+    storage = ProjectStorage(workspace_dir=tmp_path / "workspace")
+    storage.create_project("project-1", name="Project", created_at=NOW)
+    run_dir = storage.run_dir("project-1", "run-1")
+    config = tmp_path / "config"
+    if workflow == "unimol":
+        dataset = run_dir / "data" / "confirmed_training_dataset.json"
+        dataset.parent.mkdir(parents=True, exist_ok=True)
+        dataset.write_text(
+            json.dumps(
+                {
+                    "dataset_id": "confirmed-dataset",
+                    "confirmed": True,
+                    "status": "confirmed",
+                    "row_count": 4,
+                    "column_ids": ["smiles", "plqy"],
+                    "target_property": "plqy",
+                }
+            ),
+            encoding="utf-8",
+        )
+        storage.register_artifact_path(
+            "project-1",
+            "run-1",
+            "confirmed_training_dataset",
+            "data/confirmed_training_dataset.json",
+        )
+        storage.write_stage_state(
+            "project-1",
+            "run-1",
+            StageState(
+                stage="confirm_extracted_dataset",
+                next_stage="train_model",
+                status=RunStatus.SUCCEEDED,
+                started_at=NOW,
+                updated_at=NOW,
+                artifacts=[
+                    ArtifactRef(
+                        artifact_id="confirmed_training_dataset",
+                        relative_path="data/confirmed_training_dataset.json",
+                        producer_task_id="confirm_extracted_dataset",
+                    )
+                ],
+            ),
+        )
+        profile_id = "unimol-train-v1"
+        task_type = "model_training"
+        remote_task_id = "train_model"
+        capabilities = ["gpu", "unimol"]
+        resources = (1, 4, 1200)
+        response = AgentExecutionPlanLLMResponse(
+            requested_tool_ids=["train_model"],
+            selected_input_artifact_ids=["confirmed_training_dataset"],
+            task_options={
+                "train_model": {"backend": "unimol", "property_id": "plqy"}
+            },
+            selected_logical_profile_ids=[profile_id],
+            limits={"max_runtime_sec": 1200, "max_gpu_hours": 1.0},
+            stop_conditions=["stop on verification failure"],
+            success_criteria=["produce a reviewable Uni-Mol model"],
+            rationales=["Use the configured remote Uni-Mol backend."],
+            assumptions=[],
+            questions=[],
+        )
+    elif workflow == "mineru":
+        pdf = run_dir / "inputs" / "papers.pdf"
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_bytes(b"%PDF-1.7 review-only input\n")
+        storage.register_artifact_path(
+            "project-1", "run-1", "pdf_corpus", "inputs/papers.pdf"
+        )
+        profile_id = "mineru-v1"
+        task_type = "document_parsing"
+        remote_task_id = "parse_document"
+        capabilities = ["gpu", "mineru"]
+        resources = (1, 4, 600)
+        response = AgentExecutionPlanLLMResponse(
+            requested_tool_ids=["index_corpus"],
+            selected_input_artifact_ids=["pdf_corpus"],
+            task_options={"index_corpus": {}},
+            selected_logical_profile_ids=[profile_id],
+            limits={"max_runtime_sec": 600, "max_gpu_hours": 1.0},
+            stop_conditions=["stop on verification failure"],
+            success_criteria=["produce a reviewable corpus index"],
+            rationales=["Use the configured MinerU parser before local indexing."],
+            assumptions=[],
+            questions=[],
+        )
+    else:  # pragma: no cover - helper is called with a frozen test matrix.
+        raise AssertionError(f"unknown workflow: {workflow}")
+
+    profiles = ResourceProfileStore(
+        workspace_dir=storage.workspace_dir,
+        config_dir=config,
+    )
+    connection = profiles.save_connection(
+        ConnectionProfile(
+            connection_id=f"{workflow}-worker",
+            ssh_host_alias=f"{workflow}-worker",
+            expected_hostname=f"{workflow}-worker",
+            remote_root="/srv/molly",
+            declared_capabilities=capabilities,
+        )
+    )
+    profiles.save_probe(
+        CapabilityProbeResult(
+            connection_id=connection.connection_id,
+            connection_profile_digest=connection.digest(),
+            status="available",
+            checked_at=NOW,
+            verified_capabilities=capabilities,
+            details=CapabilityDetails(
+                cpu_threads=32,
+                cuda=CudaCapabilityDetails(status="available"),
+            ),
+        )
+    )
+    registry = AtomicTaskRegistry()
+    builder = AgentProjectObservationBuilder(
+        storage=storage,
+        registry=registry,
+        resource_profiles=profiles,
+        clock=lambda: NOW,
+    )
+    proposal_store = ScientificAgentPlanProposalStore(
+        storage=storage,
+        registry=registry,
+        observation_builder=builder,
+    )
+    proposal = ScientificAgentPlanService(
+        storage=storage,
+        registry=registry,
+        observation_builder=builder,
+        proposal_store=proposal_store,
+        clock=lambda: NOW,
+    ).create_proposal(
+        project_id="project-1",
+        run_id="run-1",
+        goal=f"Prepare the representative {workflow} mixed workflow",
+        user_constraints=[],
+        provider=StubLLMProvider(response=response.model_dump(mode="json")),
+        client_request_id="proposal-request",
+    )
+    policy_store = RemoteResourceAuthorityPolicyStore(config_dir=config)
+    policy_store.save(
+        RemoteResourceAuthorityPolicy(
+            entries=[
+                RemoteResourceAuthorityPolicyEntry(
+                    policy_id=f"{workflow}-policy",
+                    enabled=True,
+                    connection_id=connection.connection_id,
+                    execution_profile_id=profile_id,
+                    remote_task_type=task_type,
+                    allowed_task_ids=[remote_task_id],
+                    configured_resources=AgentConfiguredRemoteResources(
+                        gpu_count=resources[0],
+                        cpu_threads=resources[1],
+                        walltime_sec=resources[2],
+                    ),
+                    budget_limits=AgentRemoteResourceBudgetLimits(
+                        max_runtime_sec=resources[2],
+                        max_gpu_hours=1.0,
+                    ),
+                )
+            ]
+        )
+    )
+    control = AgentPlanControlStore(storage=storage)
+    service = RemoteResourceAuthorityService(
+        proposal_store=proposal_store,
+        resource_profiles=profiles,
+        policy_store=policy_store,
+        control_store=control,
+        clock=lambda: NOW,
+    )
+    authorization = ScientificAgentAuthorizationService(
+        storage=storage,
+        proposal_store=proposal_store,
+        registry=registry,
+        control_store=control,
+        resource_authority_resolver=lambda publication, task_id: service.current_authority(
+            publication=publication, task_id=task_id
+        ),
+        clock=lambda: NOW,
+    )
+    return storage, proposal, service, authorization
+
+
 def _multiprocess_publish_worker(
     workspace: str,
     config: str,
@@ -338,6 +684,14 @@ def test_configured_authority_enables_exact_non_dispatched_authorization_chain(
     )
     assert created.decision.outcome == AgentRemoteResourceAuthorityOutcome.CONFIGURED
     assert len(created.authorities) == 1
+    assert created.authority_set.remote_task_ids == ["remote_task"]
+    assert created.authority_set.aggregate_budget.walltime_aggregation_policy == (
+        "sequential_sum.v1"
+    )
+    assert created.authority_set.aggregate_budget.total_derived_gpu_hours == (
+        resources[0] * resources[2] / 3600
+    )
+    assert created.authority_set.executable is False
     authority = created.authorities[0]
     assert authority.configured_resources.model_dump() == {
         "gpu_count": resources[0],
@@ -670,9 +1024,15 @@ def test_policy_and_probe_drift_stale_authorization_and_start_intent(
 def test_fault_after_authority_rename_leaves_no_success_marker_and_recovers(
     tmp_path: Path,
 ) -> None:
-    storage, profiles, policy_store, proposal_store, proposal, _, _ = _configured_case(
-        tmp_path
-    )
+    (
+        storage,
+        profiles,
+        policy_store,
+        proposal_store,
+        proposal,
+        _,
+        authorization_service,
+    ) = _configured_case(tmp_path)
     control = AgentPlanControlStore(storage=storage)
     failed = False
 
@@ -705,6 +1065,20 @@ def test_fault_after_authority_rename_leaves_no_success_marker_and_recovers(
         / "crash-request"
     )
     assert not (request_dir / "authorities_committed.json").exists()
+    authority_sets_root = (
+        storage.projects_root
+        / "project-1"
+        / "agent_plan_control"
+        / "remote_resource_authority_sets"
+    )
+    assert not authority_sets_root.exists()
+    permission = authorization_service.evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert permission.outcome == AgentPermissionOutcome.DENY
+    assert "REMOTE_RESOURCE_AUTHORITY_REQUIRED" in permission.reason_codes
     recovered = RemoteResourceAuthorityService(
         proposal_store=proposal_store,
         resource_profiles=profiles,
@@ -714,8 +1088,320 @@ def test_fault_after_authority_rename_leaves_no_success_marker_and_recovers(
         project_id="project-1", proposal_id=proposal.proposal_id, request=request
     )
     assert len(recovered.authorities) == 1
+    assert recovered.authority_set.remote_task_ids == ["remote_task"]
     marker = json.loads((request_dir / "authorities_committed.json").read_text())
     assert marker["status"] == "AUTHORITIES_COMMITTED"
+
+
+def test_permission_rejects_raw_authority_without_complete_set_binding(
+    tmp_path: Path,
+) -> None:
+    _, _, _, proposal_store, proposal, service, _ = _configured_case(tmp_path)
+    result = service.publish(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            client_request_id="raw-authority-request",
+        ),
+    )
+    publication = proposal_store.read(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        verify_current=True,
+    )
+    decision = ScientificAgentPermissionEngine(
+        registry=AtomicTaskRegistry(
+            [_remote_task("molecular_generation", "reinvent4-cpu-v1")]
+        ),
+        resource_authority_resolver=lambda _publication, _task_id: result.authorities[0],
+    ).evaluate(
+        publication=publication,
+        phase=AgentPermissionPhase.PROPOSAL_REVIEW,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert decision.outcome == AgentPermissionOutcome.DENY
+    assert "REMOTE_RESOURCE_AUTHORITY_REQUIRED" in decision.reason_codes
+
+
+@pytest.mark.parametrize("fault_phase", ["after_remote_authority_1", "after_remote_authority_2"])
+def test_incomplete_multi_remote_roster_is_inert_until_authority_set_publication(
+    tmp_path: Path,
+    fault_phase: str,
+) -> None:
+    (
+        storage,
+        profiles,
+        policy_store,
+        proposal_store,
+        proposal,
+        _,
+        authorization_service,
+    ) = _multi_remote_case(tmp_path)
+
+    def fault(phase: str) -> None:
+        if phase == fault_phase:
+            raise RuntimeError("simulated crash before complete authority set")
+
+    service = RemoteResourceAuthorityService(
+        proposal_store=proposal_store,
+        resource_profiles=profiles,
+        policy_store=policy_store,
+        control_store=AgentPlanControlStore(storage=storage),
+        fault_injector=fault,
+    )
+    request = AgentRemoteResourceAuthorityRequest(
+        expected_proposal_digest=proposal.proposal_digest,
+        client_request_id="incomplete-roster-request",
+    )
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        service.publish(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=request,
+        )
+    assert not (
+        storage.projects_root
+        / "project-1"
+        / "agent_plan_control"
+        / "remote_resource_authority_sets"
+    ).exists()
+    permission = authorization_service.evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert permission.outcome == AgentPermissionOutcome.DENY
+    assert "REMOTE_RESOURCE_AUTHORITY_REQUIRED" in permission.reason_codes
+
+
+def test_multi_remote_roster_and_publication_follow_run_plan_order(tmp_path: Path) -> None:
+    _, _, _, _, proposal, service, authorization_service = _multi_remote_case(tmp_path)
+    assert [item.task_id for item in proposal.run_plan.tasks] == [
+        "train_model",
+        "generate_candidates",
+    ]
+    assert [item.task_id for item in proposal.dispatch_intents] == [
+        "generate_candidates",
+        "train_model",
+    ]
+    result = service.publish(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            client_request_id="ordered-roster-request",
+        ),
+    )
+    assert result.decision.remote_task_ids == ["train_model", "generate_candidates"]
+    assert [item.task_id for item in result.decision.task_decisions] == [
+        "train_model",
+        "generate_candidates",
+    ]
+    assert [item.task_id for item in result.authorities] == [
+        "train_model",
+        "generate_candidates",
+    ]
+    assert result.authority_set.remote_task_ids == [
+        "train_model",
+        "generate_candidates",
+    ]
+    assert [item.task_id for item in result.authority_set.authority_bindings] == [
+        "train_model",
+        "generate_candidates",
+    ]
+    permission = authorization_service.evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert permission.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
+
+
+def test_aggregate_remote_gpu_hours_fail_closed_at_plan_level(tmp_path: Path) -> None:
+    _, _, _, _, proposal, service, _ = _multi_remote_case(
+        tmp_path,
+        resources=(1, 2, 2160),
+        max_runtime_sec=5000,
+        max_gpu_hours=1.0,
+    )
+    evaluation = service.evaluate(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            client_request_id="aggregate-budget-request",
+        ),
+        publish_decision=False,
+    )
+    assert evaluation.decision.outcome == AgentRemoteResourceAuthorityOutcome.DENY
+    assert "REMOTE_RESOURCE_AGGREGATE_BUDGET_EXCEEDED" in (
+        evaluation.decision.reason_codes
+    )
+    assert evaluation.decision.aggregate_budget.total_derived_gpu_hours == pytest.approx(
+        1.2
+    )
+    assert evaluation.authority_set is None
+
+
+def test_policy_change_at_success_boundary_leaves_only_stale_audit_set(
+    tmp_path: Path,
+) -> None:
+    (
+        storage,
+        profiles,
+        policy_store,
+        proposal_store,
+        proposal,
+        _,
+        authorization_service,
+    ) = _configured_case(tmp_path)
+    changed = False
+
+    def fault(phase: str) -> None:
+        nonlocal changed
+        if phase == "before_authorities_committed_marker" and not changed:
+            changed = True
+            entry = policy_store.read().entries[0]
+            policy_store.save(
+                RemoteResourceAuthorityPolicy(
+                    entries=[
+                        entry.model_copy(
+                            update={
+                                "configured_resources": entry.configured_resources.model_copy(
+                                    update={"walltime_sec": 500}
+                                )
+                            }
+                        )
+                    ]
+                )
+            )
+
+    service = RemoteResourceAuthorityService(
+        proposal_store=proposal_store,
+        resource_profiles=profiles,
+        policy_store=policy_store,
+        control_store=AgentPlanControlStore(storage=storage),
+        fault_injector=fault,
+    )
+    with pytest.raises(RemoteResourceAuthorityStale):
+        service.publish(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=AgentRemoteResourceAuthorityRequest(
+                expected_proposal_digest=proposal.proposal_digest,
+                client_request_id="success-boundary-request",
+            ),
+        )
+    request_dir = (
+        storage.projects_root
+        / "project-1"
+        / "agent_plan_control"
+        / "remote_resource_authority_requests"
+        / "success-boundary-request"
+    )
+    assert not (request_dir / "authorities_committed.json").exists()
+    assert list(
+        (
+            storage.projects_root
+            / "project-1"
+            / "agent_plan_control"
+            / "remote_resource_authority_sets"
+        ).iterdir()
+    )
+    permission = authorization_service.evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert permission.outcome == AgentPermissionOutcome.DENY
+
+
+def test_probe_change_after_set_rename_prevents_success_marker_and_response(
+    tmp_path: Path,
+) -> None:
+    storage, profiles, policy_store, proposal_store, proposal, _, _ = _configured_case(
+        tmp_path
+    )
+    changed = False
+
+    def fault(phase: str) -> None:
+        nonlocal changed
+        if phase == "after_authority_set_publication" and not changed:
+            changed = True
+            connection = profiles.get_connection("scientific-worker")
+            profiles.save_probe(
+                CapabilityProbeResult(
+                    connection_id=connection.connection_id,
+                    connection_profile_digest=connection.digest(),
+                    status="available",
+                    checked_at="2026-08-01T00:01:00Z",
+                    verified_capabilities=["cpu", "reinvent4"],
+                    details=CapabilityDetails(cpu_threads=16),
+                )
+            )
+
+    service = RemoteResourceAuthorityService(
+        proposal_store=proposal_store,
+        resource_profiles=profiles,
+        policy_store=policy_store,
+        control_store=AgentPlanControlStore(storage=storage),
+        fault_injector=fault,
+    )
+    with pytest.raises((RemoteResourceAuthorityStale, ScientificAgentPlanSourceChanged)):
+        service.publish(
+            project_id="project-1",
+            proposal_id=proposal.proposal_id,
+            request=AgentRemoteResourceAuthorityRequest(
+                expected_proposal_digest=proposal.proposal_digest,
+                client_request_id="post-set-probe-drift-request",
+            ),
+        )
+    request_dir = (
+        storage.projects_root
+        / "project-1"
+        / "agent_plan_control"
+        / "remote_resource_authority_requests"
+        / "post-set-probe-drift-request"
+    )
+    assert not (request_dir / "authorities_committed.json").exists()
+    assert list(
+        (
+            storage.projects_root
+            / "project-1"
+            / "agent_plan_control"
+            / "remote_resource_authority_sets"
+        ).iterdir()
+    )
+
+
+@pytest.mark.parametrize("workflow", ["unimol", "mineru"])
+def test_default_registry_mixed_remote_chain_uses_resource_set_budget_authority(
+    tmp_path: Path,
+    workflow: str,
+) -> None:
+    _, proposal, service, authorization_service = _default_registry_mixed_case(
+        tmp_path, workflow=workflow
+    )
+    routes = [item.execution_route for item in proposal.dispatch_intents]
+    assert "local_executor" in routes
+    assert "remote_execution_service" in routes
+    result = service.publish(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            client_request_id=f"{workflow}-mixed-resource-request",
+        ),
+    )
+    assert result.authority_set.aggregate_budget.total_derived_gpu_hours > 0
+    permission = authorization_service.evaluate_permission(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        expected_proposal_digest=proposal.proposal_digest,
+    )
+    assert permission.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
+    assert "BUDGET_AUTHORITY_UNAVAILABLE" not in permission.reason_codes
 
 
 def test_policy_change_after_candidate_is_rejected_before_commit(tmp_path: Path) -> None:
@@ -807,6 +1493,15 @@ def test_cross_process_same_request_publishes_one_exact_roster(tmp_path: Path) -
         ).iterdir()
     )
     assert len(publications) == 1
+    authority_sets = list(
+        (
+            storage.projects_root
+            / "project-1"
+            / "agent_plan_control"
+            / "remote_resource_authority_sets"
+        ).iterdir()
+    )
+    assert len(authority_sets) == 1
 
 
 def test_client_resource_injection_is_rejected_by_frozen_request_schema() -> None:
@@ -821,6 +1516,69 @@ def test_client_resource_injection_is_rejected_by_frozen_request_schema() -> Non
             }
         )
 
+
+@pytest.mark.parametrize("enabled", [1, 0, "true", "false"])
+def test_private_policy_enabled_requires_a_strict_boolean(enabled: object) -> None:
+    with pytest.raises(ValidationError):
+        RemoteResourceAuthorityPolicyEntry.model_validate(
+            {
+                "policy_id": "strict-policy",
+                "enabled": enabled,
+                "connection_id": "worker",
+                "execution_profile_id": "reinvent4-cpu-v1",
+                "remote_task_type": "molecular_generation",
+                "allowed_task_ids": ["remote_task"],
+                "configured_resources": {
+                    "gpu_count": 0,
+                    "cpu_threads": 1,
+                    "walltime_sec": 600,
+                },
+                "budget_limits": {
+                    "max_runtime_sec": 600,
+                    "max_gpu_hours": 1.0,
+                    "max_cost_usd": None,
+                },
+            }
+        )
+
+
+def test_authority_set_schema_rejects_missing_or_replaced_complete_binding(
+    tmp_path: Path,
+) -> None:
+    _, _, _, _, proposal, service, _ = _configured_case(tmp_path)
+    result = service.publish(
+        project_id="project-1",
+        proposal_id=proposal.proposal_id,
+        request=AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=proposal.proposal_digest,
+            client_request_id="set-schema-request",
+        ),
+    )
+    payload = result.authority_set.model_dump(mode="json")
+    payload["authority_bindings"] = []
+    with pytest.raises(ValidationError):
+        AgentRemoteResourceAuthoritySet.model_validate(payload)
+
+    payload = result.authority_set.model_dump(mode="json")
+    payload["authority_bindings"][0]["authority_digest"] = "sha256:" + "9" * 64
+    with pytest.raises(ValidationError):
+        AgentRemoteResourceAuthoritySet.model_validate(payload)
+
+
+def test_frozen_remote_resource_authority_schemas_match_generated_models() -> None:
+    schema_dir = Path(__file__).resolve().parents[1] / "docs" / "schemas"
+    models = {
+        "agent_remote_resource_authority_request": AgentRemoteResourceAuthorityRequest,
+        "agent_remote_resource_authority_decision": AgentRemoteResourceAuthorityDecision,
+        "agent_remote_resource_authority": AgentRemoteResourceAuthority,
+        "agent_remote_resource_authority_set": AgentRemoteResourceAuthoritySet,
+        "remote_resource_authority_policy": RemoteResourceAuthorityPolicy,
+    }
+    for name, model in models.items():
+        frozen = json.loads(
+            (schema_dir / f"{name}.schema.json").read_text(encoding="utf-8")
+        )
+        assert frozen == model.model_json_schema()
 
 def test_resource_aware_permission_policy_digest_is_hash_seed_stable() -> None:
     script = (

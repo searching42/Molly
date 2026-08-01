@@ -36,6 +36,7 @@ from ai4s_agent.schemas import (
     AgentPermissionShadowRecord,
     AgentRemoteResourceAuthority,
     AgentRemoteResourceAuthorityDecision,
+    AgentRemoteResourceAuthoritySet,
     AgentPlanAuthorization,
     AgentPlanAuthorizationRequest,
     AgentPlanStartIntent,
@@ -108,6 +109,12 @@ _CONTROL_LAYOUT: Mapping[str, tuple[str, str, str, type[BaseModel]]] = {
         "authority_digest",
         AgentRemoteResourceAuthority,
     ),
+    "remote_resource_authority_set": (
+        "remote_resource_authority_sets",
+        "remote_resource_authority_set.json",
+        "authority_set_digest",
+        AgentRemoteResourceAuthoritySet,
+    ),
 }
 _CONTROL_ID_FIELDS = {
     "permission_decision": "decision_id",
@@ -116,6 +123,7 @@ _CONTROL_ID_FIELDS = {
     "shadow_record": "shadow_record_id",
     "remote_resource_authority_decision": "decision_id",
     "remote_resource_authority": "authority_id",
+    "remote_resource_authority_set": "authority_set_id",
 }
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -329,6 +337,30 @@ class AgentPlanControlStore:
             kind="remote_resource_authority",
             artifact_id=authority_id,
             expected_type=AgentRemoteResourceAuthority,
+        )
+
+    def publish_remote_resource_authority_set(
+        self,
+        authority_set: AgentRemoteResourceAuthoritySet,
+        *,
+        staging_parent: Path | None = None,
+    ) -> AgentRemoteResourceAuthoritySet:
+        return self._publish_model(
+            project_id=authority_set.project_id,
+            kind="remote_resource_authority_set",
+            artifact_id=authority_set.authority_set_id,
+            model=authority_set,
+            staging_parent=staging_parent,
+        )
+
+    def read_remote_resource_authority_set(
+        self, *, project_id: str, authority_set_id: str
+    ) -> AgentRemoteResourceAuthoritySet:
+        return self._read_model(
+            project_id=project_id,
+            kind="remote_resource_authority_set",
+            artifact_id=authority_set_id,
+            expected_type=AgentRemoteResourceAuthoritySet,
         )
 
     def read_shadow_record(

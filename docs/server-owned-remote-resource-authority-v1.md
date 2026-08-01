@@ -18,7 +18,8 @@ PR-BN will dispatch later. PR-BM2 does not create a remote execution request.
 | Connection Profile | Private logical connection identity and declared capability | Configured resources or dispatch |
 | Execution Profile | Fixed task/worker/environment/device contract and ceilings | A resource grant |
 | Capability Probe | Current availability and verified capability facts for one exact connection digest | Resource selection |
-| Resource authority | Exact configured resources for one proposal task | User plan approval or dispatch |
+| Per-task resource authority | Exact configured resources for one proposal task; inert without its complete set | User plan approval or dispatch |
+| Resource AuthoritySet | Manifest-last activation of the complete current remote roster and aggregate budget | User plan approval or dispatch |
 | Plan authorization | Exact user authority over the proposal and task-authority digest roster | GateDecision or execution |
 | Start intent | Request for a future Controller action | RemoteExecutionRequest or running state |
 
@@ -37,6 +38,7 @@ file fsync, and directory fsync.
 Each enabled entry binds a unique `policy_id`, `connection_id`, fixed
 `execution_profile_id`, `remote_task_type`, explicit task allowlist, complete
 integer `gpu_count`/`cpu_threads`/`walltime_sec`, and server budget limits.
+`enabled` is a strict JSON boolean; coercible integers and strings are rejected.
 Unknown keys are rejected. Hostnames, SSH aliases, remote roots, paths,
 commands, argv, environment activation, credentials, tokens, and worker
 overrides are not policy fields and never appear in public authority bytes.
@@ -70,7 +72,9 @@ CUDA probe. Capabilities from different connections are never combined.
 
 ## Deterministic derivation
 
-For every ordered `remote_execution_service` dispatch intent:
+One canonical remote roster is projected from RunPlan dependency order, never
+from the proposal's task-ID-sorted dispatch serialization. For every ordered
+`remote_execution_service` task:
 
 1. exact-read and current-verify the immutable PR-BL publication;
 2. bind the ordered RunPlan roster and unique dispatch intent;
@@ -81,14 +85,33 @@ For every ordered `remote_execution_service` dispatch intent:
    status, and all profile-required capabilities;
 6. apply the shared profile ceiling/device validator and probe limits;
 7. treat proposal resource values only as reviewed constraints, never defaults;
-8. validate runtime and derived GPU hours against both proposal and private
-   budget ceilings;
+8. validate per-task runtime and derived GPU hours against private policy
+   ceilings;
 9. derive immutable authority bytes, digest, and ID.
+
+After every per-task authority is derived, v1 constructs a plan-level
+aggregate budget in the same RunPlan order:
+
+```text
+total_derived_gpu_hours = sum(per-task derived_gpu_hours)
+total_walltime_upper_bound_sec = sum(per-task walltime_sec)
+walltime_aggregation_policy = sequential_sum.v1
+```
+
+The conservative sequential walltime and total GPU hours are compared once
+against proposal-level `max_runtime_sec` and `max_gpu_hours`. Individual tasks
+cannot each reuse the whole plan limit. `total_configured_cpu_threads` is
+bound as an informational aggregate and is not treated as concurrent CPU
+allocation.
 
 `derived_gpu_hours = gpu_count * walltime_sec / 3600`. A non-null proposal or
 policy `max_cost_usd` is denied because v1 has no versioned server cost model;
-cost is never assumed to be zero. `max_steps` and `max_records` retain the
-existing PR-BM budget semantics.
+cost is never assumed to be zero. For Permission v2, the three remote resource
+dimensions (`max_runtime_sec`, `max_gpu_hours`, `max_cost_usd`) are owned by
+the current exact AuthoritySet even in a mixed local/remote plan. Other
+dimensions such as `max_steps` and `max_records` retain the existing PR-BM
+budget semantics. Fixed local dependencies do not acquire remote resources or
+silently reclassify those remote dimensions as legacy budget facts.
 
 The compiler-generated `remote_resources_<task_id>` question is satisfied only
 for Permission policy v2 by a current exact authority for that same task. No
@@ -116,6 +139,14 @@ Its semantic digest excludes only `created_at` and covers:
 The ID is derived from the authority digest. The publication never includes
 host, path, command, credential, request/job ID, or runtime status.
 
+Per-task files are audit material until one
+`agent_remote_resource_authority_set.v1` manifest exact-binds the decision,
+RunPlan-order remote roster, every authority ID/digest, the complete roster
+digest, every per-task budget binding, aggregate totals, aggregation policy,
+and aggregate budget digest. The set ID is derived from its semantic digest;
+`created_at` is excluded and `executable=false` is fixed. A stale set remains
+an immutable audit but is not current authority.
+
 ## Permission, authorization, and start-intent integration
 
 The frozen PR-BM v1 permission material and digest remain unchanged for exact
@@ -126,14 +157,14 @@ decisions. New remote evaluations use
 For a remote task:
 
 ```text
-no current published authority
+no complete current published AuthoritySet
   -> DENY / REMOTE_RESOURCE_AUTHORITY_REQUIRED
 
 stale or mismatched authority
   -> DENY with its stable resource-authority reason
 
-current exact authority
-  -> execution_binding_digest = digest(route + type + profile + authority digest)
+current exact authority in a complete current set
+  -> execution_binding_digest = digest(route + type + profile + authority digest + set digest)
   -> proposal review = REQUIRE_APPROVAL
 ```
 
@@ -141,7 +172,7 @@ The existing chain then binds the resource facts without changing
 `agent_plan_authorization.v1` or `agent_plan_start_intent.v1`:
 
 ```text
-resource authority digest
+resource authority digest + AuthoritySet digest
 -> remote execution_binding_digest
 -> task_authority_digest
 -> permission decision digest
@@ -160,6 +191,11 @@ Persisted v1 local decisions are regenerated with v1. Persisted v2 remote
 decisions are regenerated with v2. Existing proposal, authorization, and start
 intent bytes are never migrated or rewritten.
 
+The reviewed v2 policy semantic digest for this contract is
+`sha256:6a95cecce70427418a617fb52250122094e9cd8d774861615e927289f753eccf`;
+it covers complete-set execution binding and mixed/aggregate remote budget
+ownership. The frozen local-only v1 digest remains unchanged.
+
 ## API and durable publication
 
 The explicit project-scoped endpoints are:
@@ -169,6 +205,7 @@ POST remote-resource-authority-evaluations
 POST remote-resource-authorities
 GET  agent-remote-resource-authority-decisions/<decision_id>
 GET  agent-remote-resource-authorities/<authority_id>
+GET  agent-remote-resource-authority-sets/<authority_set_id>
 ```
 
 The request schema permits only `expected_proposal_digest` and
@@ -188,11 +225,17 @@ RESERVED
 ```
 
 Authorities for multiple remote tasks are published in deterministic RunPlan
-order. Only the final marker binds the complete authority ID/digest roster.
+order. Bare per-task publications are inert. After the full roster is
+current-verified, the no-replace AuthoritySet is published manifest-last and
+then current-verified again. The mutation/fault opportunity precedes the last
+source re-derive; only after that barrier does the request success marker bind
+the set ID/digest, complete roster digest, and aggregate budget digest.
 Same request/same bytes recovers idempotently; same request/different bytes is
-a conflict. A crash or source drift may leave an immutable audit publication,
-but cannot write the success marker or return success. Re-entry derives the
-same IDs and completes exactly one roster.
+a conflict. A crash after any per-task rename but before AuthoritySet
+publication cannot be consumed by Permission. Source drift after set rename
+may leave a stale immutable audit set, but cannot write the request success
+marker or return success. Re-entry derives the same IDs and completes exactly
+one roster.
 
 ## Threat model and privacy
 
@@ -216,7 +259,8 @@ does not create `RemoteExecutionRequest`, transfer manifest, queue job,
 execution record, GateDecision, or running status. It implements no Controller,
 Execution Agent, Replanner, UI, cancellation, retry, or dispatch.
 
-PR-BN may consume only after re-verification: authority ID/digest, task
+PR-BN may consume only after re-verification: AuthoritySet ID/digest and
+complete roster/aggregate budget digests, per-task authority ID/digest, task
 execution-binding digest, configured resources, connection/profile/probe
 digests, budget and policy digests, full task roster, and the exact
 proposal/authorization/start-intent relationship. Time-based probe expiry and

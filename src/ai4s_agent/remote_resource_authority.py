@@ -30,12 +30,15 @@ from ai4s_agent.runtime_environments import (
 )
 from ai4s_agent.schemas import (
     AgentConfiguredRemoteResources,
+    AgentRemoteResourceAggregateBudget,
     AgentRemoteResourceAuthority,
     AgentRemoteResourceAuthorityDecision,
     AgentRemoteResourceAuthorityFinding,
     AgentRemoteResourceAuthorityOutcome,
     AgentRemoteResourceAuthorityRequest,
+    AgentRemoteResourceAuthoritySet,
     AgentRemoteResourceSourceBinding,
+    AgentRemoteResourceTaskBudgetBinding,
     AgentRemoteResourceTaskDecision,
     RemoteResourceAuthorityPolicy,
     RemoteResourceAuthorityPolicyEntry,
@@ -134,12 +137,38 @@ class RemoteResourceAuthorityPolicyStore:
 class RemoteResourceAuthorityEvaluation:
     decision: AgentRemoteResourceAuthorityDecision
     authorities: tuple[AgentRemoteResourceAuthority, ...]
+    authority_set: AgentRemoteResourceAuthoritySet | None
 
 
 @dataclass(frozen=True)
 class RemoteResourceAuthorityPublication:
     decision: AgentRemoteResourceAuthorityDecision
     authorities: tuple[AgentRemoteResourceAuthority, ...]
+    authority_set: AgentRemoteResourceAuthoritySet
+
+
+@dataclass(frozen=True)
+class CurrentRemoteResourceAuthorityBinding:
+    """Permission input proving one task belongs to a complete current set."""
+
+    authority: AgentRemoteResourceAuthority
+    authority_set: AgentRemoteResourceAuthoritySet
+
+    @property
+    def authority_id(self) -> str:
+        return self.authority.authority_id
+
+    @property
+    def authority_digest(self) -> str:
+        return self.authority.authority_digest
+
+    @property
+    def authority_set_id(self) -> str:
+        return self.authority_set.authority_set_id
+
+    @property
+    def authority_set_digest(self) -> str:
+        return self.authority_set.authority_set_digest
 
 
 @dataclass(frozen=True)
@@ -191,7 +220,9 @@ class RemoteResourceAuthorityService:
             decision = self.control_store.publish_remote_resource_authority_decision(
                 result.decision
             )
-            return RemoteResourceAuthorityEvaluation(decision, result.authorities)
+            return RemoteResourceAuthorityEvaluation(
+                decision, result.authorities, result.authority_set
+            )
         return result
 
     def publish(
@@ -226,11 +257,16 @@ class RemoteResourceAuthorityService:
                     candidate.decision
                 )
                 raise RemoteResourceAuthorityDenied(decision)
+            if candidate.authority_set is None:
+                raise RemoteResourceAuthorityError(
+                    "configured remote resource decision lacks an authority set"
+                )
 
             checkpoint = {
                 "schema_version": "agent_remote_resource_authority_checkpoint.v1",
                 "decision": candidate.decision.model_dump(mode="json"),
                 "authorities": [item.model_dump(mode="json") for item in candidate.authorities],
+                "authority_set": candidate.authority_set.model_dump(mode="json"),
             }
             self._write_or_verify(
                 session.request_dir / "checkpoint.json",
@@ -272,15 +308,46 @@ class RemoteResourceAuthorityService:
                 self._fault(f"after_remote_authority_{index + 1}")
 
             verified = tuple(
-                self.verify_authority(
+                self.control_store.read_remote_resource_authority(
                     project_id=project_id,
                     authority_id=item.authority_id,
-                    verify_current=True,
                 )
                 for item in published
             )
+            if [item.model_dump(mode="json") for item in verified] != [
+                item.model_dump(mode="json") for item in candidate.authorities
+            ]:
+                raise RemoteResourceAuthorityConflict(
+                    "published remote authority roster differs from the checkpoint"
+                )
             self._fault("after_authority_roster_verification")
-            # Final current-source barrier before the complete-roster marker.
+            # Per-task files remain inert until the complete manifest is
+            # published.  Re-read every source immediately before that
+            # manifest-last activation boundary.
+            before_set = self._derive(
+                self._verified_publication(
+                    project_id, proposal_id, request.expected_proposal_digest
+                )
+            )
+            if not _same_evaluation(candidate, before_set):
+                raise RemoteResourceAuthorityStale(
+                    "resource authority sources changed before authority-set publication"
+                )
+            authority_set = self.control_store.publish_remote_resource_authority_set(
+                candidate.authority_set,
+                staging_parent=session.request_dir,
+            )
+            self._fault("after_authority_set_publication")
+            self.verify_authority_set(
+                project_id=project_id,
+                authority_set_id=authority_set.authority_set_id,
+                verify_current=True,
+            )
+
+            # The mutation/fault opportunity is deliberately before the last
+            # source re-derive.  A changed policy/profile/probe cannot produce
+            # the immutable request success marker or a success response.
+            self._fault("before_authorities_committed_marker")
             final = self._derive(
                 self._verified_publication(
                     project_id, proposal_id, request.expected_proposal_digest
@@ -290,7 +357,11 @@ class RemoteResourceAuthorityService:
                 raise RemoteResourceAuthorityStale(
                     "resource authority sources changed before success marker"
                 )
-            self._fault("before_authorities_committed_marker")
+            self.verify_authority_set(
+                project_id=project_id,
+                authority_set_id=authority_set.authority_set_id,
+                verify_current=True,
+            )
             self._write_marker(
                 session,
                 filename="authorities_committed.json",
@@ -300,9 +371,19 @@ class RemoteResourceAuthorityService:
                     "decision_digest": decision.decision_digest,
                     "authority_ids": [item.authority_id for item in verified],
                     "authority_digests": [item.authority_digest for item in verified],
+                    "authority_set_id": authority_set.authority_set_id,
+                    "authority_set_digest": authority_set.authority_set_digest,
+                    "remote_task_ids": authority_set.remote_task_ids,
+                    "complete_roster_digest": authority_set.complete_roster_digest,
+                    "aggregate_budget_digest": authority_set.aggregate_budget_digest,
                 },
             )
-            return RemoteResourceAuthorityPublication(decision, verified)
+            verified_set = self.verify_authority_set(
+                project_id=project_id,
+                authority_set_id=authority_set.authority_set_id,
+                verify_current=True,
+            )
+            return RemoteResourceAuthorityPublication(decision, verified, verified_set)
 
     def verify_authority(
         self,
@@ -320,12 +401,35 @@ class RemoteResourceAuthorityService:
             project_id, authority.proposal_id, authority.proposal_digest
         )
         current = self._derive(publication)
+        expected_set = current.authority_set
+        if (
+            current.decision.outcome != AgentRemoteResourceAuthorityOutcome.CONFIGURED
+            or expected_set is None
+        ):
+            raise RemoteResourceAuthorityStale(
+                "remote resource authority set is not currently configured"
+            )
+        published_set = self.verify_authority_set(
+            project_id=project_id,
+            authority_set_id=expected_set.authority_set_id,
+            verify_current=True,
+        )
+        binding = next(
+            (
+                item
+                for item in published_set.authority_bindings
+                if item.authority_id == authority_id
+            ),
+            None,
+        )
         match = next(
             (item for item in current.authorities if item.task_id == authority.task_id),
             None,
         )
         if (
-            current.decision.outcome != AgentRemoteResourceAuthorityOutcome.CONFIGURED
+            binding is None
+            or binding.task_id != authority.task_id
+            or binding.authority_digest != authority.authority_digest
             or match is None
             or match.model_dump(mode="json") != authority.model_dump(mode="json")
         ):
@@ -334,12 +438,59 @@ class RemoteResourceAuthorityService:
             )
         return authority
 
+    def verify_authority_set(
+        self,
+        *,
+        project_id: str,
+        authority_set_id: str,
+        verify_current: bool = True,
+    ) -> AgentRemoteResourceAuthoritySet:
+        authority_set = self.control_store.read_remote_resource_authority_set(
+            project_id=project_id,
+            authority_set_id=authority_set_id,
+        )
+        if not verify_current:
+            return authority_set
+        publication = self._verified_publication(
+            project_id,
+            authority_set.proposal_id,
+            authority_set.proposal_digest,
+        )
+        current = self._derive(publication)
+        expected = current.authority_set
+        if (
+            current.decision.outcome != AgentRemoteResourceAuthorityOutcome.CONFIGURED
+            or expected is None
+            or expected.model_dump(mode="json")
+            != authority_set.model_dump(mode="json")
+        ):
+            raise RemoteResourceAuthorityStale(
+                "remote resource authority set no longer matches current sources"
+            )
+        expected_by_task = {item.task_id: item for item in current.authorities}
+        for binding in authority_set.authority_bindings:
+            persisted = self.control_store.read_remote_resource_authority(
+                project_id=project_id,
+                authority_id=binding.authority_id,
+            )
+            expected_authority = expected_by_task.get(binding.task_id)
+            if (
+                expected_authority is None
+                or persisted.model_dump(mode="json")
+                != expected_authority.model_dump(mode="json")
+                or persisted.authority_digest != binding.authority_digest
+            ):
+                raise RemoteResourceAuthorityStale(
+                    "remote resource authority set contains a stale task binding"
+                )
+        return authority_set
+
     def current_authority(
         self,
         *,
         publication: ScientificAgentPlanPublication,
         task_id: str,
-    ) -> AgentRemoteResourceAuthority:
+    ) -> CurrentRemoteResourceAuthorityBinding:
         evaluation = self._derive(publication)
         task = next(
             (item for item in evaluation.decision.task_decisions if item.task_id == task_id),
@@ -352,10 +503,44 @@ class RemoteResourceAuthorityService:
                 else task.reason_codes[0]
             )
             raise RemoteResourceAuthorityUnavailable(reason)
+        expected_set = evaluation.authority_set
+        if expected_set is None:
+            raise RemoteResourceAuthorityUnavailable(
+                "REMOTE_RESOURCE_AUTHORITY_REQUIRED"
+            )
+        try:
+            published_set = self.control_store.read_remote_resource_authority_set(
+                project_id=publication.proposal.project_id,
+                authority_set_id=expected_set.authority_set_id,
+            )
+        except FileNotFoundError as exc:
+            raise RemoteResourceAuthorityUnavailable(
+                "REMOTE_RESOURCE_AUTHORITY_REQUIRED"
+            ) from exc
+        if published_set.model_dump(mode="json") != expected_set.model_dump(mode="json"):
+            raise RemoteResourceAuthorityUnavailable(
+                "REMOTE_RESOURCE_SOURCE_CHANGED"
+            )
+        binding = next(
+            (
+                item
+                for item in published_set.authority_bindings
+                if item.task_id == task_id
+            ),
+            None,
+        )
+        if (
+            binding is None
+            or binding.authority_id != task.authority_id
+            or binding.authority_digest != task.authority_digest
+        ):
+            raise RemoteResourceAuthorityUnavailable(
+                "REMOTE_RESOURCE_AUTHORITY_REQUIRED"
+            )
         try:
             authority = self.control_store.read_remote_resource_authority(
                 project_id=publication.proposal.project_id,
-                authority_id=task.authority_id,
+                authority_id=binding.authority_id,
             )
         except FileNotFoundError as exc:
             raise RemoteResourceAuthorityUnavailable(
@@ -368,17 +553,25 @@ class RemoteResourceAuthorityService:
             raise RemoteResourceAuthorityUnavailable(
                 "REMOTE_RESOURCE_SOURCE_CHANGED"
             )
-        return authority
+        return CurrentRemoteResourceAuthorityBinding(
+            authority=authority,
+            authority_set=published_set,
+        )
 
     def _derive(
         self, publication: ScientificAgentPlanPublication
     ) -> RemoteResourceAuthorityEvaluation:
         proposal = publication.proposal
         ordered_task_ids = [item.task_id for item in proposal.run_plan.tasks]
+        dispatch_by_task = {item.task_id: item for item in proposal.dispatch_intents}
+        remote_task_ids = [
+            task_id
+            for task_id in ordered_task_ids
+            if dispatch_by_task[task_id].execution_route
+            == "remote_execution_service"
+        ]
         remote_dispatches = [
-            item
-            for item in proposal.dispatch_intents
-            if item.execution_route == "remote_execution_service"
+            dispatch_by_task[task_id] for task_id in remote_task_ids
         ]
         try:
             policy = self.policy_store.read()
@@ -431,7 +624,6 @@ class RemoteResourceAuthorityService:
                 )
             )
 
-        dispatch_by_task = {item.task_id: item for item in proposal.dispatch_intents}
         for planned in proposal.run_plan.tasks:
             dispatch = dispatch_by_task.get(planned.task_id)
             if dispatch is None or dispatch.execution_route != "remote_execution_service":
@@ -580,23 +772,12 @@ class RemoteResourceAuthorityService:
                         findings.append(_finding("REMOTE_RESOURCE_LIMIT_EXCEEDED", task_id))
                     if intent.gpu_count is not None or intent.cpu_threads is not None:
                         findings.append(_finding("REMOTE_RESOURCE_SOURCE_CHANGED", task_id))
-                limits = proposal.limits
-                if (
-                    limits.get("max_runtime_sec") is not None
-                    and resources.walltime_sec > float(limits["max_runtime_sec"])
-                ):
-                    findings.append(_finding("REMOTE_RESOURCE_BUDGET_EXCEEDED", task_id))
                 derived_gpu_hours = resources.gpu_count * resources.walltime_sec / 3600.0
                 if resources.walltime_sec > entry.budget_limits.max_runtime_sec:
                     findings.append(_finding("REMOTE_RESOURCE_BUDGET_EXCEEDED", task_id))
                 if derived_gpu_hours > entry.budget_limits.max_gpu_hours:
                     findings.append(_finding("REMOTE_RESOURCE_BUDGET_EXCEEDED", task_id))
-                if (
-                    limits.get("max_gpu_hours") is not None
-                    and derived_gpu_hours > float(limits["max_gpu_hours"])
-                ):
-                    findings.append(_finding("REMOTE_RESOURCE_BUDGET_EXCEEDED", task_id))
-                if limits.get("max_cost_usd") is not None or entry.budget_limits.max_cost_usd is not None:
+                if entry.budget_limits.max_cost_usd is not None:
                     findings.append(
                         _finding("REMOTE_RESOURCE_COST_AUTHORITY_UNAVAILABLE", task_id)
                     )
@@ -635,6 +816,42 @@ class RemoteResourceAuthorityService:
                 )
             )
 
+        aggregate_budget = self._build_aggregate_budget(
+            proposal=proposal,
+            remote_task_ids=remote_task_ids,
+            authorities=authorities,
+        )
+        if remote_task_ids:
+            if (
+                aggregate_budget.plan_max_runtime_sec is not None
+                and aggregate_budget.total_walltime_upper_bound_sec
+                > aggregate_budget.plan_max_runtime_sec
+            ):
+                global_findings.append(
+                    _finding(
+                        "REMOTE_RESOURCE_AGGREGATE_BUDGET_EXCEEDED",
+                        detail="Sequential remote walltime exceeds the exact plan limit.",
+                    )
+                )
+            if (
+                aggregate_budget.plan_max_gpu_hours is not None
+                and aggregate_budget.total_derived_gpu_hours
+                > aggregate_budget.plan_max_gpu_hours
+            ):
+                global_findings.append(
+                    _finding(
+                        "REMOTE_RESOURCE_AGGREGATE_BUDGET_EXCEEDED",
+                        detail="Aggregate remote GPU-hours exceed the exact plan limit.",
+                    )
+                )
+            if aggregate_budget.plan_max_cost_usd is not None:
+                global_findings.append(
+                    _finding(
+                        "REMOTE_RESOURCE_COST_AUTHORITY_UNAVAILABLE",
+                        detail="No server-owned remote cost model is configured.",
+                    )
+                )
+
         if not remote_dispatches:
             global_findings.append(
                 AgentRemoteResourceAuthorityFinding(
@@ -661,15 +878,97 @@ class RemoteResourceAuthorityService:
             policy_version=policy_version,
             policy_digest=policy_digest,
             ordered_task_ids=ordered_task_ids,
-            remote_task_ids=[item.task_id for item in remote_dispatches],
+            remote_task_ids=remote_task_ids,
             task_decisions=task_decisions,
+            aggregate_budget=aggregate_budget,
             outcome=outcome,
             reason_codes=reason_codes,
             findings=global_findings,
             created_at=proposal.created_at,
             executable=False,
         )
-        return RemoteResourceAuthorityEvaluation(decision, tuple(authorities))
+        authority_set = (
+            self._build_authority_set(
+                decision=decision,
+                aggregate_budget=aggregate_budget,
+            )
+            if remote_task_ids
+            and outcome == AgentRemoteResourceAuthorityOutcome.CONFIGURED
+            else None
+        )
+        return RemoteResourceAuthorityEvaluation(
+            decision, tuple(authorities), authority_set
+        )
+
+    @staticmethod
+    def _build_aggregate_budget(
+        *,
+        proposal: Any,
+        remote_task_ids: Sequence[str],
+        authorities: Sequence[AgentRemoteResourceAuthority],
+    ) -> AgentRemoteResourceAggregateBudget:
+        authorities_by_task = {item.task_id: item for item in authorities}
+        bindings = [
+            AgentRemoteResourceTaskBudgetBinding(
+                task_id=task_id,
+                authority_id=authorities_by_task[task_id].authority_id,
+                authority_digest=authorities_by_task[task_id].authority_digest,
+                configured_resources=authorities_by_task[task_id].configured_resources,
+                budget_limits=authorities_by_task[task_id].budget_limits,
+                budget_policy_digest=authorities_by_task[task_id].budget_policy_digest,
+                derived_gpu_hours=authorities_by_task[task_id].derived_gpu_hours,
+            )
+            for task_id in remote_task_ids
+            if task_id in authorities_by_task
+        ]
+        return AgentRemoteResourceAggregateBudget(
+            remote_task_ids=list(remote_task_ids),
+            per_task_budget_bindings=bindings,
+            walltime_aggregation_policy="sequential_sum.v1",
+            total_derived_gpu_hours=sum(item.derived_gpu_hours for item in bindings),
+            total_configured_cpu_threads=sum(
+                item.configured_resources.cpu_threads for item in bindings
+            ),
+            total_walltime_upper_bound_sec=sum(
+                item.configured_resources.walltime_sec for item in bindings
+            ),
+            plan_max_runtime_sec=proposal.limits.get("max_runtime_sec"),
+            plan_max_gpu_hours=proposal.limits.get("max_gpu_hours"),
+            plan_max_cost_usd=proposal.limits.get("max_cost_usd"),
+        )
+
+    @staticmethod
+    def _build_authority_set(
+        *,
+        decision: AgentRemoteResourceAuthorityDecision,
+        aggregate_budget: AgentRemoteResourceAggregateBudget,
+    ) -> AgentRemoteResourceAuthoritySet:
+        bindings = list(aggregate_budget.per_task_budget_bindings)
+        complete_roster_digest = _agent_digest(
+            {
+                "schema_version": "agent_remote_resource_authority_complete_roster.v1",
+                "remote_task_ids": decision.remote_task_ids,
+                "authority_bindings": [
+                    item.model_dump(mode="json") for item in bindings
+                ],
+            }
+        )
+        return AgentRemoteResourceAuthoritySet(
+            project_id=decision.project_id,
+            run_id=decision.run_id,
+            proposal_id=decision.proposal_id,
+            proposal_digest=decision.proposal_digest,
+            decision_id=decision.decision_id,
+            decision_digest=decision.decision_digest,
+            ordered_task_ids=decision.ordered_task_ids,
+            remote_task_ids=decision.remote_task_ids,
+            authority_bindings=bindings,
+            complete_roster_digest=complete_roster_digest,
+            aggregate_budget=aggregate_budget,
+            aggregate_budget_digest=aggregate_budget.aggregate_budget_digest,
+            created_at=decision.created_at,
+            executable=False,
+        )
 
     @staticmethod
     def _build_authority(
@@ -898,10 +1197,21 @@ def _same_evaluation(
         left.decision.model_dump(mode="json") == right.decision.model_dump(mode="json")
         and [item.model_dump(mode="json") for item in left.authorities]
         == [item.model_dump(mode="json") for item in right.authorities]
+        and (
+            None
+            if left.authority_set is None
+            else left.authority_set.model_dump(mode="json")
+        )
+        == (
+            None
+            if right.authority_set is None
+            else right.authority_set.model_dump(mode="json")
+        )
     )
 
 
 __all__ = [
+    "CurrentRemoteResourceAuthorityBinding",
     "RemoteResourceAuthorityConflict",
     "RemoteResourceAuthorityDenied",
     "RemoteResourceAuthorityError",

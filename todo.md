@@ -994,6 +994,15 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：v1没有版本化 monetary cost model或 probe TTL，因此任何非空 cost authority请求 fail closed，probe freshness只由 exact connection/probe/profile/capability digest与available状态约束；PR-BN消费前必须再次current-verify全部binding。
 - 批准人：待 repository owner review。
 
+### 2026-08-01：PR-BM2 review 修复完整 roster 激活与聚合预算
+
+- 决策：裸 per-task resource authority 只保留为不可执行审计；只有按 RunPlan 顺序覆盖全部 remote task、绑定完整 authority/budget roster 且 current-verified 的 immutable AuthoritySet 才能进入 Permission v2。远程 walltime 采用版本化 `sequential_sum.v1`，GPU-hour 按 task 求和后与 plan limit比较。
+- 原计划：逐个 authority rename 后由 Permission 直接读取单文件；request marker 才记录完整 roster；proposal remote budget只在全 remote plan中脱离 legacy budget检查，且 plan limit按每个 task重复校验。
+- 新计划：per-task publication → 完整 roster verification → AuthoritySet manifest-last → set current verification → marker前 fault/mutation opportunity → final source rederive → request success marker。mixed plan中的 `max_runtime_sec`、`max_gpu_hours`、`max_cost_usd` 由 AuthoritySet覆盖，其他 local维度仍由现有 budget authority处理。
+- 依据：新增 first/final authority rename crash 后 Permission仍 `DENY`、set rename后 policy/probe drift无 success marker/response、非字典序 multi-remote roster、aggregate GPU-hour超限、默认 Registry Uni-Mol/MinerU mixed chain和 strict policy boolean测试。
+- 影响任务：`M3H-007A` 继续 `I/T/— / READY` 等待 owner review；`M3H-GATE-002` 不标 `V`；PR-BN/M3H-008/M3H-010继续 `DEFERRED`，不创建 RemoteExecutionRequest或 dispatch。
+- 批准人：待 repository owner review。
+
 后续路线调整必须追加：
 
 ```text

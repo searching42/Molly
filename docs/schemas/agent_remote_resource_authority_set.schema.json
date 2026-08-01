@@ -119,42 +119,6 @@
       "title": "AgentRemoteResourceAggregateBudget",
       "type": "object"
     },
-    "AgentRemoteResourceAuthorityFinding": {
-      "additionalProperties": false,
-      "properties": {
-        "reason_code": {
-          "title": "Reason Code",
-          "type": "string"
-        },
-        "outcome": {
-          "$ref": "#/$defs/AgentRemoteResourceAuthorityOutcome"
-        },
-        "task_id": {
-          "default": "",
-          "title": "Task Id",
-          "type": "string"
-        },
-        "detail": {
-          "default": "",
-          "title": "Detail",
-          "type": "string"
-        }
-      },
-      "required": [
-        "reason_code",
-        "outcome"
-      ],
-      "title": "AgentRemoteResourceAuthorityFinding",
-      "type": "object"
-    },
-    "AgentRemoteResourceAuthorityOutcome": {
-      "enum": [
-        "CONFIGURED",
-        "DENY"
-      ],
-      "title": "AgentRemoteResourceAuthorityOutcome",
-      "type": "string"
-    },
     "AgentRemoteResourceBudgetLimits": {
       "additionalProperties": false,
       "properties": {
@@ -228,62 +192,20 @@
       ],
       "title": "AgentRemoteResourceTaskBudgetBinding",
       "type": "object"
-    },
-    "AgentRemoteResourceTaskDecision": {
-      "additionalProperties": false,
-      "properties": {
-        "task_id": {
-          "title": "Task Id",
-          "type": "string"
-        },
-        "outcome": {
-          "$ref": "#/$defs/AgentRemoteResourceAuthorityOutcome"
-        },
-        "reason_codes": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Reason Codes",
-          "type": "array"
-        },
-        "authority_id": {
-          "default": "",
-          "title": "Authority Id",
-          "type": "string"
-        },
-        "authority_digest": {
-          "default": "",
-          "title": "Authority Digest",
-          "type": "string"
-        },
-        "findings": {
-          "items": {
-            "$ref": "#/$defs/AgentRemoteResourceAuthorityFinding"
-          },
-          "title": "Findings",
-          "type": "array"
-        }
-      },
-      "required": [
-        "task_id",
-        "outcome",
-        "reason_codes"
-      ],
-      "title": "AgentRemoteResourceTaskDecision",
-      "type": "object"
     }
   },
   "additionalProperties": false,
+  "description": "Manifest-last activation boundary for one complete remote task roster.",
   "properties": {
     "schema_version": {
-      "const": "agent_remote_resource_authority_decision.v1",
-      "default": "agent_remote_resource_authority_decision.v1",
+      "const": "agent_remote_resource_authority_set.v1",
+      "default": "agent_remote_resource_authority_set.v1",
       "title": "Schema Version",
       "type": "string"
     },
-    "decision_id": {
+    "authority_set_id": {
       "default": "",
-      "title": "Decision Id",
+      "title": "Authority Set Id",
       "type": "string"
     },
     "project_id": {
@@ -302,12 +224,12 @@
       "title": "Proposal Digest",
       "type": "string"
     },
-    "policy_version": {
-      "title": "Policy Version",
+    "decision_id": {
+      "title": "Decision Id",
       "type": "string"
     },
-    "policy_digest": {
-      "title": "Policy Digest",
+    "decision_digest": {
+      "title": "Decision Digest",
       "type": "string"
     },
     "ordered_task_ids": {
@@ -324,36 +246,27 @@
       "title": "Remote Task Ids",
       "type": "array"
     },
-    "task_decisions": {
+    "authority_bindings": {
       "items": {
-        "$ref": "#/$defs/AgentRemoteResourceTaskDecision"
+        "$ref": "#/$defs/AgentRemoteResourceTaskBudgetBinding"
       },
-      "title": "Task Decisions",
+      "title": "Authority Bindings",
       "type": "array"
+    },
+    "complete_roster_digest": {
+      "title": "Complete Roster Digest",
+      "type": "string"
     },
     "aggregate_budget": {
       "$ref": "#/$defs/AgentRemoteResourceAggregateBudget"
     },
-    "outcome": {
-      "$ref": "#/$defs/AgentRemoteResourceAuthorityOutcome"
+    "aggregate_budget_digest": {
+      "title": "Aggregate Budget Digest",
+      "type": "string"
     },
-    "reason_codes": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Reason Codes",
-      "type": "array"
-    },
-    "findings": {
-      "items": {
-        "$ref": "#/$defs/AgentRemoteResourceAuthorityFinding"
-      },
-      "title": "Findings",
-      "type": "array"
-    },
-    "decision_digest": {
+    "authority_set_digest": {
       "default": "",
-      "title": "Decision Digest",
+      "title": "Authority Set Digest",
       "type": "string"
     },
     "created_at": {
@@ -372,16 +285,16 @@
     "run_id",
     "proposal_id",
     "proposal_digest",
-    "policy_version",
-    "policy_digest",
+    "decision_id",
+    "decision_digest",
     "ordered_task_ids",
     "remote_task_ids",
-    "task_decisions",
+    "authority_bindings",
+    "complete_roster_digest",
     "aggregate_budget",
-    "outcome",
-    "reason_codes",
+    "aggregate_budget_digest",
     "created_at"
   ],
-  "title": "AgentRemoteResourceAuthorityDecision",
+  "title": "AgentRemoteResourceAuthoritySet",
   "type": "object"
 }

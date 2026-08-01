@@ -186,6 +186,7 @@ RESOURCE_AUTHORITY_REASON_CODES = (
     "REMOTE_RESOURCE_DEVICE_POLICY_MISMATCH",
     "REMOTE_RESOURCE_BUDGET_UNAVAILABLE",
     "REMOTE_RESOURCE_BUDGET_EXCEEDED",
+    "REMOTE_RESOURCE_AGGREGATE_BUDGET_EXCEEDED",
     "REMOTE_RESOURCE_COST_AUTHORITY_UNAVAILABLE",
     "REMOTE_RESOURCE_SOURCE_CHANGED",
 )
@@ -285,7 +286,21 @@ RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL: Mapping[str, Any] = {
         "remote_resource_authority": "current_exact_server_owned_authority_required",
         "proposal_resource_intent": "reviewed_constraint_not_authority",
         "remote_profile_binding_required": True,
-        "execution_binding": "route_type_profile_and_resource_authority_digest",
+        "execution_binding": (
+            "route_type_profile_resource_authority_and_complete_set_digests"
+        ),
+    },
+    "remote_budget_ownership_rules": {
+        "resource_dimensions": [
+            "max_runtime_sec",
+            "max_gpu_hours",
+            "max_cost_usd",
+        ],
+        "owner": "current_exact_remote_resource_authority_set",
+        "mixed_plan_behavior": "remote_dimensions_are_not_legacy_budget_dimensions",
+        "gpu_hour_aggregation": "sum_per_task",
+        "walltime_aggregation": "sequential_sum.v1",
+        "local_fixed_task_dimensions": "non_resource_dimensions_remain_legacy_budget_owned",
     },
     "reason_code_vocabulary": sorted(
         {*REASON_CODE_VOCABULARY, *RESOURCE_AUTHORITY_REASON_CODES}
@@ -781,18 +796,40 @@ class ScientificAgentPermissionEngine:
                         "Remote task lacks a current exact server-owned resource authority.",
                     )
                 else:
-                    execution_binding_digest = _agent_digest(
-                        {
-                            "schema_version": "agent-remote-task-execution-binding.v1",
-                            "task_id": task_id,
-                            "execution_route": execution_route,
-                            "remote_task_type": remote_task_type,
-                            "logical_profile_id": getattr(
-                                dispatch_by_task.get(task_id), "logical_profile_id", None
-                            ),
-                            "remote_resource_authority_digest": authority.authority_digest,
-                        }
+                    authority_set_digest = str(
+                        getattr(authority, "authority_set_digest", "") or ""
                     )
+                    if not authority_set_digest:
+                        execution_binding_digest = _unavailable_execution_binding_digest(
+                            task_id=task_id,
+                            execution_route=execution_route,
+                            remote_task_type=remote_task_type,
+                        )
+                        add_task(
+                            "remote_resource_authority_required",
+                            AgentPermissionOutcome.DENY,
+                            "Remote task authority is not activated by a complete current set.",
+                        )
+                    else:
+                        execution_binding_digest = _agent_digest(
+                            {
+                                "schema_version": "agent-remote-task-execution-binding.v2",
+                                "task_id": task_id,
+                                "execution_route": execution_route,
+                                "remote_task_type": remote_task_type,
+                                "logical_profile_id": getattr(
+                                    dispatch_by_task.get(task_id),
+                                    "logical_profile_id",
+                                    None,
+                                ),
+                                "remote_resource_authority_digest": (
+                                    authority.authority_digest
+                                ),
+                                "remote_resource_authority_set_digest": (
+                                    authority_set_digest
+                                ),
+                            }
+                        )
             else:
                 execution_binding_digest = _agent_digest(
                     {
@@ -1030,10 +1067,7 @@ class ScientificAgentPermissionEngine:
             )
 
         limits_requiring_legacy_budget = dict(proposal.limits)
-        if resource_aware and has_remote_tasks and all(
-            item.execution_route == "remote_execution_service"
-            for item in proposal.dispatch_intents
-        ):
+        if resource_aware and has_remote_tasks:
             for resource_dimension in (
                 "max_runtime_sec",
                 "max_gpu_hours",
