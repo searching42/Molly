@@ -19,7 +19,7 @@ from ai4s_agent.execution_agent_store import (
     ExecutionAgentStoreConflict,
     ExecutionAgentStoreVerificationError,
 )
-from ai4s_agent.llm_provider import StubLLMProvider
+from ai4s_agent.llm_provider import OpenAICompatibleProvider, StubLLMProvider
 from ai4s_agent.schemas import (
     AgentHarnessControllerAdvanceRequest,
     AgentHarnessControllerAction,
@@ -29,6 +29,7 @@ from ai4s_agent.schemas import (
     AgentToolCallApplicationRequest,
     AgentToolCallProposalRequest,
     LLMInvocationRecord,
+    LLMProviderConfig,
     _agent_digest,
 )
 from ai4s_agent.scientific_agent_harness_controller import ControllerAdvanceResult
@@ -265,6 +266,131 @@ class _MarkdownProvider(StubLLMProvider):
             raw_response={"response": "```json\n{}\n```"},
             parsed_output=parsed,
         )
+
+
+class _InvocationMetadataProvider:
+    def __init__(self, *, provider: str, model: str, response_id: str) -> None:
+        self.provider = provider
+        self.model = model
+        self.response_id = response_id
+        self.calls = 0
+
+    def complete_json(self, **kwargs: Any) -> LLMInvocationRecord:
+        self.calls += 1
+        parsed = {
+            "selected_tool_id": "agent.pause_current.v1",
+            "decision_summary": "Pause this bounded turn.",
+        }
+        return LLMInvocationRecord(
+            provider=self.provider,
+            model=self.model,
+            prompt_version=kwargs["prompt_version"],
+            response_id=self.response_id,
+            raw_response={"response": parsed},
+            parsed_output=parsed,
+        )
+
+
+@pytest.mark.parametrize(
+    ("configured_model", "expected_model"),
+    [
+        ("", "default"),
+        ("Qwen/Qwen3-32B", None),
+    ],
+)
+def test_openai_compatible_provider_metadata_projection_accepts_real_contracts(
+    tmp_path,
+    configured_model,
+    expected_model,
+) -> None:
+    storage, _, controller, initial = local_controller_execution(tmp_path)
+    response = {
+        "selected_tool_id": "agent.pause_current.v1",
+        "decision_summary": "Pause this bounded turn.",
+    }
+    calls = 0
+
+    def transport(url, payload, headers, timeout):
+        del url, headers, timeout
+        nonlocal calls
+        calls += 1
+        assert payload["model"] == (configured_model or "default")
+        return {
+            "choices": [{"message": {"content": json.dumps(response)}}],
+        }
+
+    provider = OpenAICompatibleProvider(
+        config=LLMProviderConfig(
+            provider="openai_compatible",
+            endpoint="https://example.test/v1",
+            model=configured_model,
+        ),
+        transport=transport,
+    )
+    proposed = execution_agent_service(
+        storage=storage,
+        controller=controller,
+    ).create_proposal(
+        project_id="project-1",
+        controller_execution_id=initial.execution.controller_execution_id,
+        request=_proposal_request(
+            initial.execution.execution_digest,
+            request_id=(
+                "provider-contract-namespaced"
+                if configured_model
+                else "provider-contract-default"
+            ),
+        ),
+        provider=provider,
+        provider_binding_digest=_agent_digest({"model": configured_model}),
+    )
+    proposal = proposed.publication.proposal
+    assert calls == 1
+    assert proposal.llm_response_id == "unavailable"
+    assert proposal.llm_response_id_digest.startswith("sha256:")
+    if expected_model is None:
+        assert proposal.llm_model == proposal.llm_model_digest
+        assert configured_model not in json.dumps(proposal.model_dump(mode="json"))
+    else:
+        assert proposal.llm_model == expected_model
+        assert proposal.llm_model_digest.startswith("sha256:")
+
+
+def test_provider_metadata_rejection_is_checkpointed_and_never_recalled(
+    tmp_path,
+) -> None:
+    storage, _, controller, initial = local_controller_execution(tmp_path)
+    service = execution_agent_service(storage=storage, controller=controller)
+    provider = _InvocationMetadataProvider(
+        provider="unsupported_provider",
+        model="model",
+        response_id="response",
+    )
+    request = _proposal_request(
+        initial.execution.execution_digest,
+        request_id="invalid-provider-metadata-1",
+    )
+    for _ in range(2):
+        with pytest.raises(
+            ExecutionAgentLLMResponseInvalid,
+            match="execution_agent_llm_response_invalid",
+        ):
+            service.create_proposal(
+                project_id="project-1",
+                controller_execution_id=initial.execution.controller_execution_id,
+                request=request,
+                provider=provider,
+                provider_binding_digest=_agent_digest({"provider": "invalid"}),
+            )
+    assert provider.calls == 1
+    request_root = (
+        storage.project_dir("project-1")
+        / "agent_execution_agent_requests"
+        / initial.execution.controller_execution_id
+        / "requests"
+        / request.client_request_id
+    )
+    assert (request_root / "llm_response_rejected.json").is_file()
 
 
 @pytest.mark.parametrize(

@@ -31,6 +31,9 @@ from ai4s_agent.scientific_agent_plan import (
 
 
 EXECUTION_AGENT_REQUEST_VERSION = "execution_agent_request_checkpoint.v1"
+EXECUTION_AGENT_APPLICATION_CHECKPOINT_VERSION = (
+    "execution_agent_application_checkpoint.v1"
+)
 EXECUTION_AGENT_PUBLICATION_MANIFEST_VERSION = (
     "execution_agent_publication_manifest.v1"
 )
@@ -73,6 +76,7 @@ class ExecutionAgentApplicationSession:
     tool_call_proposal_id: str
     client_request_id: str
     request_digest: str
+    application_root: Path
     request_dir: Path
 
 
@@ -178,6 +182,7 @@ class ExecutionAgentStore:
                 tool_call_proposal_id=proposal_id,
                 client_request_id=request_id,
                 request_digest=request_digest,
+                application_root=application_root,
                 request_dir=request_dir,
             )
             self.write_marker(
@@ -187,6 +192,83 @@ class ExecutionAgentStore:
                 values={},
             )
             yield session
+
+    def write_application_checkpoint(
+        self,
+        session: ExecutionAgentApplicationSession,
+        *,
+        filename: str,
+        status: str,
+        values: Mapping[str, Any],
+    ) -> None:
+        """Write proposal-scoped effect authority independent of an apply request."""
+
+        payload = {
+            "schema_version": EXECUTION_AGENT_APPLICATION_CHECKPOINT_VERSION,
+            "status": status,
+            "project_id": session.project_id,
+            "tool_call_proposal_id": session.tool_call_proposal_id,
+            **dict(values),
+        }
+        self.write_or_verify(
+            session.application_root / filename,
+            _pretty_json_bytes(payload),
+        )
+
+    def read_committed_application_receipt(
+        self,
+        *,
+        project_id: str,
+        tool_call_proposal_id: str,
+    ) -> AgentToolCallApplicationReceipt | None:
+        """Resolve one proposal's receipt through its exact root pointer only."""
+
+        project = _safe_scope_id(project_id, field="project_id")
+        proposal_id = _safe_scope_id(
+            tool_call_proposal_id,
+            field="tool_call_proposal_id",
+        )
+        application_root = self._nested_scope_root(
+            project_id=project,
+            root_name="agent_execution_agent_applications",
+            scope_id=proposal_id,
+            create=False,
+        )
+        if application_root is None:
+            return None
+        marker = self.read_marker(
+            application_root / "application_receipt_committed.json"
+        )
+        if marker is None:
+            return None
+        if (
+            marker.get("schema_version")
+            != EXECUTION_AGENT_APPLICATION_CHECKPOINT_VERSION
+            or marker.get("status") != "APPLICATION_RECEIPT_COMMITTED"
+            or marker.get("project_id") != project
+            or marker.get("tool_call_proposal_id") != proposal_id
+        ):
+            raise ExecutionAgentStoreVerificationError(
+                "application receipt pointer failed exact validation"
+            )
+        receipt_id = marker.get("application_receipt_id")
+        receipt_digest = marker.get("application_receipt_digest")
+        if not isinstance(receipt_id, str) or not isinstance(receipt_digest, str):
+            raise ExecutionAgentStoreVerificationError(
+                "application receipt pointer is incomplete"
+            )
+        receipt = self.read_application_receipt(
+            project_id=project,
+            application_receipt_id=receipt_id,
+        )
+        if (
+            receipt.application_receipt_digest != receipt_digest
+            or receipt.tool_call_proposal_id != proposal_id
+        ):
+            raise ExecutionAgentStoreVerificationError(
+                "application receipt pointer binding mismatch"
+            )
+        return receipt
 
     def write_marker(
         self,
@@ -411,31 +493,13 @@ class ExecutionAgentStore:
         project_id: str,
         tool_call_proposal_id: str,
     ) -> list[AgentToolCallApplicationReceipt]:
-        root = self._root(
+        """Compatibility list view backed by the proposal's exact pointer."""
+
+        receipt = self.read_committed_application_receipt(
             project_id=project_id,
-            name="agent_execution_agent_application_receipts",
-            create=False,
+            tool_call_proposal_id=tool_call_proposal_id,
         )
-        if root is None:
-            return []
-        children = sorted(root.iterdir(), key=lambda item: item.name)
-        if len(children) > 4096:
-            raise ExecutionAgentStoreVerificationError(
-                "application receipt roster exceeds its bounded limit"
-            )
-        result: list[AgentToolCallApplicationReceipt] = []
-        for child in children:
-            if child.is_symlink() or not child.is_dir():
-                raise ExecutionAgentStoreVerificationError(
-                    "application receipt roster contains an unsafe entry"
-                )
-            receipt = self.read_application_receipt(
-                project_id=project_id,
-                application_receipt_id=child.name,
-            )
-            if receipt.tool_call_proposal_id == tool_call_proposal_id:
-                result.append(receipt)
-        return sorted(result, key=lambda item: item.application_receipt_id)
+        return [receipt] if receipt is not None else []
 
     def _proposal_payloads(
         self,

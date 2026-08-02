@@ -236,6 +236,10 @@
       "title": "Prompt Digest",
       "type": "string"
     },
+    "provider_metadata_projection_version": {
+      "title": "Provider Metadata Projection Version",
+      "type": "string"
+    },
     "llm_provider_kind": {
       "title": "Llm Provider Kind",
       "type": "string"
@@ -244,8 +248,16 @@
       "title": "Llm Model",
       "type": "string"
     },
+    "llm_model_digest": {
+      "title": "Llm Model Digest",
+      "type": "string"
+    },
     "llm_response_id": {
       "title": "Llm Response Id",
+      "type": "string"
+    },
+    "llm_response_id_digest": {
+      "title": "Llm Response Id Digest",
       "type": "string"
     },
     "parsed_llm_response": {
@@ -303,9 +315,12 @@
     "execution_agent_policy_digest",
     "prompt_version",
     "prompt_digest",
+    "provider_metadata_projection_version",
     "llm_provider_kind",
     "llm_model",
+    "llm_model_digest",
     "llm_response_id",
+    "llm_response_id_digest",
     "parsed_llm_response",
     "parsed_llm_response_digest",
     "source_bindings",

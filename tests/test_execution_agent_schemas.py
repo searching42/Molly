@@ -112,7 +112,7 @@ def test_execution_agent_policy_and_controller_policy_are_hash_seed_stable() -> 
         (EXECUTION_AGENT_POLICY_DIGEST, CONTROLLER_POLICY_DIGEST),
     ]
     assert EXECUTION_AGENT_POLICY_DIGEST == (
-        "sha256:1ed4ad740d0257b48477a77ceec3e6ea79ea5894f8e7e3b3e0c9de96c73bf2f7"
+        "sha256:520b9dba4907192337eb004ade113eb4072b7f8589d2710e14c4df44772dcdcf"
     )
     assert CONTROLLER_POLICY_DIGEST == (
         "sha256:2611cf3836b19505259f6edd17024f5d3b41a835c049aaf8f5776b73853ecb6c"

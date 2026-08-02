@@ -54,6 +54,10 @@ from ai4s_agent.scientific_agent_harness_controller import (
 EXECUTION_AGENT_POLICY_VERSION = "scientific-agent-execution-agent-policy.v1"
 EXECUTION_AGENT_PROMPT_VERSION = "scientific-agent-execution-selection.v1"
 EXECUTION_AGENT_RESPONSE_VERSION = "agent_execution_llm_response.v1"
+EXECUTION_AGENT_PROVIDER_METADATA_PROJECTION_VERSION = (
+    "execution_agent_provider_metadata_projection.v1"
+)
+_EXECUTION_AGENT_PROVIDER_KINDS = frozenset({"openai_compatible", "stub"})
 EXECUTION_AGENT_SYSTEM_PROMPT = """You are a bounded execution selector.
 
 Choose exactly one tool_id from the server-provided tool catalog.
@@ -159,6 +163,12 @@ _POLICY_MATERIAL: Mapping[str, Any] = {
     "proposal_current_inspection": "required",
     "provider_consent": "existing_external_llm_approved_literal_true",
     "provider_crash": "unknown_outcome_never_auto_retry",
+    "provider_metadata": {
+        "projection_version": EXECUTION_AGENT_PROVIDER_METADATA_PROJECTION_VERSION,
+        "provider_kinds": sorted(_EXECUTION_AGENT_PROVIDER_KINDS),
+        "model": "safe_label_or_sha256_identity",
+        "response_id": "safe_label_or_sha256_identity_or_unavailable",
+    },
     "privacy": {
         "handling": "reject_not_redact",
         "summary_pattern_digest": _agent_digest(_UNSAFE_SUMMARY_PATTERN_TEXT),
@@ -546,6 +556,22 @@ class ExecutionAgentService:
                             },
                         ) as validation_span:
                             parsed = self._validated_response(invocation, catalog)
+                            provider_metadata = self._provider_metadata(invocation)
+                            response_checkpoint_material = {
+                                "prompt_digest": prompt_digest,
+                                **provider_metadata,
+                                "parsed_llm_response": parsed.model_dump(mode="json"),
+                                "parsed_llm_response_digest": _agent_digest(
+                                    parsed.model_dump(mode="json")
+                                ),
+                                "proposal_created_at": observation.created_at,
+                            }
+                            response_checkpoint_values = {
+                                **response_checkpoint_material,
+                                "response_checkpoint_digest": _agent_digest(
+                                    response_checkpoint_material
+                                ),
+                            }
                             validation_span.add_event(
                                 "execution_agent.llm_response_validated",
                                 {"selected_tool_id": parsed.selected_tool_id},
@@ -558,32 +584,6 @@ class ExecutionAgentService:
                             values={"reason_code": "EXECUTION_AGENT_LLM_RESPONSE_INVALID"},
                         )
                         raise
-                    response_checkpoint_material = {
-                        "prompt_digest": prompt_digest,
-                        "llm_provider_kind": self._provider_label(
-                            invocation.provider,
-                            field="llm_provider_kind",
-                        ),
-                        "llm_model": self._provider_label(
-                            invocation.model,
-                            field="llm_model",
-                        ),
-                        "llm_response_id": self._provider_label(
-                            invocation.response_id,
-                            field="llm_response_id",
-                        ),
-                        "parsed_llm_response": parsed.model_dump(mode="json"),
-                        "parsed_llm_response_digest": _agent_digest(
-                            parsed.model_dump(mode="json")
-                        ),
-                        "proposal_created_at": observation.created_at,
-                    }
-                    response_checkpoint_values = {
-                        **response_checkpoint_material,
-                        "response_checkpoint_digest": _agent_digest(
-                            response_checkpoint_material
-                        ),
-                    }
                     self.store.write_marker(
                         session,
                         filename="llm_response_committed.json",
@@ -666,9 +666,12 @@ class ExecutionAgentService:
             key: checkpoint.get(key)
             for key in (
                 "prompt_digest",
+                "provider_metadata_projection_version",
                 "llm_provider_kind",
                 "llm_model",
+                "llm_model_digest",
                 "llm_response_id",
+                "llm_response_id_digest",
                 "parsed_llm_response",
                 "parsed_llm_response_digest",
                 "proposal_created_at",
@@ -685,8 +688,13 @@ class ExecutionAgentService:
             or proposal.prompt_digest != prompt_digest
             or proposal.llm_provider_kind
             != checkpoint.get("llm_provider_kind")
+            or proposal.provider_metadata_projection_version
+            != checkpoint.get("provider_metadata_projection_version")
             or proposal.llm_model != checkpoint.get("llm_model")
+            or proposal.llm_model_digest != checkpoint.get("llm_model_digest")
             or proposal.llm_response_id != checkpoint.get("llm_response_id")
+            or proposal.llm_response_id_digest
+            != checkpoint.get("llm_response_id_digest")
             or proposal.parsed_llm_response != parsed
             or proposal.parsed_llm_response_digest
             != checkpoint.get("parsed_llm_response_digest")
@@ -733,25 +741,21 @@ class ExecutionAgentService:
             ScientificAgentHarnessControllerConflict,
         ):
             current = False
-        receipts = self.store.application_receipts_for_proposal(
+        receipt = self.store.read_committed_application_receipt(
             project_id=project_id,
             tool_call_proposal_id=tool_call_proposal_id,
         )
-        if len(receipts) > 1:
-            raise ExecutionAgentStoreVerificationError(
-                "tool call proposal has conflicting application receipts"
-            )
-        if receipts:
+        if receipt is not None:
             self._assert_application_receipt_binding(
                 publication=publication,
-                receipt=receipts[0],
+                receipt=receipt,
             )
         return ExecutionAgentReadResult(
             publication=publication,
             current=current,
             stale=not current,
-            applied=bool(receipts),
-            application_receipt=receipts[0] if receipts else None,
+            applied=receipt is not None,
+            application_receipt=receipt,
         )
 
     def apply_proposal(
@@ -797,18 +801,14 @@ class ExecutionAgentService:
                     raise ExecutionAgentConflict(
                         "proposal application does not bind the exact proposal"
                     )
-                existing = self.store.application_receipts_for_proposal(
+                existing = self.store.read_committed_application_receipt(
                     project_id=project_id,
                     tool_call_proposal_id=tool_call_proposal_id,
                 )
-                if len(existing) > 1:
-                    raise ExecutionAgentStoreVerificationError(
-                        "tool call proposal has conflicting application receipts"
-                    )
-                if existing:
+                if existing is not None:
                     self._assert_application_receipt_binding(
                         publication=publication,
-                        receipt=existing[0],
+                        receipt=existing,
                     )
                     self.store.write_marker(
                         session,
@@ -816,16 +816,16 @@ class ExecutionAgentService:
                         status="APPLICATION_COMMITTED",
                         values={
                             "application_receipt_id": (
-                                existing[0].application_receipt_id
+                                existing.application_receipt_id
                             ),
                             "application_receipt_digest": (
-                                existing[0].application_receipt_digest
+                                existing.application_receipt_digest
                             ),
                         },
                     )
                     return ExecutionAgentApplyResult(
                         publication=publication,
-                        application_receipt=existing[0],
+                        application_receipt=existing,
                         controller_result=None,
                     )
                 selected = next(
@@ -841,13 +841,19 @@ class ExecutionAgentService:
                         "selected tool is not in the current exact catalog"
                     )
                 controller_call_started = self.store.read_marker(
-                    session.request_dir / "controller_call_started.json"
+                    session.application_root / "controller_call_started.json"
+                )
+                controller_effect_observed = self.store.read_marker(
+                    session.application_root / "controller_effect_observed.json"
                 )
                 if (
                     proposal.server_compiled_operation
                     != AgentExecutionServerCompiledOperation.CONTROLLER_ADVANCE
                 ):
-                    if controller_call_started is not None:
+                    if (
+                        controller_call_started is not None
+                        or controller_effect_observed is not None
+                    ):
                         raise ExecutionAgentStoreVerificationError(
                             "no-effect proposal has an impossible Controller checkpoint"
                         )
@@ -858,8 +864,6 @@ class ExecutionAgentService:
                         publication=publication,
                         apply_span=apply_span,
                     )
-                if controller_call_started is None:
-                    self._assert_publication_current(publication)
                 controller_result: ControllerAdvanceResult | None = None
                 had_prior_decision = False
                 if (
@@ -892,6 +896,28 @@ class ExecutionAgentService:
                             "deterministic Controller request evidence is inconsistent"
                         )
                     had_prior_decision = bool(prior)
+                    if controller_call_started is not None and (
+                        controller_call_started.get("controller_request_id")
+                        != controller_request_id
+                        or controller_call_started.get("tool_call_proposal_digest")
+                        != proposal.tool_call_proposal_digest
+                    ):
+                        raise ExecutionAgentStoreVerificationError(
+                            "proposal Controller checkpoint binding mismatch"
+                        )
+                    if not had_prior_decision:
+                        self._assert_publication_current(publication)
+                    self.store.write_application_checkpoint(
+                        session,
+                        filename="controller_call_started.json",
+                        status="CONTROLLER_CALL_STARTED",
+                        values={
+                            "tool_call_proposal_digest": (
+                                proposal.tool_call_proposal_digest
+                            ),
+                            "controller_request_id": controller_request_id,
+                        },
+                    )
                     self.store.write_marker(
                         session,
                         filename="controller_call_started.json",
@@ -910,7 +936,6 @@ class ExecutionAgentService:
                         ),
                         expected_inspection_digest=proposal.inspection_digest,
                     )
-                    self.store._fault("after_controller_advance")
                     if (
                         controller_result.decision is None
                         and controller_result.receipt is not None
@@ -951,6 +976,47 @@ class ExecutionAgentService:
                         raise ExecutionAgentConflict(
                             "Controller advance lacks exact decision and receipt evidence"
                         )
+                    effect_values = {
+                        "tool_call_proposal_digest": (
+                            proposal.tool_call_proposal_digest
+                        ),
+                        "controller_request_id": controller_request_id,
+                        "controller_decision_id": (
+                            controller_result.decision.decision_id
+                        ),
+                        "controller_decision_digest": (
+                            controller_result.decision.decision_digest
+                        ),
+                        "controller_receipt_id": (
+                            controller_result.receipt.receipt_id
+                        ),
+                        "controller_receipt_digest": (
+                            controller_result.receipt.receipt_digest
+                        ),
+                        "after_inspection_digest": (
+                            controller_result.inspection.inspection_digest
+                        ),
+                    }
+                    if controller_effect_observed is not None:
+                        effect_values["after_inspection_digest"] = (
+                            controller_effect_observed.get(
+                                "after_inspection_digest"
+                            )
+                        )
+                    self.store.write_application_checkpoint(
+                        session,
+                        filename="controller_effect_observed.json",
+                        status="CONTROLLER_EFFECT_OBSERVED",
+                        values=effect_values,
+                    )
+                    effect_after_inspection_digest = effect_values.get(
+                        "after_inspection_digest"
+                    )
+                    if not isinstance(effect_after_inspection_digest, str):
+                        raise ExecutionAgentStoreVerificationError(
+                            "proposal Controller effect checkpoint is incomplete"
+                        )
+                    self.store._fault("after_controller_advance")
                     after = controller_result
                     outcome = (
                         AgentToolCallApplicationOutcome.RECONCILED
@@ -968,14 +1034,40 @@ class ExecutionAgentService:
                     controller_result=controller_result,
                     outcome=outcome,
                     reason=reason,
+                    after_inspection_digest=effect_after_inspection_digest,
+                )
+                candidates = [receipt]
+                if outcome == AgentToolCallApplicationOutcome.RECONCILED:
+                    candidates.append(
+                        self._application_receipt(
+                            publication=publication,
+                            after=after,
+                            controller_result=controller_result,
+                            outcome=AgentToolCallApplicationOutcome.APPLIED,
+                            reason="EXECUTION_AGENT_CONTROLLER_ADVANCE_APPLIED",
+                            after_inspection_digest=(
+                                effect_after_inspection_digest
+                            ),
+                        )
+                    )
+                existing_candidate = self._existing_candidate_receipt(
+                    project_id=project_id,
+                    candidates=candidates,
                 )
                 self.store._fault("before_application_receipt")
-                receipt = self.store.publish_application_receipt(
-                    project_id=project_id,
-                    receipt=receipt,
-                    staging_parent=session.request_dir,
-                )
+                if existing_candidate is not None:
+                    receipt = existing_candidate
+                else:
+                    receipt = self.store.publish_application_receipt(
+                        project_id=project_id,
+                        receipt=receipt,
+                        staging_parent=session.request_dir,
+                    )
                 self.store._fault("after_application_receipt")
+                self._commit_application_receipt_pointer(
+                    session=session,
+                    receipt=receipt,
+                )
                 self.store.write_marker(
                     session,
                     filename="application_committed.json",
@@ -1062,13 +1154,24 @@ class ExecutionAgentService:
                 outcome=outcome,
                 reason=reason,
             )
-            self.store._fault("before_application_receipt")
-            receipt = self.store.publish_application_receipt(
+            existing_candidate = self._existing_candidate_receipt(
                 project_id=project_id,
-                receipt=receipt,
-                staging_parent=session.request_dir,
+                candidates=[receipt],
             )
+            self.store._fault("before_application_receipt")
+            if existing_candidate is not None:
+                receipt = existing_candidate
+            else:
+                receipt = self.store.publish_application_receipt(
+                    project_id=project_id,
+                    receipt=receipt,
+                    staging_parent=session.request_dir,
+                )
             self.store._fault("after_application_receipt")
+            self._commit_application_receipt_pointer(
+                session=session,
+                receipt=receipt,
+            )
             self.store.write_marker(
                 session,
                 filename="application_committed.json",
@@ -1234,9 +1337,12 @@ class ExecutionAgentService:
             key: checkpoint.get(key)
             for key in (
                 "prompt_digest",
+                "provider_metadata_projection_version",
                 "llm_provider_kind",
                 "llm_model",
+                "llm_model_digest",
                 "llm_response_id",
+                "llm_response_id_digest",
                 "parsed_llm_response",
                 "parsed_llm_response_digest",
                 "proposal_created_at",
@@ -1333,9 +1439,16 @@ class ExecutionAgentService:
             execution_agent_policy_digest=EXECUTION_AGENT_POLICY_DIGEST,
             prompt_version=EXECUTION_AGENT_PROMPT_VERSION,
             prompt_digest=prompt_digest,
+            provider_metadata_projection_version=str(
+                checkpoint.get("provider_metadata_projection_version") or ""
+            ),
             llm_provider_kind=str(checkpoint.get("llm_provider_kind") or ""),
             llm_model=str(checkpoint.get("llm_model") or ""),
+            llm_model_digest=str(checkpoint.get("llm_model_digest") or ""),
             llm_response_id=str(checkpoint.get("llm_response_id") or ""),
+            llm_response_id_digest=str(
+                checkpoint.get("llm_response_id_digest") or ""
+            ),
             parsed_llm_response=parsed,
             parsed_llm_response_digest=_agent_digest(parsed.model_dump(mode="json")),
             source_bindings=sources,
@@ -1518,9 +1631,17 @@ class ExecutionAgentService:
                 raise ExecutionAgentStoreVerificationError(
                     "application receipt Controller evidence failed exact replay"
                 )
+            if receipt.dispatch_occurred != controller_receipts[0].dispatch_occurred:
+                raise ExecutionAgentStoreVerificationError(
+                    "application receipt dispatch claim failed exact replay"
+                )
         elif receipt.after_inspection_digest != receipt.before_inspection_digest:
             raise ExecutionAgentStoreVerificationError(
                 "no-effect application receipt changed the Controller inspection"
+            )
+        elif receipt.dispatch_occurred:
+            raise ExecutionAgentStoreVerificationError(
+                "no-effect application receipt cannot claim dispatch"
             )
 
     @staticmethod
@@ -1640,24 +1761,69 @@ class ExecutionAgentService:
         return decoded
 
     @staticmethod
-    def _provider_label(value: Any, *, field: str) -> str:
+    def _provider_metadata(invocation: Any) -> dict[str, str]:
+        """Project provider metadata into bounded, privacy-safe identities."""
+
+        try:
+            provider = _agent_safe_text(
+                invocation.provider,
+                field="llm_provider_kind",
+                max_length=128,
+                allow_empty=False,
+            ).lower()
+            if provider not in _EXECUTION_AGENT_PROVIDER_KINDS:
+                raise ValueError("unsupported Execution Agent provider kind")
+            model, model_digest = ExecutionAgentService._provider_metadata_label(
+                invocation.model,
+                field="llm_model",
+            )
+            response_id, response_id_digest = (
+                ExecutionAgentService._provider_metadata_label(
+                    invocation.response_id,
+                    field="llm_response_id",
+                )
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ExecutionAgentLLMResponseInvalid(
+                "execution_agent_llm_response_invalid"
+            ) from exc
+        return {
+            "provider_metadata_projection_version": (
+                EXECUTION_AGENT_PROVIDER_METADATA_PROJECTION_VERSION
+            ),
+            "llm_provider_kind": provider,
+            "llm_model": model,
+            "llm_model_digest": model_digest,
+            "llm_response_id": response_id,
+            "llm_response_id_digest": response_id_digest,
+        }
+
+    @staticmethod
+    def _provider_metadata_label(value: Any, *, field: str) -> tuple[str, str]:
         clean = _agent_safe_text(
             value,
             field=field,
-            max_length=128,
-            allow_empty=False,
+            max_length=512,
+            allow_empty=True,
         )
-        if field == "llm_provider_kind":
-            clean = clean.lower()
-        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", clean) is None:
-            raise ExecutionAgentLLMResponseInvalid(
-                "execution_agent_llm_response_invalid"
-            )
-        if _UNSAFE_SUMMARY_PATTERN.search(f" {clean}"):
-            raise ExecutionAgentLLMResponseInvalid(
-                "execution_agent_llm_response_invalid"
-            )
-        return clean
+        digest = _agent_digest(
+            {
+                "schema_version": (
+                    EXECUTION_AGENT_PROVIDER_METADATA_PROJECTION_VERSION
+                ),
+                "field": field,
+                "value": clean,
+            }
+        )
+        if not clean:
+            return "unavailable", digest
+        if (
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", clean)
+            is not None
+            and _UNSAFE_SUMMARY_PATTERN.search(f" {clean}") is None
+        ):
+            return clean, digest
+        return digest, digest
 
     @staticmethod
     def _controller_request_id(proposal: AgentToolCallProposal) -> str:
@@ -1671,6 +1837,54 @@ class ExecutionAgentService:
         )
         return f"execution-agent-advance-{digest.split(':', 1)[1][:32]}"
 
+    def _existing_candidate_receipt(
+        self,
+        *,
+        project_id: str,
+        candidates: list[AgentToolCallApplicationReceipt],
+    ) -> AgentToolCallApplicationReceipt | None:
+        """Exact-read only the receipt IDs derivable from this proposal effect."""
+
+        found: list[AgentToolCallApplicationReceipt] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            if candidate.application_receipt_id in seen:
+                continue
+            seen.add(candidate.application_receipt_id)
+            try:
+                receipt = self.store.read_application_receipt(
+                    project_id=project_id,
+                    application_receipt_id=candidate.application_receipt_id,
+                )
+            except FileNotFoundError:
+                continue
+            if receipt.application_receipt_digest != candidate.application_receipt_digest:
+                raise ExecutionAgentStoreVerificationError(
+                    "application receipt candidate binding mismatch"
+                )
+            found.append(receipt)
+        if len(found) > 1:
+            raise ExecutionAgentStoreVerificationError(
+                "tool call proposal has conflicting application receipts"
+            )
+        return found[0] if found else None
+
+    def _commit_application_receipt_pointer(
+        self,
+        *,
+        session: Any,
+        receipt: AgentToolCallApplicationReceipt,
+    ) -> None:
+        self.store.write_application_checkpoint(
+            session,
+            filename="application_receipt_committed.json",
+            status="APPLICATION_RECEIPT_COMMITTED",
+            values={
+                "application_receipt_id": receipt.application_receipt_id,
+                "application_receipt_digest": receipt.application_receipt_digest,
+            },
+        )
+
     def _application_receipt(
         self,
         *,
@@ -1679,11 +1893,17 @@ class ExecutionAgentService:
         controller_result: ControllerAdvanceResult | None,
         outcome: AgentToolCallApplicationOutcome,
         reason: str,
+        after_inspection_digest: str | None = None,
     ) -> AgentToolCallApplicationReceipt:
         proposal = publication.proposal
         decision = controller_result.decision if controller_result is not None else None
         controller_receipt = (
             controller_result.receipt if controller_result is not None else None
+        )
+        exact_after_inspection_digest = (
+            after.inspection.inspection_digest
+            if after_inspection_digest is None
+            else after_inspection_digest
         )
         sources = [
             AgentHarnessControllerSourceBinding(
@@ -1701,7 +1921,7 @@ class ExecutionAgentService:
             AgentHarnessControllerSourceBinding(
                 name="after_controller_inspection",
                 source_id=f"after-{proposal.controller_execution_id}",
-                source_digest=after.inspection.inspection_digest,
+                source_digest=exact_after_inspection_digest,
                 authority_class=AgentHarnessAuthorityClass.DERIVED,
             ),
         ]
@@ -1730,7 +1950,7 @@ class ExecutionAgentService:
             selected_tool_id=proposal.selected_tool_id,
             server_compiled_operation=proposal.server_compiled_operation,
             before_inspection_digest=proposal.inspection_digest,
-            after_inspection_digest=after.inspection.inspection_digest,
+            after_inspection_digest=exact_after_inspection_digest,
             controller_decision_id=decision.decision_id if decision is not None else "",
             controller_decision_digest=(
                 decision.decision_digest if decision is not None else ""
@@ -1745,6 +1965,11 @@ class ExecutionAgentService:
             ),
             side_effect_attempted=controller_result is not None,
             controller_advance_called=controller_result is not None,
+            dispatch_occurred=(
+                controller_receipt.dispatch_occurred
+                if controller_receipt is not None
+                else False
+            ),
             outcome=outcome,
             user_boundary_kind=proposal.user_boundary_kind,
             reason_codes=[reason],

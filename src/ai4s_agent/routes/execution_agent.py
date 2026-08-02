@@ -283,7 +283,12 @@ def register_execution_agent_routes(
                     mode="json"
                 ),
                 "applied": True,
-                "dispatched": result.application_receipt.controller_advance_called,
+                "controller_advance_called": (
+                    result.application_receipt.controller_advance_called
+                ),
+                "dispatch_occurred": result.application_receipt.dispatch_occurred,
+                # Backward-compatible alias with corrected dispatch semantics.
+                "dispatched": result.application_receipt.dispatch_occurred,
             }
             if result.controller_result is not None:
                 payload["controller_inspection"] = (

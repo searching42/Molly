@@ -5360,9 +5360,12 @@ class AgentToolCallProposal(BaseModel):
     execution_agent_policy_digest: str
     prompt_version: str
     prompt_digest: str
+    provider_metadata_projection_version: str
     llm_provider_kind: str
     llm_model: str
+    llm_model_digest: str
     llm_response_id: str
+    llm_response_id_digest: str
     parsed_llm_response: AgentExecutionLLMResponse
     parsed_llm_response_digest: str
     source_bindings: list[AgentHarnessControllerSourceBinding]
@@ -5383,6 +5386,7 @@ class AgentToolCallProposal(BaseModel):
         "current_slot_id",
         "execution_agent_policy_version",
         "prompt_version",
+        "provider_metadata_projection_version",
         "llm_provider_kind",
     )
     @classmethod
@@ -5402,6 +5406,8 @@ class AgentToolCallProposal(BaseModel):
         "tool_catalog_digest",
         "execution_agent_policy_digest",
         "prompt_digest",
+        "llm_model_digest",
+        "llm_response_id_digest",
         "parsed_llm_response_digest",
         "source_bindings_digest",
     )
@@ -5502,6 +5508,7 @@ class AgentToolCallApplicationReceipt(BaseModel):
     controller_receipt_digest: str = ""
     side_effect_attempted: bool
     controller_advance_called: bool
+    dispatch_occurred: bool
     outcome: AgentToolCallApplicationOutcome
     user_boundary_kind: AgentExecutionUserBoundaryKind
     reason_codes: list[str]
@@ -5585,6 +5592,8 @@ class AgentToolCallApplicationReceipt(BaseModel):
             raise ValueError("application Controller call requires exact decision and receipt")
         if self.side_effect_attempted != self.controller_advance_called:
             raise ValueError("only the Controller advance operation may attempt a side effect")
+        if self.dispatch_occurred and not self.controller_advance_called:
+            raise ValueError("dispatch requires an exact Controller action receipt")
         expected_outcomes = {
             AgentExecutionServerCompiledOperation.CONTROLLER_ADVANCE: {
                 AgentToolCallApplicationOutcome.APPLIED,

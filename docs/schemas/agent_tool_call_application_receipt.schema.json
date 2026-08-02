@@ -150,6 +150,10 @@
       "title": "Controller Advance Called",
       "type": "boolean"
     },
+    "dispatch_occurred": {
+      "title": "Dispatch Occurred",
+      "type": "boolean"
+    },
     "outcome": {
       "$ref": "#/$defs/AgentToolCallApplicationOutcome"
     },
@@ -190,6 +194,7 @@
     "after_inspection_digest",
     "side_effect_attempted",
     "controller_advance_called",
+    "dispatch_occurred",
     "outcome",
     "user_boundary_kind",
     "reason_codes",

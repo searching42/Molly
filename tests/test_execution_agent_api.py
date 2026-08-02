@@ -80,7 +80,40 @@ def test_execution_agent_api_create_get_and_apply(tmp_path) -> None:
     assert applied.status_code == 200
     applied_payload = applied.get_json()
     assert applied_payload["application_receipt"]["outcome"] == "paused"
+    assert applied_payload["controller_advance_called"] is False
+    assert applied_payload["dispatch_occurred"] is False
     assert applied_payload["dispatched"] is False
+
+
+def test_execution_agent_api_does_not_call_complete_execution_a_dispatch(
+    tmp_path,
+) -> None:
+    client, initial = _client(tmp_path)
+    created = client.post(
+        _root(initial),
+        json=_proposal_body(
+            initial,
+            tool_id="controller.advance_current.v1",
+            request_id="proposal-api-complete-1",
+        ),
+    ).get_json()
+    proposal = created["tool_call_proposal"]
+    applied = client.post(
+        f"{_root(initial)}/{proposal['tool_call_proposal_id']}/apply",
+        json={
+            "expected_tool_call_proposal_digest": proposal[
+                "tool_call_proposal_digest"
+            ],
+            "client_request_id": "apply-api-complete-1",
+        },
+    )
+    assert applied.status_code == 200
+    payload = applied.get_json()
+    assert payload["controller_decision"]["action_kind"] == "complete_execution"
+    assert payload["controller_advance_called"] is True
+    assert payload["dispatch_occurred"] is False
+    assert payload["dispatched"] is False
+    assert payload["application_receipt"]["dispatch_occurred"] is False
 
 
 def test_execution_agent_api_rejects_every_client_authority_injection(tmp_path) -> None:
