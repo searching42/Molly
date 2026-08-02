@@ -560,7 +560,16 @@ class ScientificAgentReplannerService:
         actor: str,
         actor_source: str,
     ) -> AgentPlanFeedbackReceipt:
-        with self.tracer.start_span("replanner.feedback") as span:
+        with self.tracer.start_span(
+            "replanner.feedback",
+            attributes={
+                "project_id": project_id,
+                "run_id": request.run_id,
+                "operation": "agent.replanner.feedback",
+                "component": "replanner",
+                "phase": "record",
+            },
+        ) as span:
             receipt = self.store.create_feedback(
                 project_id=project_id,
                 request=request,
@@ -680,7 +689,17 @@ class ScientificAgentReplannerService:
                 try:
                     with self.tracer.start_span(
                         "replanner.llm_call",
-                        attributes={"observation_digest": observation.observation_digest},
+                        attributes={
+                            "project_id": clean_project,
+                            "run_id": request.run_id,
+                            "proposal_id": request.baseline_proposal_id,
+                            "proposal_digest": request.baseline_proposal_digest,
+                            "observation_digest": observation.observation_digest,
+                            "request_digest": request.request_digest,
+                            "operation": "agent.replanner.llm_call",
+                            "component": "replanner",
+                            "phase": "provider_call",
+                        },
                     ) as llm_span:
                         invocation = provider.complete_json(
                             messages=self._messages(observation, baseline),
@@ -890,7 +909,16 @@ class ScientificAgentReplannerService:
                 raise ScientificAgentReplannerStale("revision candidate or canonical diff is stale")
             with self.tracer.start_span(
                 "replanner.apply",
-                attributes={"revision_id": revision.revision_id},
+                attributes={
+                    "project_id": clean_project,
+                    "run_id": revision.run_id,
+                    "revision_id": revision.revision_id,
+                    "revision_digest": revision.revision_digest,
+                    "plan_diff_id": revision.plan_diff.plan_diff_id,
+                    "operation": "agent.replanner.apply_revision",
+                    "component": "replanner",
+                    "phase": "apply",
+                },
             ) as apply_span:
                 publication = self.proposal_store.publish(
                     observation=baseline.current_observation,

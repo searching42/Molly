@@ -12,7 +12,7 @@ from ai4s_agent.execution_agent import ExecutionAgentService
 from ai4s_agent.execution_agent_store import ExecutionAgentStore
 from ai4s_agent.agent_run_inspection import AgentRunInspectionService
 from ai4s_agent.executor import RunPlanExecutor
-from ai4s_agent.harness_tracing import build_harness_tracer
+from ai4s_agent.harness_tracing import build_harness_observability
 from ai4s_agent.job_manager import JobManager
 from ai4s_agent.llm_provider import LLMProviderManager
 from ai4s_agent.llm_settings import LLMSettingsStore
@@ -149,6 +149,9 @@ def register_routes(
     app.extensions["dataset_workflow_service"] = datasets
     app.extensions["literature_intake_service"] = literature_intakes
     app.extensions["remote_execution_lifecycle"] = remote_executions
+    harness_tracer, telemetry_health = build_harness_observability()
+    app.extensions["harness_tracer"] = harness_tracer
+    app.extensions["harness_telemetry_health"] = telemetry_health
 
     register_core_routes(app)
     register_legacy_plan_routes(app, orch=orch, jobs=jobs)
@@ -168,6 +171,7 @@ def register_routes(
         resource_profiles=resource_profiles,
         llm_settings=llm_settings,
         llm_providers=llm_providers,
+        tracer=harness_tracer,
     )
     register_scientific_agent_permission_routes(
         app,
@@ -175,8 +179,8 @@ def register_routes(
         proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
         resource_profiles=resource_profiles,
         resource_authority_policy_store=resource_authority_policies,
+        tracer=harness_tracer,
     )
-    harness_tracer = build_harness_tracer()
     harness_controller = ScientificAgentHarnessController(
         storage=projects,
         proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
@@ -228,6 +232,7 @@ def register_routes(
             control_store=app.extensions["scientific_agent_plan_control_store"],
             controller=harness_controller,
             execution_agent_store=execution_agent_store,
+            tracer=harness_tracer,
         ),
     )
     register_llm_settings_routes(

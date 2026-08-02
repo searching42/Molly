@@ -4961,6 +4961,136 @@ class AgentRunInspection(BaseModel):
         return payload
 
 
+class HarnessTelemetryCorrelationContext(BaseModel):
+    """Privacy-safe, derived correlation shared by every telemetry adapter."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["harness_telemetry_correlation.v1"] = (
+        "harness_telemetry_correlation.v1"
+    )
+    project_id: str = ""
+    run_id: str = ""
+    inspection_id: str = ""
+    inspection_digest: str = ""
+    proposal_id: str = ""
+    proposal_digest: str = ""
+    semantic_plan_id: str = ""
+    semantic_plan_digest: str = ""
+    permission_decision_id: str = ""
+    authorization_id: str = ""
+    start_intent_id: str = ""
+    controller_execution_id: str = ""
+    controller_execution_digest: str = ""
+    controller_revision: int | None = Field(default=None, ge=0, le=1_000_000)
+    task_id: str = ""
+    task_index: int | None = Field(default=None, ge=0, le=1023)
+    slot_id: str = ""
+    execution_route: str = ""
+    tool_call_proposal_id: str = ""
+    tool_call_application_receipt_id: str = ""
+    revision_id: str = ""
+    revision_digest: str = ""
+    plan_diff_id: str = ""
+    revision_application_receipt_id: str = ""
+    gate_id: str = ""
+    gate_snapshot_id: str = ""
+    gate_decision_digest: str = ""
+    publication_id: str = ""
+    publication_digest: str = ""
+    operation: str
+    component: str
+    phase: str
+    authority_class: Literal["derived", "observational"] = "derived"
+    telemetry_authoritative: Literal[False] = False
+
+    @field_validator(
+        "project_id",
+        "run_id",
+        "inspection_id",
+        "proposal_id",
+        "semantic_plan_id",
+        "permission_decision_id",
+        "authorization_id",
+        "start_intent_id",
+        "controller_execution_id",
+        "task_id",
+        "slot_id",
+        "execution_route",
+        "tool_call_proposal_id",
+        "tool_call_application_receipt_id",
+        "revision_id",
+        "plan_diff_id",
+        "revision_application_receipt_id",
+        "gate_id",
+        "gate_snapshot_id",
+        "publication_id",
+        "operation",
+        "component",
+        "phase",
+    )
+    @classmethod
+    def validate_safe_labels(cls, value: str, info: Any) -> str:
+        clean = _agent_safe_text(
+            value,
+            field=info.field_name,
+            max_length=256,
+            allow_empty=info.field_name
+            not in {"operation", "component", "phase"},
+        )
+        if clean and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}", clean) is None:
+            raise ValueError(f"{info.field_name} must be a privacy-safe label")
+        return clean
+
+    @field_validator(
+        "inspection_digest",
+        "proposal_digest",
+        "semantic_plan_digest",
+        "controller_execution_digest",
+        "revision_digest",
+        "gate_decision_digest",
+        "publication_digest",
+    )
+    @classmethod
+    def validate_optional_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(value, field=info.field_name, allow_empty=True)
+
+    def telemetry_attributes(self) -> dict[str, str | int | bool]:
+        payload = self.model_dump(mode="json")
+        attributes: dict[str, str | int | bool] = {}
+        for key, value in payload.items():
+            if value in {"", None}:
+                continue
+            attributes[f"molly.{key}"] = value
+        return attributes
+
+
+class HarnessTelemetryHealthSnapshot(BaseModel):
+    """Ephemeral process health; never persisted or used as run authority."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["harness_telemetry_health.v1"] = (
+        "harness_telemetry_health.v1"
+    )
+    otel_enabled: bool = False
+    otel_available: bool = False
+    otel_last_result_code: str = "TELEMETRY_DISABLED"
+    langsmith_enabled: bool = False
+    langsmith_available: bool = False
+    langsmith_last_result_code: str = "TELEMETRY_DISABLED"
+    dropped_event_count: int = Field(default=0, ge=0, le=2**63 - 1)
+    export_failure_count: int = Field(default=0, ge=0, le=2**63 - 1)
+    telemetry_authoritative: Literal[False] = False
+
+    @field_validator("otel_last_result_code", "langsmith_last_result_code")
+    @classmethod
+    def validate_result_code(cls, value: str) -> str:
+        if re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", value) is None:
+            raise ValueError("telemetry health result code is invalid")
+        return value
+
+
 class AgentHarnessControllerDecision(BaseModel):
     """Immutable deterministic selection of one bounded Controller action."""
 
@@ -9401,6 +9531,8 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_harness_controller_action_receipt": AgentHarnessControllerActionReceipt,
     "agent_harness_controller_inspection": AgentHarnessControllerInspection,
     "agent_run_inspection": AgentRunInspection,
+    "harness_telemetry_correlation": HarnessTelemetryCorrelationContext,
+    "harness_telemetry_health": HarnessTelemetryHealthSnapshot,
     "agent_harness_gate_approval_request": AgentHarnessGateApprovalRequest,
     "agent_harness_remote_approval_request": AgentHarnessRemoteApprovalRequest,
     "agent_harness_local_dispatch_receipt": AgentHarnessLocalDispatchReceipt,

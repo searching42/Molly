@@ -26,7 +26,12 @@ from jsonschema import Draft202012Validator
 from werkzeug.utils import secure_filename
 
 from ai4s_agent._utils import now_iso
+from ai4s_agent.harness_tracing import HarnessTracer, NoopHarnessTracer
 from ai4s_agent.llm_provider import LLMProvider, LLMProviderError
+from ai4s_agent.observability_correlation import (
+    build_harness_telemetry_correlation,
+    privacy_safe_telemetry_attributes,
+)
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
 from ai4s_agent.resource_profiles import EXECUTION_PROFILES, ResourceProfileStore
 from ai4s_agent.schemas import (
@@ -1650,6 +1655,7 @@ class ScientificAgentPlanService:
         registry: AtomicTaskRegistry | None = None,
         observation_builder: AgentProjectObservationBuilder | None = None,
         proposal_store: "ScientificAgentPlanProposalStore" | None = None,
+        tracer: HarnessTracer | None = None,
         clock: Callable[[], str] = now_iso,
     ) -> None:
         self.storage = storage
@@ -1666,6 +1672,7 @@ class ScientificAgentPlanService:
             observation_builder=self.observation_builder,
             registry=self.registry,
         )
+        self.tracer = tracer or NoopHarnessTracer()
         self.clock = clock
 
     def create_proposal(
@@ -1713,10 +1720,12 @@ class ScientificAgentPlanService:
             self.proposal_store.mark_planning(session)
             started = time.monotonic()
             try:
-                invocation_record = provider.complete_json(
-                    messages=build_scientific_agent_plan_messages(observation=observation),
-                    prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
-                    response_model=AgentExecutionPlanLLMResponse,
+                invocation_record = self._complete_planning_call(
+                    provider=provider,
+                    observation=observation,
+                    project_id=clean_project_id,
+                    run_id=clean_run_id,
+                    request_digest=request_digest,
                 )
             except (LLMProviderError, OSError) as exc:
                 raise ScientificAgentPlanError("dedicated LLM planning call failed") from exc
@@ -1754,6 +1763,56 @@ class ScientificAgentPlanService:
                 session=session,
             )
             return proposal
+
+    def _complete_planning_call(
+        self,
+        *,
+        provider: LLMProvider,
+        observation: AgentProjectObservation,
+        project_id: str,
+        run_id: str,
+        request_digest: str,
+    ) -> Any:
+        correlation = build_harness_telemetry_correlation(
+            project_id=project_id,
+            run_id=run_id,
+            operation="agent.plan.propose",
+            component="planner",
+            phase="provider_call",
+        )
+        attributes = privacy_safe_telemetry_attributes(correlation)
+        attributes["molly.request_digest"] = request_digest
+        with self.tracer.start_span(
+            "planner.propose",
+            attributes=attributes,
+        ) as proposal_span:
+            try:
+                with self.tracer.start_span(
+                    "planner.llm_call",
+                    attributes=attributes,
+                ) as llm_span:
+                    invocation = provider.complete_json(
+                        messages=build_scientific_agent_plan_messages(
+                            observation=observation
+                        ),
+                        prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
+                        response_model=AgentExecutionPlanLLMResponse,
+                    )
+                    llm_span.set_attribute(
+                        "response_digest",
+                        _canonical_digest(invocation.parsed_output),
+                    )
+            except Exception:
+                proposal_span.add_event(
+                    "planner.provider_failed",
+                    {"reason_code": "PLANNER_PROVIDER_CALL_FAILED"},
+                )
+                raise
+            proposal_span.add_event(
+                "planner.provider_completed",
+                {"outcome": "completed"},
+            )
+            return invocation
 
 
 @dataclass(frozen=True)

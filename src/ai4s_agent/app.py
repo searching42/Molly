@@ -37,6 +37,12 @@ def create_app(
             app,
             llm_provider_manager.close,
         )
+    harness_tracer = app.extensions.get("harness_tracer")
+    if harness_tracer is not None:
+        app.extensions["harness_tracer_finalizer"] = weakref.finalize(
+            app,
+            harness_tracer.shutdown,
+        )
     extension_context = route_extension_context(
         app=app,
         base_runs_dir=base_runs_dir,

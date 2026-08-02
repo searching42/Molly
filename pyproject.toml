@@ -32,6 +32,13 @@ tracing = [
   "opentelemetry-exporter-otlp-proto-http>=1.44,<2",
   "opentelemetry-sdk>=1.44,<2",
 ]
+observability = [
+  "langsmith>=0.4,<1",
+  "opentelemetry-api>=1.44,<2",
+  "opentelemetry-exporter-otlp-proto-grpc>=1.44,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.44,<2",
+  "opentelemetry-sdk>=1.44,<2",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
