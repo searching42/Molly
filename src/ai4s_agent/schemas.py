@@ -3637,6 +3637,38 @@ class AgentHarnessControllerReceiptOutcome(str, Enum):
     CONFLICT = "conflict"
 
 
+class AgentHarnessControllerActionBoundaryClass(str, Enum):
+    ORDINARY_ADVANCE = "ordinary_advance"
+    USER_GATE_APPROVAL = "user_gate_approval"
+    USER_REMOTE_APPROVAL = "user_remote_approval"
+    EXPLICIT_RECOVERY = "explicit_recovery"
+    TERMINAL_OBSERVATION = "terminal_observation"
+
+
+class AgentExecutionServerCompiledOperation(str, Enum):
+    CONTROLLER_ADVANCE = "controller_advance"
+    NO_EFFECT_PAUSE = "no_effect_pause"
+    REQUEST_USER_GATE_APPROVAL = "request_user_gate_approval"
+    REQUEST_USER_REMOTE_APPROVAL = "request_user_remote_approval"
+    REQUEST_USER_RECOVERY = "request_user_recovery"
+    OBSERVE_TERMINAL = "observe_terminal"
+
+
+class AgentExecutionUserBoundaryKind(str, Enum):
+    NONE = "none"
+    GATE_APPROVAL = "gate_approval"
+    REMOTE_APPROVAL = "remote_approval"
+    RECOVERY = "recovery"
+
+
+class AgentToolCallApplicationOutcome(str, Enum):
+    APPLIED = "applied"
+    PAUSED = "paused"
+    USER_ACTION_REQUIRED = "user_action_required"
+    TERMINAL_OBSERVED = "terminal_observed"
+    RECONCILED = "reconciled"
+
+
 class AgentHarnessControllerStartRequest(BaseModel):
     """The complete client-controlled Controller creation request."""
 
@@ -4872,6 +4904,745 @@ class AgentHarnessControllerActionReceipt(BaseModel):
         payload = self.model_dump(mode="json")
         payload.pop("receipt_id", None)
         payload.pop("receipt_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentExecutionSafeFactBinding(BaseModel):
+    """Privacy-safe projection of one exact Controller inspection fact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    authority_class: AgentHarnessAuthorityClass
+    source_id: str = ""
+    source_digest: str = ""
+    state: str
+
+    @field_validator("name", "source_id", "state")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "source_id",
+        )
+
+    @field_validator("source_digest")
+    @classmethod
+    def validate_source_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="source_digest", allow_empty=True)
+
+    @model_validator(mode="after")
+    def validate_source_pair(self) -> "AgentExecutionSafeFactBinding":
+        if bool(self.source_id) != bool(self.source_digest):
+            raise ValueError("execution observation fact source ID and digest must agree")
+        return self
+
+
+AGENT_EXECUTION_TOOL_BINDINGS: dict[
+    str,
+    tuple[
+        AgentHarnessControllerActionBoundaryClass,
+        AgentExecutionServerCompiledOperation,
+        AgentExecutionUserBoundaryKind,
+    ],
+] = {
+    "controller.advance_current.v1": (
+        AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+        AgentExecutionServerCompiledOperation.CONTROLLER_ADVANCE,
+        AgentExecutionUserBoundaryKind.NONE,
+    ),
+    "agent.pause_current.v1": (
+        AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+        AgentExecutionServerCompiledOperation.NO_EFFECT_PAUSE,
+        AgentExecutionUserBoundaryKind.NONE,
+    ),
+    "user.request_gate_approval.v1": (
+        AgentHarnessControllerActionBoundaryClass.USER_GATE_APPROVAL,
+        AgentExecutionServerCompiledOperation.REQUEST_USER_GATE_APPROVAL,
+        AgentExecutionUserBoundaryKind.GATE_APPROVAL,
+    ),
+    "user.request_remote_approval.v1": (
+        AgentHarnessControllerActionBoundaryClass.USER_REMOTE_APPROVAL,
+        AgentExecutionServerCompiledOperation.REQUEST_USER_REMOTE_APPROVAL,
+        AgentExecutionUserBoundaryKind.REMOTE_APPROVAL,
+    ),
+    "user.request_recovery.v1": (
+        AgentHarnessControllerActionBoundaryClass.EXPLICIT_RECOVERY,
+        AgentExecutionServerCompiledOperation.REQUEST_USER_RECOVERY,
+        AgentExecutionUserBoundaryKind.RECOVERY,
+    ),
+    "agent.observe_terminal.v1": (
+        AgentHarnessControllerActionBoundaryClass.TERMINAL_OBSERVATION,
+        AgentExecutionServerCompiledOperation.OBSERVE_TERMINAL,
+        AgentExecutionUserBoundaryKind.NONE,
+    ),
+}
+
+
+class AgentExecutionToolSpec(BaseModel):
+    """One fixed, argument-free operation exposed to the Execution Agent."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_execution_tool_spec.v1"] = (
+        "agent_execution_tool_spec.v1"
+    )
+    tool_id: str
+    controller_action_boundary_class: AgentHarnessControllerActionBoundaryClass
+    server_compiled_operation: AgentExecutionServerCompiledOperation
+    application_eligible: Literal[True] = True
+    user_boundary_kind: AgentExecutionUserBoundaryKind
+
+    @field_validator("tool_id")
+    @classmethod
+    def validate_tool_id(cls, value: str) -> str:
+        clean = _agent_identifier(value, field="tool_id")
+        if clean not in AGENT_EXECUTION_TOOL_BINDINGS:
+            raise ValueError("execution tool ID is not in the fixed v1 roster")
+        return clean
+
+    @model_validator(mode="after")
+    def validate_fixed_binding(self) -> "AgentExecutionToolSpec":
+        expected = AGENT_EXECUTION_TOOL_BINDINGS[self.tool_id]
+        if (
+            self.controller_action_boundary_class,
+            self.server_compiled_operation,
+            self.user_boundary_kind,
+        ) != expected:
+            raise ValueError("execution tool does not match its fixed server binding")
+        return self
+
+
+class AgentExecutionToolCatalog(BaseModel):
+    """State-dependent subset of the fixed argument-free execution tools."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_execution_tool_catalog.v1"] = (
+        "agent_execution_tool_catalog.v1"
+    )
+    tool_catalog_id: str = ""
+    tools: list[AgentExecutionToolSpec]
+    tool_catalog_digest: str = ""
+
+    @field_validator("tool_catalog_id")
+    @classmethod
+    def validate_catalog_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="tool_catalog_id", allow_empty=True)
+
+    @field_validator("tool_catalog_digest")
+    @classmethod
+    def validate_catalog_digest(cls, value: str) -> str:
+        return _agent_digest_value(
+            value,
+            field="tool_catalog_digest",
+            allow_empty=True,
+        )
+
+    @model_validator(mode="after")
+    def validate_catalog(self) -> "AgentExecutionToolCatalog":
+        tools = sorted(self.tools, key=lambda item: item.tool_id)
+        ids = [item.tool_id for item in tools]
+        if (
+            not ids
+            or len(ids) > len(AGENT_EXECUTION_TOOL_BINDINGS)
+            or len(ids) != len(set(ids))
+        ):
+            raise ValueError("execution tool catalog must contain a bounded unique roster")
+        object.__setattr__(self, "tools", tools)
+        expected = _agent_digest(self.semantic_material())
+        if self.tool_catalog_digest and self.tool_catalog_digest != expected:
+            raise ValueError("execution tool catalog digest mismatch")
+        object.__setattr__(self, "tool_catalog_digest", expected)
+        expected_id = f"execution-tool-catalog-{expected.split(':', 1)[1][:32]}"
+        if self.tool_catalog_id and self.tool_catalog_id != expected_id:
+            raise ValueError("execution tool catalog ID must derive from its digest")
+        object.__setattr__(self, "tool_catalog_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "tools": [item.model_dump(mode="json") for item in self.tools],
+        }
+
+
+class AgentExecutionAgentObservation(BaseModel):
+    """Allowlisted Controller snapshot sent to the bounded Execution Agent."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_execution_agent_observation.v1"] = (
+        "agent_execution_agent_observation.v1"
+    )
+    observation_id: str = ""
+    observation_digest: str = ""
+    project_id: str
+    run_id: str
+    controller_execution_id: str
+    controller_execution_digest: str
+    controller_policy_version: str
+    controller_policy_digest: str
+    inspection_digest: str
+    controller_status: AgentHarnessControllerStatus
+    next_controller_action: AgentHarnessControllerAction
+    controller_action_boundary_class: AgentHarnessControllerActionBoundaryClass
+    current_task_id: str = ""
+    current_task_index: int | None = Field(default=None, ge=0, le=1023)
+    current_execution_route: Literal["", "local_executor", "remote_execution_service"] = ""
+    current_attempt_ordinal: int = Field(default=0, ge=0, le=1023)
+    current_slot_id: str = ""
+    task_authority_digest: str = ""
+    compiled_options_digest: str = ""
+    input_artifacts_digest: str = ""
+    output_contract_digest: str = ""
+    latest_controller_receipt_id: str = ""
+    latest_controller_receipt_digest: str = ""
+    latest_controller_receipt_outcome: AgentHarnessControllerReceiptOutcome | None = None
+    latest_safe_reason_codes: list[str] = Field(default_factory=list)
+    safe_fact_bindings: list[AgentExecutionSafeFactBinding]
+    safe_fact_bindings_digest: str
+    tool_catalog_id: str
+    tool_catalog_digest: str
+    execution_agent_policy_version: str
+    execution_agent_policy_digest: str
+    created_at: str
+
+    @field_validator(
+        "observation_id",
+        "project_id",
+        "run_id",
+        "controller_execution_id",
+        "controller_policy_version",
+        "current_task_id",
+        "current_slot_id",
+        "latest_controller_receipt_id",
+        "tool_catalog_id",
+        "execution_agent_policy_version",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name
+            in {
+                "observation_id",
+                "current_task_id",
+                "current_slot_id",
+                "latest_controller_receipt_id",
+            },
+        )
+
+    @field_validator(
+        "observation_digest",
+        "controller_execution_digest",
+        "controller_policy_digest",
+        "inspection_digest",
+        "task_authority_digest",
+        "compiled_options_digest",
+        "input_artifacts_digest",
+        "output_contract_digest",
+        "latest_controller_receipt_digest",
+        "safe_fact_bindings_digest",
+        "tool_catalog_digest",
+        "execution_agent_policy_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name
+            in {
+                "observation_digest",
+                "task_authority_digest",
+                "compiled_options_digest",
+                "input_artifacts_digest",
+                "output_contract_digest",
+                "latest_controller_receipt_digest",
+            },
+        )
+
+    @field_validator("latest_safe_reason_codes")
+    @classmethod
+    def validate_reason_codes(cls, value: list[str]) -> list[str]:
+        cleaned = _agent_string_list(
+            value,
+            field="latest_safe_reason_codes",
+            sort_values=True,
+            max_items=64,
+        )
+        if any(re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None for item in cleaned):
+            raise ValueError("execution observation reason codes are invalid")
+        return cleaned
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_observation(self) -> "AgentExecutionAgentObservation":
+        has_task = self.current_task_index is not None
+        task_fields = bool(
+            self.current_task_id
+            and self.current_slot_id
+            and self.current_execution_route
+            and self.task_authority_digest
+            and self.compiled_options_digest
+            and self.input_artifacts_digest
+            and self.output_contract_digest
+        )
+        if has_task != task_fields:
+            raise ValueError("execution observation current task binding is incomplete")
+        has_receipt = bool(self.latest_controller_receipt_id)
+        if has_receipt != bool(
+            self.latest_controller_receipt_digest
+            and self.latest_controller_receipt_outcome is not None
+        ):
+            raise ValueError("execution observation latest receipt binding is incomplete")
+        names = [item.name for item in self.safe_fact_bindings]
+        if not names or len(names) != len(set(names)) or len(names) > 1024:
+            raise ValueError("execution observation facts must be bounded and unique")
+        expected_facts = _agent_digest(
+            [item.model_dump(mode="json") for item in self.safe_fact_bindings]
+        )
+        if self.safe_fact_bindings_digest != expected_facts:
+            raise ValueError("execution observation fact binding digest mismatch")
+        expected = _agent_digest(self.semantic_material())
+        if self.observation_digest and self.observation_digest != expected:
+            raise ValueError("execution observation digest mismatch")
+        object.__setattr__(self, "observation_digest", expected)
+        expected_id = f"execution-observation-{expected.split(':', 1)[1][:32]}"
+        if self.observation_id and self.observation_id != expected_id:
+            raise ValueError("execution observation ID must derive from its digest")
+        object.__setattr__(self, "observation_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("observation_id", None)
+        payload.pop("observation_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentExecutionLLMResponse(BaseModel):
+    """The entire accepted Execution Agent response; no arguments or authority."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    selected_tool_id: str
+    decision_summary: str = ""
+
+    @field_validator("selected_tool_id")
+    @classmethod
+    def validate_tool_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="selected_tool_id")
+
+    @field_validator("decision_summary")
+    @classmethod
+    def validate_summary(cls, value: str) -> str:
+        return _agent_safe_text(
+            value,
+            field="decision_summary",
+            max_length=512,
+        )
+
+
+class AgentToolCallProposalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_tool_call_proposal_request.v1"] = (
+        "agent_tool_call_proposal_request.v1"
+    )
+    expected_controller_execution_digest: str
+    client_request_id: str
+    external_llm_approved: Literal[True]
+    llm_provider: dict[str, Any] | None = None
+
+    @field_validator("expected_controller_execution_digest")
+    @classmethod
+    def validate_execution_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="expected_controller_execution_digest")
+
+    @field_validator("client_request_id")
+    @classmethod
+    def validate_request_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="client_request_id")
+
+    @field_validator("external_llm_approved", mode="before")
+    @classmethod
+    def validate_literal_consent(cls, value: Any) -> Any:
+        if value is not True:
+            raise ValueError("external_llm_approved must be literal true")
+        return value
+
+    @field_validator("llm_provider", mode="before")
+    @classmethod
+    def validate_provider_contract(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("llm_provider must be an object")
+        allowed = {
+            "provider",
+            "endpoint",
+            "api_key",
+            "model",
+            "timeout_sec",
+            "connect_timeout_sec",
+            "write_timeout_sec",
+            "pool_timeout_sec",
+            "total_timeout_sec",
+            "max_connect_retries",
+            "retry_backoff_sec",
+            "stub_response",
+        }
+        if set(value).difference(allowed):
+            raise ValueError("llm_provider contains unsupported fields")
+        return _validate_json_safe(value, "llm_provider")
+
+
+class AgentToolCallApplicationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_tool_call_application_request.v1"] = (
+        "agent_tool_call_application_request.v1"
+    )
+    expected_tool_call_proposal_digest: str
+    client_request_id: str
+
+    @field_validator("expected_tool_call_proposal_digest")
+    @classmethod
+    def validate_proposal_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="expected_tool_call_proposal_digest")
+
+    @field_validator("client_request_id")
+    @classmethod
+    def validate_request_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="client_request_id")
+
+
+class AgentToolCallProposal(BaseModel):
+    """Immutable, non-authoritative selection from one exact server catalog."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_tool_call_proposal.v1"] = (
+        "agent_tool_call_proposal.v1"
+    )
+    tool_call_proposal_id: str = ""
+    tool_call_proposal_digest: str = ""
+    project_id: str
+    run_id: str
+    controller_execution_id: str
+    controller_execution_digest: str
+    inspection_digest: str
+    observation_id: str
+    observation_digest: str
+    tool_catalog_id: str
+    tool_catalog_digest: str
+    selected_tool_id: str
+    current_task_id: str = ""
+    current_task_index: int | None = Field(default=None, ge=0, le=1023)
+    current_attempt_ordinal: int = Field(default=0, ge=0, le=1023)
+    current_slot_id: str = ""
+    next_controller_action: AgentHarnessControllerAction
+    controller_action_boundary_class: AgentHarnessControllerActionBoundaryClass
+    server_compiled_operation: AgentExecutionServerCompiledOperation
+    application_eligible: Literal[True]
+    user_boundary_kind: AgentExecutionUserBoundaryKind
+    execution_agent_policy_version: str
+    execution_agent_policy_digest: str
+    prompt_version: str
+    prompt_digest: str
+    provider_metadata_projection_version: str
+    llm_provider_kind: str
+    llm_model: str
+    llm_model_digest: str
+    llm_response_id: str
+    llm_response_id_digest: str
+    parsed_llm_response: AgentExecutionLLMResponse
+    parsed_llm_response_digest: str
+    source_bindings: list[AgentHarnessControllerSourceBinding]
+    source_bindings_digest: str
+    status: Literal["review_only"] = "review_only"
+    executable: Literal[False] = False
+    created_at: str
+
+    @field_validator(
+        "tool_call_proposal_id",
+        "project_id",
+        "run_id",
+        "controller_execution_id",
+        "observation_id",
+        "tool_catalog_id",
+        "selected_tool_id",
+        "current_task_id",
+        "current_slot_id",
+        "execution_agent_policy_version",
+        "prompt_version",
+        "provider_metadata_projection_version",
+        "llm_provider_kind",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name
+            in {"tool_call_proposal_id", "current_task_id", "current_slot_id"},
+        )
+
+    @field_validator(
+        "tool_call_proposal_digest",
+        "controller_execution_digest",
+        "inspection_digest",
+        "observation_digest",
+        "tool_catalog_digest",
+        "execution_agent_policy_digest",
+        "prompt_digest",
+        "llm_model_digest",
+        "llm_response_id_digest",
+        "parsed_llm_response_digest",
+        "source_bindings_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "tool_call_proposal_digest",
+        )
+
+    @field_validator("llm_model", "llm_response_id")
+    @classmethod
+    def validate_provider_labels(cls, value: str, info: Any) -> str:
+        clean = _agent_safe_text(
+            value,
+            field=info.field_name,
+            max_length=128,
+            allow_empty=False,
+        )
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", clean) is None:
+            raise ValueError(f"{info.field_name} must be a bounded provider label")
+        return clean
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_proposal(self) -> "AgentToolCallProposal":
+        if self.parsed_llm_response.selected_tool_id != self.selected_tool_id:
+            raise ValueError("proposal selected tool does not match the parsed response")
+        if self.parsed_llm_response_digest != _agent_digest(
+            self.parsed_llm_response.model_dump(mode="json")
+        ):
+            raise ValueError("proposal parsed response digest mismatch")
+        has_task = self.current_task_index is not None
+        if has_task != bool(self.current_task_id and self.current_slot_id):
+            raise ValueError("proposal current task binding is incomplete")
+        names = [item.name for item in self.source_bindings]
+        if not names or len(names) != len(set(names)):
+            raise ValueError("proposal source bindings must be non-empty and unique")
+        if self.source_bindings_digest != _agent_digest(
+            [item.model_dump(mode="json") for item in self.source_bindings]
+        ):
+            raise ValueError("proposal source binding digest mismatch")
+        expected_tool = AGENT_EXECUTION_TOOL_BINDINGS.get(self.selected_tool_id)
+        if expected_tool is None or (
+            self.server_compiled_operation,
+            self.user_boundary_kind,
+        ) != (expected_tool[1], expected_tool[2]):
+            raise ValueError("proposal server operation does not match its selected tool")
+        if (
+            self.selected_tool_id != "agent.pause_current.v1"
+            and self.controller_action_boundary_class != expected_tool[0]
+        ):
+            raise ValueError("proposal boundary does not match its selected tool")
+        expected = _agent_digest(self.semantic_material())
+        if self.tool_call_proposal_digest and self.tool_call_proposal_digest != expected:
+            raise ValueError("tool call proposal digest mismatch")
+        object.__setattr__(self, "tool_call_proposal_digest", expected)
+        expected_id = f"tool-call-proposal-{expected.split(':', 1)[1][:32]}"
+        if self.tool_call_proposal_id and self.tool_call_proposal_id != expected_id:
+            raise ValueError("tool call proposal ID must derive from its digest")
+        object.__setattr__(self, "tool_call_proposal_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("tool_call_proposal_id", None)
+        payload.pop("tool_call_proposal_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentToolCallApplicationReceipt(BaseModel):
+    """Exact server application result; never a scientific success claim."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_tool_call_application_receipt.v1"] = (
+        "agent_tool_call_application_receipt.v1"
+    )
+    application_receipt_id: str = ""
+    application_receipt_digest: str = ""
+    tool_call_proposal_id: str
+    tool_call_proposal_digest: str
+    controller_execution_id: str
+    controller_execution_digest: str
+    selected_tool_id: str
+    server_compiled_operation: AgentExecutionServerCompiledOperation
+    before_inspection_digest: str
+    after_inspection_digest: str
+    controller_decision_id: str = ""
+    controller_decision_digest: str = ""
+    controller_receipt_id: str = ""
+    controller_receipt_digest: str = ""
+    side_effect_attempted: bool
+    controller_advance_called: bool
+    dispatch_occurred: bool
+    outcome: AgentToolCallApplicationOutcome
+    user_boundary_kind: AgentExecutionUserBoundaryKind
+    reason_codes: list[str]
+    source_bindings: list[AgentHarnessControllerSourceBinding]
+    source_bindings_digest: str
+    created_at: str
+
+    @field_validator(
+        "application_receipt_id",
+        "tool_call_proposal_id",
+        "controller_execution_id",
+        "selected_tool_id",
+        "controller_decision_id",
+        "controller_receipt_id",
+    )
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name
+            in {
+                "application_receipt_id",
+                "controller_decision_id",
+                "controller_receipt_id",
+            },
+        )
+
+    @field_validator(
+        "application_receipt_digest",
+        "tool_call_proposal_digest",
+        "controller_execution_digest",
+        "before_inspection_digest",
+        "after_inspection_digest",
+        "controller_decision_digest",
+        "controller_receipt_digest",
+        "source_bindings_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name
+            in {
+                "application_receipt_digest",
+                "controller_decision_digest",
+                "controller_receipt_digest",
+            },
+        )
+
+    @field_validator("reason_codes")
+    @classmethod
+    def validate_reason_codes(cls, value: list[str]) -> list[str]:
+        cleaned = _agent_string_list(
+            value,
+            field="reason_codes",
+            sort_values=True,
+            max_items=64,
+        )
+        if not cleaned or any(
+            re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None for item in cleaned
+        ):
+            raise ValueError("application reason codes are invalid")
+        return cleaned
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_receipt(self) -> "AgentToolCallApplicationReceipt":
+        decision_pair = bool(self.controller_decision_id or self.controller_decision_digest)
+        receipt_pair = bool(self.controller_receipt_id or self.controller_receipt_digest)
+        if decision_pair != bool(self.controller_decision_id and self.controller_decision_digest):
+            raise ValueError("application Controller decision binding is incomplete")
+        if receipt_pair != bool(self.controller_receipt_id and self.controller_receipt_digest):
+            raise ValueError("application Controller receipt binding is incomplete")
+        if self.controller_advance_called != bool(decision_pair and receipt_pair):
+            raise ValueError("application Controller call requires exact decision and receipt")
+        if self.side_effect_attempted != self.controller_advance_called:
+            raise ValueError("only the Controller advance operation may attempt a side effect")
+        if self.dispatch_occurred and not self.controller_advance_called:
+            raise ValueError("dispatch requires an exact Controller action receipt")
+        expected_outcomes = {
+            AgentExecutionServerCompiledOperation.CONTROLLER_ADVANCE: {
+                AgentToolCallApplicationOutcome.APPLIED,
+                AgentToolCallApplicationOutcome.RECONCILED,
+            },
+            AgentExecutionServerCompiledOperation.NO_EFFECT_PAUSE: {
+                AgentToolCallApplicationOutcome.PAUSED,
+            },
+            AgentExecutionServerCompiledOperation.REQUEST_USER_GATE_APPROVAL: {
+                AgentToolCallApplicationOutcome.USER_ACTION_REQUIRED,
+            },
+            AgentExecutionServerCompiledOperation.REQUEST_USER_REMOTE_APPROVAL: {
+                AgentToolCallApplicationOutcome.USER_ACTION_REQUIRED,
+            },
+            AgentExecutionServerCompiledOperation.REQUEST_USER_RECOVERY: {
+                AgentToolCallApplicationOutcome.USER_ACTION_REQUIRED,
+            },
+            AgentExecutionServerCompiledOperation.OBSERVE_TERMINAL: {
+                AgentToolCallApplicationOutcome.TERMINAL_OBSERVED,
+            },
+        }
+        if self.outcome not in expected_outcomes[self.server_compiled_operation]:
+            raise ValueError("application outcome does not match the server operation")
+        if self.controller_advance_called != (
+            self.server_compiled_operation
+            == AgentExecutionServerCompiledOperation.CONTROLLER_ADVANCE
+        ):
+            raise ValueError("application Controller call does not match the server operation")
+        names = [item.name for item in self.source_bindings]
+        if not names or len(names) != len(set(names)):
+            raise ValueError("application source bindings must be non-empty and unique")
+        if self.source_bindings_digest != _agent_digest(
+            [item.model_dump(mode="json") for item in self.source_bindings]
+        ):
+            raise ValueError("application source binding digest mismatch")
+        expected = _agent_digest(self.semantic_material())
+        if self.application_receipt_digest and self.application_receipt_digest != expected:
+            raise ValueError("application receipt digest mismatch")
+        object.__setattr__(self, "application_receipt_digest", expected)
+        expected_id = f"tool-call-application-{expected.split(':', 1)[1][:32]}"
+        if self.application_receipt_id and self.application_receipt_id != expected_id:
+            raise ValueError("application receipt ID must derive from its digest")
+        object.__setattr__(self, "application_receipt_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("application_receipt_id", None)
+        payload.pop("application_receipt_digest", None)
         payload.pop("created_at", None)
         return payload
 
@@ -7494,6 +8265,14 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_harness_local_dispatch_receipt": AgentHarnessLocalDispatchReceipt,
     "agent_harness_local_execution_publication": AgentHarnessLocalExecutionPublication,
     "agent_harness_verified_output_binding": AgentHarnessVerifiedOutputBinding,
+    "agent_execution_agent_observation": AgentExecutionAgentObservation,
+    "agent_execution_tool_spec": AgentExecutionToolSpec,
+    "agent_execution_tool_catalog": AgentExecutionToolCatalog,
+    "agent_execution_llm_response": AgentExecutionLLMResponse,
+    "agent_tool_call_proposal_request": AgentToolCallProposalRequest,
+    "agent_tool_call_proposal": AgentToolCallProposal,
+    "agent_tool_call_application_request": AgentToolCallApplicationRequest,
+    "agent_tool_call_application_receipt": AgentToolCallApplicationReceipt,
     "agent_permission_shadow_record": AgentPermissionShadowRecord,
     "run_plan_diff": RunPlanDiff,
     "plan_rationale": PlanRationale,

@@ -26,6 +26,7 @@ from ai4s_agent.resource_profiles import build_transfer_manifest_from_payloads
 from ai4s_agent.schemas import (
     AgentHarnessAuthorityClass,
     AgentHarnessControllerAction,
+    AgentHarnessControllerActionBoundaryClass,
     AgentHarnessControllerActionReceipt,
     AgentHarnessControllerAdvanceRequest,
     AgentHarnessControllerDecision,
@@ -146,6 +147,42 @@ _POLICY_MATERIAL: Mapping[str, Any] = {
     ),
 }
 CONTROLLER_POLICY_DIGEST = _agent_digest(_POLICY_MATERIAL)
+
+
+_TERMINAL_CONTROLLER_ACTIONS = frozenset(
+    {
+        AgentHarnessControllerAction.STOP_GATE_REJECTED,
+        AgentHarnessControllerAction.STOP_REMOTE_REJECTED,
+        AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+        AgentHarnessControllerAction.COMPLETE_EXECUTION,
+    }
+)
+
+
+def controller_action_boundary_class(
+    action: AgentHarnessControllerAction,
+    *,
+    terminal_receipt_committed: bool = False,
+) -> AgentHarnessControllerActionBoundaryClass:
+    """Classify one Controller action without creating a second scheduler.
+
+    Terminal actions remain ordinary advances until their exact Controller
+    receipt exists; after that immutable boundary they become read-only
+    terminal observations for the Execution Agent.
+    """
+
+    if action == AgentHarnessControllerAction.WAIT_FOR_GATE:
+        return AgentHarnessControllerActionBoundaryClass.USER_GATE_APPROVAL
+    if action == AgentHarnessControllerAction.WAIT_FOR_REMOTE_APPROVAL:
+        return AgentHarnessControllerActionBoundaryClass.USER_REMOTE_APPROVAL
+    if action in {
+        AgentHarnessControllerAction.RECOVER_REMOTE_TASK,
+        AgentHarnessControllerAction.CANCEL_EXECUTION,
+    }:
+        return AgentHarnessControllerActionBoundaryClass.EXPLICIT_RECOVERY
+    if action in _TERMINAL_CONTROLLER_ACTIONS and terminal_receipt_committed:
+        return AgentHarnessControllerActionBoundaryClass.TERMINAL_OBSERVATION
+    return AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE
 
 
 class ScientificAgentHarnessControllerError(ValueError):
@@ -543,6 +580,45 @@ class ScientificAgentHarnessController:
         )
         return ControllerAdvanceResult(execution=execution, inspection=self._inspect(execution))
 
+    def read_execution_agent_snapshot(
+        self,
+        *,
+        project_id: str,
+        controller_execution_id: str,
+        expected_controller_execution_digest: str = "",
+    ) -> ControllerAdvanceResult:
+        """Return one current read-only snapshot under the execution-wide lock."""
+
+        with self.execution_agent_snapshot_session(
+            project_id=project_id,
+            controller_execution_id=controller_execution_id,
+            expected_controller_execution_digest=(
+                expected_controller_execution_digest
+            ),
+        ) as snapshot:
+            return snapshot
+
+    @contextmanager
+    def execution_agent_snapshot_session(
+        self,
+        *,
+        project_id: str,
+        controller_execution_id: str,
+        expected_controller_execution_digest: str = "",
+    ):
+        """Yield a read-only snapshot while retaining the execution lock."""
+
+        with self._verified_execution_session(
+            project_id=project_id,
+            controller_execution_id=controller_execution_id,
+            expected_execution_digest=expected_controller_execution_digest,
+        ) as execution:
+            yield ControllerAdvanceResult(
+                execution=execution,
+                inspection=self._inspect(execution),
+                receipt=self._latest_receipt(execution),
+            )
+
     @contextmanager
     def _verified_execution_session(
         self,
@@ -576,6 +652,7 @@ class ScientificAgentHarnessController:
         project_id: str,
         controller_execution_id: str,
         request: AgentHarnessControllerAdvanceRequest,
+        expected_inspection_digest: str = "",
     ) -> ControllerAdvanceResult:
         request_digest = self._request_digest(
             project_id=project_id,
@@ -591,14 +668,33 @@ class ScientificAgentHarnessController:
                 project_id=project_id,
                 controller_execution_id=controller_execution_id,
                 expected_execution_digest=request.expected_controller_execution_digest,
-            ) as execution, self.requests.request_session(
-                project_id=project_id,
-                operation="advance",
-                scope_id=self._scope_id("advance", controller_execution_id),
-                client_request_id=request.client_request_id,
-                request_digest=request_digest,
-            ) as session:
-                return self._advance_in_session(execution=execution, session=session)
+            ) as execution:
+                with self.requests.request_session(
+                    project_id=project_id,
+                    operation="advance",
+                    scope_id=self._scope_id("advance", controller_execution_id),
+                    client_request_id=request.client_request_id,
+                    request_digest=request_digest,
+                ) as session:
+                    # A committed request must remain exactly replayable after its
+                    # own effect changed the inspection.  Fresh first calls still
+                    # fail closed inside both execution- and request-wide locks.
+                    if (
+                        expected_inspection_digest
+                        and self.requests.read_marker(
+                            session.request_dir / "decision.json"
+                        )
+                        is None
+                        and self._inspect(execution).inspection_digest
+                        != expected_inspection_digest
+                    ):
+                        raise ScientificAgentHarnessControllerConflict(
+                            "Controller inspection no longer matches the expected snapshot"
+                        )
+                    return self._advance_in_session(
+                        execution=execution,
+                        session=session,
+                    )
 
     def approve_gate(
         self,
@@ -1399,11 +1495,10 @@ class ScientificAgentHarnessController:
                     predecessor_receipt_id=predecessor.receipt_id if predecessor else "",
                     reason_codes=[self._decision_reason(inspection.next_action)],
                     created_at=self.clock(),
-                    executable=inspection.next_action not in {
-                        AgentHarnessControllerAction.WAIT_FOR_GATE,
-                        AgentHarnessControllerAction.WAIT_FOR_REMOTE_APPROVAL,
-                        AgentHarnessControllerAction.RECOVER_REMOTE_TASK,
-                    },
+                    executable=(
+                        controller_action_boundary_class(inspection.next_action)
+                        == AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE
+                    ),
                 )
                 self.control_store.publish_harness_controller_decision(
                     project_id=execution.project_id, decision=decision

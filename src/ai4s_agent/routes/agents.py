@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import ipaddress
 import json
-from collections.abc import Iterator
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import AbstractContextManager
 from typing import Any
-from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request
 from pydantic import ValidationError
@@ -24,15 +21,12 @@ from ai4s_agent.llm_provider import (
     LLMProviderManager,
     create_llm_provider,
 )
-from ai4s_agent.llm_settings import (
-    LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE,
-    LLMSettingsStore,
-)
+from ai4s_agent.llm_provider_resolution import llm_provider_from_payload
+from ai4s_agent.llm_settings import LLMSettingsStore
 from ai4s_agent.memory import ProjectMemory
 from ai4s_agent.routes.run_plans import run_plan_from_payload
 from ai4s_agent.schemas import (
     GateName,
-    LLMProviderConfig,
     LiteratureCorpusSource,
     ReplanRequest,
     ResearchSourceProposal,
@@ -819,27 +813,12 @@ def _llm_provider_from_payload(
     settings: LLMSettingsStore,
     providers: LLMProviderManager,
 ) -> AbstractContextManager[LLMProvider | None]:
-    if "llm_provider" in payload:
-        raw = payload.get("llm_provider")
-        if raw in (None, "", False):
-            return nullcontext(None)
-        if not isinstance(raw, dict):
-            raise ValueError("llm_provider must be an object when provided")
-        config = LLMProviderConfig.model_validate(raw)
-    else:
-        settings_status, config = settings.resolve()
-        if config is None:
-            if settings_status == LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE:
-                raise ValueError("configured LLM settings are unavailable")
-            return nullcontext(None)
-    if _is_external_llm_config(config) and payload.get("external_llm_approved") is not True:
-        raise ValueError(
-            "external_llm_approved=true is required before sending request data "
-            "to a non-loopback LLM endpoint"
-        )
-    if "llm_provider" in payload:
-        return _temporary_provider(config)
-    return providers.lease(config)
+    return llm_provider_from_payload(
+        payload,
+        settings=settings,
+        providers=providers,
+        provider_factory=create_llm_provider,
+    )
 
 
 def _conversation_assistant_message(
@@ -898,27 +877,6 @@ def _conversation_assistant_message(
     if not reply or len(reply) > 20_000:
         raise LLMProviderError("conversation assistant response is empty or too large")
     return reply
-
-
-def _is_external_llm_config(config: LLMProviderConfig) -> bool:
-    if config.provider.strip().lower().replace("-", "_") != "openai_compatible":
-        return False
-    hostname = str(urlparse(config.endpoint).hostname or "").strip().lower()
-    if hostname == "localhost":
-        return False
-    try:
-        return not ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return True
-
-
-@contextmanager
-def _temporary_provider(config: LLMProviderConfig) -> Iterator[LLMProvider]:
-    provider = create_llm_provider(config)
-    try:
-        yield provider
-    finally:
-        provider.close()
 
 
 def _as_bool(value: object) -> bool:

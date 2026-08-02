@@ -24,6 +24,12 @@ _SPAN_NAMES = frozenset(
         "remote.dispatch",
         "remote.refresh",
         "remote.recover",
+        "execution_agent.propose",
+        "execution_agent.observe",
+        "execution_agent.llm_call",
+        "execution_agent.validate_response",
+        "execution_agent.publish_proposal",
+        "execution_agent.apply",
     }
 )
 _EVENT_NAMES = frozenset(
@@ -35,6 +41,13 @@ _EVENT_NAMES = frozenset(
         "controller.failure",
         "executor.completed",
         "remote.transition",
+        "execution_agent.observation_frozen",
+        "execution_agent.llm_response_validated",
+        "execution_agent.proposal_committed",
+        "execution_agent.proposal_stale",
+        "execution_agent.controller_advance_applied",
+        "execution_agent.user_action_required",
+        "execution_agent.application_reconciled",
     }
 )
 _STRING_ATTRIBUTE_KEYS = frozenset(
@@ -56,6 +69,16 @@ _STRING_ATTRIBUTE_KEYS = frozenset(
         "remote_task_type",
         "execution_profile_id",
         "reason_code",
+        "tool_call_proposal_id",
+        "selected_tool_id",
+        "controller_status",
+        "next_controller_action",
+        "current_task_id",
+        "application_outcome",
+        "inspection_digest",
+        "observation_digest",
+        "tool_catalog_digest",
+        "application_receipt_digest",
         "authority_digest",
         "decision_digest",
         "receipt_digest",

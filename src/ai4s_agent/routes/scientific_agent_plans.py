@@ -7,8 +7,8 @@ from flask import Flask, jsonify, request
 from pydantic import ValidationError
 
 from ai4s_agent.llm_provider import LLMProvider, LLMProviderError, LLMProviderManager
+from ai4s_agent.llm_provider_resolution import llm_provider_from_payload
 from ai4s_agent.llm_settings import LLMSettingsStore
-from ai4s_agent.routes.agents import _llm_provider_from_payload
 from ai4s_agent.scientific_agent_plan import (
     AgentProjectObservationBuilder,
     ScientificAgentPlanError,
@@ -79,7 +79,7 @@ def register_scientific_agent_plan_routes(
             request_id = payload.get("client_request_id")
             if request_id is not None and not isinstance(request_id, str):
                 return _error_response("client_request_id must be a string", 400)
-            provider_context: AbstractContextManager[LLMProvider | None] = _llm_provider_from_payload(
+            provider_context: AbstractContextManager[LLMProvider | None] = llm_provider_from_payload(
                 payload,
                 settings=llm_settings,
                 providers=llm_providers,

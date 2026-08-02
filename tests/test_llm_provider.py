@@ -182,6 +182,95 @@ def test_openai_compatible_provider_builds_chat_completion_request() -> None:
     assert result.parsed_output["requested_tasks"] == ["run_baseline"]
 
 
+def test_openai_compatible_provider_preserves_empty_configured_model() -> None:
+    captured: dict[str, object] = {}
+
+    def transport(
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_sec: int,
+    ) -> dict[str, object]:
+        del url, headers, timeout_sec
+        captured["payload"] = payload
+        return {
+            "id": "chatcmpl-empty-model",
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {"requested_tasks": ["render_report"]}
+                        )
+                    }
+                }
+            ],
+        }
+
+    provider = OpenAICompatibleProvider(
+        config=LLMProviderConfig(
+            provider="openai_compatible",
+            endpoint="https://example.test/v1",
+            model="",
+        ),
+        transport=transport,
+    )
+    result = provider.complete_json(
+        messages=[{"role": "user", "content": "Render a report."}],
+        prompt_version="planner.v1",
+    )
+
+    assert captured["payload"]["model"] == "default"
+    assert result.model == ""
+
+
+def test_planner_preserves_openai_empty_model_invocation_metadata() -> None:
+    def transport(
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_sec: int,
+    ) -> dict[str, object]:
+        del url, headers, timeout_sec
+        assert payload["model"] == "default"
+        return {
+            "id": "chatcmpl-planner-empty-model",
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "requested_tasks": ["render_report"],
+                                "assumptions": [],
+                                "rationales": [],
+                                "questions": [],
+                            }
+                        )
+                    }
+                }
+            ],
+        }
+
+    provider = OpenAICompatibleProvider(
+        config=LLMProviderConfig(
+            provider="openai_compatible",
+            endpoint="https://example.test/v1",
+            model="",
+        ),
+        transport=transport,
+    )
+    proposal = PlannerAgent(provider=provider).propose_plan(
+        run_id="r-openai-empty-model",
+        goal="Render the existing candidates as a report.",
+        available_artifacts=["candidate_predictions"],
+    )
+
+    assert proposal.status == "needs_confirmation"
+    assert proposal.llm_invocation is not None
+    assert proposal.llm_invocation.provider == "openai_compatible"
+    assert proposal.llm_invocation.model == ""
+    assert proposal.llm_invocation.response_id == "chatcmpl-planner-empty-model"
+
+
 def test_create_llm_provider_supports_stub_and_openai_compatible() -> None:
     stub = create_llm_provider(LLMProviderConfig(provider="stub", stub_response={"requested_tasks": ["run_baseline"]}))
     openai = create_llm_provider(

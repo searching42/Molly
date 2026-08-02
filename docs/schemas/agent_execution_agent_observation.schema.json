@@ -1,0 +1,304 @@
+{
+  "$defs": {
+    "AgentExecutionSafeFactBinding": {
+      "additionalProperties": false,
+      "description": "Privacy-safe projection of one exact Controller inspection fact.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "authority_class": {
+          "$ref": "#/$defs/AgentHarnessAuthorityClass"
+        },
+        "source_id": {
+          "default": "",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_digest": {
+          "default": "",
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "authority_class",
+        "state"
+      ],
+      "title": "AgentExecutionSafeFactBinding",
+      "type": "object"
+    },
+    "AgentHarnessAuthorityClass": {
+      "enum": [
+        "authoritative",
+        "derived",
+        "observational",
+        "unverified"
+      ],
+      "title": "AgentHarnessAuthorityClass",
+      "type": "string"
+    },
+    "AgentHarnessControllerAction": {
+      "enum": [
+        "prepare_local_gate",
+        "wait_for_gate",
+        "stop_gate_rejected",
+        "execute_local_task",
+        "adopt_completed_task",
+        "prepare_remote_request",
+        "wait_for_remote_approval",
+        "stop_remote_rejected",
+        "dispatch_remote_task",
+        "refresh_remote_task",
+        "recover_remote_task",
+        "adopt_remote_outputs",
+        "stop_task_terminal",
+        "cancel_execution",
+        "complete_execution"
+      ],
+      "title": "AgentHarnessControllerAction",
+      "type": "string"
+    },
+    "AgentHarnessControllerActionBoundaryClass": {
+      "enum": [
+        "ordinary_advance",
+        "user_gate_approval",
+        "user_remote_approval",
+        "explicit_recovery",
+        "terminal_observation"
+      ],
+      "title": "AgentHarnessControllerActionBoundaryClass",
+      "type": "string"
+    },
+    "AgentHarnessControllerReceiptOutcome": {
+      "enum": [
+        "committed",
+        "reconciled",
+        "waiting",
+        "rejected",
+        "failed",
+        "conflict"
+      ],
+      "title": "AgentHarnessControllerReceiptOutcome",
+      "type": "string"
+    },
+    "AgentHarnessControllerStatus": {
+      "enum": [
+        "active",
+        "waiting_gate",
+        "waiting_remote_approval",
+        "running_remote",
+        "recovery_required",
+        "cancelled",
+        "failed",
+        "succeeded"
+      ],
+      "title": "AgentHarnessControllerStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Allowlisted Controller snapshot sent to the bounded Execution Agent.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_execution_agent_observation.v1",
+      "default": "agent_execution_agent_observation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "observation_id": {
+      "default": "",
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "observation_digest": {
+      "default": "",
+      "title": "Observation Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "controller_policy_version": {
+      "title": "Controller Policy Version",
+      "type": "string"
+    },
+    "controller_policy_digest": {
+      "title": "Controller Policy Digest",
+      "type": "string"
+    },
+    "inspection_digest": {
+      "title": "Inspection Digest",
+      "type": "string"
+    },
+    "controller_status": {
+      "$ref": "#/$defs/AgentHarnessControllerStatus"
+    },
+    "next_controller_action": {
+      "$ref": "#/$defs/AgentHarnessControllerAction"
+    },
+    "controller_action_boundary_class": {
+      "$ref": "#/$defs/AgentHarnessControllerActionBoundaryClass"
+    },
+    "current_task_id": {
+      "default": "",
+      "title": "Current Task Id",
+      "type": "string"
+    },
+    "current_task_index": {
+      "anyOf": [
+        {
+          "maximum": 1023,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Current Task Index"
+    },
+    "current_execution_route": {
+      "default": "",
+      "enum": [
+        "",
+        "local_executor",
+        "remote_execution_service"
+      ],
+      "title": "Current Execution Route",
+      "type": "string"
+    },
+    "current_attempt_ordinal": {
+      "default": 0,
+      "maximum": 1023,
+      "minimum": 0,
+      "title": "Current Attempt Ordinal",
+      "type": "integer"
+    },
+    "current_slot_id": {
+      "default": "",
+      "title": "Current Slot Id",
+      "type": "string"
+    },
+    "task_authority_digest": {
+      "default": "",
+      "title": "Task Authority Digest",
+      "type": "string"
+    },
+    "compiled_options_digest": {
+      "default": "",
+      "title": "Compiled Options Digest",
+      "type": "string"
+    },
+    "input_artifacts_digest": {
+      "default": "",
+      "title": "Input Artifacts Digest",
+      "type": "string"
+    },
+    "output_contract_digest": {
+      "default": "",
+      "title": "Output Contract Digest",
+      "type": "string"
+    },
+    "latest_controller_receipt_id": {
+      "default": "",
+      "title": "Latest Controller Receipt Id",
+      "type": "string"
+    },
+    "latest_controller_receipt_digest": {
+      "default": "",
+      "title": "Latest Controller Receipt Digest",
+      "type": "string"
+    },
+    "latest_controller_receipt_outcome": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentHarnessControllerReceiptOutcome"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "latest_safe_reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Latest Safe Reason Codes",
+      "type": "array"
+    },
+    "safe_fact_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentExecutionSafeFactBinding"
+      },
+      "title": "Safe Fact Bindings",
+      "type": "array"
+    },
+    "safe_fact_bindings_digest": {
+      "title": "Safe Fact Bindings Digest",
+      "type": "string"
+    },
+    "tool_catalog_id": {
+      "title": "Tool Catalog Id",
+      "type": "string"
+    },
+    "tool_catalog_digest": {
+      "title": "Tool Catalog Digest",
+      "type": "string"
+    },
+    "execution_agent_policy_version": {
+      "title": "Execution Agent Policy Version",
+      "type": "string"
+    },
+    "execution_agent_policy_digest": {
+      "title": "Execution Agent Policy Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "controller_execution_id",
+    "controller_execution_digest",
+    "controller_policy_version",
+    "controller_policy_digest",
+    "inspection_digest",
+    "controller_status",
+    "next_controller_action",
+    "controller_action_boundary_class",
+    "safe_fact_bindings",
+    "safe_fact_bindings_digest",
+    "tool_catalog_id",
+    "tool_catalog_digest",
+    "execution_agent_policy_version",
+    "execution_agent_policy_digest",
+    "created_at"
+  ],
+  "title": "AgentExecutionAgentObservation",
+  "type": "object"
+}

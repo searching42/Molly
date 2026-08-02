@@ -1,0 +1,332 @@
+{
+  "$defs": {
+    "AgentExecutionLLMResponse": {
+      "additionalProperties": false,
+      "description": "The entire accepted Execution Agent response; no arguments or authority.",
+      "properties": {
+        "selected_tool_id": {
+          "title": "Selected Tool Id",
+          "type": "string"
+        },
+        "decision_summary": {
+          "default": "",
+          "title": "Decision Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "selected_tool_id"
+      ],
+      "title": "AgentExecutionLLMResponse",
+      "type": "object"
+    },
+    "AgentExecutionServerCompiledOperation": {
+      "enum": [
+        "controller_advance",
+        "no_effect_pause",
+        "request_user_gate_approval",
+        "request_user_remote_approval",
+        "request_user_recovery",
+        "observe_terminal"
+      ],
+      "title": "AgentExecutionServerCompiledOperation",
+      "type": "string"
+    },
+    "AgentExecutionUserBoundaryKind": {
+      "enum": [
+        "none",
+        "gate_approval",
+        "remote_approval",
+        "recovery"
+      ],
+      "title": "AgentExecutionUserBoundaryKind",
+      "type": "string"
+    },
+    "AgentHarnessAuthorityClass": {
+      "enum": [
+        "authoritative",
+        "derived",
+        "observational",
+        "unverified"
+      ],
+      "title": "AgentHarnessAuthorityClass",
+      "type": "string"
+    },
+    "AgentHarnessControllerAction": {
+      "enum": [
+        "prepare_local_gate",
+        "wait_for_gate",
+        "stop_gate_rejected",
+        "execute_local_task",
+        "adopt_completed_task",
+        "prepare_remote_request",
+        "wait_for_remote_approval",
+        "stop_remote_rejected",
+        "dispatch_remote_task",
+        "refresh_remote_task",
+        "recover_remote_task",
+        "adopt_remote_outputs",
+        "stop_task_terminal",
+        "cancel_execution",
+        "complete_execution"
+      ],
+      "title": "AgentHarnessControllerAction",
+      "type": "string"
+    },
+    "AgentHarnessControllerActionBoundaryClass": {
+      "enum": [
+        "ordinary_advance",
+        "user_gate_approval",
+        "user_remote_approval",
+        "explicit_recovery",
+        "terminal_observation"
+      ],
+      "title": "AgentHarnessControllerActionBoundaryClass",
+      "type": "string"
+    },
+    "AgentHarnessControllerSourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_digest": {
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "authority_class": {
+          "$ref": "#/$defs/AgentHarnessAuthorityClass",
+          "default": "authoritative"
+        }
+      },
+      "required": [
+        "name",
+        "source_id",
+        "source_digest"
+      ],
+      "title": "AgentHarnessControllerSourceBinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable, non-authoritative selection from one exact server catalog.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_tool_call_proposal.v1",
+      "default": "agent_tool_call_proposal.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tool_call_proposal_id": {
+      "default": "",
+      "title": "Tool Call Proposal Id",
+      "type": "string"
+    },
+    "tool_call_proposal_digest": {
+      "default": "",
+      "title": "Tool Call Proposal Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "inspection_digest": {
+      "title": "Inspection Digest",
+      "type": "string"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "observation_digest": {
+      "title": "Observation Digest",
+      "type": "string"
+    },
+    "tool_catalog_id": {
+      "title": "Tool Catalog Id",
+      "type": "string"
+    },
+    "tool_catalog_digest": {
+      "title": "Tool Catalog Digest",
+      "type": "string"
+    },
+    "selected_tool_id": {
+      "title": "Selected Tool Id",
+      "type": "string"
+    },
+    "current_task_id": {
+      "default": "",
+      "title": "Current Task Id",
+      "type": "string"
+    },
+    "current_task_index": {
+      "anyOf": [
+        {
+          "maximum": 1023,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Current Task Index"
+    },
+    "current_attempt_ordinal": {
+      "default": 0,
+      "maximum": 1023,
+      "minimum": 0,
+      "title": "Current Attempt Ordinal",
+      "type": "integer"
+    },
+    "current_slot_id": {
+      "default": "",
+      "title": "Current Slot Id",
+      "type": "string"
+    },
+    "next_controller_action": {
+      "$ref": "#/$defs/AgentHarnessControllerAction"
+    },
+    "controller_action_boundary_class": {
+      "$ref": "#/$defs/AgentHarnessControllerActionBoundaryClass"
+    },
+    "server_compiled_operation": {
+      "$ref": "#/$defs/AgentExecutionServerCompiledOperation"
+    },
+    "application_eligible": {
+      "const": true,
+      "title": "Application Eligible",
+      "type": "boolean"
+    },
+    "user_boundary_kind": {
+      "$ref": "#/$defs/AgentExecutionUserBoundaryKind"
+    },
+    "execution_agent_policy_version": {
+      "title": "Execution Agent Policy Version",
+      "type": "string"
+    },
+    "execution_agent_policy_digest": {
+      "title": "Execution Agent Policy Digest",
+      "type": "string"
+    },
+    "prompt_version": {
+      "title": "Prompt Version",
+      "type": "string"
+    },
+    "prompt_digest": {
+      "title": "Prompt Digest",
+      "type": "string"
+    },
+    "provider_metadata_projection_version": {
+      "title": "Provider Metadata Projection Version",
+      "type": "string"
+    },
+    "llm_provider_kind": {
+      "title": "Llm Provider Kind",
+      "type": "string"
+    },
+    "llm_model": {
+      "title": "Llm Model",
+      "type": "string"
+    },
+    "llm_model_digest": {
+      "title": "Llm Model Digest",
+      "type": "string"
+    },
+    "llm_response_id": {
+      "title": "Llm Response Id",
+      "type": "string"
+    },
+    "llm_response_id_digest": {
+      "title": "Llm Response Id Digest",
+      "type": "string"
+    },
+    "parsed_llm_response": {
+      "$ref": "#/$defs/AgentExecutionLLMResponse"
+    },
+    "parsed_llm_response_digest": {
+      "title": "Parsed Llm Response Digest",
+      "type": "string"
+    },
+    "source_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentHarnessControllerSourceBinding"
+      },
+      "title": "Source Bindings",
+      "type": "array"
+    },
+    "source_bindings_digest": {
+      "title": "Source Bindings Digest",
+      "type": "string"
+    },
+    "status": {
+      "const": "review_only",
+      "default": "review_only",
+      "title": "Status",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "controller_execution_id",
+    "controller_execution_digest",
+    "inspection_digest",
+    "observation_id",
+    "observation_digest",
+    "tool_catalog_id",
+    "tool_catalog_digest",
+    "selected_tool_id",
+    "next_controller_action",
+    "controller_action_boundary_class",
+    "server_compiled_operation",
+    "application_eligible",
+    "user_boundary_kind",
+    "execution_agent_policy_version",
+    "execution_agent_policy_digest",
+    "prompt_version",
+    "prompt_digest",
+    "provider_metadata_projection_version",
+    "llm_provider_kind",
+    "llm_model",
+    "llm_model_digest",
+    "llm_response_id",
+    "llm_response_id_digest",
+    "parsed_llm_response",
+    "parsed_llm_response_digest",
+    "source_bindings",
+    "source_bindings_digest",
+    "created_at"
+  ],
+  "title": "AgentToolCallProposal",
+  "type": "object"
+}

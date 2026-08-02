@@ -1,0 +1,108 @@
+{
+  "$defs": {
+    "AgentExecutionServerCompiledOperation": {
+      "enum": [
+        "controller_advance",
+        "no_effect_pause",
+        "request_user_gate_approval",
+        "request_user_remote_approval",
+        "request_user_recovery",
+        "observe_terminal"
+      ],
+      "title": "AgentExecutionServerCompiledOperation",
+      "type": "string"
+    },
+    "AgentExecutionToolSpec": {
+      "additionalProperties": false,
+      "description": "One fixed, argument-free operation exposed to the Execution Agent.",
+      "properties": {
+        "schema_version": {
+          "const": "agent_execution_tool_spec.v1",
+          "default": "agent_execution_tool_spec.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tool_id": {
+          "title": "Tool Id",
+          "type": "string"
+        },
+        "controller_action_boundary_class": {
+          "$ref": "#/$defs/AgentHarnessControllerActionBoundaryClass"
+        },
+        "server_compiled_operation": {
+          "$ref": "#/$defs/AgentExecutionServerCompiledOperation"
+        },
+        "application_eligible": {
+          "const": true,
+          "default": true,
+          "title": "Application Eligible",
+          "type": "boolean"
+        },
+        "user_boundary_kind": {
+          "$ref": "#/$defs/AgentExecutionUserBoundaryKind"
+        }
+      },
+      "required": [
+        "tool_id",
+        "controller_action_boundary_class",
+        "server_compiled_operation",
+        "user_boundary_kind"
+      ],
+      "title": "AgentExecutionToolSpec",
+      "type": "object"
+    },
+    "AgentExecutionUserBoundaryKind": {
+      "enum": [
+        "none",
+        "gate_approval",
+        "remote_approval",
+        "recovery"
+      ],
+      "title": "AgentExecutionUserBoundaryKind",
+      "type": "string"
+    },
+    "AgentHarnessControllerActionBoundaryClass": {
+      "enum": [
+        "ordinary_advance",
+        "user_gate_approval",
+        "user_remote_approval",
+        "explicit_recovery",
+        "terminal_observation"
+      ],
+      "title": "AgentHarnessControllerActionBoundaryClass",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "State-dependent subset of the fixed argument-free execution tools.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_execution_tool_catalog.v1",
+      "default": "agent_execution_tool_catalog.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tool_catalog_id": {
+      "default": "",
+      "title": "Tool Catalog Id",
+      "type": "string"
+    },
+    "tools": {
+      "items": {
+        "$ref": "#/$defs/AgentExecutionToolSpec"
+      },
+      "title": "Tools",
+      "type": "array"
+    },
+    "tool_catalog_digest": {
+      "default": "",
+      "title": "Tool Catalog Digest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "tools"
+  ],
+  "title": "AgentExecutionToolCatalog",
+  "type": "object"
+}

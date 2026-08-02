@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "agent_tool_call_proposal_request.v1",
+      "default": "agent_tool_call_proposal_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "expected_controller_execution_digest": {
+      "title": "Expected Controller Execution Digest",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "external_llm_approved": {
+      "const": true,
+      "title": "External Llm Approved",
+      "type": "boolean"
+    },
+    "llm_provider": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Llm Provider"
+    }
+  },
+  "required": [
+    "expected_controller_execution_digest",
+    "client_request_id",
+    "external_llm_approved"
+  ],
+  "title": "AgentToolCallProposalRequest",
+  "type": "object"
+}
