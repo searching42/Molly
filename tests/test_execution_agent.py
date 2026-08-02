@@ -973,6 +973,78 @@ def test_user_boundary_tools_only_publish_no_effect_receipts(
     assert controller.advance_calls == 0
 
 
+def test_user_boundary_receipt_is_adopted_after_snapshot_changes(tmp_path) -> None:
+    storage, control_store, _, initial = local_controller_execution(tmp_path)
+    gate_snapshot = _snapshot_with_action(
+        initial,
+        status=AgentHarnessControllerStatus.WAITING_GATE,
+        action=AgentHarnessControllerAction.WAIT_FOR_GATE,
+    )
+    controller = _SnapshotOnlyController(gate_snapshot, control_store)
+
+    def crash(phase: str) -> None:
+        if phase == "after_application_receipt":
+            raise RuntimeError("user-boundary application crash")
+
+    crashing = execution_agent_service(
+        storage=storage,
+        controller=controller,
+        fault_injector=crash,
+    )
+    proposed = crashing.create_proposal(
+        project_id="project-1",
+        controller_execution_id=initial.execution.controller_execution_id,
+        request=_proposal_request(
+            initial.execution.execution_digest,
+            request_id="gate-boundary-crash-proposal-1",
+        ),
+        provider=_provider("user.request_gate_approval.v1"),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+    proposal = proposed.publication.proposal
+    with pytest.raises(RuntimeError, match="user-boundary application crash"):
+        crashing.apply_proposal(
+            project_id="project-1",
+            controller_execution_id=initial.execution.controller_execution_id,
+            tool_call_proposal_id=proposal.tool_call_proposal_id,
+            request=AgentToolCallApplicationRequest(
+                expected_tool_call_proposal_digest=(
+                    proposal.tool_call_proposal_digest
+                ),
+                client_request_id="gate-boundary-crash-request-a",
+            ),
+        )
+    assert crashing.store.read_committed_application_receipt(
+        project_id="project-1",
+        tool_call_proposal_id=proposal.tool_call_proposal_id,
+    ) is None
+
+    controller.snapshot = initial
+    recovered = execution_agent_service(storage=storage, controller=controller)
+    result = recovered.apply_proposal(
+        project_id="project-1",
+        controller_execution_id=initial.execution.controller_execution_id,
+        tool_call_proposal_id=proposal.tool_call_proposal_id,
+        request=AgentToolCallApplicationRequest(
+            expected_tool_call_proposal_digest=proposal.tool_call_proposal_digest,
+            client_request_id="gate-boundary-recovery-request-b",
+        ),
+    )
+    assert result.application_receipt.outcome == (
+        AgentToolCallApplicationOutcome.USER_ACTION_REQUIRED
+    )
+    assert result.application_receipt.before_inspection_digest == (
+        result.application_receipt.after_inspection_digest
+    )
+    assert result.application_receipt.controller_advance_called is False
+    assert result.application_receipt.dispatch_occurred is False
+    assert controller.advance_calls == 0
+    assert recovered.store.read_committed_application_receipt(
+        project_id="project-1",
+        tool_call_proposal_id=proposal.tool_call_proposal_id,
+    ) == result.application_receipt
+
+
 def test_sequential_turn_reaches_stable_terminal_observation(tmp_path) -> None:
     storage, _, controller, initial = local_controller_execution(tmp_path)
     service = execution_agent_service(storage=storage, controller=controller)

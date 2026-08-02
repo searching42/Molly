@@ -190,9 +190,7 @@ class OpenAICompatibleProvider:
         self._check_deadline(deadline)
         return LLMInvocationRecord(
             provider="openai_compatible",
-            # Bind the effective model sent on the wire, including the
-            # OpenAI-compatible default used for an empty configuration.
-            model=str(payload["model"]),
+            model=self.config.model,
             prompt_version=prompt_version,
             response_id=_sanitize_text(raw.get("id"), self.config.api_key),
             raw_response=_json_safe_raw(raw, self.config.api_key),

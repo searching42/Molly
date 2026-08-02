@@ -1017,7 +1017,6 @@ class ExecutionAgentService:
                             "proposal Controller effect checkpoint is incomplete"
                         )
                     self.store._fault("after_controller_advance")
-                    after = controller_result
                     outcome = (
                         AgentToolCallApplicationOutcome.RECONCILED
                         if had_prior_decision
@@ -1030,7 +1029,6 @@ class ExecutionAgentService:
                     )
                 receipt = self._application_receipt(
                     publication=publication,
-                    after=after,
                     controller_result=controller_result,
                     outcome=outcome,
                     reason=reason,
@@ -1041,7 +1039,6 @@ class ExecutionAgentService:
                     candidates.append(
                         self._application_receipt(
                             publication=publication,
-                            after=after,
                             controller_result=controller_result,
                             outcome=AgentToolCallApplicationOutcome.APPLIED,
                             reason="EXECUTION_AGENT_CONTROLLER_ADVANCE_APPLIED",
@@ -1121,84 +1118,91 @@ class ExecutionAgentService:
         apply_span: Any,
     ) -> ExecutionAgentApplyResult:
         proposal = publication.proposal
-        with self.controller.execution_agent_snapshot_session(
+        if (
+            proposal.server_compiled_operation
+            == AgentExecutionServerCompiledOperation.NO_EFFECT_PAUSE
+        ):
+            outcome = AgentToolCallApplicationOutcome.PAUSED
+            reason = "EXECUTION_AGENT_PAUSED"
+        elif (
+            proposal.server_compiled_operation
+            == AgentExecutionServerCompiledOperation.OBSERVE_TERMINAL
+        ):
+            outcome = AgentToolCallApplicationOutcome.TERMINAL_OBSERVED
+            reason = "EXECUTION_AGENT_TERMINAL_OBSERVED"
+        else:
+            outcome = AgentToolCallApplicationOutcome.USER_ACTION_REQUIRED
+            reason = "EXECUTION_AGENT_USER_ACTION_REQUIRED"
+        # This candidate is derived solely from the immutable proposal.  An
+        # orphan published before its proposal-scoped pointer can therefore be
+        # adopted even if the Controller inspection has since advanced.
+        receipt = self._application_receipt(
+            publication=publication,
+            controller_result=None,
+            outcome=outcome,
+            reason=reason,
+            after_inspection_digest=proposal.inspection_digest,
+        )
+        existing_candidate = self._existing_candidate_receipt(
             project_id=project_id,
-            controller_execution_id=controller_execution_id,
-            expected_controller_execution_digest=(
-                proposal.controller_execution_digest
-            ),
-        ) as snapshot:
-            self._assert_publication_snapshot(
+            candidates=[receipt],
+        )
+        if existing_candidate is not None:
+            self._assert_application_receipt_binding(
                 publication=publication,
-                snapshot=snapshot,
+                receipt=existing_candidate,
             )
-            if (
-                proposal.server_compiled_operation
-                == AgentExecutionServerCompiledOperation.NO_EFFECT_PAUSE
-            ):
-                outcome = AgentToolCallApplicationOutcome.PAUSED
-                reason = "EXECUTION_AGENT_PAUSED"
-            elif (
-                proposal.server_compiled_operation
-                == AgentExecutionServerCompiledOperation.OBSERVE_TERMINAL
-            ):
-                outcome = AgentToolCallApplicationOutcome.TERMINAL_OBSERVED
-                reason = "EXECUTION_AGENT_TERMINAL_OBSERVED"
-            else:
-                outcome = AgentToolCallApplicationOutcome.USER_ACTION_REQUIRED
-                reason = "EXECUTION_AGENT_USER_ACTION_REQUIRED"
-            receipt = self._application_receipt(
-                publication=publication,
-                after=snapshot,
-                controller_result=None,
-                outcome=outcome,
-                reason=reason,
-            )
-            existing_candidate = self._existing_candidate_receipt(
+            receipt = existing_candidate
+        else:
+            with self.controller.execution_agent_snapshot_session(
                 project_id=project_id,
-                candidates=[receipt],
-            )
-            self.store._fault("before_application_receipt")
-            if existing_candidate is not None:
-                receipt = existing_candidate
-            else:
+                controller_execution_id=controller_execution_id,
+                expected_controller_execution_digest=(
+                    proposal.controller_execution_digest
+                ),
+            ) as snapshot:
+                self._assert_publication_snapshot(
+                    publication=publication,
+                    snapshot=snapshot,
+                )
+                self.store._fault("before_application_receipt")
                 receipt = self.store.publish_application_receipt(
                     project_id=project_id,
                     receipt=receipt,
                     staging_parent=session.request_dir,
                 )
-            self.store._fault("after_application_receipt")
-            self._commit_application_receipt_pointer(
-                session=session,
-                receipt=receipt,
-            )
-            self.store.write_marker(
-                session,
-                filename="application_committed.json",
-                status="APPLICATION_COMMITTED",
-                values={
-                    "application_receipt_id": receipt.application_receipt_id,
-                    "application_receipt_digest": receipt.application_receipt_digest,
+                self.store._fault("after_application_receipt")
+        self._commit_application_receipt_pointer(
+            session=session,
+            receipt=receipt,
+        )
+        self.store.write_marker(
+            session,
+            filename="application_committed.json",
+            status="APPLICATION_COMMITTED",
+            values={
+                "application_receipt_id": receipt.application_receipt_id,
+                "application_receipt_digest": receipt.application_receipt_digest,
+            },
+        )
+        apply_span.set_attribute("application_outcome", receipt.outcome.value)
+        apply_span.set_attribute(
+            "application_receipt_digest",
+            receipt.application_receipt_digest,
+        )
+        if outcome == AgentToolCallApplicationOutcome.USER_ACTION_REQUIRED:
+            apply_span.add_event(
+                "execution_agent.user_action_required",
+                {
+                    "tool_call_proposal_id": proposal.tool_call_proposal_id,
+                    "selected_tool_id": proposal.selected_tool_id,
                 },
             )
-            apply_span.set_attribute("application_outcome", receipt.outcome.value)
-            apply_span.set_attribute(
-                "application_receipt_digest",
-                receipt.application_receipt_digest,
-            )
-            if outcome == AgentToolCallApplicationOutcome.USER_ACTION_REQUIRED:
-                apply_span.add_event(
-                    "execution_agent.user_action_required",
-                    {
-                        "tool_call_proposal_id": proposal.tool_call_proposal_id,
-                        "selected_tool_id": proposal.selected_tool_id,
-                    },
-                )
-            return ExecutionAgentApplyResult(
-                publication=publication,
-                application_receipt=receipt,
-                controller_result=None,
-            )
+        return ExecutionAgentApplyResult(
+            publication=publication,
+            application_receipt=receipt,
+            controller_result=None,
+        )
 
     def _frozen_observation(
         self,
@@ -1773,8 +1777,11 @@ class ExecutionAgentService:
             ).lower()
             if provider not in _EXECUTION_AGENT_PROVIDER_KINDS:
                 raise ValueError("unsupported Execution Agent provider kind")
+            effective_model = invocation.model
+            if provider == "openai_compatible" and not effective_model:
+                effective_model = "default"
             model, model_digest = ExecutionAgentService._provider_metadata_label(
-                invocation.model,
+                effective_model,
                 field="llm_model",
             )
             response_id, response_id_digest = (
@@ -1889,21 +1896,15 @@ class ExecutionAgentService:
         self,
         *,
         publication: ExecutionAgentProposalPublication,
-        after: ControllerAdvanceResult,
         controller_result: ControllerAdvanceResult | None,
         outcome: AgentToolCallApplicationOutcome,
         reason: str,
-        after_inspection_digest: str | None = None,
+        after_inspection_digest: str,
     ) -> AgentToolCallApplicationReceipt:
         proposal = publication.proposal
         decision = controller_result.decision if controller_result is not None else None
         controller_receipt = (
             controller_result.receipt if controller_result is not None else None
-        )
-        exact_after_inspection_digest = (
-            after.inspection.inspection_digest
-            if after_inspection_digest is None
-            else after_inspection_digest
         )
         sources = [
             AgentHarnessControllerSourceBinding(
@@ -1921,7 +1922,7 @@ class ExecutionAgentService:
             AgentHarnessControllerSourceBinding(
                 name="after_controller_inspection",
                 source_id=f"after-{proposal.controller_execution_id}",
-                source_digest=exact_after_inspection_digest,
+                source_digest=after_inspection_digest,
                 authority_class=AgentHarnessAuthorityClass.DERIVED,
             ),
         ]
@@ -1950,7 +1951,7 @@ class ExecutionAgentService:
             selected_tool_id=proposal.selected_tool_id,
             server_compiled_operation=proposal.server_compiled_operation,
             before_inspection_digest=proposal.inspection_digest,
-            after_inspection_digest=exact_after_inspection_digest,
+            after_inspection_digest=after_inspection_digest,
             controller_decision_id=decision.decision_id if decision is not None else "",
             controller_decision_digest=(
                 decision.decision_digest if decision is not None else ""
