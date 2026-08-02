@@ -10,6 +10,7 @@ from ai4s_agent.control_plane_events import ControlPlaneEventProjector
 from ai4s_agent.dataset_workflow import DatasetWorkflowService
 from ai4s_agent.execution_agent import ExecutionAgentService
 from ai4s_agent.execution_agent_store import ExecutionAgentStore
+from ai4s_agent.agent_run_inspection import AgentRunInspectionService
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.harness_tracing import build_harness_tracer
 from ai4s_agent.job_manager import JobManager
@@ -30,6 +31,7 @@ from ai4s_agent.routes.conversations import register_conversation_routes
 from ai4s_agent.routes.control_plane_events import register_control_plane_event_routes
 from ai4s_agent.routes.datasets import register_dataset_routes
 from ai4s_agent.routes.execution_agent import register_execution_agent_routes
+from ai4s_agent.routes.agent_run_inspection import register_agent_run_inspection_routes
 from ai4s_agent.routes.core import register_core_routes
 from ai4s_agent.routes.internal_run_plan_queue import register_internal_run_plan_queue_routes
 from ai4s_agent.routes.jobs import register_job_routes
@@ -216,6 +218,17 @@ def register_routes(
         service=replanner,
         llm_settings=llm_settings,
         llm_providers=llm_providers,
+    )
+    register_agent_run_inspection_routes(
+        app,
+        service=AgentRunInspectionService(
+            storage=projects,
+            proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
+            authorization_service=app.extensions["scientific_agent_authorization_service"],
+            control_store=app.extensions["scientific_agent_plan_control_store"],
+            controller=harness_controller,
+            execution_agent_store=execution_agent_store,
+        ),
     )
     register_llm_settings_routes(
         app,

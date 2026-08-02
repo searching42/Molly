@@ -1,0 +1,678 @@
+{
+  "$defs": {
+    "AgentRunArtifactInspection": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "artifact_digest": {
+          "default": "",
+          "title": "Artifact Digest",
+          "type": "string"
+        },
+        "artifact_type": {
+          "title": "Artifact Type",
+          "type": "string"
+        },
+        "artifact_role": {
+          "title": "Artifact Role",
+          "type": "string"
+        },
+        "producer_task_id": {
+          "default": "",
+          "title": "Producer Task Id",
+          "type": "string"
+        },
+        "consumer_task_roster": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Consumer Task Roster",
+          "type": "array"
+        },
+        "registry_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "verified_publication_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance_digest": {
+          "title": "Provenance Digest",
+          "type": "string"
+        },
+        "currentness": {
+          "enum": [
+            "current",
+            "stale",
+            "missing"
+          ],
+          "title": "Currentness",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "artifact_type",
+        "artifact_role",
+        "provenance_digest",
+        "currentness"
+      ],
+      "title": "AgentRunArtifactInspection",
+      "type": "object"
+    },
+    "AgentRunControllerInspection": {
+      "additionalProperties": false,
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/AgentRunInspectionBinding"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "controller_revision": {
+          "default": 0,
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Controller Revision",
+          "type": "integer"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "current_task_id": {
+          "default": "",
+          "title": "Current Task Id",
+          "type": "string"
+        },
+        "execution_route": {
+          "default": "",
+          "title": "Execution Route",
+          "type": "string"
+        },
+        "durable_effect_state": {
+          "title": "Durable Effect State",
+          "type": "string"
+        },
+        "recovery_state": {
+          "title": "Recovery State",
+          "type": "string"
+        },
+        "inspection_digest": {
+          "title": "Inspection Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution",
+        "status",
+        "durable_effect_state",
+        "recovery_state",
+        "inspection_digest"
+      ],
+      "title": "AgentRunControllerInspection",
+      "type": "object"
+    },
+    "AgentRunInspectionBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "object_id": {
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_digest": {
+          "title": "Object Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "object_id",
+        "object_digest"
+      ],
+      "title": "AgentRunInspectionBinding",
+      "type": "object"
+    },
+    "AgentRunInspectionSourceBinding": {
+      "additionalProperties": false,
+      "description": "Privacy-safe exact source identity used by the unified projection.",
+      "properties": {
+        "source_name": {
+          "title": "Source Name",
+          "type": "string"
+        },
+        "source_kind": {
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_digest": {
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "currentness": {
+          "default": "current",
+          "enum": [
+            "current",
+            "historical"
+          ],
+          "title": "Currentness",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_name",
+        "source_kind",
+        "source_id",
+        "source_digest"
+      ],
+      "title": "AgentRunInspectionSourceBinding",
+      "type": "object"
+    },
+    "AgentRunInspectionStatus": {
+      "enum": [
+        "current",
+        "stale_source",
+        "replaced_source",
+        "damaged_source",
+        "missing_source",
+        "incomplete_authority_chain",
+        "recovery_required"
+      ],
+      "title": "AgentRunInspectionStatus",
+      "type": "string"
+    },
+    "AgentRunPlanInspection": {
+      "additionalProperties": false,
+      "properties": {
+        "proposal": {
+          "$ref": "#/$defs/AgentRunInspectionBinding"
+        },
+        "semantic_plan": {
+          "$ref": "#/$defs/AgentRunInspectionBinding"
+        },
+        "observation": {
+          "$ref": "#/$defs/AgentRunInspectionBinding"
+        },
+        "tool_catalog_digest": {
+          "title": "Tool Catalog Digest",
+          "type": "string"
+        },
+        "permission_decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "permission_result": {
+          "default": "not_evaluated",
+          "title": "Permission Result",
+          "type": "string"
+        },
+        "authority_set": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "authorization": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "authorization_mode": {
+          "default": "",
+          "title": "Authorization Mode",
+          "type": "string"
+        },
+        "trusted_actor_binding_digest": {
+          "default": "",
+          "title": "Trusted Actor Binding Digest",
+          "type": "string"
+        },
+        "start_intent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "dispatch_state": {
+          "default": "not_requested",
+          "title": "Dispatch State",
+          "type": "string"
+        },
+        "required_gates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Gates",
+          "type": "array"
+        }
+      },
+      "required": [
+        "proposal",
+        "semantic_plan",
+        "observation",
+        "tool_catalog_digest"
+      ],
+      "title": "AgentRunPlanInspection",
+      "type": "object"
+    },
+    "AgentRunReplannerInspection": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/AgentRunInspectionBinding"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "feedback_receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "plan_diff": {
+          "$ref": "#/$defs/AgentRunInspectionBinding"
+        },
+        "successor_proposal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "application_receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fresh_permission_required": {
+          "title": "Fresh Permission Required",
+          "type": "boolean"
+        },
+        "fresh_authorization_required": {
+          "title": "Fresh Authorization Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "revision",
+        "status",
+        "plan_diff",
+        "fresh_permission_required",
+        "fresh_authorization_required"
+      ],
+      "title": "AgentRunReplannerInspection",
+      "type": "object"
+    },
+    "AgentRunTaskInspection": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "dependency_roster": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dependency Roster",
+          "type": "array"
+        },
+        "execution_route": {
+          "title": "Execution Route",
+          "type": "string"
+        },
+        "logical_profile_id": {
+          "default": "",
+          "title": "Logical Profile Id",
+          "type": "string"
+        },
+        "requested_resource_summary_digest": {
+          "default": "",
+          "title": "Requested Resource Summary Digest",
+          "type": "string"
+        },
+        "stage_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "stage_status": {
+          "default": "not_started",
+          "title": "Stage Status",
+          "type": "string"
+        },
+        "registry_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "verified_publication": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "input_artifact_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Input Artifact Refs",
+          "type": "array"
+        },
+        "output_artifact_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Output Artifact Refs",
+          "type": "array"
+        },
+        "verifier_supported_outcome": {
+          "default": "not_available",
+          "title": "Verifier Supported Outcome",
+          "type": "string"
+        },
+        "gate_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Gate Requirements",
+          "type": "array"
+        },
+        "gate_snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "gate_decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "recovery_required": {
+          "default": false,
+          "title": "Recovery Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "task_id",
+        "execution_route"
+      ],
+      "title": "AgentRunTaskInspection",
+      "type": "object"
+    },
+    "AgentRunToolCallInspection": {
+      "additionalProperties": false,
+      "properties": {
+        "proposal": {
+          "$ref": "#/$defs/AgentRunInspectionBinding"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "application_receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRunInspectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "durable_effect_state": {
+          "title": "Durable Effect State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "proposal",
+        "status",
+        "durable_effect_state"
+      ],
+      "title": "AgentRunToolCallInspection",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Canonical, reconstructable, non-authoritative run inspection v1.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_run_inspection.v1",
+      "default": "agent_run_inspection.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "inspection_id": {
+      "default": "",
+      "title": "Inspection Id",
+      "type": "string"
+    },
+    "inspection_digest": {
+      "default": "",
+      "title": "Inspection Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "read_only": {
+      "const": true,
+      "default": true,
+      "title": "Read Only",
+      "type": "boolean"
+    },
+    "authoritative": {
+      "const": false,
+      "default": false,
+      "title": "Authoritative",
+      "type": "boolean"
+    },
+    "inspection_status": {
+      "$ref": "#/$defs/AgentRunInspectionStatus"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "authoritative_status_available": {
+      "title": "Authoritative Status Available",
+      "type": "boolean"
+    },
+    "verifier_supported_run_outcome": {
+      "title": "Verifier Supported Run Outcome",
+      "type": "string"
+    },
+    "scientific_success": {
+      "const": "not_asserted",
+      "default": "not_asserted",
+      "title": "Scientific Success",
+      "type": "string"
+    },
+    "plan": {
+      "$ref": "#/$defs/AgentRunPlanInspection"
+    },
+    "controller": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentRunControllerInspection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "tool_calls": {
+      "items": {
+        "$ref": "#/$defs/AgentRunToolCallInspection"
+      },
+      "title": "Tool Calls",
+      "type": "array"
+    },
+    "replanner": {
+      "items": {
+        "$ref": "#/$defs/AgentRunReplannerInspection"
+      },
+      "title": "Replanner",
+      "type": "array"
+    },
+    "tasks": {
+      "items": {
+        "$ref": "#/$defs/AgentRunTaskInspection"
+      },
+      "title": "Tasks",
+      "type": "array"
+    },
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/AgentRunArtifactInspection"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "source_roster": {
+      "items": {
+        "$ref": "#/$defs/AgentRunInspectionSourceBinding"
+      },
+      "title": "Source Roster",
+      "type": "array"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "created_at",
+    "inspection_status",
+    "reason_codes",
+    "authoritative_status_available",
+    "verifier_supported_run_outcome",
+    "plan",
+    "source_roster"
+  ],
+  "title": "AgentRunInspection",
+  "type": "object"
+}
