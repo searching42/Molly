@@ -449,7 +449,7 @@ M3.5 至少支持两种用户模式：
 | `M3H-007A` 建立 server-owned configured resource authority | `I/T/—` | `DONE` | PR-BM2 在 `a055a87` 获得 owner review approval，并由 PR #20 以 `5389a3c` 合并；从私有 server policy、exact connection/profile/probe、预算和完整 task roster 派生 immutable AuthoritySet，不创建 request 或 dispatch |
 | `M3H-008` Harness Controller 接入现有执行链 | `I/T/—` | `DONE` | PR-BN 最终 review HEAD `2fa4f74a4caa5618f5046151b6258b2d51f6e91f` 已通过 repository-owner review，并由 PR #21 以 merge commit `d4ac276d4faa6623ccaa7661a6d9db14e6225833` 合入 `main`；不据此声明真实 remote canary 或完整 Harness 完成 |
 | `M3H-009` 接入 Execution Agent LLM | `I/T/—` | `DONE` | PR-BO owner-approved implementation HEAD `c24da96b19ee5af5dda6b96ea8e3a05b0e88bd9f` 已通过 PR Fast、4-shard Full CI 与三类 CodeQL；PR #22 最终由 merge commit `ee1db0032d316d2ea71bfde4e1f6bbc03cd944a7` 合入 `main` |
-| `M3H-010` unified verified run inspection/read projection | `I/T/—` | `READY` | PR-BQ1 是 PR-BQ0 合并后的唯一下一实现动作；建立统一、read-only、current-verified 的 run/Controller/Verifier/artifact projection 与 strict API，只有 authoritative StageState、Artifact Registry 和 verified publication 能支持结果状态 |
+| `M3H-010` unified verified run inspection/read projection | `I(partial)/T(partial)/—` | `READY` | PR-BN 只提供 verifier-bound Controller observation 与 local/remote completion verification 的 prerequisite seam；完整的统一、read-only、current-verified run/Controller/Verifier/artifact projection 与 strict API 尚未实现，PR-BQ1 是 PR-BQ0 合并后的唯一下一实现动作；只有 authoritative StageState、Artifact Registry 和 verified publication 能支持结果状态 |
 | `M3H-011` Replanner 与 plan revision | `I/T/—` | `DONE` | PR #23 在 reviewed HEAD `1f7ba18a6e79281190b10c2ca18f7d59adb97ed7` 通过 repository-owner review、PR Fast、4-shard Full CI 与 Actions/Python/JavaScript-TypeScript CodeQL，并由 merge commit `1dd70e6746ef0518a38aa0471fd657a5d4172ba5` 合入 `main`；material revision 创建新 proposal/semantic-plan digest，旧 proposal 与 authorization 保持 immutable，successor 必须重新 Permission evaluation 并获得新 trusted-user authorization；Replanner 不 authorize、start、advance、retry、recover、cancel 或 dispatch，无 exact verifier evidence binding 的 standalone `verifier_outcome` trigger 不属于 v1；不据此标记 `M3H-GATE-005 V`、M3.5 或 Molly v1 完成 |
 | `M3H-012` 统一 Plan/Tool/Permission/Replan UI | `I(partial)/T(partial)/—` | `DEFERRED` | PR-BQ3；待 BQ1 与 BQ2/BR1/BR2 契约稳定后解锁，优先复用 Flask UI 和现有 strict API，不建立第二权威 |
 | `M3H-013` Structured Dataset Canary | `I/T(partial)/—` | `DEFERRED` | PR-BR1；Raw/Confirmed CSV 必须在当前 run 重新训练、真实生成、预测与排序，不复用旧模型、旧 prediction 或 `existing_output` |
@@ -540,7 +540,7 @@ PR #22 和 PR #23 的 `I/T/— / DONE` 不会自动产生任何 Gate `V`。只�
 
 #### v1 产品定位
 
-> Molly v1 是一个面向 OLED 有机小分子发光材料的可复现、可审计科学 Agent。系统支持从结构化待清洗数据或论文出发，经人工确认、模型训练和分子生成，输出带 provenance 和基础模型证据的计算候选物，并通过 Molly 原生权威账本、OpenTelemetry、LangSmith 和简化 UI 展示完整运行轨迹。
+> Molly v1 是一个面向 OLED 有机小分子发光材料的可复现、可审计科学 Agent。系统包含两条独立的 bounded workflow：结构化数据 workflow 从待清洗数据出发，经人工确认、fresh model training、分子生成、预测与验证，输出带 provenance 和基础模型证据的 `Computational Top-N`；PDF workflow 从真实论文出发，经 MinerU、deterministic extraction 和 LLM contextual mapping，只输出 confirmation-ready candidate raw dataset 并在 Gate 前进入 `WAITING_USER`。两条 workflow 均通过 Molly 原生权威账本、OpenTelemetry、LangSmith 和简化 UI 展示各自的完整运行轨迹；PDF workflow 不暗示已完成 confirmed dataset、模型训练、分子生成或 Top-N。
 
 #### v1 科学范围与数据充分性
 
@@ -570,7 +570,7 @@ v1 最终输出名称固定为 `Model-ranked Computational Candidates` 或 `Comp
 
 v1 在验收证据成立后可以声明：
 
-- 从原始输入到候选物的端到端流程可复现；
+- Structured Dataset workflow 从原始输入到计算候选物的端到端流程可复现；PDF workflow 从论文到 confirmation-ready candidate raw dataset 的有界流程可复现；
 - 每一步具有 artifact、digest、版本、随机种子和 provenance；
 - LLM 可基于 MinerU 输出生成待人工确认的数据候选；
 - 模型训练和候选生成从当前运行输入重新执行；
@@ -642,9 +642,22 @@ UI 至少支持 plan review、blocking question、Permission 结果、approve-an
 → Computational Top-N
 ```
 
-CI Reference Canary 固定为 `Raw CSV → fresh local baseline model → deterministic generation → Top-N`，用于 CI 快速、确定性重放，保护 Gate、artifact、Registry、replay 与恢复契约。
+CI Reference Canary 必须显式经过与 production 相同的 confirmation contract，固定为：
 
-Private Real-Tool Canary 固定为 `Raw CSV → Confirmed Dataset → fresh Uni-Mol model → real REINVENT4 → prediction/ranking → Computational Top-N`。必须在受信任私有运行环境执行，公共仓库仅保存脱敏 evidence，不提交主机、路径、账号、SSH、密钥或私有数据；不复用旧模型或旧预测，至少真实执行一次 training 和 generation，支持进程重启与 exact replay，并产生可关联的 Molly、OTel 和 LangSmith 轨迹。
+```text
+Raw CSV
+→ review snapshot
+→ exact test GateDecision / confirmation receipt
+→ Confirmed Dataset
+→ fresh local baseline model
+→ deterministic generation
+→ candidate validation
+→ Top-N
+```
+
+CI 可使用确定性测试 actor 与 Gate fixture，但必须发布并 exact-bind 真实同契约的 GateDecision/confirmation receipt；缺少、替换、stale 或错绑 confirmation 时，training 必须 fail closed。不得将预置 CSV、fixture 标签或测试代码中的隐式假设当作 confirmed data。该 canary 用于 CI 快速、确定性重放，保护 confirmation Gate、artifact、Registry、replay 与恢复契约。
+
+Private Real-Tool Canary 固定为 `Raw CSV → Confirmed Dataset → fresh Uni-Mol model → real REINVENT4 → prediction/ranking → Computational Top-N`，其 Confirmed Dataset 也必须由同一 confirmation contract 产生，不得将预置 CSV 隐式当作 confirmed data。必须在受信任私有运行环境执行，公共仓库仅保存脱敏 evidence，不提交主机、路径、账号、SSH、密钥或私有数据；不复用旧模型或旧预测，至少真实执行一次 training 和 generation，支持进程重启与 exact replay，并产生可关联的 Molly、OTel 和 LangSmith 轨迹。
 
 ##### `V1-ACCEPT-002` PDF–MinerU–LLM Canary
 
@@ -1336,7 +1349,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 任务：在不建立第二套 authority 的前提下，为现有 Planner、Permission、Authorization、Controller、Executor/remote lifecycle、Verifier、StageState、Artifact Registry、Execution Agent 和 Replanner 建立统一、read-only、current-verified 的 run inspection projection 与 strict API。该 projection 是后续 observability、canary 和 UI 的稳定读取边界，不得写入 execution、authorization 或 scientific result 状态。
 
-当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`而非 `DONE`；`M3H-001`～`M3H-009` 与 `M3H-011` 为 `I/T/— / DONE`；`M3H-010` 为唯一 `READY` 的下一实现任务；`M3H-012`～`M3H-015` 保持 `DEFERRED`。规范交付队列仅在 5.5.3 定义；后续任务按其依赖顺序逐步解锁。M4 不得抢占 P0，M5 仅可进行不阻塞 v1 的范围与数据充分性准备。
+当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`而非 `DONE`；`M3H-001`～`M3H-009` 与 `M3H-011` 为 `I/T/— / DONE`；`M3H-010` 仅有 `I(partial)/T(partial)/—` prerequisite evidence，但作为唯一下一实现任务保持 `READY`；`M3H-012`～`M3H-015` 保持 `DEFERRED`。规范交付队列仅在 5.5.3 定义；后续任务按其依赖顺序逐步解锁。M4 不得抢占 P0，M5 仅可进行不阻塞 v1 的范围与数据充分性准备。
 
 必须验证：
 
