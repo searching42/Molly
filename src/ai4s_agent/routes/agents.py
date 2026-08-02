@@ -19,6 +19,7 @@ from ai4s_agent.llm_provider import (
     LLMProvider,
     LLMProviderError,
     LLMProviderManager,
+    create_llm_provider,
 )
 from ai4s_agent.llm_provider_resolution import llm_provider_from_payload
 from ai4s_agent.llm_settings import LLMSettingsStore
@@ -816,6 +817,7 @@ def _llm_provider_from_payload(
         payload,
         settings=settings,
         providers=providers,
+        provider_factory=create_llm_provider,
     )
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any
@@ -33,6 +33,7 @@ def resolve_llm_provider_payload(
     *,
     settings: LLMSettingsStore,
     providers: LLMProviderManager,
+    provider_factory: Callable[[LLMProviderConfig], LLMProvider] = create_llm_provider,
 ) -> LLMProviderResolution:
     if "llm_provider" in payload:
         raw = payload.get("llm_provider")
@@ -77,7 +78,11 @@ def resolve_llm_provider_payload(
         }
     )
     return LLMProviderResolution(
-        provider_context=(temporary_provider(config) if temporary else providers.lease(config)),
+        provider_context=(
+            temporary_provider(config, provider_factory=provider_factory)
+            if temporary
+            else providers.lease(config)
+        ),
         config=config,
         provider_binding_digest=binding_digest,
     )
@@ -88,6 +93,7 @@ def llm_provider_from_payload(
     *,
     settings: LLMSettingsStore,
     providers: LLMProviderManager,
+    provider_factory: Callable[[LLMProviderConfig], LLMProvider] = create_llm_provider,
 ) -> AbstractContextManager[LLMProvider | None]:
     """Compatibility projection used by existing planning/conversation routes."""
 
@@ -95,6 +101,7 @@ def llm_provider_from_payload(
         payload,
         settings=settings,
         providers=providers,
+        provider_factory=provider_factory,
     ).provider_context
 
 
@@ -111,8 +118,12 @@ def is_external_llm_config(config: LLMProviderConfig) -> bool:
 
 
 @contextmanager
-def temporary_provider(config: LLMProviderConfig) -> Iterator[LLMProvider]:
-    provider = create_llm_provider(config)
+def temporary_provider(
+    config: LLMProviderConfig,
+    *,
+    provider_factory: Callable[[LLMProviderConfig], LLMProvider] = create_llm_provider,
+) -> Iterator[LLMProvider]:
+    provider = provider_factory(config)
     try:
         yield provider
     finally:

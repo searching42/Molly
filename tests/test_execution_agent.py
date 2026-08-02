@@ -297,7 +297,7 @@ class _MarkdownProvider(StubLLMProvider):
         CountingStubProvider(
             response={
                 "selected_tool_id": "agent.pause_current.v1",
-                "decision_summary": "Use 10.0.0.1 for this operation.",
+                "decision_summary": "Use 192.0.2.1 for this operation.",
             }
         ),
         CountingStubProvider(
