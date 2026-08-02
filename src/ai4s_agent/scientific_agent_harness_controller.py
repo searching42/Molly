@@ -21,6 +21,10 @@ from typing import Any, Callable, Mapping
 from ai4s_agent._utils import now_iso
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.harness_tracing import HarnessTracer, NoopHarnessTracer
+from ai4s_agent.observability_correlation import (
+    build_harness_telemetry_correlation,
+    privacy_safe_telemetry_attributes,
+)
 from ai4s_agent.oled_scientific_agent_source_evidence import read_dispatch_receipts
 from ai4s_agent.resource_profiles import build_transfer_manifest_from_payloads
 from ai4s_agent.schemas import (
@@ -146,6 +150,37 @@ _POLICY_MATERIAL: Mapping[str, Any] = {
         }
     ),
 }
+
+
+def _controller_telemetry_attributes(
+    execution: AgentHarnessControllerExecution,
+    *,
+    operation: str,
+    component: str,
+    phase: str,
+    slot: AgentHarnessControllerTaskSlot | None = None,
+) -> dict[str, str | int | bool]:
+    context = build_harness_telemetry_correlation(
+        project_id=execution.project_id,
+        run_id=execution.run_id,
+        proposal_id=execution.proposal_id,
+        proposal_digest=execution.proposal_digest,
+        semantic_plan_id=execution.semantic_plan_id,
+        semantic_plan_digest=execution.semantic_plan_digest,
+        permission_decision_id=execution.permission_decision_id,
+        authorization_id=execution.authorization_id,
+        start_intent_id=execution.start_intent_id,
+        controller_execution_id=execution.controller_execution_id,
+        controller_execution_digest=execution.execution_digest,
+        task_id=slot.task_id if slot is not None else "",
+        task_index=slot.planned_task_index if slot is not None else None,
+        slot_id=slot.slot_id if slot is not None else "",
+        execution_route=slot.execution_route if slot is not None else "",
+        operation=operation,
+        component=component,
+        phase=phase,
+    )
+    return privacy_safe_telemetry_attributes(context)
 CONTROLLER_POLICY_DIGEST = _agent_digest(_POLICY_MATERIAL)
 
 
@@ -463,8 +498,15 @@ class ScientificAgentHarnessController:
         scope = self._scope_id("create", start_intent_id)
         with self.tracer.start_span(
             "controller.execution",
-            attributes={"controller_policy_version": CONTROLLER_POLICY_VERSION},
-        ):
+            attributes={
+                "project_id": project_id,
+                "start_intent_id": start_intent_id,
+                "controller_policy_version": CONTROLLER_POLICY_VERSION,
+                "operation": "agent.controller.create",
+                "component": "controller",
+                "phase": "create",
+            },
+        ) as controller_span:
             with self.requests.scope_session(
                 project_id=project_id,
                 operation="create",
@@ -566,6 +608,13 @@ class ScientificAgentHarnessController:
                                 "controller_execution_digest": execution.execution_digest,
                             },
                         )
+                        for key, value in _controller_telemetry_attributes(
+                            execution,
+                            operation="agent.controller.create",
+                            component="controller",
+                            phase="committed",
+                        ).items():
+                            controller_span.set_attribute(key, value)
                         return self._advance_in_session(
                             execution=execution,
                             session=session,
@@ -574,11 +623,31 @@ class ScientificAgentHarnessController:
     def get(
         self, *, project_id: str, controller_execution_id: str
     ) -> ControllerAdvanceResult:
-        execution = self.verify_execution(
-            project_id=project_id,
-            controller_execution_id=controller_execution_id,
-        )
-        return ControllerAdvanceResult(execution=execution, inspection=self._inspect(execution))
+        with self.tracer.start_span(
+            "controller.action",
+            attributes={
+                "project_id": project_id,
+                "controller_execution_id": controller_execution_id,
+                "operation": "agent.controller.inspect",
+                "component": "controller",
+                "phase": "read",
+            },
+        ) as inspect_span:
+            execution = self.verify_execution(
+                project_id=project_id,
+                controller_execution_id=controller_execution_id,
+            )
+            for key, value in _controller_telemetry_attributes(
+                execution,
+                operation="agent.controller.inspect",
+                component="controller",
+                phase="completed",
+            ).items():
+                inspect_span.set_attribute(key, value)
+            return ControllerAdvanceResult(
+                execution=execution,
+                inspection=self._inspect(execution),
+            )
 
     def read_execution_agent_snapshot(
         self,
@@ -662,13 +731,26 @@ class ScientificAgentHarnessController:
         )
         with self.tracer.start_span(
             "controller.advance",
-            attributes={"controller_execution_id": controller_execution_id},
-        ):
+            attributes={
+                "project_id": project_id,
+                "controller_execution_id": controller_execution_id,
+                "operation": "agent.controller.advance",
+                "component": "controller",
+                "phase": "advance",
+            },
+        ) as advance_span:
             with self._verified_execution_session(
                 project_id=project_id,
                 controller_execution_id=controller_execution_id,
                 expected_execution_digest=request.expected_controller_execution_digest,
             ) as execution:
+                for key, value in _controller_telemetry_attributes(
+                    execution,
+                    operation="agent.controller.advance",
+                    component="controller",
+                    phase="advance",
+                ).items():
+                    advance_span.set_attribute(key, value)
                 with self.requests.request_session(
                     project_id=project_id,
                     operation="advance",
@@ -1565,8 +1647,18 @@ class ScientificAgentHarnessController:
                 project_id=execution.project_id,
                 controller_execution_id=execution.controller_execution_id,
             )
-            action_attributes: dict[str, str | int] = {
-                "controller_execution_id": execution.controller_execution_id,
+            action_attributes: dict[str, str | int | bool] = {
+                **_controller_telemetry_attributes(
+                    execution,
+                    operation="agent.controller.advance",
+                    component="controller",
+                    phase="execute_decision",
+                    slot=(
+                        execution.task_slots[decision.task_index]
+                        if decision.task_index is not None
+                        else None
+                    ),
+                ),
                 "action_id": decision.decision_id,
                 "decision_id": decision.decision_id,
                 "action": decision.action_kind.value,
@@ -1777,7 +1869,13 @@ class ScientificAgentHarnessController:
             with self.tracer.start_span(
                 "controller.action",
                 attributes={
-                    "controller_execution_id": execution.controller_execution_id,
+                    **_controller_telemetry_attributes(
+                        execution,
+                        operation="agent.controller.advance",
+                        component="controller",
+                        phase="recover_decision",
+                        slot=execution.task_slots[decision.task_index],
+                    ),
                     "action_id": decision.decision_id,
                     "decision_id": decision.decision_id,
                     "action": decision.action_kind.value,
@@ -1880,7 +1978,24 @@ class ScientificAgentHarnessController:
             # non-executable.  The immutable WAITING receipt keeps the
             # Controller chain linear while /recover remains the only route
             # that may invoke lifecycle recovery.
-            outcome = AgentHarnessControllerReceiptOutcome.WAITING
+            if (
+                action
+                == AgentHarnessControllerAction.WAIT_FOR_REMOTE_APPROVAL
+                and slot is not None
+            ):
+                with self.tracer.start_span(
+                    "remote.await_approval",
+                    attributes=_controller_telemetry_attributes(
+                        execution,
+                        operation="agent.execution.remote.await_approval",
+                        component="remote_execution",
+                        phase="waiting",
+                        slot=slot,
+                    ),
+                ):
+                    outcome = AgentHarnessControllerReceiptOutcome.WAITING
+            else:
+                outcome = AgentHarnessControllerReceiptOutcome.WAITING
         elif action == AgentHarnessControllerAction.PREPARE_LOCAL_GATE:
             assert slot is not None
             current = self.storage.read_stage_state(execution.project_id, execution.run_id)
@@ -1945,11 +2060,14 @@ class ScientificAgentHarnessController:
                 with self.tracer.start_span(
                     "executor.local_task",
                     attributes={
-                        "controller_execution_id": execution.controller_execution_id,
-                        "task_id": slot.task_id,
-                        "task_index": slot.planned_task_index,
+                        **_controller_telemetry_attributes(
+                            execution,
+                            operation="agent.execution.local",
+                            component="executor",
+                            phase="execute",
+                            slot=slot,
+                        ),
                         "attempt": slot.attempt,
-                        "execution_route": slot.execution_route,
                     },
                 ):
                     result = self._execute_local(execution, slot, decision)
@@ -2007,11 +2125,14 @@ class ScientificAgentHarnessController:
                 with self.tracer.start_span(
                     "remote.prepare",
                     attributes={
-                        "controller_execution_id": execution.controller_execution_id,
-                        "task_id": slot.task_id,
-                        "task_index": slot.planned_task_index,
+                        **_controller_telemetry_attributes(
+                            execution,
+                            operation="agent.execution.remote.prepare",
+                            component="remote_execution",
+                            phase="prepare",
+                            slot=slot,
+                        ),
                         "attempt": slot.attempt,
-                        "slot_id": slot.slot_id,
                     },
                 ):
                     result = self._prepare_remote(execution, slot)
@@ -2036,11 +2157,14 @@ class ScientificAgentHarnessController:
                 with self.tracer.start_span(
                     "remote.dispatch",
                     attributes={
-                        "controller_execution_id": execution.controller_execution_id,
-                        "task_id": slot.task_id,
-                        "task_index": slot.planned_task_index,
+                        **_controller_telemetry_attributes(
+                            execution,
+                            operation="agent.execution.remote.dispatch",
+                            component="remote_execution",
+                            phase="dispatch",
+                            slot=slot,
+                        ),
                         "attempt": slot.attempt,
-                        "slot_id": slot.slot_id,
                     },
                 ):
                     result = self.remote_executions.dispatch(
@@ -2058,11 +2182,14 @@ class ScientificAgentHarnessController:
                 with self.tracer.start_span(
                     "remote.refresh",
                     attributes={
-                        "controller_execution_id": execution.controller_execution_id,
-                        "task_id": slot.task_id,
-                        "task_index": slot.planned_task_index,
+                        **_controller_telemetry_attributes(
+                            execution,
+                            operation="agent.execution.remote.refresh",
+                            component="remote_execution",
+                            phase="refresh",
+                            slot=slot,
+                        ),
                         "attempt": slot.attempt,
-                        "slot_id": slot.slot_id,
                     },
                 ):
                     result = self.remote_executions.refresh(
@@ -2071,7 +2198,20 @@ class ScientificAgentHarnessController:
                     )
         elif action == AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS:
             assert slot is not None
-            result = self._remote_inspection(execution, slot)
+            with self.tracer.start_span(
+                "remote.adopt",
+                attributes={
+                    **_controller_telemetry_attributes(
+                        execution,
+                        operation="agent.execution.remote.adopt",
+                        component="remote_execution",
+                        phase="adopt",
+                        slot=slot,
+                    ),
+                    "attempt": slot.attempt,
+                },
+            ):
+                result = self._remote_inspection(execution, slot)
             if str(result["state"]["status"]) != "SUCCEEDED" or result.get("publication") is None:
                 raise ScientificAgentHarnessControllerVerificationError("remote success publication is unavailable")
             reason = "TASK_COMPLETED"
@@ -2089,11 +2229,14 @@ class ScientificAgentHarnessController:
                 with self.tracer.start_span(
                     "remote.recover",
                     attributes={
-                        "controller_execution_id": execution.controller_execution_id,
-                        "task_id": slot.task_id,
-                        "task_index": slot.planned_task_index,
+                        **_controller_telemetry_attributes(
+                            execution,
+                            operation="agent.execution.remote.recover",
+                            component="remote_execution",
+                            phase="recover",
+                            slot=slot,
+                        ),
                         "attempt": slot.attempt,
-                        "slot_id": slot.slot_id,
                     },
                 ):
                     result = self.remote_executions.recover(

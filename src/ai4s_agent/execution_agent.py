@@ -421,7 +421,13 @@ class ExecutionAgentService:
         )
         with self.tracer.start_span(
             "execution_agent.propose",
-            attributes={"controller_execution_id": controller_execution_id},
+            attributes={
+                "project_id": project_id,
+                "controller_execution_id": controller_execution_id,
+                "operation": "agent.execution_agent.propose",
+                "component": "execution_agent",
+                "phase": "propose",
+            },
         ) as propose_span:
             with self.store.proposal_request_session(
                 project_id=project_id,
@@ -522,7 +528,16 @@ class ExecutionAgentService:
                         with self.tracer.start_span(
                             "execution_agent.llm_call",
                             attributes={
-                                "controller_execution_id": controller_execution_id
+                                "project_id": project_id,
+                                "run_id": observation.run_id,
+                                "controller_execution_id": controller_execution_id,
+                                "controller_execution_digest": (
+                                    observation.controller_execution_digest
+                                ),
+                                "request_digest": prompt_digest,
+                                "operation": "agent.execution_agent.llm_call",
+                                "component": "execution_agent",
+                                "phase": "provider_call",
                             },
                         ):
                             invocation = provider.complete_json(
@@ -778,8 +793,12 @@ class ExecutionAgentService:
         with self.tracer.start_span(
             "execution_agent.apply",
             attributes={
+                "project_id": project_id,
                 "controller_execution_id": controller_execution_id,
                 "tool_call_proposal_id": tool_call_proposal_id,
+                "operation": "agent.execution_agent.apply",
+                "component": "execution_agent",
+                "phase": "apply",
             },
         ) as apply_span:
             with self.store.application_session(

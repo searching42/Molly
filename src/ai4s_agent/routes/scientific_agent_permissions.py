@@ -6,6 +6,7 @@ from flask import Flask, jsonify, request
 from pydantic import ValidationError
 
 from ai4s_agent.actor_identity import resolve_authenticated_actor
+from ai4s_agent.harness_tracing import HarnessTracer
 from ai4s_agent.remote_resource_authority import (
     RemoteResourceAuthorityPolicyStore,
     RemoteResourceAuthorityService,
@@ -86,6 +87,7 @@ def register_scientific_agent_permission_routes(
     proposal_store: ScientificAgentPlanProposalStore,
     resource_profiles: ResourceProfileStore,
     resource_authority_policy_store: RemoteResourceAuthorityPolicyStore,
+    tracer: HarnessTracer | None = None,
 ) -> None:
     control_store = AgentPlanControlStore(storage=projects)
     resource_authorities = RemoteResourceAuthorityService(
@@ -104,6 +106,7 @@ def register_scientific_agent_permission_routes(
                 task_id=task_id,
             )
         ),
+        tracer=tracer,
     )
     app.extensions["scientific_agent_plan_control_store"] = control_store
     app.extensions["scientific_agent_authorization_service"] = service

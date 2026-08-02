@@ -24,6 +24,11 @@ from typing import Any, Callable, Mapping, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from ai4s_agent._utils import now_iso
+from ai4s_agent.harness_tracing import HarnessTracer, NoopHarnessTracer
+from ai4s_agent.observability_correlation import (
+    build_harness_telemetry_correlation,
+    privacy_safe_telemetry_attributes,
+)
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import (
     AgentAuthorizationArtifactBinding,
@@ -1082,6 +1087,7 @@ class ScientificAgentAuthorizationService:
         permission_engine: ScientificAgentPermissionEngine | None = None,
         resource_authority_resolver: Callable[[ScientificAgentPlanPublication, str], Any]
         | None = None,
+        tracer: HarnessTracer | None = None,
         clock: Callable[[], str] = now_iso,
     ) -> None:
         self.storage = storage
@@ -1093,6 +1099,7 @@ class ScientificAgentAuthorizationService:
             resource_authority_resolver=resource_authority_resolver,
             clock=clock,
         )
+        self.tracer = tracer or NoopHarnessTracer()
         self.clock = clock
 
     def evaluate_permission(
@@ -1103,12 +1110,35 @@ class ScientificAgentAuthorizationService:
         expected_proposal_digest: str | None = None,
     ) -> AgentPermissionDecision:
         publication = self._verified_publication(project_id, proposal_id)
-        decision = self.permission_engine.evaluate(
-            publication=publication,
-            phase=AgentPermissionPhase.PROPOSAL_REVIEW,
-            expected_proposal_digest=expected_proposal_digest,
+        proposal = publication.proposal
+        correlation = build_harness_telemetry_correlation(
+            project_id=proposal.project_id,
+            run_id=proposal.run_id,
+            proposal_id=proposal.proposal_id,
+            proposal_digest=proposal.proposal_digest,
+            semantic_plan_id=proposal.semantic_plan_id,
+            semantic_plan_digest=proposal.semantic_plan_digest,
+            operation="agent.permission.evaluate",
+            component="permission",
+            phase="evaluate",
         )
-        return self.control_store.publish_permission_decision(decision)
+        with self.tracer.start_span(
+            "permission.evaluate",
+            attributes=privacy_safe_telemetry_attributes(correlation),
+        ) as span:
+            decision = self.permission_engine.evaluate(
+                publication=publication,
+                phase=AgentPermissionPhase.PROPOSAL_REVIEW,
+                expected_proposal_digest=expected_proposal_digest,
+            )
+            committed = self.control_store.publish_permission_decision(decision)
+            span.set_attribute("permission_decision_id", committed.decision_id)
+            span.set_attribute("decision_digest", committed.decision_digest)
+            span.add_event(
+                "permission.decision",
+                {"outcome": committed.outcome.value.lower()},
+            )
+            return committed
 
     def authorize(
         self,
@@ -1119,14 +1149,33 @@ class ScientificAgentAuthorizationService:
         actor: str,
         actor_source: str,
     ) -> AgentPlanAuthorization:
-        result = self._commit_authority_chain(
+        correlation = build_harness_telemetry_correlation(
             project_id=project_id,
             proposal_id=proposal_id,
-            request=request,
-            actor=actor,
-            actor_source=actor_source,
-            operation="authorize",
+            proposal_digest=request.expected_proposal_digest,
+            operation="agent.authorization.create",
+            component="authorization",
+            phase="commit",
         )
+        with self.tracer.start_span(
+            "authorization.create",
+            attributes=privacy_safe_telemetry_attributes(correlation),
+        ) as span:
+            result = self._commit_authority_chain(
+                project_id=project_id,
+                proposal_id=proposal_id,
+                request=request,
+                actor=actor,
+                actor_source=actor_source,
+                operation="authorize",
+            )
+            authorization = (
+                result.authorization
+                if isinstance(result, ApproveAndStartResult)
+                else result
+            )
+            span.set_attribute("authorization_id", authorization.authorization_id)
+            span.add_event("authorization.committed", {"outcome": "committed"})
         if isinstance(result, ApproveAndStartResult):  # pragma: no cover
             return result.authorization
         return result
@@ -1140,16 +1189,51 @@ class ScientificAgentAuthorizationService:
         actor: str,
         actor_source: str,
     ) -> ApproveAndStartResult:
-        result = self._commit_authority_chain(
+        correlation = build_harness_telemetry_correlation(
             project_id=project_id,
             proposal_id=proposal_id,
-            request=request,
-            actor=actor,
-            actor_source=actor_source,
-            operation="approve-and-start",
+            proposal_digest=request.expected_proposal_digest,
+            operation="agent.authorization.create",
+            component="authorization",
+            phase="approve_and_start",
         )
+        with self.tracer.start_span(
+            "authorization.create",
+            attributes=privacy_safe_telemetry_attributes(correlation),
+        ) as span:
+            result = self._commit_authority_chain(
+                project_id=project_id,
+                proposal_id=proposal_id,
+                request=request,
+                actor=actor,
+                actor_source=actor_source,
+                operation="approve-and-start",
+            )
+            if isinstance(result, ApproveAndStartResult):
+                span.set_attribute(
+                    "authorization_id", result.authorization.authorization_id
+                )
+                span.add_event(
+                    "authorization.committed", {"outcome": "committed"}
+                )
         if not isinstance(result, ApproveAndStartResult):  # pragma: no cover
             raise ScientificAgentAuthorizationError("approve-and-start did not create an intent")
+        start_correlation = build_harness_telemetry_correlation(
+            project_id=project_id,
+            run_id=result.start_intent.run_id,
+            proposal_id=proposal_id,
+            proposal_digest=request.expected_proposal_digest,
+            authorization_id=result.authorization.authorization_id,
+            start_intent_id=result.start_intent.start_intent_id,
+            operation="agent.start_intent.create",
+            component="authorization",
+            phase="committed",
+        )
+        with self.tracer.start_span(
+            "start_intent.create",
+            attributes=privacy_safe_telemetry_attributes(start_correlation),
+        ) as start_span:
+            start_span.add_event("start_intent.committed", {"outcome": "committed"})
         return result
 
     def verify_authorization(

@@ -118,13 +118,26 @@ def test_only_allowlisted_bounded_attributes_and_events_reach_delegate() -> None
         span.add_event("raw.event", {"status": "active"})
 
     assert recorded.attributes == {
-        "outcome": "committed",
-        "receipt_digest": "sha256:" + "b" * 64,
+        "molly.outcome": "committed",
+        "molly.receipt_digest": "sha256:" + "b" * 64,
+        "molly.schema_version": "harness_telemetry_correlation.v1",
+        "molly.telemetry_authoritative": False,
     }
-    assert recorded.events == [("controller.receipt", {"status": "active"})]
+    assert recorded.events == [
+        (
+            "controller.receipt",
+            {
+                "molly.schema_version": "harness_telemetry_correlation.v1",
+                "molly.status": "active",
+                "molly.telemetry_authoritative": False,
+            },
+        )
+    ]
     assert delegate.calls[0][1]["attributes"] == {
-        "task_id": "inspect_dataset",
-        "task_index": 0,
+        "molly.schema_version": "harness_telemetry_correlation.v1",
+        "molly.task_id": "inspect_dataset",
+        "molly.task_index": 0,
+        "molly.telemetry_authoritative": False,
     }
     assert delegate.calls[0][1]["record_exception"] is False
     assert delegate.calls[0][1]["set_status_on_exception"] is False
@@ -153,5 +166,5 @@ def test_safe_links_and_event_bounds_do_not_accept_private_payloads() -> None:
         span.set_attribute("task_id", "user@example.com")
 
     assert len(recorded.events) == 32
-    assert "task_id" not in recorded.attributes
+    assert "molly.task_id" not in recorded.attributes
     assert delegate.calls[0][1]["links"] == []

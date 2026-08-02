@@ -7,6 +7,7 @@ from flask import Flask, jsonify, request
 from pydantic import ValidationError
 
 from ai4s_agent.llm_provider import LLMProvider, LLMProviderError, LLMProviderManager
+from ai4s_agent.harness_tracing import HarnessTracer
 from ai4s_agent.llm_provider_resolution import llm_provider_from_payload
 from ai4s_agent.llm_settings import LLMSettingsStore
 from ai4s_agent.scientific_agent_plan import (
@@ -42,6 +43,7 @@ def register_scientific_agent_plan_routes(
     resource_profiles: Any,
     llm_settings: LLMSettingsStore,
     llm_providers: LLMProviderManager,
+    tracer: HarnessTracer | None = None,
 ) -> None:
     observation_builder = AgentProjectObservationBuilder(
         storage=projects,
@@ -96,6 +98,7 @@ def register_scientific_agent_plan_routes(
                     resource_profiles=resource_profiles,
                     observation_builder=observation_builder,
                     proposal_store=proposal_store,
+                    tracer=tracer,
                 )
                 proposal = service.create_proposal(
                     project_id=project_id,

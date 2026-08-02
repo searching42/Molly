@@ -1,0 +1,64 @@
+{
+  "additionalProperties": false,
+  "description": "Ephemeral process health; never persisted or used as run authority.",
+  "properties": {
+    "dropped_event_count": {
+      "default": 0,
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "title": "Dropped Event Count",
+      "type": "integer"
+    },
+    "export_failure_count": {
+      "default": 0,
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "title": "Export Failure Count",
+      "type": "integer"
+    },
+    "langsmith_available": {
+      "default": false,
+      "title": "Langsmith Available",
+      "type": "boolean"
+    },
+    "langsmith_enabled": {
+      "default": false,
+      "title": "Langsmith Enabled",
+      "type": "boolean"
+    },
+    "langsmith_last_result_code": {
+      "default": "TELEMETRY_DISABLED",
+      "title": "Langsmith Last Result Code",
+      "type": "string"
+    },
+    "otel_available": {
+      "default": false,
+      "title": "Otel Available",
+      "type": "boolean"
+    },
+    "otel_enabled": {
+      "default": false,
+      "title": "Otel Enabled",
+      "type": "boolean"
+    },
+    "otel_last_result_code": {
+      "default": "TELEMETRY_DISABLED",
+      "title": "Otel Last Result Code",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "harness_telemetry_health.v1",
+      "default": "harness_telemetry_health.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "telemetry_authoritative": {
+      "const": false,
+      "default": false,
+      "title": "Telemetry Authoritative",
+      "type": "boolean"
+    }
+  },
+  "title": "HarnessTelemetryHealthSnapshot",
+  "type": "object"
+}

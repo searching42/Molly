@@ -5,6 +5,11 @@ from typing import Any, Callable
 
 from ai4s_agent._utils import now_iso
 from ai4s_agent.execution_agent_store import ExecutionAgentStore
+from ai4s_agent.harness_tracing import HarnessTracer, NoopHarnessTracer
+from ai4s_agent.observability_correlation import (
+    build_harness_telemetry_correlation,
+    privacy_safe_telemetry_attributes,
+)
 from ai4s_agent.schemas import (
     AgentHarnessControllerStatus,
     AgentPermissionPhase,
@@ -57,6 +62,7 @@ class AgentRunInspectionService:
         control_store: Any,
         controller: Any,
         execution_agent_store: ExecutionAgentStore,
+        tracer: HarnessTracer | None = None,
         clock: Callable[[], str] = now_iso,
     ) -> None:
         self.storage = storage
@@ -66,9 +72,55 @@ class AgentRunInspectionService:
         self.controller = controller
         self.execution_agent_store = execution_agent_store
         self.replanner_store = ScientificAgentReplannerStore(storage=storage)
+        self.tracer = tracer or NoopHarnessTracer()
         self.clock = clock
 
     def inspect(self, *, project_id: str, run_id: str) -> AgentRunInspection:
+        try:
+            correlation = build_harness_telemetry_correlation(
+                project_id=project_id,
+                run_id=run_id,
+                operation="agent.run_inspection.read",
+                component="run_inspection",
+                phase="read",
+            )
+            initial_attributes = privacy_safe_telemetry_attributes(correlation)
+        except ValueError:
+            initial_attributes = {}
+        with self.tracer.start_span(
+            "run_inspection.read",
+            attributes=initial_attributes,
+        ) as span:
+            try:
+                inspection = self._inspect_fail_closed(
+                    project_id=project_id,
+                    run_id=run_id,
+                )
+            except AgentRunInspectionReadError as exc:
+                span.record_error(exc.reason_code)
+                raise
+            final_correlation = build_harness_telemetry_correlation(
+                inspection=inspection,
+                operation="agent.run_inspection.read",
+                component="run_inspection",
+                phase="completed",
+            )
+            for key, value in privacy_safe_telemetry_attributes(
+                final_correlation
+            ).items():
+                span.set_attribute(key, value)
+            span.add_event(
+                "run_inspection.completed",
+                {"outcome": inspection.inspection_status.value},
+            )
+            return inspection
+
+    def _inspect_fail_closed(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+    ) -> AgentRunInspection:
         try:
             return self._inspect(project_id=project_id, run_id=run_id)
         except AgentRunInspectionReadError:

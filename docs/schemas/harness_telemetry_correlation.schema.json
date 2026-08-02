@@ -1,0 +1,209 @@
+{
+  "additionalProperties": false,
+  "description": "Privacy-safe, derived correlation shared by every telemetry adapter.",
+  "properties": {
+    "authority_class": {
+      "default": "derived",
+      "enum": [
+        "derived",
+        "observational"
+      ],
+      "title": "Authority Class",
+      "type": "string"
+    },
+    "authorization_id": {
+      "default": "",
+      "title": "Authorization Id",
+      "type": "string"
+    },
+    "component": {
+      "title": "Component",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "default": "",
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "default": "",
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_revision": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Controller Revision"
+    },
+    "execution_route": {
+      "default": "",
+      "title": "Execution Route",
+      "type": "string"
+    },
+    "gate_decision_digest": {
+      "default": "",
+      "title": "Gate Decision Digest",
+      "type": "string"
+    },
+    "gate_id": {
+      "default": "",
+      "title": "Gate Id",
+      "type": "string"
+    },
+    "gate_snapshot_id": {
+      "default": "",
+      "title": "Gate Snapshot Id",
+      "type": "string"
+    },
+    "inspection_digest": {
+      "default": "",
+      "title": "Inspection Digest",
+      "type": "string"
+    },
+    "inspection_id": {
+      "default": "",
+      "title": "Inspection Id",
+      "type": "string"
+    },
+    "operation": {
+      "title": "Operation",
+      "type": "string"
+    },
+    "permission_decision_id": {
+      "default": "",
+      "title": "Permission Decision Id",
+      "type": "string"
+    },
+    "phase": {
+      "title": "Phase",
+      "type": "string"
+    },
+    "plan_diff_id": {
+      "default": "",
+      "title": "Plan Diff Id",
+      "type": "string"
+    },
+    "project_id": {
+      "default": "",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "proposal_digest": {
+      "default": "",
+      "title": "Proposal Digest",
+      "type": "string"
+    },
+    "proposal_id": {
+      "default": "",
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "publication_digest": {
+      "default": "",
+      "title": "Publication Digest",
+      "type": "string"
+    },
+    "publication_id": {
+      "default": "",
+      "title": "Publication Id",
+      "type": "string"
+    },
+    "revision_application_receipt_id": {
+      "default": "",
+      "title": "Revision Application Receipt Id",
+      "type": "string"
+    },
+    "revision_digest": {
+      "default": "",
+      "title": "Revision Digest",
+      "type": "string"
+    },
+    "revision_id": {
+      "default": "",
+      "title": "Revision Id",
+      "type": "string"
+    },
+    "run_id": {
+      "default": "",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "harness_telemetry_correlation.v1",
+      "default": "harness_telemetry_correlation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "semantic_plan_digest": {
+      "default": "",
+      "title": "Semantic Plan Digest",
+      "type": "string"
+    },
+    "semantic_plan_id": {
+      "default": "",
+      "title": "Semantic Plan Id",
+      "type": "string"
+    },
+    "slot_id": {
+      "default": "",
+      "title": "Slot Id",
+      "type": "string"
+    },
+    "start_intent_id": {
+      "default": "",
+      "title": "Start Intent Id",
+      "type": "string"
+    },
+    "task_id": {
+      "default": "",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "task_index": {
+      "anyOf": [
+        {
+          "maximum": 1023,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Task Index"
+    },
+    "telemetry_authoritative": {
+      "const": false,
+      "default": false,
+      "title": "Telemetry Authoritative",
+      "type": "boolean"
+    },
+    "tool_call_application_receipt_id": {
+      "default": "",
+      "title": "Tool Call Application Receipt Id",
+      "type": "string"
+    },
+    "tool_call_proposal_id": {
+      "default": "",
+      "title": "Tool Call Proposal Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "operation",
+    "component",
+    "phase"
+  ],
+  "title": "HarnessTelemetryCorrelationContext",
+  "type": "object"
+}

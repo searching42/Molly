@@ -168,12 +168,12 @@ def test_execution_agent_tracing_emits_only_safe_allowlisted_metadata(tmp_path) 
     )
     _run_pause_turn(tmp_path, tracer)
     assert {
-        "execution_agent.propose",
-        "execution_agent.observe",
-        "execution_agent.llm_call",
-        "execution_agent.validate_response",
-        "execution_agent.publish_proposal",
-        "execution_agent.apply",
+        "agent.execution_agent.propose",
+        "agent.execution_agent.observe",
+        "agent.execution_agent.llm_call",
+        "agent.execution_agent.validate_response",
+        "agent.execution_agent.publish_proposal",
+        "agent.execution_agent.apply",
     }.issubset({record["name"] for record in delegate.records})
     serialized = repr(delegate.records).lower()
     for forbidden in (
