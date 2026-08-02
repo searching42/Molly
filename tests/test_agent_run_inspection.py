@@ -135,6 +135,16 @@ def _snapshot(root: Path) -> dict[str, bytes]:
     }
 
 
+def _assert_frozen_v1_semantics(inspection: AgentRunInspection) -> None:
+    legacy_payload = inspection.model_dump(mode="json")
+    assert "structured_dataset_canary" not in legacy_payload
+    legacy_payload.pop("inspection_id")
+    legacy_payload.pop("inspection_digest")
+    legacy_payload.pop("created_at")
+    assert inspection.semantic_material() == legacy_payload
+    assert inspection.inspection_digest == _agent_digest(legacy_payload)
+
+
 def _service_from_controller(storage, controller) -> AgentRunInspectionService:
     return AgentRunInspectionService(
         storage=storage,
@@ -228,6 +238,7 @@ def test_proposal_only_inspection_is_current_deterministic_and_read_only(tmp_pat
     assert first.controller is None
     assert first.authoritative is False and first.read_only is True
     assert first.scientific_success == "not_asserted"
+    _assert_frozen_v1_semantics(first)
     assert _snapshot(project) == before
     assert [
         (item.source_name, item.source_kind, item.source_id)
@@ -254,7 +265,7 @@ def test_self_signed_structured_dataset_directory_is_not_inspection_authority(
     after = service.inspect(project_id="project-1", run_id="run-1")
 
     assert after.inspection_digest == before.inspection_digest
-    assert after.structured_dataset_canary is None
+    assert "structured_dataset_canary" not in after.model_dump(mode="json")
     assert not any(
         item.source_kind == "structured_dataset_canary_publication"
         for item in after.source_roster
@@ -793,6 +804,7 @@ def test_successor_current_controller_isolated_from_terminal_historical_executio
     assert [item.currentness for item in historical_execution_sources] == [
         "historical"
     ]
+    _assert_frozen_v1_semantics(before_fresh_authority)
 
     fresh = controller.authorization_service.approve_and_start(
         project_id="project-1",

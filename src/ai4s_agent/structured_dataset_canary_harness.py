@@ -133,11 +133,15 @@ def run_structured_dataset_ci_harness(
             run_dir / registry["structured_dataset_canary_evidence"],
             digest_field="evidence_digest",
         )
-        StructuredDatasetCanaryService(
+        StructuredDatasetCanaryService.verify_harness_task_publication(
             storage=storage,
-            trusted_actors={clean_actor},
-            harness_authority_managed=True,
-        )._verify_final_evidence(project_id, run_id, evidence)
+            project_id=project_id,
+            run_id=run_id,
+            task_id="evaluate_structured_dataset_canary",
+            artifact_paths=controller.executor._artifact_paths_from_registry(
+                project_id, run_id, run_dir
+            ),
+        )
         topn = read_json_artifact(
             run_dir / registry["computational_top_n"],
             digest_field="publication_digest",

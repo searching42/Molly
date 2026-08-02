@@ -1031,11 +1031,16 @@ class RunPlanExecutor:
             StructuredDatasetCanaryService,
         )
 
+        run_dir = self.storage.run_dir(project_id, run_id)
+        artifact_paths = self._artifact_paths_from_registry(
+            project_id, run_id, run_dir
+        )
         StructuredDatasetCanaryService.verify_harness_task_publication(
             storage=self.storage,
             project_id=project_id,
             run_id=run_id,
             task_id=task_id,
+            artifact_paths=artifact_paths,
         )
 
     def _execute_from(

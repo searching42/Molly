@@ -4879,36 +4879,6 @@ class AgentRunArtifactInspection(BaseModel):
         return _agent_string_list(value, field="consumer_task_roster", sort_values=True)
 
 
-class AgentRunStructuredDatasetCanaryInspection(BaseModel):
-    """Verified BR1 projection composed into AgentRunInspection v1."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    schema_version: Literal["structured_dataset_canary_inspection.v1"] = (
-        "structured_dataset_canary_inspection.v1"
-    )
-    status: Literal["in_progress", "succeeded"]
-    current_stage: str
-    stage_status: str
-    recovery_required: bool = False
-    bindings: dict[str, AgentRunInspectionBinding] = Field(default_factory=dict)
-    registry_digest: str
-    source_roster_digest: str
-    claim_boundary: Literal["computational_candidates_only"] = (
-        "computational_candidates_only"
-    )
-
-    @field_validator("current_stage", "stage_status")
-    @classmethod
-    def validate_states(cls, value: str, info: Any) -> str:
-        return _agent_identifier(value, field=info.field_name)
-
-    @field_validator("registry_digest", "source_roster_digest")
-    @classmethod
-    def validate_digests(cls, value: str, info: Any) -> str:
-        return _agent_digest_value(value, field=info.field_name)
-
-
 class AgentRunInspection(BaseModel):
     """Canonical, reconstructable, non-authoritative run inspection v1."""
 
@@ -4933,7 +4903,6 @@ class AgentRunInspection(BaseModel):
     replanner: list[AgentRunReplannerInspection] = Field(default_factory=list)
     tasks: list[AgentRunTaskInspection] = Field(default_factory=list)
     artifacts: list[AgentRunArtifactInspection] = Field(default_factory=list)
-    structured_dataset_canary: AgentRunStructuredDatasetCanaryInspection | None = None
     source_roster: list[AgentRunInspectionSourceBinding]
 
     @field_validator("inspection_id", "project_id", "run_id", "verifier_supported_run_outcome")

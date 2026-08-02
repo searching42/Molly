@@ -1004,7 +1004,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     AtomicTaskSpec(
         task_id="prepare_structured_dataset_canary",
         required_artifacts=["uploaded_dataset"],
-        output_artifacts=["raw_dataset", "review_snapshot"],
+        output_artifacts=["raw_dataset", "raw_dataset_csv", "review_snapshot"],
         risk_level=RiskLevel.LOW,
         default_adapter="prepare_structured_dataset_canary_adapter",
         scientific_tool_id="prepare_structured_dataset_canary",
@@ -1036,8 +1036,12 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     ),
     AtomicTaskSpec(
         task_id="confirm_structured_dataset_canary",
-        required_artifacts=["raw_dataset", "review_snapshot"],
-        output_artifacts=["confirmation_receipt", "confirmed_training_dataset"],
+        required_artifacts=["raw_dataset", "raw_dataset_csv", "review_snapshot"],
+        output_artifacts=[
+            "confirmation_receipt",
+            "confirmed_training_dataset",
+            "confirmed_training_dataset_csv",
+        ],
         risk_level=RiskLevel.HIGH,
         gates=[GateName.TRAIN_CONFIG.value],
         default_adapter="confirm_structured_dataset_canary_adapter",
@@ -1062,6 +1066,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         input_artifact_alternatives=[],
         accepted_input_trust_classes_by_artifact={
             "raw_dataset": ["registered_intermediate", "verified_output"],
+            "raw_dataset_csv": ["registered_intermediate", "verified_output"],
             "review_snapshot": ["registered_intermediate", "verified_output"],
         },
         budget_dimensions=["max_records"],
@@ -1072,7 +1077,11 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     ),
     AtomicTaskSpec(
         task_id="train_structured_dataset_canary",
-        required_artifacts=["confirmation_receipt", "confirmed_training_dataset"],
+        required_artifacts=[
+            "confirmation_receipt",
+            "confirmed_training_dataset",
+            "confirmed_training_dataset_csv",
+        ],
         output_artifacts=["training_request", "trained_model", "model_package"],
         risk_level=RiskLevel.HIGH,
         gates=[GateName.TRAIN_CONFIG.value],
@@ -1102,6 +1111,7 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         accepted_input_trust_classes_by_artifact={
             "confirmation_receipt": ["verified_output"],
             "confirmed_training_dataset": ["confirmed_scientific_input", "verified_output"],
+            "confirmed_training_dataset_csv": ["confirmed_scientific_input", "verified_output"],
         },
         budget_dimensions=["max_records", "max_runtime_sec"],
         supports_plan_preapproval=False,
@@ -1153,9 +1163,9 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
     AtomicTaskSpec(
         task_id="evaluate_structured_dataset_canary",
         required_artifacts=[
-            "raw_dataset", "review_snapshot", "confirmation_receipt",
-            "confirmed_training_dataset", "model_package", "generation_publication",
-            "candidate_dataset",
+            "raw_dataset", "raw_dataset_csv", "review_snapshot", "confirmation_receipt",
+            "confirmed_training_dataset", "confirmed_training_dataset_csv", "trained_model",
+            "model_package", "generation_publication", "candidate_dataset",
         ],
         output_artifacts=[
             "prediction_publication", "candidate_validation", "ranking_publication",
@@ -1191,9 +1201,9 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         accepted_input_trust_classes_by_artifact={
             artifact_id: ["registered_intermediate", "verified_output", "confirmed_scientific_input"]
             for artifact_id in [
-                "raw_dataset", "review_snapshot", "confirmation_receipt",
-                "confirmed_training_dataset", "model_package", "generation_publication",
-                "candidate_dataset",
+                "raw_dataset", "raw_dataset_csv", "review_snapshot", "confirmation_receipt",
+                "confirmed_training_dataset", "confirmed_training_dataset_csv", "trained_model",
+                "model_package", "generation_publication", "candidate_dataset",
             ]
         },
         budget_dimensions=["max_records", "max_runtime_sec"],

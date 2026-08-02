@@ -95,12 +95,19 @@ class StructuredDatasetCanaryService:
             self._stage(project_id, run_id, "dataset.inspect", RunStatus.SUCCEEDED, timestamp, ["raw_dataset"])
             return published
 
-    def _review(self, project_id: str, run_id: str, raw: Mapping[str, Any], timestamp: str) -> dict[str, Any]:
+    def _review(
+        self,
+        project_id: str,
+        run_id: str,
+        raw: Mapping[str, Any],
+        raw_dataset_path: Path,
+        timestamp: str,
+    ) -> dict[str, Any]:
         existing = self._optional_read(project_id, run_id, "review_snapshot.json", "review_snapshot_digest")
         if existing:
             return existing
         with self._span("dataset.clean", project_id, run_id, "clean"):
-            rows = self._raw_rows(project_id, run_id, raw)
+            rows = self._raw_rows(raw_dataset_path, raw)
             review = build_review_snapshot(raw, rows, molecule_inspector=_molecule_identity, created_at=timestamp)
             self._stage(project_id, run_id, "dataset.clean", RunStatus.RUNNING, timestamp)
             published = self._publish(project_id, run_id, "review_snapshot.json", review, "review_snapshot_digest")
@@ -178,13 +185,14 @@ class StructuredDatasetCanaryService:
         review: Mapping[str, Any],
         decision: Mapping[str, Any],
         receipt: Mapping[str, Any],
+        raw_dataset_path: Path,
         timestamp: str,
     ) -> dict[str, Any]:
         existing = self._optional_read(project_id, run_id, "confirmed_dataset.json", "publication_digest")
         if existing:
             self._verify_confirmed_binding(existing, receipt)
             return existing
-        rows = self._raw_rows(project_id, run_id, raw)
+        rows = self._raw_rows(raw_dataset_path, raw)
         confirmed, csv_bytes = build_confirmed_dataset(
             raw=raw, review=review, decision=decision, receipt=receipt, rows=rows,
             trusted_actors=self.trusted_actors, project_id=project_id, run_id=run_id,
@@ -204,6 +212,7 @@ class StructuredDatasetCanaryService:
         run_id: str,
         confirmed: Mapping[str, Any],
         receipt: Mapping[str, Any],
+        confirmed_dataset_path: Path,
         *,
         seed: int,
         timestamp: str,
@@ -245,7 +254,7 @@ class StructuredDatasetCanaryService:
             )
         with self._span("model.train", project_id, run_id, "train"):
             self._stage(project_id, run_id, "model.train", RunStatus.RUNNING, timestamp)
-            rows = self._confirmed_rows(project_id, run_id, confirmed)
+            rows = self._confirmed_rows(confirmed_dataset_path, confirmed)
             checkpoint = _fit_baseline(rows, seed=seed)
             checkpoint.update(
                 {
@@ -376,6 +385,9 @@ class StructuredDatasetCanaryService:
         confirmed: Mapping[str, Any],
         model: Mapping[str, Any],
         generation: Mapping[str, Any],
+        candidate_roster: list[dict[str, Any]],
+        checkpoint_path: Path,
+        confirmed_dataset_path: Path,
         *,
         seed: int,
         top_n: int,
@@ -387,12 +399,24 @@ class StructuredDatasetCanaryService:
             raise StructuredDatasetCanaryError(
                 "pre-existing Top-N is not current-attempt authority"
             )
-        checkpoint = self._read_checkpoint(self._path(project_id, run_id, "model_checkpoint.json"))
-        if checkpoint.get("run_id") != run_id or checkpoint.get("confirmed_dataset_digest") != confirmed["publication_digest"]:
+        checkpoint = self._read_checkpoint(checkpoint_path)
+        _, checkpoint_sha = read_regular_file_bound(
+            checkpoint_path, max_bytes=8 * 1024 * 1024
+        )
+        if (
+            checkpoint.get("project_id") != project_id
+            or checkpoint.get("run_id") != run_id
+            or checkpoint.get("confirmed_dataset_digest")
+            != confirmed["publication_digest"]
+            or checkpoint.get("confirmation_receipt_digest")
+            != confirmed.get("confirmation_receipt_digest")
+            or checkpoint.get("seed") != model.get("random_seed")
+            or model.get("checkpoint_digest") != "sha256:" + checkpoint_sha
+        ):
             raise StructuredDatasetCanaryError("model checkpoint is stale or copied")
         with self._span("candidate.predict", project_id, run_id, "predict"):
             predictions = []
-            for item in generation["candidate_roster"]:
+            for item in candidate_roster:
                 identity = _molecule_identity(item["smiles"])
                 predicted = _predict_one(checkpoint, item["smiles"]) if identity else None
                 predictions.append(
@@ -426,9 +450,9 @@ class StructuredDatasetCanaryService:
             self._register(project_id, run_id, {"prediction_publication": "structured_dataset_canary/prediction.json"})
         self._fault(fault_after, "prediction_publication")
         with self._span("candidate.validate", project_id, run_id, "validate"):
-            training_rows = self._confirmed_rows(project_id, run_id, confirmed)
+            training_rows = self._confirmed_rows(confirmed_dataset_path, confirmed)
             validation_rows, summary = validate_candidates(
-                generation["candidate_roster"], training_rows, seed=seed,
+                candidate_roster, training_rows, seed=seed,
                 ad_similarity_threshold=0.20,
             )
             validation = {
@@ -612,142 +636,6 @@ class StructuredDatasetCanaryService:
         )
         return published
 
-    def _verify_final_evidence(self, project_id: str, run_id: str, evidence: Mapping[str, Any]) -> None:
-        verify_publication(evidence, digest_field="evidence_digest")
-        if evidence.get("project_id") != project_id or evidence.get("run_id") != run_id:
-            raise StructuredDatasetCanaryError("canary evidence scope mismatch")
-        raw = self._read(project_id, run_id, "raw_dataset.json", "raw_publication_digest")
-        review = self._read(project_id, run_id, "review_snapshot.json", "review_snapshot_digest")
-        receipt = self._read(
-            project_id, run_id, "confirmation_receipt.json", "confirmation_receipt_digest"
-        )
-        matching_decisions = [
-            decision
-            for decision in (
-                GateDecision.model_validate(item)
-                for item in self.storage.read_gate_decisions(project_id, run_id)
-            )
-            if digest_json(decision.model_dump(mode="json"))
-            == receipt.get("gate_decision_digest")
-        ]
-        if len(matching_decisions) != 1:
-            raise StructuredDatasetCanaryError(
-                "confirmation receipt lacks one exact canonical GateDecision"
-            )
-        decision = matching_decisions[0].model_dump(mode="json")
-        verify_confirmation_authority(
-            raw=raw,
-            review=review,
-            decision=decision,
-            receipt=receipt,
-            trusted_actors=self.trusted_actors,
-            project_id=project_id,
-            run_id=run_id,
-        )
-        self._raw_rows(project_id, run_id, raw)
-        confirmed = self._read(project_id, run_id, "confirmed_dataset.json", "publication_digest")
-        self._verify_confirmed_binding(confirmed, receipt)
-        self._confirmed_rows(project_id, run_id, confirmed)
-        model = self._read(project_id, run_id, "model_package.json", "publication_digest")
-        self._verify_model_binding(model, confirmed, receipt, run_id)
-        training_request = self._read_checkpoint(
-            self._path(project_id, run_id, "training_request.json")
-        )
-        request_digest = str(training_request.get("training_request_digest") or "")
-        request_material = dict(training_request)
-        request_material.pop("training_request_digest", None)
-        checkpoint = self._read_checkpoint(
-            self._path(project_id, run_id, "model_checkpoint.json")
-        )
-        if (
-            request_digest != digest_json(request_material)
-            or model.get("training_request_digest") != request_digest
-            or checkpoint.get("training_request_digest") != request_digest
-            or checkpoint.get("confirmation_receipt_digest")
-            != receipt["confirmation_receipt_digest"]
-            or checkpoint.get("confirmed_dataset_digest")
-            != confirmed["publication_digest"]
-            or checkpoint.get("seed") != model.get("random_seed")
-        ):
-            raise StructuredDatasetCanaryError(
-                "training request, checkpoint, and model package binding mismatch"
-            )
-        generation = self._read(project_id, run_id, "generation.json", "publication_digest")
-        self._verify_generation_binding(generation, model, confirmed, run_id)
-        generation_request = self._read_checkpoint(
-            self._path(project_id, run_id, "generation_request.json")
-        )
-        generated_candidates = json.loads(
-            read_regular_file_bound(
-                self._path(project_id, run_id, "generated_candidates.json"),
-                max_bytes=8 * 1024 * 1024,
-            )[0]
-        )
-        if (
-            generation.get("generation_request_digest")
-            != digest_json(generation_request)
-            or generation.get("candidate_roster_digest")
-            != digest_json(generated_candidates)
-            or generated_candidates != generation.get("candidate_roster")
-        ):
-            raise StructuredDatasetCanaryError(
-                "generation request and candidate roster binding mismatch"
-            )
-        prediction = self._read(project_id, run_id, "prediction.json", "publication_digest")
-        validation = self._read(project_id, run_id, "validation.json", "publication_digest")
-        ranking = self._read(project_id, run_id, "ranking.json", "publication_digest")
-        topn = self._read(project_id, run_id, "topn.json", "publication_digest")
-        if (
-            prediction.get("run_id") != run_id
-            or prediction.get("model_package_digest") != model["publication_digest"]
-            or prediction.get("generation_publication_digest") != generation["publication_digest"]
-            or prediction.get("candidate_roster_digest") != generation["candidate_roster_digest"]
-        ):
-            raise StructuredDatasetCanaryError("prediction publication is stale or misbound")
-        if (
-            validation.get("run_id") != run_id
-            or validation.get("generation_publication_digest") != generation["publication_digest"]
-            or validation.get("candidate_roster_digest") != generation["candidate_roster_digest"]
-        ):
-            raise StructuredDatasetCanaryError("validation publication is stale or misbound")
-        if (
-            ranking.get("run_id") != run_id
-            or ranking.get("model_package_digest") != model["publication_digest"]
-            or ranking.get("generation_publication_digest") != generation["publication_digest"]
-            or ranking.get("prediction_publication_digest") != prediction["publication_digest"]
-            or ranking.get("validation_publication_digest") != validation["publication_digest"]
-        ):
-            raise StructuredDatasetCanaryError("ranking publication is stale or misbound")
-        if (
-            topn.get("run_id") != run_id
-            or topn.get("model_package_digest") != model["publication_digest"]
-            or topn.get("confirmed_dataset_digest") != confirmed["publication_digest"]
-            or topn.get("generation_publication_digest") != generation["publication_digest"]
-            or topn.get("prediction_publication_digest") != prediction["publication_digest"]
-            or topn.get("ranking_publication_digest") != ranking["publication_digest"]
-            or topn.get("validation_publication_digest") != validation["publication_digest"]
-        ):
-            raise StructuredDatasetCanaryError("Computational Top-N is stale or misbound")
-        actual = {
-            "raw": raw["raw_publication_digest"],
-            "review": review["review_snapshot_digest"],
-            "receipt": receipt["confirmation_receipt_digest"],
-            "confirmed": confirmed["publication_digest"],
-            "model": model["publication_digest"],
-            "generation": generation["publication_digest"],
-            "prediction": prediction["publication_digest"],
-            "validation": validation["publication_digest"],
-            "ranking": ranking["publication_digest"],
-            "topn": topn["publication_digest"],
-        }
-        if any(
-            evidence.get("bindings", {}).get(name, {}).get("object_digest") != digest
-            for name, digest in actual.items()
-        ):
-            raise StructuredDatasetCanaryError("evidence binding roster mismatch")
-        if evidence.get("replay_digest") != digest_json(actual):
-            raise StructuredDatasetCanaryError("evidence replay digest mismatch")
-
     @classmethod
     def verify_harness_task_publication(
         cls,
@@ -756,51 +644,60 @@ class StructuredDatasetCanaryService:
         project_id: str,
         run_id: str,
         task_id: str,
+        artifact_paths: Mapping[str, str],
     ) -> None:
-        """Exact-verify BR1 outputs for Controller completion/reconstruction."""
+        """Verify only the exact current Registry paths used by the Controller."""
 
-        receipt_path = (
-            storage.run_dir(project_id, run_id)
-            / "structured_dataset_canary"
-            / "confirmation_receipt.json"
-        )
-        trusted = set()
-        if receipt_path.exists():
-            trusted.add(
-                str(
-                    read_json_artifact(
-                        receipt_path,
-                        digest_field="confirmation_receipt_digest",
-                    ).get("actor")
-                    or ""
+        def path(artifact_id: str) -> Path:
+            raw_path = str(artifact_paths.get(artifact_id) or "").strip()
+            if not raw_path:
+                raise StructuredDatasetCanaryError(
+                    f"current Registry artifact is missing: {artifact_id}"
                 )
+            return Path(raw_path).absolute()
+
+        def publication(artifact_id: str, digest_field: str) -> dict[str, Any]:
+            value = read_json_artifact(path(artifact_id), digest_field=digest_field)
+            if value.get("project_id") != project_id or value.get("run_id") != run_id:
+                raise StructuredDatasetCanaryError(
+                    f"current Registry artifact scope mismatch: {artifact_id}"
+                )
+            return value
+
+        def json_value(artifact_id: str) -> Any:
+            raw, _ = read_regular_file_bound(
+                path(artifact_id), max_bytes=8 * 1024 * 1024
             )
-        service = cls(
-            storage=storage,
-            trusted_actors=trusted,
-            harness_authority_managed=True,
-        )
-        raw = service._read(
-            project_id, run_id, "raw_dataset.json", "raw_publication_digest"
-        )
-        review = service._read(
-            project_id, run_id, "review_snapshot.json", "review_snapshot_digest"
-        )
+            try:
+                return json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise StructuredDatasetCanaryError(
+                    f"current Registry artifact is invalid JSON: {artifact_id}"
+                ) from exc
+
+        raw = publication("raw_dataset", "raw_publication_digest")
+        review = publication("review_snapshot", "review_snapshot_digest")
         if (
             review.get("raw_dataset_id") != raw.get("dataset_id")
             or review.get("raw_dataset_digest") != raw.get("dataset_digest")
+            or review.get("raw_publication_digest")
+            != raw.get("raw_publication_digest")
         ):
-            raise StructuredDatasetCanaryError("review snapshot Raw Dataset binding mismatch")
-        service._raw_rows(project_id, run_id, raw)
+            raise StructuredDatasetCanaryError(
+                "review snapshot Raw Dataset binding mismatch"
+            )
+        service = cls(
+            storage=storage,
+            trusted_actors=set(),
+            harness_authority_managed=True,
+        )
+        service._raw_rows(path("raw_dataset_csv"), raw)
         if task_id == "prepare_structured_dataset_canary":
             return
 
-        receipt = service._read(
-            project_id,
-            run_id,
-            "confirmation_receipt.json",
-            "confirmation_receipt_digest",
-        )
+        receipt = publication("confirmation_receipt", "confirmation_receipt_digest")
+        trusted = {str(receipt.get("actor") or "")}
+        service.trusted_actors = frozenset(trusted)
         matching = [
             decision
             for decision in (
@@ -823,31 +720,27 @@ class StructuredDatasetCanaryService:
             project_id=project_id,
             run_id=run_id,
         )
-        confirmed = service._read(
-            project_id, run_id, "confirmed_dataset.json", "publication_digest"
-        )
+        confirmed = publication("confirmed_training_dataset", "publication_digest")
         service._verify_confirmed_binding(confirmed, receipt)
-        service._confirmed_rows(project_id, run_id, confirmed)
+        service._confirmed_rows(path("confirmed_training_dataset_csv"), confirmed)
         if task_id == "confirm_structured_dataset_canary":
             return
 
-        model = service._read(
-            project_id, run_id, "model_package.json", "publication_digest"
-        )
+        model = publication("model_package", "publication_digest")
         service._verify_model_binding(model, confirmed, receipt, run_id)
-        training_request = service._read_checkpoint(
-            service._path(project_id, run_id, "training_request.json")
-        )
+        training_request = json_value("training_request")
+        if not isinstance(training_request, dict):
+            raise StructuredDatasetCanaryError("training request must be an object")
         request_digest = str(training_request.pop("training_request_digest", ""))
-        checkpoint_path = service._path(
-            project_id, run_id, "model_checkpoint.json"
-        )
+        checkpoint_path = path("trained_model")
         checkpoint = service._read_checkpoint(checkpoint_path)
         _, checkpoint_sha = read_regular_file_bound(
             checkpoint_path, max_bytes=8 * 1024 * 1024
         )
         if (
             request_digest != digest_json(training_request)
+            or checkpoint.get("project_id") != project_id
+            or checkpoint.get("run_id") != run_id
             or model.get("training_request_digest") != request_digest
             or checkpoint.get("training_request_digest") != request_digest
             or checkpoint.get("confirmed_dataset_digest")
@@ -863,19 +756,16 @@ class StructuredDatasetCanaryService:
         if task_id == "train_structured_dataset_canary":
             return
 
-        generation = service._read(
-            project_id, run_id, "generation.json", "publication_digest"
-        )
+        generation = publication("generation_publication", "publication_digest")
         service._verify_generation_binding(generation, model, confirmed, run_id)
-        generation_request = service._read_checkpoint(
-            service._path(project_id, run_id, "generation_request.json")
-        )
-        generated_candidates = json.loads(
-            read_regular_file_bound(
-                service._path(project_id, run_id, "generated_candidates.json"),
-                max_bytes=8 * 1024 * 1024,
-            )[0]
-        )
+        generation_request = json_value("generation_request")
+        generated_candidates = json_value("candidate_dataset")
+        if not isinstance(generation_request, dict) or not isinstance(
+            generated_candidates, list
+        ):
+            raise StructuredDatasetCanaryError(
+                "generation request or candidate roster contract is invalid"
+            )
         if (
             generation.get("generation_request_digest")
             != digest_json(generation_request)
@@ -890,15 +780,138 @@ class StructuredDatasetCanaryService:
             return
         if task_id != "evaluate_structured_dataset_canary":
             raise StructuredDatasetCanaryError("unknown Structured Dataset task")
-        evidence = service._read(
-            project_id, run_id, "evidence.json", "evidence_digest"
+        prediction = publication("prediction_publication", "publication_digest")
+        validation = publication("candidate_validation", "publication_digest")
+        ranking = publication("ranking_publication", "publication_digest")
+        topn = publication("computational_top_n", "publication_digest")
+        evidence = publication(
+            "structured_dataset_canary_evidence", "evidence_digest"
         )
-        service._verify_final_evidence(project_id, run_id, evidence)
+        if (
+            prediction.get("model_package_digest") != model["publication_digest"]
+            or prediction.get("generation_publication_digest")
+            != generation["publication_digest"]
+            or prediction.get("candidate_roster_digest")
+            != generation["candidate_roster_digest"]
+        ):
+            raise StructuredDatasetCanaryError(
+                "prediction publication is stale or misbound"
+            )
+        if (
+            validation.get("generation_publication_digest")
+            != generation["publication_digest"]
+            or validation.get("candidate_roster_digest")
+            != generation["candidate_roster_digest"]
+        ):
+            raise StructuredDatasetCanaryError(
+                "validation publication is stale or misbound"
+            )
+        if (
+            ranking.get("model_package_digest") != model["publication_digest"]
+            or ranking.get("generation_publication_digest")
+            != generation["publication_digest"]
+            or ranking.get("prediction_publication_digest")
+            != prediction["publication_digest"]
+            or ranking.get("validation_publication_digest")
+            != validation["publication_digest"]
+        ):
+            raise StructuredDatasetCanaryError(
+                "ranking publication is stale or misbound"
+            )
+        if (
+            topn.get("model_package_digest") != model["publication_digest"]
+            or topn.get("confirmed_dataset_digest")
+            != confirmed["publication_digest"]
+            or topn.get("generation_publication_digest")
+            != generation["publication_digest"]
+            or topn.get("prediction_publication_digest")
+            != prediction["publication_digest"]
+            or topn.get("ranking_publication_digest")
+            != ranking["publication_digest"]
+            or topn.get("validation_publication_digest")
+            != validation["publication_digest"]
+        ):
+            raise StructuredDatasetCanaryError(
+                "Computational Top-N is stale or misbound"
+            )
+        actual = {
+            "raw": raw["raw_publication_digest"],
+            "review": review["review_snapshot_digest"],
+            "receipt": receipt["confirmation_receipt_digest"],
+            "confirmed": confirmed["publication_digest"],
+            "model": model["publication_digest"],
+            "generation": generation["publication_digest"],
+            "prediction": prediction["publication_digest"],
+            "validation": validation["publication_digest"],
+            "ranking": ranking["publication_digest"],
+            "topn": topn["publication_digest"],
+        }
+        if any(
+            evidence.get("bindings", {}).get(name, {}).get("object_digest")
+            != digest
+            for name, digest in actual.items()
+        ):
+            raise StructuredDatasetCanaryError("evidence binding roster mismatch")
+        if evidence.get("replay_digest") != digest_json(actual):
+            raise StructuredDatasetCanaryError("evidence replay digest mismatch")
 
     def _verify_confirmed_binding(self, confirmed: Mapping[str, Any], receipt: Mapping[str, Any]) -> None:
         verify_publication(confirmed, digest_field="publication_digest")
-        if confirmed.get("confirmation_receipt_digest") != receipt.get("confirmation_receipt_digest"):
+        verify_publication(receipt, digest_field="confirmation_receipt_digest")
+        if (
+            confirmed.get("project_id") != receipt.get("project_id")
+            or confirmed.get("run_id") != receipt.get("run_id")
+            or confirmed.get("raw_dataset_id") != receipt.get("raw_dataset_id")
+            or confirmed.get("raw_dataset_digest") != receipt.get("raw_dataset_digest")
+            or confirmed.get("review_snapshot_id")
+            != receipt.get("review_snapshot_id")
+            or confirmed.get("review_snapshot_digest")
+            != receipt.get("review_snapshot_digest")
+            or confirmed.get("confirmation_receipt_id")
+            != receipt.get("confirmation_receipt_id")
+            or confirmed.get("confirmation_receipt_digest")
+            != receipt.get("confirmation_receipt_digest")
+            or confirmed.get("confirmed_row_roster")
+            != receipt.get("confirmed_row_roster")
+            or confirmed.get("confirmed_row_roster_digest")
+            != receipt.get("confirmed_row_roster_digest")
+            or confirmed.get("target_property") != receipt.get("target_property")
+            or confirmed.get("material_role") != receipt.get("material_role")
+        ):
             raise ConfirmationAuthorityError("confirmed dataset receipt binding mismatch")
+
+    def _verify_confirmation_chain(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        raw: Mapping[str, Any],
+        review: Mapping[str, Any],
+        receipt: Mapping[str, Any],
+    ) -> None:
+        matching = [
+            decision
+            for decision in (
+                GateDecision.model_validate(item)
+                for item in self.storage.read_gate_decisions(project_id, run_id)
+            )
+            if digest_json(decision.model_dump(mode="json"))
+            == receipt.get("gate_decision_digest")
+        ]
+        if len(matching) != 1:
+            raise StructuredDatasetCanaryError(
+                "confirmation receipt lacks one exact canonical GateDecision"
+            )
+        actor = str(receipt.get("actor") or "")
+        verify_confirmation_authority(
+            raw=raw,
+            review=review,
+            decision=matching[0].model_dump(mode="json"),
+            receipt=receipt,
+            trusted_actors={actor},
+            project_id=project_id,
+            run_id=run_id,
+        )
 
     @staticmethod
     def _verify_model_binding(model: Mapping[str, Any], confirmed: Mapping[str, Any], receipt: Mapping[str, Any], run_id: str) -> None:
@@ -912,6 +925,24 @@ class StructuredDatasetCanaryService:
             raise StructuredDatasetCanaryError("old or copied model package is not current authority")
 
     @staticmethod
+    def _verify_model_confirmed_binding(
+        model: Mapping[str, Any], confirmed: Mapping[str, Any], run_id: str
+    ) -> None:
+        verify_publication(model, digest_field="publication_digest")
+        verify_publication(confirmed, digest_field="publication_digest")
+        if (
+            model.get("run_id") != run_id
+            or model.get("confirmed_dataset_digest")
+            != confirmed.get("publication_digest")
+            or model.get("confirmation_receipt_digest")
+            != confirmed.get("confirmation_receipt_digest")
+            or model.get("fresh_training") is not True
+        ):
+            raise StructuredDatasetCanaryError(
+                "old or copied model package is not current authority"
+            )
+
+    @staticmethod
     def _verify_generation_binding(generation: Mapping[str, Any], model: Mapping[str, Any], confirmed: Mapping[str, Any], run_id: str) -> None:
         verify_publication(generation, digest_field="publication_digest")
         if (
@@ -922,17 +953,21 @@ class StructuredDatasetCanaryService:
         ):
             raise StructuredDatasetCanaryError("old generation or existing_output is rejected")
 
-    def _confirmed_rows(self, project_id: str, run_id: str, confirmed: Mapping[str, Any]) -> list[dict[str, str]]:
+    @staticmethod
+    def _confirmed_rows(
+        path: Path, confirmed: Mapping[str, Any]
+    ) -> list[dict[str, str]]:
         raw, digest = read_regular_file_bound(
-            self._path(project_id, run_id, "confirmed_dataset.csv"), max_bytes=16 * 1024 * 1024
+            path, max_bytes=16 * 1024 * 1024
         )
         if "sha256:" + digest != confirmed.get("content_digest"):
             raise ConfirmationAuthorityError("confirmed dataset content digest mismatch")
         return _csv_rows(raw)
 
-    def _raw_rows(self, project_id: str, run_id: str, raw: Mapping[str, Any]) -> list[dict[str, str]]:
+    @staticmethod
+    def _raw_rows(path: Path, raw: Mapping[str, Any]) -> list[dict[str, str]]:
         data, digest = read_regular_file_bound(
-            self._path(project_id, run_id, "raw_dataset.csv"), max_bytes=16 * 1024 * 1024
+            path, max_bytes=16 * 1024 * 1024
         )
         if "sha256:" + digest != raw.get("dataset_digest"):
             raise ConfirmationAuthorityError("raw dataset content digest mismatch")

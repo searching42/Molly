@@ -6,6 +6,9 @@ from pathlib import Path
 import pytest
 
 from ai4s_agent.agent_run_inspection import AgentRunInspectionService
+from ai4s_agent.adapters.structured_dataset_canary import (
+    confirm_structured_dataset_canary_adapter,
+)
 from ai4s_agent.execution_agent_store import ExecutionAgentStore
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.llm_provider import StubLLMProvider
@@ -33,6 +36,14 @@ from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.structured_dataset_canary import (
     StructuredDatasetCanaryError,
     StructuredDatasetCanaryService,
+    _molecule_identity,
+)
+from ai4s_agent.structured_dataset_confirmation import (
+    ConfirmationAuthorityError,
+    build_confirmation_authority,
+    build_raw_dataset,
+    build_review_snapshot,
+    canonical_json_bytes,
 )
 from ai4s_agent.structured_dataset_canary_harness import (
     TASK_IDS,
@@ -183,6 +194,95 @@ def _complete(storage, controller, intent):
     raise AssertionError("Controller did not reach a terminal state")
 
 
+def _divergent_confirmation_payload(tmp_path: Path):
+    storage = ProjectStorage(tmp_path / "workspace")
+    storage.create_project("project-1", name="Canary", created_at=NOW)
+    run_dir = storage.run_dir("project-1", "run-1")
+    current_dir = run_dir / "registry-current"
+    fixed_dir = run_dir / "structured_dataset_canary"
+    current_dir.mkdir()
+    fixed_dir.mkdir()
+
+    current_bytes = dataset_bytes()
+    stale_bytes = current_bytes.replace(b"0.200", b"0.201", 1)
+    current_raw, current_rows = build_raw_dataset(
+        project_id="project-1",
+        run_id="run-1",
+        csv_bytes=current_bytes,
+        source_kind="synthetic",
+        created_at=NOW,
+    )
+    current_review = build_review_snapshot(
+        current_raw,
+        current_rows,
+        molecule_inspector=_molecule_identity,
+        created_at=NOW,
+    )
+    stale_raw, stale_rows = build_raw_dataset(
+        project_id="project-1",
+        run_id="run-1",
+        csv_bytes=stale_bytes,
+        source_kind="synthetic",
+        created_at=NOW,
+    )
+    stale_review = build_review_snapshot(
+        stale_raw,
+        stale_rows,
+        molecule_inspector=_molecule_identity,
+        created_at=NOW,
+    )
+    for directory, raw, review, content in (
+        (current_dir, current_raw, current_review, current_bytes),
+        (fixed_dir, stale_raw, stale_review, stale_bytes),
+    ):
+        (directory / "raw_dataset.json").write_bytes(
+            canonical_json_bytes(raw) + b"\n"
+        )
+        (directory / "review_snapshot.json").write_bytes(
+            canonical_json_bytes(review) + b"\n"
+        )
+        (directory / "raw_dataset.csv").write_bytes(content)
+    for artifact_id, filename in (
+        ("raw_dataset", "raw_dataset.json"),
+        ("raw_dataset_csv", "raw_dataset.csv"),
+        ("review_snapshot", "review_snapshot.json"),
+    ):
+        storage.register_artifact_path(
+            "project-1",
+            "run-1",
+            artifact_id,
+            f"registry-current/{filename}",
+        )
+    decision, _ = build_confirmation_authority(
+        raw=current_raw,
+        review=current_review,
+        actor="test-actor",
+        actor_source="deterministic_test_fixture",
+        trusted_actors={"test-actor"},
+        project_id="project-1",
+        run_id="run-1",
+        decision_time=NOW,
+    )
+    storage.append_gate_decision("project-1", "run-1", decision)
+    registry = storage.read_artifact_registry("project-1", "run-1")
+    payload = {
+        "project_id": "project-1",
+        "run_id": "run-1",
+        "output_root": str(fixed_dir),
+        "created_at": NOW,
+        "actor": "test-actor",
+        **{
+            f"{artifact_id}_path": str(run_dir / registry[artifact_id])
+            for artifact_id in (
+                "raw_dataset",
+                "raw_dataset_csv",
+                "review_snapshot",
+            )
+        },
+    }
+    return storage, payload, current_raw, stale_raw
+
+
 @pytest.mark.pr_fast
 def test_ci_canary_runs_only_through_authorized_harness_tasks(tmp_path: Path) -> None:
     storage, controls, controller, intent = _authority_chain(tmp_path)
@@ -246,11 +346,54 @@ def test_ci_canary_runs_only_through_authorized_harness_tasks(tmp_path: Path) ->
         execution_agent_store=ExecutionAgentStore(storage=storage),
         clock=lambda: NOW,
     ).inspect(project_id="project-1", run_id="run-1")
-    assert inspection.structured_dataset_canary is None
+    assert "structured_dataset_canary" not in inspection.model_dump(mode="json")
     assert {item.task_id for item in inspection.tasks}.issuperset(set(TASK_IDS))
     assert {item.artifact_id for item in inspection.artifacts}.issuperset(
         {"model_package", "generation_publication", "computational_top_n"}
     )
+
+
+def test_confirmation_consumes_exact_registry_payload_not_stale_fixed_sibling(
+    tmp_path: Path,
+) -> None:
+    _, payload, current_raw, stale_raw = _divergent_confirmation_payload(tmp_path)
+
+    result = confirm_structured_dataset_canary_adapter(payload)
+
+    receipt = json.loads(
+        Path(result["outputs"]["confirmation_receipt"]).read_text(encoding="utf-8")
+    )
+    assert receipt["raw_publication_digest"] == current_raw["raw_publication_digest"]
+    assert receipt["raw_publication_digest"] != stale_raw["raw_publication_digest"]
+    assert set(result["outputs"]) == {
+        "confirmation_receipt",
+        "confirmed_training_dataset",
+        "confirmed_training_dataset_csv",
+    }
+
+
+def test_replaced_exact_payload_content_fails_closed(tmp_path: Path) -> None:
+    _, payload, _, _ = _divergent_confirmation_payload(tmp_path)
+    exact_csv = Path(payload["raw_dataset_csv_path"])
+    exact_csv.write_bytes(exact_csv.read_bytes().replace(b"0.200", b"0.202", 1))
+
+    with pytest.raises(ConfirmationAuthorityError, match="content digest"):
+        confirm_structured_dataset_canary_adapter(payload)
+
+
+def test_harness_adapters_do_not_fall_back_to_service_fixed_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage, _, controller, intent = _authority_chain(tmp_path)
+
+    def reject_fixed_read(*_: object, **__: object):
+        raise AssertionError("adapter attempted a fixed-directory authority read")
+
+    monkeypatch.setattr(StructuredDatasetCanaryService, "_read", reject_fixed_read)
+
+    completed = _complete(storage, controller, intent)
+
+    assert completed.inspection.status.value == "succeeded"
 
 
 def test_preexisting_checkpoint_is_rejected_by_current_training_attempt(
