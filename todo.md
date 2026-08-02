@@ -1365,6 +1365,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 影响任务：`M3H-010` 继续 `I/T/— / DONE`；`M3H-015` 继续 `I(partial)/T(partial)/— / IN_PROGRESS`。不记录 owner acceptance、不转 Ready、不合并；无 Gate `V`，不声明 M3.5 或 Molly v1 完成。
 - 批准人：待 repository-owner exact-HEAD re-review。
 
+### 2026-08-02：PR #26 gRPC base-exporter 日志隐私 blocker 修复，继续保持 Draft
+
+- 决策：gRPC 模式在构造 exporter 前同时为 signal-specific trace exporter 与共享 `opentelemetry.exporter.otlp.proto.grpc.exporter` 安装固定消息脱敏 filter；共享 mixin 的 credential 文件读取、collector endpoint、`RpcError.details()` 与 traceback 不得越过 Molly privacy boundary。
+- 原计划：首轮修复只过滤 signal-specific gRPC trace-exporter logger，未覆盖真实 SDK 执行 credential 初始化与 export/retry 日志的 base-exporter logger。
+- 新计划：保留 Molly-owned processor/exporter 的 fail-open health 语义，同时在 vendor delegate 写日志之前完成 base logger 脱敏；PR 继续保持 Draft，新增 thread 保持 unresolved，等待 repository-owner 对新 exact HEAD 复核。
+- 依据：真实 gRPC SDK 对抗测试使用私有 collector endpoint、缺失 certificate path 与带敏感 details 的 `RpcError`，验证初始化和 export failure 的 `caplog` 仅含固定 `MOLLY_OTEL_VENDOR_LOG_REDACTED`；observability/tracing 最小回归 `37 passed`，repository privacy `37 passed`，本地 PR Fast `1138 passed, 5454 deselected`；`compileall`、`git diff --check` 与 4-shard assignment validation 通过。GitHub 4-shard Full CI 仍是完整套件权威 evidence。
+- 影响任务：`M3H-010` 继续 `I/T/— / DONE`；`M3H-015` 继续 `I(partial)/T(partial)/— / IN_PROGRESS`。不记录 owner acceptance、不转 Ready、不合并；无 Gate `V`，不声明 M3.5 或 Molly v1 完成。
+- 新增风险：未来 gRPC SDK 若迁移 credential 或 retry 日志模块，必须重新核对 vendor send/log boundary；任何新增 vendor logger 都必须在可能接触 endpoint、证书路径或异常详情前应用同一固定脱敏策略。
+- 批准人：待 repository-owner exact-HEAD re-review。
+
 后续路线调整必须追加：
 
 ```text

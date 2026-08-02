@@ -831,17 +831,23 @@ def _build_otel_tracer(
             from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
                 OTLPSpanExporter,
             )
-            exporter_log_module = (
-                "opentelemetry.exporter.otlp.proto.grpc.trace_exporter"
+            exporter_log_modules = (
+                "opentelemetry.exporter.otlp.proto.grpc.trace_exporter",
+                # Credential reads, endpoint/retry failures, RpcError details,
+                # and tracebacks are emitted by the shared exporter mixin.
+                "opentelemetry.exporter.otlp.proto.grpc.exporter",
             )
         else:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                 OTLPSpanExporter,
             )
-            exporter_log_module = (
-                "opentelemetry.exporter.otlp.proto.http.trace_exporter"
+            exporter_log_modules = (
+                "opentelemetry.exporter.otlp.proto.http.trace_exporter",
             )
-        _install_privacy_safe_otel_log_filter(exporter_log_module)
+        # Install before exporter construction: the gRPC SDK can log private
+        # certificate paths while resolving credentials in __init__.
+        for exporter_log_module in exporter_log_modules:
+            _install_privacy_safe_otel_log_filter(exporter_log_module)
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import SpanExportResult

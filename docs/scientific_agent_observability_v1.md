@@ -66,7 +66,10 @@ only `service.name`; it does not run default or environment resource detectors.
 A Molly-owned bounded processor sits in front of a privacy-safe exporter
 wrapper. Delegate exceptions and failure results become fixed health codes,
 queue pressure increments the drop counter, and vendor-created log records are
-redacted to a fixed message before handler serialization.
+redacted to a fixed message before handler serialization. In gRPC mode this
+filter covers both the signal-specific trace exporter and the shared exporter
+mixin before exporter construction, including credential-file initialization,
+endpoint/retry failures, `RpcError.details()`, and traceback-bearing records.
 
 OpenTelemetry mode is private server configuration:
 

@@ -459,6 +459,82 @@ def test_otel_real_sdk_resource_ignores_malicious_environment_metadata(
 
 
 @pytest.mark.pr_fast
+def test_otel_real_grpc_sdk_redacts_init_and_rpc_error_logs(
+    monkeypatch,
+    tmp_path,
+    caplog,
+) -> None:
+    import logging
+
+    import grpc
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    base_logger_name = "opentelemetry.exporter.otlp.proto.grpc.exporter"
+    trace_logger_name = (
+        "opentelemetry.exporter.otlp.proto.grpc.trace_exporter"
+    )
+    private_endpoint = "https://private-collector.invalid:4317"
+    private_certificate = tmp_path / "private-client-certificate.pem"
+    private_details = "Authorization: Bearer secret; token=secret"
+
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", private_endpoint)
+    monkeypatch.setenv(
+        "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+        str(private_certificate),
+    )
+    caplog.set_level(logging.DEBUG, logger=base_logger_name)
+    caplog.set_level(logging.DEBUG, logger=trace_logger_name)
+
+    config = HarnessObservabilityConfig(otel_mode="otlp_grpc")
+    health = HarnessTelemetryHealth(config=config)
+    tracer = _build_otel_tracer(config=config, health=health)
+    assert isinstance(tracer, OpenTelemetryHarnessTracer)
+
+    class SensitiveRpcError(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNKNOWN
+
+        def details(self):
+            return private_details
+
+        def trailing_metadata(self):
+            return ()
+
+    def fail_export(**_kwargs):
+        raise SensitiveRpcError()
+
+    processors = tracer.provider._active_span_processor._span_processors
+    processor = next(
+        item
+        for item in processors
+        if isinstance(item, _PrivacySafeBatchSpanProcessor)
+    )
+    delegate = processor.exporter.delegate
+    delegate._client = SimpleNamespace(Export=fail_export)
+    assert processor.exporter.export([]) == SpanExportResult.FAILURE
+
+    vendor_records = [
+        record
+        for record in caplog.records
+        if record.name in {base_logger_name, trace_logger_name}
+    ]
+    # One record covers credential-file initialization and another covers the
+    # real OTLPExporterMixin RpcError path before it returns FAILURE.
+    assert len(vendor_records) >= 2
+    assert {
+        record.getMessage() for record in vendor_records
+    } == {"MOLLY_OTEL_VENDOR_LOG_REDACTED"}
+    captured = caplog.text
+    assert str(private_certificate) not in captured
+    assert private_endpoint not in captured
+    assert private_details not in captured
+    assert "Bearer secret" not in captured
+    assert "Traceback" not in captured
+    assert health.snapshot().export_failure_count == 1
+    tracer.shutdown()
+
+
+@pytest.mark.pr_fast
 def test_otel_export_exception_and_failure_are_safely_counted(caplog) -> None:
     from opentelemetry.sdk.trace.export import SpanExportResult
 
