@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import uuid
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
@@ -18,6 +19,7 @@ from ai4s_agent.harness_tracing import (
     _validate_event,
     _validate_links,
     _validate_span,
+    _NAMESPACED_ATTRIBUTE_KEYS,
 )
 from ai4s_agent.observability_config import (
     HarnessObservabilityConfig,
@@ -35,6 +37,42 @@ _LANGSMITH_LLM_SPANS = frozenset(
     }
 )
 _MAX_EVENTS = 32
+_LANGSMITH_PROJECT_NAME = "molly-scientific-agent-harness"
+
+
+def _langsmith_safe_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    """Final SDK serialization guard for the frozen Molly namespace."""
+
+    safe: dict[str, Any] = {}
+    for key, item in value.items():
+        if key not in _NAMESPACED_ATTRIBUTE_KEYS:
+            continue
+        try:
+            raw_key = key.removeprefix("molly.")
+            _, validated = _validate_attribute(raw_key, item)
+        except Exception:
+            continue
+        safe[key] = validated
+    return safe
+
+
+def _langsmith_safe_outputs(value: dict[str, Any]) -> dict[str, Any]:
+    """Allow only fixed terminal classifications at the SDK send boundary."""
+
+    safe: dict[str, Any] = {}
+    outcome = value.get("outcome")
+    if outcome in {"completed", "failed"}:
+        safe["outcome"] = outcome
+    exception_type = value.get("exception_type_code")
+    try:
+        _, validated = _validate_attribute(
+            "exception_type_code", exception_type
+        )
+    except Exception:
+        pass
+    else:
+        safe["exception_type_code"] = validated
+    return safe
 
 
 class _LangSmithSpan:
@@ -80,12 +118,15 @@ class _LangSmithSpanContext(AbstractContextManager[HarnessSpan]):
         self.mode = mode
         self.health = health
         self.span = _LangSmithSpan(attributes=attributes)
-        self.run_id: Any = None
+        self.run_id: uuid.UUID | None = None
 
     def __enter__(self) -> HarnessSpan:
+        run_id = uuid.uuid4()
         try:
-            created = self.client.create_run(
+            self.client.create_run(
+                id=run_id,
                 name=_export_span_name(self.name),
+                project_name=_LANGSMITH_PROJECT_NAME,
                 run_type="llm",
                 inputs={},
                 extra={
@@ -94,11 +135,7 @@ class _LangSmithSpanContext(AbstractContextManager[HarnessSpan]):
                     )
                 },
             )
-            self.run_id = (
-                created.get("id")
-                if isinstance(created, Mapping)
-                else getattr(created, "id", created)
-            )
+            self.run_id = run_id
             self.health.langsmith_result("LANGSMITH_RUN_STARTED", available=True)
         except Exception:
             self.run_id = None
@@ -217,7 +254,14 @@ def build_langsmith_harness_tracer(
             from langsmith import Client
 
             client_factory = Client
-        client = client_factory()
+        client = client_factory(
+            auto_batch_tracing=False,
+            hide_inputs=True,
+            hide_metadata=_langsmith_safe_metadata,
+            hide_outputs=_langsmith_safe_outputs,
+            omit_traced_runtime_info=True,
+            timeout_ms=1000,
+        )
     except Exception:
         health.langsmith_result("LANGSMITH_INITIALIZATION_FAILED", available=False)
         return None

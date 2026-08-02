@@ -15,9 +15,16 @@ from ai4s_agent.harness_tracing import (
     CompositeHarnessTracer,
     NoopHarnessTracer,
     OpenTelemetryHarnessTracer,
+    _PrivacySafeBatchSpanProcessor,
+    _PrivacySafeOTelExporter,
+    _build_otel_tracer,
     build_harness_observability,
 )
-from ai4s_agent.langsmith_adapter import LangSmithHarnessTracer
+from ai4s_agent.langsmith_adapter import (
+    LangSmithHarnessTracer,
+    _langsmith_safe_metadata,
+    _langsmith_safe_outputs,
+)
 from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.observability_config import (
     HarnessObservabilityConfig,
@@ -123,6 +130,27 @@ class _BlockingProvider:
 
     def shutdown(self):
         return None
+
+
+class _OtelDelegateExporter:
+    def __init__(self, *, result=None, error: Exception | None = None) -> None:
+        self.result = result
+        self.error = error
+        self.batches: list[list[object]] = []
+        self.started = threading.Event()
+        self.release: threading.Event | None = None
+
+    def export(self, spans):
+        self.batches.append(list(spans))
+        self.started.set()
+        if self.release is not None:
+            self.release.wait(5)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+    def shutdown(self, **_):
+        return None
         return True
 
     def shutdown(self):
@@ -148,11 +176,11 @@ class _LangSmithClient:
         if self.fail_create:
             raise RuntimeError("token=secret at /private/langsmith")
         self.created.append(kwargs)
-        return SimpleNamespace(id="vendor-run-private-id")
+        return None
 
     def update_run(self, run_id, **kwargs):
         if self.fail_update:
-            raise RuntimeError("10.0.0.1 stderr payload")
+            raise RuntimeError("192.0.2.1 stderr payload")
         self.updated.append((run_id, kwargs))
 
     def close(self):
@@ -278,7 +306,7 @@ def test_correlation_schema_is_canonical_namespaced_and_privacy_bounded() -> Non
     for forbidden in (
         "/private/user/path",
         "ssh://private-host",
-        "10.0.0.1",
+        "192.0.2.1",
         "user@example",
         "token=secret",
         "Authorization: Bearer secret",
@@ -372,6 +400,133 @@ def test_otel_attribute_event_and_export_timeout_are_fail_open() -> None:
     provider.release.set()
 
 
+@pytest.mark.pr_fast
+def test_otel_real_sdk_resource_ignores_malicious_environment_metadata(
+    monkeypatch,
+    caplog,
+) -> None:
+    import logging
+    from opentelemetry.sdk.trace.export import SpanExportResult
+    from opentelemetry.exporter.otlp.proto.http import trace_exporter
+
+    delegate = _OtelDelegateExporter(result=SpanExportResult.SUCCESS)
+    captured_kwargs: dict[str, object] = {}
+
+    def exporter_factory(**kwargs):
+        captured_kwargs.update(kwargs)
+        return delegate
+
+    monkeypatch.setenv(
+        "OTEL_RESOURCE_ATTRIBUTES",
+        "host.name=private-host,user.name=private-user,token=secret",
+    )
+    monkeypatch.setattr(trace_exporter, "OTLPSpanExporter", exporter_factory)
+    config = HarnessObservabilityConfig(otel_mode="otlp_http")
+    health = HarnessTelemetryHealth(config=config)
+    tracer = _build_otel_tracer(config=config, health=health)
+    assert isinstance(tracer, OpenTelemetryHarnessTracer)
+    with tracer.start_span(
+        "controller.advance",
+        attributes={
+            "project_id": "project-1",
+            "run_id": "run-1",
+            "operation": "agent.controller.advance",
+            "component": "controller",
+            "phase": "advance",
+        },
+    ):
+        pass
+    assert tracer.provider.force_flush(timeout_millis=1000) is True
+    assert captured_kwargs == {"timeout": 5.0}
+    assert tracer.provider.resource.attributes == {
+        "service.name": "molly-scientific-agent-harness"
+    }
+    assert delegate.batches
+    assert delegate.batches[0][0].resource.attributes == {
+        "service.name": "molly-scientific-agent-harness"
+    }
+    serialized = repr(delegate.batches)
+    assert "private-host" not in serialized
+    assert "private-user" not in serialized
+    assert "token=secret" not in serialized
+    logging.getLogger(
+        "opentelemetry.exporter.otlp.proto.http.trace_exporter"
+    ).error("endpoint=%s token=%s", "https://private-host", "secret")
+    assert "MOLLY_OTEL_VENDOR_LOG_REDACTED" in caplog.text
+    assert "private-host" not in caplog.text
+    assert "token=" not in caplog.text
+    tracer.shutdown()
+
+
+@pytest.mark.pr_fast
+def test_otel_export_exception_and_failure_are_safely_counted(caplog) -> None:
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    config = HarnessObservabilityConfig(otel_mode="otlp_http")
+    health = HarnessTelemetryHealth(config=config)
+    exploding = _PrivacySafeOTelExporter(
+        delegate=_OtelDelegateExporter(
+            error=RuntimeError(
+                "collector=https://private-host token=secret /private/path"
+            )
+        ),
+        health=health,
+        success_result=SpanExportResult.SUCCESS,
+        failure_result=SpanExportResult.FAILURE,
+    )
+    assert exploding.export([object()]) == SpanExportResult.FAILURE
+    failing = _PrivacySafeOTelExporter(
+        delegate=_OtelDelegateExporter(result=SpanExportResult.FAILURE),
+        health=health,
+        success_result=SpanExportResult.SUCCESS,
+        failure_result=SpanExportResult.FAILURE,
+    )
+    assert failing.export([object()]) == SpanExportResult.FAILURE
+    snapshot = health.snapshot()
+    assert snapshot.export_failure_count == 2
+    assert snapshot.otel_last_result_code == "OTEL_EXPORT_FAILED"
+    assert "private-host" not in caplog.text
+    assert "token=secret" not in caplog.text
+    assert "/private/path" not in caplog.text
+
+
+@pytest.mark.pr_fast
+def test_otel_queue_full_is_dropped_and_counted_without_sdk_warning(caplog) -> None:
+    from opentelemetry.sdk.trace.export import SpanExportResult
+    from opentelemetry.trace import TraceFlags
+
+    config = HarnessObservabilityConfig(otel_mode="otlp_http")
+    health = HarnessTelemetryHealth(config=config)
+    delegate = _OtelDelegateExporter(result=SpanExportResult.SUCCESS)
+    delegate.release = threading.Event()
+    exporter = _PrivacySafeOTelExporter(
+        delegate=delegate,
+        health=health,
+        success_result=SpanExportResult.SUCCESS,
+        failure_result=SpanExportResult.FAILURE,
+    )
+    processor = _PrivacySafeBatchSpanProcessor(
+        exporter=exporter,
+        health=health,
+        max_queue_size=1,
+        schedule_delay_millis=5000,
+        max_export_batch_size=1,
+    )
+    sampled_span = SimpleNamespace(
+        context=SimpleNamespace(trace_flags=TraceFlags(TraceFlags.SAMPLED))
+    )
+    processor.on_end(sampled_span)
+    assert delegate.started.wait(1)
+    processor.on_end(sampled_span)
+    processor.on_end(sampled_span)
+    snapshot = health.snapshot()
+    assert snapshot.dropped_event_count == 1
+    assert snapshot.otel_last_result_code == "OTEL_QUEUE_FULL"
+    assert "Queue full" not in caplog.text
+    delegate.release.set()
+    processor.shutdown(timeout_millis=1000)
+
+
 def test_langsmith_metadata_only_records_one_safe_llm_run() -> None:
     config = HarnessObservabilityConfig(langsmith_mode="metadata_only")
     health = HarnessTelemetryHealth(config=config)
@@ -399,6 +554,7 @@ def test_langsmith_metadata_only_records_one_safe_llm_run() -> None:
         span.set_attribute("status", "token=secret")
     assert len(client.created) == len(client.updated) == 1
     assert client.created[0]["inputs"] == {}
+    assert client.created[0]["id"] == client.updated[0][0]
     serialized = repr((client.created, client.updated))
     assert "molly.telemetry_authoritative" in serialized
     for forbidden in (
@@ -410,6 +566,113 @@ def test_langsmith_metadata_only_records_one_safe_llm_run() -> None:
         "chain-of-thought",
     ):
         assert forbidden not in serialized
+
+
+@pytest.mark.pr_fast
+def test_langsmith_real_sdk_send_boundary_strips_runtime_and_env_metadata(
+    monkeypatch,
+) -> None:
+    from langsmith import Client
+
+    monkeypatch.setenv("LANGCHAIN_REVISION_ID", "private-revision")
+    monkeypatch.setenv("LANGCHAIN_ENDPOINT", "https://private-host")
+    monkeypatch.setenv("LANGSMITH_PROJECT", "private-project")
+    client = Client(
+        api_url="https://unused.invalid",
+        api_key="test-key",
+        auto_batch_tracing=False,
+        hide_inputs=True,
+        hide_metadata=_langsmith_safe_metadata,
+        hide_outputs=_langsmith_safe_outputs,
+        omit_traced_runtime_info=True,
+    )
+    captured: list[dict[str, object]] = []
+    updates: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        Client,
+        "_create_run",
+        lambda self, run_create, **_: captured.append(run_create),
+    )
+    monkeypatch.setattr(
+        Client,
+        "_update_run",
+        lambda self, run_update, **_: updates.append(run_update),
+    )
+    run_id = __import__("uuid").uuid4()
+    client.create_run(
+        id=run_id,
+        name="agent.plan.llm_call",
+        project_name="molly-scientific-agent-harness",
+        run_type="llm",
+        inputs={"prompt": "/private/paper token=secret"},
+        outputs={"outcome": "completed", "raw": "private response"},
+        extra={
+            "metadata": {
+                "molly.project_id": "project-1",
+                "molly.telemetry_authoritative": False,
+                "private_key": "secret",
+            },
+        },
+    )
+    assert len(captured) == 1
+    payload = captured[0]
+    assert payload["id"] == run_id
+    assert payload["inputs"] == {}
+    assert payload["outputs"] == {"outcome": "completed"}
+    assert payload["extra"] == {
+        "metadata": {
+            "molly.project_id": "project-1",
+            "molly.telemetry_authoritative": False,
+        },
+    }
+    serialized = repr(payload)
+    for forbidden in (
+        "private-revision",
+        "LANGCHAIN_ENDPOINT",
+        "/private/paper",
+        "token=secret",
+        "private response",
+        "private_key",
+        "private-host",
+        "private-project",
+        "python_version",
+        "platform",
+    ):
+        assert forbidden not in serialized
+
+    health = HarnessTelemetryHealth(
+        config=HarnessObservabilityConfig(langsmith_mode="metadata_only")
+    )
+    tracer = LangSmithHarnessTracer(
+        client=client,
+        mode="metadata_only",
+        health=health,
+    )
+    with tracer.start_span(
+        "planner.llm_call",
+        attributes={
+            "project_id": "project-1",
+            "run_id": "run-1",
+            "operation": "agent.plan.llm_call",
+            "component": "planner",
+            "phase": "provider_call",
+        },
+    ) as span:
+        span.add_event(
+            "planner.provider_completed", {"outcome": "completed"}
+        )
+    assert len(updates) == 1
+    assert captured[-1]["id"] == updates[0]["id"]
+    assert captured[-1]["session_name"] == "molly-scientific-agent-harness"
+    assert updates[0]["outputs"] == {
+        "outcome": "completed",
+        "exception_type_code": "NO_EXCEPTION",
+    }
+    final_payload = repr((captured[-1], updates[0]))
+    assert "runtime" not in final_payload
+    assert "private-revision" not in final_payload
+    assert "private-host" not in final_payload
+    assert "private-project" not in final_payload
 
 
 @pytest.mark.parametrize("failure", ["create", "update", "close"])
@@ -533,7 +796,7 @@ print(json.dumps(privacy_safe_telemetry_attributes(context), separators=(',', ':
 def test_missing_optional_langsmith_dependency_degrades_to_noop() -> None:
     tracer, health = build_harness_observability(
         environ={"AI4S_HARNESS_LANGSMITH_MODE": "metadata_only"},
-        langsmith_client_factory=lambda: (_ for _ in ()).throw(
+        langsmith_client_factory=lambda **_: (_ for _ in ()).throw(
             ImportError("langsmith unavailable")
         ),
     )
@@ -586,7 +849,10 @@ def test_disabled_app_registers_inspection_route_without_vendor_sdks(
 def test_langsmith_observer_reinitializes_after_process_restart_boundary() -> None:
     clients: list[_LangSmithClient] = []
 
-    def factory() -> _LangSmithClient:
+    def factory(**kwargs) -> _LangSmithClient:
+        assert kwargs["omit_traced_runtime_info"] is True
+        assert kwargs["auto_batch_tracing"] is False
+        assert kwargs["timeout_ms"] == 1000
         client = _LangSmithClient()
         clients.append(client)
         return client

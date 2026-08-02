@@ -7,8 +7,10 @@ idempotency, recovery, or result verification.
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
+from collections import deque
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
@@ -199,6 +201,25 @@ _EXPORTED_SPAN_NAMES = {
 }
 
 
+class _PrivacySafeOTelLogFilter(logging.Filter):
+    """Replace vendor-created log material before handler serialization."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = "MOLLY_OTEL_VENDOR_LOG_REDACTED"
+        record.args = ()
+        record.exc_info = None
+        record.exc_text = None
+        record.stack_info = None
+        return True
+
+
+def _install_privacy_safe_otel_log_filter(module_name: str) -> None:
+    logger = logging.getLogger(module_name)
+    if any(isinstance(item, _PrivacySafeOTelLogFilter) for item in logger.filters):
+        return
+    logger.addFilter(_PrivacySafeOTelLogFilter())
+
+
 class HarnessTracingError(ValueError):
     """A caller attempted to put non-allowlisted data into tracing."""
 
@@ -370,6 +391,193 @@ def _export_attributes(
     if len(exported) > _MAX_ATTRIBUTES:
         raise HarnessTracingError("exported tracing attributes exceed the bound")
     return exported
+
+
+class _PrivacySafeOTelExporter:
+    """Swallow delegate failures before the OTel SDK can log raw details."""
+
+    def __init__(
+        self,
+        *,
+        delegate: Any,
+        health: HarnessTelemetryHealth,
+        success_result: Any,
+        failure_result: Any,
+    ) -> None:
+        self.delegate = delegate
+        self.health = health
+        self.success_result = success_result
+        self.failure_result = failure_result
+        self._state_lock = threading.Lock()
+        self._shutdown = False
+
+    def export(self, spans: Sequence[Any]) -> Any:
+        with self._state_lock:
+            if self._shutdown:
+                self.health.otel_result(
+                    "OTEL_EXPORTER_SHUTDOWN", available=False
+                )
+                return self.failure_result
+        try:
+            result = self.delegate.export(spans)
+        except Exception:
+            self.health.otel_result("OTEL_EXPORT_FAILED", available=False)
+            return self.failure_result
+        if result != self.success_result:
+            self.health.otel_result("OTEL_EXPORT_FAILED", available=False)
+            return self.failure_result
+        self.health.otel_result("OTEL_EXPORT_COMPLETED", available=True)
+        return self.success_result
+
+    def shutdown(self, timeout_millis: int | None = None) -> None:
+        with self._state_lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+        try:
+            if timeout_millis is None:
+                self.delegate.shutdown()
+            else:
+                try:
+                    self.delegate.shutdown(timeout_millis=timeout_millis)
+                except TypeError:
+                    self.delegate.shutdown()
+        except Exception:
+            self.health.otel_result(
+                "OTEL_EXPORTER_SHUTDOWN_FAILED", available=False
+            )
+
+
+class _PrivacySafeBatchSpanProcessor:
+    """Bounded non-blocking processor with no raw SDK exception logging."""
+
+    def __init__(
+        self,
+        *,
+        exporter: _PrivacySafeOTelExporter,
+        health: HarnessTelemetryHealth,
+        max_queue_size: int,
+        schedule_delay_millis: int,
+        max_export_batch_size: int,
+    ) -> None:
+        self.exporter = exporter
+        self.health = health
+        self.max_queue_size = max_queue_size
+        self.max_export_batch_size = max_export_batch_size
+        self.schedule_delay_seconds = schedule_delay_millis / 1000.0
+        self._queue: deque[Any] = deque()
+        self._condition = threading.Condition()
+        self._export_lock = threading.Lock()
+        self._shutdown = False
+        self._worker = threading.Thread(
+            target=self._run,
+            name="molly-otel-batch-export",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def on_start(self, span: Any, parent_context: Any = None) -> None:
+        del span, parent_context
+
+    def _on_ending(self, span: Any) -> None:
+        del span
+
+    def on_end(self, span: Any) -> None:
+        context = getattr(span, "context", None)
+        trace_flags = getattr(context, "trace_flags", None)
+        if not bool(getattr(trace_flags, "sampled", False)):
+            return
+        with self._condition:
+            if self._shutdown:
+                self.health.dropped(
+                    reason_code="OTEL_PROCESSOR_SHUTDOWN",
+                    vendor="otel",
+                )
+                return
+            if len(self._queue) >= self.max_queue_size:
+                self.health.dropped(
+                    reason_code="OTEL_QUEUE_FULL",
+                    vendor="otel",
+                )
+                return
+            self._queue.append(span)
+            self._condition.notify()
+
+    def _take_batch(self) -> list[Any]:
+        with self._condition:
+            count = min(len(self._queue), self.max_export_batch_size)
+            return [self._queue.popleft() for _ in range(count)]
+
+    def _export(self, batch: Sequence[Any]) -> None:
+        if not batch:
+            return
+        try:
+            with self._export_lock:
+                self.exporter.export(batch)
+        except Exception:
+            # Defensive boundary: the safe exporter itself must never affect
+            # the worker or print a raw delegate exception.
+            self.health.otel_result("OTEL_EXPORT_FAILED", available=False)
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                while not self._queue and not self._shutdown:
+                    self._condition.wait()
+                if self._shutdown and not self._queue:
+                    return
+                if (
+                    not self._shutdown
+                    and len(self._queue) < self.max_export_batch_size
+                ):
+                    self._condition.wait(self.schedule_delay_seconds)
+                batch = [
+                    self._queue.popleft()
+                    for _ in range(
+                        min(len(self._queue), self.max_export_batch_size)
+                    )
+                ]
+            self._export(batch)
+
+    def force_flush(self, timeout_millis: int = 500) -> bool:
+        completed = threading.Event()
+
+        def flush() -> None:
+            try:
+                while True:
+                    batch = self._take_batch()
+                    if not batch:
+                        break
+                    self._export(batch)
+                # Synchronize with a batch already removed by the background
+                # worker before reporting a successful flush.
+                with self._export_lock:
+                    pass
+            finally:
+                completed.set()
+
+        worker = threading.Thread(
+            target=flush,
+            name="molly-otel-force-flush",
+            daemon=True,
+        )
+        worker.start()
+        if completed.wait(max(0.0, timeout_millis / 1000.0)):
+            return True
+        self.health.otel_result("OTEL_FORCE_FLUSH_TIMEOUT", available=False)
+        return False
+
+    def shutdown(self, timeout_millis: int = 500) -> None:
+        with self._condition:
+            self._shutdown = True
+            self._condition.notify_all()
+        self._worker.join(max(0.0, timeout_millis / 1000.0))
+        if self._worker.is_alive():
+            self.health.otel_result(
+                "OTEL_PROCESSOR_SHUTDOWN_TIMEOUT", available=False
+            )
+            return
+        self.exporter.shutdown(timeout_millis=timeout_millis)
 
 
 class _OpenTelemetrySpan:
@@ -623,24 +831,41 @@ def _build_otel_tracer(
             from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
                 OTLPSpanExporter,
             )
+            exporter_log_module = (
+                "opentelemetry.exporter.otlp.proto.grpc.trace_exporter"
+            )
         else:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                 OTLPSpanExporter,
             )
+            exporter_log_module = (
+                "opentelemetry.exporter.otlp.proto.http.trace_exporter"
+            )
+        _install_privacy_safe_otel_log_filter(exporter_log_module)
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace.export import SpanExportResult
 
         provider = TracerProvider(
-            resource=Resource.create({"service.name": "molly-scientific-agent-harness"})
+            # Direct construction intentionally bypasses default/environment
+            # detectors such as OTEL_RESOURCE_ATTRIBUTES.
+            resource=Resource(
+                {"service.name": "molly-scientific-agent-harness"}
+            )
+        )
+        exporter = _PrivacySafeOTelExporter(
+            delegate=OTLPSpanExporter(timeout=5.0),
+            health=health,
+            success_result=SpanExportResult.SUCCESS,
+            failure_result=SpanExportResult.FAILURE,
         )
         provider.add_span_processor(
-            BatchSpanProcessor(
-                OTLPSpanExporter(),
+            _PrivacySafeBatchSpanProcessor(
+                exporter=exporter,
+                health=health,
                 max_queue_size=2048,
                 schedule_delay_millis=5000,
                 max_export_batch_size=512,
-                export_timeout_millis=5000,
             )
         )
         tracer = provider.get_tracer("ai4s_agent.harness", "1")

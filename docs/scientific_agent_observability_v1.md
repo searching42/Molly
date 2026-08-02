@@ -61,6 +61,13 @@ reason code and sanitized exception type code; adapters never call an API that
 records the raw exception object. Batch processing is bounded and has finite
 export and shutdown timeouts. Molly does not add a durable telemetry queue.
 
+The tracer provider receives a directly constructed, frozen Resource containing
+only `service.name`; it does not run default or environment resource detectors.
+A Molly-owned bounded processor sits in front of a privacy-safe exporter
+wrapper. Delegate exceptions and failure results become fixed health codes,
+queue pressure increments the drop counter, and vendor-created log records are
+redacted to a fixed message before handler serialization.
+
 OpenTelemetry mode is private server configuration:
 
 - `disabled` (default);
@@ -87,6 +94,13 @@ safe provider classifications when available, latency/count classifications,
 fixed outcomes, and canonical correlation fields. Prompt text, response text,
 paper text, private feedback, conversation, and reasoning are never accepted by
 the adapter.
+
+The adapter generates the UUID before `Client.create_run(id=...)` and uses that
+same local UUID for `update_run`, matching the SDK's `create_run() -> None`
+contract. The real client is forced to `omit_traced_runtime_info=True`; SDK
+input, output, and metadata sanitizers form a second send-boundary allowlist,
+and synchronous calls use a finite timeout so adapter-level failures remain
+observable and fail open.
 
 `structured_content` requires the server-owned allow flag. Without it, config
 deterministically degrades to `metadata_only` without blocking the business

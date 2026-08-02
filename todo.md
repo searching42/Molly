@@ -1356,6 +1356,15 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：vendor SDK 或 exporter 的失败、超时与队列压力必须始终 fail open；telemetry ID、配置、health、trace status 和 vendor run status 不得进入 proposal、Permission、authorization、Controller、remote request、StageState、Registry、publication、verifier 或 inspection digest。不得创建第二套 durable telemetry ledger，也不得修改固定 `molly-worker` 协议。
 - 批准人：待 GitHub Full CI、CodeQL 与 repository-owner review；PR 保持 Draft。
 
+### 2026-08-02：PR #26 首轮真实 vendor SDK runtime/privacy blockers 修复，继续保持 Draft
+
+- 决策：按真实 LangSmith/OpenTelemetry SDK 契约关闭四项 blocker：LangSmith 由 adapter 预生成 UUID 并以同一 ID create/update；真实 Client 强制关闭 runtime/env metadata 并在 SDK send boundary 再次过滤 inputs/outputs/metadata；OTel 使用不运行 detector 的显式 Resource；Molly-owned bounded processor 与 privacy-safe exporter wrapper 接管 export exception、FAILURE、queue-full、health 和安全日志边界。
+- 原计划：初始 BQ2 fake client 错误假设 `create_run()` 返回 run ID，默认 LangSmith Client 与 `Resource.create()` 允许 SDK 自动 metadata 绕过 Molly allowlist，原始 `BatchSpanProcessor` 也无法把后台失败/drop 绑定到 Molly health。
+- 新计划：faithful vendor-boundary tests 直接覆盖 LangSmith SDK create/update serialization 与 OTel SDK provider/exported-span Resource，并对 export exception、`SpanExportResult.FAILURE`、queue-full 和 vendor log redaction 做对抗验证；PR 继续保持 Draft，等待 exact-HEAD owner re-review。
+- 依据：observability/tracing focused tests `29 passed`，包括真实 SDK serialization/resource boundary；Planner/authorization/Controller/Execution Agent/Replanner/inspection/privacy 相邻链 `274 passed`；本地 PR Fast `1137 passed, 5454 deselected`；`compileall`、`git diff --check` 与 4-shard assignment validation 通过。GitHub 4-shard Full CI 仍是完整套件权威 evidence。
+- 影响任务：`M3H-010` 继续 `I/T/— / DONE`；`M3H-015` 继续 `I(partial)/T(partial)/— / IN_PROGRESS`。不记录 owner acceptance、不转 Ready、不合并；无 Gate `V`，不声明 M3.5 或 Molly v1 完成。
+- 批准人：待 repository-owner exact-HEAD re-review。
+
 后续路线调整必须追加：
 
 ```text
