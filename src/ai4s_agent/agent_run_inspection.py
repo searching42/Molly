@@ -20,7 +20,10 @@ from ai4s_agent.schemas import (
     AgentRunToolCallInspection,
     _agent_digest,
 )
-from ai4s_agent.scientific_agent_replanner import ScientificAgentReplannerStore
+from ai4s_agent.scientific_agent_replanner import (
+    ScientificAgentReplannerService,
+    ScientificAgentReplannerStore,
+)
 
 
 _MAX_COLLECTION_ITEMS = 4096
@@ -155,7 +158,12 @@ class AgentRunInspectionService:
         revisions, revision_applications = self._replanner_chain(
             project_id=project, run_id=run
         )
-        head = self._select_plan_head(publications, revisions, revision_applications)
+        head = self._select_plan_head(
+            project_id=project,
+            publications=publications,
+            revisions=revisions,
+            applications=revision_applications,
+        )
 
         authorizations = self._control_models(
             project,
@@ -210,7 +218,38 @@ class AgentRunInspectionService:
             item for item in self.control_store.list_harness_controller_executions(project_id=project)
             if item.run_id == run
         ]
-        execution = self._zero_or_one(executions, "CONTROLLER_EXECUTION")
+        current_executions = [
+            item
+            for item in executions
+            if item.proposal_id == head.proposal.proposal_id
+        ]
+        execution = self._zero_or_one(
+            current_executions, "CURRENT_CONTROLLER_EXECUTION"
+        )
+        historical_executions = [
+            item
+            for item in executions
+            if item.proposal_id != head.proposal.proposal_id
+        ]
+        historical_decisions: list[Any] = []
+        historical_receipts: list[Any] = []
+        for historical_execution in historical_executions:
+            historical_decisions.extend(
+                self.control_store.list_harness_controller_decisions(
+                    project_id=project,
+                    controller_execution_id=(
+                        historical_execution.controller_execution_id
+                    ),
+                )
+            )
+            historical_receipts.extend(
+                self.control_store.list_harness_controller_action_receipts(
+                    project_id=project,
+                    controller_execution_id=(
+                        historical_execution.controller_execution_id
+                    ),
+                )
+            )
         controller_result = None
         if execution is not None:
             controller_result = self.controller.get(
@@ -218,19 +257,6 @@ class AgentRunInspectionService:
                 controller_execution_id=execution.controller_execution_id,
             )
             execution = controller_result.execution
-            if execution.proposal_id != head.proposal.proposal_id:
-                # An applied successor deliberately requires fresh permission and
-                # authorization.  The old execution remains historical authority.
-                applied_successors = {
-                    item.successor_proposal_id for item in revision_applications
-                }
-                if head.proposal.proposal_id not in applied_successors:
-                    self._incomplete("CONTROLLER_PROPOSAL_BINDING")
-                head = self.proposal_store.read(
-                    project_id=project,
-                    proposal_id=head.proposal.proposal_id,
-                    verify_current=True,
-                )
         else:
             # Before Controller start, currentness is established by the Planner's
             # current reader.  A running Controller uses its stronger post-start
@@ -241,10 +267,7 @@ class AgentRunInspectionService:
                 verify_current=True,
             )
 
-        if authority_set is not None and (
-            execution is None
-            or execution.proposal_id != head.proposal.proposal_id
-        ):
+        if authority_set is not None and execution is None:
             verified_set = self.controller.resource_authority_service.verify_authority_set(
                 project_id=project,
                 authority_set_id=authority_set.authority_set_id,
@@ -285,7 +308,7 @@ class AgentRunInspectionService:
         tool_proposals, tool_receipts = self._execution_agent_chain(
             project_id=project,
             run_id=run,
-            controller_execution_id=(execution.controller_execution_id if execution else ""),
+            controller_execution_id="",
         )
         tool_receipts_by_proposal = {
             item.tool_call_proposal_id: item for item in tool_receipts
@@ -349,6 +372,9 @@ class AgentRunInspectionService:
             controller_result=controller_result,
             decisions=decisions,
             receipts=receipts,
+            historical_executions=historical_executions,
+            historical_decisions=historical_decisions,
+            historical_receipts=historical_receipts,
             tool_proposals=tool_proposals,
             tool_receipts=tool_receipts,
             revisions=revisions,
@@ -518,12 +544,52 @@ class AgentRunInspectionService:
             sorted(applications, key=lambda item: item.application_receipt_id),
         )
 
-    def _select_plan_head(self, publications: list[Any], revisions: list[Any], applications: list[Any]):
+    def _select_plan_head(
+        self,
+        *,
+        project_id: str,
+        publications: list[Any],
+        revisions: list[Any],
+        applications: list[Any],
+    ):
         by_id = {item.proposal.proposal_id: item for item in publications}
-        successors = {item.successor_proposal_id for item in applications}
-        superseded = {item.supersedes_proposal_id for item in applications}
-        if not successors.issubset(by_id) or not superseded.issubset(by_id):
-            self._incomplete("REPLANNER_PROPOSAL_BINDING")
+        revisions_by_id = {item.revision_id: item for item in revisions}
+        if len(revisions_by_id) != len(revisions):
+            self._incomplete("REPLANNER_REVISION_BINDING")
+        superseded: set[str] = set()
+        for receipt in applications:
+            revision = revisions_by_id.get(receipt.revision_id)
+            if revision is None:
+                self._incomplete("REPLANNER_APPLICATION_BINDING")
+            baseline = by_id.get(revision.replan_request.baseline_proposal_id)
+            successor = by_id.get(receipt.successor_proposal_id)
+            if baseline is None or successor is None:
+                self._incomplete("REPLANNER_PROPOSAL_BINDING")
+            if (
+                baseline.proposal.proposal_digest
+                != revision.replan_request.baseline_proposal_digest
+            ):
+                self._incomplete("REPLANNER_BASELINE_BINDING")
+            successor_request_digest = (
+                ScientificAgentReplannerService
+                ._successor_publication_request_digest(revision)
+            )
+            exact_successor = self.proposal_store.read_immutable_publication(
+                project_id=project_id,
+                proposal_id=receipt.successor_proposal_id,
+                expected_request_digest=successor_request_digest,
+            )
+            ScientificAgentReplannerService._verify_applied_successor(
+                revision=revision,
+                publication=exact_successor,
+                receipt=receipt,
+            )
+            if (
+                exact_successor.proposal.model_dump(mode="json")
+                != successor.proposal.model_dump(mode="json")
+            ):
+                self._incomplete("REPLANNER_SUCCESSOR_BINDING")
+            superseded.add(receipt.supersedes_proposal_id)
         heads = sorted(set(by_id).difference(superseded))
         if len(heads) != 1:
             raise AgentRunInspectionReadError(
@@ -531,10 +597,6 @@ class AgentRunInspectionService:
                 AgentRunInspectionStatus.REPLACED_SOURCE,
                 409,
             )
-        for receipt in applications:
-            revision = next((item for item in revisions if item.revision_id == receipt.revision_id), None)
-            if revision is None or revision.revision_digest != receipt.revision_digest:
-                self._incomplete("REPLANNER_APPLICATION_BINDING")
         return by_id[heads[0]]
 
     @staticmethod
@@ -717,7 +779,6 @@ class AgentRunInspectionService:
             item.task_id: item
             for item in (authorization.dispatch_intents if authorization else proposal.dispatch_intents)
         }
-        slots = {item.task_id: item for item in execution.task_slots} if execution else {}
         gate_by_task: dict[str, list[str]] = {}
         if authorization:
             for binding in authorization.gate_bindings:
@@ -735,26 +796,75 @@ class AgentRunInspectionService:
         )
         verified_outputs: dict[str, AgentRunInspectionBinding] = {}
         output_digests: dict[str, str] = {}
-        completed_tasks: set[str] = set()
+        completion_receipts: dict[str, Any] = {}
         gate_snapshots: dict[str, AgentRunInspectionBinding] = {}
         gate_decisions: dict[str, AgentRunInspectionBinding] = {}
         for receipt in receipts:
             if set(receipt.reason_codes).intersection({"TASK_COMPLETED", "TASK_ADOPTED"}):
-                completed_tasks.add(receipt.task_id)
-            for output in receipt.verified_output_bindings:
-                output_digests[output.artifact_id] = output.content_sha256
+                if receipt.task_id in completion_receipts:
+                    self._incomplete("TASK_COMPLETION_RECEIPT_BINDING")
+                task = next(
+                    (
+                        item
+                        for item in proposal.run_plan.tasks
+                        if item.task_id == receipt.task_id
+                    ),
+                    None,
+                )
+                if task is None or receipt.outcome.value not in {
+                    "committed",
+                    "reconciled",
+                }:
+                    self._incomplete("TASK_COMPLETION_RECEIPT_BINDING")
+                if not set(task.output_artifacts).issubset(registry):
+                    self._incomplete("TASK_COMPLETION_REGISTRY_BINDING")
                 if receipt.local_execution_publication_id:
-                    verified_outputs[output.artifact_id] = self._binding(
+                    local_publication = (
+                        self.control_store.read_harness_local_execution_publication(
+                            project_id=proposal.project_id,
+                            publication_id=receipt.local_execution_publication_id,
+                        )
+                    )
+                    if (
+                        local_publication.publication_digest
+                        != receipt.local_execution_publication_digest
+                        or local_publication.verified_outputs
+                        != receipt.verified_output_bindings
+                        or local_publication.verified_outputs_digest
+                        != receipt.verified_output_bindings_digest
+                        or not set(task.output_artifacts).issubset(
+                            {
+                                item.artifact_id
+                                for item in receipt.verified_output_bindings
+                            }
+                        )
+                    ):
+                        self._incomplete("TASK_LOCAL_PUBLICATION_BINDING")
+                    publication_binding = self._binding(
                         receipt.local_execution_publication_id,
                         receipt.local_execution_publication_digest,
                     )
-            if receipt.remote_publication_digest and receipt.task_id:
-                for artifact_id in next(
-                    item.output_artifacts for item in proposal.run_plan.tasks if item.task_id == receipt.task_id
+                    for output in receipt.verified_output_bindings:
+                        output_digests[output.artifact_id] = output.content_sha256
+                        verified_outputs[output.artifact_id] = publication_binding
+                elif (
+                    receipt.remote_publication_digest
+                    and receipt.remote_execution_slot_id
+                    and receipt.after_remote_stage_digest
+                    and receipt.remote_status_source_roster_digest
                 ):
-                    verified_outputs[artifact_id] = self._binding(
-                        f"remote-publication-{receipt.slot_id}", receipt.remote_publication_digest
+                    publication_binding = self._binding(
+                        f"remote-publication-{receipt.slot_id}",
+                        receipt.remote_publication_digest,
                     )
+                    for artifact_id in task.output_artifacts:
+                        verified_outputs[artifact_id] = self._binding(
+                            publication_binding.object_id,
+                            publication_binding.object_digest,
+                        )
+                else:
+                    self._incomplete("TASK_VERIFIED_PUBLICATION_BINDING")
+                completion_receipts[receipt.task_id] = receipt
             if receipt.task_id and receipt.gate_snapshot_id and receipt.gate_snapshot_hash:
                 gate_snapshots[receipt.task_id] = self._binding(
                     receipt.gate_snapshot_id,
@@ -765,11 +875,8 @@ class AgentRunInspectionService:
                     f"gate-decisions-{receipt.task_id}-a{receipt.attempt_ordinal}",
                     receipt.gate_decision_digest,
                 )
-        current_index = (
-            controller_result.inspection.current_task_index if controller_result else None
-        )
         task_views = []
-        for index, task in enumerate(proposal.run_plan.tasks):
+        for task in proposal.run_plan.tasks:
             intent = intents[task.task_id]
             resource_digest = (
                 _agent_digest(intent.requested_resources.model_dump(mode="json"))
@@ -778,15 +885,25 @@ class AgentRunInspectionService:
             )
             task_stage = stage if stage is not None and stage.stage == task.task_id else None
             outcome = "not_available"
-            if task.task_id in completed_tasks or (current_index is not None and index < current_index):
-                outcome = "succeeded"
-            elif task_stage is not None:
-                outcome = task_stage.status.value.lower()
             recovery = bool(
                 controller_result
                 and controller_result.inspection.current_task_id == task.task_id
                 and controller_result.inspection.status == AgentHarnessControllerStatus.RECOVERY_REQUIRED
             )
+            if task.task_id in completion_receipts:
+                outcome = "succeeded"
+            elif recovery:
+                outcome = "recovery_required"
+            elif (
+                controller_result
+                and controller_result.inspection.current_task_id == task.task_id
+                and controller_result.inspection.status
+                in {
+                    AgentHarnessControllerStatus.FAILED,
+                    AgentHarnessControllerStatus.CANCELLED,
+                }
+            ):
+                outcome = controller_result.inspection.status.value
             publication_binding = next(
                 (verified_outputs[item] for item in task.output_artifacts if item in verified_outputs),
                 None,
@@ -990,6 +1107,30 @@ class AgentRunInspectionService:
         start_intent = values["start_intent"]
         if start_intent:
             add("start_intent", "start_intent", start_intent.start_intent_id, start_intent.start_intent_digest)
+        for item in values["historical_executions"]:
+            add(
+                "controller_execution",
+                "controller_execution",
+                item.controller_execution_id,
+                item.execution_digest,
+                "historical",
+            )
+        for item in values["historical_decisions"]:
+            add(
+                "controller_decision",
+                "controller_decision",
+                item.decision_id,
+                item.decision_digest,
+                "historical",
+            )
+        for item in values["historical_receipts"]:
+            add(
+                "controller_receipt",
+                "controller_receipt",
+                item.receipt_id,
+                item.receipt_digest,
+                "historical",
+            )
         execution = values["execution"]
         if execution:
             add("controller_execution", "controller_execution", execution.controller_execution_id, execution.execution_digest)
@@ -1052,7 +1193,13 @@ class AgentRunInspectionService:
             if item.observation.feedback_receipt_id:
                 add("replanner_feedback", "replanner_feedback_receipt", item.observation.feedback_receipt_id, item.observation.feedback_receipt_digest)
         for item in values["revision_applications"]:
-            add("revision_application", "replanner_application_receipt", item.application_receipt_id, item.application_receipt_digest)
+            add(
+                "revision_application",
+                "replanner_application_receipt",
+                item.application_receipt_id,
+                item.application_receipt_digest,
+                "historical",
+            )
         unique = {
             (item.source_name, item.source_kind, item.source_id): item
             for item in rows

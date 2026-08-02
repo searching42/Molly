@@ -24,6 +24,7 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerStartRequest,
     AgentPlanAuthorizationRequest,
     AgentPlanFeedbackRequest,
+    AgentPlanRevisionApplicationReceipt,
     AgentPlanRevisionApplicationRequest,
     AgentReplanLLMResponse,
     AgentRunInspection,
@@ -41,6 +42,7 @@ from ai4s_agent.scientific_agent_plan import (
     ScientificAgentPlanProposalStore,
     ScientificAgentPlanService,
 )
+from ai4s_agent.scientific_agent_replanner import ScientificAgentReplannerService
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -142,6 +144,71 @@ def _service_from_controller(storage, controller) -> AgentRunInspectionService:
         controller=controller,
         execution_agent_store=ExecutionAgentStore(storage=storage),
         clock=lambda: _NOW,
+    )
+
+
+def _applied_replan(tmp_path: Path):
+    from tests import test_scientific_agent_replanner as replanner_tests
+
+    (
+        storage,
+        proposal_store,
+        authorization_service,
+        baseline,
+        old_authorization,
+        replanner,
+    ) = replanner_tests._baseline(tmp_path)
+    feedback = replanner.create_feedback(
+        project_id="project-1",
+        request=AgentPlanFeedbackRequest(
+            run_id="run-1",
+            client_request_id="feedback-exact-inspection-1",
+            feedback="Reduce the bounded candidate count.",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    revision = replanner.create_revision(
+        project_id="project-1",
+        payload=replanner_tests._revision_payload(
+            baseline,
+            old_authorization,
+            feedback,
+            request_id="revision-exact-inspection-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        provider=replanner_tests.CountingProvider(
+            response=AgentReplanLLMResponse(
+                rationale_summary="Use a smaller bounded candidate set.",
+                option_patch={"generate_candidates": {"count": 4}},
+            ).model_dump(mode="json")
+        ),
+    ).proposal
+    application = replanner.apply_revision(
+        project_id="project-1",
+        revision_id=revision.revision_id,
+        request=AgentPlanRevisionApplicationRequest(
+            expected_revision_digest=revision.revision_digest,
+            client_request_id="revision-exact-application-1",
+        ),
+    )
+    controller = ScientificAgentHarnessController(
+        storage=storage,
+        proposal_store=proposal_store,
+        authorization_service=authorization_service,
+        control_store=authorization_service.control_store,
+        resource_authority_service=_NoRemoteAuthorities(),
+        executor=RunPlanExecutor(storage=storage, registry=proposal_store.registry),
+        remote_executions=_NoRemoteLifecycle(),
+        clock=lambda: _NOW,
+    )
+    return (
+        storage,
+        baseline,
+        revision,
+        application,
+        _service_from_controller(storage, controller),
     )
 
 
@@ -613,3 +680,228 @@ def test_replanner_review_and_applied_successor_require_fresh_authority_in_proje
     assert applied.replanner[0].status == "applied"
     assert applied.replanner[0].fresh_permission_required is True
     assert applied.replanner[0].fresh_authorization_required is True
+
+
+def test_successor_current_controller_isolated_from_terminal_historical_execution(
+    tmp_path: Path,
+) -> None:
+    from tests.execution_agent_test_support import local_controller_execution
+
+    storage, control_store, controller, old_result = local_controller_execution(tmp_path)
+    baseline = controller.proposal_store.read_immutable_publication(
+        project_id="project-1",
+        proposal_id=old_result.execution.proposal_id,
+    ).proposal
+    old_authorization = control_store.read_authorization(
+        project_id="project-1",
+        authorization_id=old_result.execution.authorization_id,
+    )
+    old_receipt = old_result.receipt
+    assert old_receipt is not None
+    old_decision = control_store.read_harness_controller_decision(
+        project_id="project-1",
+        decision_id=old_receipt.decision_id,
+    )
+    replanner = ScientificAgentReplannerService(
+        storage=storage,
+        proposal_store=controller.proposal_store,
+        observation_builder=controller.proposal_store.observation_builder,
+        authorization_service=controller.authorization_service,
+        control_store=control_store,
+        controller=controller,
+        clock=lambda: _NOW,
+    )
+    revision = replanner.create_revision(
+        project_id="project-1",
+        payload={
+            "run_id": "run-1",
+            "client_request_id": "terminal-successor-revision-1",
+            "trigger_kind": "controller_terminal",
+            "baseline_proposal_id": baseline.proposal_id,
+            "baseline_proposal_digest": baseline.proposal_digest,
+            "baseline_semantic_plan_id": baseline.semantic_plan_id,
+            "baseline_semantic_plan_digest": baseline.semantic_plan_digest,
+            "baseline_run_plan_digest": _agent_digest(
+                baseline.run_plan.model_dump(mode="json")
+            ),
+            "baseline_authorization_id": old_authorization.authorization_id,
+            "baseline_authorization_digest": old_authorization.authorization_digest,
+            "controller_execution_id": old_result.execution.controller_execution_id,
+            "controller_execution_digest": old_result.execution.execution_digest,
+            "controller_decision_id": old_decision.decision_id,
+            "controller_decision_digest": old_decision.decision_digest,
+            "controller_receipt_id": old_receipt.receipt_id,
+            "controller_receipt_digest": old_receipt.receipt_digest,
+            "external_llm_approved": True,
+        },
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        provider=StubLLMProvider(
+            response=AgentReplanLLMResponse(
+                success_criteria=["produce an exact privacy-safe dataset profile"]
+            ).model_dump(mode="json")
+        ),
+    ).proposal
+    applied = replanner.apply_revision(
+        project_id="project-1",
+        revision_id=revision.revision_id,
+        request=AgentPlanRevisionApplicationRequest(
+            expected_revision_digest=revision.revision_digest,
+            client_request_id="terminal-successor-application-1",
+        ),
+    )
+    inspection_service = _service_from_controller(storage, controller)
+
+    before_fresh_authority = inspection_service.inspect(
+        project_id="project-1", run_id="run-1"
+    )
+    assert before_fresh_authority.plan.proposal.object_id == applied.successor.proposal_id
+    assert before_fresh_authority.controller is None
+    assert before_fresh_authority.verifier_supported_run_outcome == "plan_proposed"
+    assert all(
+        task.verifier_supported_outcome == "not_available"
+        for task in before_fresh_authority.tasks
+    )
+    historical_execution_sources = [
+        item
+        for item in before_fresh_authority.source_roster
+        if item.source_kind == "controller_execution"
+    ]
+    assert [item.currentness for item in historical_execution_sources] == [
+        "historical"
+    ]
+
+    fresh = controller.authorization_service.approve_and_start(
+        project_id="project-1",
+        proposal_id=applied.successor.proposal_id,
+        request=AgentPlanAuthorizationRequest(
+            expected_proposal_digest=applied.successor.proposal_digest,
+            authorization_mode=AgentAuthorizationMode.STEPWISE,
+            requested_preauthorized_gate_ids=[],
+            confirmed=True,
+            client_request_id="terminal-successor-authorization-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    current_result = controller.create(
+        project_id="project-1",
+        start_intent_id=fresh.start_intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=fresh.start_intent.start_intent_digest,
+            client_request_id="terminal-successor-controller-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    after_fresh_authority = inspection_service.inspect(
+        project_id="project-1", run_id="run-1"
+    )
+    assert after_fresh_authority.controller is not None
+    assert (
+        after_fresh_authority.controller.execution.object_id
+        == current_result.execution.controller_execution_id
+    )
+    assert after_fresh_authority.verifier_supported_run_outcome == "succeeded"
+    execution_sources = [
+        item
+        for item in after_fresh_authority.source_roster
+        if item.source_kind == "controller_execution"
+    ]
+    assert {item.currentness for item in execution_sources} == {
+        "current",
+        "historical",
+    }
+
+
+def test_recovery_required_succeeded_stage_never_claims_verified_task_success(
+    tmp_path: Path,
+) -> None:
+    from tests.test_scientific_agent_harness_controller import (
+        _local_prepublication_crash,
+        _reopen_local_controller,
+    )
+
+    storage, _, _, _, _ = _local_prepublication_crash(tmp_path)
+    controller = _reopen_local_controller(str(storage.workspace_dir))
+    inspected = _service_from_controller(storage, controller).inspect(
+        project_id="project-1", run_id="run-1"
+    )
+
+    assert inspected.inspection_status == AgentRunInspectionStatus.RECOVERY_REQUIRED
+    assert inspected.verifier_supported_run_outcome == "recovery_required"
+    assert inspected.tasks[0].stage_status == "succeeded"
+    assert inspected.tasks[0].verifier_supported_outcome == "recovery_required"
+    assert inspected.tasks[0].verified_publication is None
+    assert inspected.tasks[0].recovery_required is True
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    [
+        ("revision_digest", "sha256:" + "1" * 64),
+        ("baseline_proposal_id", "proposal-wrong-baseline"),
+        ("baseline_proposal_digest", "sha256:" + "2" * 64),
+        ("successor_proposal_digest", "sha256:" + "3" * 64),
+        ("successor_semantic_plan_id", "semantic-plan-wrong"),
+        ("successor_semantic_plan_digest", "sha256:" + "4" * 64),
+        ("plan_diff_id", "plan-diff-wrong"),
+        ("plan_diff_digest", "sha256:" + "5" * 64),
+        ("parent_proposal_id", "proposal-wrong-parent"),
+        ("supersedes_proposal_id", "proposal-wrong-supersedes"),
+    ],
+)
+def test_plan_head_rejects_self_consistent_misbound_replanner_application_fields(
+    tmp_path: Path,
+    field: str,
+    wrong_value: str,
+) -> None:
+    _, _, revision, application, service = _applied_replan(tmp_path)
+    payload = application.receipt.model_dump(mode="json")
+    payload[field] = wrong_value
+    payload["application_receipt_id"] = ""
+    payload["application_receipt_digest"] = ""
+    try:
+        misbound = AgentPlanRevisionApplicationReceipt.model_validate(payload)
+    except ValueError:
+        # Some parent/supersedes inconsistencies are rejected even earlier by
+        # the strict source schema; they are still fail-closed inputs.
+        return
+    publications = service._plan_publications(
+        project_id="project-1", run_id="run-1"
+    )
+
+    with pytest.raises(ValueError):
+        service._select_plan_head(
+            project_id="project-1",
+            publications=publications,
+            revisions=[revision],
+            applications=[misbound],
+        )
+
+
+def test_inspection_rejects_replaced_successor_publication_request_binding(
+    tmp_path: Path,
+) -> None:
+    storage, _, _, application, service = _applied_replan(tmp_path)
+    committed_path = (
+        storage.workspace_dir
+        / "projects"
+        / "project-1"
+        / "agent_plan_requests"
+        / application.successor.client_request_id
+        / "committed.json"
+    )
+    committed = json.loads(committed_path.read_text(encoding="utf-8"))
+    committed["request_digest"] = "sha256:" + "0" * 64
+    committed_path.write_text(
+        json.dumps(committed, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AgentRunInspectionReadError) as captured:
+        service.inspect(project_id="project-1", run_id="run-1")
+    assert captured.value.inspection_status in {
+        AgentRunInspectionStatus.REPLACED_SOURCE,
+        AgentRunInspectionStatus.INCOMPLETE_AUTHORITY_CHAIN,
+    }

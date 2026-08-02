@@ -1338,6 +1338,14 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：unified projection 必须继续随既有 authority schema 版本演进；任何新增 source 若影响状态或 lineage 必须进入 canonical roster，telemetry/UI/cache 永远不得提升为 authority。
 - 批准人：待 repository-owner review；保持 Draft，不标 `DONE`。
 
+### 2026-08-02：PR-BQ1 首轮 correctness review blockers 修复，继续保持 Draft
+
+- 决策：修复 current head 与历史 Controller execution 混用、recovery-required 窗口仅凭 StageState 宣称 task success、以及 Replanner application 未完整 exact-bind 即选择 successor head 三项 blocker；只允许与 verified current proposal 精确绑定的零或一个 Controller execution 驱动 current outcome，旧 execution/decision/receipt/ToolCall 仅作为 historical chain。
+- 新计划：task `succeeded` 必须同时具有 committed/reconciled completion/adoption receipt、完整 Registry/output binding 和 verified local/remote publication；Replanner application 在改变 head 前必须绑定 exact revision、baseline、successor/semantic plan、canonical diff、parent/supersedes 与 immutable successor publication request checkpoint。
+- 依据：inspection focused/adversarial tests `24 passed`；remote authority、Controller、Execution Agent、Replanner 与 inspection 相邻回归 `163 passed`；本地 PR Fast `1131 passed, 5436 deselected`；完整“旧 Controller terminal → successor apply → fresh authority → 新 Controller”与 crash-before-publication recovery 场景通过。完整套件仍以最新修复 HEAD 的 GitHub 4-shard Full CI 为权威 evidence。
+- 影响任务：`M3H-010` 继续保持 `I/T/— / IN_PROGRESS`；三条 inline thread 等待 repository-owner 复核，不记录 owner acceptance、不转 Ready、不合并；无 Gate `V`、无 runtime acceptance，不声明 M3.5 或 Molly v1 完成。
+- 批准人：待 repository-owner re-review。
+
 后续路线调整必须追加：
 
 ```text

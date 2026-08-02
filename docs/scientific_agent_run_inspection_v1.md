@@ -39,6 +39,13 @@ application receipts are exact-read as a separate review/application chain. An
 applied successor remains non-executable until fresh Permission and trusted-user
 authorization exist.
 
+Every completed Replanner application is verified before it can select the
+current plan head. The verification binds the application receipt to the exact
+revision, baseline proposal and digest, immutable successor proposal and
+semantic-plan digests, canonical plan diff, parent/supersedes relationship, and
+the successor publication request checkpoint. A self-consistent but misbound
+receipt therefore cannot redirect inspection to another proposal.
+
 The run-level outcome never comes from a client outcome label, conversation,
 LLM response, trace, telemetry, stdout, stderr, exception, or UI state. Terminal
 and in-flight outcomes are derived from the verified Controller inspection,
@@ -75,6 +82,14 @@ roster. A historical exact reader never establishes a new request's
 currentness, Permission decision, authorization, dispatch, or current scientific
 state.
 
+A run can legally contain multiple Controller executions across a material
+revision. Only the zero-or-one execution whose proposal binding equals the
+verified current plan head is eligible to drive the current Controller, task,
+tool-call, dispatch, or run outcome. Executions, decisions, receipts, and tool
+calls for superseded proposals remain exact historical sources. Before the
+successor receives fresh Permission/authorization/start authority, the old
+Controller's terminal state cannot be inherited by the successor.
+
 ## Task, artifact, and lineage boundary
 
 Task views expose logical task IDs, dependency and artifact rosters, logical
@@ -82,6 +97,13 @@ route/profile/resource digests, Gate requirements, exact StageState/Registry/
 publication bindings, verifier-supported outcome, and recovery requirement.
 Artifact views expose logical ID/digest/type/role, producer and consumer IDs,
 Registry/publication bindings, provenance digest, and currentness.
+
+`StageState.status=SUCCEEDED` is displayable evidence but is never sufficient
+to produce `verifier_supported_outcome=succeeded`. Task success additionally
+requires one exact committed/reconciled completion or adoption receipt, complete
+Registry/output bindings, and its verified local or remote publication. A crash
+after StageState/Registry commit but before publication/Controller receipt is
+projected as `recovery_required`, never as task success.
 
 Artifact bytes are never returned. Registry relative paths are never returned.
 The service does not read raw artifact contents; existing Planner and Controller
