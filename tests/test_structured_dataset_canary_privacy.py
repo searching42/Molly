@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from ai4s_agent.storage import ProjectStorage
-from ai4s_agent.structured_dataset_canary import StructuredDatasetCanaryService
+from ai4s_agent.structured_dataset_canary_harness import run_structured_dataset_ci_harness
 from tests.test_structured_dataset_confirmation import NOW, fixture_rows
 
 
@@ -38,17 +38,13 @@ def test_private_raw_fields_do_not_enter_public_evidence_topn_or_inspection(tmp_
     source.write_text(stream.getvalue())
     storage = ProjectStorage(tmp_path / "workspace")
     storage.create_project("project-1", name="Fixture", created_at=NOW)
-    service = StructuredDatasetCanaryService(
-        storage=storage, trusted_actors={"test-actor"}, clock=lambda: NOW,
-    )
-
-    result = service.run_ci_reference(
+    result = run_structured_dataset_ci_harness(
+        storage=storage,
         project_id="project-1", run_id="run-1", raw_csv=source,
-        actor="test-actor", seed=53, created_at=NOW,
+        actor="test-actor", seed=53,
     )
-    inspection = service.inspection_projection(project_id="project-1", run_id="run-1")
     public = json.dumps(
-        {"evidence": result.evidence, "topn": result.computational_top_n, "inspection": inspection},
+        {"evidence": result.evidence, "topn": result.computational_top_n},
         sort_keys=True,
     )
 
@@ -67,12 +63,9 @@ def test_symlink_raw_source_is_rejected(tmp_path: Path) -> None:
         pytest.skip("symlink unsupported")
     storage = ProjectStorage(tmp_path / "workspace")
     storage.create_project("project-1", name="Fixture", created_at=NOW)
-    service = StructuredDatasetCanaryService(
-        storage=storage, trusted_actors={"test-actor"}, clock=lambda: NOW,
-    )
-
     with pytest.raises(ValueError, match="unavailable"):
-        service.run_ci_reference(
+        run_structured_dataset_ci_harness(
+            storage=storage,
             project_id="project-1", run_id="run-1", raw_csv=source,
-            actor="test-actor", created_at=NOW,
+            actor="test-actor",
         )

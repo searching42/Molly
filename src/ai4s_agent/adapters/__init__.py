@@ -64,6 +64,13 @@ from ai4s_agent.adapters.oled_bounded_discovery_controller import (
     execute_oled_bounded_discovery_controller_adapter,
 )
 from ai4s_agent.adapters.runtime import AdapterRuntimeError
+from ai4s_agent.adapters.structured_dataset_canary import (
+    confirm_structured_dataset_canary_adapter,
+    evaluate_structured_dataset_canary_adapter,
+    generate_structured_dataset_canary_adapter,
+    prepare_structured_dataset_canary_adapter,
+    train_structured_dataset_canary_adapter,
+)
 
 
 def _strict_execute_error(payload: dict[str, Any], *, adapter: str) -> dict[str, Any] | None:
@@ -140,4 +147,9 @@ __all__ = [
     "execute_oled_generated_candidate_evaluation_adapter",
     "execute_oled_candidate_decision_adapter",
     "execute_oled_bounded_discovery_controller_adapter",
+    "prepare_structured_dataset_canary_adapter",
+    "confirm_structured_dataset_canary_adapter",
+    "train_structured_dataset_canary_adapter",
+    "generate_structured_dataset_canary_adapter",
+    "evaluate_structured_dataset_canary_adapter",
 ]

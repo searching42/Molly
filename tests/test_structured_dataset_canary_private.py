@@ -67,18 +67,17 @@ def test_private_request_rejects_fake_tools_reuse_and_environment_data(mutation:
 
 def test_ci_evidence_schema_accepts_real_canary_evidence(tmp_path: Path) -> None:
     from ai4s_agent.storage import ProjectStorage
-    from ai4s_agent.structured_dataset_canary import StructuredDatasetCanaryService
+    from ai4s_agent.structured_dataset_canary_harness import run_structured_dataset_ci_harness
     from tests.test_structured_dataset_confirmation import NOW, dataset_bytes
 
     source = tmp_path / "raw.csv"
     source.write_bytes(dataset_bytes())
     storage = ProjectStorage(tmp_path / "workspace")
     storage.create_project("project-1", name="Fixture", created_at=NOW)
-    evidence = StructuredDatasetCanaryService(
-        storage=storage, trusted_actors={"test-actor"}, clock=lambda: NOW,
-    ).run_ci_reference(
+    evidence = run_structured_dataset_ci_harness(
+        storage=storage,
         project_id="project-1", run_id="run-1", raw_csv=source,
-        actor="test-actor", seed=3, created_at=NOW,
+        actor="test-actor", seed=3,
     ).evidence
     schema = json.loads(
         (Path("docs/schemas") / "structured_dataset_canary_evidence.schema.json").read_text()

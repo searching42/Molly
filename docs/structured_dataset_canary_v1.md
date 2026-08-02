@@ -4,7 +4,7 @@ Structured Dataset Canary v1 implements the BR1 engineering canary for broader o
 
 ## Authority chain
 
-The canary uses the existing Molly run directory, GateDecision store, `StageState`, Artifact Registry, verified immutable publications, Harness tracing seam and `AgentRunInspection v1`. It does not create a second Gate, registry, status, recovery ledger, model registry or telemetry authority.
+The canary is compiled into five planner-visible `ScientificToolSpec` / RunPlan tasks: prepare, confirm, train, generate and evaluate. The CI fixture first creates a proposal, receives Permission, calls approve-and-start and then lets the Harness Controller dispatch one task at a time through `RunPlanExecutor`. Task backends cannot register artifacts, write `StageState`, append Gate decisions, create Controller receipts or reconcile recovery. Those facts remain owned by Molly's existing authority chain.
 
 `Raw Dataset is never training authority.` Raw CSV publication status is always `candidate_unconfirmed`. Review produces an immutable row roster and proposed actions. A trusted actor then approves the exact review snapshot through the shared training-config Gate; the confirmation receipt binds project, run, raw digest, review digest, included/excluded rows, target, role, condition policy, actor/source and decision digest.
 
@@ -12,7 +12,7 @@ The canary uses the existing Molly run directory, GateDecision store, `StageStat
 
 ## CI Reference Canary
 
-The public path performs a real deterministic ridge fit on RDKit molecular descriptors from the current run's Confirmed Dataset. It records molecule, paper and external-holdout split assignments. Candidate generation executes a seed-bound deterministic molecule construction algorithm; it never reads a preset Top-N. Prediction consumes the current model checkpoint and current generated roster. Ranking is deterministic, displays OOD findings and excludes OOD candidates from Top-N according to an explicit rule.
+The public path performs a real deterministic ridge fit on RDKit molecular descriptors from the current run's Confirmed Dataset. Split assignment operates on connected components of the InChIKey–paper bipartite graph; records sharing either a molecule or paper never cross train, test or external holdout, and insufficient independent components fail closed. Candidate generation executes a seed-bound deterministic molecule construction algorithm; it never reads a preset Top-N. Prediction consumes the current model checkpoint and current generated roster. Ranking is deterministic, displays OOD findings and excludes OOD candidates from Top-N according to an explicit rule.
 
 Chemical validation records RDKit validity, canonical SMILES, Standard InChI/InChIKey, duplicates, training-set exact matches, nearest-neighbor similarity, scaffold novelty, AD/OOD status and a no-silent-loss summary.
 
@@ -20,9 +20,9 @@ The current run does not reuse an old model, prediction, generated candidate ros
 
 ## Recovery and replay
 
-Every request, checkpoint and publication has a semantic digest. Restart reads and verifies exact existing authority. A model checkpoint is adopted without refitting. A verified model or generation publication missing only its Controller completion receipt is reconciled by exact digest without re-execution. An unknown generation dispatch outcome enters recovery-required and is never dispatched again automatically. Replaced source bytes, registry conflicts and cross-run packages fail closed.
+Every request, checkpoint and publication has a semantic digest. Training request, current Controller dispatch receipt, checkpoint, Registry outputs, verified local publication and Controller action receipt form one exact chain. A pre-existing/copied checkpoint or request is rejected by the backend. If a dispatch occurred but the Controller publication/receipt is missing, only the existing Controller recovery verifier may reconcile it; the backend never adopts or redispatches it. Generation follows the same Controller-owned unknown-outcome rule and has no canary-specific dispatch ledger. Replaced source bytes, registry conflicts and cross-run packages fail closed.
 
-Exact replay uses canonical JSON and semantic digests that exclude observation timestamps and telemetry. Telemetry is non-authoritative and fail-open.
+Exact replay verifies the succeeded current Controller execution and its published artifacts without invoking training or generation again. Canonical JSON and semantic digests exclude telemetry. Telemetry is non-authoritative and fail-open.
 
 ## Scientific and claim boundary
 

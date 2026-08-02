@@ -28,9 +28,7 @@ from ai4s_agent.schemas import (
     AgentPlanRevisionApplicationRequest,
     AgentReplanLLMResponse,
     AgentRunInspection,
-    AgentRunInspectionBinding,
     AgentRunInspectionStatus,
-    AgentRunStructuredDatasetCanaryInspection,
     CORE_SCHEMA_MODELS,
     _agent_digest,
 )
@@ -240,42 +238,26 @@ def test_proposal_only_inspection_is_current_deterministic_and_read_only(tmp_pat
     )
 
 
-def test_structured_dataset_canary_is_composed_into_unified_inspection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_self_signed_structured_dataset_directory_is_not_inspection_authority(
+    tmp_path: Path,
 ) -> None:
-    _, _, _, _, _, service, _ = _chain(tmp_path)
-    digest = "sha256:" + "a" * 64
-    projection = AgentRunStructuredDatasetCanaryInspection(
-        status="succeeded",
-        current_stage="candidate.rank",
-        stage_status="succeeded",
-        bindings={
-            "model_package": AgentRunInspectionBinding(
-                object_id="model-run-1", object_digest=digest
-            ),
-            "computational_top_n": AgentRunInspectionBinding(
-                object_id="computational-topn-run-1", object_digest=digest
-            ),
-        },
-        registry_digest=digest,
-        source_roster_digest=digest,
-    )
-    monkeypatch.setattr(
-        service,
-        "_structured_dataset_canary_projection",
-        lambda **_: projection,
+    storage, _, _, _, _, service, _ = _chain(tmp_path)
+    before = service.inspect(project_id="project-1", run_id="run-1")
+    forged = storage.run_dir("project-1", "run-1") / "structured_dataset_canary"
+    forged.mkdir()
+    (forged / "evidence.json").write_text(
+        '{"schema_version":"structured_dataset_canary_evidence.v1",'
+        '"evidence_digest":"sha256:' + "a" * 64 + '"}',
+        encoding="utf-8",
     )
 
-    inspected = service.inspect(project_id="project-1", run_id="run-1")
+    after = service.inspect(project_id="project-1", run_id="run-1")
 
-    assert inspected.structured_dataset_canary == projection
-    assert {
-        item.source_name for item in inspected.source_roster
-    }.issuperset(
-        {
-            "structured_dataset_model_package",
-            "structured_dataset_computational_top_n",
-        }
+    assert after.inspection_digest == before.inspection_digest
+    assert after.structured_dataset_canary is None
+    assert not any(
+        item.source_kind == "structured_dataset_canary_publication"
+        for item in after.source_roster
     )
 
 

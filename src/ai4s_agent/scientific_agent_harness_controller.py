@@ -3372,9 +3372,22 @@ class ScientificAgentHarnessController:
             )
         decision = unreceipted[0]
         if stage is not None and decision.task_id and stage.stage != decision.task_id:
-            raise ScientificAgentHarnessControllerVerificationError(
-                "unreceipted StageState belongs to another task"
+            preparing_exact_successor = bool(
+                decision.action_kind
+                in {
+                    AgentHarnessControllerAction.PREPARE_LOCAL_GATE,
+                    AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+                }
+                and latest is not None
+                and latest.after_stage_digest == stage_digest
+                and latest.after_artifact_registry_digest == registry_digest
+                and stage.status == RunStatus.SUCCEEDED
+                and stage.next_stage == decision.task_id
             )
+            if not preparing_exact_successor:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "unreceipted StageState belongs to another task"
+                )
         task_limit = (
             len(authorization.run_plan.tasks)
             if decision.task_index is None

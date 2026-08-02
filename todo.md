@@ -1385,6 +1385,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：CI deterministic baseline/generator 被误读为真实 Uni-Mol/REINVENT4；broader organic emitter PLQY 工程范围被误称为 TADF discovery；旧 model/prediction/candidate 或 `existing_output` 被错误复用；私有运行环境定位信息进入公共 evidence。
 - 批准人：待 GitHub Full CI、CodeQL 与 repository-owner exact-HEAD review；PR 保持 Draft。
 
+### 2026-08-02：PR #27 owner review blockers — BR1 接入唯一 Harness authority chain
+
+- 决策：PR #27 reviewed HEAD `78a61ea29bb7b10dd0e2e0d8bb8e8ea4ff724fbd` 继续保持 Draft；移除 CI canary 对 StageState、Artifact Registry、GateDecision、Controller receipt 与 recovery 的直接写入/补写权威，改为五个 planner-visible RunPlan tasks，经 proposal、Permission、immutable authorization、approve-and-start、Harness Controller 与 RunPlanExecutor 执行。
+- 原计划：独立 `StructuredDatasetCanaryService` 顺序执行全部阶段，并把 canary 目录直接投影进 `AgentRunInspection`。
+- 新计划：canary service 仅作为 task backend 发布本任务 immutable bytes；Controller 独占 dispatch、StageState、Registry、verified local publication、receipt 与 recovery。Inspection 仅从现有 current Controller/task/artifact facts 派生，独立或伪造 canary 目录不进入 source roster。Training request、checkpoint 和 model package exact-bind 当前确认数据、receipt 与 seed；预置 checkpoint fail closed。Split 改为 InChIKey–paper 二部图 connected components，禁止 molecule/paper 跨 split。
+- 依据：repository owner 提交 4 条 correctness/authority inline blocker；本轮新增无 Harness 直跑拒绝、真实 approve-and-start/Controller 端到端、预置 checkpoint 拒绝、crash-after-checkpoint recovery-required、伪造 inspection 目录隔离、Controller exact replay 及 molecule/paper component split 回归。BR1 focused `34 passed`，Planner/Executor/Controller/Inspection 相邻链 `156 passed`，Permission/authorization/resource authority `118 passed`，PR Fast `1157 passed, 5469 deselected`；`compileall`、`git diff --check` 与 4-shard assignment validation 通过。GitHub Full CI、CodeQL 与 owner re-review 待新 HEAD。
+- 影响任务：`M3H-013` 继续 `I/T(partial)/— / IN_PROGRESS`；Private Real-Tool Canary 尚未完成，不记录 runtime `V`，不新增 `M3H-GATE-006 V`，不声明 M3.5、`M3H-015` 或 Molly v1 完成。
+- 新增风险：private Uni-Mol/REINVENT4 路径仍需在可信环境证明同一 Controller/remote lifecycle authority；当前公共 CI 只证明 deterministic backend 的同契约链。
+- 批准人：待 repository-owner 对修复后 exact HEAD re-review；不转 Ready、不合并。
+
 后续路线调整必须追加：
 
 ```text

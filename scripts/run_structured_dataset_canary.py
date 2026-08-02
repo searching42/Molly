@@ -5,7 +5,9 @@ import json
 from pathlib import Path
 
 from ai4s_agent.storage import ProjectStorage
-from ai4s_agent.structured_dataset_canary import StructuredDatasetCanaryService
+from ai4s_agent.structured_dataset_canary_harness import (
+    run_structured_dataset_ci_harness,
+)
 from ai4s_agent.structured_dataset_private_canary import PrivateRealToolCanaryRequest
 
 
@@ -28,10 +30,8 @@ def main() -> int:
             parser.error("ci_reference requires --raw-csv and --actor")
         if not any(item["project_id"] == args.project_id for item in storage.list_projects()):
             storage.create_project(args.project_id, name=args.project_id, created_at="runtime")
-        result = StructuredDatasetCanaryService(
+        result = run_structured_dataset_ci_harness(
             storage=storage,
-            trusted_actors={args.actor},
-        ).run_ci_reference(
             project_id=args.project_id,
             run_id=args.run_id,
             raw_csv=args.raw_csv,
@@ -44,7 +44,7 @@ def main() -> int:
             "artifact_name": result.computational_top_n["artifact_name"],
             "evidence_digest": result.evidence["evidence_digest"],
             "topn_digest": result.computational_top_n["publication_digest"],
-            "replayed": result.replayed,
+            "controller_execution_id": result.controller_execution_id,
         }, sort_keys=True))
         return 0
 

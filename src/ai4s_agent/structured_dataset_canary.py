@@ -5,14 +5,17 @@ import hashlib
 import json
 import math
 import random
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from ai4s_agent._utils import now_iso
 from ai4s_agent.generation_publication import publish_fresh_bytes, read_regular_file_bound
 from ai4s_agent.harness_tracing import HarnessTracer, NoopHarnessTracer
-from ai4s_agent.schemas import ArtifactRef, RunStatus, StageHistoryItem, StageState
+from ai4s_agent.schemas import (
+    GateDecision,
+    GateName,
+    RunStatus,
+)
 from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.structured_dataset_confirmation import (
     ConfirmationAuthorityError,
@@ -51,19 +54,8 @@ class StructuredDatasetCanaryError(RuntimeError):
     pass
 
 
-class RecoveryRequiredError(StructuredDatasetCanaryError):
-    pass
-
-
-@dataclass(frozen=True)
-class StructuredDatasetCanaryResult:
-    evidence: dict[str, Any]
-    computational_top_n: dict[str, Any]
-    replayed: bool
-
-
 class StructuredDatasetCanaryService:
-    """Thin orchestration over Molly's Gate, StageState, Registry and publications."""
+    """Scientific task backend; Harness owns scheduling and all control authority."""
 
     def __init__(
         self,
@@ -72,142 +64,17 @@ class StructuredDatasetCanaryService:
         trusted_actors: Iterable[str],
         tracer: HarnessTracer | None = None,
         clock: Callable[[], str] = now_iso,
+        harness_authority_managed: bool = False,
     ) -> None:
         self.storage = storage
         self.trusted_actors = frozenset(str(item) for item in trusted_actors)
         self.tracer = tracer or NoopHarnessTracer()
         self.clock = clock
-
-    def run_ci_reference(
-        self,
-        *,
-        project_id: str,
-        run_id: str,
-        raw_csv: str | Path,
-        actor: str,
-        seed: int = 1729,
-        top_n: int = 5,
-        created_at: str | None = None,
-        fault_after: str = "",
-    ) -> StructuredDatasetCanaryResult:
-        if top_n < 1 or top_n > 100:
-            raise ValueError("top_n must be between 1 and 100")
-        timestamp = created_at or self.clock()
-        final_path = self._path(project_id, run_id, "evidence.json")
-        if final_path.exists():
-            evidence = read_json_artifact(final_path, digest_field="evidence_digest")
-            self._verify_final_evidence(project_id, run_id, evidence)
-            topn = self._read(project_id, run_id, "topn.json", "publication_digest")
-            return StructuredDatasetCanaryResult(evidence, topn, True)
-
-        raw = self._ingest_raw(
-            project_id=project_id,
-            run_id=run_id,
-            source=Path(raw_csv),
-            timestamp=timestamp,
-        )
-        self._fault(fault_after, "raw_publication")
-        review = self._review(project_id, run_id, raw, timestamp)
-        self._fault(fault_after, "review_snapshot")
-        decision, receipt = self._confirm(
-            project_id, run_id, raw, review, actor=actor, timestamp=timestamp
-        )
-        self._fault(fault_after, "gate_decision")
-        self._fault(fault_after, "confirmation_receipt")
-        confirmed = self._publish_confirmed(
-            project_id, run_id, raw, review, decision, receipt, timestamp
-        )
-        self._fault(fault_after, "confirmed_dataset_publication")
-        model = self._train(
-            project_id, run_id, confirmed, receipt, seed=seed, timestamp=timestamp,
-            fault_after=fault_after,
-        )
-        generation = self._generate(
-            project_id, run_id, confirmed, model, seed=seed, timestamp=timestamp,
-            fault_after=fault_after,
-        )
-        prediction, validation, ranking, topn = self._predict_validate_rank(
-            project_id,
-            run_id,
-            confirmed,
-            model,
-            generation,
-            seed=seed,
-            top_n=top_n,
-            timestamp=timestamp,
-            fault_after=fault_after,
-        )
-        evidence = self._publish_evidence(
-            project_id=project_id,
-            run_id=run_id,
-            raw=raw,
-            review=review,
-            receipt=receipt,
-            confirmed=confirmed,
-            model=model,
-            generation=generation,
-            prediction=prediction,
-            validation=validation,
-            ranking=ranking,
-            topn=topn,
-            seed=seed,
-            timestamp=timestamp,
-        )
-        return StructuredDatasetCanaryResult(evidence, topn, False)
-
-    def inspection_projection(self, *, project_id: str, run_id: str) -> dict[str, Any] | None:
-        root = self._root(project_id, run_id, create=False)
-        if not root.exists() or not (root / "raw_dataset.json").exists():
-            return None
-        definitions = (
-            ("raw_dataset", "raw_dataset.json", "raw_publication_digest"),
-            ("review_snapshot", "review_snapshot.json", "review_snapshot_digest"),
-            ("confirmation_receipt", "confirmation_receipt.json", "confirmation_receipt_digest"),
-            ("confirmed_dataset", "confirmed_dataset.json", "publication_digest"),
-            ("model_package", "model_package.json", "publication_digest"),
-            ("generation", "generation.json", "publication_digest"),
-            ("prediction", "prediction.json", "publication_digest"),
-            ("validation", "validation.json", "publication_digest"),
-            ("ranking", "ranking.json", "publication_digest"),
-            ("computational_top_n", "topn.json", "publication_digest"),
-            ("evidence", "evidence.json", "evidence_digest"),
-        )
-        bindings: dict[str, dict[str, str]] = {}
-        for name, filename, digest_field in definitions:
-            path = root / filename
-            if path.exists():
-                payload = read_json_artifact(path, digest_field=digest_field)
-                object_id = str(
-                    payload.get(f"{name}_id")
-                    or payload.get("model_package_id")
-                    or payload.get("generation_publication_id")
-                    or payload.get("prediction_publication_id")
-                    or payload.get("ranking_publication_id")
-                    or payload.get("validation_id")
-                    or payload.get("topn_id")
-                    or payload.get("confirmation_receipt_id")
-                    or payload.get("confirmed_dataset_id")
-                    or payload.get("review_snapshot_id")
-                    or payload.get("dataset_id")
-                    or f"{name}-{run_id}"
-                )
-                bindings[name] = {
-                    "object_id": object_id,
-                    "object_digest": str(payload[digest_field]),
-                }
-        stage = self.storage.read_stage_state(project_id, run_id)
-        registry = self.storage.read_artifact_registry(project_id, run_id)
-        return {
-            "schema_version": "structured_dataset_canary_inspection.v1",
-            "status": "succeeded" if "evidence" in bindings else "in_progress",
-            "current_stage": stage.stage if stage else "not_started",
-            "stage_status": stage.status.value.lower() if stage else "not_started",
-            "recovery_required": bool(stage and stage.details.get("recovery_required")),
-            "bindings": bindings,
-            "registry_digest": digest_json(registry),
-            "source_roster_digest": digest_json(bindings),
-            "claim_boundary": "computational_candidates_only",
-        }
+        if not harness_authority_managed:
+            raise StructuredDatasetCanaryError(
+                "Structured Dataset Canary backend requires approve-and-start Harness authority management"
+            )
+        self.harness_authority_managed = True
 
     def _ingest_raw(self, *, project_id: str, run_id: str, source: Path, timestamp: str) -> dict[str, Any]:
         with self._span("dataset.inspect", project_id, run_id, "inspect"):
@@ -254,15 +121,26 @@ class StructuredDatasetCanaryService:
         existing_receipt = self._optional_read(
             project_id, run_id, "confirmation_receipt.json", "confirmation_receipt_digest"
         )
-        decision_path = self._path(project_id, run_id, "gate_decision.json")
         if existing_receipt:
-            decision = self._read_decision(decision_path)
-            verify_confirmation_authority(
-                raw=raw, review=review, decision=decision, receipt=existing_receipt,
-                trusted_actors=self.trusted_actors, project_id=project_id, run_id=run_id,
+            raise StructuredDatasetCanaryError(
+                "pre-existing confirmation receipt is not current-attempt authority"
             )
-            return decision, existing_receipt
         with self._span("dataset.confirm", project_id, run_id, "confirm"):
+            decisions = [
+                decision
+                for decision in (
+                    GateDecision.model_validate(item)
+                    for item in self.storage.read_gate_decisions(project_id, run_id)
+                )
+                if decision.gate == GateName.TRAIN_CONFIG
+                and decision.approved
+                and decision.actor == actor
+            ]
+            if len(decisions) != 1:
+                raise ConfirmationAuthorityError(
+                    "exact Controller-committed GateDecision is required"
+                )
+            canonical_decision = decisions[0]
             decision_model, receipt = build_confirmation_authority(
                 raw=raw,
                 review=review,
@@ -272,15 +150,10 @@ class StructuredDatasetCanaryService:
                 project_id=project_id,
                 run_id=run_id,
                 decision_time=timestamp,
+                gate_decision=canonical_decision,
             )
             decision = decision_model.model_dump(mode="json")
             self._stage(project_id, run_id, "dataset.confirm", RunStatus.WAITING_USER, timestamp)
-            if decision_path.exists():
-                if self._read_decision(decision_path) != decision:
-                    raise ConfirmationAuthorityError("immutable GateDecision was replaced")
-            else:
-                publish_fresh_bytes(decision_path, canonical_json_bytes(decision) + b"\n")
-                self.storage.append_gate_decision(project_id, run_id, decision_model)
             published = self._publish(
                 project_id, run_id, "confirmation_receipt.json", receipt,
                 "confirmation_receipt_digest",
@@ -288,13 +161,12 @@ class StructuredDatasetCanaryService:
             self._register(
                 project_id, run_id,
                 {
-                    "structured_dataset_gate_decision": "structured_dataset_canary/gate_decision.json",
                     "confirmation_receipt": "structured_dataset_canary/confirmation_receipt.json",
                 },
             )
             self._stage(
                 project_id, run_id, "dataset.confirm", RunStatus.SUCCEEDED, timestamp,
-                ["structured_dataset_gate_decision", "confirmation_receipt"],
+                ["confirmation_receipt"],
             )
             return decision, published
 
@@ -339,28 +211,55 @@ class StructuredDatasetCanaryService:
     ) -> dict[str, Any]:
         existing = self._optional_read(project_id, run_id, "model_package.json", "publication_digest")
         if existing:
-            self._verify_model_binding(existing, confirmed, receipt, run_id)
-            self._ensure_controller_receipt(project_id, run_id, "model", existing["publication_digest"])
-            return existing
+            raise StructuredDatasetCanaryError(
+                "pre-existing model package is not current-attempt authority"
+            )
+        training_request = {
+            "schema_version": "structured_dataset_training_request.v1",
+            "project_id": project_id,
+            "run_id": run_id,
+            "confirmed_dataset_id": confirmed["confirmed_dataset_id"],
+            "confirmed_dataset_digest": confirmed["publication_digest"],
+            "confirmation_receipt_id": receipt["confirmation_receipt_id"],
+            "confirmation_receipt_digest": receipt["confirmation_receipt_digest"],
+            "seed": seed,
+            "training_configuration": {
+                "algorithm": "ridge_linear_regression",
+                "ridge": 1e-6,
+                "split": "molecule_paper_bipartite_components_with_external_holdout",
+            },
+        }
+        training_request["training_request_digest"] = digest_json(training_request)
+        request_path = self._path(project_id, run_id, "training_request.json")
+        if request_path.exists():
+            raise StructuredDatasetCanaryError(
+                "pre-existing training request is not current-attempt authority"
+            )
+        publish_fresh_bytes(
+            request_path, canonical_json_bytes(training_request) + b"\n"
+        )
         checkpoint_path = self._path(project_id, run_id, "model_checkpoint.json")
         if checkpoint_path.exists():
-            checkpoint = self._read_checkpoint(checkpoint_path)
-        else:
-            with self._span("model.train", project_id, run_id, "train"):
-                self._stage(project_id, run_id, "model.train", RunStatus.RUNNING, timestamp)
-                rows = self._confirmed_rows(project_id, run_id, confirmed)
-                checkpoint = _fit_baseline(rows, seed=seed)
-                checkpoint.update(
-                    {
-                        "schema_version": "structured_dataset_baseline_checkpoint.v1",
-                        "project_id": project_id,
-                        "run_id": run_id,
-                        "confirmed_dataset_id": confirmed["confirmed_dataset_id"],
-                        "confirmed_dataset_digest": confirmed["publication_digest"],
-                        "seed": seed,
-                    }
-                )
-                publish_fresh_bytes(checkpoint_path, canonical_json_bytes(checkpoint) + b"\n")
+            raise StructuredDatasetCanaryError(
+                "pre-existing training checkpoint is not current-attempt authority"
+            )
+        with self._span("model.train", project_id, run_id, "train"):
+            self._stage(project_id, run_id, "model.train", RunStatus.RUNNING, timestamp)
+            rows = self._confirmed_rows(project_id, run_id, confirmed)
+            checkpoint = _fit_baseline(rows, seed=seed)
+            checkpoint.update(
+                {
+                    "schema_version": "structured_dataset_baseline_checkpoint.v1",
+                    "project_id": project_id,
+                    "run_id": run_id,
+                    "confirmed_dataset_id": confirmed["confirmed_dataset_id"],
+                    "confirmed_dataset_digest": confirmed["publication_digest"],
+                    "confirmation_receipt_digest": receipt["confirmation_receipt_digest"],
+                    "training_request_digest": training_request["training_request_digest"],
+                    "seed": seed,
+                }
+            )
+            publish_fresh_bytes(checkpoint_path, canonical_json_bytes(checkpoint) + b"\n")
         self._fault(fault_after, "training_checkpoint")
         checkpoint_bytes, checkpoint_sha = read_regular_file_bound(checkpoint_path, max_bytes=2 * 1024 * 1024)
         package = {
@@ -372,6 +271,7 @@ class StructuredDatasetCanaryService:
             "confirmed_dataset_digest": confirmed["publication_digest"],
             "confirmation_receipt_id": receipt["confirmation_receipt_id"],
             "confirmation_receipt_digest": receipt["confirmation_receipt_digest"],
+            "training_request_digest": training_request["training_request_digest"],
             "split_manifest": checkpoint["split_manifest"],
             "training_configuration": checkpoint["training_configuration"],
             "random_seed": seed,
@@ -381,7 +281,7 @@ class StructuredDatasetCanaryService:
             "checkpoint_digest": "sha256:" + checkpoint_sha,
             "metrics": checkpoint["metrics"],
             "applicability_domain_metadata": checkpoint["applicability_domain"],
-            "created_by_task": "train_model",
+            "created_by_task": "train_structured_dataset_canary",
             "fresh_training": True,
             "created_at": timestamp,
         }
@@ -394,7 +294,6 @@ class StructuredDatasetCanaryService:
             },
         )
         self._fault(fault_after, "model_publication")
-        self._write_controller_receipt(project_id, run_id, "model", published["publication_digest"], timestamp)
         self._stage(project_id, run_id, "model.train", RunStatus.SUCCEEDED, timestamp, ["model_package"])
         return published
 
@@ -411,9 +310,9 @@ class StructuredDatasetCanaryService:
     ) -> dict[str, Any]:
         existing = self._optional_read(project_id, run_id, "generation.json", "publication_digest")
         if existing:
-            self._verify_generation_binding(existing, model, confirmed, run_id)
-            self._ensure_controller_receipt(project_id, run_id, "generation", existing["publication_digest"])
-            return existing
+            raise StructuredDatasetCanaryError(
+                "pre-existing generation publication is not current-attempt authority"
+            )
         request = {
             "schema_version": "structured_dataset_generation_request.v1",
             "project_id": project_id,
@@ -433,26 +332,11 @@ class StructuredDatasetCanaryService:
         request_digest = digest_json(request)
         request_path = self._path(project_id, run_id, "generation_request.json")
         if request_path.exists():
-            if self._read_checkpoint(request_path) != request:
-                raise RecoveryRequiredError("generation request was replaced")
-        else:
-            publish_fresh_bytes(request_path, canonical_json_bytes(request) + b"\n")
+            raise StructuredDatasetCanaryError(
+                "pre-existing generation request is not current-attempt authority"
+            )
+        publish_fresh_bytes(request_path, canonical_json_bytes(request) + b"\n")
         self._fault(fault_after, "generation_request")
-        dispatch_path = self._path(project_id, run_id, "generation_dispatch.json")
-        if dispatch_path.exists():
-            dispatch = self._read_checkpoint(dispatch_path)
-            if dispatch.get("outcome") == "unknown":
-                self._recovery_stage(project_id, run_id, "candidate.generate", timestamp)
-                raise RecoveryRequiredError("generation dispatch outcome requires exact reconciliation")
-        else:
-            dispatch = {
-                "schema_version": "structured_dataset_generation_dispatch.v1",
-                "request_digest": request_digest,
-                "dispatch_id": "dispatch-" + request_digest.removeprefix("sha256:")[:24],
-                "outcome": "completed",
-            }
-            publish_fresh_bytes(dispatch_path, canonical_json_bytes(dispatch) + b"\n")
-        self._fault(fault_after, "generation_dispatch")
         with self._span("candidate.generate", project_id, run_id, "generate"):
             self._stage(project_id, run_id, "candidate.generate", RunStatus.RUNNING, timestamp)
             candidates = _deterministic_generation(seed=seed, count=24)
@@ -467,7 +351,7 @@ class StructuredDatasetCanaryService:
                 "confirmed_dataset_id": confirmed["confirmed_dataset_id"],
                 "confirmed_dataset_digest": confirmed["publication_digest"],
                 "generation_request_digest": request_digest,
-                "dispatch_id": dispatch["dispatch_id"],
+                "execution_authority": "harness_controller_local_dispatch_receipt",
                 "generation_config": request["generation_config"],
                 "objective": request["objective"],
                 "constraints": request["constraints"],
@@ -482,7 +366,6 @@ class StructuredDatasetCanaryService:
             published = self._publish(project_id, run_id, "generation.json", payload, "publication_digest")
             self._register(project_id, run_id, {"generation_publication": "structured_dataset_canary/generation.json"})
             self._fault(fault_after, "generation_publication")
-            self._write_controller_receipt(project_id, run_id, "generation", published["publication_digest"], timestamp)
             self._stage(project_id, run_id, "candidate.generate", RunStatus.SUCCEEDED, timestamp, ["generation_publication"])
             return published
 
@@ -501,11 +384,8 @@ class StructuredDatasetCanaryService:
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
         old_topn = self._optional_read(project_id, run_id, "topn.json", "publication_digest")
         if old_topn:
-            return (
-                self._read(project_id, run_id, "prediction.json", "publication_digest"),
-                self._read(project_id, run_id, "validation.json", "publication_digest"),
-                self._read(project_id, run_id, "ranking.json", "publication_digest"),
-                old_topn,
+            raise StructuredDatasetCanaryError(
+                "pre-existing Top-N is not current-attempt authority"
             )
         checkpoint = self._read_checkpoint(self._path(project_id, run_id, "model_checkpoint.json"))
         if checkpoint.get("run_id") != run_id or checkpoint.get("confirmed_dataset_digest") != confirmed["publication_digest"]:
@@ -705,7 +585,7 @@ class StructuredDatasetCanaryService:
             "bindings": bindings,
             "source_roster_digest": digest_json(bindings),
             "replay_digest": digest_json(semantic_chain),
-            "registry_digest": digest_json(registry),
+            "input_registry_digest": digest_json(registry),
             "recovery_findings": {
                 "training_idempotency_key": values["model"]["publication_digest"],
                 "generation_idempotency_key": values["generation"]["generation_request_digest"],
@@ -738,10 +618,23 @@ class StructuredDatasetCanaryService:
             raise StructuredDatasetCanaryError("canary evidence scope mismatch")
         raw = self._read(project_id, run_id, "raw_dataset.json", "raw_publication_digest")
         review = self._read(project_id, run_id, "review_snapshot.json", "review_snapshot_digest")
-        decision = self._read_decision(self._path(project_id, run_id, "gate_decision.json"))
         receipt = self._read(
             project_id, run_id, "confirmation_receipt.json", "confirmation_receipt_digest"
         )
+        matching_decisions = [
+            decision
+            for decision in (
+                GateDecision.model_validate(item)
+                for item in self.storage.read_gate_decisions(project_id, run_id)
+            )
+            if digest_json(decision.model_dump(mode="json"))
+            == receipt.get("gate_decision_digest")
+        ]
+        if len(matching_decisions) != 1:
+            raise StructuredDatasetCanaryError(
+                "confirmation receipt lacks one exact canonical GateDecision"
+            )
+        decision = matching_decisions[0].model_dump(mode="json")
         verify_confirmation_authority(
             raw=raw,
             review=review,
@@ -757,8 +650,49 @@ class StructuredDatasetCanaryService:
         self._confirmed_rows(project_id, run_id, confirmed)
         model = self._read(project_id, run_id, "model_package.json", "publication_digest")
         self._verify_model_binding(model, confirmed, receipt, run_id)
+        training_request = self._read_checkpoint(
+            self._path(project_id, run_id, "training_request.json")
+        )
+        request_digest = str(training_request.get("training_request_digest") or "")
+        request_material = dict(training_request)
+        request_material.pop("training_request_digest", None)
+        checkpoint = self._read_checkpoint(
+            self._path(project_id, run_id, "model_checkpoint.json")
+        )
+        if (
+            request_digest != digest_json(request_material)
+            or model.get("training_request_digest") != request_digest
+            or checkpoint.get("training_request_digest") != request_digest
+            or checkpoint.get("confirmation_receipt_digest")
+            != receipt["confirmation_receipt_digest"]
+            or checkpoint.get("confirmed_dataset_digest")
+            != confirmed["publication_digest"]
+            or checkpoint.get("seed") != model.get("random_seed")
+        ):
+            raise StructuredDatasetCanaryError(
+                "training request, checkpoint, and model package binding mismatch"
+            )
         generation = self._read(project_id, run_id, "generation.json", "publication_digest")
         self._verify_generation_binding(generation, model, confirmed, run_id)
+        generation_request = self._read_checkpoint(
+            self._path(project_id, run_id, "generation_request.json")
+        )
+        generated_candidates = json.loads(
+            read_regular_file_bound(
+                self._path(project_id, run_id, "generated_candidates.json"),
+                max_bytes=8 * 1024 * 1024,
+            )[0]
+        )
+        if (
+            generation.get("generation_request_digest")
+            != digest_json(generation_request)
+            or generation.get("candidate_roster_digest")
+            != digest_json(generated_candidates)
+            or generated_candidates != generation.get("candidate_roster")
+        ):
+            raise StructuredDatasetCanaryError(
+                "generation request and candidate roster binding mismatch"
+            )
         prediction = self._read(project_id, run_id, "prediction.json", "publication_digest")
         validation = self._read(project_id, run_id, "validation.json", "publication_digest")
         ranking = self._read(project_id, run_id, "ranking.json", "publication_digest")
@@ -813,9 +747,153 @@ class StructuredDatasetCanaryService:
             raise StructuredDatasetCanaryError("evidence binding roster mismatch")
         if evidence.get("replay_digest") != digest_json(actual):
             raise StructuredDatasetCanaryError("evidence replay digest mismatch")
-        current = self.inspection_projection(project_id=project_id, run_id=run_id)
-        if current is None or current["status"] != "succeeded":
-            raise StructuredDatasetCanaryError("canary authority chain is incomplete")
+
+    @classmethod
+    def verify_harness_task_publication(
+        cls,
+        *,
+        storage: ProjectStorage,
+        project_id: str,
+        run_id: str,
+        task_id: str,
+    ) -> None:
+        """Exact-verify BR1 outputs for Controller completion/reconstruction."""
+
+        receipt_path = (
+            storage.run_dir(project_id, run_id)
+            / "structured_dataset_canary"
+            / "confirmation_receipt.json"
+        )
+        trusted = set()
+        if receipt_path.exists():
+            trusted.add(
+                str(
+                    read_json_artifact(
+                        receipt_path,
+                        digest_field="confirmation_receipt_digest",
+                    ).get("actor")
+                    or ""
+                )
+            )
+        service = cls(
+            storage=storage,
+            trusted_actors=trusted,
+            harness_authority_managed=True,
+        )
+        raw = service._read(
+            project_id, run_id, "raw_dataset.json", "raw_publication_digest"
+        )
+        review = service._read(
+            project_id, run_id, "review_snapshot.json", "review_snapshot_digest"
+        )
+        if (
+            review.get("raw_dataset_id") != raw.get("dataset_id")
+            or review.get("raw_dataset_digest") != raw.get("dataset_digest")
+        ):
+            raise StructuredDatasetCanaryError("review snapshot Raw Dataset binding mismatch")
+        service._raw_rows(project_id, run_id, raw)
+        if task_id == "prepare_structured_dataset_canary":
+            return
+
+        receipt = service._read(
+            project_id,
+            run_id,
+            "confirmation_receipt.json",
+            "confirmation_receipt_digest",
+        )
+        matching = [
+            decision
+            for decision in (
+                GateDecision.model_validate(item)
+                for item in storage.read_gate_decisions(project_id, run_id)
+            )
+            if digest_json(decision.model_dump(mode="json"))
+            == receipt.get("gate_decision_digest")
+        ]
+        if len(matching) != 1:
+            raise StructuredDatasetCanaryError(
+                "confirmation receipt lacks one exact canonical GateDecision"
+            )
+        verify_confirmation_authority(
+            raw=raw,
+            review=review,
+            decision=matching[0].model_dump(mode="json"),
+            receipt=receipt,
+            trusted_actors=trusted,
+            project_id=project_id,
+            run_id=run_id,
+        )
+        confirmed = service._read(
+            project_id, run_id, "confirmed_dataset.json", "publication_digest"
+        )
+        service._verify_confirmed_binding(confirmed, receipt)
+        service._confirmed_rows(project_id, run_id, confirmed)
+        if task_id == "confirm_structured_dataset_canary":
+            return
+
+        model = service._read(
+            project_id, run_id, "model_package.json", "publication_digest"
+        )
+        service._verify_model_binding(model, confirmed, receipt, run_id)
+        training_request = service._read_checkpoint(
+            service._path(project_id, run_id, "training_request.json")
+        )
+        request_digest = str(training_request.pop("training_request_digest", ""))
+        checkpoint_path = service._path(
+            project_id, run_id, "model_checkpoint.json"
+        )
+        checkpoint = service._read_checkpoint(checkpoint_path)
+        _, checkpoint_sha = read_regular_file_bound(
+            checkpoint_path, max_bytes=8 * 1024 * 1024
+        )
+        if (
+            request_digest != digest_json(training_request)
+            or model.get("training_request_digest") != request_digest
+            or checkpoint.get("training_request_digest") != request_digest
+            or checkpoint.get("confirmed_dataset_digest")
+            != confirmed["publication_digest"]
+            or checkpoint.get("confirmation_receipt_digest")
+            != receipt["confirmation_receipt_digest"]
+            or checkpoint.get("seed") != model.get("random_seed")
+            or model.get("checkpoint_digest") != "sha256:" + checkpoint_sha
+        ):
+            raise StructuredDatasetCanaryError(
+                "training request, checkpoint, and model package binding mismatch"
+            )
+        if task_id == "train_structured_dataset_canary":
+            return
+
+        generation = service._read(
+            project_id, run_id, "generation.json", "publication_digest"
+        )
+        service._verify_generation_binding(generation, model, confirmed, run_id)
+        generation_request = service._read_checkpoint(
+            service._path(project_id, run_id, "generation_request.json")
+        )
+        generated_candidates = json.loads(
+            read_regular_file_bound(
+                service._path(project_id, run_id, "generated_candidates.json"),
+                max_bytes=8 * 1024 * 1024,
+            )[0]
+        )
+        if (
+            generation.get("generation_request_digest")
+            != digest_json(generation_request)
+            or generation.get("candidate_roster_digest")
+            != digest_json(generated_candidates)
+            or generated_candidates != generation.get("candidate_roster")
+        ):
+            raise StructuredDatasetCanaryError(
+                "generation request and candidate roster binding mismatch"
+            )
+        if task_id == "generate_structured_dataset_canary":
+            return
+        if task_id != "evaluate_structured_dataset_canary":
+            raise StructuredDatasetCanaryError("unknown Structured Dataset task")
+        evidence = service._read(
+            project_id, run_id, "evidence.json", "evidence_digest"
+        )
+        service._verify_final_evidence(project_id, run_id, evidence)
 
     def _verify_confirmed_binding(self, confirmed: Mapping[str, Any], receipt: Mapping[str, Any]) -> None:
         verify_publication(confirmed, digest_field="publication_digest")
@@ -900,13 +978,8 @@ class StructuredDatasetCanaryService:
         publish_fresh_bytes(path, payload)
 
     def _register(self, project_id: str, run_id: str, artifacts: dict[str, str]) -> None:
-        existing = self.storage.read_artifact_registry(project_id, run_id)
-        conflicts = {key: value for key, value in artifacts.items() if key in existing and existing[key] != value}
-        if conflicts:
-            raise StructuredDatasetCanaryError("Artifact Registry binding conflict")
-        additions = {key: value for key, value in artifacts.items() if key not in existing}
-        if additions:
-            self.storage.register_new_artifact_registry_paths(project_id, run_id, additions)
+        # Output registration belongs exclusively to RunPlanExecutor.
+        return
 
     def _stage(
         self,
@@ -917,77 +990,8 @@ class StructuredDatasetCanaryService:
         timestamp: str,
         artifact_ids: list[str] | None = None,
     ) -> None:
-        previous = self.storage.read_stage_state(project_id, run_id)
-        history = list(previous.history) if previous else []
-        if previous and (previous.stage != stage or previous.status != status):
-            history.append(
-                StageHistoryItem(
-                    stage=previous.stage,
-                    status=previous.status,
-                    updated_at=previous.updated_at,
-                    note="structured_dataset_canary",
-                )
-            )
-        refs = [
-            ArtifactRef(
-                artifact_id=item,
-                relative_path=self.storage.read_artifact_registry(project_id, run_id).get(item, ""),
-                producer_task_id=stage,
-            )
-            for item in (artifact_ids or [])
-        ]
-        self.storage.write_stage_state(
-            project_id,
-            run_id,
-            StageState(
-                stage=stage,
-                status=status,
-                started_at=previous.started_at if previous and previous.stage == stage else timestamp,
-                ended_at=timestamp if status in {RunStatus.SUCCEEDED, RunStatus.FAILED} else None,
-                updated_at=timestamp,
-                details={"authority": "molly_stage_state", "canary": "structured_dataset_v1"},
-                artifacts=refs,
-                history=history,
-            ),
-        )
-
-    def _recovery_stage(self, project_id: str, run_id: str, stage: str, timestamp: str) -> None:
-        self._stage(project_id, run_id, stage, RunStatus.RUNNING, timestamp)
-        state = self.storage.read_stage_state(project_id, run_id)
-        assert state is not None
-        self.storage.write_stage_state(
-            project_id, run_id, state.model_copy(update={"details": state.details | {"recovery_required": True}})
-        )
-
-    def _write_controller_receipt(self, project_id: str, run_id: str, kind: str, publication_digest: str, timestamp: str) -> None:
-        payload = {
-            "schema_version": "structured_dataset_controller_completion_receipt.v1",
-            "project_id": project_id,
-            "run_id": run_id,
-            "task": kind,
-            "publication_digest": publication_digest,
-            "outcome": "completed",
-            "created_at": timestamp,
-        }
-        self._publish(project_id, run_id, f"{kind}_controller_receipt.json", payload, "receipt_digest")
-
-    def _ensure_controller_receipt(self, project_id: str, run_id: str, kind: str, publication_digest: str) -> None:
-        path = self._path(project_id, run_id, f"{kind}_controller_receipt.json")
-        if not path.exists():
-            self._recovery_stage(project_id, run_id, f"{kind}.reconcile", self.clock())
-            # The publication and Registry binding were re-verified by the
-            # caller. Adopt that exact effect; never execute the tool again.
-            self._write_controller_receipt(
-                project_id,
-                run_id,
-                kind,
-                publication_digest,
-                self.clock(),
-            )
-            return
-        receipt = read_json_artifact(path, digest_field="receipt_digest")
-        if receipt.get("publication_digest") != publication_digest:
-            raise RecoveryRequiredError(f"{kind} Controller receipt binding mismatch")
+        # StageState belongs exclusively to RunPlanExecutor.
+        return
 
     @staticmethod
     def _read_checkpoint(path: Path) -> dict[str, Any]:
@@ -996,10 +1000,6 @@ class StructuredDatasetCanaryService:
         if not isinstance(payload, dict):
             raise StructuredDatasetCanaryError("checkpoint must be an object")
         return payload
-
-    @staticmethod
-    def _read_decision(path: Path) -> dict[str, Any]:
-        return StructuredDatasetCanaryService._read_checkpoint(path)
 
     @staticmethod
     def _fault(fault_after: str, boundary: str) -> None:
@@ -1170,16 +1170,7 @@ def _fit_baseline(rows: list[dict[str, str]], *, seed: int) -> dict[str, Any]:
         )
     if len(samples) < 4:
         raise StructuredDatasetCanaryError("confirmed dataset has too few valid rows for fresh training")
-    assignments = []
-    for item in samples:
-        bucket = int(hashlib.sha256((item["inchikey"] + f":{seed}").encode()).hexdigest()[:8], 16) % 5
-        split = "external_holdout" if bucket == 0 else "test" if bucket == 1 else "train"
-        assignments.append({"row_id": item["row_id"], "inchikey": item["inchikey"], "paper_id": item["paper_id"], "split": split})
-    if sum(item["split"] == "train" for item in assignments) < 3:
-        assignments = [
-            dict(item, split="train" if index < len(assignments) - 2 else "test" if index == len(assignments) - 2 else "external_holdout")
-            for index, item in enumerate(assignments)
-        ]
+    assignments, component_roster = _component_split_assignments(samples, seed=seed)
     split_by_row = {item["row_id"]: item["split"] for item in assignments}
     training = [item for item in samples if split_by_row[item["row_id"]] == "train"]
     coefficients = _ridge_fit([item["features"] for item in training], [item["target"] for item in training], ridge=1e-6)
@@ -1191,8 +1182,10 @@ def _fit_baseline(rows: list[dict[str, str]], *, seed: int) -> dict[str, Any]:
         "coefficients": coefficients,
         "feature_names": ["mw", "logp", "tpsa", "rings", "hetero_atoms"],
         "split_manifest": {
-            "strategy": "molecule_group_plus_paper_manifest_with_external_holdout",
+            "strategy": "molecule_paper_bipartite_components_with_external_holdout",
             "assignments": assignments,
+            "components": component_roster,
+            "component_roster_digest": digest_json(component_roster),
             "molecule_group_digest": digest_json(sorted(item["inchikey"] for item in assignments)),
             "paper_group_digest": digest_json(sorted({item["paper_id"] for item in assignments})),
         },
@@ -1210,6 +1203,109 @@ def _fit_baseline(rows: list[dict[str, str]], *, seed: int) -> dict[str, Any]:
             "similarity_threshold": 0.20,
         },
     }
+
+
+def _component_split_assignments(
+    samples: list[dict[str, Any]], *, seed: int
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """Split connected molecule-paper components, never individual rows.
+
+    Molecules and papers form a bipartite graph.  Any records sharing either
+    identity therefore share a connected component and must remain in one
+    split.  A dataset with fewer than three components cannot honestly provide
+    train, test, and external-holdout partitions and is rejected.
+    """
+
+    parents: dict[str, str] = {}
+
+    def find(node: str) -> str:
+        parents.setdefault(node, node)
+        while parents[node] != node:
+            parents[node] = parents[parents[node]]
+            node = parents[node]
+        return node
+
+    def union(left: str, right: str) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parents[max(left_root, right_root)] = min(left_root, right_root)
+
+    for item in samples:
+        molecule = f"molecule:{item['inchikey']}"
+        paper = f"paper:{item['paper_id']}"
+        union(molecule, paper)
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in samples:
+        grouped.setdefault(find(f"molecule:{item['inchikey']}"), []).append(item)
+    if len(grouped) < 3:
+        raise StructuredDatasetCanaryError(
+            "confirmed dataset needs at least three independent molecule-paper components"
+        )
+
+    components: list[dict[str, Any]] = []
+    for members in grouped.values():
+        row_ids = sorted(str(item["row_id"]) for item in members)
+        inchikeys = sorted({str(item["inchikey"]) for item in members})
+        paper_ids = sorted({str(item["paper_id"]) for item in members})
+        identity = {
+            "row_ids": row_ids,
+            "inchikeys": inchikeys,
+            "paper_ids": paper_ids,
+        }
+        components.append(
+            {
+                **identity,
+                "component_digest": digest_json(identity),
+                "order_digest": digest_json({"seed": seed, **identity}),
+            }
+        )
+    components.sort(key=lambda item: (item["order_digest"], item["component_digest"]))
+
+    # Reserve complete components for independent evaluation, then place every
+    # remaining component in training.  This is deterministic and never falls
+    # back to row order.
+    split_by_component = {
+        component["component_digest"]: (
+            "external_holdout" if index == 0 else "test" if index == 1 else "train"
+        )
+        for index, component in enumerate(components)
+    }
+    if sum(len(item["row_ids"]) for item in components[2:]) < 3:
+        raise StructuredDatasetCanaryError(
+            "molecule-paper component split leaves too few training records"
+        )
+    row_split = {
+        row_id: split_by_component[component["component_digest"]]
+        for component in components
+        for row_id in component["row_ids"]
+    }
+    assignments = [
+        {
+            "row_id": str(item["row_id"]),
+            "inchikey": str(item["inchikey"]),
+            "paper_id": str(item["paper_id"]),
+            "component_digest": next(
+                component["component_digest"]
+                for component in components
+                if str(item["row_id"]) in component["row_ids"]
+            ),
+            "split": row_split[str(item["row_id"])],
+        }
+        for item in sorted(samples, key=lambda value: str(value["row_id"]))
+    ]
+    roster = [
+        {
+            "component_digest": component["component_digest"],
+            "row_ids": component["row_ids"],
+            "inchikeys": component["inchikeys"],
+            "paper_ids": component["paper_ids"],
+            "split": split_by_component[component["component_digest"]],
+        }
+        for component in components
+    ]
+    return assignments, roster
 
 
 def _deterministic_generation(*, seed: int, count: int) -> list[dict[str, str]]:
@@ -1332,9 +1428,7 @@ def _require_rdkit() -> None:
 
 
 __all__ = [
-    "RecoveryRequiredError",
     "StructuredDatasetCanaryError",
-    "StructuredDatasetCanaryResult",
     "StructuredDatasetCanaryService",
     "validate_candidates",
 ]

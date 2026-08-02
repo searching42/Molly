@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": [
     "schema_version", "run_id", "project_id", "test_mode", "bindings",
-    "source_roster_digest", "replay_digest", "registry_digest",
+    "source_roster_digest", "replay_digest", "input_registry_digest",
     "recovery_findings", "privacy_findings", "authority_isolation", "seed",
     "claim_boundary", "private_real_tool_completed", "created_at", "evidence_digest"
   ],
@@ -29,7 +29,7 @@
     },
     "source_roster_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "replay_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "registry_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "input_registry_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "recovery_findings": {"type": "object"},
     "privacy_findings": {"type": "object"},
     "authority_isolation": {"const": "telemetry_non_authoritative_fail_open"},

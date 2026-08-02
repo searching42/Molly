@@ -106,12 +106,14 @@ after StageState/Registry commit but before publication/Controller receipt is
 projected as `recovery_required`, never as task success.
 
 Artifact bytes are never returned. Registry relative paths are never returned.
-For BR1, the optional `structured_dataset_canary` projection exact-reads only
-bounded privacy-safe canary publication JSON and projects IDs/digests, current
-stage, Registry/source-roster digests and recovery status. It never returns the
-Raw/Confirmed CSV, SMILES roster, model checkpoint, private paths or environment
-metadata. Existing Planner/Controller verifiers and canary publication readers
-perform content verification behind their authority boundaries.
+BR1 does not add a canary-directory projection or source kind. Its prepare,
+confirm, train, generate and evaluate tasks and their model/generation/Top-N
+artifacts appear only through the existing verified Controller task and artifact
+projections. A self-consistent `structured_dataset_canary/` directory, without
+the current proposal, Permission, authorization, Controller receipts, Registry
+bindings and verified local publications, cannot change the inspection digest or
+claim success. Raw/Confirmed CSV, SMILES rosters, checkpoints, paths and
+environment metadata are never returned.
 
 ## Privacy boundary
 

@@ -265,6 +265,7 @@ def build_confirmation_authority(
     confirmed_row_roster: list[str] | None = None,
     excluded_row_roster: list[str] | None = None,
     decision_time: str | None = None,
+    gate_decision: GateDecision | None = None,
 ) -> tuple[GateDecision, dict[str, Any]]:
     verify_publication(raw, digest_field="raw_publication_digest")
     verify_publication(review, digest_field="review_snapshot_digest")
@@ -291,7 +292,7 @@ def build_confirmation_authority(
     if sorted(confirmed + excluded) != sorted(all_rows) or set(confirmed) & set(excluded):
         raise ConfirmationAuthorityError("confirmation row roster mismatch")
     timestamp = decision_time or now_iso()
-    decision = GateDecision(
+    decision = gate_decision or GateDecision(
         gate=GateName.TRAIN_CONFIG,
         approved=True,
         actor=clean_actor,
@@ -300,6 +301,15 @@ def build_confirmation_authority(
         approved_snapshot_id=str(review["review_snapshot_id"]),
         approved_snapshot_hash=str(review["review_snapshot_digest"]),
     )
+    if (
+        decision.gate != GateName.TRAIN_CONFIG
+        or not decision.approved
+        or decision.actor != clean_actor
+        or not decision.approved_snapshot_id
+        or not decision.approved_snapshot_hash
+    ):
+        raise ConfirmationAuthorityError("GateDecision does not approve the exact confirmation task")
+    timestamp = decision.approved_at
     decision_digest = digest_json(decision.model_dump(mode="json"))
     material = {
         "schema_version": CONFIRMATION_RECEIPT_SCHEMA,
@@ -312,6 +322,8 @@ def build_confirmation_authority(
         "review_snapshot_digest": review["review_snapshot_digest"],
         "gate": GateName.TRAIN_CONFIG.value,
         "gate_decision_digest": decision_digest,
+        "gate_snapshot_id": decision.approved_snapshot_id,
+        "gate_snapshot_digest": decision.approved_snapshot_hash,
         "confirmed_row_roster": confirmed,
         "confirmed_row_roster_digest": digest_json(confirmed),
         "excluded_row_roster": excluded,
@@ -371,10 +383,10 @@ def verify_confirmation_authority(
         raise ConfirmationAuthorityError("GateDecision does not approve training")
     if parsed.actor not in set(trusted_actors) or receipt.get("actor") != parsed.actor:
         raise ConfirmationAuthorityError("confirmation actor is not trusted")
-    if parsed.approved_snapshot_id != review["review_snapshot_id"]:
-        raise ConfirmationAuthorityError("GateDecision review snapshot ID mismatch")
-    if parsed.approved_snapshot_hash != review["review_snapshot_digest"]:
-        raise ConfirmationAuthorityError("GateDecision review snapshot digest mismatch")
+    if receipt.get("gate_snapshot_id") != parsed.approved_snapshot_id:
+        raise ConfirmationAuthorityError("confirmation Gate snapshot ID mismatch")
+    if receipt.get("gate_snapshot_digest") != parsed.approved_snapshot_hash:
+        raise ConfirmationAuthorityError("confirmation Gate snapshot digest mismatch")
     if receipt.get("decision_time") != parsed.approved_at:
         raise ConfirmationAuthorityError("GateDecision time binding mismatch")
     if str(parsed.approved_at or "") < str(review.get("created_at") or ""):

@@ -3,39 +3,34 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ai4s_agent.storage import ProjectStorage
-from ai4s_agent.structured_dataset_canary import StructuredDatasetCanaryService
+from ai4s_agent.structured_dataset_canary_harness import run_structured_dataset_ci_harness
 from tests.test_structured_dataset_confirmation import NOW, dataset_bytes
 
 
-def test_concurrent_repeated_read_is_stable_and_read_only(tmp_path: Path) -> None:
+def test_controller_exact_replay_is_stable_and_read_only(tmp_path: Path) -> None:
     source = tmp_path / "raw.csv"
     source.write_bytes(dataset_bytes())
     storage = ProjectStorage(tmp_path / "workspace")
     storage.create_project("project-1", name="Fixture", created_at=NOW)
-    service = StructuredDatasetCanaryService(
-        storage=storage, trusted_actors={"test-actor"}, clock=lambda: NOW,
-    )
-    result = service.run_ci_reference(
+    result = run_structured_dataset_ci_harness(
+        storage=storage,
         project_id="project-1", run_id="run-1", raw_csv=source,
-        actor="test-actor", seed=59, created_at=NOW,
+        actor="test-actor", seed=59,
     )
     root = storage.projects_root / "project-1"
     before = _snapshot(root)
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        projections = list(
-            executor.map(
-                lambda _: service.inspection_projection(project_id="project-1", run_id="run-1"),
-                range(32),
-            )
-        )
+    replay = run_structured_dataset_ci_harness(
+        storage=storage,
+        project_id="project-1", run_id="run-1", raw_csv=source,
+        actor="test-actor", seed=59,
+    )
 
-    assert all(item == projections[0] for item in projections)
-    assert projections[0]["bindings"]["evidence"]["object_digest"] == result.evidence["evidence_digest"]
+    assert replay.controller_execution_id == result.controller_execution_id
+    assert replay.evidence["evidence_digest"] == result.evidence["evidence_digest"]
     assert _snapshot(root) == before
 
 
