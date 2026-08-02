@@ -1111,6 +1111,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 验证证据：Replanner 专项 `12 passed`；PR-BL～PR-BO、Permission/authorization/start-intent、AuthoritySet、Controller、Execution Agent 与 schema 回归 `304 passed`；provider/settings/conversation/privacy/Gate/Stage/Registry 代表链 `135 passed`；其他 schema/tracing 组合回归 `45 passed`；最终核心相邻回归 `204 passed`；本地 PR Fast `1131 passed, 5403 deselected`；`compileall`、`git diff --check` 与 4-shard assignment validation 通过。完整套件仍以 GitHub 4-shard Full CI 为权威。
 - 批准人：待 repository-owner review；不标 `DONE`、`M3H-GATE-005 V`、M3.5 完成或 Replanner runtime acceptance。
 
+### 2026-08-02：PR-BP inline review blockers 收口，保持 Draft 待 latest-HEAD CI
+
+- 决策：统一所有 Replanner LLM prose 字段的具体载荷安全策略，不再将 OLED `host material` / `host–dopant` 领域术语当作基础设施；从 v1 trigger 枚举移除无 exact verifier evidence binding 的 `verifier_outcome`；application 在 current recompile 前 exact-adopt revision 已确定并发布的 successor，使历史 effect reconciliation 与后续 current-source drift 分离。
+- 原计划：Replanner service 额外正则屏蔽裸 `host` 且未覆盖 stop/success prose；v1 允许客户端声称 `verifier_outcome` 却无 outcome ID/digest；successor-before-receipt 恢复和已完成 receipt replay 仍依赖 current Registry/source verification。
+- 新计划：Pydantic response source 对 rationale、question prompt/reason、stop conditions 与 success criteria 共用 path/endpoint/credential assignment/execution-output/shell-payload 检测；standalone verifier trigger 留待完整 StageState/Registry/verified-publication source roster 的新版本；PR-BL proposal store 新增只验证 immutable publication canonical bytes 的 historical reader，application 再对 revision candidate、digest、diff、parent/supersedes 和 receipt 做 exact binding。
+- 依据：Replanner 专项新增 OLED 合法 prose、五类字段不安全载荷、无证据 verifier trigger、successor-before-receipt 后 Registry/source drift fresh-process adoption、receipt 后 drift exact replay、publication request binding 替换拒绝回归；Replanner 专项 `21 passed`，PR-BL proposal/Replanner/schema/Permission 最小回归链 `178 passed`，本地 PR Fast `1131 passed, 5412 deselected`，`compileall`、`git diff --check` 与 4-shard assignment validation 通过。GitHub Full CI/CodeQL 结果待最新修复 HEAD 触发后更新。
+- 影响任务：`M3H-011` 保持 `I/T/— / IN_PROGRESS`；`M3H-GATE-005`、`M3H-GATE-002`、`M3H-GATE-003` 均不标 `V`；PR-BQ / `M3H-012` 保持 `DEFERRED`，不声明 owner approval、Ready、merge 或 runtime acceptance。
+- 新增风险：historical reader 只能用于已由 immutable revision 确定的 effect reconciliation，不能代替新 application 的 current verification；未来恢复 `verifier_outcome` 前必须先版本化 exact evidence contract。
+- 批准人：待 repository-owner review；保持 Draft。
+
 后续路线调整必须追加：
 
 ```text

@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -816,15 +815,51 @@ class ScientificAgentReplannerService:
                     raise ScientificAgentReplannerConflict(
                         "revision was already applied by a different request"
                     )
-                publication = self.proposal_store.read(
+                publication = self.proposal_store.read_immutable_publication(
                     project_id=clean_project,
                     proposal_id=existing_receipt.successor_proposal_id,
-                    verify_current=True,
+                    expected_request_digest=self._successor_publication_request_digest(
+                        revision
+                    ),
+                )
+                self._verify_applied_successor(
+                    revision=revision,
+                    publication=publication,
+                    receipt=existing_receipt,
                 )
                 return ReplannerApplyResult(
                     revision=revision,
                     successor=publication.proposal,
                     receipt=existing_receipt,
+                    replayed=True,
+                )
+            successor = revision.successor_candidate
+            try:
+                publication = self.proposal_store.read_immutable_publication(
+                    project_id=clean_project,
+                    proposal_id=successor.proposal_id,
+                    expected_request_digest=self._successor_publication_request_digest(
+                        revision
+                    ),
+                )
+            except FileNotFoundError:
+                publication = None
+            if publication is not None:
+                self._verify_applied_successor(
+                    revision=revision,
+                    publication=publication,
+                    receipt=None,
+                )
+                receipt = self._application_receipt(
+                    revision=revision,
+                    successor=publication.proposal,
+                    client_request_id=request.client_request_id,
+                )
+                committed = self.store.publish_application(receipt)
+                return ReplannerApplyResult(
+                    revision=revision,
+                    successor=publication.proposal,
+                    receipt=committed,
                     replayed=True,
                 )
             baseline = self._verify_baseline(revision.replan_request)
@@ -853,7 +888,6 @@ class ScientificAgentReplannerService:
                 != revision.baseline_permission_decision_digest
             ):
                 raise ScientificAgentReplannerStale("revision candidate or canonical diff is stale")
-            successor = revision.successor_candidate
             with self.tracer.start_span(
                 "replanner.apply",
                 attributes={"revision_id": revision.revision_id},
@@ -863,13 +897,7 @@ class ScientificAgentReplannerService:
                     catalog=baseline.current_observation.tool_catalog,
                     llm_response=successor.validated_llm_response,
                     proposal=successor,
-                    request_digest=_agent_digest(
-                        {
-                            "schema_version": "agent_plan_successor_publication_request.v1",
-                            "revision_id": revision.revision_id,
-                            "revision_digest": revision.revision_digest,
-                        }
-                    ),
+                    request_digest=self._successor_publication_request_digest(revision),
                 )
                 apply_span.set_attribute(
                     "successor_proposal_id", publication.proposal.proposal_id
@@ -879,22 +907,10 @@ class ScientificAgentReplannerService:
                     {"successor_proposal_id": publication.proposal.proposal_id},
                 )
             self.store._fault("after_successor_proposal")
-            receipt = AgentPlanRevisionApplicationReceipt(
-                project_id=clean_project,
-                revision_id=revision.revision_id,
-                revision_digest=revision.revision_digest,
-                baseline_proposal_id=revision.replan_request.baseline_proposal_id,
-                baseline_proposal_digest=revision.replan_request.baseline_proposal_digest,
-                successor_proposal_id=publication.proposal.proposal_id,
-                successor_proposal_digest=publication.proposal.proposal_digest,
-                successor_semantic_plan_id=publication.proposal.semantic_plan_id,
-                successor_semantic_plan_digest=publication.proposal.semantic_plan_digest,
-                plan_diff_id=revision.plan_diff.plan_diff_id,
-                plan_diff_digest=revision.plan_diff.plan_diff_digest,
-                parent_proposal_id=revision.replan_request.baseline_proposal_id,
-                supersedes_proposal_id=revision.replan_request.baseline_proposal_id,
+            receipt = self._application_receipt(
+                revision=revision,
+                successor=publication.proposal,
                 client_request_id=request.client_request_id,
-                created_at=self.clock(),
             )
             existing = self.store.publish_application(receipt)
             replayed = False
@@ -903,6 +919,84 @@ class ScientificAgentReplannerService:
                 successor=publication.proposal,
                 receipt=existing,
                 replayed=replayed,
+            )
+
+    def _application_receipt(
+        self,
+        *,
+        revision: AgentPlanRevisionProposal,
+        successor: AgentExecutionPlanProposal,
+        client_request_id: str,
+    ) -> AgentPlanRevisionApplicationReceipt:
+        return AgentPlanRevisionApplicationReceipt(
+            project_id=revision.project_id,
+            revision_id=revision.revision_id,
+            revision_digest=revision.revision_digest,
+            baseline_proposal_id=revision.replan_request.baseline_proposal_id,
+            baseline_proposal_digest=revision.replan_request.baseline_proposal_digest,
+            successor_proposal_id=successor.proposal_id,
+            successor_proposal_digest=successor.proposal_digest,
+            successor_semantic_plan_id=successor.semantic_plan_id,
+            successor_semantic_plan_digest=successor.semantic_plan_digest,
+            plan_diff_id=revision.plan_diff.plan_diff_id,
+            plan_diff_digest=revision.plan_diff.plan_diff_digest,
+            parent_proposal_id=revision.replan_request.baseline_proposal_id,
+            supersedes_proposal_id=revision.replan_request.baseline_proposal_id,
+            client_request_id=client_request_id,
+            created_at=self.clock(),
+        )
+
+    @staticmethod
+    def _successor_publication_request_digest(
+        revision: AgentPlanRevisionProposal,
+    ) -> str:
+        return _agent_digest(
+            {
+                "schema_version": "agent_plan_successor_publication_request.v1",
+                "revision_id": revision.revision_id,
+                "revision_digest": revision.revision_digest,
+            }
+        )
+
+    @staticmethod
+    def _verify_applied_successor(
+        *,
+        revision: AgentPlanRevisionProposal,
+        publication: ScientificAgentPlanPublication,
+        receipt: AgentPlanRevisionApplicationReceipt | None,
+    ) -> None:
+        successor = revision.successor_candidate
+        if (
+            successor is None
+            or publication.proposal.model_dump(mode="json")
+            != successor.model_dump(mode="json")
+            or publication.proposal.proposal_digest
+            != revision.successor_proposal_digest
+        ):
+            raise ScientificAgentReplannerConflict(
+                "published successor does not exactly match the immutable revision"
+            )
+        if receipt is not None and (
+            receipt.project_id != revision.project_id
+            or receipt.revision_id != revision.revision_id
+            or receipt.revision_digest != revision.revision_digest
+            or receipt.baseline_proposal_id
+            != revision.replan_request.baseline_proposal_id
+            or receipt.baseline_proposal_digest
+            != revision.replan_request.baseline_proposal_digest
+            or receipt.successor_proposal_id != successor.proposal_id
+            or receipt.successor_proposal_digest != successor.proposal_digest
+            or receipt.successor_semantic_plan_id != successor.semantic_plan_id
+            or receipt.successor_semantic_plan_digest != successor.semantic_plan_digest
+            or receipt.plan_diff_id != revision.plan_diff.plan_diff_id
+            or receipt.plan_diff_digest != revision.plan_diff.plan_diff_digest
+            or receipt.parent_proposal_id
+            != revision.replan_request.baseline_proposal_id
+            or receipt.supersedes_proposal_id
+            != revision.replan_request.baseline_proposal_id
+        ):
+            raise ScientificAgentReplannerConflict(
+                "application receipt does not exactly bind the immutable revision and successor"
             )
 
     def read_application(
@@ -1321,26 +1415,6 @@ class ScientificAgentReplannerService:
             properties = tools[tool_id].option_schema.get("properties", {})
             if set(patch).difference(properties):
                 raise ScientificAgentReplannerResponseInvalid("revision contains an unknown option")
-        unsafe = re.compile(
-            r"(?:^|[\s\"'=])/(?:[^\s/]+/)*[^\s/]+|"
-            r"https?://|\b(?:ssh|scp|bash|zsh|powershell|command|argv|host|hostname)\b|"
-            r"\b(?:api[_-]?key|token|password|secret|credential)\b|"
-            r"\b(?:traceback|exception|stderr|stdout)\b|`|\$\(|&&|\|\|",
-            re.IGNORECASE,
-        )
-        texts = [
-            response.rationale_summary,
-            *(
-                text
-                for question in response.unresolved_questions
-                for text in (question.prompt, question.reason)
-            ),
-        ]
-        if any(unsafe.search(text) for text in texts):
-            raise ScientificAgentReplannerResponseInvalid(
-                "revision response contains a privacy-unsafe field"
-            )
-
     def _verify_revision_current(self, revision: AgentPlanRevisionProposal) -> None:
         baseline = self._verify_baseline(revision.replan_request)
         observation = self._build_observation(revision.replan_request, baseline)

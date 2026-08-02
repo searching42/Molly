@@ -176,6 +176,18 @@ _AGENT_SECRET_LITERAL_PATTERN = re.compile(
 )
 _AGENT_PRIVATE_KEY_PATTERN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE)
 _AGENT_ENV_ASSIGNMENT_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]{2,}\s*=")
+_AGENT_LLM_ENDPOINT_PATTERN = re.compile(r"\b(?:https?|ssh)://", re.IGNORECASE)
+_AGENT_LLM_SHELL_PAYLOAD_PATTERN = re.compile(
+    r"`|\$\(|&&|\|\||"
+    r"\b(?:command|argv|shell|hostname|endpoint)\b\s*[:=]|"
+    r"\b(?:ssh|scp)\s+\S+|"
+    r"\b(?:bash|zsh|powershell|sh)\s+(?:-[A-Za-z]+\s+)?\S+",
+    re.IGNORECASE,
+)
+_AGENT_LLM_RAW_EXECUTION_OUTPUT_PATTERN = re.compile(
+    r"\btraceback\s*\(most recent call last\)|\b(?:stdout|stderr)\s*[:=]",
+    re.IGNORECASE,
+)
 _AGENT_FORBIDDEN_KEY_TOKENS = frozenset(
     {
         "adapter",
@@ -270,6 +282,37 @@ def _agent_safe_text(value: Any, *, field: str, max_length: int = 4096, allow_em
         or _AGENT_ENV_ASSIGNMENT_PATTERN.search(clean)
     ):
         raise ValueError(f"{field} contains private infrastructure, command, credential, or authority material")
+    return clean
+
+
+def _agent_safe_llm_prose(
+    value: Any,
+    *,
+    field: str,
+    max_length: int = 4096,
+    allow_empty: bool = True,
+) -> str:
+    """Validate LLM prose without treating scientific domain words as infrastructure.
+
+    Concrete endpoints, assignments, execution output, and shell payloads are
+    rejected.  Bare words such as ``host`` remain valid scientific prose; for
+    example, OLED host-material and host–dopant terminology is not an endpoint.
+    """
+
+    clean = _agent_safe_text(
+        value,
+        field=field,
+        max_length=max_length,
+        allow_empty=allow_empty,
+    )
+    if (
+        _AGENT_LLM_ENDPOINT_PATTERN.search(clean)
+        or _AGENT_LLM_SHELL_PAYLOAD_PATTERN.search(clean)
+        or _AGENT_LLM_RAW_EXECUTION_OUTPUT_PATTERN.search(clean)
+    ):
+        raise ValueError(
+            f"{field} contains private infrastructure, command, credential, or execution-output material"
+        )
     return clean
 
 
@@ -7801,7 +7844,6 @@ class AgentPlanReplanTriggerKind(str, Enum):
     EXPLICIT_USER_FEEDBACK = "explicit_user_feedback"
     CONTROLLER_FAILED = "controller_failed"
     CONTROLLER_TERMINAL = "controller_terminal"
-    VERIFIER_OUTCOME = "verifier_outcome"
     PLAN_SOURCE_DRIFT = "plan_source_drift"
     USER_REQUESTED_REVISION = "user_requested_revision"
 
@@ -8054,7 +8096,7 @@ class AgentReplanLLMResponse(BaseModel):
     @field_validator("rationale_summary")
     @classmethod
     def validate_rationale(cls, value: str) -> str:
-        return _agent_safe_text(value, field="rationale_summary", max_length=1000)
+        return _agent_safe_llm_prose(value, field="rationale_summary", max_length=1000)
 
     @field_validator("retain_tool_ids", "add_tool_ids", "remove_tool_ids")
     @classmethod
@@ -8100,10 +8142,33 @@ class AgentReplanLLMResponse(BaseModel):
     def validate_criteria(cls, value: list[str] | None, info: Any) -> list[str] | None:
         if value is None:
             return None
-        return _agent_string_list(value, field=info.field_name, sort_values=False, max_items=1024)
+        if len(value) > 1024:
+            raise ValueError(f"{info.field_name} contains too many entries")
+        cleaned = [
+            _agent_safe_llm_prose(
+                item,
+                field=f"{info.field_name}[{index}]",
+                allow_empty=False,
+            )
+            for index, item in enumerate(value)
+        ]
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError(f"{info.field_name} must not contain duplicates")
+        return cleaned
 
     @model_validator(mode="after")
     def validate_intent(self) -> "AgentReplanLLMResponse":
+        for index, question in enumerate(self.unresolved_questions):
+            _agent_safe_llm_prose(
+                question.prompt,
+                field=f"unresolved_questions[{index}].prompt",
+                allow_empty=False,
+            )
+            _agent_safe_llm_prose(
+                question.reason,
+                field=f"unresolved_questions[{index}].reason",
+                allow_empty=False,
+            )
         rosters = [self.retain_tool_ids, self.add_tool_ids, self.remove_tool_ids]
         flattened = [item for roster in rosters for item in roster]
         if len(flattened) != len(set(flattened)):

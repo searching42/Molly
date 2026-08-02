@@ -705,7 +705,6 @@
         "explicit_user_feedback",
         "controller_failed",
         "controller_terminal",
-        "verifier_outcome",
         "plan_source_drift",
         "user_requested_revision"
       ],

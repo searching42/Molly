@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.schemas import (
@@ -12,6 +13,7 @@ from ai4s_agent.schemas import (
     AgentExecutionPlanLLMResponse,
     AgentPlanAuthorizationRequest,
     AgentPlanFeedbackRequest,
+    AgentExecutionPlanQuestion,
     AgentPlanRevisionApplicationRequest,
     AgentReplanLLMResponse,
     AgentTaskDispatchIntent,
@@ -26,18 +28,21 @@ from ai4s_agent.scientific_agent_authorization import (
 )
 from ai4s_agent.scientific_agent_plan import (
     AgentProjectObservationBuilder,
+    ScientificAgentPlanPublicationConflict,
     ScientificAgentPlanProposalStore,
     ScientificAgentPlanService,
 )
 from ai4s_agent.scientific_agent_replanner import (
     ScientificAgentReplannerConflict,
     ScientificAgentReplannerOutcomeUnknown,
+    ScientificAgentReplannerResponseInvalid,
     ScientificAgentReplannerService,
     ScientificAgentReplannerStale,
     ScientificAgentReplannerStore,
     canonical_plan_diff,
     plan_semantic_projection,
 )
+from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.storage import ProjectStorage
 from tests.execution_agent_test_support import local_controller_execution
 
@@ -293,6 +298,141 @@ def test_no_change_is_immutable_and_cannot_be_applied(tmp_path) -> None:
                 expected_revision_digest=created.proposal.revision_digest,
                 client_request_id="no-change-apply",
             ),
+        )
+
+
+def test_oled_host_domain_prose_is_valid_in_every_replanner_text_field(tmp_path) -> None:
+    _, _, _, baseline, authorization, service = _baseline(tmp_path)
+    feedback = service.create_feedback(
+        project_id="project-1",
+        request=AgentPlanFeedbackRequest(
+            run_id="run-1",
+            client_request_id="feedback-oled-host",
+            feedback="Review the OLED material pairing.",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    revision = service.create_revision(
+        project_id="project-1",
+        payload=_revision_payload(
+            baseline, authorization, feedback, request_id="revision-oled-host"
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        provider=StubLLMProvider(
+            response=AgentReplanLLMResponse(
+                rationale_summary="Change the host material after review.",
+                option_patch={"generate_candidates": {"count": 4}},
+                stop_conditions=["Stop if the host material is unsuitable."],
+                success_criteria=["Review the host–dopant pair."],
+                unresolved_questions=[
+                    AgentExecutionPlanQuestion(
+                        question_id="oled-host-review",
+                        prompt="Which host material should be retained?",
+                        reason="The host–dopant pair requires user review.",
+                    )
+                ],
+            ).model_dump(mode="json")
+        ),
+    ).proposal
+    assert revision.status == "review_required"
+    assert revision.parsed_llm_response.rationale_summary.startswith("Change the host")
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("rationale_summary", "/tmp/private/model.bin"),
+        ("question_prompt", "api_key=super-secret-value"),
+        ("question_reason", "Use endpoint=https://private.example.test"),
+        ("stop_conditions", "bash -c whoami"),
+        ("success_criteria", "stderr: credential material"),
+    ],
+)
+def test_every_replanner_prose_field_rejects_concrete_private_or_command_payloads(
+    tmp_path, field: str, unsafe_value: str
+) -> None:
+    _, _, _, baseline, authorization, service = _baseline(tmp_path)
+    feedback = service.create_feedback(
+        project_id="project-1",
+        request=AgentPlanFeedbackRequest(
+            run_id="run-1",
+            client_request_id="feedback-unsafe-prose",
+            feedback="Review a bounded option change.",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    response: dict[str, object] = {
+        "schema_version": "agent_replan_llm_response.v1",
+        "option_patch": {"generate_candidates": {"count": 4}},
+    }
+    if field == "rationale_summary":
+        response[field] = unsafe_value
+    elif field == "question_prompt":
+        response["unresolved_questions"] = [
+            {
+                "question_id": "unsafe-question",
+                "prompt": unsafe_value,
+                "reason": "Review is required.",
+                "blocks_proposal": True,
+            }
+        ]
+    elif field == "question_reason":
+        response["unresolved_questions"] = [
+            {
+                "question_id": "unsafe-question",
+                "prompt": "Which bounded option should be used?",
+                "reason": unsafe_value,
+                "blocks_proposal": True,
+            }
+        ]
+    else:
+        response[field] = [unsafe_value]
+
+    with pytest.raises(ScientificAgentReplannerResponseInvalid):
+        service.create_revision(
+            project_id="project-1",
+            payload=_revision_payload(
+                baseline,
+                authorization,
+                feedback,
+                request_id=f"revision-unsafe-{field.replace('_', '-')}",
+            ),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+            provider=StubLLMProvider(response=response),
+        )
+
+
+def test_v1_replan_request_rejects_unbound_verifier_outcome_trigger(tmp_path) -> None:
+    _, _, _, baseline, authorization, service = _baseline(tmp_path)
+    feedback = service.create_feedback(
+        project_id="project-1",
+        request=AgentPlanFeedbackRequest(
+            run_id="run-1",
+            client_request_id="feedback-verifier-trigger",
+            feedback="Review the current plan.",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    with pytest.raises(ValidationError):
+        service.create_revision(
+            project_id="project-1",
+            payload={
+                **_revision_payload(
+                    baseline,
+                    authorization,
+                    feedback,
+                    request_id="revision-verifier-trigger",
+                ),
+                "trigger_kind": "verifier_outcome",
+            },
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+            provider=StubLLMProvider(response={"no_change": True}),
         )
 
 
@@ -585,7 +725,7 @@ def test_unknown_provider_outcome_is_stable_and_never_retried(tmp_path) -> None:
 
 
 def test_application_recovers_successor_published_before_receipt(tmp_path) -> None:
-    storage, _, _, baseline, authorization, service = _baseline(tmp_path)
+    storage, proposal_store, authorization_service, baseline, authorization, service = _baseline(tmp_path)
     feedback = service.create_feedback(
         project_id="project-1",
         request=AgentPlanFeedbackRequest(
@@ -624,11 +764,146 @@ def test_application_recovers_successor_published_before_receipt(tmp_path) -> No
         service.apply_revision(
             project_id="project-1", revision_id=revision.revision_id, request=request
         )
-    recovered = service.apply_revision(
+    unrelated_task = next(
+        task
+        for task in proposal_store.registry.list_tasks()
+        if task.task_id != "generate_candidates"
+    )
+    proposal_store.registry = AtomicTaskRegistry([unrelated_task])
+    recovered_service = ScientificAgentReplannerService(
+        storage=storage,
+        proposal_store=proposal_store,
+        observation_builder=service.observation_builder,
+        authorization_service=authorization_service,
+        control_store=service.control_store,
+        controller=NoController(),
+        clock=lambda: NOW,
+    )
+
+    def stale_sources(_request):
+        raise ScientificAgentReplannerStale("current sources drifted after publication")
+
+    recovered_service._verify_baseline = stale_sources  # type: ignore[method-assign]
+    recovered = recovered_service.apply_revision(
         project_id="project-1", revision_id=revision.revision_id, request=request
     )
     assert recovered.receipt.successor_proposal_digest == revision.successor_proposal_digest
     assert recovered.dispatched is False
+    assert recovered.replayed is True
+
+
+def test_completed_application_exact_replay_ignores_later_current_source_drift(tmp_path) -> None:
+    storage, proposal_store, authorization_service, baseline, authorization, service = _baseline(tmp_path)
+    feedback = service.create_feedback(
+        project_id="project-1",
+        request=AgentPlanFeedbackRequest(
+            run_id="run-1",
+            client_request_id="feedback-applied-replay",
+            feedback="Use five candidates.",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    revision = service.create_revision(
+        project_id="project-1",
+        payload=_revision_payload(
+            baseline, authorization, feedback, request_id="revision-applied-replay"
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        provider=StubLLMProvider(
+            response=AgentReplanLLMResponse(
+                option_patch={"generate_candidates": {"count": 5}}
+            ).model_dump(mode="json")
+        ),
+    ).proposal
+    request = AgentPlanRevisionApplicationRequest(
+        expected_revision_digest=revision.revision_digest,
+        client_request_id="application-applied-replay",
+    )
+    applied = service.apply_revision(
+        project_id="project-1", revision_id=revision.revision_id, request=request
+    )
+
+    unrelated_task = next(
+        task
+        for task in proposal_store.registry.list_tasks()
+        if task.task_id != "generate_candidates"
+    )
+    proposal_store.registry = AtomicTaskRegistry([unrelated_task])
+    replay_service = ScientificAgentReplannerService(
+        storage=storage,
+        proposal_store=proposal_store,
+        observation_builder=service.observation_builder,
+        authorization_service=authorization_service,
+        control_store=service.control_store,
+        controller=NoController(),
+        clock=lambda: "2026-08-02T01:00:00Z",
+    )
+
+    def stale_sources(_request):
+        raise ScientificAgentReplannerStale("current sources drifted after receipt")
+
+    replay_service._verify_baseline = stale_sources  # type: ignore[method-assign]
+    replay = replay_service.apply_revision(
+        project_id="project-1", revision_id=revision.revision_id, request=request
+    )
+    assert replay.replayed is True
+    assert replay.receipt.model_dump(mode="json") == applied.receipt.model_dump(mode="json")
+    assert replay.successor.model_dump(mode="json") == applied.successor.model_dump(mode="json")
+
+
+def test_application_replay_rejects_replaced_successor_publication_request_binding(tmp_path) -> None:
+    storage, _, _, baseline, authorization, service = _baseline(tmp_path)
+    feedback = service.create_feedback(
+        project_id="project-1",
+        request=AgentPlanFeedbackRequest(
+            run_id="run-1",
+            client_request_id="feedback-request-binding",
+            feedback="Use seven candidates.",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    revision = service.create_revision(
+        project_id="project-1",
+        payload=_revision_payload(
+            baseline, authorization, feedback, request_id="revision-request-binding"
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        provider=StubLLMProvider(
+            response=AgentReplanLLMResponse(
+                option_patch={"generate_candidates": {"count": 7}}
+            ).model_dump(mode="json")
+        ),
+    ).proposal
+    request = AgentPlanRevisionApplicationRequest(
+        expected_revision_digest=revision.revision_digest,
+        client_request_id="application-request-binding",
+    )
+    applied = service.apply_revision(
+        project_id="project-1", revision_id=revision.revision_id, request=request
+    )
+    committed_path = (
+        storage.workspace_dir
+        / "projects"
+        / "project-1"
+        / "agent_plan_requests"
+        / applied.successor.client_request_id
+        / "committed.json"
+    )
+    committed = json.loads(committed_path.read_text(encoding="utf-8"))
+    committed["request_digest"] = "sha256:" + "0" * 64
+    committed_path.write_text(
+        json.dumps(committed, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ScientificAgentPlanPublicationConflict):
+        service.apply_revision(
+            project_id="project-1", revision_id=revision.revision_id, request=request
+        )
 
 
 def test_feedback_same_request_replays_original_bytes(tmp_path) -> None:

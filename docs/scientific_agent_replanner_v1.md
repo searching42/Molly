@@ -22,6 +22,19 @@ sources. Paths, hosts, commands, credentials, raw artifacts, stdout/stderr,
 provider payloads, exceptions, conversation history, and private reasoning are
 not projected. Unsafe LLM text is rejected rather than redacted.
 
+The v1 trigger enum accepts dedicated feedback, Controller failure/terminal,
+plan-source drift, and user-requested revision triggers. A standalone
+`verifier_outcome` trigger is intentionally not exposed in v1: it will require
+a future versioned binding that exact-identifies and current-verifies the
+project/run/task, StageState, Registry lineage, verified publication, and full
+source roster. A client-supplied outcome label is never verifier evidence.
+
+All LLM-controlled prose uses one concrete-payload policy across rationale,
+question prompt/reason, stop conditions, and success criteria. Private paths,
+endpoints, credential assignments, execution output, and shell payloads fail
+closed. Scientific domain language remains valid; in particular, OLED terms
+such as `host material` and `host–dopant pair` are not treated as hostnames.
+
 The validated LLM response is only a suggestion. The existing PR-BL catalog,
 `AtomicTaskRegistry`, dependency expansion, option compiler, artifact trust
 checks, route/profile selection, resource and budget checks, and Gate bindings
@@ -59,12 +72,23 @@ A revision proposal is immutable, `review_only=true`, `executable=false`,
 Executor, RemoteExecutionService, adapters, workers, Gate writers, StageState,
 Registry/publication writers, retry, recovery, or cancellation.
 
-Application is a separate explicit operation. It exact-reads the revision,
-re-verifies every baseline/source binding, rebuilds the current observation,
-recompiles the successor, and regenerates the diff. Only exact byte-equivalent
-candidate and diff material can be published. Application then uses the existing
-PR-BL immutable proposal store and records parent/supersedes bindings in an
-immutable application receipt. It never authorizes or dispatches.
+Application is a separate explicit operation. Before first publication it
+exact-reads the revision, re-verifies every baseline/source binding, rebuilds
+the current observation, recompiles the successor, and regenerates the diff.
+Only exact byte-equivalent candidate and diff material can be published.
+Application then uses the existing PR-BL immutable proposal store and records
+parent/supersedes bindings in an immutable application receipt. It never
+authorizes or dispatches.
+
+Crash reconciliation is historical rather than a new current-plan decision.
+If the revision-determined successor publication already exists, application
+first exact-reads every immutable publication file without consulting the
+current Registry or observation sources, proves the stored proposal equals the
+revision candidate and its digest/parent/diff bindings, and adopts it into the
+single application receipt. A completed application replay follows the same
+immutable reader. Later catalog, artifact, or profile drift can therefore make
+a new application stale, but cannot orphan an already-published successor or
+invalidate exact replay of its already-committed receipt.
 
 The old proposal and authorization stay immutable and remain bound only to the
 old digest. A material revision has a new proposal and semantic-plan digest.

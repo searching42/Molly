@@ -2289,6 +2289,93 @@ class ScientificAgentPlanProposalStore:
         proposal_id: str,
         verify_current: bool = True,
     ) -> ScientificAgentPlanPublication:
+        return self._read_publication(
+            project_id=project_id,
+            proposal_id=proposal_id,
+            verify_current=verify_current,
+            verify_compilation=True,
+        )
+
+    def read_immutable_publication(
+        self,
+        *,
+        project_id: str,
+        proposal_id: str,
+        expected_request_digest: str | None = None,
+    ) -> ScientificAgentPlanPublication:
+        """Exact-read a historical publication without consulting current sources.
+
+        This reader verifies every immutable publication file and canonical
+        projection.  It deliberately does not recompile with the current task
+        registry or assert that the observation is still current, so durable
+        effect reconciliation cannot be broken by later catalog/source drift.
+        """
+
+        publication = self._read_publication(
+            project_id=project_id,
+            proposal_id=proposal_id,
+            verify_current=False,
+            verify_compilation=False,
+        )
+        if expected_request_digest is not None:
+            self._verify_immutable_request_binding(
+                publication=publication,
+                expected_request_digest=expected_request_digest,
+            )
+        return publication
+
+    def _verify_immutable_request_binding(
+        self,
+        *,
+        publication: ScientificAgentPlanPublication,
+        expected_request_digest: str,
+    ) -> None:
+        proposal = publication.proposal
+        request_dir = self._request_dir(
+            project_id=proposal.project_id,
+            client_request_id=proposal.client_request_id,
+            create=False,
+        )
+        if request_dir is None:
+            raise ScientificAgentPlanPublicationConflict(
+                "proposal publication request binding is missing"
+            )
+        reservation = self._read_request_json(
+            request_dir / "reservation.json",
+            label="proposal request reservation",
+        )
+        expected_reservation = {
+            "schema_version": REQUEST_BINDING_SCHEMA_VERSION,
+            "status": "RESERVED",
+            "project_id": proposal.project_id,
+            "client_request_id": proposal.client_request_id,
+            "request_digest": expected_request_digest,
+        }
+        if reservation != expected_reservation:
+            raise ScientificAgentPlanPublicationConflict(
+                "proposal publication reservation binding mismatch"
+            )
+        committed = self._read_request_json(
+            request_dir / "committed.json",
+            label="committed proposal request",
+        )
+        expected_committed = self._request_binding_payload(
+            proposal=proposal,
+            request_digest=expected_request_digest,
+        ) | {"status": "COMMITTED"}
+        if committed != expected_committed:
+            raise ScientificAgentPlanPublicationConflict(
+                "committed proposal publication request binding mismatch"
+            )
+
+    def _read_publication(
+        self,
+        *,
+        project_id: str,
+        proposal_id: str,
+        verify_current: bool,
+        verify_compilation: bool,
+    ) -> ScientificAgentPlanPublication:
         clean_project_id = _safe_scope_id(project_id, field="project_id")
         clean_proposal_id = _safe_scope_id(proposal_id, field="proposal_id")
         proposal_dir = self._find_proposal_dir(clean_project_id, clean_proposal_id)
@@ -2334,11 +2421,12 @@ class ScientificAgentPlanProposalStore:
             or verification.get("executable") is not False
         ):
             raise ScientificAgentPlanError("stored proposal verification is invalid")
-        self._assert_compiled_proposal(
-            observation=observation,
-            llm_response=llm_response,
-            proposal=proposal,
-        )
+        if verify_compilation:
+            self._assert_compiled_proposal(
+                observation=observation,
+                llm_response=llm_response,
+                proposal=proposal,
+            )
         expected_payloads = self._publication_payloads(
             observation=observation,
             catalog=catalog,
