@@ -390,7 +390,7 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 
 优先级：`P0`
 
-范围状态：`READY`。M3 已完成并提供可重放、可归因的执行轨迹基础；PR-BL～PR-BP 已使 Planner、Permission、Authorization、Controller、Execution Agent 和 Replanner 的核心 contract 进入 `main`，但仍无代表性 runtime `V`。当前 P0 主线转向 unified read projection、observability、real canary、UI 与 release acceptance，PR-BQ1 / `M3H-010` 是唯一下一实现动作。M4 benchmark protocol 继续暂缓，避免抢占 M3.5 integration/runtime closure 的 P0 资源。
+范围状态：`READY`。M3 已完成并提供可重放、可归因的执行轨迹基础；PR-BL～PR-BP 已使 Planner、Permission、Authorization、Controller、Execution Agent 和 Replanner 的核心 contract 进入 `main`，但仍无代表性 runtime `V`。当前 P0 主线转向 unified read projection、observability、real canary、UI 与 release acceptance，PR-BQ1 / `M3H-010` 是唯一当前 `IN_PROGRESS` 实现动作。M4 benchmark protocol 继续暂缓，避免抢占 M3.5 integration/runtime closure 的 P0 资源。
 
 目标权限链：
 
@@ -449,7 +449,7 @@ M3.5 至少支持两种用户模式：
 | `M3H-007A` 建立 server-owned configured resource authority | `I/T/—` | `DONE` | PR-BM2 在 `a055a87` 获得 owner review approval，并由 PR #20 以 `5389a3c` 合并；从私有 server policy、exact connection/profile/probe、预算和完整 task roster 派生 immutable AuthoritySet，不创建 request 或 dispatch |
 | `M3H-008` Harness Controller 接入现有执行链 | `I/T/—` | `DONE` | PR-BN 最终 review HEAD `2fa4f74a4caa5618f5046151b6258b2d51f6e91f` 已通过 repository-owner review，并由 PR #21 以 merge commit `d4ac276d4faa6623ccaa7661a6d9db14e6225833` 合入 `main`；不据此声明真实 remote canary 或完整 Harness 完成 |
 | `M3H-009` 接入 Execution Agent LLM | `I/T/—` | `DONE` | PR-BO owner-approved implementation HEAD `c24da96b19ee5af5dda6b96ea8e3a05b0e88bd9f` 已通过 PR Fast、4-shard Full CI 与三类 CodeQL；PR #22 最终由 merge commit `ee1db0032d316d2ea71bfde4e1f6bbc03cd944a7` 合入 `main` |
-| `M3H-010` unified verified run inspection/read projection | `I(partial)/T(partial)/—` | `READY` | PR-BN 只提供 verifier-bound Controller observation 与 local/remote completion verification 的 prerequisite seam；完整的统一、read-only、current-verified run/Controller/Verifier/artifact projection 与 strict API 尚未实现，PR-BQ1 是 PR-BQ0 合并后的唯一下一实现动作；只有 authoritative StageState、Artifact Registry 和 verified publication 能支持结果状态 |
+| `M3H-010` unified verified run inspection/read projection | `I/T/—` | `IN_PROGRESS` | PR-BQ1 已实现单一 `agent_run_inspection.v1`、canonical source roster/digest、current/historical 分流、privacy-safe task/artifact lineage 与 strict read-only GET API，并新增 currentness/integrity/injection/no-side-effect/schema focused tests；无 Gate `V`、无 runtime acceptance，等待 GitHub Full CI、CodeQL 与 repository-owner review，不标 `DONE` |
 | `M3H-011` Replanner 与 plan revision | `I/T/—` | `DONE` | PR #23 在 reviewed HEAD `1f7ba18a6e79281190b10c2ca18f7d59adb97ed7` 通过 repository-owner review、PR Fast、4-shard Full CI 与 Actions/Python/JavaScript-TypeScript CodeQL，并由 merge commit `1dd70e6746ef0518a38aa0471fd657a5d4172ba5` 合入 `main`；material revision 创建新 proposal/semantic-plan digest，旧 proposal 与 authorization 保持 immutable，successor 必须重新 Permission evaluation 并获得新 trusted-user authorization；Replanner 不 authorize、start、advance、retry、recover、cancel 或 dispatch，无 exact verifier evidence binding 的 standalone `verifier_outcome` trigger 不属于 v1；不据此标记 `M3H-GATE-005 V`、M3.5 或 Molly v1 完成 |
 | `M3H-012` 统一 Plan/Tool/Permission/Replan UI | `I(partial)/T(partial)/—` | `DEFERRED` | PR-BQ3；待 BQ1 与 BQ2/BR1/BR2 契约稳定后解锁，优先复用 Flask UI 和现有 strict API，不建立第二权威 |
 | `M3H-013` Structured Dataset Canary | `I/T(partial)/—` | `DEFERRED` | PR-BR1；Raw/Confirmed CSV 必须在当前 run 重新训练、真实生成、预测与排序，不复用旧模型、旧 prediction 或 `existing_output` |
@@ -1328,6 +1328,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：继续增加底层契约导致 scope creep；UI 在 API 未稳定前开发导致返工；canary 复用旧模型或旧输出造成伪端到端；OTel/LangSmith 被误当作权威状态；TADF 数据不足却过度声明科学范围；私有论文或基础设施信息进入公共 evidence。
 - 批准人：repository owner（PR-BQ0 待 review；范围冻结以本 PR 合并后生效）。
 
+### 2026-08-02：PR-BQ1 unified verified run inspection v1 实现与自动测试完成，保持 Draft 待审
+
+- 决策：`M3H-010` 从 `I(partial)/T(partial)/— / READY` 更新为 `I/T/— / IN_PROGRESS`；新增唯一 canonical `agent_run_inspection.v1`、deterministic digest/source roster、strict read-only GET API，以及 plan/Permission/authorization/Controller/Execution Agent/Replanner/task/artifact 的 privacy-safe exact-bound 投影。
+- 原计划：PR-BN 仅提供 Controller verifier-bound observation prerequisite seam，后续 observability、canary 与 UI 尚无统一读取边界。
+- 新计划：PR-BQ1 只组合现有 current verifier 与 immutable historical reader；无法 current-verify 时按 stale/replaced/damaged/missing/incomplete taxonomy fail closed；历史 effect 不替代新 Permission、authorization、dispatch 或 current scientific state。后续仍按 `BQ1 → BQ2/BR1/BR2 → BQ3 → BR3` 推进。
+- 依据：新增 focused schema/currentness/integrity/client-injection/privacy/read-only/hash-seed/fresh-process/concurrency/local/remote/Gate/recovery/Execution Agent/Replanner tests `11 passed`；latest-code remote resource authority、Controller、Execution Agent、Replanner 与 inspection 相邻回归 `150 passed`；本地 PR Fast `1131 passed, 5423 deselected`；`compileall`、`git diff --check` 与 4-shard assignment validation 通过。完整套件仍以 GitHub 4-shard Full CI 为权威 evidence。
+- 影响任务：`M3H-010` 保持 `IN_PROGRESS`，等待 GitHub Full CI、CodeQL 与 repository-owner review；`M3H-012`～`M3H-015` 不提前解锁。本批次无 runtime acceptance、无 Gate `V`，不声明 M3.5 或 Molly v1 完成。
+- 新增风险：unified projection 必须继续随既有 authority schema 版本演进；任何新增 source 若影响状态或 lineage 必须进入 canonical roster，telemetry/UI/cache 永远不得提升为 authority。
+- 批准人：待 repository-owner review；保持 Draft，不标 `DONE`。
+
 后续路线调整必须追加：
 
 ```text
@@ -1345,11 +1355,11 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 唯一下一实现动作：PR-BQ1 — `M3H-010` unified verified run inspection/read projection（READY）
+### 当前实现动作：PR-BQ1 — `M3H-010` unified verified run inspection/read projection（IN_PROGRESS）
 
 任务：在不建立第二套 authority 的前提下，为现有 Planner、Permission、Authorization、Controller、Executor/remote lifecycle、Verifier、StageState、Artifact Registry、Execution Agent 和 Replanner 建立统一、read-only、current-verified 的 run inspection projection 与 strict API。该 projection 是后续 observability、canary 和 UI 的稳定读取边界，不得写入 execution、authorization 或 scientific result 状态。
 
-当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`而非 `DONE`；`M3H-001`～`M3H-009` 与 `M3H-011` 为 `I/T/— / DONE`；`M3H-010` 仅有 `I(partial)/T(partial)/—` prerequisite evidence，但作为唯一下一实现任务保持 `READY`；`M3H-012`～`M3H-015` 保持 `DEFERRED`。规范交付队列仅在 5.5.3 定义；后续任务按其依赖顺序逐步解锁。M4 不得抢占 P0，M5 仅可进行不阻塞 v1 的范围与数据充分性准备。
+当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`而非 `DONE`；`M3H-001`～`M3H-009` 与 `M3H-011` 为 `I/T/— / DONE`；`M3H-010` 已有 `I/T/—` 自动化证据并保持 `IN_PROGRESS`，等待 GitHub Full CI、CodeQL 与 repository-owner review；`M3H-012`～`M3H-015` 保持 `DEFERRED`。规范交付队列仅在 5.5.3 定义；后续任务按其依赖顺序逐步解锁。M4 不得抢占 P0，M5 仅可进行不阻塞 v1 的范围与数据充分性准备。
 
 必须验证：
 

@@ -4634,6 +4634,333 @@ class AgentHarnessControllerInspection(BaseModel):
         return payload
 
 
+class AgentRunInspectionStatus(str, Enum):
+    CURRENT = "current"
+    STALE_SOURCE = "stale_source"
+    REPLACED_SOURCE = "replaced_source"
+    DAMAGED_SOURCE = "damaged_source"
+    MISSING_SOURCE = "missing_source"
+    INCOMPLETE_AUTHORITY_CHAIN = "incomplete_authority_chain"
+    RECOVERY_REQUIRED = "recovery_required"
+
+
+class AgentRunInspectionSourceBinding(BaseModel):
+    """Privacy-safe exact source identity used by the unified projection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_name: str
+    source_kind: str
+    source_id: str
+    source_digest: str
+    currentness: Literal["current", "historical"] = "current"
+
+    @field_validator("source_name", "source_kind")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("source_id")
+    @classmethod
+    def validate_source_id(cls, value: str) -> str:
+        clean = _agent_safe_text(
+            value, field="source_id", max_length=256, allow_empty=False
+        )
+        if re.fullmatch(r"[a-z0-9][a-z0-9_.:-]{0,255}", clean) is None:
+            raise ValueError("source_id must be a privacy-safe canonical identifier")
+        return clean
+
+    @field_validator("source_digest")
+    @classmethod
+    def validate_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="source_digest")
+
+
+class AgentRunInspectionBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    object_id: str
+    object_digest: str
+
+    @field_validator("object_id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        clean = _agent_safe_text(
+            value, field="object_id", max_length=256, allow_empty=False
+        )
+        if re.fullmatch(r"[a-z0-9][a-z0-9_.:-]{0,255}", clean) is None:
+            raise ValueError("object_id must be a privacy-safe canonical identifier")
+        return clean
+
+    @field_validator("object_digest")
+    @classmethod
+    def validate_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="object_digest")
+
+
+class AgentRunPlanInspection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    proposal: AgentRunInspectionBinding
+    semantic_plan: AgentRunInspectionBinding
+    observation: AgentRunInspectionBinding
+    tool_catalog_digest: str
+    permission_decision: AgentRunInspectionBinding | None = None
+    permission_result: str = "not_evaluated"
+    authority_set: AgentRunInspectionBinding | None = None
+    authorization: AgentRunInspectionBinding | None = None
+    authorization_mode: str = ""
+    trusted_actor_binding_digest: str = ""
+    start_intent: AgentRunInspectionBinding | None = None
+    dispatch_state: str = "not_requested"
+    required_gates: list[str] = Field(default_factory=list)
+
+    @field_validator("tool_catalog_digest")
+    @classmethod
+    def validate_catalog_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="tool_catalog_digest")
+
+    @field_validator("trusted_actor_binding_digest")
+    @classmethod
+    def validate_actor_digest(cls, value: str) -> str:
+        return _agent_digest_value(
+            value, field="trusted_actor_binding_digest", allow_empty=True
+        )
+
+    @field_validator("permission_result", "authorization_mode", "dispatch_state")
+    @classmethod
+    def validate_states(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name, allow_empty=info.field_name == "authorization_mode")
+
+    @field_validator("required_gates")
+    @classmethod
+    def validate_gates(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="required_gates", sort_values=True)
+
+
+class AgentRunControllerInspection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    execution: AgentRunInspectionBinding
+    decision: AgentRunInspectionBinding | None = None
+    receipt: AgentRunInspectionBinding | None = None
+    controller_revision: int = Field(default=0, ge=0, le=1_000_000)
+    status: str
+    current_task_id: str = ""
+    execution_route: str = ""
+    durable_effect_state: str
+    recovery_state: str
+    inspection_digest: str
+
+    @field_validator(
+        "status", "current_task_id", "execution_route", "durable_effect_state", "recovery_state"
+    )
+    @classmethod
+    def validate_states(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"current_task_id", "execution_route"},
+        )
+
+    @field_validator("inspection_digest")
+    @classmethod
+    def validate_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="inspection_digest")
+
+
+class AgentRunToolCallInspection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    proposal: AgentRunInspectionBinding
+    status: str
+    application_receipt: AgentRunInspectionBinding | None = None
+    durable_effect_state: str
+
+    @field_validator("status", "durable_effect_state")
+    @classmethod
+    def validate_states(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+
+class AgentRunReplannerInspection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    revision: AgentRunInspectionBinding
+    status: str
+    feedback_receipt: AgentRunInspectionBinding | None = None
+    plan_diff: AgentRunInspectionBinding
+    successor_proposal: AgentRunInspectionBinding | None = None
+    application_receipt: AgentRunInspectionBinding | None = None
+    fresh_permission_required: bool
+    fresh_authorization_required: bool
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        return _agent_identifier(value, field="status")
+
+
+class AgentRunTaskInspection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    task_id: str
+    dependency_roster: list[str] = Field(default_factory=list)
+    execution_route: str
+    logical_profile_id: str = ""
+    requested_resource_summary_digest: str = ""
+    stage_state: AgentRunInspectionBinding | None = None
+    stage_status: str = "not_started"
+    registry_binding: AgentRunInspectionBinding | None = None
+    verified_publication: AgentRunInspectionBinding | None = None
+    input_artifact_refs: list[str] = Field(default_factory=list)
+    output_artifact_refs: list[str] = Field(default_factory=list)
+    verifier_supported_outcome: str = "not_available"
+    gate_requirements: list[str] = Field(default_factory=list)
+    gate_snapshot: AgentRunInspectionBinding | None = None
+    gate_decision: AgentRunInspectionBinding | None = None
+    recovery_required: bool = False
+
+    @field_validator("task_id", "execution_route", "logical_profile_id", "stage_status", "verifier_supported_outcome")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "logical_profile_id",
+        )
+
+    @field_validator("requested_resource_summary_digest")
+    @classmethod
+    def validate_resource_digest(cls, value: str) -> str:
+        return _agent_digest_value(
+            value, field="requested_resource_summary_digest", allow_empty=True
+        )
+
+    @field_validator(
+        "dependency_roster", "input_artifact_refs", "output_artifact_refs", "gate_requirements"
+    )
+    @classmethod
+    def validate_rosters(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=True)
+
+
+class AgentRunArtifactInspection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact_id: str
+    artifact_digest: str = ""
+    artifact_type: str
+    artifact_role: str
+    producer_task_id: str = ""
+    consumer_task_roster: list[str] = Field(default_factory=list)
+    registry_binding: AgentRunInspectionBinding | None = None
+    verified_publication_binding: AgentRunInspectionBinding | None = None
+    provenance_digest: str
+    currentness: Literal["current", "stale", "missing"]
+
+    @field_validator("artifact_id", "artifact_type", "artifact_role", "producer_task_id")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value, field=info.field_name, allow_empty=info.field_name == "producer_task_id"
+        )
+
+    @field_validator("artifact_digest", "provenance_digest")
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value, field=info.field_name, allow_empty=info.field_name == "artifact_digest"
+        )
+
+    @field_validator("consumer_task_roster")
+    @classmethod
+    def validate_consumers(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="consumer_task_roster", sort_values=True)
+
+
+class AgentRunInspection(BaseModel):
+    """Canonical, reconstructable, non-authoritative run inspection v1."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_run_inspection.v1"] = "agent_run_inspection.v1"
+    inspection_id: str = ""
+    inspection_digest: str = ""
+    project_id: str
+    run_id: str
+    created_at: str
+    read_only: Literal[True] = True
+    authoritative: Literal[False] = False
+    inspection_status: AgentRunInspectionStatus
+    reason_codes: list[str]
+    authoritative_status_available: bool
+    verifier_supported_run_outcome: str
+    scientific_success: Literal["not_asserted"] = "not_asserted"
+    plan: AgentRunPlanInspection
+    controller: AgentRunControllerInspection | None = None
+    tool_calls: list[AgentRunToolCallInspection] = Field(default_factory=list)
+    replanner: list[AgentRunReplannerInspection] = Field(default_factory=list)
+    tasks: list[AgentRunTaskInspection] = Field(default_factory=list)
+    artifacts: list[AgentRunArtifactInspection] = Field(default_factory=list)
+    source_roster: list[AgentRunInspectionSourceBinding]
+
+    @field_validator("inspection_id", "project_id", "run_id", "verifier_supported_run_outcome")
+    @classmethod
+    def validate_identifiers(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value, field=info.field_name, allow_empty=info.field_name == "inspection_id"
+        )
+
+    @field_validator("inspection_digest")
+    @classmethod
+    def validate_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="inspection_digest", allow_empty=True)
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_created_at(cls, value: str) -> str:
+        return _agent_safe_text(value, field="created_at", max_length=64, allow_empty=False)
+
+    @field_validator("reason_codes")
+    @classmethod
+    def validate_reason_codes(cls, value: list[str]) -> list[str]:
+        cleaned = _agent_string_list(value, field="reason_codes", sort_values=True, max_items=64)
+        if not cleaned or any(re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None for item in cleaned):
+            raise ValueError("inspection reason codes are invalid")
+        return cleaned
+
+    @model_validator(mode="after")
+    def bind_inspection(self) -> "AgentRunInspection":
+        object.__setattr__(self, "tool_calls", sorted(self.tool_calls, key=lambda item: item.proposal.object_id))
+        object.__setattr__(self, "replanner", sorted(self.replanner, key=lambda item: item.revision.object_id))
+        object.__setattr__(self, "tasks", sorted(self.tasks, key=lambda item: item.task_id))
+        object.__setattr__(self, "artifacts", sorted(self.artifacts, key=lambda item: item.artifact_id))
+        source_keys = [(item.source_name, item.source_kind, item.source_id) for item in self.source_roster]
+        if not source_keys or source_keys != sorted(source_keys) or len(source_keys) != len(set(source_keys)):
+            raise ValueError("inspection source roster must be non-empty, sorted and unique")
+        if self.authoritative_status_available != (
+            self.inspection_status in {AgentRunInspectionStatus.CURRENT, AgentRunInspectionStatus.RECOVERY_REQUIRED}
+        ):
+            raise ValueError("inspection authoritative-status availability is inconsistent")
+        expected = _agent_digest(self.semantic_material())
+        if self.inspection_digest and self.inspection_digest != expected:
+            raise ValueError("agent run inspection digest mismatch")
+        object.__setattr__(self, "inspection_digest", expected)
+        expected_id = f"run-inspection-{expected.split(':', 1)[1][:32]}"
+        if self.inspection_id and self.inspection_id != expected_id:
+            raise ValueError("agent run inspection ID must derive from its digest")
+        object.__setattr__(self, "inspection_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("inspection_id", None)
+        payload.pop("inspection_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
 class AgentHarnessControllerDecision(BaseModel):
     """Immutable deterministic selection of one bounded Controller action."""
 
@@ -9073,6 +9400,7 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_harness_controller_decision": AgentHarnessControllerDecision,
     "agent_harness_controller_action_receipt": AgentHarnessControllerActionReceipt,
     "agent_harness_controller_inspection": AgentHarnessControllerInspection,
+    "agent_run_inspection": AgentRunInspection,
     "agent_harness_gate_approval_request": AgentHarnessGateApprovalRequest,
     "agent_harness_remote_approval_request": AgentHarnessRemoteApprovalRequest,
     "agent_harness_local_dispatch_receipt": AgentHarnessLocalDispatchReceipt,
