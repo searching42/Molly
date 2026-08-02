@@ -1,0 +1,214 @@
+{
+  "$defs": {
+    "AgentPlanReplanTriggerKind": {
+      "enum": [
+        "explicit_user_feedback",
+        "controller_failed",
+        "controller_terminal",
+        "verifier_outcome",
+        "plan_source_drift",
+        "user_requested_revision"
+      ],
+      "title": "AgentPlanReplanTriggerKind",
+      "type": "string"
+    },
+    "AgentReplannerSourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_digest": {
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "source_kind": {
+          "title": "Source Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "source_id",
+        "source_digest",
+        "source_kind"
+      ],
+      "title": "AgentReplannerSourceBinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "agent_replanner_observation.v1",
+      "default": "agent_replanner_observation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "observation_id": {
+      "default": "",
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "observation_digest": {
+      "default": "",
+      "title": "Observation Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "trigger_kind": {
+      "$ref": "#/$defs/AgentPlanReplanTriggerKind"
+    },
+    "baseline_proposal_id": {
+      "title": "Baseline Proposal Id",
+      "type": "string"
+    },
+    "baseline_proposal_digest": {
+      "title": "Baseline Proposal Digest",
+      "type": "string"
+    },
+    "baseline_semantic_plan_id": {
+      "title": "Baseline Semantic Plan Id",
+      "type": "string"
+    },
+    "baseline_semantic_plan_digest": {
+      "title": "Baseline Semantic Plan Digest",
+      "type": "string"
+    },
+    "baseline_run_plan_digest": {
+      "title": "Baseline Run Plan Digest",
+      "type": "string"
+    },
+    "baseline_authorization_id": {
+      "title": "Baseline Authorization Id",
+      "type": "string"
+    },
+    "baseline_authorization_digest": {
+      "title": "Baseline Authorization Digest",
+      "type": "string"
+    },
+    "ordered_task_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Ordered Task Ids",
+      "type": "array"
+    },
+    "current_task_index": {
+      "anyOf": [
+        {
+          "maximum": 1023,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Current Task Index"
+    },
+    "controller_state": {
+      "title": "Controller State",
+      "type": "string"
+    },
+    "current_task_outcome": {
+      "title": "Current Task Outcome",
+      "type": "string"
+    },
+    "safe_reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Safe Reason Codes",
+      "type": "array"
+    },
+    "verified_artifact_lineage_digest": {
+      "title": "Verified Artifact Lineage Digest",
+      "type": "string"
+    },
+    "output_contract_status": {
+      "title": "Output Contract Status",
+      "type": "string"
+    },
+    "gate_status": {
+      "title": "Gate Status",
+      "type": "string"
+    },
+    "remote_approval_status": {
+      "title": "Remote Approval Status",
+      "type": "string"
+    },
+    "profile_resource_budget_digest": {
+      "title": "Profile Resource Budget Digest",
+      "type": "string"
+    },
+    "tool_catalog_digest": {
+      "title": "Tool Catalog Digest",
+      "type": "string"
+    },
+    "feedback_receipt_id": {
+      "default": "",
+      "title": "Feedback Receipt Id",
+      "type": "string"
+    },
+    "feedback_receipt_digest": {
+      "default": "",
+      "title": "Feedback Receipt Digest",
+      "type": "string"
+    },
+    "source_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentReplannerSourceBinding"
+      },
+      "title": "Source Bindings",
+      "type": "array"
+    },
+    "source_bindings_digest": {
+      "title": "Source Bindings Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "trigger_kind",
+    "baseline_proposal_id",
+    "baseline_proposal_digest",
+    "baseline_semantic_plan_id",
+    "baseline_semantic_plan_digest",
+    "baseline_run_plan_digest",
+    "baseline_authorization_id",
+    "baseline_authorization_digest",
+    "ordered_task_ids",
+    "controller_state",
+    "current_task_outcome",
+    "verified_artifact_lineage_digest",
+    "output_contract_status",
+    "gate_status",
+    "remote_approval_status",
+    "profile_resource_budget_digest",
+    "tool_catalog_digest",
+    "source_bindings",
+    "source_bindings_digest",
+    "created_at"
+  ],
+  "title": "AgentReplannerObservation",
+  "type": "object"
+}

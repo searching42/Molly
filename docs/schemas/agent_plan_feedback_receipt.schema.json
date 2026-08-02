@@ -1,0 +1,85 @@
+{
+  "additionalProperties": false,
+  "description": "Privacy-safe binding to private feedback; never approval or truth.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_plan_feedback_receipt.v1",
+      "default": "agent_plan_feedback_receipt.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "feedback_receipt_id": {
+      "default": "",
+      "title": "Feedback Receipt Id",
+      "type": "string"
+    },
+    "feedback_receipt_digest": {
+      "default": "",
+      "title": "Feedback Receipt Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "actor": {
+      "title": "Actor",
+      "type": "string"
+    },
+    "actor_source": {
+      "title": "Actor Source",
+      "type": "string"
+    },
+    "source_kind": {
+      "const": "explicit_user_feedback",
+      "default": "explicit_user_feedback",
+      "title": "Source Kind",
+      "type": "string"
+    },
+    "feedback_payload_digest": {
+      "title": "Feedback Payload Digest",
+      "type": "string"
+    },
+    "reason_code": {
+      "const": "EXPLICIT_USER_FEEDBACK_RECORDED",
+      "default": "EXPLICIT_USER_FEEDBACK_RECORDED",
+      "title": "Reason Code",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "approval": {
+      "const": false,
+      "default": false,
+      "title": "Approval",
+      "type": "boolean"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "client_request_id",
+    "actor",
+    "actor_source",
+    "feedback_payload_digest",
+    "created_at"
+  ],
+  "title": "AgentPlanFeedbackReceipt",
+  "type": "object"
+}

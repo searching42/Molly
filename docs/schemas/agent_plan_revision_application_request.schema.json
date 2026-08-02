@@ -1,0 +1,25 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "agent_plan_revision_application_request.v1",
+      "default": "agent_plan_revision_application_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "expected_revision_digest": {
+      "title": "Expected Revision Digest",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "expected_revision_digest",
+    "client_request_id"
+  ],
+  "title": "AgentPlanRevisionApplicationRequest",
+  "type": "object"
+}

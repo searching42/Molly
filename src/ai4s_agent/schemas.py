@@ -7797,6 +7797,754 @@ class ProjectMemoryUse(BaseModel):
     source_refs: list[str] = Field(default_factory=list)
 
 
+class AgentPlanReplanTriggerKind(str, Enum):
+    EXPLICIT_USER_FEEDBACK = "explicit_user_feedback"
+    CONTROLLER_FAILED = "controller_failed"
+    CONTROLLER_TERMINAL = "controller_terminal"
+    VERIFIER_OUTCOME = "verifier_outcome"
+    PLAN_SOURCE_DRIFT = "plan_source_drift"
+    USER_REQUESTED_REVISION = "user_requested_revision"
+
+
+class AgentPlanFeedbackRequest(BaseModel):
+    """Dedicated feedback input. Ordinary conversation is never accepted here."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_plan_feedback_request.v1"] = (
+        "agent_plan_feedback_request.v1"
+    )
+    run_id: str
+    client_request_id: str
+    feedback: str
+    source_kind: Literal["explicit_user_feedback"] = "explicit_user_feedback"
+
+    @field_validator("run_id", "client_request_id")
+    @classmethod
+    def validate_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("feedback")
+    @classmethod
+    def validate_feedback(cls, value: str) -> str:
+        clean = str(value)
+        if clean != clean.strip() or not clean or len(clean.encode("utf-8")) > 16_384:
+            raise ValueError("feedback must be non-empty canonical UTF-8 within 16384 bytes")
+        if "\x00" in clean:
+            raise ValueError("feedback contains a forbidden NUL character")
+        return clean
+
+
+class AgentPlanFeedbackReceipt(BaseModel):
+    """Privacy-safe binding to private feedback; never approval or truth."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_plan_feedback_receipt.v1"] = (
+        "agent_plan_feedback_receipt.v1"
+    )
+    feedback_receipt_id: str = ""
+    feedback_receipt_digest: str = ""
+    project_id: str
+    run_id: str
+    client_request_id: str
+    actor: str
+    actor_source: str
+    source_kind: Literal["explicit_user_feedback"] = "explicit_user_feedback"
+    feedback_payload_digest: str
+    reason_code: Literal["EXPLICIT_USER_FEEDBACK_RECORDED"] = (
+        "EXPLICIT_USER_FEEDBACK_RECORDED"
+    )
+    created_at: str
+    approval: Literal[False] = False
+    executable: Literal[False] = False
+
+    @field_validator(
+        "feedback_receipt_id", "project_id", "run_id", "client_request_id"
+    )
+    @classmethod
+    def validate_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "feedback_receipt_id",
+        )
+
+    @field_validator("feedback_receipt_digest", "feedback_payload_digest")
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "feedback_receipt_digest",
+        )
+
+    @field_validator("actor", "actor_source")
+    @classmethod
+    def validate_actor(cls, value: str, info: Any) -> str:
+        return _agent_safe_text(value, field=info.field_name, max_length=256, allow_empty=False)
+
+    @model_validator(mode="after")
+    def bind_receipt(self) -> "AgentPlanFeedbackReceipt":
+        expected_id = "feedback-" + _agent_digest(
+            {
+                "schema_version": self.schema_version,
+                "project_id": self.project_id,
+                "client_request_id": self.client_request_id,
+            }
+        ).split(":", 1)[1][:32]
+        if self.feedback_receipt_id and self.feedback_receipt_id != expected_id:
+            raise ValueError("feedback receipt ID must derive from its request slot")
+        object.__setattr__(self, "feedback_receipt_id", expected_id)
+        expected = _agent_digest(self.semantic_material())
+        if self.feedback_receipt_digest and self.feedback_receipt_digest != expected:
+            raise ValueError("feedback receipt digest mismatch")
+        object.__setattr__(self, "feedback_receipt_digest", expected)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("feedback_receipt_id", None)
+        payload.pop("feedback_receipt_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentPlanReplanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_plan_replan_request.v1"] = (
+        "agent_plan_replan_request.v1"
+    )
+    project_id: str
+    run_id: str
+    client_request_id: str
+    actor: str
+    actor_source: str
+    trigger_kind: AgentPlanReplanTriggerKind
+    baseline_proposal_id: str
+    baseline_proposal_digest: str
+    baseline_semantic_plan_id: str
+    baseline_semantic_plan_digest: str
+    baseline_run_plan_digest: str
+    baseline_authorization_id: str
+    baseline_authorization_digest: str
+    feedback_receipt_id: str = ""
+    feedback_receipt_digest: str = ""
+    controller_execution_id: str = ""
+    controller_execution_digest: str = ""
+    controller_decision_id: str = ""
+    controller_decision_digest: str = ""
+    controller_receipt_id: str = ""
+    controller_receipt_digest: str = ""
+    tool_call_proposal_id: str = ""
+    tool_call_proposal_digest: str = ""
+    tool_call_application_receipt_id: str = ""
+    tool_call_application_receipt_digest: str = ""
+    external_llm_approved: Literal[True]
+    request_digest: str = ""
+    created_at: str
+
+    @field_validator(
+        "project_id", "run_id", "client_request_id", "baseline_proposal_id",
+        "baseline_semantic_plan_id", "baseline_authorization_id",
+        "feedback_receipt_id", "controller_execution_id", "controller_decision_id",
+        "controller_receipt_id", "tool_call_proposal_id",
+        "tool_call_application_receipt_id",
+    )
+    @classmethod
+    def validate_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {
+                "feedback_receipt_id", "controller_execution_id", "controller_decision_id",
+                "controller_receipt_id", "tool_call_proposal_id",
+                "tool_call_application_receipt_id",
+            },
+        )
+
+    @field_validator(
+        "baseline_proposal_digest", "baseline_semantic_plan_digest",
+        "baseline_run_plan_digest", "baseline_authorization_digest",
+        "feedback_receipt_digest", "controller_execution_digest",
+        "controller_decision_digest", "controller_receipt_digest",
+        "tool_call_proposal_digest", "tool_call_application_receipt_digest",
+        "request_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {
+                "feedback_receipt_digest", "controller_execution_digest",
+                "controller_decision_digest", "controller_receipt_digest",
+                "tool_call_proposal_digest", "tool_call_application_receipt_digest",
+                "request_digest",
+            },
+        )
+
+    @field_validator("actor", "actor_source")
+    @classmethod
+    def validate_actor(cls, value: str, info: Any) -> str:
+        return _agent_safe_text(value, field=info.field_name, max_length=256, allow_empty=False)
+
+    @model_validator(mode="after")
+    def bind_request(self) -> "AgentPlanReplanRequest":
+        for name in (
+            "feedback_receipt", "controller_execution", "controller_decision",
+            "controller_receipt", "tool_call_proposal", "tool_call_application_receipt",
+        ):
+            if bool(getattr(self, f"{name}_id")) != bool(getattr(self, f"{name}_digest")):
+                raise ValueError(f"{name} ID and digest must be present together")
+        if self.trigger_kind == AgentPlanReplanTriggerKind.EXPLICIT_USER_FEEDBACK and not self.feedback_receipt_id:
+            raise ValueError("explicit user feedback trigger requires an exact feedback receipt")
+        if self.trigger_kind in {
+            AgentPlanReplanTriggerKind.CONTROLLER_FAILED,
+            AgentPlanReplanTriggerKind.CONTROLLER_TERMINAL,
+        } and not self.controller_execution_id:
+            raise ValueError("Controller triggers require an exact Controller execution")
+        if self.controller_execution_id and not (
+            self.controller_decision_id and self.controller_receipt_id
+        ):
+            raise ValueError(
+                "Controller execution binding requires exact current decision and receipt bindings"
+            )
+        if self.tool_call_application_receipt_id and not self.tool_call_proposal_id:
+            raise ValueError(
+                "Execution Agent application receipt requires its ToolCallProposal binding"
+            )
+        expected = _agent_digest(self.semantic_material())
+        if self.request_digest and self.request_digest != expected:
+            raise ValueError("replan request digest mismatch")
+        object.__setattr__(self, "request_digest", expected)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("request_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentReplanLLMResponse(BaseModel):
+    """Bounded revision intent. It cannot express dependencies or authority."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_replan_llm_response.v1"] = (
+        "agent_replan_llm_response.v1"
+    )
+    rationale_summary: str = ""
+    retain_tool_ids: list[str] = Field(default_factory=list)
+    add_tool_ids: list[str] = Field(default_factory=list)
+    remove_tool_ids: list[str] = Field(default_factory=list)
+    replace_tool_ids: dict[str, str] = Field(default_factory=dict)
+    option_patch: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    selected_input_artifact_ids: list[str] | None = None
+    selected_logical_profile_ids: list[str] | None = None
+    limits: dict[str, Any] | None = None
+    stop_conditions: list[str] | None = None
+    success_criteria: list[str] | None = None
+    unresolved_questions: list[AgentExecutionPlanQuestion] = Field(default_factory=list)
+    pause: bool = False
+    no_change: bool = False
+
+    @field_validator("rationale_summary")
+    @classmethod
+    def validate_rationale(cls, value: str) -> str:
+        return _agent_safe_text(value, field="rationale_summary", max_length=1000)
+
+    @field_validator("retain_tool_ids", "add_tool_ids", "remove_tool_ids")
+    @classmethod
+    def validate_tools(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(value, field=info.field_name, sort_values=False, max_items=1024)
+
+    @field_validator("replace_tool_ids")
+    @classmethod
+    def validate_replacements(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized = {
+            _agent_identifier(key, field="replace_tool_ids key"): _agent_identifier(
+                target, field="replace_tool_ids value"
+            )
+            for key, target in value.items()
+        }
+        return {key: normalized[key] for key in sorted(normalized)}
+
+    @field_validator("option_patch")
+    @classmethod
+    def validate_option_patch(cls, value: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        normalized: dict[str, dict[str, Any]] = {}
+        for tool_id, patch in value.items():
+            clean = _agent_identifier(tool_id, field="option_patch key")
+            if not isinstance(patch, dict):
+                raise ValueError("option patches must be objects")
+            normalized[clean] = _agent_safe_value(patch, f"option_patch.{clean}")
+        return {key: normalized[key] for key in sorted(normalized)}
+
+    @field_validator("selected_input_artifact_ids", "selected_logical_profile_ids")
+    @classmethod
+    def validate_optional_ids(cls, value: list[str] | None, info: Any) -> list[str] | None:
+        if value is None:
+            return None
+        return _agent_string_list(value, field=info.field_name, sort_values=True, max_items=1024)
+
+    @field_validator("limits")
+    @classmethod
+    def validate_limits(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return None if value is None else _agent_limits(value, field="limits")
+
+    @field_validator("stop_conditions", "success_criteria")
+    @classmethod
+    def validate_criteria(cls, value: list[str] | None, info: Any) -> list[str] | None:
+        if value is None:
+            return None
+        return _agent_string_list(value, field=info.field_name, sort_values=False, max_items=1024)
+
+    @model_validator(mode="after")
+    def validate_intent(self) -> "AgentReplanLLMResponse":
+        rosters = [self.retain_tool_ids, self.add_tool_ids, self.remove_tool_ids]
+        flattened = [item for roster in rosters for item in roster]
+        if len(flattened) != len(set(flattened)):
+            raise ValueError("tool revision rosters must be disjoint and unique")
+        if self.no_change and any(
+            (
+                flattened,
+                self.replace_tool_ids,
+                self.option_patch,
+                self.selected_input_artifact_ids is not None,
+                self.selected_logical_profile_ids is not None,
+                self.limits is not None,
+                self.stop_conditions is not None,
+                self.success_criteria is not None,
+                self.unresolved_questions,
+            )
+        ):
+            raise ValueError("no_change cannot include a material revision intent")
+        return self
+
+
+class AgentReplannerSourceBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    source_id: str
+    source_digest: str
+    source_kind: str
+
+    @field_validator("name", "source_id", "source_kind")
+    @classmethod
+    def validate_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(value, field=info.field_name)
+
+    @field_validator("source_digest")
+    @classmethod
+    def validate_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="source_digest")
+
+
+class AgentReplannerObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_replanner_observation.v1"] = (
+        "agent_replanner_observation.v1"
+    )
+    observation_id: str = ""
+    observation_digest: str = ""
+    project_id: str
+    run_id: str
+    trigger_kind: AgentPlanReplanTriggerKind
+    baseline_proposal_id: str
+    baseline_proposal_digest: str
+    baseline_semantic_plan_id: str
+    baseline_semantic_plan_digest: str
+    baseline_run_plan_digest: str
+    baseline_authorization_id: str
+    baseline_authorization_digest: str
+    ordered_task_ids: list[str]
+    current_task_index: int | None = Field(default=None, ge=0, le=1023)
+    controller_state: str
+    current_task_outcome: str
+    safe_reason_codes: list[str] = Field(default_factory=list)
+    verified_artifact_lineage_digest: str
+    output_contract_status: str
+    gate_status: str
+    remote_approval_status: str
+    profile_resource_budget_digest: str
+    tool_catalog_digest: str
+    feedback_receipt_id: str = ""
+    feedback_receipt_digest: str = ""
+    source_bindings: list[AgentReplannerSourceBinding]
+    source_bindings_digest: str
+    created_at: str
+
+    @field_validator(
+        "observation_id", "project_id", "run_id", "baseline_proposal_id",
+        "baseline_semantic_plan_id", "baseline_authorization_id", "feedback_receipt_id",
+        "controller_state", "current_task_outcome", "output_contract_status",
+        "gate_status", "remote_approval_status",
+    )
+    @classmethod
+    def validate_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"observation_id", "feedback_receipt_id"},
+        )
+
+    @field_validator("ordered_task_ids", "safe_reason_codes")
+    @classmethod
+    def validate_lists(cls, value: list[str], info: Any) -> list[str]:
+        return _agent_string_list(
+            value,
+            field=info.field_name,
+            sort_values=info.field_name == "safe_reason_codes",
+            max_items=1024,
+        )
+
+    @field_validator(
+        "observation_digest", "baseline_proposal_digest", "baseline_semantic_plan_digest",
+        "baseline_run_plan_digest", "baseline_authorization_digest",
+        "verified_artifact_lineage_digest", "profile_resource_budget_digest",
+        "tool_catalog_digest", "feedback_receipt_digest", "source_bindings_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"observation_digest", "feedback_receipt_digest"},
+        )
+
+    @model_validator(mode="after")
+    def bind_observation(self) -> "AgentReplannerObservation":
+        if bool(self.feedback_receipt_id) != bool(self.feedback_receipt_digest):
+            raise ValueError("feedback receipt binding is incomplete")
+        names = [item.name for item in self.source_bindings]
+        if not names or names != sorted(names) or len(names) != len(set(names)):
+            raise ValueError("Replanner source bindings must be non-empty, sorted and unique")
+        if self.source_bindings_digest != _agent_digest(
+            [item.model_dump(mode="json") for item in self.source_bindings]
+        ):
+            raise ValueError("Replanner source binding digest mismatch")
+        expected = _agent_digest(self.semantic_material())
+        if self.observation_digest and self.observation_digest != expected:
+            raise ValueError("Replanner observation digest mismatch")
+        object.__setattr__(self, "observation_digest", expected)
+        expected_id = f"replanner-observation-{expected.split(':', 1)[1][:32]}"
+        if self.observation_id and self.observation_id != expected_id:
+            raise ValueError("Replanner observation ID must derive from its digest")
+        object.__setattr__(self, "observation_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("observation_id", None)
+        payload.pop("observation_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentPlanDiffChange(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    dimension: Literal[
+        "task", "dependency", "option", "artifact", "route_profile_resource",
+        "budget", "gate", "semantic"
+    ]
+    path: str
+    change_kind: Literal["added", "removed", "changed"]
+    before_present: bool
+    before: Any = None
+    after_present: bool
+    after: Any = None
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        clean = _agent_safe_text(value, field="path", max_length=512, allow_empty=False)
+        if re.fullmatch(r"[A-Za-z0-9_.:\[\]-]+", clean) is None:
+            raise ValueError("diff path is not canonical")
+        return clean
+
+    @field_validator("before", "after")
+    @classmethod
+    def validate_values(cls, value: Any, info: Any) -> Any:
+        return _agent_safe_value(value, info.field_name)
+
+    @model_validator(mode="after")
+    def validate_change(self) -> "AgentPlanDiffChange":
+        expected = (
+            "added" if not self.before_present and self.after_present
+            else "removed" if self.before_present and not self.after_present
+            else "changed"
+        )
+        if not self.before_present and not self.after_present:
+            raise ValueError("diff change must have a before or after value")
+        if expected != self.change_kind:
+            raise ValueError("diff change kind does not match presence markers")
+        if self.before_present and self.after_present and self.before == self.after:
+            raise ValueError("changed diff values must differ")
+        return self
+
+
+class AgentPlanDiff(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_plan_diff.v1"] = "agent_plan_diff.v1"
+    plan_diff_id: str = ""
+    plan_diff_digest: str = ""
+    baseline_semantic_plan_digest: str
+    successor_semantic_plan_digest: str
+    baseline_projection_digest: str
+    successor_projection_digest: str
+    changes: list[AgentPlanDiffChange] = Field(default_factory=list)
+    material_change: bool
+    created_at: str
+
+    @field_validator(
+        "plan_diff_digest", "baseline_semantic_plan_digest", "successor_semantic_plan_digest",
+        "baseline_projection_digest", "successor_projection_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value, field=info.field_name, allow_empty=info.field_name == "plan_diff_digest"
+        )
+
+    @field_validator("plan_diff_id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="plan_diff_id", allow_empty=True)
+
+    @model_validator(mode="after")
+    def bind_diff(self) -> "AgentPlanDiff":
+        keys = [(item.dimension, item.path) for item in self.changes]
+        if keys != sorted(keys) or len(keys) != len(set(keys)):
+            raise ValueError("canonical diff changes must be sorted and unique")
+        if self.material_change != bool(self.changes):
+            raise ValueError("material_change must equal the canonical change roster")
+        expected = _agent_digest(self.semantic_material())
+        if self.plan_diff_digest and self.plan_diff_digest != expected:
+            raise ValueError("canonical plan diff digest mismatch")
+        object.__setattr__(self, "plan_diff_digest", expected)
+        expected_id = f"plan-diff-{expected.split(':', 1)[1][:32]}"
+        if self.plan_diff_id and self.plan_diff_id != expected_id:
+            raise ValueError("plan diff ID must derive from its digest")
+        object.__setattr__(self, "plan_diff_id", expected_id)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("plan_diff_id", None)
+        payload.pop("plan_diff_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentPlanRevisionProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_plan_revision_proposal.v1"] = (
+        "agent_plan_revision_proposal.v1"
+    )
+    revision_id: str = ""
+    revision_digest: str = ""
+    project_id: str
+    run_id: str
+    replan_request: AgentPlanReplanRequest
+    observation: AgentReplannerObservation
+    parsed_llm_response: AgentReplanLLMResponse
+    parsed_llm_response_digest: str
+    provider_kind: str
+    provider_model_digest: str
+    provider_response_id_digest: str
+    baseline_permission_decision_id: str
+    baseline_permission_decision_digest: str
+    successor_candidate: AgentExecutionPlanProposal | None = None
+    successor_proposal_digest: str = ""
+    plan_diff: AgentPlanDiff
+    blocking_questions: list[AgentExecutionPlanQuestion] = Field(default_factory=list)
+    required_new_gates: list[str] = Field(default_factory=list)
+    policy_version: str
+    prompt_version: Literal["scientific-agent-plan-revision.v1"] = (
+        "scientific-agent-plan-revision.v1"
+    )
+    response_schema_version: Literal["agent_replan_llm_response.v1"] = (
+        "agent_replan_llm_response.v1"
+    )
+    status: Literal["review_required", "no_material_change"]
+    review_only: Literal[True] = True
+    executable: Literal[False] = False
+    authorized: Literal[False] = False
+    applied: Literal[False] = False
+    created_at: str
+
+    @field_validator(
+        "revision_id", "project_id", "run_id", "provider_kind",
+        "baseline_permission_decision_id", "policy_version",
+    )
+    @classmethod
+    def validate_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value, field=info.field_name, allow_empty=info.field_name == "revision_id"
+        )
+
+    @field_validator(
+        "revision_digest", "parsed_llm_response_digest", "provider_model_digest",
+        "provider_response_id_digest", "baseline_permission_decision_digest",
+        "successor_proposal_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name in {"revision_digest", "successor_proposal_digest"},
+        )
+
+    @field_validator("required_new_gates")
+    @classmethod
+    def validate_gates(cls, value: list[str]) -> list[str]:
+        return _agent_string_list(value, field="required_new_gates", sort_values=True, max_items=1024)
+
+    @model_validator(mode="after")
+    def bind_revision(self) -> "AgentPlanRevisionProposal":
+        if self.replan_request.project_id != self.project_id or self.replan_request.run_id != self.run_id:
+            raise ValueError("revision request identity mismatch")
+        if self.observation.project_id != self.project_id or self.observation.run_id != self.run_id:
+            raise ValueError("revision observation identity mismatch")
+        if self.parsed_llm_response_digest != _agent_digest(
+            self.parsed_llm_response.model_dump(mode="json")
+        ):
+            raise ValueError("revision LLM response digest mismatch")
+        material = self.plan_diff.material_change
+        if material != bool(self.successor_candidate):
+            raise ValueError("material revisions require exactly one successor candidate")
+        if bool(self.successor_candidate) != bool(self.successor_proposal_digest):
+            raise ValueError("successor candidate digest binding is incomplete")
+        if self.successor_candidate and self.successor_candidate.proposal_digest != self.successor_proposal_digest:
+            raise ValueError("successor candidate digest mismatch")
+        if self.status != ("review_required" if material else "no_material_change"):
+            raise ValueError("revision status does not match canonical diff")
+        expected_id = "revision-" + _agent_digest(
+            {
+                "schema_version": self.schema_version,
+                "project_id": self.project_id,
+                "client_request_id": self.replan_request.client_request_id,
+            }
+        ).split(":", 1)[1][:32]
+        if self.revision_id and self.revision_id != expected_id:
+            raise ValueError("revision ID must derive from the request slot")
+        object.__setattr__(self, "revision_id", expected_id)
+        expected = _agent_digest(self.semantic_material())
+        if self.revision_digest and self.revision_digest != expected:
+            raise ValueError("revision proposal digest mismatch")
+        object.__setattr__(self, "revision_digest", expected)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("revision_id", None)
+        payload.pop("revision_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
+class AgentPlanRevisionApplicationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_plan_revision_application_request.v1"] = (
+        "agent_plan_revision_application_request.v1"
+    )
+    expected_revision_digest: str
+    client_request_id: str
+
+    @field_validator("expected_revision_digest")
+    @classmethod
+    def validate_digest(cls, value: str) -> str:
+        return _agent_digest_value(value, field="expected_revision_digest")
+
+    @field_validator("client_request_id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _agent_identifier(value, field="client_request_id")
+
+
+class AgentPlanRevisionApplicationReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["agent_plan_revision_application_receipt.v1"] = (
+        "agent_plan_revision_application_receipt.v1"
+    )
+    application_receipt_id: str = ""
+    application_receipt_digest: str = ""
+    project_id: str
+    revision_id: str
+    revision_digest: str
+    baseline_proposal_id: str
+    baseline_proposal_digest: str
+    successor_proposal_id: str
+    successor_proposal_digest: str
+    successor_semantic_plan_id: str
+    successor_semantic_plan_digest: str
+    plan_diff_id: str
+    plan_diff_digest: str
+    parent_proposal_id: str
+    supersedes_proposal_id: str
+    client_request_id: str
+    status: Literal["applied"] = "applied"
+    fresh_permission_required: Literal[True] = True
+    fresh_authorization_required: Literal[True] = True
+    dispatched: Literal[False] = False
+    created_at: str
+
+    @field_validator(
+        "application_receipt_id", "project_id", "revision_id", "baseline_proposal_id",
+        "successor_proposal_id", "successor_semantic_plan_id", "plan_diff_id",
+        "parent_proposal_id", "supersedes_proposal_id", "client_request_id",
+    )
+    @classmethod
+    def validate_ids(cls, value: str, info: Any) -> str:
+        return _agent_identifier(
+            value,
+            field=info.field_name,
+            allow_empty=info.field_name == "application_receipt_id",
+        )
+
+    @field_validator(
+        "application_receipt_digest", "revision_digest", "baseline_proposal_digest",
+        "successor_proposal_digest", "successor_semantic_plan_digest", "plan_diff_digest",
+    )
+    @classmethod
+    def validate_digests(cls, value: str, info: Any) -> str:
+        return _agent_digest_value(
+            value, field=info.field_name, allow_empty=info.field_name == "application_receipt_digest"
+        )
+
+    @model_validator(mode="after")
+    def bind_receipt(self) -> "AgentPlanRevisionApplicationReceipt":
+        if self.parent_proposal_id != self.baseline_proposal_id or self.supersedes_proposal_id != self.baseline_proposal_id:
+            raise ValueError("successor parent/supersedes binding must name the baseline proposal")
+        expected_id = f"revision-application-{_agent_digest({'project_id': self.project_id, 'revision_id': self.revision_id}).split(':', 1)[1][:32]}"
+        if self.application_receipt_id and self.application_receipt_id != expected_id:
+            raise ValueError("revision application receipt ID must derive from the revision")
+        object.__setattr__(self, "application_receipt_id", expected_id)
+        expected = _agent_digest(self.semantic_material())
+        if self.application_receipt_digest and self.application_receipt_digest != expected:
+            raise ValueError("revision application receipt digest mismatch")
+        object.__setattr__(self, "application_receipt_digest", expected)
+        return self
+
+    def semantic_material(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        payload.pop("application_receipt_id", None)
+        payload.pop("application_receipt_digest", None)
+        payload.pop("created_at", None)
+        return payload
+
+
 class AgentPlanProposal(BaseModel):
     run_id: str
     goal: str
@@ -8273,6 +9021,15 @@ CORE_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "agent_tool_call_proposal": AgentToolCallProposal,
     "agent_tool_call_application_request": AgentToolCallApplicationRequest,
     "agent_tool_call_application_receipt": AgentToolCallApplicationReceipt,
+    "agent_plan_feedback_request": AgentPlanFeedbackRequest,
+    "agent_plan_feedback_receipt": AgentPlanFeedbackReceipt,
+    "agent_plan_replan_request": AgentPlanReplanRequest,
+    "agent_replan_llm_response": AgentReplanLLMResponse,
+    "agent_replanner_observation": AgentReplannerObservation,
+    "agent_plan_diff": AgentPlanDiff,
+    "agent_plan_revision_proposal": AgentPlanRevisionProposal,
+    "agent_plan_revision_application_request": AgentPlanRevisionApplicationRequest,
+    "agent_plan_revision_application_receipt": AgentPlanRevisionApplicationReceipt,
     "agent_permission_shadow_record": AgentPermissionShadowRecord,
     "run_plan_diff": RunPlanDiff,
     "plan_rationale": PlanRationale,

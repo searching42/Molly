@@ -30,6 +30,12 @@ _SPAN_NAMES = frozenset(
         "execution_agent.validate_response",
         "execution_agent.publish_proposal",
         "execution_agent.apply",
+        "replanner.feedback",
+        "replanner.observe",
+        "replanner.llm_call",
+        "replanner.compile",
+        "replanner.publish",
+        "replanner.apply",
     }
 )
 _EVENT_NAMES = frozenset(
@@ -48,6 +54,13 @@ _EVENT_NAMES = frozenset(
         "execution_agent.controller_advance_applied",
         "execution_agent.user_action_required",
         "execution_agent.application_reconciled",
+        "replanner.feedback_recorded",
+        "replanner.observation_frozen",
+        "replanner.provider_outcome_committed",
+        "replanner.proposal_committed",
+        "replanner.no_material_change",
+        "replanner.successor_committed",
+        "replanner.application_committed",
     }
 )
 _STRING_ATTRIBUTE_KEYS = frozenset(
@@ -82,6 +95,11 @@ _STRING_ATTRIBUTE_KEYS = frozenset(
         "authority_digest",
         "decision_digest",
         "receipt_digest",
+        "feedback_receipt_id",
+        "revision_id",
+        "revision_digest",
+        "plan_diff_digest",
+        "successor_proposal_id",
     }
 )
 _INTEGER_ATTRIBUTE_KEYS = frozenset(

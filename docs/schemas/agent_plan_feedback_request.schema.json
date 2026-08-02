@@ -1,0 +1,37 @@
+{
+  "additionalProperties": false,
+  "description": "Dedicated feedback input. Ordinary conversation is never accepted here.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_plan_feedback_request.v1",
+      "default": "agent_plan_feedback_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "feedback": {
+      "title": "Feedback",
+      "type": "string"
+    },
+    "source_kind": {
+      "const": "explicit_user_feedback",
+      "default": "explicit_user_feedback",
+      "title": "Source Kind",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "client_request_id",
+    "feedback"
+  ],
+  "title": "AgentPlanFeedbackRequest",
+  "type": "object"
+}

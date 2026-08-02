@@ -1,0 +1,169 @@
+{
+  "$defs": {
+    "AgentPlanReplanTriggerKind": {
+      "enum": [
+        "explicit_user_feedback",
+        "controller_failed",
+        "controller_terminal",
+        "verifier_outcome",
+        "plan_source_drift",
+        "user_requested_revision"
+      ],
+      "title": "AgentPlanReplanTriggerKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "agent_plan_replan_request.v1",
+      "default": "agent_plan_replan_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
+    "actor": {
+      "title": "Actor",
+      "type": "string"
+    },
+    "actor_source": {
+      "title": "Actor Source",
+      "type": "string"
+    },
+    "trigger_kind": {
+      "$ref": "#/$defs/AgentPlanReplanTriggerKind"
+    },
+    "baseline_proposal_id": {
+      "title": "Baseline Proposal Id",
+      "type": "string"
+    },
+    "baseline_proposal_digest": {
+      "title": "Baseline Proposal Digest",
+      "type": "string"
+    },
+    "baseline_semantic_plan_id": {
+      "title": "Baseline Semantic Plan Id",
+      "type": "string"
+    },
+    "baseline_semantic_plan_digest": {
+      "title": "Baseline Semantic Plan Digest",
+      "type": "string"
+    },
+    "baseline_run_plan_digest": {
+      "title": "Baseline Run Plan Digest",
+      "type": "string"
+    },
+    "baseline_authorization_id": {
+      "title": "Baseline Authorization Id",
+      "type": "string"
+    },
+    "baseline_authorization_digest": {
+      "title": "Baseline Authorization Digest",
+      "type": "string"
+    },
+    "feedback_receipt_id": {
+      "default": "",
+      "title": "Feedback Receipt Id",
+      "type": "string"
+    },
+    "feedback_receipt_digest": {
+      "default": "",
+      "title": "Feedback Receipt Digest",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "default": "",
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "default": "",
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "controller_decision_id": {
+      "default": "",
+      "title": "Controller Decision Id",
+      "type": "string"
+    },
+    "controller_decision_digest": {
+      "default": "",
+      "title": "Controller Decision Digest",
+      "type": "string"
+    },
+    "controller_receipt_id": {
+      "default": "",
+      "title": "Controller Receipt Id",
+      "type": "string"
+    },
+    "controller_receipt_digest": {
+      "default": "",
+      "title": "Controller Receipt Digest",
+      "type": "string"
+    },
+    "tool_call_proposal_id": {
+      "default": "",
+      "title": "Tool Call Proposal Id",
+      "type": "string"
+    },
+    "tool_call_proposal_digest": {
+      "default": "",
+      "title": "Tool Call Proposal Digest",
+      "type": "string"
+    },
+    "tool_call_application_receipt_id": {
+      "default": "",
+      "title": "Tool Call Application Receipt Id",
+      "type": "string"
+    },
+    "tool_call_application_receipt_digest": {
+      "default": "",
+      "title": "Tool Call Application Receipt Digest",
+      "type": "string"
+    },
+    "external_llm_approved": {
+      "const": true,
+      "title": "External Llm Approved",
+      "type": "boolean"
+    },
+    "request_digest": {
+      "default": "",
+      "title": "Request Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "client_request_id",
+    "actor",
+    "actor_source",
+    "trigger_kind",
+    "baseline_proposal_id",
+    "baseline_proposal_digest",
+    "baseline_semantic_plan_id",
+    "baseline_semantic_plan_digest",
+    "baseline_run_plan_digest",
+    "baseline_authorization_id",
+    "baseline_authorization_digest",
+    "external_llm_approved",
+    "created_at"
+  ],
+  "title": "AgentPlanReplanRequest",
+  "type": "object"
+}
