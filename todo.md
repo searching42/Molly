@@ -390,7 +390,7 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 
 优先级：`P0`
 
-范围状态：`READY`。M3 已完成并提供可重放、可归因的执行轨迹基础；PR-BL～PR-BQ1 已使 Planner、Permission、Authorization、Controller、Execution Agent、Replanner 与 unified verified inspection 的核心 contract 进入 `main`，但仍无代表性 runtime `V`。当前 P0 动作为 PR-BQ2 / `M3H-015` observability 子范围；BR1、BR2 与 BQ3 不在本 PR 同时启动。M4 benchmark protocol 继续暂缓，避免抢占 M3.5 integration/runtime closure 的 P0 资源。
+范围状态：`READY`。M3 已完成并提供可重放、可归因的执行轨迹基础；PR-BL～PR-BQ2 已使 Planner、Permission、Authorization、Controller、Execution Agent、Replanner、unified verified inspection 与 privacy-safe observability 的核心 contract 进入 `main`，但仍无代表性 runtime `V`。当前唯一 P0 实现动作为 PR-BR1 / `M3H-013` Structured Dataset Canary；BR2、BQ3 与 BR3 不在本 PR 同时启动。M4 benchmark protocol 继续暂缓，避免抢占 M3.5 integration/runtime closure 的 P0 资源。
 
 目标权限链：
 
@@ -452,7 +452,7 @@ M3.5 至少支持两种用户模式：
 | `M3H-010` unified verified run inspection/read projection | `I/T/—` | `DONE` | PR #25 reviewed HEAD `e10ac49ce6049aa8730766be793c64aee01a8f4d` 已通过 owner review，并由 squash merge commit `df64c318ce2576e42da245403c63c4f570facee9` 合入 `main`；单一 `agent_run_inspection.v1`、canonical source roster/digest、current/historical 分流与 strict read-only API 已成为 BQ2 读取边界；不据此产生 Gate `V` 或 runtime acceptance |
 | `M3H-011` Replanner 与 plan revision | `I/T/—` | `DONE` | PR #23 在 reviewed HEAD `1f7ba18a6e79281190b10c2ca18f7d59adb97ed7` 通过 repository-owner review、PR Fast、4-shard Full CI 与 Actions/Python/JavaScript-TypeScript CodeQL，并由 merge commit `1dd70e6746ef0518a38aa0471fd657a5d4172ba5` 合入 `main`；material revision 创建新 proposal/semantic-plan digest，旧 proposal 与 authorization 保持 immutable，successor 必须重新 Permission evaluation 并获得新 trusted-user authorization；Replanner 不 authorize、start、advance、retry、recover、cancel 或 dispatch，无 exact verifier evidence binding 的 standalone `verifier_outcome` trigger 不属于 v1；不据此标记 `M3H-GATE-005 V`、M3.5 或 Molly v1 完成 |
 | `M3H-012` 统一 Plan/Tool/Permission/Replan UI | `I(partial)/T(partial)/—` | `DEFERRED` | PR-BQ3；待 BQ1 与 BQ2/BR1/BR2 契约稳定后解锁，优先复用 Flask UI 和现有 strict API，不建立第二权威 |
-| `M3H-013` Structured Dataset Canary | `I/T(partial)/—` | `DEFERRED` | PR-BR1；Raw/Confirmed CSV 必须在当前 run 重新训练、真实生成、预测与排序，不复用旧模型、旧 prediction 或 `existing_output` |
+| `M3H-013` Structured Dataset Canary | `I/T(partial)/—` | `IN_PROGRESS` | PR-BR1；production-equivalent confirmation/StageState/Registry/publication contract 与 CI deterministic canary 实现中；Private Real-Tool Canary 尚未完成，故无 runtime `V`、不标 `DONE` |
 | `M3H-014` PDF–MinerU–LLM Canary | `I/T(partial)/—` | `DEFERRED` | PR-BR2；真实 OLED/emitter PDF 经 evidence-bound extraction 与 contextual mapping 形成 candidate raw dataset，必须在 confirmation Gate 前进入 `WAITING_USER` |
 | `M3H-015` observability 与最终 v1 验收 | `I(partial)/T(partial)/—` | `IN_PROGRESS` | PR-BQ2 实现 OTel/LangSmith、统一 correlation、privacy allowlist、optional/lazy 与 fail-open seam；PR-BR3 仍负责最终 UI-driven runtime、restart、recovery、exact replay、privacy 与 adversarial acceptance evidence，故整个任务不标 `I/T/—` 或 `DONE`；telemetry 始终 non-authoritative |
 
@@ -506,7 +506,7 @@ PR-BR3  M3H-015
        UI-driven final v1 acceptance、exact replay、recovery、privacy、adversarial evidence
 ```
 
-解锁顺序固定为 `BQ1 → BQ2/BR1/BR2 → BQ3 → BR3`。PR #25 已合并，owner 当前选择 PR-BQ2 作为唯一实现动作；BR1、BR2 与 BQ3 不在本 PR 同时启动。M4 继续不得抢占 P0；M5 只允许进行不阻塞 v1 的科学范围与数据充分性准备，不启动 DFT、MD、逆合成、自动文献评分或 Agentic RL。
+解锁顺序固定为 `BQ1 → BQ2/BR1/BR2 → BQ3 → BR3`。PR #26 已合并，owner 当前选择 PR-BR1 / `M3H-013` 作为唯一实现动作；PR-BR2 / `M3H-014`、PR-BQ3 / `M3H-012` 与 PR-BR3 / `M3H-015` final acceptance 保持未启动。M4 继续不得抢占 P0；M5 只允许进行不阻塞 v1 的科学范围与数据充分性准备，不启动 DFT、MD、逆合成、自动文献评分或 Agentic RL。
 
 在 M3.5 v1 规范队列完成前，不删除现有执行 API，不替换 `RunPlanExecutor`，不修改固定 `molly-worker` 协议为任意命令执行，也不将 review-only AgentToolRegistry 直接改成第二个执行 registry。
 
@@ -1375,6 +1375,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：未来 gRPC SDK 若迁移 credential 或 retry 日志模块，必须重新核对 vendor send/log boundary；任何新增 vendor logger 都必须在可能接触 endpoint、证书路径或异常详情前应用同一固定脱敏策略。
 - 批准人：待 repository-owner exact-HEAD re-review。
 
+### 2026-08-02：PR #26 合并并启动 PR-BR1 Structured Dataset Canary v1
+
+- 决策：PR #26 reviewed HEAD `ba574eb69bb204de5f8ee1b776a0aebff64d5fa9` 已完成复核，并由 squash merge commit `0c558a5e1a029a7e715048e11c6edcc0ab76c40e` 合入 `main`；`M3H-010` 保持 `I/T/— / DONE`，`M3H-015` 保持 `I(partial)/T(partial)/— / IN_PROGRESS`。当前唯一实现动作更新为 PR-BR1 / `M3H-013`，其状态更新为 `I/T(partial)/— / IN_PROGRESS`。
+- 原计划：PR-BQ2 完成 observability seam 后，BR1、BR2 可分别实现两条 canary，随后才由 BQ3 与 BR3 完成 UI 和最终 acceptance。
+- 新计划：BR1 只实现 Structured Dataset Canary 的 production-equivalent Raw/Confirmed Dataset、exact confirmation、fresh model、generation、prediction/ranking、chemical validation、recovery/replay、inspection、observability 与 privacy contract；公共 CI 完成 deterministic reference canary，私有真实环境入口和 evidence contract 同时冻结。PR-BR2 / `M3H-014`、PR-BQ3 / `M3H-012` 与 PR-BR3 / `M3H-015` final acceptance 继续保持未启动。
+- 依据：PR #26 reviewed HEAD `ba574eb69bb204de5f8ee1b776a0aebff64d5fa9`；PR #26 squash merge `0c558a5e1a029a7e715048e11c6edcc0ab76c40e`。当前公开环境不具备可声明 fresh Uni-Mol 与 real REINVENT4 成功的 owner-reviewed private runtime evidence。
+- 影响任务：`M3H-013` 仅进入 `I/T(partial)/— / IN_PROGRESS`；不新增任何 `M3H-GATE-* V`，不标记 `M3H-015 DONE`、M3.5 完成或 Molly v1 完成。即使 CI Reference Canary 通过也不产生 runtime `V`。
+- 新增风险：CI deterministic baseline/generator 被误读为真实 Uni-Mol/REINVENT4；broader organic emitter PLQY 工程范围被误称为 TADF discovery；旧 model/prediction/candidate 或 `existing_output` 被错误复用；私有运行环境定位信息进入公共 evidence。
+- 批准人：待 GitHub Full CI、CodeQL 与 repository-owner exact-HEAD review；PR 保持 Draft。
+
 后续路线调整必须追加：
 
 ```text
@@ -1392,19 +1402,19 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 当前实现动作：PR-BQ2 — `M3H-015` privacy-safe Harness observability v1（IN_PROGRESS）
+### 当前实现动作：PR-BR1 — `M3H-013` Structured Dataset Canary v1（IN_PROGRESS）
 
-任务：在不建立第二套 authority 或事件账本的前提下，为 Planner、Permission、Authorization、Controller、local/remote lifecycle、Execution Agent、Replanner 和 `AgentRunInspection v1` 增加 optional、privacy-safe、统一关联且 vendor failure fail-open 的 OpenTelemetry/LangSmith seam。Telemetry 不得写入或推导 execution、authorization、Gate、StageState、Registry、publication、verifier、recovery 或 scientific-success 状态。
+任务：复用 Molly 现有 Planner、Permission、immutable authorization、Controller、Executor/RemoteExecutionService、Gate、StageState、Artifact Registry、verified publication、`AgentRunInspection v1` 与 observability seam，实现 Raw CSV → exact confirmation → Confirmed Dataset → current-run fresh model → generation → prediction/ranking → chemical validation → `Computational Top-N` 的两层 canary。公共 CI 只证明同契约 deterministic reference path；Private Real-Tool Canary 必须另有 fresh Uni-Mol、real REINVENT4 与脱敏 owner-reviewed evidence。
 
-当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY` 而非 `DONE`；`M3H-001`～`M3H-011` 为 `I/T/— / DONE`；`M3H-015` 只因 PR-BQ2 observability seam 保持 `I(partial)/T(partial)/— / IN_PROGRESS`。BR3 的最终验收仍未完成，`M3H-012`～`M3H-014` 未在本 PR 启动。M4 不得抢占 P0，M5 仅可进行不阻塞 v1 的范围与数据充分性准备。
+当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY` 而非 `DONE`；`M3H-001`～`M3H-011` 为 `I/T/— / DONE`；`M3H-013` 为 `I/T(partial)/— / IN_PROGRESS`；`M3H-015` 继续为 `I(partial)/T(partial)/— / IN_PROGRESS`。Private Real-Tool Canary、BR2、BQ3 与 BR3 最终验收均未完成；无 Gate `V`，不声明 M3.5 或 Molly v1 完成。
 
 必须验证：
 
-1. OTel 与 LangSmith 使用统一 privacy-safe correlation，始终携带 `telemetry_authoritative=false`，且不进入任何 Molly authority bytes/digest；
-2. SDK 缺失、初始化、export、queue、span/run 与 shutdown failure 全部 fail open，不增加 provider call、dispatch、retry、recover 或 cancel；
-3. metadata-only 不上传 prompt/response、论文、feedback、conversation、raw exception、路径、host、endpoint、credential、command、stdout/stderr；
-4. telemetry 开关和 vendor failure 不改变 remote request/worker protocol、业务错误、权威 bytes 或 `AgentRunInspection` schema/digest；
-5. 本任务不实现 dashboard、real collector/LangSmith acceptance、BR1/BR2 canary、BQ3 UI 或 BR3 final acceptance。
+1. Raw Dataset 永不成为 training authority；training 必须 exact-bind GateDecision、confirmation receipt 与 Confirmed Dataset publication；
+2. baseline model 在当前 run 真实 fit，generation 真实执行确定性逻辑，prediction/ranking 只消费当前 model/candidate roster，旧输出与 `existing_output` fail closed；
+3. chemical validation 覆盖 identity、duplicate、training exact match、similarity、scaffold、AD/OOD 与 no-silent-loss；
+4. restart/recovery 不重复 training 或 generation dispatch，exact replay 与 telemetry availability 无关；
+5. 公共 evidence 保持脱敏，输出只称 `Computational Top-N`；本 PR 不声明 private runtime、Gate `V`、BR2、BQ3、BR3、M3.5 或 Molly v1 完成。
 
 ### 资源机会队列
 

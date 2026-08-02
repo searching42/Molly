@@ -51,6 +51,14 @@ _SPAN_NAMES = frozenset(
         "authorization.create",
         "start_intent.create",
         "run_inspection.read",
+        "dataset.inspect",
+        "dataset.clean",
+        "dataset.confirm",
+        "model.train",
+        "candidate.generate",
+        "candidate.predict",
+        "candidate.rank",
+        "candidate.validate",
     }
 )
 _EVENT_NAMES = frozenset(
@@ -198,6 +206,14 @@ _EXPORTED_SPAN_NAMES = {
     "replanner.publish": "agent.replanner.create_revision",
     "replanner.apply": "agent.replanner.apply_revision",
     "run_inspection.read": "agent.run_inspection.read",
+    "dataset.inspect": "agent.dataset.inspect",
+    "dataset.clean": "agent.dataset.clean",
+    "dataset.confirm": "agent.dataset.confirm",
+    "model.train": "agent.model.train",
+    "candidate.generate": "agent.candidate.generate",
+    "candidate.predict": "agent.candidate.predict",
+    "candidate.rank": "agent.candidate.rank",
+    "candidate.validate": "agent.candidate.validate",
 }
 
 

@@ -28,7 +28,9 @@ from ai4s_agent.schemas import (
     AgentPlanRevisionApplicationRequest,
     AgentReplanLLMResponse,
     AgentRunInspection,
+    AgentRunInspectionBinding,
     AgentRunInspectionStatus,
+    AgentRunStructuredDatasetCanaryInspection,
     CORE_SCHEMA_MODELS,
     _agent_digest,
 )
@@ -235,6 +237,45 @@ def test_proposal_only_inspection_is_current_deterministic_and_read_only(tmp_pat
     ] == sorted(
         (item.source_name, item.source_kind, item.source_id)
         for item in first.source_roster
+    )
+
+
+def test_structured_dataset_canary_is_composed_into_unified_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _, _, _, _, service, _ = _chain(tmp_path)
+    digest = "sha256:" + "a" * 64
+    projection = AgentRunStructuredDatasetCanaryInspection(
+        status="succeeded",
+        current_stage="candidate.rank",
+        stage_status="succeeded",
+        bindings={
+            "model_package": AgentRunInspectionBinding(
+                object_id="model-run-1", object_digest=digest
+            ),
+            "computational_top_n": AgentRunInspectionBinding(
+                object_id="computational-topn-run-1", object_digest=digest
+            ),
+        },
+        registry_digest=digest,
+        source_roster_digest=digest,
+    )
+    monkeypatch.setattr(
+        service,
+        "_structured_dataset_canary_projection",
+        lambda **_: projection,
+    )
+
+    inspected = service.inspect(project_id="project-1", run_id="run-1")
+
+    assert inspected.structured_dataset_canary == projection
+    assert {
+        item.source_name for item in inspected.source_roster
+    }.issuperset(
+        {
+            "structured_dataset_model_package",
+            "structured_dataset_computational_top_n",
+        }
     )
 
 

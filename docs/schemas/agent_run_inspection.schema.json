@@ -383,6 +383,69 @@
       "title": "AgentRunReplannerInspection",
       "type": "object"
     },
+    "AgentRunStructuredDatasetCanaryInspection": {
+      "additionalProperties": false,
+      "description": "Verified BR1 projection composed into AgentRunInspection v1.",
+      "properties": {
+        "schema_version": {
+          "const": "structured_dataset_canary_inspection.v1",
+          "default": "structured_dataset_canary_inspection.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "in_progress",
+            "succeeded"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "current_stage": {
+          "title": "Current Stage",
+          "type": "string"
+        },
+        "stage_status": {
+          "title": "Stage Status",
+          "type": "string"
+        },
+        "recovery_required": {
+          "default": false,
+          "title": "Recovery Required",
+          "type": "boolean"
+        },
+        "bindings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AgentRunInspectionBinding"
+          },
+          "title": "Bindings",
+          "type": "object"
+        },
+        "registry_digest": {
+          "title": "Registry Digest",
+          "type": "string"
+        },
+        "source_roster_digest": {
+          "title": "Source Roster Digest",
+          "type": "string"
+        },
+        "claim_boundary": {
+          "const": "computational_candidates_only",
+          "default": "computational_candidates_only",
+          "title": "Claim Boundary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "current_stage",
+        "stage_status",
+        "registry_digest",
+        "source_roster_digest"
+      ],
+      "title": "AgentRunStructuredDatasetCanaryInspection",
+      "type": "object"
+    },
     "AgentRunTaskInspection": {
       "additionalProperties": false,
       "properties": {
@@ -653,6 +716,17 @@
       },
       "title": "Artifacts",
       "type": "array"
+    },
+    "structured_dataset_canary": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentRunStructuredDatasetCanaryInspection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "source_roster": {
       "items": {

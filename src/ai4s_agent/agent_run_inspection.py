@@ -21,6 +21,7 @@ from ai4s_agent.schemas import (
     AgentRunInspectionStatus,
     AgentRunPlanInspection,
     AgentRunReplannerInspection,
+    AgentRunStructuredDatasetCanaryInspection,
     AgentRunTaskInspection,
     AgentRunToolCallInspection,
     _agent_digest,
@@ -413,6 +414,10 @@ class AgentRunInspectionService:
                     for artifact_id, relative_path in raw_registry.items()
                 }
 
+        structured_dataset_canary = self._structured_dataset_canary_projection(
+            project_id=project,
+            run_id=run,
+        )
         source_roster = self._source_roster(
             head=head,
             publications=publications,
@@ -431,6 +436,7 @@ class AgentRunInspectionService:
             tool_receipts=tool_receipts,
             revisions=revisions,
             revision_applications=revision_applications,
+            structured_dataset_canary=structured_dataset_canary,
         )
         plan = self._plan_projection(
             publication=head,
@@ -498,6 +504,7 @@ class AgentRunInspectionService:
             replanner=replan_projection,
             tasks=task_projection,
             artifacts=artifact_projection,
+            structured_dataset_canary=structured_dataset_canary,
             source_roster=source_roster,
         )
 
@@ -1252,6 +1259,15 @@ class AgentRunInspectionService:
                 item.application_receipt_digest,
                 "historical",
             )
+        canary = values.get("structured_dataset_canary")
+        if canary is not None:
+            for name, binding in sorted(canary.bindings.items()):
+                add(
+                    f"structured_dataset_{name}",
+                    "structured_dataset_canary_publication",
+                    binding.object_id,
+                    binding.object_digest,
+                )
         unique = {
             (item.source_name, item.source_kind, item.source_id): item
             for item in rows
@@ -1263,6 +1279,26 @@ class AgentRunInspectionService:
                 if any(row != item for row in matches):
                     self._incomplete("SOURCE_ROSTER_CONFLICT")
         return [unique[key] for key in sorted(unique)]
+
+    def _structured_dataset_canary_projection(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+    ) -> AgentRunStructuredDatasetCanaryInspection | None:
+        from ai4s_agent.structured_dataset_canary import StructuredDatasetCanaryService
+
+        payload = StructuredDatasetCanaryService(
+            storage=self.storage,
+            trusted_actors=(),
+            tracer=NoopHarnessTracer(),
+            clock=self.clock,
+        ).inspection_projection(project_id=project_id, run_id=run_id)
+        return (
+            AgentRunStructuredDatasetCanaryInspection.model_validate(payload)
+            if payload is not None
+            else None
+        )
 
     @staticmethod
     def _run_outcome(*, permission: Any, authorization: Any, start_intent: Any, controller_result: Any) -> str:

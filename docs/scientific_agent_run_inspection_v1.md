@@ -106,9 +106,12 @@ after StageState/Registry commit but before publication/Controller receipt is
 projected as `recovery_required`, never as task success.
 
 Artifact bytes are never returned. Registry relative paths are never returned.
-The service does not read raw artifact contents; existing Planner and Controller
-verifiers perform any required exact content verification behind their existing
-authority boundary.
+For BR1, the optional `structured_dataset_canary` projection exact-reads only
+bounded privacy-safe canary publication JSON and projects IDs/digests, current
+stage, Registry/source-roster digests and recovery status. It never returns the
+Raw/Confirmed CSV, SMILES roster, model checkpoint, private paths or environment
+metadata. Existing Planner/Controller verifiers and canary publication readers
+perform content verification behind their authority boundaries.
 
 ## Privacy boundary
 
@@ -161,14 +164,13 @@ LangSmith package is required.
 
 ## Non-goals and handoff
 
-This version does not deploy observability, implement an OTel/LangSmith adapter,
-run the Structured Dataset or PDF–MinerU–LLM canaries, build the unified UI,
-change frontend frameworks, add automatic loops/retry/recovery/cancellation,
-approve Gates, expand resources or budgets, or claim scientific validation.
+This version does not run the PDF–MinerU–LLM canary, build the unified UI,
+change frontend frameworks, add automatic retry/cancellation, expand resources
+or budgets, or claim scientific validation. BR1 adds the Structured Dataset
+Canary binding projection without turning inspection into authority.
 
-PR-BQ2 may translate the stable projection into non-authoritative observability.
-PR-BR1 and PR-BR2 must bind their canary evidence to this inspection identity and
-the underlying exact sources. PR-BQ3 may render the projection without becoming
+PR-BR2 must bind its PDF canary evidence to this inspection identity and the
+underlying exact sources. PR-BQ3 may render the projection without becoming
 authority. PR-BR3 remains responsible for representative runtime, recovery,
 privacy, replay, and final v1 acceptance.
 
