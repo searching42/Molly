@@ -1,0 +1,121 @@
+{
+  "$defs": {
+    "AgentPlanDiffChange": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "enum": [
+            "task",
+            "dependency",
+            "option",
+            "artifact",
+            "route_profile_resource",
+            "budget",
+            "gate",
+            "semantic"
+          ],
+          "title": "Dimension",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "change_kind": {
+          "enum": [
+            "added",
+            "removed",
+            "changed"
+          ],
+          "title": "Change Kind",
+          "type": "string"
+        },
+        "before_present": {
+          "title": "Before Present",
+          "type": "boolean"
+        },
+        "before": {
+          "default": null,
+          "title": "Before"
+        },
+        "after_present": {
+          "title": "After Present",
+          "type": "boolean"
+        },
+        "after": {
+          "default": null,
+          "title": "After"
+        }
+      },
+      "required": [
+        "dimension",
+        "path",
+        "change_kind",
+        "before_present",
+        "after_present"
+      ],
+      "title": "AgentPlanDiffChange",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "agent_plan_diff.v1",
+      "default": "agent_plan_diff.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "plan_diff_id": {
+      "default": "",
+      "title": "Plan Diff Id",
+      "type": "string"
+    },
+    "plan_diff_digest": {
+      "default": "",
+      "title": "Plan Diff Digest",
+      "type": "string"
+    },
+    "baseline_semantic_plan_digest": {
+      "title": "Baseline Semantic Plan Digest",
+      "type": "string"
+    },
+    "successor_semantic_plan_digest": {
+      "title": "Successor Semantic Plan Digest",
+      "type": "string"
+    },
+    "baseline_projection_digest": {
+      "title": "Baseline Projection Digest",
+      "type": "string"
+    },
+    "successor_projection_digest": {
+      "title": "Successor Projection Digest",
+      "type": "string"
+    },
+    "changes": {
+      "items": {
+        "$ref": "#/$defs/AgentPlanDiffChange"
+      },
+      "title": "Changes",
+      "type": "array"
+    },
+    "material_change": {
+      "title": "Material Change",
+      "type": "boolean"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "baseline_semantic_plan_digest",
+    "successor_semantic_plan_digest",
+    "baseline_projection_digest",
+    "successor_projection_digest",
+    "material_change",
+    "created_at"
+  ],
+  "title": "AgentPlanDiff",
+  "type": "object"
+}

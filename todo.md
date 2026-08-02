@@ -450,7 +450,7 @@ M3.5 至少支持两种用户模式：
 | `M3H-008` Harness Controller 接入现有执行链 | `I/T/—` | `DONE` | PR-BN 最终 review HEAD `2fa4f74a4caa5618f5046151b6258b2d51f6e91f` 已通过 repository-owner review，并由 PR #21 以 merge commit `d4ac276d4faa6623ccaa7661a6d9db14e6225833` 合入 `main`；不据此声明真实 remote canary 或完整 Harness 完成 |
 | `M3H-009` 接入 Execution Agent LLM | `I/T/—` | `DONE` | PR-BO 最终 review HEAD `c24da96b19ee5af5dda6b96ea8e3a05b0e88bd9f` 已通过 repository-owner review；current-verified Controller snapshot、privacy-safe observation、server-owned bounded tool catalog、strict structured LLM response、immutable non-authoritative `ToolCallProposal`、two-phase apply、exact application receipt、跨请求 crash reconciliation 与 provider metadata compatibility 已完成，且该 HEAD 的 PR Fast、4-shard Full CI 与三类 CodeQL 均通过 |
 | `M3H-010` Verifier-bound feedback observation | `I/T/—` | `READY` | PR-BN 已建立 verifier-bound Controller observation prerequisite seam并覆盖 local/remote completion 验证；只有 authoritative StageState、Artifact Registry 和 verified publication 能支持 running/success/failure，LLM 文本与 telemetry 不能改变 UI 或状态 |
-| `M3H-011` Replanner 与 plan revision | `I(partial)/T(partial)/—` | `READY` | PR-BP 已解锁；用户反馈或运行失败必须产生 explicit diff、新 plan digest 与新授权，旧授权对任何实质变化失效；本状态不表示 PR-BP 已启动或已有实现 |
+| `M3H-011` Replanner 与 plan revision | `I/T/—` | `IN_PROGRESS` | PR-BP 已实现 Replanner observation、strict revision response、server-side successor compilation、canonical complete diff、immutable revision proposal/application 与 fresh authorization 边界；定向回归与本地 PR Fast 通过，仍等待 GitHub CI 与 repository-owner review，不标 `DONE` 或 Gate `V` |
 | `M3H-012` 统一 Plan/Tool/Permission/Replan UI | `I(partial)/T(partial)/—` | `DEFERRED` | 支持批准并启动、修改后重规划、拒绝、atomic task 与端到端模式；保留高级诊断入口 |
 | `M3H-013` confirmed CSV → fresh model → Top-N Harness 验收 | `I/T(partial)/—` | `DEFERRED` | 不复用既有模型或预测；在批准范围内完成训练、生成、预测、排序、Top-N 与报告 |
 | `M3H-014` PDF → candidate dataset Harness 验收 | `I/T(partial)/—` | `DEFERRED` | 调用 MinerU/pdfplumber、抽取、归一化、provenance、冲突合并和 CSV；在 dataset confirmation 前强制暂停 |
@@ -1101,6 +1101,26 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：后续Replanner不得把用户反馈、失败文本、LLM输出或旧Execution Agent proposal当作新执行授权；任何task、option、resource、profile、budget或Gate语义变化都必须产生新digest并重新授权。
 - 批准人：searching42（repository owner）；approval绑定HEAD `c24da96b19ee5af5dda6b96ea8e3a05b0e88bd9f`。
 
+### 2026-08-02：PR-BP Replanner 与 plan revision v1 实现完成，保持 Draft 待 owner review
+
+- 决策：`M3H-011` 保持 `I/T/— / IN_PROGRESS`；新增 dedicated feedback receipt、current-verified Replanner observation、一次 strict provider revision、server-side PR-BL candidate compilation、八维 canonical complete diff、immutable revision proposal 与显式 application receipt。material revision 只发布新 PR-BL-compatible successor proposal，必须重新经过现有 Permission Engine 和 trusted-user authorization。
+- 范围与非目标：不实现 PR-BQ UI、自动 Agent loop、retry/recover/cancel、Gate/remote approval、resource/budget/profile 扩张、Controller action 扩展、Executor/RemoteExecutionService/worker/adapter 调用或真实基础设施 canary。
+- 权威边界：LLM 只输出 planner-visible revision intent；现有 ScientificToolCatalog、AtomicTaskRegistry、option compiler、artifact trust、profile/resource/budget/Gate 绑定负责重新编译；服务器比较完整 compiled plan 生成 diff；旧 proposal、authorization、start intent、Controller/Execution Agent artifacts 保持 immutable；application 不授权、不启动、不 dispatch。
+- 恢复与隐私：provider-started/outcome/rejected checkpoint 确保每 request 最多一次 provider call，unknown outcome 不自动重试；revision/application 使用 project-scoped lock、immutable request digest、private staging、manifest-last、fsync、atomic publication 和 exact reread。raw feedback 仅保存在 project-private 目录，authoritative artifacts 与 tracing 只含 ID/digest/fixed code，tracing optional、fail-open、non-authoritative。
+- 风险：remote successor 的 configured AuthoritySet 仍必须在 successor proposal 发布后由 PR-BM2 现有 resource-authority 路径建立并由 fresh Permission 验证；Replanner 不预先发布或扩张 AuthoritySet。真实 remote canary、M3H runtime acceptance 和 `M3H-GATE-005` 仍待 owner-directed 验收。
+- 验证证据：Replanner 专项 `12 passed`；PR-BL～PR-BO、Permission/authorization/start-intent、AuthoritySet、Controller、Execution Agent 与 schema 回归 `304 passed`；provider/settings/conversation/privacy/Gate/Stage/Registry 代表链 `135 passed`；其他 schema/tracing 组合回归 `45 passed`；最终核心相邻回归 `204 passed`；本地 PR Fast `1131 passed, 5403 deselected`；`compileall`、`git diff --check` 与 4-shard assignment validation 通过。完整套件仍以 GitHub 4-shard Full CI 为权威。
+- 批准人：待 repository-owner review；不标 `DONE`、`M3H-GATE-005 V`、M3.5 完成或 Replanner runtime acceptance。
+
+### 2026-08-02：PR-BP inline review blockers 收口，保持 Draft 待 latest-HEAD CI
+
+- 决策：统一所有 Replanner LLM prose 字段的具体载荷安全策略，不再将 OLED `host material` / `host–dopant` 领域术语当作基础设施；从 v1 trigger 枚举移除无 exact verifier evidence binding 的 `verifier_outcome`；application 在 current recompile 前 exact-adopt revision 已确定并发布的 successor，使历史 effect reconciliation 与后续 current-source drift 分离。
+- 原计划：Replanner service 额外正则屏蔽裸 `host` 且未覆盖 stop/success prose；v1 允许客户端声称 `verifier_outcome` 却无 outcome ID/digest；successor-before-receipt 恢复和已完成 receipt replay 仍依赖 current Registry/source verification。
+- 新计划：Pydantic response source 对 rationale、question prompt/reason、stop conditions 与 success criteria 共用 path/endpoint/credential assignment/execution-output/shell-payload 检测；standalone verifier trigger 留待完整 StageState/Registry/verified-publication source roster 的新版本；PR-BL proposal store 新增只验证 immutable publication canonical bytes 的 historical reader，application 再对 revision candidate、digest、diff、parent/supersedes 和 receipt 做 exact binding。
+- 依据：Replanner 专项新增 OLED 合法 prose、五类字段不安全载荷、无证据 verifier trigger、successor-before-receipt 后 Registry/source drift fresh-process adoption、receipt 后 drift exact replay、publication request binding 替换拒绝回归；Replanner 专项 `21 passed`，PR-BL proposal/Replanner/schema/Permission 最小回归链 `178 passed`，本地 PR Fast `1131 passed, 5412 deselected`，`compileall`、`git diff --check` 与 4-shard assignment validation 通过。GitHub Full CI/CodeQL 结果待最新修复 HEAD 触发后更新。
+- 影响任务：`M3H-011` 保持 `I/T/— / IN_PROGRESS`；`M3H-GATE-005`、`M3H-GATE-002`、`M3H-GATE-003` 均不标 `V`；PR-BQ / `M3H-012` 保持 `DEFERRED`，不声明 owner approval、Ready、merge 或 runtime acceptance。
+- 新增风险：historical reader 只能用于已由 immutable revision 确定的 effect reconciliation，不能代替新 application 的 current verification；未来恢复 `verifier_outcome` 前必须先版本化 exact evidence contract。
+- 批准人：待 repository-owner review；保持 Draft。
+
 后续路线调整必须追加：
 
 ```text
@@ -1118,7 +1138,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 下一可启动动作：PR-BP Replanner、plan diff 与重新授权（READY）
+### 当前实现动作：PR-BP Replanner、plan diff 与重新授权（IN_PROGRESS）
 
 任务：完成`M3H-011`，让用户反馈、Controller失败/终态与verifier-bound observation产生显式、canonical、可审查的plan diff；任何实质变化必须创建新plan digest并重新经过Permission Engine与authorization，旧proposal、旧plan与旧authorization保持immutable。
 
@@ -1131,7 +1151,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 - Replanner只能提出review-only revision，Controller、Permission Engine、Executor、RemoteExecutionService与Verifier继续保持既有authority边界；
 - tracing保持optional、fail-open且non-authoritative，不得改变diff、proposal、authorization或scientific authority bytes。
 
-当前状态：M3为`I/T/V / DONE`；M3.5为`READY`；PR-BL、PR-BM、PR-BM2、PR-BN与PR-BO的`M3H-001`～`M3H-009`均为`I/T/— / DONE`并已通过owner review；`M3H-010`为`I/T/— / READY`；PR-BP / `M3H-011`为`READY`但尚未启动；M4/PR-BK继续暂缓；`M3H-GATE-002`与`M3H-GATE-003`均不标`V`。
+当前状态：M3为`I/T/V / DONE`；M3.5为`READY`；PR-BL、PR-BM、PR-BM2、PR-BN与PR-BO的`M3H-001`～`M3H-009`均为`I/T/— / DONE`并已通过owner review；`M3H-010`为`I/T/— / READY`；PR-BP / `M3H-011`为`IN_PROGRESS`；M4/PR-BK继续暂缓；`M3H-GATE-002`、`M3H-GATE-003`与`M3H-GATE-005`均不标`V`。
 
 必须验证：
 
@@ -1158,7 +1178,7 @@ PR-BM  Permission Engine、immutable plan authorization、approve-and-start cont
 PR-BM2 server-owned configured resource-authority contract（owner review approved；PR #20 已合并）
 PR-BN  Harness Controller 接入现有 Executor/remote/verifier 链（owner review approved；PR #21 已合并）
 PR-BO  Execution Agent LLM 与受约束 ToolCallProposal（owner review approved；待PR #22合并）
-PR-BP  Replanner、plan diff 与重新授权（READY；尚未启动）
+PR-BP  Replanner、plan diff 与重新授权（当前实现动作；IN_PROGRESS）
 PR-BQ  统一 Harness UI 与 atomic/end-to-end 入口
 PR-BR  CSV/PDF acceptance、恢复、exact replay、隐私与对抗 evidence
 PR-BK  M4 benchmark protocol（M3.5 核心完成后恢复）

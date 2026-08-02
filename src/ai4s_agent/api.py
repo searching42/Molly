@@ -44,6 +44,9 @@ from ai4s_agent.routes.projects import register_project_routes
 from ai4s_agent.routes.review import register_review_routes
 from ai4s_agent.routes.run_plans import register_run_plan_routes
 from ai4s_agent.routes.scientific_agent_plans import register_scientific_agent_plan_routes
+from ai4s_agent.routes.scientific_agent_replanner import (
+    register_scientific_agent_replanner_routes,
+)
 from ai4s_agent.routes.scientific_agent_permissions import (
     register_scientific_agent_permission_routes,
 )
@@ -53,6 +56,7 @@ from ai4s_agent.routes.scientific_agent_harness_controller import (
 from ai4s_agent.scientific_agent_harness_controller import (
     ScientificAgentHarnessController,
 )
+from ai4s_agent.scientific_agent_replanner import ScientificAgentReplannerService
 from ai4s_agent.routes.worker_deployment import register_worker_deployment_routes
 from ai4s_agent.storage import ProjectStorage
 
@@ -185,14 +189,31 @@ def register_routes(
         app,
         controller=harness_controller,
     )
+    execution_agent_store = ExecutionAgentStore(storage=projects)
     execution_agent = ExecutionAgentService(
         controller=harness_controller,
-        store=ExecutionAgentStore(storage=projects),
+        store=execution_agent_store,
         tracer=harness_tracer,
     )
     register_execution_agent_routes(
         app,
         service=execution_agent,
+        llm_settings=llm_settings,
+        llm_providers=llm_providers,
+    )
+    replanner = ScientificAgentReplannerService(
+        storage=projects,
+        proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
+        observation_builder=app.extensions["scientific_agent_plan_observation_builder"],
+        authorization_service=app.extensions["scientific_agent_authorization_service"],
+        control_store=app.extensions["scientific_agent_plan_control_store"],
+        controller=harness_controller,
+        execution_agent_store=execution_agent_store,
+        tracer=harness_tracer,
+    )
+    register_scientific_agent_replanner_routes(
+        app,
+        service=replanner,
         llm_settings=llm_settings,
         llm_providers=llm_providers,
     )

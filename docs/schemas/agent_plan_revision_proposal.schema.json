@@ -1,0 +1,1426 @@
+{
+  "$defs": {
+    "AgentExecutionPlanLLMResponse": {
+      "additionalProperties": false,
+      "description": "Only high-level planner suggestions; no execution or approval fields.",
+      "properties": {
+        "schema_version": {
+          "const": "agent_execution_plan_llm_response.v1",
+          "default": "agent_execution_plan_llm_response.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "requested_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requested Tool Ids",
+          "type": "array"
+        },
+        "selected_input_artifact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selected Input Artifact Ids",
+          "type": "array"
+        },
+        "task_options": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Task Options",
+          "type": "object"
+        },
+        "selected_logical_profile_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selected Logical Profile Ids",
+          "type": "array"
+        },
+        "limits": {
+          "additionalProperties": true,
+          "title": "Limits",
+          "type": "object"
+        },
+        "stop_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Stop Conditions",
+          "type": "array"
+        },
+        "success_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Success Criteria",
+          "type": "array"
+        },
+        "rationales": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rationales",
+          "type": "array"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/AgentExecutionPlanQuestion"
+          },
+          "title": "Questions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requested_tool_ids",
+        "selected_input_artifact_ids",
+        "task_options",
+        "selected_logical_profile_ids",
+        "limits",
+        "stop_conditions",
+        "success_criteria",
+        "rationales",
+        "assumptions",
+        "questions"
+      ],
+      "title": "AgentExecutionPlanLLMResponse",
+      "type": "object"
+    },
+    "AgentExecutionPlanProposal": {
+      "additionalProperties": false,
+      "description": "Immutable review/control artifact.  It is never an execution authority.",
+      "properties": {
+        "schema_version": {
+          "const": "agent_execution_plan_proposal.v1",
+          "default": "agent_execution_plan_proposal.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "goal": {
+          "title": "Goal",
+          "type": "string"
+        },
+        "user_constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "User Constraints",
+          "type": "array"
+        },
+        "planner_backend": {
+          "title": "Planner Backend",
+          "type": "string"
+        },
+        "prompt_version": {
+          "const": "scientific-agent-long-horizon-plan.v1",
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "observation_id": {
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "observation_digest": {
+          "title": "Observation Digest",
+          "type": "string"
+        },
+        "tool_catalog_digest": {
+          "title": "Tool Catalog Digest",
+          "type": "string"
+        },
+        "validated_llm_response": {
+          "$ref": "#/$defs/AgentExecutionPlanLLMResponse"
+        },
+        "run_plan": {
+          "$ref": "#/$defs/RunPlan"
+        },
+        "planner_options": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Planner Options",
+          "type": "object"
+        },
+        "effective_planner_options": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Effective Planner Options",
+          "type": "object"
+        },
+        "compiled_task_options": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Compiled Task Options",
+          "type": "object"
+        },
+        "option_compiler_version": {
+          "const": "scientific-planner-option-compiler.v1",
+          "default": "scientific-planner-option-compiler.v1",
+          "title": "Option Compiler Version",
+          "type": "string"
+        },
+        "selected_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selected Artifacts",
+          "type": "array"
+        },
+        "selected_profiles": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selected Profiles",
+          "type": "array"
+        },
+        "dispatch_intents": {
+          "items": {
+            "$ref": "#/$defs/AgentTaskDispatchIntent"
+          },
+          "title": "Dispatch Intents",
+          "type": "array"
+        },
+        "limits": {
+          "additionalProperties": true,
+          "title": "Limits",
+          "type": "object"
+        },
+        "stop_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Stop Conditions",
+          "type": "array"
+        },
+        "success_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Success Criteria",
+          "type": "array"
+        },
+        "rationales": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rationales",
+          "type": "array"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/AgentExecutionPlanQuestion"
+          },
+          "title": "Questions",
+          "type": "array"
+        },
+        "required_gates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Gates",
+          "type": "array"
+        },
+        "missing_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Artifacts",
+          "type": "array"
+        },
+        "status": {
+          "const": "review_required",
+          "default": "review_required",
+          "title": "Status",
+          "type": "string"
+        },
+        "llm_invocation": {
+          "$ref": "#/$defs/AgentLLMInvocationMetadata"
+        },
+        "semantic_plan_id": {
+          "default": "",
+          "title": "Semantic Plan Id",
+          "type": "string"
+        },
+        "semantic_plan_digest": {
+          "default": "",
+          "title": "Semantic Plan Digest",
+          "type": "string"
+        },
+        "invocation_id": {
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "client_request_id": {
+          "title": "Client Request Id",
+          "type": "string"
+        },
+        "publication_id": {
+          "default": "",
+          "title": "Publication Id",
+          "type": "string"
+        },
+        "proposal_id": {
+          "default": "",
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "proposal_digest": {
+          "default": "",
+          "title": "Proposal Digest",
+          "type": "string"
+        },
+        "executable": {
+          "const": false,
+          "default": false,
+          "title": "Executable",
+          "type": "boolean"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "run_id",
+        "goal",
+        "planner_backend",
+        "prompt_version",
+        "observation_id",
+        "observation_digest",
+        "tool_catalog_digest",
+        "validated_llm_response",
+        "run_plan",
+        "llm_invocation",
+        "invocation_id",
+        "client_request_id",
+        "created_at"
+      ],
+      "title": "AgentExecutionPlanProposal",
+      "type": "object"
+    },
+    "AgentExecutionPlanQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "blocks_proposal": {
+          "default": true,
+          "title": "Blocks Proposal",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question_id",
+        "prompt",
+        "reason"
+      ],
+      "title": "AgentExecutionPlanQuestion",
+      "type": "object"
+    },
+    "AgentLLMInvocationMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "prompt_version": {
+          "const": "scientific-agent-long-horizon-plan.v1",
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "response_id": {
+          "default": "",
+          "title": "Response Id",
+          "type": "string"
+        },
+        "observation_digest": {
+          "title": "Observation Digest",
+          "type": "string"
+        },
+        "tool_catalog_digest": {
+          "title": "Tool Catalog Digest",
+          "type": "string"
+        },
+        "validated_output_digest": {
+          "title": "Validated Output Digest",
+          "type": "string"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        }
+      },
+      "required": [
+        "provider",
+        "prompt_version",
+        "observation_digest",
+        "tool_catalog_digest",
+        "validated_output_digest"
+      ],
+      "title": "AgentLLMInvocationMetadata",
+      "type": "object"
+    },
+    "AgentPlanDiff": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "agent_plan_diff.v1",
+          "default": "agent_plan_diff.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "plan_diff_id": {
+          "default": "",
+          "title": "Plan Diff Id",
+          "type": "string"
+        },
+        "plan_diff_digest": {
+          "default": "",
+          "title": "Plan Diff Digest",
+          "type": "string"
+        },
+        "baseline_semantic_plan_digest": {
+          "title": "Baseline Semantic Plan Digest",
+          "type": "string"
+        },
+        "successor_semantic_plan_digest": {
+          "title": "Successor Semantic Plan Digest",
+          "type": "string"
+        },
+        "baseline_projection_digest": {
+          "title": "Baseline Projection Digest",
+          "type": "string"
+        },
+        "successor_projection_digest": {
+          "title": "Successor Projection Digest",
+          "type": "string"
+        },
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/AgentPlanDiffChange"
+          },
+          "title": "Changes",
+          "type": "array"
+        },
+        "material_change": {
+          "title": "Material Change",
+          "type": "boolean"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseline_semantic_plan_digest",
+        "successor_semantic_plan_digest",
+        "baseline_projection_digest",
+        "successor_projection_digest",
+        "material_change",
+        "created_at"
+      ],
+      "title": "AgentPlanDiff",
+      "type": "object"
+    },
+    "AgentPlanDiffChange": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "enum": [
+            "task",
+            "dependency",
+            "option",
+            "artifact",
+            "route_profile_resource",
+            "budget",
+            "gate",
+            "semantic"
+          ],
+          "title": "Dimension",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "change_kind": {
+          "enum": [
+            "added",
+            "removed",
+            "changed"
+          ],
+          "title": "Change Kind",
+          "type": "string"
+        },
+        "before_present": {
+          "title": "Before Present",
+          "type": "boolean"
+        },
+        "before": {
+          "default": null,
+          "title": "Before"
+        },
+        "after_present": {
+          "title": "After Present",
+          "type": "boolean"
+        },
+        "after": {
+          "default": null,
+          "title": "After"
+        }
+      },
+      "required": [
+        "dimension",
+        "path",
+        "change_kind",
+        "before_present",
+        "after_present"
+      ],
+      "title": "AgentPlanDiffChange",
+      "type": "object"
+    },
+    "AgentPlanReplanRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "agent_plan_replan_request.v1",
+          "default": "agent_plan_replan_request.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "client_request_id": {
+          "title": "Client Request Id",
+          "type": "string"
+        },
+        "actor": {
+          "title": "Actor",
+          "type": "string"
+        },
+        "actor_source": {
+          "title": "Actor Source",
+          "type": "string"
+        },
+        "trigger_kind": {
+          "$ref": "#/$defs/AgentPlanReplanTriggerKind"
+        },
+        "baseline_proposal_id": {
+          "title": "Baseline Proposal Id",
+          "type": "string"
+        },
+        "baseline_proposal_digest": {
+          "title": "Baseline Proposal Digest",
+          "type": "string"
+        },
+        "baseline_semantic_plan_id": {
+          "title": "Baseline Semantic Plan Id",
+          "type": "string"
+        },
+        "baseline_semantic_plan_digest": {
+          "title": "Baseline Semantic Plan Digest",
+          "type": "string"
+        },
+        "baseline_run_plan_digest": {
+          "title": "Baseline Run Plan Digest",
+          "type": "string"
+        },
+        "baseline_authorization_id": {
+          "title": "Baseline Authorization Id",
+          "type": "string"
+        },
+        "baseline_authorization_digest": {
+          "title": "Baseline Authorization Digest",
+          "type": "string"
+        },
+        "feedback_receipt_id": {
+          "default": "",
+          "title": "Feedback Receipt Id",
+          "type": "string"
+        },
+        "feedback_receipt_digest": {
+          "default": "",
+          "title": "Feedback Receipt Digest",
+          "type": "string"
+        },
+        "controller_execution_id": {
+          "default": "",
+          "title": "Controller Execution Id",
+          "type": "string"
+        },
+        "controller_execution_digest": {
+          "default": "",
+          "title": "Controller Execution Digest",
+          "type": "string"
+        },
+        "controller_decision_id": {
+          "default": "",
+          "title": "Controller Decision Id",
+          "type": "string"
+        },
+        "controller_decision_digest": {
+          "default": "",
+          "title": "Controller Decision Digest",
+          "type": "string"
+        },
+        "controller_receipt_id": {
+          "default": "",
+          "title": "Controller Receipt Id",
+          "type": "string"
+        },
+        "controller_receipt_digest": {
+          "default": "",
+          "title": "Controller Receipt Digest",
+          "type": "string"
+        },
+        "tool_call_proposal_id": {
+          "default": "",
+          "title": "Tool Call Proposal Id",
+          "type": "string"
+        },
+        "tool_call_proposal_digest": {
+          "default": "",
+          "title": "Tool Call Proposal Digest",
+          "type": "string"
+        },
+        "tool_call_application_receipt_id": {
+          "default": "",
+          "title": "Tool Call Application Receipt Id",
+          "type": "string"
+        },
+        "tool_call_application_receipt_digest": {
+          "default": "",
+          "title": "Tool Call Application Receipt Digest",
+          "type": "string"
+        },
+        "external_llm_approved": {
+          "const": true,
+          "title": "External Llm Approved",
+          "type": "boolean"
+        },
+        "request_digest": {
+          "default": "",
+          "title": "Request Digest",
+          "type": "string"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "run_id",
+        "client_request_id",
+        "actor",
+        "actor_source",
+        "trigger_kind",
+        "baseline_proposal_id",
+        "baseline_proposal_digest",
+        "baseline_semantic_plan_id",
+        "baseline_semantic_plan_digest",
+        "baseline_run_plan_digest",
+        "baseline_authorization_id",
+        "baseline_authorization_digest",
+        "external_llm_approved",
+        "created_at"
+      ],
+      "title": "AgentPlanReplanRequest",
+      "type": "object"
+    },
+    "AgentPlanReplanTriggerKind": {
+      "enum": [
+        "explicit_user_feedback",
+        "controller_failed",
+        "controller_terminal",
+        "plan_source_drift",
+        "user_requested_revision"
+      ],
+      "title": "AgentPlanReplanTriggerKind",
+      "type": "string"
+    },
+    "AgentRemoteResourceRequestIntent": {
+      "additionalProperties": false,
+      "description": "Review-only resource intent; nullable fields are never invented authority.",
+      "properties": {
+        "status": {
+          "default": "not_configured",
+          "enum": [
+            "not_configured",
+            "partial",
+            "configured"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "gpu_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Count"
+        },
+        "cpu_threads": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Threads"
+        },
+        "walltime_sec": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Walltime Sec"
+        }
+      },
+      "title": "AgentRemoteResourceRequestIntent",
+      "type": "object"
+    },
+    "AgentReplanLLMResponse": {
+      "additionalProperties": false,
+      "description": "Bounded revision intent. It cannot express dependencies or authority.",
+      "properties": {
+        "schema_version": {
+          "const": "agent_replan_llm_response.v1",
+          "default": "agent_replan_llm_response.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "rationale_summary": {
+          "default": "",
+          "title": "Rationale Summary",
+          "type": "string"
+        },
+        "retain_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Retain Tool Ids",
+          "type": "array"
+        },
+        "add_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Add Tool Ids",
+          "type": "array"
+        },
+        "remove_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Remove Tool Ids",
+          "type": "array"
+        },
+        "replace_tool_ids": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Replace Tool Ids",
+          "type": "object"
+        },
+        "option_patch": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Option Patch",
+          "type": "object"
+        },
+        "selected_input_artifact_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selected Input Artifact Ids"
+        },
+        "selected_logical_profile_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selected Logical Profile Ids"
+        },
+        "limits": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limits"
+        },
+        "stop_conditions": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stop Conditions"
+        },
+        "success_criteria": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Success Criteria"
+        },
+        "unresolved_questions": {
+          "items": {
+            "$ref": "#/$defs/AgentExecutionPlanQuestion"
+          },
+          "title": "Unresolved Questions",
+          "type": "array"
+        },
+        "pause": {
+          "default": false,
+          "title": "Pause",
+          "type": "boolean"
+        },
+        "no_change": {
+          "default": false,
+          "title": "No Change",
+          "type": "boolean"
+        }
+      },
+      "title": "AgentReplanLLMResponse",
+      "type": "object"
+    },
+    "AgentReplannerObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "agent_replanner_observation.v1",
+          "default": "agent_replanner_observation.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "observation_id": {
+          "default": "",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "observation_digest": {
+          "default": "",
+          "title": "Observation Digest",
+          "type": "string"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "trigger_kind": {
+          "$ref": "#/$defs/AgentPlanReplanTriggerKind"
+        },
+        "baseline_proposal_id": {
+          "title": "Baseline Proposal Id",
+          "type": "string"
+        },
+        "baseline_proposal_digest": {
+          "title": "Baseline Proposal Digest",
+          "type": "string"
+        },
+        "baseline_semantic_plan_id": {
+          "title": "Baseline Semantic Plan Id",
+          "type": "string"
+        },
+        "baseline_semantic_plan_digest": {
+          "title": "Baseline Semantic Plan Digest",
+          "type": "string"
+        },
+        "baseline_run_plan_digest": {
+          "title": "Baseline Run Plan Digest",
+          "type": "string"
+        },
+        "baseline_authorization_id": {
+          "title": "Baseline Authorization Id",
+          "type": "string"
+        },
+        "baseline_authorization_digest": {
+          "title": "Baseline Authorization Digest",
+          "type": "string"
+        },
+        "ordered_task_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Ordered Task Ids",
+          "type": "array"
+        },
+        "current_task_index": {
+          "anyOf": [
+            {
+              "maximum": 1023,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Task Index"
+        },
+        "controller_state": {
+          "title": "Controller State",
+          "type": "string"
+        },
+        "current_task_outcome": {
+          "title": "Current Task Outcome",
+          "type": "string"
+        },
+        "safe_reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Safe Reason Codes",
+          "type": "array"
+        },
+        "verified_artifact_lineage_digest": {
+          "title": "Verified Artifact Lineage Digest",
+          "type": "string"
+        },
+        "output_contract_status": {
+          "title": "Output Contract Status",
+          "type": "string"
+        },
+        "gate_status": {
+          "title": "Gate Status",
+          "type": "string"
+        },
+        "remote_approval_status": {
+          "title": "Remote Approval Status",
+          "type": "string"
+        },
+        "profile_resource_budget_digest": {
+          "title": "Profile Resource Budget Digest",
+          "type": "string"
+        },
+        "tool_catalog_digest": {
+          "title": "Tool Catalog Digest",
+          "type": "string"
+        },
+        "feedback_receipt_id": {
+          "default": "",
+          "title": "Feedback Receipt Id",
+          "type": "string"
+        },
+        "feedback_receipt_digest": {
+          "default": "",
+          "title": "Feedback Receipt Digest",
+          "type": "string"
+        },
+        "source_bindings": {
+          "items": {
+            "$ref": "#/$defs/AgentReplannerSourceBinding"
+          },
+          "title": "Source Bindings",
+          "type": "array"
+        },
+        "source_bindings_digest": {
+          "title": "Source Bindings Digest",
+          "type": "string"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "run_id",
+        "trigger_kind",
+        "baseline_proposal_id",
+        "baseline_proposal_digest",
+        "baseline_semantic_plan_id",
+        "baseline_semantic_plan_digest",
+        "baseline_run_plan_digest",
+        "baseline_authorization_id",
+        "baseline_authorization_digest",
+        "ordered_task_ids",
+        "controller_state",
+        "current_task_outcome",
+        "verified_artifact_lineage_digest",
+        "output_contract_status",
+        "gate_status",
+        "remote_approval_status",
+        "profile_resource_budget_digest",
+        "tool_catalog_digest",
+        "source_bindings",
+        "source_bindings_digest",
+        "created_at"
+      ],
+      "title": "AgentReplannerObservation",
+      "type": "object"
+    },
+    "AgentReplannerSourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_digest": {
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "source_kind": {
+          "title": "Source Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "source_id",
+        "source_digest",
+        "source_kind"
+      ],
+      "title": "AgentReplannerSourceBinding",
+      "type": "object"
+    },
+    "AgentTaskDispatchIntent": {
+      "additionalProperties": false,
+      "description": "Non-executing route binding for one canonical RunPlan task.",
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "execution_route": {
+          "enum": [
+            "local_executor",
+            "remote_execution_service"
+          ],
+          "title": "Execution Route",
+          "type": "string"
+        },
+        "remote_task_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "document_parsing",
+                "model_training",
+                "molecular_generation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Task Type"
+        },
+        "logical_profile_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Logical Profile Id"
+        },
+        "requested_resources": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRemoteResourceRequestIntent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "task_id",
+        "execution_route"
+      ],
+      "title": "AgentTaskDispatchIntent",
+      "type": "object"
+    },
+    "PlannedTask": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "required_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Artifacts",
+          "type": "array"
+        },
+        "output_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Output Artifacts",
+          "type": "array"
+        },
+        "unresolved_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unresolved Requirements",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "title": "PlannedTask",
+      "type": "object"
+    },
+    "RunPlan": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "requested_tasks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requested Tasks",
+          "type": "array"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/PlannedTask"
+          },
+          "title": "Tasks",
+          "type": "array"
+        },
+        "available_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Available Artifacts",
+          "type": "array"
+        },
+        "missing_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Artifacts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "requested_tasks",
+        "tasks"
+      ],
+      "title": "RunPlan",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "agent_plan_revision_proposal.v1",
+      "default": "agent_plan_revision_proposal.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "revision_id": {
+      "default": "",
+      "title": "Revision Id",
+      "type": "string"
+    },
+    "revision_digest": {
+      "default": "",
+      "title": "Revision Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "replan_request": {
+      "$ref": "#/$defs/AgentPlanReplanRequest"
+    },
+    "observation": {
+      "$ref": "#/$defs/AgentReplannerObservation"
+    },
+    "parsed_llm_response": {
+      "$ref": "#/$defs/AgentReplanLLMResponse"
+    },
+    "parsed_llm_response_digest": {
+      "title": "Parsed Llm Response Digest",
+      "type": "string"
+    },
+    "provider_kind": {
+      "title": "Provider Kind",
+      "type": "string"
+    },
+    "provider_model_digest": {
+      "title": "Provider Model Digest",
+      "type": "string"
+    },
+    "provider_response_id_digest": {
+      "title": "Provider Response Id Digest",
+      "type": "string"
+    },
+    "baseline_permission_decision_id": {
+      "title": "Baseline Permission Decision Id",
+      "type": "string"
+    },
+    "baseline_permission_decision_digest": {
+      "title": "Baseline Permission Decision Digest",
+      "type": "string"
+    },
+    "successor_candidate": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentExecutionPlanProposal"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "successor_proposal_digest": {
+      "default": "",
+      "title": "Successor Proposal Digest",
+      "type": "string"
+    },
+    "plan_diff": {
+      "$ref": "#/$defs/AgentPlanDiff"
+    },
+    "blocking_questions": {
+      "items": {
+        "$ref": "#/$defs/AgentExecutionPlanQuestion"
+      },
+      "title": "Blocking Questions",
+      "type": "array"
+    },
+    "required_new_gates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required New Gates",
+      "type": "array"
+    },
+    "policy_version": {
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "prompt_version": {
+      "const": "scientific-agent-plan-revision.v1",
+      "default": "scientific-agent-plan-revision.v1",
+      "title": "Prompt Version",
+      "type": "string"
+    },
+    "response_schema_version": {
+      "const": "agent_replan_llm_response.v1",
+      "default": "agent_replan_llm_response.v1",
+      "title": "Response Schema Version",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "review_required",
+        "no_material_change"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "review_only": {
+      "const": true,
+      "default": true,
+      "title": "Review Only",
+      "type": "boolean"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "authorized": {
+      "const": false,
+      "default": false,
+      "title": "Authorized",
+      "type": "boolean"
+    },
+    "applied": {
+      "const": false,
+      "default": false,
+      "title": "Applied",
+      "type": "boolean"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "run_id",
+    "replan_request",
+    "observation",
+    "parsed_llm_response",
+    "parsed_llm_response_digest",
+    "provider_kind",
+    "provider_model_digest",
+    "provider_response_id_digest",
+    "baseline_permission_decision_id",
+    "baseline_permission_decision_digest",
+    "plan_diff",
+    "policy_version",
+    "status",
+    "created_at"
+  ],
+  "title": "AgentPlanRevisionProposal",
+  "type": "object"
+}
