@@ -8,6 +8,8 @@ from flask import Flask
 from ai4s_agent.conversation_store import ConversationStore
 from ai4s_agent.control_plane_events import ControlPlaneEventProjector
 from ai4s_agent.dataset_workflow import DatasetWorkflowService
+from ai4s_agent.execution_agent import ExecutionAgentService
+from ai4s_agent.execution_agent_store import ExecutionAgentStore
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.harness_tracing import build_harness_tracer
 from ai4s_agent.job_manager import JobManager
@@ -27,6 +29,7 @@ from ai4s_agent.routes.agents import _as_bool, register_agent_routes
 from ai4s_agent.routes.conversations import register_conversation_routes
 from ai4s_agent.routes.control_plane_events import register_control_plane_event_routes
 from ai4s_agent.routes.datasets import register_dataset_routes
+from ai4s_agent.routes.execution_agent import register_execution_agent_routes
 from ai4s_agent.routes.core import register_core_routes
 from ai4s_agent.routes.internal_run_plan_queue import register_internal_run_plan_queue_routes
 from ai4s_agent.routes.jobs import register_job_routes
@@ -167,6 +170,7 @@ def register_routes(
         resource_profiles=resource_profiles,
         resource_authority_policy_store=resource_authority_policies,
     )
+    harness_tracer = build_harness_tracer()
     harness_controller = ScientificAgentHarnessController(
         storage=projects,
         proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
@@ -175,11 +179,22 @@ def register_routes(
         resource_authority_service=app.extensions["remote_resource_authority_service"],
         executor=RunPlanExecutor(storage=projects),
         remote_executions=remote_executions,
-        tracer=build_harness_tracer(),
+        tracer=harness_tracer,
     )
     register_scientific_agent_harness_controller_routes(
         app,
         controller=harness_controller,
+    )
+    execution_agent = ExecutionAgentService(
+        controller=harness_controller,
+        store=ExecutionAgentStore(storage=projects),
+        tracer=harness_tracer,
+    )
+    register_execution_agent_routes(
+        app,
+        service=execution_agent,
+        llm_settings=llm_settings,
+        llm_providers=llm_providers,
     )
     register_llm_settings_routes(
         app,

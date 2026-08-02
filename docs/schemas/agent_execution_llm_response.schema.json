@@ -1,0 +1,20 @@
+{
+  "additionalProperties": false,
+  "description": "The entire accepted Execution Agent response; no arguments or authority.",
+  "properties": {
+    "selected_tool_id": {
+      "title": "Selected Tool Id",
+      "type": "string"
+    },
+    "decision_summary": {
+      "default": "",
+      "title": "Decision Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "selected_tool_id"
+  ],
+  "title": "AgentExecutionLLMResponse",
+  "type": "object"
+}

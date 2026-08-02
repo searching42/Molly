@@ -1,0 +1,25 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "agent_tool_call_application_request.v1",
+      "default": "agent_tool_call_application_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "expected_tool_call_proposal_digest": {
+      "title": "Expected Tool Call Proposal Digest",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "expected_tool_call_proposal_digest",
+    "client_request_id"
+  ],
+  "title": "AgentToolCallApplicationRequest",
+  "type": "object"
+}

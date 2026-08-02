@@ -4,7 +4,7 @@
 > 当前公开基线：`public-baseline-v1`（单一根提交的隐私审查快照）
 > 历史审计基线：迁移前完整提交、分支与 PR 保留在私有审计仓库
 > 当前主里程碑：M3.5 — Scientific Agent Harness 与受控 LLM 执行接入
-> 最后更新：2026-08-01
+> 最后更新：2026-08-02
 > 适用范围：Molly Agent 执行能力、长程任务轨迹审计及科学有效性验证
 
 `todo.md` 是仓库中里程碑范围、任务状态、验收门槛、风险状态和推进顺序的唯一规范性来源。领域专题文档可以解释实现细节，但不得维护与本文件竞争的路线或状态表。
@@ -448,7 +448,7 @@ M3.5 至少支持两种用户模式：
 | `M3H-007` Permission Engine shadow mode | `I/T/—` | `DONE` | PR-BM 提供独立显式 shadow comparator/audit，不拦截或改变现有 route，并通过 owner review |
 | `M3H-007A` 建立 server-owned configured resource authority | `I/T/—` | `DONE` | PR-BM2 在 `a055a87` 获得 owner review approval，并由 PR #20 以 `5389a3c` 合并；从私有 server policy、exact connection/profile/probe、预算和完整 task roster 派生 immutable AuthoritySet，不创建 request 或 dispatch |
 | `M3H-008` Harness Controller 接入现有执行链 | `I/T/—` | `DONE` | PR-BN 最终 review HEAD `2fa4f74a4caa5618f5046151b6258b2d51f6e91f` 已通过 repository-owner review，并由 PR #21 以 merge commit `d4ac276d4faa6623ccaa7661a6d9db14e6225833` 合入 `main`；不据此声明真实 remote canary 或完整 Harness 完成 |
-| `M3H-009` 接入 Execution Agent LLM | `—/—/—` | `IN_PROGRESS` | PR-BO 是唯一当前实现动作：从 current-verified Controller inspection 派生 privacy-safe observation 与 server-owned bounded tool catalog，只冻结 non-authoritative `ToolCallProposal`，apply 时最多调用一次现有 Controller advance；无任意 task、adapter、profile、resource、argv、shell、SSH 或路径选择 |
+| `M3H-009` 接入 Execution Agent LLM | `I/T/—` | `IN_PROGRESS` | PR-BO 已实现 current-verified Controller snapshot、privacy-safe observation、server-owned bounded tool catalog、strict structured LLM response、immutable non-authoritative `ToolCallProposal`、two-phase apply 与 exact application receipt；定向实现/兼容链共 `163 passed`，本地 PR Fast `1125 passed, 5388 deselected`，仍等待GitHub Full CI、CodeQL与repository-owner review，不据此标记DONE |
 | `M3H-010` Verifier-bound feedback observation | `I/T/—` | `READY` | PR-BN 已建立 verifier-bound Controller observation prerequisite seam并覆盖 local/remote completion 验证；只有 authoritative StageState、Artifact Registry 和 verified publication 能支持 running/success/failure，LLM 文本与 telemetry 不能改变 UI 或状态 |
 | `M3H-011` Replanner 与 plan revision | `I(partial)/T(partial)/—` | `DEFERRED` | 用户反馈或运行失败产生 explicit diff、新 plan digest 与新授权；旧授权对任何实质变化失效 |
 | `M3H-012` 统一 Plan/Tool/Permission/Replan UI | `I(partial)/T(partial)/—` | `DEFERRED` | 支持批准并启动、修改后重规划、拒绝、atomic task 与端到端模式；保留高级诊断入口 |
@@ -1081,6 +1081,14 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：Execution Agent不得成为第二个task scheduler；LLM只能在server派生的当前action目录中选择，不能直接调用Executor、RemoteExecutionService或worker，且tracing、普通conversation、LLM文本与proposal本身均非执行权威。
 - 批准人：searching42（repository owner）；PR-BO implementation待review。
 
+### 2026-08-02：PR-BO实现与定向自动化完成，保持Draft等待owner review
+
+- 决策：`M3H-009`更新为`I/T/— / IN_PROGRESS`；Execution Agent只消费execution-wide锁定的current Controller snapshot，只能从server-owned固定catalog选择一个无参数tool，并冻结`executable=false`的non-authoritative `ToolCallProposal`。proposal创建与apply仍是两个显式API阶段。
+- 边界：只有`controller.advance_current.v1`可使用server-derived deterministic request ID调用一次现有`Controller.advance`；pause、Gate提示、remote approval提示、recovery提示与terminal observation均在Controller execution锁内只发布no-effect application receipt，不批准、不recover、不cancel、不retry，也不调用Executor或RemoteExecutionService。
+- 依据：新增schema/policy、safe observation、tool mapping、strict response、provider consent/crash checkpoint、manifest-last proposal、application reconciliation、state drift、client/LLM injection、privacy、tracing equivalence与跨进程同/不同request测试；定向Execution Agent `48 passed`、既有Controller/schema/tracing `44 passed`、provider/settings/conversation/planning/repository privacy及Permission固定digest `71 passed`，合计`163 passed`；本地PR Fast为`1125 passed, 5388 deselected`；`compileall`、`git diff --check`与4-shard assignment validation通过。
+- 影响任务：`M3H-GATE-002`与`M3H-GATE-003`均不标`V`；`M3H-009`不标`DONE`；PR-BP/`M3H-011`继续`DEFERRED`。尚未声明完整Harness、Replanner、UI、自动循环、任意科学task选择或真实remote canary。
+- 批准人：待repository-owner review。
+
 后续路线调整必须追加：
 
 ```text
@@ -1111,7 +1119,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 - proposal request与application必须跨进程幂等、crash-safe且no-replace；provider outcome unknown不自动retry，一个proposal最多产生一个Controller effect和一个application receipt；
 - OpenTelemetry默认关闭、lazy、fail-open且non-authoritative；tracing on/off不得改变proposal、Controller或scientific authority bytes。
 
-当前状态：M3为`I/T/V / DONE`；M3.5为`READY`；PR-BL、PR-BM、PR-BM2与PR-BN的`M3H-001`～`M3H-008`均为`I/T/— / DONE`、已通过owner review并合并；`M3H-009`/PR-BO为`—/—/— / IN_PROGRESS`且是唯一当前动作；`M3H-010`为`I/T/— / READY`；PR-BP/`M3H-011`保持`DEFERRED`；M4/PR-BK继续暂缓；`M3H-GATE-002`与`M3H-GATE-003`均不标`V`。
+当前状态：M3为`I/T/V / DONE`；M3.5为`READY`；PR-BL、PR-BM、PR-BM2与PR-BN的`M3H-001`～`M3H-008`均为`I/T/— / DONE`、已通过owner review并合并；`M3H-009`/PR-BO为`I/T/— / IN_PROGRESS`且是唯一当前动作，等待CI与owner review；`M3H-010`为`I/T/— / READY`；PR-BP/`M3H-011`保持`DEFERRED`；M4/PR-BK继续暂缓；`M3H-GATE-002`与`M3H-GATE-003`均不标`V`。
 
 必须验证：
 

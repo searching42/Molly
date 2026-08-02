@@ -1,0 +1,202 @@
+{
+  "$defs": {
+    "AgentExecutionServerCompiledOperation": {
+      "enum": [
+        "controller_advance",
+        "no_effect_pause",
+        "request_user_gate_approval",
+        "request_user_remote_approval",
+        "request_user_recovery",
+        "observe_terminal"
+      ],
+      "title": "AgentExecutionServerCompiledOperation",
+      "type": "string"
+    },
+    "AgentExecutionUserBoundaryKind": {
+      "enum": [
+        "none",
+        "gate_approval",
+        "remote_approval",
+        "recovery"
+      ],
+      "title": "AgentExecutionUserBoundaryKind",
+      "type": "string"
+    },
+    "AgentHarnessAuthorityClass": {
+      "enum": [
+        "authoritative",
+        "derived",
+        "observational",
+        "unverified"
+      ],
+      "title": "AgentHarnessAuthorityClass",
+      "type": "string"
+    },
+    "AgentHarnessControllerSourceBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_digest": {
+          "title": "Source Digest",
+          "type": "string"
+        },
+        "authority_class": {
+          "$ref": "#/$defs/AgentHarnessAuthorityClass",
+          "default": "authoritative"
+        }
+      },
+      "required": [
+        "name",
+        "source_id",
+        "source_digest"
+      ],
+      "title": "AgentHarnessControllerSourceBinding",
+      "type": "object"
+    },
+    "AgentToolCallApplicationOutcome": {
+      "enum": [
+        "applied",
+        "paused",
+        "user_action_required",
+        "terminal_observed",
+        "reconciled"
+      ],
+      "title": "AgentToolCallApplicationOutcome",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Exact server application result; never a scientific success claim.",
+  "properties": {
+    "schema_version": {
+      "const": "agent_tool_call_application_receipt.v1",
+      "default": "agent_tool_call_application_receipt.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "application_receipt_id": {
+      "default": "",
+      "title": "Application Receipt Id",
+      "type": "string"
+    },
+    "application_receipt_digest": {
+      "default": "",
+      "title": "Application Receipt Digest",
+      "type": "string"
+    },
+    "tool_call_proposal_id": {
+      "title": "Tool Call Proposal Id",
+      "type": "string"
+    },
+    "tool_call_proposal_digest": {
+      "title": "Tool Call Proposal Digest",
+      "type": "string"
+    },
+    "controller_execution_id": {
+      "title": "Controller Execution Id",
+      "type": "string"
+    },
+    "controller_execution_digest": {
+      "title": "Controller Execution Digest",
+      "type": "string"
+    },
+    "selected_tool_id": {
+      "title": "Selected Tool Id",
+      "type": "string"
+    },
+    "server_compiled_operation": {
+      "$ref": "#/$defs/AgentExecutionServerCompiledOperation"
+    },
+    "before_inspection_digest": {
+      "title": "Before Inspection Digest",
+      "type": "string"
+    },
+    "after_inspection_digest": {
+      "title": "After Inspection Digest",
+      "type": "string"
+    },
+    "controller_decision_id": {
+      "default": "",
+      "title": "Controller Decision Id",
+      "type": "string"
+    },
+    "controller_decision_digest": {
+      "default": "",
+      "title": "Controller Decision Digest",
+      "type": "string"
+    },
+    "controller_receipt_id": {
+      "default": "",
+      "title": "Controller Receipt Id",
+      "type": "string"
+    },
+    "controller_receipt_digest": {
+      "default": "",
+      "title": "Controller Receipt Digest",
+      "type": "string"
+    },
+    "side_effect_attempted": {
+      "title": "Side Effect Attempted",
+      "type": "boolean"
+    },
+    "controller_advance_called": {
+      "title": "Controller Advance Called",
+      "type": "boolean"
+    },
+    "outcome": {
+      "$ref": "#/$defs/AgentToolCallApplicationOutcome"
+    },
+    "user_boundary_kind": {
+      "$ref": "#/$defs/AgentExecutionUserBoundaryKind"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "source_bindings": {
+      "items": {
+        "$ref": "#/$defs/AgentHarnessControllerSourceBinding"
+      },
+      "title": "Source Bindings",
+      "type": "array"
+    },
+    "source_bindings_digest": {
+      "title": "Source Bindings Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "tool_call_proposal_id",
+    "tool_call_proposal_digest",
+    "controller_execution_id",
+    "controller_execution_digest",
+    "selected_tool_id",
+    "server_compiled_operation",
+    "before_inspection_digest",
+    "after_inspection_digest",
+    "side_effect_attempted",
+    "controller_advance_called",
+    "outcome",
+    "user_boundary_kind",
+    "reason_codes",
+    "source_bindings",
+    "source_bindings_digest",
+    "created_at"
+  ],
+  "title": "AgentToolCallApplicationReceipt",
+  "type": "object"
+}
