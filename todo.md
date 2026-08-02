@@ -390,7 +390,7 @@ M2 使用按事实类型划分的 authority matrix，不把所有来源排成一
 
 优先级：`P0`
 
-范围状态：`READY`。M3 已完成并提供可重放、可归因的执行轨迹基础；当前下一主线改为完善领域化 Scientific Agent Harness，并让 LLM 通过受约束的计划、工具调用和重规划契约接入现有执行链条。M4 benchmark protocol 暂缓到 Harness 核心 action/authorization schema 冻结后，避免 benchmark 在动作空间与权限语义变化后返工。
+范围状态：`READY`。M3 已完成并提供可重放、可归因的执行轨迹基础；PR-BL～PR-BP 已使 Planner、Permission、Authorization、Controller、Execution Agent 和 Replanner 的核心 contract 进入 `main`，但仍无代表性 runtime `V`。当前 P0 主线转向 unified read projection、observability、real canary、UI 与 release acceptance，PR-BQ1 / `M3H-010` 是唯一下一实现动作。M4 benchmark protocol 继续暂缓，避免抢占 M3.5 integration/runtime closure 的 P0 资源。
 
 目标权限链：
 
@@ -448,13 +448,13 @@ M3.5 至少支持两种用户模式：
 | `M3H-007` Permission Engine shadow mode | `I/T/—` | `DONE` | PR-BM 提供独立显式 shadow comparator/audit，不拦截或改变现有 route，并通过 owner review |
 | `M3H-007A` 建立 server-owned configured resource authority | `I/T/—` | `DONE` | PR-BM2 在 `a055a87` 获得 owner review approval，并由 PR #20 以 `5389a3c` 合并；从私有 server policy、exact connection/profile/probe、预算和完整 task roster 派生 immutable AuthoritySet，不创建 request 或 dispatch |
 | `M3H-008` Harness Controller 接入现有执行链 | `I/T/—` | `DONE` | PR-BN 最终 review HEAD `2fa4f74a4caa5618f5046151b6258b2d51f6e91f` 已通过 repository-owner review，并由 PR #21 以 merge commit `d4ac276d4faa6623ccaa7661a6d9db14e6225833` 合入 `main`；不据此声明真实 remote canary 或完整 Harness 完成 |
-| `M3H-009` 接入 Execution Agent LLM | `I/T/—` | `DONE` | PR-BO 最终 review HEAD `c24da96b19ee5af5dda6b96ea8e3a05b0e88bd9f` 已通过 repository-owner review；current-verified Controller snapshot、privacy-safe observation、server-owned bounded tool catalog、strict structured LLM response、immutable non-authoritative `ToolCallProposal`、two-phase apply、exact application receipt、跨请求 crash reconciliation 与 provider metadata compatibility 已完成，且该 HEAD 的 PR Fast、4-shard Full CI 与三类 CodeQL 均通过 |
-| `M3H-010` Verifier-bound feedback observation | `I/T/—` | `READY` | PR-BN 已建立 verifier-bound Controller observation prerequisite seam并覆盖 local/remote completion 验证；只有 authoritative StageState、Artifact Registry 和 verified publication 能支持 running/success/failure，LLM 文本与 telemetry 不能改变 UI 或状态 |
-| `M3H-011` Replanner 与 plan revision | `I/T/—` | `IN_PROGRESS` | PR-BP 已实现 Replanner observation、strict revision response、server-side successor compilation、canonical complete diff、immutable revision proposal/application 与 fresh authorization 边界；定向回归与本地 PR Fast 通过，仍等待 GitHub CI 与 repository-owner review，不标 `DONE` 或 Gate `V` |
-| `M3H-012` 统一 Plan/Tool/Permission/Replan UI | `I(partial)/T(partial)/—` | `DEFERRED` | 支持批准并启动、修改后重规划、拒绝、atomic task 与端到端模式；保留高级诊断入口 |
-| `M3H-013` confirmed CSV → fresh model → Top-N Harness 验收 | `I/T(partial)/—` | `DEFERRED` | 不复用既有模型或预测；在批准范围内完成训练、生成、预测、排序、Top-N 与报告 |
-| `M3H-014` PDF → candidate dataset Harness 验收 | `I/T(partial)/—` | `DEFERRED` | 调用 MinerU/pdfplumber、抽取、归一化、provenance、冲突合并和 CSV；在 dataset confirmation 前强制暂停 |
-| `M3H-015` Harness 轨迹、恢复、隐私与对抗验收 | `I(partial)/T(partial)/—` | `DEFERRED` | action proposal、permission、authorization、dispatch、verification、replan 均可重放且不含 private chain-of-thought 或基础设施敏感信息 |
+| `M3H-009` 接入 Execution Agent LLM | `I/T/—` | `DONE` | PR-BO owner-approved implementation HEAD `c24da96b19ee5af5dda6b96ea8e3a05b0e88bd9f` 已通过 PR Fast、4-shard Full CI 与三类 CodeQL；PR #22 最终由 merge commit `ee1db0032d316d2ea71bfde4e1f6bbc03cd944a7` 合入 `main` |
+| `M3H-010` unified verified run inspection/read projection | `I(partial)/T(partial)/—` | `READY` | PR-BN 只提供 verifier-bound Controller observation 与 local/remote completion verification 的 prerequisite seam；完整的统一、read-only、current-verified run/Controller/Verifier/artifact projection 与 strict API 尚未实现，PR-BQ1 是 PR-BQ0 合并后的唯一下一实现动作；只有 authoritative StageState、Artifact Registry 和 verified publication 能支持结果状态 |
+| `M3H-011` Replanner 与 plan revision | `I/T/—` | `DONE` | PR #23 在 reviewed HEAD `1f7ba18a6e79281190b10c2ca18f7d59adb97ed7` 通过 repository-owner review、PR Fast、4-shard Full CI 与 Actions/Python/JavaScript-TypeScript CodeQL，并由 merge commit `1dd70e6746ef0518a38aa0471fd657a5d4172ba5` 合入 `main`；material revision 创建新 proposal/semantic-plan digest，旧 proposal 与 authorization 保持 immutable，successor 必须重新 Permission evaluation 并获得新 trusted-user authorization；Replanner 不 authorize、start、advance、retry、recover、cancel 或 dispatch，无 exact verifier evidence binding 的 standalone `verifier_outcome` trigger 不属于 v1；不据此标记 `M3H-GATE-005 V`、M3.5 或 Molly v1 完成 |
+| `M3H-012` 统一 Plan/Tool/Permission/Replan UI | `I(partial)/T(partial)/—` | `DEFERRED` | PR-BQ3；待 BQ1 与 BQ2/BR1/BR2 契约稳定后解锁，优先复用 Flask UI 和现有 strict API，不建立第二权威 |
+| `M3H-013` Structured Dataset Canary | `I/T(partial)/—` | `DEFERRED` | PR-BR1；Raw/Confirmed CSV 必须在当前 run 重新训练、真实生成、预测与排序，不复用旧模型、旧 prediction 或 `existing_output` |
+| `M3H-014` PDF–MinerU–LLM Canary | `I/T(partial)/—` | `DEFERRED` | PR-BR2；真实 OLED/emitter PDF 经 evidence-bound extraction 与 contextual mapping 形成 candidate raw dataset，必须在 confirmation Gate 前进入 `WAITING_USER` |
+| `M3H-015` observability 与最终 v1 验收 | `I(partial)/T(partial)/—` | `DEFERRED` | PR-BQ2 先完成 OTel/LangSmith/correlation/privacy seam，PR-BR3 再完成 UI-driven runtime、recovery、exact replay、privacy 与 adversarial evidence；telemetry 始终 non-authoritative |
 
 `I(partial)` 与 `T(partial)` 仅表示当前仓库已有相关 Planner、review-only tool registry、Gate、Executor、remote lifecycle、worker、task-state projection 或 replan 设计；不得据此宣称 Harness 已完成。
 
@@ -473,7 +473,7 @@ PR-BM2 M3H-007A
        server-owned configured resource-authority contract
        只派生和验证 exact remote resource binding；不创建 remote request、不 dispatch
 
-PR-BN  M3H-008、M3H-010
+PR-BN  M3H-008
        Harness Controller 接入 RunPlanExecutor、RemoteExecutionService 与 Verifier
        stepwise/frozen-plan 执行、幂等、cancel/recover、authority-bound 状态
 
@@ -484,14 +484,31 @@ PR-BO  M3H-009
 PR-BP  M3H-011
        Replanner、计划 diff、新授权和失败/反馈闭环
 
-PR-BQ  M3H-012
-       主 UI 统一 Plan/Tool/Permission/Replan cards 与 atomic/end-to-end 入口
+PR-BQ0
+       todo.md 状态同步、v1 scope 与 acceptance 冻结
 
-PR-BR  M3H-013～M3H-015
-       confirmed CSV 与 PDF 两条 acceptance、exact replay、恢复、隐私和对抗 evidence
+PR-BQ1  M3H-010
+       unified verified run inspection/read projection/API
+
+PR-BQ2  M3H-015
+       OpenTelemetry runtime deployment/configuration、LangSmith adapter、correlation IDs、privacy/fail-open validation
+
+PR-BR1  M3H-013
+       Structured Dataset Canary；raw/confirmed CSV → fresh model → candidate Top-N
+
+PR-BR2  M3H-014
+       PDF–MinerU–LLM Canary；PDF → candidate raw dataset → confirmation Gate
+
+PR-BQ3  M3H-012
+       minimal unified Harness UI
+
+PR-BR3  M3H-015
+       UI-driven final v1 acceptance、exact replay、recovery、privacy、adversarial evidence
 ```
 
-在 PR-BL～PR-BR 完成前，不删除现有执行 API，不替换 `RunPlanExecutor`，不修改固定 `molly-worker` 协议为任意命令执行，也不将 review-only AgentToolRegistry 直接改成第二个执行 registry。
+解锁顺序固定为 `BQ1 → BQ2/BR1/BR2 → BQ3 → BR3`。PR-BQ0 合并后，PR-BQ1 是唯一下一实现动作；`M3H-012`～`M3H-015` 不同时标记 `READY`。M4 继续不得抢占 P0；M5 只允许进行不阻塞 v1 的科学范围与数据充分性准备，不启动 DFT、MD、逆合成、自动文献评分或 Agentic RL。
+
+在 M3.5 v1 规范队列完成前，不删除现有执行 API，不替换 `RunPlanExecutor`，不修改固定 `molly-worker` 协议为任意命令执行，也不将 review-only AgentToolRegistry 直接改成第二个执行 registry。
 
 ### 5.5.4 M3.5 退出条件
 
@@ -508,6 +525,174 @@ PR-BO 最终 review HEAD `c24da96b19ee5af5dda6b96ea8e3a05b0e88bd9f` 已获得 re
 - `M3H-GATE-005`：Replanner 对用户反馈、失败或计划漂移生成 explicit diff；任何实质变更创建新 digest 并要求新授权，不自动重试或扩大预算。
 - `M3H-GATE-006`：confirmed CSV → fresh model → Top-N 在 Harness 下完成代表性验收；PDF → candidate dataset 在 confirmation Gate 前正确暂停；新进程可恢复并 exact replay 完整 Harness 轨迹。
 - `M3H-GATE-007`：Harness 权限系统、UI 与现有手动执行路径完成兼容/迁移验证，没有第二套 task、Gate、StageState 或 publication authority。
+
+Molly v1 与既有 Gate 的验收映射固定为：
+
+- `M3H-GATE-001`～`M3H-GATE-005`：覆盖 Planner、authorization、execution、verifier 和 replan，均需代表性 runtime `V`。
+- `M3H-GATE-006`：覆盖 Structured Dataset Canary、PDF–MinerU–LLM Canary、process restart 和 exact replay。
+- `M3H-GATE-007`：覆盖 unified UI、legacy/manual path compatibility 与 no second authority。
+
+PR #22 和 PR #23 的 `I/T/— / DONE` 不会自动产生任何 Gate `V`。只有 PR-BR3 绑定的代表性 runtime、恢复、exact replay、隐私与 repository-owner review 才能关闭 M3.5；当前 M3.5 不得标记 `DONE`。
+
+### 5.5.5 Molly v1：可复现、可审计的 OLED 发光材料科学 Agent
+
+本节是 Molly v1 产品范围、科学范围、主张边界与 acceptance 的规范定义；不表示相应 runtime 已完成。
+
+#### v1 产品定位
+
+> Molly v1 是一个面向 OLED 有机小分子发光材料的可复现、可审计科学 Agent。系统包含两条独立的 bounded workflow：结构化数据 workflow 从待清洗数据出发，经人工确认、fresh model training、分子生成、预测与验证，输出带 provenance 和基础模型证据的 `Computational Top-N`；PDF workflow 从真实论文出发，经 MinerU、deterministic extraction 和 LLM contextual mapping，只输出 confirmation-ready candidate raw dataset 并在 Gate 前进入 `WAITING_USER`。两条 workflow 均通过 Molly 原生权威账本、OpenTelemetry、LangSmith 和简化 UI 展示各自的完整运行轨迹；PDF workflow 不暗示已完成 confirmed dataset、模型训练、分子生成或 Top-N。
+
+#### v1 科学范围与数据充分性
+
+```yaml
+material_role: emitter
+preferred_emission_mechanism: TADF
+chemical_scope: organic_small_molecule
+metal_complex: excluded
+polymer: excluded
+exciplex_system: excluded
+host_generation: excluded
+transport_material_generation: excluded
+```
+
+- TADF emitter 是 v1 的优先科学目标。
+- 正式主张 TADF 发现前，必须确认去重后的 TADF 数据足以进行 molecule-group、paper-group 和独立测试拆分。
+- 如果当前 TADF 数据不足，工程 acceptance 可使用更广义的 organic emitter PLQY 数据；此时输出不得表述为 TADF 候选物或 TADF 材料发现。
+- 数据模型必须保留 `material_role` 和 `emission_mechanism`，避免混合不同材料角色与发光机制。
+
+#### v1 预测、条件与候选物边界
+
+v1 默认优先处理 `PLQY` 或其他已冻结的 emitter 性质目标。数据与模型必须保留 medium、host、doping ratio、temperature、measurement condition、paper evidence 以及 comparable/non-comparable 状态；不得将不同 host、掺杂比例、溶液/薄膜环境和器件条件下的数值静默当作同一种纯分子标签。
+
+v1 最终输出名称固定为 `Model-ranked Computational Candidates` 或 `Computational Top-N`。不得使用 `Validated High-performance OLED Materials`、`Experimentally Validated Candidates` 或 `Discovered OLED Materials`。
+
+#### v1 主张边界
+
+v1 在验收证据成立后可以声明：
+
+- Structured Dataset workflow 从原始输入到计算候选物的端到端流程可复现；PDF workflow 从论文到 confirmation-ready candidate raw dataset 的有界流程可复现；
+- 每一步具有 artifact、digest、版本、随机种子和 provenance；
+- LLM 可基于 MinerU 输出生成待人工确认的数据候选；
+- 模型训练和候选生成从当前运行输入重新执行；
+- Agent 计划、授权、执行、验证和重规划轨迹可审计；
+- 输出是经基础化学和模型适用域筛选的计算候选物。
+
+v1 不可以声明：已完成实验验证；真实 EQE、寿命或器件性能达到预测值；候选物一定可合成或一定具有高 TADF 性能；已完成 DFT、TD-DFT、MD、QM/MM 或 KMC 验证；Molly 优于现有分子优化方法；系统是 autonomous scientist；或已完成材料发现闭环。
+
+#### v1 必需功能
+
+##### `V1-FUNC-001` 结构化数据主流程
+
+```text
+Raw / Candidate Dataset
+→ inspect
+→ clean
+→ human confirmation
+→ Confirmed Dataset
+→ fresh model training
+→ Model Package
+→ real candidate generation
+→ prediction and ranking
+→ candidate validation
+→ Computational Top-N
+```
+
+不得复用已有模型代替本次训练，不得复用已有 prediction 代替本次预测，不得用 `existing_output` 代替正式真实工具验收。每个阶段必须绑定当前 run 的输入/输出，记录随机种子、配置、软件版本和 artifact digest，支持恢复与 exact replay，且不重复训练或 remote dispatch。
+
+##### `V1-FUNC-002` 论文到待清洗数据
+
+```text
+PDF
+→ MinerU
+→ ParsedDocument
+→ deterministic extraction
+→ LLM contextual semantic mapping
+→ schema validation
+→ candidate raw dataset
+→ human confirmation Gate
+```
+
+每条数据必须绑定正文、表格或其他明确 evidence anchor。LLM 不得自动填补缺失条件，proposal 保持 review-only，ontology extension 不得自动修改 ontology，未人工确认前不得进入正式训练数据。PDF 与 CSV 入口最终使用同一 Raw Dataset contract，并在 confirmation Gate 前正确暂停。
+
+##### `V1-FUNC-003` 轨迹记录与可视化
+
+- Molly immutable event/evidence ledger 保持权威。
+- OpenTelemetry 记录系统、Controller、Executor、remote lifecycle 和工具执行轨迹。
+- LangSmith 记录 Planner、Execution Agent、Replanner 和文献抽取 LLM 调用。
+- OpenTelemetry 和 LangSmith 都不得成为 execution、authorization、StageState、Registry 或 scientific success 权威；trace/exporter 故障不得改变权威输出。
+- 使用统一关联字段连接 Molly run、OTel trace 和 LangSmith run。
+
+##### `V1-FUNC-004` 简单可用 UI
+
+UI 至少支持 plan review、blocking question、Permission 结果、approve-and-start、reject、request revision、plan diff、Gate approval、remote approval、recovery-required 提示、数据记录确认、运行状态、artifact lineage、model result、Top-N 与 OpenTelemetry/LangSmith 跳转。v1 不要求重写为 React、Vue 或其他大型前端框架；优先复用当前 Flask UI 与现有 strict API。
+
+#### v1 正式 acceptance canary
+
+##### `V1-ACCEPT-001` Structured Dataset Canary
+
+正式验收链：
+
+```text
+待清洗 CSV
+→ Confirmed Dataset
+→ fresh model
+→ real REINVENT4
+→ prediction/ranking
+→ candidate validation
+→ Computational Top-N
+```
+
+CI Reference Canary 必须显式经过与 production 相同的 confirmation contract，固定为：
+
+```text
+Raw CSV
+→ review snapshot
+→ exact test GateDecision / confirmation receipt
+→ Confirmed Dataset
+→ fresh local baseline model
+→ deterministic generation
+→ candidate validation
+→ Top-N
+```
+
+CI 可使用确定性测试 actor 与 Gate fixture，但必须发布并 exact-bind 真实同契约的 GateDecision/confirmation receipt；缺少、替换、stale 或错绑 confirmation 时，training 必须 fail closed。不得将预置 CSV、fixture 标签或测试代码中的隐式假设当作 confirmed data。该 canary 用于 CI 快速、确定性重放，保护 confirmation Gate、artifact、Registry、replay 与恢复契约。
+
+Private Real-Tool Canary 固定为 `Raw CSV → Confirmed Dataset → fresh Uni-Mol model → real REINVENT4 → prediction/ranking → Computational Top-N`，其 Confirmed Dataset 也必须由同一 confirmation contract 产生，不得将预置 CSV 隐式当作 confirmed data。必须在受信任私有运行环境执行，公共仓库仅保存脱敏 evidence，不提交主机、路径、账号、SSH、密钥或私有数据；不复用旧模型或旧预测，至少真实执行一次 training 和 generation，支持进程重启与 exact replay，并产生可关联的 Molly、OTel 和 LangSmith 轨迹。
+
+##### `V1-ACCEPT-002` PDF–MinerU–LLM Canary
+
+```text
+真实 OLED PDF
+→ MinerU
+→ ParsedDocument
+→ deterministic candidates
+→ LLM contextual mapping
+→ candidate raw dataset
+→ confirmation Gate
+→ WAITING_USER
+```
+
+使用至少一篇真实 OLED/emitter 论文，不能只使用 synthetic PDF；不要求单篇 PDF 数据直接训练模型，验收重点是 evidence-bound raw dataset 与正确暂停。外部 LLM 处理私有论文前必须获得明确授权，不得把 LLM 输出自动提升为 confirmed、gold 或 training data。
+
+#### v1 候选物基础验证
+
+v1 不要求 DFT，但 acceptance 至少覆盖：
+
+```text
+RDKit validity
+canonical SMILES
+Standard InChI / InChIKey identity
+duplicate removal
+training-set exact duplicate check
+nearest-neighbor similarity
+scaffold novelty
+basic applicability-domain status
+OOD warning
+validity / uniqueness / diversity summary
+generation seed provenance
+```
+
+超出适用域的候选物必须保留并显示风险；可以从最终 Top-N 排除，但不得静默地把高预测分当作高可信度。
 
 ---
 
@@ -1121,6 +1306,28 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：historical reader 只能用于已由 immutable revision 确定的 effect reconciliation，不能代替新 application 的 current verification；未来恢复 `verifier_outcome` 前必须先版本化 exact evidence contract。
 - 批准人：待 repository-owner review；保持 Draft。
 
+### 2026-08-02：PR-BP owner review approved 并合入 main
+
+- 决策：repository owner 在 exact reviewed HEAD `1f7ba18a6e79281190b10c2ca18f7d59adb97ed7` 确认三项 inline blocker 全部关闭，批准 PR #23；PR #23 由 merge commit `1dd70e6746ef0518a38aa0471fd657a5d4172ba5` 合入 `main`，`M3H-011` 更新为 `I/T/— / DONE`。
+- 原计划：PR-BP 保持 Draft，`M3H-011` 保持 `IN_PROGRESS`，等待 latest-HEAD Full CI、CodeQL 与 repository-owner review；`M3H-GATE-005` 不标 `V`。
+- 新计划：将 current-verified Replanner observation、dedicated feedback receipt、strict revision provider contract、server-side successor compilation、canonical complete plan diff、immutable revision proposal 与 explicit successor application 作为已合并基线。material revision 必须产生新 proposal/semantic-plan digest，旧 proposal 与 authorization 保持 immutable，successor 必须重新经过 Permission evaluation 并获得新 trusted-user authorization。
+- 依据：reviewed HEAD 的 PR Fast 通过（`1131 passed, 5412 deselected`）；4-shard Full CI 通过；Actions、Python 和 JavaScript/TypeScript CodeQL 通过；all inline review threads 已 resolved；GitHub 上有 repository-owner exact-HEAD approval 记录。
+- 影响任务：`M3H-011` 标记 `DONE`；`M3H-010` 保持 `READY`；`M3H-GATE-005` 不标 `V`；不据此声明 M3.5 或 Molly v1 完成。Replanner 不直接 authorize、start、advance、retry、recover、cancel 或 dispatch。
+- 新增或保留风险：真实 MinerU、Uni-Mol 和 REINVENT4 canary、Harness UI 与代表性 runtime `V` 仍缺失；standalone `verifier_outcome` trigger 因缺少 exact verifier evidence binding 仍不属于 v1；自动 retry/recover/cancel 与 autonomous Agent loop 仍为非目标。
+- 批准人：searching42（repository owner）。
+- reviewed HEAD：`1f7ba18a6e79281190b10c2ca18f7d59adb97ed7`。
+- merge commit：`1dd70e6746ef0518a38aa0471fd657a5d4172ba5`。
+
+### 2026-08-02：PR-BQ0 冻结 Molly v1 范围与 acceptance，主线从 Harness contract construction 转向 integration and runtime closure
+
+- 决策：PR #22 和 PR #23 已使 Planner、Permission、Authorization、Controller、Execution Agent 和 Replanner 基本完整；后续 P0 不再优先增加 authority contract，而是转向 unified read projection、observability、real canary、UI 与 release acceptance。`todo.md` 继续是范围、状态、验收门槛与推进顺序的唯一规范性来源。
+- 原计划：由 PR-BQ 一次性统一 UI，再由 PR-BR 一次性完成 CSV/PDF、恢复、exact replay、隐私与对抗验收。
+- 新计划：将交付拆分为 BQ0、BQ1、BQ2、BR1、BR2、BQ3 和 BR3；先稳定 read API 和后端 canary，再开发最终 UI，通过两条正式 canary 和最终 BR3 完成 v1 验收。PR-BQ0 合并后唯一下一实现动作为 PR-BQ1 / `M3H-010` unified verified run inspection/read projection。
+- 依据：PR #22 Execution Agent 已由 `ee1db0032d316d2ea71bfde4e1f6bbc03cd944a7` 合并；PR #23 Replanner 已由 `1dd70e6746ef0518a38aa0471fd657a5d4172ba5` 合并。当前缺口已从核心 authority 转为 integration、runtime evidence 和用户入口；大型 UI/acceptance PR 会增加审查、恢复和 contract drift 风险。
+- 影响任务：`M3H-011` 更新为 `DONE`；`M3H-010` 保持 `READY` 并成为唯一下一实现动作；`M3H-012`～`M3H-015` 按新队列顺序逐步解锁；M4 保持非 P0；M5 只进行窄化科学范围和数据充分性准备。
+- 新增风险：继续增加底层契约导致 scope creep；UI 在 API 未稳定前开发导致返工；canary 复用旧模型或旧输出造成伪端到端；OTel/LangSmith 被误当作权威状态；TADF 数据不足却过度声明科学范围；私有论文或基础设施信息进入公共 evidence。
+- 批准人：repository owner（PR-BQ0 待 review；范围冻结以本 PR 合并后生效）。
+
 后续路线调整必须追加：
 
 ```text
@@ -1138,58 +1345,26 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 当前实现动作：PR-BP Replanner、plan diff 与重新授权（IN_PROGRESS）
+### 唯一下一实现动作：PR-BQ1 — `M3H-010` unified verified run inspection/read projection（READY）
 
-任务：完成`M3H-011`，让用户反馈、Controller失败/终态与verifier-bound observation产生显式、canonical、可审查的plan diff；任何实质变化必须创建新plan digest并重新经过Permission Engine与authorization，旧proposal、旧plan与旧authorization保持immutable。
+任务：在不建立第二套 authority 的前提下，为现有 Planner、Permission、Authorization、Controller、Executor/remote lifecycle、Verifier、StageState、Artifact Registry、Execution Agent 和 Replanner 建立统一、read-only、current-verified 的 run inspection projection 与 strict API。该 projection 是后续 observability、canary 和 UI 的稳定读取边界，不得写入 execution、authorization 或 scientific result 状态。
 
-范围：
-
-- 只消费exact-bound、privacy-safe的用户反馈、Controller receipt、StageState、Registry、verified publication与既有plan/authorization binding；不得把自由文本或telemetry提升为scientific authority；
-- diff必须显式列出task、dependency、option、artifact、resource/profile、budget与Gate变化；未知或不可重验source fail closed；
-- 任何实质变化都创建新plan/proposal digest并要求新authorization；不得原地修改或扩张旧authorization；
-- proposal与apply继续分阶段，不建立自动循环，不自动retry、recover、cancel、批准Gate或扩大预算；
-- Replanner只能提出review-only revision，Controller、Permission Engine、Executor、RemoteExecutionService与Verifier继续保持既有authority边界；
-- tracing保持optional、fail-open且non-authoritative，不得改变diff、proposal、authorization或scientific authority bytes。
-
-当前状态：M3为`I/T/V / DONE`；M3.5为`READY`；PR-BL、PR-BM、PR-BM2、PR-BN与PR-BO的`M3H-001`～`M3H-009`均为`I/T/— / DONE`并已通过owner review；`M3H-010`为`I/T/— / READY`；PR-BP / `M3H-011`为`IN_PROGRESS`；M4/PR-BK继续暂缓；`M3H-GATE-002`、`M3H-GATE-003`与`M3H-GATE-005`均不标`V`。
+当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY`而非 `DONE`；`M3H-001`～`M3H-009` 与 `M3H-011` 为 `I/T/— / DONE`；`M3H-010` 仅有 `I(partial)/T(partial)/—` prerequisite evidence，但作为唯一下一实现任务保持 `READY`；`M3H-012`～`M3H-015` 保持 `DEFERRED`。规范交付队列仅在 5.5.3 定义；后续任务按其依赖顺序逐步解锁。M4 不得抢占 P0，M5 仅可进行不阻塞 v1 的范围与数据充分性准备。
 
 必须验证：
 
-1. 每个revision proposal精确绑定原plan、authorization、Controller/verifier evidence与用户反馈source roster；
-2. plan diff canonical、可重放且完整覆盖新增、删除和修改，不允许隐藏的effective/default变化；
-3. 任何实质diff产生新plan digest、Permission decision与authorization，旧authority不能被复用；
-4. stale observation、损坏publication、未知task/resource或越权budget/profile变化均fail closed；
-5. proposal、review、authorization与apply保持分离，crash/replay/cross-process并发不重复产生revision或执行effect；
-6. LLM文本、conversation、telemetry与tracing不能伪造feedback、failure、approval、dispatch或scientific success。
-
-### 主线队列
-
-```text
-PR-BD  observer-only trajectory projection v1（已完成）
-PR-BE  external-anchor trajectory verifier 与对抗测试（已完成）
-PR-BF  deterministic trajectory audit metrics v1（已完成）
-PR-BG  failure taxonomy 与 first-cause attribution（已完成）
-PR-BH  read-only inspect API 与最小时间线（已完成）
-PR-BJ  authoritative M3 failure source evidence contract v1（已完成）
-PR-BI  representative inspection validation evidence（machine + owner review complete）
-
-PR-BL  ScientificToolSpec、AgentProjectObservation、LLM long-horizon plan proposal（owner review approved；已合并）
-PR-BM  Permission Engine、immutable plan authorization、approve-and-start contract（owner review approved；已合并）
-PR-BM2 server-owned configured resource-authority contract（owner review approved；PR #20 已合并）
-PR-BN  Harness Controller 接入现有 Executor/remote/verifier 链（owner review approved；PR #21 已合并）
-PR-BO  Execution Agent LLM 与受约束 ToolCallProposal（owner review approved；待PR #22合并）
-PR-BP  Replanner、plan diff 与重新授权（当前实现动作；IN_PROGRESS）
-PR-BQ  统一 Harness UI 与 atomic/end-to-end 入口
-PR-BR  CSV/PDF acceptance、恢复、exact replay、隐私与对抗 evidence
-PR-BK  M4 benchmark protocol（M3.5 核心完成后恢复）
-```
+1. 所有显示状态均可追溯到 exact-bound authoritative source，telemetry、LLM 文本与 UI 缓存不能提升为权威；
+2. current/stale/replaced/damaged source 可稳定区分并 fail closed；
+3. projection/API 只读且 privacy-safe，不修改任何 proposal、authorization、Controller receipt、StageState、Registry 或 publication bytes；
+4. legacy/manual path 与现有 strict API 行为保持兼容；
+5. 本任务不实现 observability deployment、canary 或 UI。
 
 ### 资源机会队列
 
 ```text
 PR-BC  logical compute-worker-main remote 两轮 canary
        M1 完成且资源安全时随时执行
-       不阻塞 PR-BL～PR-BR 或 M3.5 主线
+       不阻塞 M3.5 v1 integration/runtime closure 主线
 ```
 
 任何后续 PR 如果不能直接推进上述队列、关闭真实 correctness/security blocker 或产出 Harness/benchmark evidence，默认暂缓。
