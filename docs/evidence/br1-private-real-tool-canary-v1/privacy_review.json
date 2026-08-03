@@ -1,0 +1,13 @@
+{
+  "artifact_scope": "blocked_preflight_evidence_only",
+  "environment_locator_values_present": false,
+  "private_dataset_rows_present": false,
+  "private_exception_details_present": false,
+  "raw_commands_present": false,
+  "raw_generated_roster_present": false,
+  "raw_smiles_present": false,
+  "raw_standard_output_present": false,
+  "schema_version": "structured_dataset_private_real_tool_privacy_review.v1",
+  "status": "pass",
+  "unsafe_account_or_credential_values_present": false
+}

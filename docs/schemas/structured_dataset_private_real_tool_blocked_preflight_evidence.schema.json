@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "structured_dataset_private_real_tool_blocked_preflight_evidence.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "base_merge_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "blocker_codes": {
+      "const": [
+        "REMOTE_RESOURCE_AUTHORITY_POLICY_MISSING",
+        "SOURCE_PROVENANCE_MISSING",
+        "DATA_CONTRACT_INCOMPLETE",
+        "CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED"
+      ]
+    },
+    "claim_boundary": {
+      "const": "No private real-tool acceptance or scientific result is claimed."
+    },
+    "formal_acceptance_started": {
+      "const": false
+    },
+    "generation_dispatch_count": {
+      "const": 0
+    },
+    "langsmith_correlation": {
+      "const": "not_applicable_no_llm_call"
+    },
+    "otel_correlation": {
+      "const": "not_applicable_preflight_blocked"
+    },
+    "preflight_id": {
+      "pattern": "^[a-z0-9][a-z0-9.-]{0,95}$",
+      "type": "string"
+    },
+    "privacy_review": {
+      "const": "pass_for_blocked_preflight_evidence"
+    },
+    "reviewed_head": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "structured_dataset_private_real_tool_blocked_preflight_evidence.v1"
+    },
+    "scientific_scope": {
+      "const": "unassigned"
+    },
+    "status": {
+      "const": "blocked"
+    },
+    "training_dispatch_count": {
+      "const": 0
+    }
+  },
+  "required": [
+    "schema_version",
+    "preflight_id",
+    "status",
+    "formal_acceptance_started",
+    "base_merge_commit",
+    "reviewed_head",
+    "scientific_scope",
+    "blocker_codes",
+    "training_dispatch_count",
+    "generation_dispatch_count",
+    "otel_correlation",
+    "langsmith_correlation",
+    "privacy_review",
+    "claim_boundary"
+  ],
+  "title": "Structured Dataset Private Real-Tool Blocked Preflight Evidence v1",
+  "type": "object"
+}

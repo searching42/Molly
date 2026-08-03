@@ -1,0 +1,49 @@
+{
+  "base_merge_commit": "e9316ad64fd219a26740b3424f541e00a9409d39",
+  "blocker_codes": [
+    "REMOTE_RESOURCE_AUTHORITY_POLICY_MISSING",
+    "SOURCE_PROVENANCE_MISSING",
+    "DATA_CONTRACT_INCOMPLETE",
+    "CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED"
+  ],
+  "molly_worker_protocol": {
+    "config_schema": "molly_worker_config.v1",
+    "execution_request_schema": "molly_remote_execution_request.v1",
+    "state_schema": "molly_worker_state.v1"
+  },
+  "preflight_id": "br1-private-preflight-20260803-e9316ad",
+  "profiles": {
+    "generation": {
+      "capability_probe_current": true,
+      "capability_status": "available",
+      "logical_profile_id": "reinvent4-cpu-v1",
+      "profile_digest": "sha256:6007ac5475802c233ce63b695d19318965f370233fda8e9ecb05ccb30a7e9709",
+      "provider_version": "4.7.15",
+      "resource_ceiling": {
+        "cpu_threads_max": 1,
+        "gpu_count_max": 0,
+        "walltime_sec_max": 21600
+      }
+    },
+    "training": {
+      "capability_probe_current": true,
+      "capability_status": "available",
+      "logical_profile_id": "unimol-train-v1",
+      "profile_digest": "sha256:62e08bde8a7bffe18b55944272399b50c4186ff0d7449dd9118791436fea59de",
+      "provider_version": "0.1.5",
+      "resource_ceiling": {
+        "cpu_threads_max": 16,
+        "gpu_count_max": 1,
+        "walltime_sec_max": 172800
+      }
+    }
+  },
+  "resource_authority_policy_configured": false,
+  "reviewed_head": "e7bb7fc45f0c514ccce000d7fff25ee66e967bd6",
+  "runtime_versions": {
+    "python": "3.13.11",
+    "rdkit": "2026.03.2"
+  },
+  "schema_version": "structured_dataset_private_real_tool_preflight.v1",
+  "status": "blocked"
+}
