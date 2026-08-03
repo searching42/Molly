@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import csv
 import io
@@ -25,6 +26,8 @@ from ai4s_agent.resource_profiles import EXECUTION_PROFILES
 from ai4s_agent.br1_preflight_authority import (
     CANONICALIZATION_CONTRACT_VERSION,
     canonical_provider_input_bytes,
+    canonical_provider_input_bytes_from_rows,
+    canonical_provider_rows,
     canonical_source_dataset_bytes,
     mapping_binding,
     mapping_binding_semantic_material,
@@ -105,6 +108,42 @@ class FakeProvider:
     def preprocess(self, smiles: str) -> ProviderPreprocessResult:
         self.calls.append(smiles)
         return self.callback(smiles)
+
+
+class CanonicalRosterProvider(FakeProvider):
+    """Fake the real adapter's byte/roster guard at the provider boundary."""
+
+    def __init__(self, callback=None) -> None:
+        super().__init__(callback)
+        self.row_calls: list[dict[str, object]] = []
+        self.last_provider_input_digest = "unavailable"
+
+    def preprocess_many_rows(
+        self,
+        rows: list[dict[str, str]],
+        provider_input_bytes: bytes,
+        provider_input_digest: str,
+    ) -> list[ProviderPreprocessResult]:
+        parsed = list(csv.DictReader(io.StringIO(provider_input_bytes.decode("utf-8"))))
+        parsed_smiles = [str(item.get("smiles") or "") for item in parsed]
+        row_smiles = [str(row.get("smiles") or "") for row in rows]
+        row_ids = [str(row.get("row_id") or "") for row in rows]
+        observed_digest = digest_bytes(provider_input_bytes)
+        self.row_calls.append(
+            {
+                "row_ids": row_ids,
+                "smiles": row_smiles,
+                "provider_input_bytes": provider_input_bytes,
+                "provider_input_digest": provider_input_digest,
+            }
+        )
+        self.last_provider_input_digest = observed_digest
+        if observed_digest != provider_input_digest:
+            raise RuntimeError("provider input digest mismatch")
+        if parsed_smiles != row_smiles:
+            raise RuntimeError("provider input roster mismatch")
+        self.calls.extend(row_smiles)
+        return [self.callback(smiles) for smiles in row_smiles]
 
 
 def _condition() -> str:
@@ -783,14 +822,174 @@ def test_replaced_and_symlink_input_are_rejected_without_exception_leak(
 def test_row_order_is_canonical_even_when_input_csv_order_changes(tmp_path: Path) -> None:
     first_rows = [_row("r-2", "CCO"), _row("r-1", "c1ccccc1O")]
     second_rows = list(reversed(first_rows))
-    first = _run(tmp_path / "first", first_rows)
-    second = _run(tmp_path / "second", second_rows)
+    first_provider = CanonicalRosterProvider()
+    second_provider = CanonicalRosterProvider()
+    first = _run(tmp_path / "first", first_rows, provider=first_provider)
+    second = _run(tmp_path / "second", second_rows, provider=second_provider)
 
+    assert first.report["overall_status"] == "PASS"
+    assert second.report["overall_status"] == "PASS"
     assert first.report["row_results"] == second.report["row_results"]
     assert first.report["supported_row_roster_digest"] == second.report[
         "supported_row_roster_digest"
     ]
+    assert first_provider.row_calls[0]["row_ids"] == ["r-1", "r-2"]
+    assert second_provider.row_calls[0]["row_ids"] == ["r-1", "r-2"]
+    assert first_provider.row_calls[0]["smiles"] == second_provider.row_calls[0]["smiles"]
+    assert first_provider.row_calls[0]["provider_input_bytes"] == second_provider.row_calls[0][
+        "provider_input_bytes"
+    ]
+    assert first.report["input_identity"]["expected_canonical_provider_input_digest"] == second.report[
+        "input_identity"
+    ]["expected_canonical_provider_input_digest"]
     assert first.report["raw_dataset_digest"] != second.report["raw_dataset_digest"]
+    assert first.report["source_authority_digest"] != second.report["source_authority_digest"]
+    assert first.report["source_publication_digest"] != second.report["source_publication_digest"]
+
+
+def test_authorized_noncanonical_raw_order_uses_canonical_provider_roster(
+    tmp_path: Path,
+) -> None:
+    rows = [_row("r-2", "CCN"), _row("r-1", "CCO")]
+    provider = CanonicalRosterProvider()
+
+    result = _run(tmp_path, rows, provider=provider)
+
+    assert result.report["overall_status"] == "PASS"
+    assert len(provider.row_calls) == 1
+    call = provider.row_calls[0]
+    assert call["row_ids"] == ["r-1", "r-2"]
+    assert call["smiles"] == ["CCO", "CCN"]
+    assert call["provider_input_bytes"] == canonical_provider_input_bytes_from_rows(
+        canonical_provider_rows(rows)
+    )
+    identity = result.report["input_identity"]
+    assert (
+        identity["expected_canonical_provider_input_digest"]
+        == identity["staged_provider_input_digest"]
+        == identity["provider_actual_input_digest"]
+        == call["provider_input_digest"]
+    )
+    assert result.report["input_row_count"] == len(result.report["row_results"]) == 2
+    assert result.report["supported_row_count"] == 2
+    assert result.report["unsupported_row_count"] == 0
+    assert result.report["unresolved_row_count"] == 0
+
+
+def test_provider_results_are_bound_to_canonical_row_ids_not_raw_positions(
+    tmp_path: Path,
+) -> None:
+    rows = [_row("r-2", "CCN"), _row("r-1", "CCO")]
+
+    def classify(smiles: str) -> ProviderPreprocessResult:
+        if smiles == "CCO":
+            return ProviderPreprocessResult("SUPPORTED", "SUPPORTED")
+        return ProviderPreprocessResult(
+            "UNSUPPORTED",
+            "SUPPORTED",
+            ("UNSUPPORTED_ELEMENT",),
+        )
+
+    provider = CanonicalRosterProvider(classify)
+    result = _run(tmp_path, rows, provider=provider)
+
+    by_id = {item["row_id"]: item for item in result.report["row_results"]}
+    assert by_id["r-1"]["provider_preprocessing_status"] == "SUPPORTED"
+    assert by_id["r-1"]["status"] == "SUPPORTED"
+    assert by_id["r-2"]["provider_preprocessing_status"] == "UNSUPPORTED"
+    assert by_id["r-2"]["status"] == "UNSUPPORTED"
+    assert by_id["r-2"]["reason_codes"] == ["UNSUPPORTED_ELEMENT"]
+    assert result.report["overall_status"] == "REVIEW_REQUIRED"
+
+
+def test_raw_order_replacement_against_old_authority_blocks_before_provider(
+    tmp_path: Path,
+) -> None:
+    rows = [_row("r-1", "CCO"), _row("r-2", "CCN")]
+    paths = _write_inputs(tmp_path, rows)
+    paths[0].write_bytes(_csv_bytes(list(reversed(rows))))
+    provider = CanonicalRosterProvider()
+
+    result = run_br1_unimol_applicability_preflight(
+        *paths,
+        **_authority_kwargs(paths),
+        provider=provider,
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        expected_provider_version="0.1.5",
+        created_at=NOW,
+    )
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "INPUT_DIGEST_MISMATCH" in result.report["global_reason_codes"]
+    assert provider.row_calls == []
+    assert result.report["dispatch_assertions"]["provider_preprocessing_dispatched"] is False
+
+
+def test_noncanonical_row_id_fails_closed_before_provider_binding(
+    tmp_path: Path,
+) -> None:
+    provider = CanonicalRosterProvider()
+    result = _run(tmp_path, [_row(" r-1 ", "CCO")], provider=provider)
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "ROW_ID_INVALID" in result.report["global_reason_codes"]
+    assert provider.row_calls == []
+
+
+def test_canonical_provider_rows_reject_duplicate_row_ids() -> None:
+    with pytest.raises(ValueError, match="unique non-empty row_id"):
+        canonical_provider_rows([_row("r-1", "CCO"), _row("r-1", "CCN")])
+
+
+def test_provider_adapter_payload_uses_one_canonical_roster(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [_row("r-2", "CCN"), _row("r-1", "CCO")]
+    provider_rows = canonical_provider_rows(rows)
+    provider_input_bytes = canonical_provider_input_bytes_from_rows(provider_rows)
+    provider_input_digest = digest_bytes(provider_input_bytes)
+    captured: dict[str, object] = {}
+
+    def fake_provider_script(_python, _script, payload, *, timeout):
+        del timeout
+        captured.update(payload)
+        decoded = base64.b64decode(payload["provider_input_bytes_b64"], validate=True)
+        return {
+            "provider_input_digest": digest_bytes(decoded),
+            "results": [
+                {
+                    "status": "SUPPORTED",
+                    "conformer_status": "SUPPORTED",
+                    "reason_codes": [],
+                }
+                for _ in payload["smiles"]
+            ],
+        }
+
+    monkeypatch.setattr(applicability, "_run_provider_json_script", fake_provider_script)
+    configured = applicability._ConfiguredUniMolProvider(
+        provider_python=tmp_path / "provider-python",
+        provider_version="0.1.5",
+        dictionary_path="provider-dictionary",
+        capabilities=FakeProvider.capabilities,
+        capability_contract=FakeProvider.capability_contract,
+    )
+
+    configured.preprocess_many_rows(
+        provider_rows,
+        provider_input_bytes,
+        provider_input_digest,
+    )
+
+    decoded = base64.b64decode(captured["provider_input_bytes_b64"], validate=True)
+    parsed = list(csv.DictReader(io.StringIO(decoded.decode("utf-8"))))
+    assert [item["smiles"] for item in parsed] == ["CCO", "CCN"]
+    assert captured["smiles"] == ["CCO", "CCN"]
+    assert captured["expected_provider_input_digest"] == provider_input_digest
+    assert decoded == provider_input_bytes
 
 
 def test_coherent_resign_of_status_reason_and_roster_fails_against_trusted_report(

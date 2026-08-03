@@ -93,6 +93,21 @@ def canonical_source_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, s
     return sorted(prepared, key=lambda row: row["row_id"])
 
 
+def canonical_provider_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """Return the normalized, uniquely identified provider roster.
+
+    Provider bytes and provider invocation positions must be derived from the
+    same ordered row objects.  Validate the row identity here so duplicate or
+    empty IDs cannot be hidden by sorting or accidentally rebound by position.
+    """
+
+    provider_rows = canonical_source_rows(rows)
+    row_ids = [row["row_id"] for row in provider_rows]
+    if any(not row_id for row_id in row_ids) or len(row_ids) != len(set(row_ids)):
+        raise ValueError("canonical provider rows require unique non-empty row_id")
+    return provider_rows
+
+
 def _csv_bytes(rows: Sequence[Mapping[str, Any]], columns: Sequence[str]) -> bytes:
     stream = io.StringIO(newline="")
     writer = csv.DictWriter(
@@ -115,8 +130,20 @@ def canonical_source_dataset_bytes(rows: Sequence[Mapping[str, Any]]) -> bytes:
 def canonical_provider_input_bytes(rows: Sequence[Mapping[str, Any]]) -> bytes:
     """Canonical bytes for the exact ``smiles,target_value`` provider input."""
 
-    source_rows = canonical_source_rows(rows)
-    return _csv_bytes(source_rows, PROVIDER_INPUT_COLUMN_ORDER)
+    return canonical_provider_input_bytes_from_rows(canonical_provider_rows(rows))
+
+
+def canonical_provider_input_bytes_from_rows(
+    provider_rows: Sequence[Mapping[str, Any]],
+) -> bytes:
+    """Serialize an already canonical provider row roster without reordering."""
+
+    row_ids = [str(row.get("row_id") or "") for row in provider_rows]
+    if any(not row_id for row_id in row_ids) or len(row_ids) != len(set(row_ids)):
+        raise ValueError("canonical provider rows require unique non-empty row_id")
+    if row_ids != sorted(row_ids):
+        raise ValueError("provider rows are not in canonical row_id order")
+    return _csv_bytes(provider_rows, PROVIDER_INPUT_COLUMN_ORDER)
 
 
 def mapping_binding(expected_provider_version: str) -> dict[str, Any]:

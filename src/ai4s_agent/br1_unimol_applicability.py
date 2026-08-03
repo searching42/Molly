@@ -38,8 +38,11 @@ from ai4s_agent.br1_preflight_authority import (
     CANONICALIZATION_CONTRACT_VERSION,
     SOURCE_AUTHORITY_SCHEMA,
     SOURCE_PUBLICATION_REGISTRY_SCHEMA,
+    canonical_field_value,
     canonical_mapping_binding,
     canonical_provider_input_bytes,
+    canonical_provider_input_bytes_from_rows,
+    canonical_provider_rows,
     canonical_source_dataset_bytes,
     mapping_binding,
     mapping_binding_semantic_material,
@@ -1811,7 +1814,18 @@ def run_br1_unimol_applicability_preflight(
         if missing:
             global_authority_reasons.add("RAW_DATASET_CONTRACT_INVALID")
         row_ids = [str(row.get("row_id") or "") for row in raw.rows]
-        if any(not row_id for row_id in row_ids) or len(row_ids) != len(set(row_ids)):
+        canonical_row_ids = [
+            canonical_field_value("row_id", row.get("row_id", ""))
+            for row in raw.rows
+        ]
+        if (
+            any(
+                not row_id or row_id != canonical_row_id
+                for row_id, canonical_row_id in zip(row_ids, canonical_row_ids)
+            )
+            or len(row_ids) != len(set(row_ids))
+            or len(canonical_row_ids) != len(set(canonical_row_ids))
+        ):
             global_authority_reasons.add("ROW_ID_INVALID")
 
     rows = list(raw.rows) if raw.valid else []
@@ -1883,13 +1897,15 @@ def run_br1_unimol_applicability_preflight(
     ]
     if eligible_rows:
         provider_preprocessing_dispatched = True
+        provider_rows: list[Mapping[str, Any]] = []
         try:
-            provider_input_bytes = canonical_provider_input_bytes(eligible_rows)
+            provider_rows = canonical_provider_rows(eligible_rows)
+            provider_input_bytes = canonical_provider_input_bytes_from_rows(provider_rows)
             provider_input_digest = digest_bytes(provider_input_bytes)
             preprocess_many_rows = getattr(provider, "preprocess_many_rows", None)
             if callable(preprocess_many_rows):
                 raw_provider_results = preprocess_many_rows(
-                    eligible_rows,
+                    provider_rows,
                     provider_input_bytes,
                     provider_input_digest,
                 )
@@ -1897,16 +1913,16 @@ def run_br1_unimol_applicability_preflight(
                 preprocess_many = getattr(provider, "preprocess_many", None)
                 if callable(preprocess_many):
                     raw_provider_results = preprocess_many(
-                        [str(row.get("smiles") or "") for row in eligible_rows]
+                        [str(row.get("smiles") or "") for row in provider_rows]
                     )
                 else:
                     raw_provider_results = [
                         provider.preprocess(str(row.get("smiles") or ""))
-                        for row in eligible_rows
+                        for row in provider_rows
                     ]
-            if len(raw_provider_results) != len(eligible_rows):
+            if len(raw_provider_results) != len(provider_rows):
                 raise RuntimeError("provider preflight result count mismatch")
-            for row, raw_result in zip(eligible_rows, raw_provider_results):
+            for row, raw_result in zip(provider_rows, raw_provider_results):
                 provider_results[str(row.get("row_id") or "")] = (
                     _normalise_provider_result(raw_result)
                 )
@@ -1924,7 +1940,7 @@ def run_br1_unimol_applicability_preflight(
             if provider_actual_input_digest != provider_input_digest:
                 global_authority_reasons.add("INPUT_DIGEST_MISMATCH")
         except Exception:
-            for row in eligible_rows:
+            for row in provider_rows or eligible_rows:
                 provider_results[str(row.get("row_id") or "")] = None
 
     row_results = [
