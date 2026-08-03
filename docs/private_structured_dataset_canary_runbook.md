@@ -26,3 +26,18 @@ Confirm that the private dataset satisfies molecule/InChIKey grouping, paper gro
 Private evidence adds Uni-Mol provider/version, verified training publication, REINVENT4 version/config digest, execution classification, generation/prediction/ranking bindings, OTel correlation and LangSmith correlation only where an LLM was actually invoked. Export only privacy-redacted digests, status classes and safe IDs.
 
 Do not mark `M3H-013 I/T/V / DONE` until fresh Uni-Mol, real REINVENT4, current-run prediction/ranking/validation, restart/replay evidence and repository-owner exact-HEAD review all exist. BR1 alone never closes M3H-GATE-006, M3.5 or Molly v1.
+
+## 2026-08-03 preflight result
+
+The first post-merge private preflight failed closed before an acceptance ID or
+run was created. The repository-owned Uni-Mol and REINVENT4 logical profiles
+had current available capability probes, but the server-owned remote resource
+authority policy was not configured. The supplied source CSV also required an
+authoritative BR1 Raw Dataset mapping because it did not contain the required
+contract columns as-is.
+
+No Controller execution, confirmation, training, generation, restart or replay
+was attempted. The privacy-safe finding is recorded in
+`docs/evidence/br1-private-real-tool-canary-v1/`. After both blockers are
+resolved, use a new clean acceptance ID and run ID; do not amend this blocked
+preflight into a successful acceptance.

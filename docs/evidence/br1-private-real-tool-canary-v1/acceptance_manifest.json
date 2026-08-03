@@ -1,0 +1,13 @@
+{
+  "acceptance_id": null,
+  "frozen_manifest_created": false,
+  "preflight_id": "br1-private-preflight-20260803-e9316ad",
+  "reason_codes": [
+    "DATA_CONTRACT_INCOMPLETE",
+    "REMOTE_RESOURCE_AUTHORITY_POLICY_MISSING"
+  ],
+  "run_id": null,
+  "schema_version": "structured_dataset_private_real_tool_acceptance_manifest_status.v1",
+  "status": "not_created_preflight_blocked"
+}
+

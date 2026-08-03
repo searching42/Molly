@@ -1,0 +1,20 @@
+{
+  "codeql": "not_run_draft_pr_not_created",
+  "compileall": "pass",
+  "focused_tests": {
+    "passed": 45,
+    "selection": [
+      "tests/test_repository_privacy.py",
+      "tests/test_structured_dataset_canary_private.py",
+      "tests/test_structured_dataset_canary_privacy.py"
+    ]
+  },
+  "full_ci": "not_run_draft_pr_not_created",
+  "git_diff_check": "pass",
+  "pr_fast": {
+    "deselected": 5472,
+    "passed": 1157
+  },
+  "schema_version": "structured_dataset_private_real_tool_validation_summary.v1",
+  "shard_assignment_validation": "pass"
+}

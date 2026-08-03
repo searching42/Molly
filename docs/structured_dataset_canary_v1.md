@@ -33,3 +33,8 @@ The frozen engineering scope is organic small-molecule emitters and PLQY. Metal 
 The final output is `Computational Top-N`, not experimental validation or material discovery. It does not assert synthesis feasibility, EQE, lifetime, TADF identity, DFT validation or a closed materials-discovery loop.
 
 No M3H Gate V, M3.5 completion, or Molly v1 completion is claimed unless the corresponding owner-reviewed runtime evidence exists.
+
+The 2026-08-03 private preflight did not create runtime evidence: it stopped
+before formal execution because the server-owned remote resource authority
+policy was absent and the supplied source CSV was not yet an authoritative BR1
+Raw Dataset. `M3H-013` therefore remains without `V` or `DONE` evidence.

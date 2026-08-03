@@ -1,0 +1,22 @@
+{
+  "acceptance_id": null,
+  "base_merge_commit": "e9316ad64fd219a26740b3424f541e00a9409d39",
+  "claim_boundary": "No private real-tool acceptance or scientific result is claimed.",
+  "confirmation": "not_run",
+  "controller_execution": "not_created",
+  "generation_dispatch_count": 0,
+  "inspection": "not_created",
+  "langsmith_correlation": "not_applicable_no_llm_call",
+  "otel_correlation": "not_applicable_preflight_blocked",
+  "preflight_id": "br1-private-preflight-20260803-e9316ad",
+  "privacy_review": "pass_for_blocked_preflight_evidence",
+  "replay": "not_run",
+  "reviewed_head": "e7bb7fc45f0c514ccce000d7fff25ee66e967bd6",
+  "run_id": null,
+  "schema_version": "structured_dataset_private_real_tool_evidence.v1",
+  "scientific_scope": "unassigned",
+  "status": "blocked",
+  "top_n": "not_created",
+  "training_dispatch_count": 0
+}
+

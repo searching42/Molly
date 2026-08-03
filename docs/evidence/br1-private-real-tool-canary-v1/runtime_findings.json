@@ -1,0 +1,53 @@
+{
+  "data_contract": {
+    "canonical_identity_generation": {
+      "canonical_unique_count": 6865,
+      "inchikey_unique_count": 6842,
+      "smiles_invalid_count": 0,
+      "smiles_valid_count": 20836
+    },
+    "connected_component_count": 937,
+    "contract_columns_missing": [
+      "comparable",
+      "doping_ratio",
+      "emission_mechanism",
+      "host",
+      "material_role",
+      "measurement_condition",
+      "medium",
+      "paper_evidence",
+      "paper_id",
+      "row_id",
+      "smiles",
+      "target_value",
+      "temperature"
+    ],
+    "paper_identifier_count": 1354,
+    "row_count": 20836,
+    "source_content_digest": "sha256:f92a55144c46ca0a0ef063c5ea82996161d65ea5c21643796cdeb897e173994c",
+    "status": "incomplete_as_is",
+    "target_numeric_count": 13978,
+    "target_range": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "outside_fraction_range_count": 0
+    }
+  },
+  "findings": [
+    {
+      "classification": "authority_blocker",
+      "code": "REMOTE_RESOURCE_AUTHORITY_POLICY_MISSING",
+      "disposition": "stop_before_formal_run"
+    },
+    {
+      "classification": "data_contract_blocker",
+      "code": "DATA_CONTRACT_INCOMPLETE",
+      "disposition": "require_authoritative_mapping_without_inference"
+    }
+  ],
+  "formal_runtime_started": false,
+  "generation_dispatch_count": 0,
+  "schema_version": "structured_dataset_private_real_tool_runtime_findings.v1",
+  "training_dispatch_count": 0
+}
+

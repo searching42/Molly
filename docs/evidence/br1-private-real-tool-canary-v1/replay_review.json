@@ -1,0 +1,15 @@
+{
+  "controller_execution_id": null,
+  "exact_replay_digest": null,
+  "generation_dispatch_count_after": 0,
+  "generation_dispatch_count_before": 0,
+  "inspection_digest": null,
+  "reason": "formal acceptance did not start because preflight failed closed",
+  "registry_digest": null,
+  "schema_version": "structured_dataset_private_real_tool_replay_review.v1",
+  "status": "not_run",
+  "top_n_publication_digest": null,
+  "training_dispatch_count_after": 0,
+  "training_dispatch_count_before": 0
+}
+
