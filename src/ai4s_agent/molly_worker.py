@@ -1561,6 +1561,7 @@ class MollyWorker:
                 audit_output,
                 {
                     "schema_version": "reinvent4_generation_audit.v1",
+                    "remote_request": request.model_dump(mode="json"),
                     "request_id": request.request_id,
                     "request_sha256": request.request_sha256,
                     "input_manifest_sha256": request.input_manifest.manifest_sha256,
@@ -1699,6 +1700,7 @@ class MollyWorker:
             audit_output,
             {
                 "schema_version": "unimol_training_audit.v1",
+                "remote_request": request.model_dump(mode="json"),
                 "request_id": request.request_id,
                 "request_sha256": request.request_sha256,
                 "input_manifest_sha256": request.input_manifest.manifest_sha256,
@@ -1819,6 +1821,7 @@ class MollyWorker:
             audit_output,
             {
                 "schema_version": "unimol_prediction_audit.v1",
+                "remote_request": request.model_dump(mode="json"),
                 "request_id": request.request_id,
                 "request_sha256": request.request_sha256,
                 "input_manifest_sha256": request.input_manifest.manifest_sha256,

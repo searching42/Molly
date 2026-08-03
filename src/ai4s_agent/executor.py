@@ -1907,6 +1907,16 @@ class RunPlanExecutor:
                 payload[f"{artifact_id}_path"] = self._absolute_artifact_path(
                     artifact_paths, artifact_id
                 )
+            if task_id in {
+                "package_private_unimol_model_v1",
+                "package_private_reinvent4_generation_v1",
+                "evaluate_private_structured_dataset_canary_v1",
+            }:
+                payload["remote_execution_publication_paths"] = [
+                    self._absolute_artifact_path(artifact_paths, artifact_id)
+                    for artifact_id in sorted(artifact_paths)
+                    if artifact_id.startswith("remote_execution_publication_")
+                ]
             if task_id == "confirm_structured_dataset_canary":
                 if GateName.TRAIN_CONFIG.value not in approved:
                     raise ValueError("structured dataset confirmation requires exact Gate authority")

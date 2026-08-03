@@ -177,6 +177,7 @@ def verify_remote_output_contents(
             )
             if (
                 audit.get("schema_version") != "reinvent4_generation_audit.v1"
+                or not _remote_request_audit_is_complete(audit)
                 or not _safe_version(audit.get("provider_version"))
                 or not _SHA256_DIGEST.fullmatch(
                     str(audit.get("effective_config_digest") or "")
@@ -204,6 +205,7 @@ def verify_remote_output_contents(
             raise ValueError("UniMol audit output schema is invalid")
         if output_contract == "unimol-training-output-v2" and (
             not _safe_version(audit.get("provider_version"))
+            or not _remote_request_audit_is_complete(audit)
             or not isinstance(audit.get("config"), dict)
             or isinstance(audit["config"].get("seed"), bool)
             or not isinstance(audit["config"].get("seed"), int)
@@ -224,6 +226,7 @@ def verify_remote_output_contents(
             raise ValueError("UniMol predictions CSV does not satisfy its output contract")
         if (
             audit.get("schema_version") != "unimol_prediction_audit.v1"
+            or not _remote_request_audit_is_complete(audit)
             or not _safe_version(audit.get("provider_version"))
             or not isinstance(audit.get("config"), dict)
         ):
@@ -254,6 +257,23 @@ def verify_remote_output_contents(
         )
         if member_audit.get("schema_version") != "parser_audit.v1":
             raise ValueError("MinerU member audit schema is invalid")
+
+
+def _remote_request_audit_is_complete(audit: dict[str, Any]) -> bool:
+    request = audit.get("remote_request")
+    if not isinstance(request, dict):
+        return False
+    manifest = request.get("input_manifest")
+    return bool(
+        request.get("schema_version") == "molly_remote_execution_request.v1"
+        and request.get("request_id") == audit.get("request_id")
+        and request.get("request_sha256") == audit.get("request_sha256")
+        and isinstance(manifest, dict)
+        and manifest.get("manifest_sha256") == audit.get("input_manifest_sha256")
+        and _SHA256_DIGEST.fullmatch(
+            str(request.get("execution_profile_digest") or "")
+        )
+    )
 
 
 def _verify_exact(
