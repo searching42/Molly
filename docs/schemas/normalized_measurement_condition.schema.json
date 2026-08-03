@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molly.local/schemas/normalized_measurement_condition.schema.json",
+  "title": "NormalizedMeasurementCondition v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "phase", "solvent", "host",
+    "doping_ratio_fraction", "doping_ratio_basis", "temperature_kelvin",
+    "atmosphere", "concentration", "measurement_method", "condition_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "normalized_measurement_condition.v1"},
+    "phase": {"enum": ["solution", "solid", "gas", "unknown"]},
+    "solvent": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["canonical_smiles", "standard_inchikey"],
+          "properties": {
+            "canonical_smiles": {"type": "string", "minLength": 1},
+            "standard_inchikey": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    },
+    "host": {"type": ["string", "null"]},
+    "doping_ratio_fraction": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "doping_ratio_basis": {"type": ["string", "null"]},
+    "temperature_kelvin": {"type": ["number", "null"], "exclusiveMinimum": 0},
+    "atmosphere": {"type": "string", "minLength": 1},
+    "concentration": {"type": ["object", "null"]},
+    "measurement_method": {"type": "string", "minLength": 1},
+    "condition_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

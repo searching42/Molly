@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molly.local/schemas/source_dataset_manifest.schema.json",
+  "title": "Source Dataset Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "dataset_name", "dataset_version", "dataset_doi",
+    "license", "download_date", "original_file_sha256",
+    "derived_raw_dataset_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "source_dataset_manifest.v1"},
+    "dataset_name": {"type": "string", "minLength": 1},
+    "dataset_version": {"type": "string", "minLength": 1},
+    "dataset_doi": {"type": "string", "minLength": 1},
+    "license": {"type": "string", "minLength": 1},
+    "download_date": {"type": "string", "format": "date"},
+    "original_file_sha256": {"type": "string", "pattern": "^(sha256:)?[0-9a-f]{64}$"},
+    "derived_raw_dataset_sha256": {"type": "string", "pattern": "^(sha256:)?[0-9a-f]{64}$"}
+  }
+}

@@ -19,7 +19,12 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerStartRequest,
     AgentHarnessGateApprovalRequest,
     AgentPlanAuthorizationRequest,
+    PlannedTask,
+    RunPlan,
+    RunStatus,
+    StageState,
 )
+from ai4s_agent.planner import private_structured_dataset_task_registry_v2
 from ai4s_agent.scientific_agent_authorization import (
     AgentPlanControlStore,
     ScientificAgentAuthorizationService,
@@ -43,13 +48,20 @@ from ai4s_agent.structured_dataset_confirmation import (
     build_confirmation_authority,
     build_raw_dataset,
     build_review_snapshot,
+    build_review_snapshot_v2,
     canonical_json_bytes,
+    digest_bytes,
+    digest_json,
 )
 from ai4s_agent.structured_dataset_canary_harness import (
     TASK_IDS,
     run_structured_dataset_ci_harness,
 )
 from tests.test_structured_dataset_confirmation import NOW, dataset_bytes
+from tests.test_structured_dataset_confirmation_v2 import (
+    _resign_review as _resign_review_v2,
+    _row as _row_v2,
+)
 
 
 class _NoRemoteAuthorities:
@@ -59,6 +71,172 @@ class _NoRemoteAuthorities:
 
 class _NoRemoteLifecycle:
     pass
+
+
+def test_prepare_v2_verifier_rejects_resigned_nested_semantic_forgery(
+    tmp_path: Path,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    storage.create_project("project-v2", name="Private", created_at=NOW)
+    source_rows = [_row_v2("r1", "CCO", "10.1000/example", source_row="tag-1")]
+    run_dir = storage.run_dir("project-v2", "run-v2")
+    artifacts = run_dir / "prepared"
+    artifacts.mkdir()
+    import csv
+    import io
+
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        stream, fieldnames=list(source_rows[0]), lineterminator="\n"
+    )
+    writer.writeheader()
+    writer.writerows(source_rows)
+    csv_bytes = stream.getvalue().encode()
+    source_manifest = {
+        "schema_version": "source_dataset_manifest.v1",
+        "dataset_name": "DB for chromophore",
+        "dataset_version": "3",
+        "dataset_doi": "10.6084/m9.figshare.12045567",
+        "license": "CC BY 4.0",
+        "download_date": "2026-08-03",
+        "original_file_sha256": "a" * 64,
+        "derived_raw_dataset_sha256": digest_bytes(csv_bytes),
+    }
+    mapping_policy = {
+        "schema_version": "br1_raw_dataset_mapping_policy.v1",
+        "target_property": "PLQY",
+        "scientific_scope": "broader_organic_emitter_plqy",
+        "scope_downgraded": True,
+        "source_solvent_smiles": "ClCCl",
+        "target_unit": "fraction",
+        "identity_key": "standard_inchikey",
+        "duplicate_tie_break": "lowest_source_tag",
+        "material_role": "emitter",
+        "emission_mechanism": "unknown",
+        "temperature_policy": "not_reported",
+        "condition_merge_policy": "explicit_single_solvent_filter_no_merge",
+        "comparability_policy": "partially_comparable_single_solvent",
+    }
+    source_bytes = canonical_json_bytes(source_manifest)
+    mapping_bytes = canonical_json_bytes(mapping_policy)
+    raw, parsed = build_raw_dataset(
+        project_id="project-v2",
+        run_id="run-v2",
+        csv_bytes=csv_bytes,
+        source_kind="private",
+        source_dataset_manifest_digest=digest_bytes(source_bytes),
+        mapping_policy_digest=digest_bytes(mapping_bytes),
+        scientific_scope="broader_organic_emitter_plqy",
+        scope_downgraded=True,
+        comparability_policy="partially_comparable_single_solvent",
+        created_at=NOW,
+    )
+    review = build_review_snapshot_v2(
+        raw, parsed, molecule_inspector=_molecule_identity, created_at=NOW
+    )
+    forged = json.loads(json.dumps(review))
+    observation = forged["row_roster"][0]["observation_identity"]
+    observation["property_id"] = "FORGED"
+    observation.pop("observation_identity_digest")
+    observation["observation_identity_digest"] = digest_json(observation)
+    forged = _resign_review_v2(forged)
+    paths = {
+        "raw_dataset": artifacts / "raw.json",
+        "raw_dataset_csv": artifacts / "raw.csv",
+        "review_snapshot": artifacts / "review.json",
+        "source_dataset_manifest": artifacts / "source.json",
+        "br1_mapping_policy": artifacts / "mapping.json",
+    }
+    paths["raw_dataset"].write_bytes(canonical_json_bytes(raw) + b"\n")
+    paths["raw_dataset_csv"].write_bytes(csv_bytes)
+    paths["review_snapshot"].write_bytes(canonical_json_bytes(forged) + b"\n")
+    paths["source_dataset_manifest"].write_bytes(source_bytes)
+    paths["br1_mapping_policy"].write_bytes(mapping_bytes)
+    for artifact_id, artifact_path in paths.items():
+        relative = artifact_path.relative_to(run_dir).as_posix()
+        storage.register_artifact_path("project-v2", "run-v2", artifact_id, relative)
+
+    with pytest.raises(
+        ConfirmationAuthorityError,
+        match="semantic derivation from exact Raw rows mismatch",
+    ):
+        StructuredDatasetCanaryService.verify_harness_task_publication(
+            storage=storage,
+            project_id="project-v2",
+            run_id="run-v2",
+            task_id="prepare_private_structured_dataset_canary_v2",
+            artifact_paths={key: str(value) for key, value in paths.items()},
+        )
+
+
+def test_normal_and_recovery_paths_both_call_structured_v2_verifier(
+    tmp_path: Path, monkeypatch
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    storage.create_project("project-v2", name="Private", created_at=NOW)
+    registry = private_structured_dataset_task_registry_v2()
+    executor = RunPlanExecutor(storage=storage, registry=registry)
+    spec = registry.get("prepare_private_structured_dataset_canary_v2")
+    task = PlannedTask(
+        task_id=spec.task_id,
+        required_artifacts=list(spec.required_artifacts),
+        output_artifacts=list(spec.output_artifacts),
+    )
+    plan = RunPlan(
+        run_id="run-v2",
+        requested_tasks=[task.task_id],
+        tasks=[task],
+        available_artifacts=list(task.required_artifacts),
+    )
+    run_dir = storage.run_dir("project-v2", "run-v2")
+    output = run_dir / "output.json"
+    output.write_text("{}", encoding="utf-8")
+    for artifact_id in task.output_artifacts:
+        storage.register_artifact_path(
+            "project-v2", "run-v2", artifact_id, "output.json"
+        )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        executor,
+        "_verify_structured_dataset_task",
+        lambda **kwargs: calls.append(str(kwargs["task_id"])),
+    )
+    executor._verify_one_task_result_outputs(
+        project_id="project-v2",
+        run_plan=plan,
+        task_index=0,
+        result={"ok": True, "status": RunStatus.SUCCEEDED.value},
+    )
+
+    storage.write_stage_state(
+        "project-v2",
+        "run-v2",
+        StageState(
+            stage=task.task_id,
+            status=RunStatus.SUCCEEDED,
+            started_at=NOW,
+            updated_at=NOW,
+        ),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_one_task_context",
+        lambda **_: (task, spec, {}, run_dir, {}),
+    )
+    executor.verify_one_task_committed_outputs(
+        project_id="project-v2",
+        run_plan=plan,
+        task_index=0,
+        task_id=task.task_id,
+        task_options={},
+        actor="",
+        expected_local_adapter_execution_binding_digest="sha256:" + "0" * 64,
+        expected_compiled_options_digest="sha256:" + "0" * 64,
+        expected_input_artifacts_digest="sha256:" + "0" * 64,
+        expected_output_contract_digest="sha256:" + "0" * 64,
+    )
+
+    assert calls == [task.task_id, task.task_id]
 
 
 def _authority_chain(tmp_path: Path):

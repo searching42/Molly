@@ -19,11 +19,13 @@ from ai4s_agent.schemas import (
 from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.structured_dataset_confirmation import (
     ConfirmationAuthorityError,
+    REVIEW_SNAPSHOT_SCHEMA_V2,
     bind_publication,
     build_confirmation_authority,
     build_confirmed_dataset,
     build_raw_dataset,
     build_review_snapshot,
+    build_review_snapshot_v2,
     canonical_json_bytes,
     digest_bytes,
     digest_json,
@@ -31,6 +33,7 @@ from ai4s_agent.structured_dataset_confirmation import (
     read_json_artifact,
     verify_confirmation_authority,
     verify_publication,
+    verify_review_snapshot,
 )
 
 try:  # pragma: no cover - CI/dev dependency; fail-closed path is tested by injection.
@@ -76,14 +79,32 @@ class StructuredDatasetCanaryService:
             )
         self.harness_authority_managed = True
 
-    def _ingest_raw(self, *, project_id: str, run_id: str, source: Path, timestamp: str) -> dict[str, Any]:
+    def _ingest_raw(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        source: Path,
+        timestamp: str,
+        source_kind: str = "synthetic",
+        source_dataset_manifest_digest: str | None = None,
+        mapping_policy_digest: str | None = None,
+        scientific_scope: str | None = None,
+        scope_downgraded: bool | None = None,
+        comparability_policy: str | None = None,
+    ) -> dict[str, Any]:
         with self._span("dataset.inspect", project_id, run_id, "inspect"):
             raw_bytes, source_digest = read_regular_file_bound(source, max_bytes=16 * 1024 * 1024)
             raw, _ = build_raw_dataset(
                 project_id=project_id,
                 run_id=run_id,
                 csv_bytes=raw_bytes,
-                source_kind="synthetic",
+                source_kind=source_kind,
+                source_dataset_manifest_digest=source_dataset_manifest_digest,
+                mapping_policy_digest=mapping_policy_digest,
+                scientific_scope=scientific_scope,
+                scope_downgraded=scope_downgraded,
+                comparability_policy=comparability_policy,
                 created_at=timestamp,
             )
             if raw["dataset_digest"] != "sha256:" + source_digest:
@@ -108,7 +129,17 @@ class StructuredDatasetCanaryService:
             return existing
         with self._span("dataset.clean", project_id, run_id, "clean"):
             rows = self._raw_rows(raw_dataset_path, raw)
-            review = build_review_snapshot(raw, rows, molecule_inspector=_molecule_identity, created_at=timestamp)
+            builder = (
+                build_review_snapshot_v2
+                if raw.get("review_snapshot_policy")
+                else build_review_snapshot
+            )
+            review = builder(
+                raw,
+                rows,
+                molecule_inspector=_molecule_identity,
+                created_at=timestamp,
+            )
             self._stage(project_id, run_id, "dataset.clean", RunStatus.RUNNING, timestamp)
             published = self._publish(project_id, run_id, "review_snapshot.json", review, "review_snapshot_digest")
             self._register(project_id, run_id, {"review_snapshot": "structured_dataset_canary/review_snapshot.json"})
@@ -121,6 +152,7 @@ class StructuredDatasetCanaryService:
         run_id: str,
         raw: Mapping[str, Any],
         review: Mapping[str, Any],
+        raw_dataset_path: Path,
         *,
         actor: str,
         timestamp: str,
@@ -148,6 +180,7 @@ class StructuredDatasetCanaryService:
                     "exact Controller-committed GateDecision is required"
                 )
             canonical_decision = decisions[0]
+            rows = self._raw_rows(raw_dataset_path, raw)
             decision_model, receipt = build_confirmation_authority(
                 raw=raw,
                 review=review,
@@ -158,6 +191,8 @@ class StructuredDatasetCanaryService:
                 run_id=run_id,
                 decision_time=timestamp,
                 gate_decision=canonical_decision,
+                rows=rows,
+                molecule_inspector=_molecule_identity,
             )
             decision = decision_model.model_dump(mode="json")
             self._stage(project_id, run_id, "dataset.confirm", RunStatus.WAITING_USER, timestamp)
@@ -197,6 +232,7 @@ class StructuredDatasetCanaryService:
             raw=raw, review=review, decision=decision, receipt=receipt, rows=rows,
             trusted_actors=self.trusted_actors, project_id=project_id, run_id=run_id,
             created_at=timestamp,
+            molecule_inspector=_molecule_identity,
         )
         self._publish_bytes(project_id, run_id, "confirmed_dataset.csv", csv_bytes)
         published = self._publish(project_id, run_id, "confirmed_dataset.json", confirmed, "publication_digest")
@@ -691,8 +727,39 @@ class StructuredDatasetCanaryService:
             trusted_actors=set(),
             harness_authority_managed=True,
         )
-        service._raw_rows(path("raw_dataset_csv"), raw)
-        if task_id == "prepare_structured_dataset_canary":
+        if review.get("schema_version") == REVIEW_SNAPSHOT_SCHEMA_V2:
+            from ai4s_agent.adapters.structured_dataset_canary import (
+                _authority_manifest,
+            )
+
+            _, source_digest = _authority_manifest(
+                path("source_dataset_manifest"),
+                schema_filename="source_dataset_manifest.schema.json",
+                schema_version="source_dataset_manifest.v1",
+            )
+            _, mapping_digest = _authority_manifest(
+                path("br1_mapping_policy"),
+                schema_filename="br1_raw_dataset_mapping_policy.schema.json",
+                schema_version="br1_raw_dataset_mapping_policy.v1",
+            )
+            if (
+                raw.get("source_dataset_manifest_digest") != source_digest
+                or raw.get("mapping_policy_digest") != mapping_digest
+            ):
+                raise StructuredDatasetCanaryError(
+                    "Raw Dataset source authority digest mismatch"
+                )
+        raw_rows = service._raw_rows(path("raw_dataset_csv"), raw)
+        verify_review_snapshot(
+            review,
+            raw=raw,
+            rows=raw_rows,
+            molecule_inspector=_molecule_identity,
+        )
+        if task_id in {
+            "prepare_structured_dataset_canary",
+            "prepare_private_structured_dataset_canary_v2",
+        }:
             return
 
         receipt = publication("confirmation_receipt", "confirmation_receipt_digest")
@@ -719,6 +786,8 @@ class StructuredDatasetCanaryService:
             trusted_actors=trusted,
             project_id=project_id,
             run_id=run_id,
+            rows=raw_rows,
+            molecule_inspector=_molecule_identity,
         )
         confirmed = publication("confirmed_training_dataset", "publication_digest")
         service._verify_confirmed_binding(confirmed, receipt)
@@ -888,6 +957,7 @@ class StructuredDatasetCanaryService:
         raw: Mapping[str, Any],
         review: Mapping[str, Any],
         receipt: Mapping[str, Any],
+        rows: Iterable[Mapping[str, str]],
     ) -> None:
         matching = [
             decision
@@ -911,6 +981,8 @@ class StructuredDatasetCanaryService:
             trusted_actors={actor},
             project_id=project_id,
             run_id=run_id,
+            rows=rows,
+            molecule_inspector=_molecule_identity,
         )
 
     @staticmethod

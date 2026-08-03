@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molly.local/schemas/structured_dataset_review_snapshot_v2.schema.json",
+  "title": "Structured Dataset Review Snapshot v2",
+  "type": "object",
+  "required": [
+    "schema_version", "review_snapshot_id", "project_id", "run_id",
+    "raw_dataset_id", "raw_dataset_digest", "raw_publication_digest",
+    "source_dataset_manifest_digest", "mapping_policy_digest", "row_roster",
+    "row_roster_digest", "proposed_confirmed_row_roster",
+    "proposed_excluded_row_roster", "normalization_summary",
+    "confirmation_scope", "review_snapshot_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "structured_dataset_review_snapshot.v2"},
+    "source_dataset_manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "mapping_policy_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "row_roster": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "row_id", "row_digest", "proposed_action", "reason_codes",
+          "molecular_identity", "normalized_measurement_condition",
+          "source_context", "source_context_digest", "observation_identity",
+          "conflict_group", "observed_payload", "observed_payload_digest"
+        ]
+      }
+    },
+    "review_snapshot_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "additionalProperties": true
+}
