@@ -655,6 +655,7 @@ def verify_review_snapshot(
     *,
     raw: Mapping[str, Any] | None = None,
     rows: Iterable[Mapping[str, str]] | None = None,
+    molecule_inspector: Callable[[str], Mapping[str, str] | None] | None = None,
 ) -> None:
     verify_publication(review, digest_field="review_snapshot_digest")
     schema_version = str(review.get("schema_version") or "")
@@ -665,6 +666,10 @@ def verify_review_snapshot(
     if raw is None:
         raise ConfirmationAuthorityError(
             "review snapshot v2 requires its exact Raw Dataset publication"
+        )
+    if rows is None or molecule_inspector is None:
+        raise ConfirmationAuthorityError(
+            "review snapshot v2 requires exact Raw rows and molecule inspector"
         )
     verify_publication(raw, digest_field="raw_publication_digest")
     if (
@@ -690,6 +695,17 @@ def verify_review_snapshot(
             raise ConfirmationAuthorityError(
                 f"review snapshot Raw Dataset {field} binding mismatch"
             )
+    exact_rows = [dict(item) for item in rows]
+    expected_review = build_review_snapshot_v2(
+        raw,
+        exact_rows,
+        molecule_inspector=molecule_inspector,
+        created_at=str(review.get("created_at") or ""),
+    )
+    if dict(review) != expected_review:
+        raise ConfirmationAuthorityError(
+            "review snapshot semantic derivation from exact Raw rows mismatch"
+        )
     if _DIGEST.fullmatch(str(review.get("source_dataset_manifest_digest") or "")) is None:
         raise ConfirmationAuthorityError("review snapshot source manifest digest is invalid")
     if _DIGEST.fullmatch(str(review.get("mapping_policy_digest") or "")) is None:
@@ -738,11 +754,9 @@ def verify_review_snapshot(
     row_ids = confirmed + excluded
     if len(row_ids) != len(set(row_ids)):
         raise ConfirmationAuthorityError("review snapshot row IDs are not unique")
-    raw_rows = None
-    if rows is not None:
-        raw_rows = {str(item.get("row_id") or ""): dict(item) for item in rows}
-        if set(raw_rows) != set(row_ids):
-            raise ConfirmationAuthorityError("review snapshot Raw row roster mismatch")
+    raw_rows = {str(item.get("row_id") or ""): item for item in exact_rows}
+    if set(raw_rows) != set(row_ids):
+        raise ConfirmationAuthorityError("review snapshot Raw row roster mismatch")
     for item in row_roster:
         if not isinstance(item, Mapping):
             raise ConfirmationAuthorityError("review snapshot row is invalid")
@@ -750,21 +764,20 @@ def verify_review_snapshot(
         observation = item.get("observation_identity")
         conflict = item.get("conflict_group")
         source_context = item.get("source_context")
-        if raw_rows is not None:
-            source_row = raw_rows[str(item.get("row_id") or "")]
-            if item.get("row_digest") != digest_json(_raw_row_identity(source_row)):
-                raise ConfirmationAuthorityError("review snapshot Raw row digest mismatch")
-            try:
-                expected_source_context = _build_source_context(
-                    source_row,
-                    source_manifest_digest=str(
-                        review["source_dataset_manifest_digest"]
-                    ),
-                )
-            except ValueError:
-                expected_source_context = None
-            if source_context != expected_source_context:
-                raise ConfirmationAuthorityError("source context Raw row binding mismatch")
+        source_row = raw_rows[str(item.get("row_id") or "")]
+        if item.get("row_digest") != digest_json(_raw_row_identity(source_row)):
+            raise ConfirmationAuthorityError("review snapshot Raw row digest mismatch")
+        try:
+            expected_source_context = _build_source_context(
+                source_row,
+                source_manifest_digest=str(
+                    review["source_dataset_manifest_digest"]
+                ),
+            )
+        except ValueError:
+            expected_source_context = None
+        if source_context != expected_source_context:
+            raise ConfirmationAuthorityError("source context Raw row binding mismatch")
         if source_context is not None and (
             not isinstance(source_context, Mapping)
             or item.get("source_context_digest") != digest_json(source_context)
@@ -1068,9 +1081,16 @@ def build_confirmation_authority(
     excluded_row_roster: list[str] | None = None,
     decision_time: str | None = None,
     gate_decision: GateDecision | None = None,
+    rows: Iterable[Mapping[str, str]] | None = None,
+    molecule_inspector: Callable[[str], Mapping[str, str] | None] | None = None,
 ) -> tuple[GateDecision, dict[str, Any]]:
     verify_publication(raw, digest_field="raw_publication_digest")
-    verify_review_snapshot(review, raw=raw)
+    verify_review_snapshot(
+        review,
+        raw=raw,
+        rows=rows,
+        molecule_inspector=molecule_inspector,
+    )
     clean_actor = str(actor or "").strip()
     if clean_actor not in set(trusted_actors):
         raise ConfirmationAuthorityError("confirmation actor is not trusted")
@@ -1169,13 +1189,20 @@ def verify_confirmation_authority(
     trusted_actors: Iterable[str],
     project_id: str,
     run_id: str,
+    rows: Iterable[Mapping[str, str]] | None = None,
+    molecule_inspector: Callable[[str], Mapping[str, str] | None] | None = None,
 ) -> None:
     if decision is None:
         raise ConfirmationAuthorityError("GateDecision is required")
     if receipt is None:
         raise ConfirmationAuthorityError("confirmation receipt is required")
     verify_publication(raw, digest_field="raw_publication_digest")
-    verify_review_snapshot(review, raw=raw)
+    verify_review_snapshot(
+        review,
+        raw=raw,
+        rows=rows,
+        molecule_inspector=molecule_inspector,
+    )
     verify_publication(receipt, digest_field="confirmation_receipt_digest")
     review_schema = str(review.get("schema_version") or "")
     expected_receipt_schema = (
@@ -1251,7 +1278,9 @@ def build_confirmed_dataset(
     project_id: str,
     run_id: str,
     created_at: str | None = None,
+    molecule_inspector: Callable[[str], Mapping[str, str] | None] | None = None,
 ) -> tuple[dict[str, Any], bytes]:
+    exact_rows = [dict(row) for row in rows]
     verify_confirmation_authority(
         raw=raw,
         review=review,
@@ -1260,8 +1289,10 @@ def build_confirmed_dataset(
         trusted_actors=trusted_actors,
         project_id=project_id,
         run_id=run_id,
+        rows=exact_rows,
+        molecule_inspector=molecule_inspector,
     )
-    by_id = {str(row.get("row_id") or ""): dict(row) for row in rows}
+    by_id = {str(row.get("row_id") or ""): row for row in exact_rows}
     confirmed_ids = list(receipt["confirmed_row_roster"])
     if any(row_id not in by_id for row_id in confirmed_ids):
         raise ConfirmationAuthorityError("confirmed row roster is not present in raw dataset")

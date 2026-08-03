@@ -156,7 +156,10 @@ def test_prepare_v2_verifier_rejects_resigned_nested_semantic_forgery(
         relative = artifact_path.relative_to(run_dir).as_posix()
         storage.register_artifact_path("project-v2", "run-v2", artifact_id, relative)
 
-    with pytest.raises(ConfirmationAuthorityError, match="property binding"):
+    with pytest.raises(
+        ConfirmationAuthorityError,
+        match="semantic derivation from exact Raw rows mismatch",
+    ):
         StructuredDatasetCanaryService.verify_harness_task_publication(
             storage=storage,
             project_id="project-v2",

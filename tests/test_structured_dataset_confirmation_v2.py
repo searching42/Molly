@@ -414,6 +414,8 @@ def test_v2_receipt_binds_review_schema_and_fails_closed_when_replaced() -> None
         project_id="project-v2",
         run_id="run-v2",
         decision_time=NOW,
+        rows=[_row("r1", "CCO", "p1")],
+        molecule_inspector=_molecule_identity,
     )
 
     assert receipt["schema_version"] == "structured_dataset_confirmation_receipt.v2"
@@ -431,6 +433,8 @@ def test_v2_receipt_binds_review_schema_and_fails_closed_when_replaced() -> None
             trusted_actors={"owner"},
             project_id="project-v2",
             run_id="run-v2",
+            rows=[_row("r1", "CCO", "p1")],
+            molecule_inspector=_molecule_identity,
         )
 
 
@@ -480,7 +484,113 @@ def test_v2_resigned_semantic_forgery_fails_closed(mutation: str) -> None:
 
     with pytest.raises(ConfirmationAuthorityError):
         verify_review_snapshot(
-            _resign_review(forged), raw=raw, rows=source_rows
+            _resign_review(forged),
+            raw=raw,
+            rows=source_rows,
+            molecule_inspector=_molecule_identity,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["molecule", "condition", "target_payload"])
+def test_v2_coherently_resigned_raw_semantic_derivation_fails_closed(
+    mutation: str,
+) -> None:
+    source_rows = [_row("r1", "CCO", "10.1000/example", source_row="tag-1")]
+    raw, review = _raw_and_review(source_rows)
+    forged = copy.deepcopy(review)
+    row = forged["row_roster"][0]
+    if mutation == "molecule":
+        row["molecular_identity"] = "FORGED-INCHIKEY"
+        row["observation_identity"]["standard_inchikey"] = "FORGED-INCHIKEY"
+        row["conflict_group"]["standard_inchikey"] = "FORGED-INCHIKEY"
+        for identity, digest_field in (
+            (row["observation_identity"], "observation_identity_digest"),
+            (row["conflict_group"], "conflict_group_digest"),
+        ):
+            identity.pop(digest_field)
+            identity[digest_field] = digest_json(identity)
+    elif mutation == "condition":
+        condition = row["normalized_measurement_condition"]
+        condition["temperature_kelvin"] = 299.15
+        condition.pop("condition_digest")
+        condition["condition_digest"] = digest_json(condition)
+        for identity, digest_field in (
+            (row["observation_identity"], "observation_identity_digest"),
+            (row["conflict_group"], "conflict_group_digest"),
+        ):
+            identity["normalized_condition_digest"] = condition["condition_digest"]
+            identity.pop(digest_field)
+            identity[digest_field] = digest_json(identity)
+    else:
+        payload = row["observed_payload"]
+        payload["value"] = 0.9
+        payload["reported_text"] = "0.9"
+        row["observed_payload_digest"] = digest_json(payload)
+
+    with pytest.raises(
+        ConfirmationAuthorityError,
+        match="semantic derivation from exact Raw rows mismatch",
+    ):
+        verify_review_snapshot(
+            _resign_review(forged),
+            raw=raw,
+            rows=source_rows,
+            molecule_inspector=_molecule_identity,
+        )
+
+
+def test_v2_coherently_resigned_duplicate_and_conflict_derivation_fails_closed() -> None:
+    source_rows = [
+        _row("r1", "CCO", "p1", target="0.4", source_row="tag-1"),
+        _row("r2", "CCO", "p1", target="0.8", source_row="tag-1"),
+        _row("r3", "CCO", "p2", target="0.9", source_row="tag-3"),
+    ]
+    raw, review = _raw_and_review(source_rows)
+    forged = copy.deepcopy(review)
+    by_id = _by_id(forged)
+    by_id["r2"]["proposed_action"] = "confirm"
+    for row in forged["row_roster"]:
+        row["reason_codes"] = []
+    forged["findings"] = []
+    forged["proposed_confirmed_row_roster"] = ["r1", "r2", "r3"]
+    forged["proposed_excluded_row_roster"] = []
+
+    with pytest.raises(
+        ConfirmationAuthorityError,
+        match="semantic derivation from exact Raw rows mismatch",
+    ):
+        verify_review_snapshot(
+            _resign_review(forged),
+            raw=raw,
+            rows=source_rows,
+            molecule_inspector=_molecule_identity,
+        )
+
+
+def test_v2_confirmation_rederives_review_from_exact_raw_rows() -> None:
+    source_rows = [_row("r1", "CCO", "p1", target="0.4", source_row="tag-1")]
+    raw, review = _raw_and_review(source_rows)
+    forged = copy.deepcopy(review)
+    payload = forged["row_roster"][0]["observed_payload"]
+    payload["value"] = 0.95
+    payload["reported_text"] = "0.95"
+    forged["row_roster"][0]["observed_payload_digest"] = digest_json(payload)
+
+    with pytest.raises(
+        ConfirmationAuthorityError,
+        match="semantic derivation from exact Raw rows mismatch",
+    ):
+        build_confirmation_authority(
+            raw=raw,
+            review=_resign_review(forged),
+            actor="owner",
+            actor_source="human_api",
+            trusted_actors={"owner"},
+            project_id="project-v2",
+            run_id="run-v2",
+            decision_time=NOW,
+            rows=source_rows,
+            molecule_inspector=_molecule_identity,
         )
 
 

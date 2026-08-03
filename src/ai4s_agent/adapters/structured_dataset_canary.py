@@ -283,6 +283,7 @@ def confirm_structured_dataset_canary_adapter(payload: dict[str, Any]) -> dict[s
         run_id,
         raw,
         review,
+        raw_path,
         actor=str(payload["actor"]),
         timestamp=timestamp,
     )
@@ -376,7 +377,7 @@ def evaluate_structured_dataset_canary_adapter(payload: dict[str, Any]) -> dict[
     project_id = str(payload["project_id"])
     run_id = str(payload["run_id"])
     raw = _publication(payload, "raw_dataset", "raw_publication_digest")
-    service._raw_rows(_input_path(payload, "raw_dataset_csv"), raw)
+    raw_rows = service._raw_rows(_input_path(payload, "raw_dataset_csv"), raw)
     review = _publication(payload, "review_snapshot", "review_snapshot_digest")
     receipt = _publication(payload, "confirmation_receipt", "confirmation_receipt_digest")
     confirmed = _publication(payload, "confirmed_training_dataset", "publication_digest")
@@ -391,6 +392,7 @@ def evaluate_structured_dataset_canary_adapter(payload: dict[str, Any]) -> dict[
         raw=raw,
         review=review,
         receipt=receipt,
+        rows=raw_rows,
     )
     service._verify_confirmed_binding(confirmed, receipt)
     service._verify_model_binding(model, confirmed, receipt, run_id)

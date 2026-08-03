@@ -166,6 +166,14 @@ node, so omitted provenance inputs cannot downgrade private CSV to synthetic
 v1. The exact plan authorization—not a JSON `owner_approved` flag—is owner
 authority for the mapping-policy digest.
 
+Private v2 review verification is derivational, not merely structural. Every
+prepare, confirmation, publication and recovery boundary re-reads the exact
+registered Raw CSV, deterministically rebuilds the complete v2 review with the
+same molecule inspector and frozen `created_at`, and requires exact publication
+equality. A coherently re-signed replacement of molecule identity, normalized
+condition, observed target payload, duplicate/conflict decisions, findings or
+action rosters therefore fails closed even when all nested digests agree.
+
 - [Local deployment and private configuration](docs/local_deployment.md)
 - [Private remote worker setup](docs/remote_worker_setup.md)
 - [Remote execution lifecycle](docs/stage6b-remote-execution-lifecycle.md)

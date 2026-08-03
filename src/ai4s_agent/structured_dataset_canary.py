@@ -152,6 +152,7 @@ class StructuredDatasetCanaryService:
         run_id: str,
         raw: Mapping[str, Any],
         review: Mapping[str, Any],
+        raw_dataset_path: Path,
         *,
         actor: str,
         timestamp: str,
@@ -179,6 +180,7 @@ class StructuredDatasetCanaryService:
                     "exact Controller-committed GateDecision is required"
                 )
             canonical_decision = decisions[0]
+            rows = self._raw_rows(raw_dataset_path, raw)
             decision_model, receipt = build_confirmation_authority(
                 raw=raw,
                 review=review,
@@ -189,6 +191,8 @@ class StructuredDatasetCanaryService:
                 run_id=run_id,
                 decision_time=timestamp,
                 gate_decision=canonical_decision,
+                rows=rows,
+                molecule_inspector=_molecule_identity,
             )
             decision = decision_model.model_dump(mode="json")
             self._stage(project_id, run_id, "dataset.confirm", RunStatus.WAITING_USER, timestamp)
@@ -228,6 +232,7 @@ class StructuredDatasetCanaryService:
             raw=raw, review=review, decision=decision, receipt=receipt, rows=rows,
             trusted_actors=self.trusted_actors, project_id=project_id, run_id=run_id,
             created_at=timestamp,
+            molecule_inspector=_molecule_identity,
         )
         self._publish_bytes(project_id, run_id, "confirmed_dataset.csv", csv_bytes)
         published = self._publish(project_id, run_id, "confirmed_dataset.json", confirmed, "publication_digest")
@@ -745,7 +750,12 @@ class StructuredDatasetCanaryService:
                     "Raw Dataset source authority digest mismatch"
                 )
         raw_rows = service._raw_rows(path("raw_dataset_csv"), raw)
-        verify_review_snapshot(review, raw=raw, rows=raw_rows)
+        verify_review_snapshot(
+            review,
+            raw=raw,
+            rows=raw_rows,
+            molecule_inspector=_molecule_identity,
+        )
         if task_id in {
             "prepare_structured_dataset_canary",
             "prepare_private_structured_dataset_canary_v2",
@@ -776,6 +786,8 @@ class StructuredDatasetCanaryService:
             trusted_actors=trusted,
             project_id=project_id,
             run_id=run_id,
+            rows=raw_rows,
+            molecule_inspector=_molecule_identity,
         )
         confirmed = publication("confirmed_training_dataset", "publication_digest")
         service._verify_confirmed_binding(confirmed, receipt)
@@ -945,6 +957,7 @@ class StructuredDatasetCanaryService:
         raw: Mapping[str, Any],
         review: Mapping[str, Any],
         receipt: Mapping[str, Any],
+        rows: Iterable[Mapping[str, str]],
     ) -> None:
         matching = [
             decision
@@ -968,6 +981,8 @@ class StructuredDatasetCanaryService:
             trusted_actors={actor},
             project_id=project_id,
             run_id=run_id,
+            rows=rows,
+            molecule_inspector=_molecule_identity,
         )
 
     @staticmethod
