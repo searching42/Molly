@@ -1,18 +1,22 @@
 {
-  "codeql": "not_run_draft_pr_not_created",
+  "github_checks": {
+    "codeql": "passed",
+    "full_ci": "not_triggered_for_draft_pr",
+    "observed_head": "940caac610fe20f7aa6bfb7377febfb7ddc18108",
+    "pr_fast": "passed"
+  },
   "compileall": "pass",
   "focused_tests": {
-    "passed": 45,
+    "passed": 46,
     "selection": [
       "tests/test_repository_privacy.py",
       "tests/test_structured_dataset_canary_private.py",
       "tests/test_structured_dataset_canary_privacy.py"
     ]
   },
-  "full_ci": "not_run_draft_pr_not_created",
   "git_diff_check": "pass",
   "pr_fast": {
-    "deselected": 5472,
+    "deselected": 5473,
     "passed": 1157
   },
   "schema_version": "structured_dataset_private_real_tool_validation_summary.v1",

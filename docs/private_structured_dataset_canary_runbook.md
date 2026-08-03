@@ -36,6 +36,14 @@ authority policy was not configured. The supplied source CSV also required an
 authoritative BR1 Raw Dataset mapping because it did not contain the required
 contract columns as-is.
 
+The uploaded source also lacked dataset name/version, source URL, license and
+download date. Those values remain unknown and are recorded as
+`SOURCE_PROVENANCE_MISSING`. In the numeric-QY subset, repeated chromophores
+across solvent conditions conflict with an InChIKey-only duplicate exclusion;
+this is recorded as `CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED`. Do not map
+that subset into BR1 Raw Dataset rows until source provenance, field mapping and
+the condition-aware identity policy are authoritative.
+
 No Controller execution, confirmation, training, generation, restart or replay
 was attempted. The privacy-safe finding is recorded in
 `docs/evidence/br1-private-real-tool-canary-v1/`. After both blockers are
