@@ -98,6 +98,15 @@ _INVERSE_DESIGN_FROZEN_INPUTS_DIR = "frozen_inputs"
 _GENERATED_EVALUATION_TASK_ID = "execute_oled_generated_candidate_evaluation"
 _CANDIDATE_DECISION_TASK_ID = "execute_oled_candidate_decision"
 _BOUNDED_CONTROLLER_TASK_ID = "execute_oled_bounded_discovery_controller"
+_STRUCTURED_DATASET_TASK_IDS = frozenset(
+    {
+        "prepare_structured_dataset_canary",
+        "confirm_structured_dataset_canary",
+        "train_structured_dataset_canary",
+        "generate_structured_dataset_canary",
+        "evaluate_structured_dataset_canary",
+    }
+)
 _IMMUTABLE_EXECUTION_RECORD_TASK_IDS = frozenset(
     {
         _REGISTRY_SCREENING_TASK_ID,
@@ -738,6 +747,11 @@ class RunPlanExecutor:
                 "Controller local task succeeded without its complete output contract: "
                 + ", ".join(missing)
             )
+        self._verify_structured_dataset_task(
+            project_id=project_id,
+            run_id=run_plan.run_id,
+            task_id=task.task_id,
+        )
 
     def verify_one_task_committed_outputs(
         self,
@@ -785,6 +799,11 @@ class RunPlanExecutor:
         registry = self.storage.read_artifact_registry(project_id, run_plan.run_id)
         if any(artifact_id not in registry for artifact_id in task.output_artifacts):
             raise ValueError("committed local task output contract is incomplete")
+        self._verify_structured_dataset_task(
+            project_id=project_id,
+            run_id=run_plan.run_id,
+            task_id=task.task_id,
+        )
         execution_record_id = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id, "")
         if not execution_record_id:
             return
@@ -1002,6 +1021,27 @@ class RunPlanExecutor:
                 bound.assert_stable()
             return
         raise ValueError("immutable local task lacks a task-specific verifier")
+
+    def _verify_structured_dataset_task(
+        self, *, project_id: str, run_id: str, task_id: str
+    ) -> None:
+        if task_id not in _STRUCTURED_DATASET_TASK_IDS:
+            return
+        from ai4s_agent.structured_dataset_canary import (
+            StructuredDatasetCanaryService,
+        )
+
+        run_dir = self.storage.run_dir(project_id, run_id)
+        artifact_paths = self._artifact_paths_from_registry(
+            project_id, run_id, run_dir
+        )
+        StructuredDatasetCanaryService.verify_harness_task_publication(
+            storage=self.storage,
+            project_id=project_id,
+            run_id=run_id,
+            task_id=task_id,
+            artifact_paths=artifact_paths,
+        )
 
     def _execute_from(
         self,
@@ -1822,6 +1862,30 @@ class RunPlanExecutor:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         approved = approved_gates or set()
+        if task_id in {
+            "prepare_structured_dataset_canary",
+            "confirm_structured_dataset_canary",
+            "train_structured_dataset_canary",
+            "generate_structured_dataset_canary",
+            "evaluate_structured_dataset_canary",
+        }:
+            task_options = self._payload_options(options)
+            payload: dict[str, Any] = {
+                "project_id": run_dir.parents[1].name,
+                "run_id": run_id,
+                "output_root": str(run_dir / "structured_dataset_canary"),
+                "created_at": "1970-01-01T00:00:00Z",
+                **task_options,
+            }
+            for artifact_id in self.registry.get(task_id).required_artifacts:
+                payload[f"{artifact_id}_path"] = self._absolute_artifact_path(
+                    artifact_paths, artifact_id
+                )
+            if task_id == "confirm_structured_dataset_canary":
+                if GateName.TRAIN_CONFIG.value not in approved:
+                    raise ValueError("structured dataset confirmation requires exact Gate authority")
+                payload["actor"] = actor
+            return payload
         if task_id == _BOUNDED_CONTROLLER_TASK_ID:
             task_options = self._payload_options(options)
             if task_options:
@@ -3169,6 +3233,25 @@ class RunPlanExecutor:
         payload: dict[str, Any],
     ) -> None:
         result_rel = self._relative(run_dir, result_path)
+        if task_id in {
+            "prepare_structured_dataset_canary",
+            "confirm_structured_dataset_canary",
+            "train_structured_dataset_canary",
+            "generate_structured_dataset_canary",
+            "evaluate_structured_dataset_canary",
+        }:
+            outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+            spec = self.registry.get(task_id)
+            if set(outputs) != set(spec.output_artifacts):
+                raise ValueError("structured dataset task output roster is incomplete")
+            for artifact_id in spec.output_artifacts:
+                output_path = Path(str(outputs[artifact_id])).absolute()
+                if not output_path.exists():
+                    raise ValueError("structured dataset task output is missing")
+                relative = self._relative(run_dir, output_path)
+                self._register(project_id, run_id, artifact_id, relative)
+                artifact_paths[artifact_id] = str(output_path)
+            return
         if task_id == "inspect_dataset":
             self._register(project_id, run_id, "dataset_profile", result_rel)
             self._register(project_id, run_id, "property_catalog", result_rel)

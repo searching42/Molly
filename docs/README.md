@@ -17,8 +17,8 @@ the current state recorded in `todo.md`.
 | Literature intake and parsing | [Literature intake](literature-intake.md), [document parsing providers](document-parsing-providers.md), [real PDF ingestion](real-pdf-ingestion.md) |
 | Remote resources | [Local deployment](local_deployment.md), [remote worker setup](remote_worker_setup.md), [resource profiles](stage6a-resource-profiles.md) |
 | Observation and trajectory integrity | [Unified Scientific Agent run inspection](scientific_agent_run_inspection_v1.md), [privacy-safe Harness observability](scientific_agent_observability_v1.md), [Control-plane event projection and SSE](control-plane-event-projection.md), [deterministic trajectory audit metrics](oled-scientific-agent-trajectory-audit-metrics.md), [failure attribution](oled-scientific-agent-failure-attribution.md), and [read-only trajectory inspection](oled-scientific-agent-trajectory-inspection.md); current status remains in `todo.md` under M2/M3/M3.5 |
-| Scientific workflow | [Phase 3 to Phase 1 pipeline](phase-3-to-phase-1-pipeline.md), [OLED bounded discovery session](oled-bounded-discovery-session.md), [OLED inverse design](oled-inverse-design.md) |
-| Acceptance and operations | [OLED MVP quickstart](oled-mvp-demo-quickstart.md), [queued-canary rollback runbook](queued-canary-operational-rollback-runbook.md), [Uni-Mol compatibility acceptance](manual-real-unimol-acceptance.md) |
+| Scientific workflow | [Structured Dataset Canary v1](structured_dataset_canary_v1.md), [Phase 3 to Phase 1 pipeline](phase-3-to-phase-1-pipeline.md), [OLED bounded discovery session](oled-bounded-discovery-session.md), [OLED inverse design](oled-inverse-design.md) |
+| Acceptance and operations | [Private Structured Dataset Canary runbook](private_structured_dataset_canary_runbook.md), [OLED MVP quickstart](oled-mvp-demo-quickstart.md), [queued-canary rollback runbook](queued-canary-operational-rollback-runbook.md), [Uni-Mol compatibility acceptance](manual-real-unimol-acceptance.md) |
 
 Focused documents beside these entry points define individual adapters,
 schemas, preflights, publication writers, and acceptance fixtures. Their scope
