@@ -47,6 +47,13 @@ There is intentionally no project API for changing this private owner policy.
 The resource-authority creation API can submit only the exact proposal digest
 and a canonical client request ID.
 
+The repository README contains the reusable operator configuration pattern.
+Configure one entry per exact Planner task and execution profile through
+`RemoteResourceAuthorityPolicyStore`; do not hand-edit the private JSON. A
+two-tool workflow such as Uni-Mol plus REINVENT4 therefore needs two entries.
+This policy cannot convert a local Planner route into a remote route and cannot
+repair a worker-protocol or provider/profile mismatch.
+
 ## Ceiling versus authority
 
 `ExecutionProfile.resource_limits` remains a ceiling. It cannot select actual

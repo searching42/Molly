@@ -12,6 +12,50 @@ Every backend input is the exact immutable path supplied by `RunPlanExecutor` fr
 
 `Training requires an exact-bound confirmation receipt and Confirmed Dataset publication.` Missing, stale, replaced or cross-scope authority fails closed. Client flags and LLM text cannot create a receipt.
 
+## Condition-aware review snapshot v2
+
+The frozen `structured_dataset_review_snapshot.v1` reader and exact replay
+bytes remain supported. New private-source BR1 preparation selects
+`structured_dataset_review_snapshot.v2` only when both a content-bound
+`source_dataset_manifest` and a content-bound `br1_mapping_policy` are present.
+Supplying only one fails closed. Their content digests are bound into the Raw
+Dataset publication, review snapshot and confirmation chain; the source files
+remain private.
+
+The source manifest must bind dataset identity/version/DOI/license, download
+date, original source digest and derived Raw CSV digest. The mapping policy
+must be owner-approved and freeze target/unit, scientific scope and downgrade,
+single-solvent condition policy, molecular identity, duplicate tie-break and
+`partially_comparable_single_solvent` semantics. Invalid or inconsistent scope
+metadata fails before the review snapshot is created.
+
+V2 separates three scientific identities:
+
+- `scientific_observation_identity.v1` binds property, Standard InChIKey,
+  normalized condition digest and source-context digest. Target value is an
+  observed payload and is deliberately not identity material.
+- `scientific_conflict_group.v1` binds property, Standard InChIKey and
+  normalized condition only. It excludes paper/source identity so differing
+  reports under the same condition remain visible as conflicts.
+- train/test/external split grouping remains the InChIKey–paper bipartite
+  connected component. It does not use observation identity.
+
+`normalized_measurement_condition.v1` canonicalizes phase, solvent molecular
+identity, host, doping fraction/basis, temperature in Kelvin, atmosphere,
+concentration and method. Missing values remain explicit null/unknown values
+and never silently collide with known values. Equivalent JSON key ordering and
+Celsius/Kelvin representations produce the same condition digest.
+
+V2 uses the review reasons `exact_duplicate_observation`,
+`same_condition_conflicting_observation`, and
+`condition_distinct_observation_retained`. Exact duplicate observations are
+excluded deterministically; distinct-source conflicts and distinct-condition
+observations are retained for human review. The current private mapping policy
+uses `partially_comparable_single_solvent`; a stronger unqualified comparable
+claim is rejected by v2. The human receipt is
+`structured_dataset_confirmation_receipt.v2` and exact-binds the v2 snapshot
+schema and digest. V1 publications are never rewritten.
+
 ## CI Reference Canary
 
 The public path performs a real deterministic ridge fit on RDKit molecular descriptors from the current run's Confirmed Dataset. Split assignment operates on connected components of the InChIKey–paper bipartite graph; records sharing either a molecule or paper never cross train, test or external holdout, and insufficient independent components fail closed. Candidate generation executes a seed-bound deterministic molecule construction algorithm; it never reads a preset Top-N. Prediction consumes the current model checkpoint and current generated roster. Ranking is deterministic, displays OOD findings and excludes OOD candidates from Top-N according to an explicit rule.

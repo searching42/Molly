@@ -87,6 +87,74 @@ an explicit `MOLLY_CONFIG_DIR`. Keep real hostnames, SSH aliases, usernames,
 known-hosts files, interpreter paths, credentials, private papers, and runtime
 outputs there—not in Git.
 
+### Configure server-owned remote resource authority
+
+Remote compute is configured from the trusted server process, never from a
+project request. First create and probe the private connection and execution
+profiles. Then save one policy entry for each exact logical task/profile pair
+through `RemoteResourceAuthorityPolicyStore`. The client continues to send only
+the logical profile ID; it cannot submit a host, endpoint, SSH option, path,
+credential, resource count, or worker override.
+
+Use the following pattern in a private server bootstrap or one-shot operator
+script. Values shown in angle brackets are logical IDs or reviewed ceilings,
+not infrastructure locators:
+
+```python
+import os
+from pathlib import Path
+
+from ai4s_agent.remote_resource_authority import (
+    RemoteResourceAuthorityPolicyStore,
+)
+from ai4s_agent.schemas import (
+    AgentConfiguredRemoteResources,
+    AgentRemoteResourceBudgetLimits,
+    RemoteResourceAuthorityPolicy,
+    RemoteResourceAuthorityPolicyEntry,
+)
+
+config_dir = Path(os.environ["MOLLY_CONFIG_DIR"])
+entries = [
+    RemoteResourceAuthorityPolicyEntry(
+        policy_id=os.environ["MOLLY_POLICY_ID"],
+        enabled=True,
+        connection_id=os.environ["MOLLY_LOGICAL_CONNECTION_ID"],
+        execution_profile_id=os.environ["MOLLY_EXECUTION_PROFILE_ID"],
+        remote_task_type=os.environ["MOLLY_REMOTE_TASK_TYPE"],
+        allowed_task_ids=[os.environ["MOLLY_PLANNER_TASK_ID"]],
+        configured_resources=AgentConfiguredRemoteResources(
+            gpu_count=int(os.environ["MOLLY_POLICY_GPU_COUNT"]),
+            cpu_threads=int(os.environ["MOLLY_POLICY_CPU_THREADS"]),
+            walltime_sec=int(os.environ["MOLLY_POLICY_WALLTIME_SEC"]),
+        ),
+        budget_limits=AgentRemoteResourceBudgetLimits(
+            max_runtime_sec=int(os.environ["MOLLY_POLICY_MAX_RUNTIME_SEC"]),
+            max_gpu_hours=float(os.environ["MOLLY_POLICY_MAX_GPU_HOURS"]),
+        ),
+    ),
+]
+RemoteResourceAuthorityPolicyStore(config_dir=config_dir).save(
+    RemoteResourceAuthorityPolicy(entries=entries)
+)
+```
+
+For a workflow with Uni-Mol training and REINVENT4 generation, create two
+entries rather than a shared wildcard entry. Each must bind its own exact task
+ID, worker task type, logical connection, execution profile and resource
+ceiling. Before approval, require an enabled exact connection, a current
+capability probe, an execution-profile/provider match and a current immutable
+AuthoritySet. A missing, disabled, ambiguous, over-ceiling or stale binding is
+a denial. Policy configuration does not make a `local_executor` task remote;
+the Planner/Registry contract must already declare the remote route and worker
+protocol.
+
+The store writes `resource_authority_policies.json` under `MOLLY_CONFIG_DIR`
+with private permissions and atomic replacement. Do not hand-edit the file or
+commit it. Public evidence may include safe logical IDs, policy/AuthoritySet
+digests and outcome classes only. See the full
+[server-owned authority contract](docs/server-owned-remote-resource-authority-v1.md).
+
 - [Local deployment and private configuration](docs/local_deployment.md)
 - [Private remote worker setup](docs/remote_worker_setup.md)
 - [Remote execution lifecycle](docs/stage6b-remote-execution-lifecycle.md)

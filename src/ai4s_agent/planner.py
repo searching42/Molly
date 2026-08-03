@@ -1023,10 +1023,15 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         remote_task_type=None,
         backend_execution_routes={},
         backend_remote_task_types={},
-        optional_input_artifacts=[],
+        optional_input_artifacts=[
+            "source_dataset_manifest",
+            "br1_mapping_policy",
+        ],
         input_artifact_alternatives=[],
         accepted_input_trust_classes_by_artifact={
-            "uploaded_dataset": ["content_bound_input"]
+            "uploaded_dataset": ["content_bound_input"],
+            "source_dataset_manifest": ["content_bound_input"],
+            "br1_mapping_policy": ["content_bound_input"],
         },
         budget_dimensions=["max_records"],
         supports_plan_preapproval=False,

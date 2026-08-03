@@ -24,6 +24,7 @@ from ai4s_agent.structured_dataset_confirmation import (
     build_confirmed_dataset,
     build_raw_dataset,
     build_review_snapshot,
+    build_review_snapshot_v2,
     canonical_json_bytes,
     digest_bytes,
     digest_json,
@@ -76,14 +77,32 @@ class StructuredDatasetCanaryService:
             )
         self.harness_authority_managed = True
 
-    def _ingest_raw(self, *, project_id: str, run_id: str, source: Path, timestamp: str) -> dict[str, Any]:
+    def _ingest_raw(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        source: Path,
+        timestamp: str,
+        source_kind: str = "synthetic",
+        source_dataset_manifest_digest: str | None = None,
+        mapping_policy_digest: str | None = None,
+        scientific_scope: str | None = None,
+        scope_downgraded: bool | None = None,
+        comparability_policy: str | None = None,
+    ) -> dict[str, Any]:
         with self._span("dataset.inspect", project_id, run_id, "inspect"):
             raw_bytes, source_digest = read_regular_file_bound(source, max_bytes=16 * 1024 * 1024)
             raw, _ = build_raw_dataset(
                 project_id=project_id,
                 run_id=run_id,
                 csv_bytes=raw_bytes,
-                source_kind="synthetic",
+                source_kind=source_kind,
+                source_dataset_manifest_digest=source_dataset_manifest_digest,
+                mapping_policy_digest=mapping_policy_digest,
+                scientific_scope=scientific_scope,
+                scope_downgraded=scope_downgraded,
+                comparability_policy=comparability_policy,
                 created_at=timestamp,
             )
             if raw["dataset_digest"] != "sha256:" + source_digest:
@@ -108,7 +127,17 @@ class StructuredDatasetCanaryService:
             return existing
         with self._span("dataset.clean", project_id, run_id, "clean"):
             rows = self._raw_rows(raw_dataset_path, raw)
-            review = build_review_snapshot(raw, rows, molecule_inspector=_molecule_identity, created_at=timestamp)
+            builder = (
+                build_review_snapshot_v2
+                if raw.get("review_snapshot_policy")
+                else build_review_snapshot
+            )
+            review = builder(
+                raw,
+                rows,
+                molecule_inspector=_molecule_identity,
+                created_at=timestamp,
+            )
             self._stage(project_id, run_id, "dataset.clean", RunStatus.RUNNING, timestamp)
             published = self._publish(project_id, run_id, "review_snapshot.json", review, "review_snapshot_digest")
             self._register(project_id, run_id, {"review_snapshot": "structured_dataset_canary/review_snapshot.json"})

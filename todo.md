@@ -4,7 +4,7 @@
 > 当前公开基线：`public-baseline-v1`（单一根提交的隐私审查快照）
 > 历史审计基线：迁移前完整提交、分支与 PR 保留在私有审计仓库
 > 当前主里程碑：M3.5 — Scientific Agent Harness 与受控 LLM 执行接入
-> 最后更新：2026-08-02
+> 最后更新：2026-08-03
 > 适用范围：Molly Agent 执行能力、长程任务轨迹审计及科学有效性验证
 
 `todo.md` 是仓库中里程碑范围、任务状态、验收门槛、风险状态和推进顺序的唯一规范性来源。领域专题文档可以解释实现细节，但不得维护与本文件竞争的路线或状态表。
@@ -1412,6 +1412,13 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新计划：blocked evidence 使用独立 `structured_dataset_private_real_tool_blocked_preflight_evidence.v1`；数据审计明确记录缺失的 source provenance、候选字段映射、统计分母与 `CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED`，在策略修复或明确筛选前不得把 numeric-QY subset 映射为 BR1 Raw Dataset。PR-BR2 仅是下一 P0 实现动作，保持 `READY` 直到首个 implementation commit 或 Draft PR 存在。
 - 依据：repository-owner 对 PR #28 exact HEAD `940caac610fe20f7aa6bfb7377febfb7ddc18108` 提交四条 review blocker；该 HEAD 的 GitHub PR Fast 与 CodeQL 已通过，Full CI 未在 Draft PR 上触发。
 - 影响任务：`M3H-013` 继续 `I/T(partial)/— / BLOCKED`；`M3H-014` 为 `I/T(partial)/— / READY`；不新增 Gate `V`，不关闭 M3.5 或 Molly v1。
+
+### 2026-08-03：BR1 condition-aware observation correctness follow-up
+
+- 决策：冻结的 `structured_dataset_review_snapshot.v1` 继续只读并保留 exact replay；新的 private-source preparation 只有在 source manifest 与 mapping policy 同时 content-bound 时才使用 condition-aware `structured_dataset_review_snapshot.v2`。
+- 依据：Deep4Chem/DB for chromophore 单溶剂子集审计证明 CSV 基本格式与 molecule–paper component split 充分，但 source provenance、有限可比性和 observation/conflict identity 不能由 v1 的 molecule-only 去重准确表达。
+- 实现边界：新增 normalized condition、source-aware observation identity、source-independent conflict group 与 v2 confirmation binding；target value 仍是 payload，不进入 identity；split 仍使用 InChIKey–paper 二部图 connected components。server-owned remote resource authority 的通用 operator 配置方法写入 README，但 policy 不得把 local Planner route 变成 remote route。
+- 影响任务：这是 `M3H-013` 正式验收前的最小 correctness 修复，不构成真实 Uni-Mol training、REINVENT4 generation 或 runtime `V`。`M3H-013` 继续 `I/T(partial)/— / BLOCKED`，`M3H-014` 继续 `I/T(partial)/— / READY`，其余 Gate/M3.5/Molly v1 状态不变。
 - 新增风险：InChIKey-only duplicate exclusion 会静默丢弃同一分子不同 solvent/condition 记录；来源名称、版本、URL、license 或 download date 被推断；pre-PR 瞬时 CI 状态被固化为当前 exact-HEAD 事实。
 - 批准人：待 repository-owner 对修复后 exact HEAD re-review；保持 Draft。
 

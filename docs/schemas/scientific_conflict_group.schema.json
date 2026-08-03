@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molly.local/schemas/scientific_conflict_group.schema.json",
+  "title": "Scientific conflict group v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "property_id", "standard_inchikey",
+    "normalized_condition_digest", "conflict_group_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "scientific_conflict_group.v1"},
+    "property_id": {"type": "string", "minLength": 1},
+    "standard_inchikey": {"type": "string", "minLength": 1},
+    "normalized_condition_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "conflict_group_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

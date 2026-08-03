@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molly.local/schemas/scientific_observation_identity.schema.json",
+  "title": "ScientificObservationIdentity v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "property_id", "standard_inchikey",
+    "normalized_condition_digest", "source_context_digest",
+    "observation_identity_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "scientific_observation_identity.v1"},
+    "property_id": {"type": "string", "minLength": 1},
+    "standard_inchikey": {"type": "string", "minLength": 1},
+    "normalized_condition_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source_context_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "observation_identity_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}
