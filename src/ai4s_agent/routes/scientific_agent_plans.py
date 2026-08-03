@@ -10,6 +10,7 @@ from ai4s_agent.llm_provider import LLMProvider, LLMProviderError, LLMProviderMa
 from ai4s_agent.harness_tracing import HarnessTracer
 from ai4s_agent.llm_provider_resolution import llm_provider_from_payload
 from ai4s_agent.llm_settings import LLMSettingsStore
+from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.scientific_agent_plan import (
     AgentProjectObservationBuilder,
     ScientificAgentPlanError,
@@ -43,15 +44,18 @@ def register_scientific_agent_plan_routes(
     resource_profiles: Any,
     llm_settings: LLMSettingsStore,
     llm_providers: LLMProviderManager,
+    registry: AtomicTaskRegistry | None = None,
     tracer: HarnessTracer | None = None,
 ) -> None:
     observation_builder = AgentProjectObservationBuilder(
         storage=projects,
+        registry=registry,
         resource_profiles=resource_profiles,
     )
     proposal_store = ScientificAgentPlanProposalStore(
         storage=projects,
         observation_builder=observation_builder,
+        registry=registry,
     )
     app.extensions["scientific_agent_plan_observation_builder"] = observation_builder
     app.extensions["scientific_agent_plan_proposal_store"] = proposal_store
@@ -95,6 +99,7 @@ def register_scientific_agent_plan_routes(
             try:
                 service = ScientificAgentPlanService(
                     storage=projects,
+                    registry=registry,
                     resource_profiles=resource_profiles,
                     observation_builder=observation_builder,
                     proposal_store=proposal_store,

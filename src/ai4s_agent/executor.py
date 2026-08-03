@@ -106,6 +106,20 @@ _STRUCTURED_DATASET_TASK_IDS = frozenset(
         "train_structured_dataset_canary",
         "generate_structured_dataset_canary",
         "evaluate_structured_dataset_canary",
+        "prepare_private_unimol_training_v1",
+        "package_private_unimol_model_v1",
+        "prepare_private_reinvent4_generation_v1",
+        "package_private_reinvent4_generation_v1",
+        "evaluate_private_structured_dataset_canary_v1",
+    }
+)
+_PRIVATE_REAL_TOOL_LOCAL_TASK_IDS = frozenset(
+    {
+        "prepare_private_unimol_training_v1",
+        "package_private_unimol_model_v1",
+        "prepare_private_reinvent4_generation_v1",
+        "package_private_reinvent4_generation_v1",
+        "evaluate_private_structured_dataset_canary_v1",
     }
 )
 _IMMUTABLE_EXECUTION_RECORD_TASK_IDS = frozenset(
@@ -460,6 +474,8 @@ class RunPlanExecutor:
             run_plan=run_plan,
             task_index=task_index,
             result=result,
+            task_options=task_options,
+            expected_compiled_options_digest=expected_compiled_options_digest,
         )
         if (
             task_completion_recorder is not None
@@ -644,6 +660,8 @@ class RunPlanExecutor:
             run_plan=run_plan,
             task_index=task_index,
             result=result,
+            task_options=task_options,
+            expected_compiled_options_digest=expected_compiled_options_digest,
         )
         if (
             task_completion_recorder is not None
@@ -737,6 +755,8 @@ class RunPlanExecutor:
         run_plan: RunPlan,
         task_index: int,
         result: dict[str, Any],
+        task_options: dict[str, Any],
+        expected_compiled_options_digest: str,
     ) -> None:
         if result.get("ok") is not True or result.get("status") != RunStatus.SUCCEEDED.value:
             return
@@ -752,6 +772,8 @@ class RunPlanExecutor:
             project_id=project_id,
             run_id=run_plan.run_id,
             task_id=task.task_id,
+            task_options=task_options,
+            expected_compiled_options_digest=expected_compiled_options_digest,
         )
 
     def verify_one_task_committed_outputs(
@@ -804,6 +826,8 @@ class RunPlanExecutor:
             project_id=project_id,
             run_id=run_plan.run_id,
             task_id=task.task_id,
+            task_options=task_options,
+            expected_compiled_options_digest=expected_compiled_options_digest,
         )
         execution_record_id = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id, "")
         if not execution_record_id:
@@ -1024,9 +1048,36 @@ class RunPlanExecutor:
         raise ValueError("immutable local task lacks a task-specific verifier")
 
     def _verify_structured_dataset_task(
-        self, *, project_id: str, run_id: str, task_id: str
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        task_id: str,
+        task_options: dict[str, Any],
+        expected_compiled_options_digest: str,
     ) -> None:
         if task_id not in _STRUCTURED_DATASET_TASK_IDS:
+            return
+        if task_id in _PRIVATE_REAL_TOOL_LOCAL_TASK_IDS:
+            from ai4s_agent.adapters.structured_dataset_canary import (
+                verify_private_real_tool_harness_task_publication,
+            )
+
+            run_dir = self.storage.run_dir(project_id, run_id)
+            artifact_paths = self._artifact_paths_from_registry(
+                project_id, run_id, run_dir
+            )
+            verify_private_real_tool_harness_task_publication(
+                storage=self.storage,
+                project_id=project_id,
+                run_id=run_id,
+                task_id=task_id,
+                artifact_paths=artifact_paths,
+                task_options=task_options,
+                expected_compiled_options_digest=(
+                    expected_compiled_options_digest
+                ),
+            )
             return
         from ai4s_agent.structured_dataset_canary import (
             StructuredDatasetCanaryService,
@@ -1876,6 +1927,16 @@ class RunPlanExecutor:
                 payload[f"{artifact_id}_path"] = self._absolute_artifact_path(
                     artifact_paths, artifact_id
                 )
+            if task_id in {
+                "package_private_unimol_model_v1",
+                "package_private_reinvent4_generation_v1",
+                "evaluate_private_structured_dataset_canary_v1",
+            }:
+                payload["remote_execution_publication_paths"] = [
+                    self._absolute_artifact_path(artifact_paths, artifact_id)
+                    for artifact_id in sorted(artifact_paths)
+                    if artifact_id.startswith("remote_execution_publication_")
+                ]
             if task_id == "confirm_structured_dataset_canary":
                 if GateName.TRAIN_CONFIG.value not in approved:
                     raise ValueError("structured dataset confirmation requires exact Gate authority")

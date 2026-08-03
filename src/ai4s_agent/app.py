@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import weakref
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,10 @@ from ai4s_agent.api_route_extensions import (
 )
 from ai4s_agent.api import register_routes
 from ai4s_agent.local_security import install_local_request_protection
+from ai4s_agent.planner import (
+    AtomicTaskRegistry,
+    private_structured_dataset_real_tool_task_registry_v3,
+)
 from ai4s_agent.profiles import route_extension_inspection_enabled, selected_profile
 
 
@@ -21,15 +26,25 @@ def create_app(
     base_runs_dir: Path | None = None,
     workspace_dir: Path | None = None,
     user_config_dir: Path | None = None,
+    scientific_task_registry: AtomicTaskRegistry | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.config.setdefault("AI4S_PROFILE", selected_profile())
+    if scientific_task_registry is None:
+        registry_id = os.environ.get("AI4S_SCIENTIFIC_TASK_REGISTRY", "").strip()
+        if registry_id == "br1-private-real-tool-v3":
+            scientific_task_registry = (
+                private_structured_dataset_real_tool_task_registry_v3()
+            )
+        elif registry_id:
+            raise ValueError("unknown server-owned scientific task registry")
     install_local_request_protection(app)
     register_routes(
         app,
         base_runs_dir=base_runs_dir,
         workspace_dir=workspace_dir,
         user_config_dir=user_config_dir,
+        scientific_task_registry=scientific_task_registry,
     )
     llm_provider_manager = app.extensions.get("llm_provider_manager")
     if llm_provider_manager is not None:

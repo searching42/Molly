@@ -139,10 +139,22 @@ RemoteResourceAuthorityPolicyStore(config_dir=config_dir).save(
 )
 ```
 
-For a workflow with Uni-Mol training and REINVENT4 generation, create two
-entries rather than a shared wildcard entry. Each must bind its own exact task
+For the BR1 real-tool workflow, create three entries rather than a shared
+wildcard entry. Each must bind its own exact task
 ID, worker task type, logical connection, execution profile and resource
-ceiling. Before approval, require an enabled exact connection, a current
+ceiling:
+
+| Planner task ID | Remote task type | Execution profile ID |
+|---|---|---|
+| `train_private_unimol_v1` | `model_training` | `unimol-train-br1-v2` |
+| `generate_private_reinvent4_v1` | `molecular_generation` | `reinvent4-br1-v2` |
+| `predict_private_unimol_v1` | `model_inference` | `unimol-predict-br1-v1` |
+
+The v2 Uni-Mol profile publishes `config.yaml`, `model_0.pth` and
+`target_scaler.ss` as one exact prediction-capable model roster; the prediction
+profile must consume those current-run artifacts together with the current
+candidate CSV. The REINVENT4 v2 profile publishes both the candidate CSV and a
+provider/config audit. Before approval, require an enabled exact connection, a current
 capability probe, an execution-profile/provider match and a current immutable
 AuthoritySet. A missing, disabled, ambiguous, over-ceiling or stale binding is
 a denial. Policy configuration does not make a `local_executor` task remote;
@@ -165,6 +177,22 @@ The private registry exposes the required-input
 node, so omitted provenance inputs cannot downgrade private CSV to synthetic
 v1. The exact plan authorization—not a JSON `owner_approved` flag—is owner
 authority for the mapping-policy digest.
+
+Formal BR1 real-tool execution uses the additional, versioned
+`private_structured_dataset_real_tool_task_registry_v3()` boundary. Inject the
+same registry instance into Planner, Permission/authorization, Controller and
+`RunPlanExecutor`, or set the trusted server process variable below before
+startup:
+
+```bash
+AI4S_SCIENTIFIC_TASK_REGISTRY=br1-private-real-tool-v3
+```
+
+This setting is server-owned and is not accepted in a project or client JSON
+request. It enables only the reviewed v3 task catalog and the three v3 logical
+execution profiles; an unknown value fails service startup. The default server
+continues to expose the frozen v1 profiles/catalog, while the private v2
+preparation-only registry remains available for exact replay.
 
 Private v2 review verification is derivational, not merely structural. Every
 prepare, confirmation, publication and recovery boundary re-reads the exact

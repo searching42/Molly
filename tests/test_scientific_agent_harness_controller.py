@@ -60,6 +60,30 @@ from ai4s_agent.storage import ProjectStorage
 _NOW = "2026-08-01T00:00:00Z"
 
 
+def test_br1_unimol_prediction_remote_inputs_have_exact_purposes() -> None:
+    contract = ScientificAgentHarnessController._remote_input_contract
+    assert contract("model_inference", ".csv") == (
+        "prediction-data",
+        "application/csv",
+    )
+    assert contract("model_inference", ".json") == (
+        "prediction-config",
+        "application/json",
+    )
+    assert contract("model_inference", ".yaml") == (
+        "model-config",
+        "application/yaml",
+    )
+    assert contract("model_inference", ".pth") == (
+        "model-weights",
+        "application/octet-stream",
+    )
+    assert contract("model_inference", ".ss") == (
+        "target-scaler",
+        "application/octet-stream",
+    )
+
+
 class _FakeHarnessSpan:
     def __init__(self, record: dict[str, object]) -> None:
         self.record = record

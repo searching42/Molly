@@ -10,7 +10,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Literal, Mapping, Sequence
+from typing import Any, Callable, Iterable, Literal, Mapping, Sequence
 
 from platformdirs import user_config_path
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -240,7 +240,12 @@ class ExecutionProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     profile_id: str
-    task_type: Literal["molecular_generation", "document_parsing", "model_training"]
+    task_type: Literal[
+        "molecular_generation",
+        "document_parsing",
+        "model_training",
+        "model_inference",
+    ]
     worker_entrypoint: Literal["molly-worker"] = "molly-worker"
     worker_action: Literal["execute"] = "execute"
     allowed_environment: str
@@ -317,6 +322,23 @@ EXECUTION_PROFILES: dict[str, ExecutionProfile] = {
             process_policy="nice_19_single_thread",
         ),
         ExecutionProfile(
+            profile_id="reinvent4-br1-v2",
+            task_type="molecular_generation",
+            allowed_environment="reinvent4",
+            required_capabilities=["reinvent4", "cpu"],
+            resource_limits=ResourceLimits(
+                gpu_count_max=0,
+                cpu_threads_max=1,
+                walltime_sec_max=6 * 3600,
+            ),
+            input_contract="reinvent4-generation-input-v2",
+            output_contract="reinvent4-generation-output-v2",
+            allowed_input_purposes=["execution-request", "generator-config"],
+            allowed_media_types=["application/json", "application/toml"],
+            device_policy="cpu_only",
+            process_policy="nice_19_single_thread",
+        ),
+        ExecutionProfile(
             profile_id="mineru-v1",
             task_type="document_parsing",
             allowed_environment="mineru",
@@ -350,8 +372,65 @@ EXECUTION_PROFILES: dict[str, ExecutionProfile] = {
             device_policy="gpu_required",
             process_policy="bounded_resources",
         ),
+        ExecutionProfile(
+            profile_id="unimol-train-br1-v2",
+            task_type="model_training",
+            allowed_environment="unimol",
+            required_capabilities=["unimol", "gpu"],
+            resource_limits=ResourceLimits(
+                gpu_count_max=1,
+                cpu_threads_max=16,
+                walltime_sec_max=48 * 3600,
+            ),
+            input_contract="unimol-training-input-v2",
+            output_contract="unimol-training-output-v2",
+            allowed_input_purposes=["training-data", "training-config"],
+            allowed_media_types=["application/csv", "application/json"],
+            device_policy="gpu_required",
+            process_policy="bounded_resources",
+        ),
+        ExecutionProfile(
+            profile_id="unimol-predict-br1-v1",
+            task_type="model_inference",
+            allowed_environment="unimol",
+            required_capabilities=["unimol", "gpu"],
+            resource_limits=ResourceLimits(
+                gpu_count_max=1,
+                cpu_threads_max=16,
+                walltime_sec_max=12 * 3600,
+            ),
+            input_contract="unimol-prediction-input-v1",
+            output_contract="unimol-prediction-output-v1",
+            allowed_input_purposes=[
+                "model-config",
+                "model-weights",
+                "prediction-config",
+                "prediction-data",
+                "target-scaler",
+            ],
+            allowed_media_types=[
+                "application/csv",
+                "application/json",
+                "application/octet-stream",
+                "application/yaml",
+            ],
+            device_policy="gpu_required",
+            process_policy="bounded_resources",
+        ),
     )
 }
+
+DEFAULT_EXECUTION_PROFILE_IDS = frozenset(
+    {"mineru-v1", "reinvent4-cpu-v1", "unimol-train-v1"}
+)
+BR1_REAL_TOOL_EXECUTION_PROFILE_IDS = frozenset(
+    {
+        *DEFAULT_EXECUTION_PROFILE_IDS,
+        "reinvent4-br1-v2",
+        "unimol-predict-br1-v1",
+        "unimol-train-br1-v2",
+    }
+)
 
 
 LEGACY_PINNED_PROFILE_BINDINGS: dict[str, tuple[str, str]] = {
@@ -657,6 +736,7 @@ class ResourceProfileStore:
         workspace_dir: Path,
         config_dir: Path | None = None,
         environ: Mapping[str, str] | None = None,
+        execution_profile_ids: Iterable[str] | None = None,
     ) -> None:
         self.workspace_dir = _absolute_config_path(workspace_dir)
         env = environ if environ is not None else os.environ
@@ -668,6 +748,18 @@ class ResourceProfileStore:
         self.lock_path = self.config_dir / ".resource_profiles.lock"
         self.legacy_path = self.workspace_dir / "workers" / "remote_workers.json"
         self._lock = threading.RLock()
+        selected_ids = (
+            DEFAULT_EXECUTION_PROFILE_IDS
+            if execution_profile_ids is None
+            else frozenset(str(item) for item in execution_profile_ids)
+        )
+        unknown = selected_ids.difference(EXECUTION_PROFILES)
+        if unknown:
+            raise ValueError("server execution profile selection is not allowlisted")
+        self.execution_profiles = {
+            profile_id: EXECUTION_PROFILES[profile_id]
+            for profile_id in sorted(selected_ids)
+        }
 
     def list_connections(self, *, include_disabled: bool = False) -> list[ConnectionProfile]:
         with self._lock, self._process_lock() as config_fd:
@@ -847,7 +939,7 @@ class ResourceProfileStore:
 
     def resolve_execution_profile(self, profile_id: str) -> ExecutionProfile:
         clean = _safe_identifier(profile_id, field="execution_profile_id")
-        profile = EXECUTION_PROFILES.get(clean)
+        profile = self.execution_profiles.get(clean)
         if profile is None:
             raise ValueError(f"execution profile is not allowed: {clean}")
         return profile
@@ -890,7 +982,9 @@ class ResourceProfileStore:
                     **profile.model_dump(mode="json"),
                     "execution_profile_digest": profile.digest(),
                 }
-                for profile in sorted(EXECUTION_PROFILES.values(), key=lambda item: item.profile_id)
+                for profile in sorted(
+                    self.execution_profiles.values(), key=lambda item: item.profile_id
+                )
             ],
         }
 

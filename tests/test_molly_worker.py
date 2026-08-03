@@ -629,6 +629,127 @@ def test_unimol_config_is_bounded_and_single_model_only() -> None:
         MollyWorker._validate_unimol_config({"wrapper": "bash -c arbitrary"})
 
 
+def test_unimol_prediction_config_is_closed_and_bounded() -> None:
+    expected = {
+        "candidate_id_col": "candidate_id",
+        "gpu_device": 0,
+        "smiles_col": "smiles",
+        "target_property": "PLQY",
+    }
+    assert MollyWorker._validate_unimol_prediction_config(expected) == expected
+    with pytest.raises(
+        WorkerProtocolError, match="invalid_unimol_prediction_config"
+    ):
+        MollyWorker._validate_unimol_prediction_config(expected | {"command": "sh"})
+    with pytest.raises(
+        WorkerProtocolError, match="invalid_unimol_prediction_config"
+    ):
+        MollyWorker._validate_unimol_prediction_config(expected | {"gpu_device": -1})
+
+
+def test_unimol_prediction_consumes_exact_model_directory_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = MollyWorker(_worker_settings(tmp_path))
+    profile = EXECUTION_PROFILES["unimol-predict-br1-v1"]
+    connection = _connection(capabilities=["gpu", "unimol"])
+    source = tmp_path / "prediction-inputs"
+    source.mkdir()
+    inputs = {
+        "candidates.csv": b"candidate_id,smiles\ncandidate-1,CC\n",
+        "config.yaml": b"task: regression\ntarget_cols: target_value\n",
+        "model_0.pth": b"fresh-model",
+        "prediction.json": (
+            b'{"candidate_id_col":"candidate_id","gpu_device":0,'
+            b'"smiles_col":"smiles","target_property":"PLQY"}\n'
+        ),
+        "target_scaler.ss": b"fresh-scaler",
+    }
+    purposes = {
+        "candidates.csv": ("prediction-data", "application/csv"),
+        "config.yaml": ("model-config", "application/yaml"),
+        "model_0.pth": ("model-weights", "application/octet-stream"),
+        "prediction.json": ("prediction-config", "application/json"),
+        "target_scaler.ss": ("target-scaler", "application/octet-stream"),
+    }
+    for name, value in inputs.items():
+        (source / name).write_bytes(value)
+    manifest = build_transfer_manifest(
+        request_id="remote-prediction-001",
+        input_root=source,
+        artifacts=[
+            {
+                "relative_path": name,
+                "purpose": purposes[name][0],
+                "media_type": purposes[name][1],
+            }
+            for name in sorted(inputs)
+        ],
+        connection=connection,
+        execution_profile=profile,
+        target_purpose="model-inference",
+    )
+    request = build_remote_execution_request(
+        project_id="project-a",
+        run_id="run-a",
+        task_id="predict-private-unimol-v1",
+        transfer_manifest=manifest,
+        connection=connection,
+        execution_profile=profile,
+        requested_resources={
+            "gpu_count": 1,
+            "cpu_threads": 2,
+            "walltime_sec": 600,
+        },
+    )
+    approval = build_remote_execution_approval(
+        request,
+        request_sha256=request.request_sha256,
+        actor="reviewer",
+    )
+    worker.stage(
+        {
+            "request": request.model_dump(mode="json"),
+            "approval": approval.model_dump(mode="json"),
+        }
+    )
+    for artifact in request.input_manifest.artifacts:
+        worker.stage_input(
+            request_id=request.request_id,
+            relative_path=artifact.relative_path,
+            size_bytes=artifact.size_bytes,
+            sha256=artifact.sha256,
+            stream=io.BytesIO(inputs[artifact.relative_path]),
+        )
+
+    def fake_run(*args: Any, **kwargs: Any) -> None:
+        worker.store.output_path(request.request_id, "predictions.csv").write_bytes(
+            b"candidate_id,predicted_value\ncandidate-1,0.5\n"
+        )
+
+    monkeypatch.setattr(worker, "_run_adapter_command", fake_run)
+    monkeypatch.setattr(
+        worker,
+        "probe",
+        lambda: {"details": {"software_versions": {"unimol-tools": "0.1.5"}}},
+    )
+
+    worker._execute_unimol_prediction(request)
+    audit = json.loads(
+        worker.store.output_path(
+            request.request_id, "prediction_audit.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert audit["provider_version"] == "0.1.5"
+    assert audit["config"]["target_property"] == "PLQY"
+    publication = worker._build_publication(request, approval)
+    assert [item.artifact_id for item in publication.artifacts] == [
+        "unimol_prediction_audit",
+        "unimol_predictions",
+    ]
+
+
 @pytest.mark.pr_fast
 def test_cancel_escalates_to_sigkill_for_ignoring_process_tree(
     tmp_path: Path,

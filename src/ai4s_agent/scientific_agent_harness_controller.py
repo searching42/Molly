@@ -57,6 +57,7 @@ from ai4s_agent.scientific_agent_authorization import AgentPlanControlStore
 from ai4s_agent.scientific_agent_permissions import (
     IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
     IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
     derive_local_task_authority_material,
 )
 from ai4s_agent.scientific_agent_plan import (
@@ -1120,6 +1121,7 @@ class ScientificAgentHarnessController:
                 if permission.policy_version not in {
                     IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
                     IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+                    MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
                 }:
                     raise ScientificAgentHarnessControllerVerificationError(
                         "local Controller tasks require implementation-bound permission authority"
@@ -3714,6 +3716,8 @@ class ScientificAgentHarnessController:
         if suffix == ".pdf":
             return "source-pdf", "application/pdf"
         if suffix == ".csv":
+            if task_type == "model_inference":
+                return "prediction-data", "application/csv"
             return "training-data", "application/csv"
         if suffix in {".parquet", ".pq"}:
             return "training-data", "application/parquet"
@@ -3724,7 +3728,15 @@ class ScientificAgentHarnessController:
                 return "corpus-manifest", "application/json"
             if task_type == "model_training":
                 return "training-config", "application/json"
+            if task_type == "model_inference":
+                return "prediction-config", "application/json"
             return "execution-request", "application/json"
+        if task_type == "model_inference" and suffix in {".yaml", ".yml"}:
+            return "model-config", "application/yaml"
+        if task_type == "model_inference" and suffix == ".pth":
+            return "model-weights", "application/octet-stream"
+        if task_type == "model_inference" and suffix == ".ss":
+            return "target-scaler", "application/octet-stream"
         raise ScientificAgentHarnessControllerVerificationError("remote input media type is not allowed")
 
     @staticmethod

@@ -21,7 +21,7 @@ from ai4s_agent._utils import now_iso
 from ai4s_agent.remote_execution_lifecycle import (
     validate_requested_resources_against_execution_profile,
 )
-from ai4s_agent.resource_profiles import EXECUTION_PROFILES, ResourceProfileStore
+from ai4s_agent.resource_profiles import ResourceProfileStore
 from ai4s_agent.runtime_environments import (
     _absolute_config_path,
     _private_process_lock,
@@ -635,11 +635,16 @@ class RemoteResourceAuthorityService:
                 findings.append(_finding("REMOTE_RESOURCE_TASK_TYPE_MISMATCH", task_id))
             if dispatch.logical_profile_id is None:
                 findings.append(_finding("REMOTE_RESOURCE_PROFILE_MISMATCH", task_id))
-            profile = (
-                None
-                if dispatch.logical_profile_id is None
-                else EXECUTION_PROFILES.get(dispatch.logical_profile_id)
-            )
+            try:
+                profile = (
+                    None
+                    if dispatch.logical_profile_id is None
+                    else self.resource_profiles.resolve_execution_profile(
+                        dispatch.logical_profile_id
+                    )
+                )
+            except ValueError:
+                profile = None
             if profile is None:
                 findings.append(_finding("REMOTE_RESOURCE_EXECUTION_PROFILE_UNKNOWN", task_id))
             elif profile.task_type != dispatch.remote_task_type:

@@ -1425,7 +1425,13 @@ class MollyWorker:
 
     def _require_adapter_available(self, request: RemoteExecutionRequest) -> None:
         profile = self._validate_execution_profile(request)
-        if profile.profile_id not in {"reinvent4-cpu-v1", "unimol-train-v1"}:
+        if profile.profile_id not in {
+            "reinvent4-cpu-v1",
+            "reinvent4-br1-v2",
+            "unimol-predict-br1-v1",
+            "unimol-train-br1-v2",
+            "unimol-train-v1",
+        }:
             raise WorkerProtocolError("adapter_unavailable")
         capabilities = set(self.probe()["capabilities"])
         if not set(profile.required_capabilities).issubset(capabilities):
@@ -1436,11 +1442,14 @@ class MollyWorker:
         request: RemoteExecutionRequest,
         inputs: _AttemptInputs,
     ) -> None:
-        if request.execution_profile_id == "reinvent4-cpu-v1":
+        if request.execution_profile_id in {"reinvent4-cpu-v1", "reinvent4-br1-v2"}:
             self._execute_reinvent4(request, inputs)
             return
-        if request.execution_profile_id == "unimol-train-v1":
+        if request.execution_profile_id in {"unimol-train-v1", "unimol-train-br1-v2"}:
             self._execute_unimol(request, inputs)
+            return
+        if request.execution_profile_id == "unimol-predict-br1-v1":
+            self._execute_unimol_prediction(request, inputs)
             return
         raise WorkerProtocolError("adapter_unavailable")
 
@@ -1544,6 +1553,25 @@ class MollyWorker:
         prefix = self._read_prefix(output_path, 4096)
         if not prefix.startswith(b"SMILES,") or b"\x00" in prefix:
             raise WorkerProtocolError("reinvent4_output_invalid")
+        if request.output_contract == "reinvent4-generation-output-v2":
+            audit_output = self.store.output_path(
+                request.request_id, "generation_audit.json"
+            )
+            _write_private_json(
+                audit_output,
+                {
+                    "schema_version": "reinvent4_generation_audit.v1",
+                    "remote_request": request.model_dump(mode="json"),
+                    "request_id": request.request_id,
+                    "request_sha256": request.request_sha256,
+                    "input_manifest_sha256": request.input_manifest.manifest_sha256,
+                    "effective_config_digest": config_digest,
+                    "provider_version": self.probe()["details"][
+                        "software_versions"
+                    ].get("reinvent", "unknown"),
+                    "seed": seed,
+                },
+            )
 
     def _execute_unimol(
         self,
@@ -1583,6 +1611,21 @@ class MollyWorker:
             "model/model.pt",
             create_parents=True,
         )
+        model_config_output = self.store.output_path(
+            request.request_id,
+            "model/config.yaml",
+            create_parents=True,
+        )
+        model_weights_output = self.store.output_path(
+            request.request_id,
+            "model/model_0.pth",
+            create_parents=True,
+        )
+        target_scaler_output = self.store.output_path(
+            request.request_id,
+            "model/target_scaler.ss",
+            create_parents=True,
+        )
         metrics_output = self.store.output_path(
             request.request_id,
             "model/training_metrics.json",
@@ -1613,6 +1656,12 @@ class MollyWorker:
                     ),
                     "scratch_path": str(scratch),
                     "model_output": str(model_output),
+                    "model_config_output": str(model_config_output),
+                    "model_weights_output": str(model_weights_output),
+                    "publish_model_directory": (
+                        request.output_contract == "unimol-training-output-v2"
+                    ),
+                    "target_scaler_output": str(target_scaler_output),
                     "metrics_output": str(metrics_output),
                     "config": config,
                 },
@@ -1640,16 +1689,146 @@ class MollyWorker:
                 raise WorkerProtocolError("attempt_input_binding_mismatch")
         finally:
             os.close(data_descriptor)
-        if not model_output.is_file() or not metrics_output.is_file():
+        expected_model_outputs = (
+            [model_config_output, model_weights_output, target_scaler_output]
+            if request.output_contract == "unimol-training-output-v2"
+            else [model_output]
+        )
+        if not all(path.is_file() for path in expected_model_outputs) or not metrics_output.is_file():
             raise WorkerProtocolError("unimol_output_missing")
         _write_private_json(
             audit_output,
             {
                 "schema_version": "unimol_training_audit.v1",
+                "remote_request": request.model_dump(mode="json"),
                 "request_id": request.request_id,
                 "request_sha256": request.request_sha256,
                 "input_manifest_sha256": request.input_manifest.manifest_sha256,
                 "environment": "unimol",
+                "provider_version": self.probe()["details"]["software_versions"].get(
+                    "unimol-tools", "unknown"
+                ),
+                "config": config,
+            },
+        )
+
+    def _execute_unimol_prediction(
+        self,
+        request: RemoteExecutionRequest,
+        inputs: _AttemptInputs | None = None,
+    ) -> None:
+        if inputs is None:
+            inputs = self._snapshot_verified_inputs(request)
+        repository = self.settings.unimol_repository
+        python = self.settings.unimol_python
+        if repository is None or python is None:
+            raise WorkerProtocolError("unimol_environment_unavailable")
+        self._require_runtime_path(repository, directory=True)
+        self._require_runtime_path(python, executable=True)
+        data_artifact = self._single_input_for_purpose(request, "prediction-data")
+        model_config_artifact = self._single_input_for_purpose(request, "model-config")
+        model_weights_artifact = self._single_input_for_purpose(request, "model-weights")
+        target_scaler_artifact = self._single_input_for_purpose(request, "target-scaler")
+        prediction_config_artifact = self._single_input_for_purpose(
+            request, "prediction-config"
+        )
+        if data_artifact.media_type != "application/csv":
+            raise WorkerProtocolError("unimol_prediction_data_invalid")
+        config = self._validate_unimol_prediction_config(
+            self._read_attempt_json(
+                inputs, prediction_config_artifact.relative_path
+            )
+        )
+        bound_artifacts = {
+            "data_path": data_artifact,
+            "model_config_path": model_config_artifact,
+            "model_weights_path": model_weights_artifact,
+            "target_scaler_path": target_scaler_artifact,
+        }
+        descriptors: dict[str, int] = {}
+        initial: dict[str, tuple[_FileIdentity, str]] = {}
+        try:
+            for name, artifact in bound_artifacts.items():
+                descriptor = _open_regular_no_follow(
+                    inputs.paths[artifact.relative_path]
+                )
+                identity, digest = _descriptor_digest(descriptor)
+                if (
+                    identity != inputs.identities[artifact.relative_path]
+                    or digest != inputs.digests[artifact.relative_path]
+                ):
+                    raise WorkerProtocolError("attempt_input_binding_mismatch")
+                descriptors[name] = descriptor
+                initial[name] = (identity, digest)
+            job_dir = self.store.job_dir(request.request_id)
+            scratch = _ensure_private_directory(
+                job_dir / "work" / "unimol-prediction"
+            )
+            predictions_output = self.store.output_path(
+                request.request_id,
+                "predictions.csv",
+            )
+            audit_output = self.store.output_path(
+                request.request_id,
+                "prediction_audit.json",
+            )
+            adapter_request = job_dir / "work" / "unimol_prediction_request.json"
+            _write_private_json(
+                adapter_request,
+                {
+                    name: self._descriptor_path(descriptor)
+                    for name, descriptor in descriptors.items()
+                }
+                | {
+                    "config": config,
+                    "predictions_output": str(predictions_output),
+                    "scratch_path": str(scratch),
+                },
+            )
+            runner = job_dir / "work" / "run_unimol_prediction.py"
+            _write_private_bytes(runner, _UNIMOL_PREDICTION_RUNNER.encode("utf-8"))
+            environment = self._adapter_environment()
+            environment.update(
+                {
+                    "OMP_NUM_THREADS": str(request.requested_resources.cpu_threads),
+                    "MKL_NUM_THREADS": str(request.requested_resources.cpu_threads),
+                    "OPENBLAS_NUM_THREADS": str(
+                        request.requested_resources.cpu_threads
+                    ),
+                    "CUDA_VISIBLE_DEVICES": str(config["gpu_device"]),
+                }
+            )
+            self._run_adapter_command(
+                request,
+                [str(python), str(runner), str(adapter_request)],
+                cwd=repository,
+                env=environment,
+                pass_fds=tuple(descriptors.values()),
+            )
+            for name, descriptor in descriptors.items():
+                identity, digest = _descriptor_digest(descriptor)
+                if (identity, digest) != initial[name]:
+                    raise WorkerProtocolError("attempt_input_binding_mismatch")
+        finally:
+            for descriptor in descriptors.values():
+                os.close(descriptor)
+        if not predictions_output.is_file():
+            raise WorkerProtocolError("unimol_prediction_output_missing")
+        prefix = self._read_prefix(predictions_output, 4096)
+        if not prefix.startswith(b"candidate_id,predicted_value\n"):
+            raise WorkerProtocolError("unimol_prediction_output_invalid")
+        _write_private_json(
+            audit_output,
+            {
+                "schema_version": "unimol_prediction_audit.v1",
+                "remote_request": request.model_dump(mode="json"),
+                "request_id": request.request_id,
+                "request_sha256": request.request_sha256,
+                "input_manifest_sha256": request.input_manifest.manifest_sha256,
+                "environment": "unimol",
+                "provider_version": self.probe()["details"]["software_versions"].get(
+                    "unimol-tools", "unknown"
+                ),
                 "config": config,
             },
         )
@@ -1662,6 +1841,14 @@ class MollyWorker:
         roster_by_contract = {
             "reinvent4-generation-output-v1": (
                 ("reinvent4_candidates", "candidates.csv", "text/csv"),
+            ),
+            "reinvent4-generation-output-v2": (
+                ("reinvent4_candidates", "candidates.csv", "text/csv"),
+                (
+                    "reinvent4_generation_audit",
+                    "generation_audit.json",
+                    "application/json",
+                ),
             ),
             "unimol-training-output-v1": (
                 ("unimol_model", "model/model.pt", "application/octet-stream"),
@@ -1676,6 +1863,45 @@ class MollyWorker:
                     "application/json",
                 ),
             ),
+            "unimol-training-output-v2": (
+                (
+                    "unimol_model_config",
+                    "model/config.yaml",
+                    "application/yaml",
+                ),
+                (
+                    "unimol_model_weights",
+                    "model/model_0.pth",
+                    "application/octet-stream",
+                ),
+                (
+                    "unimol_target_scaler",
+                    "model/target_scaler.ss",
+                    "application/octet-stream",
+                ),
+                (
+                    "unimol_training_audit",
+                    "model/training_audit.json",
+                    "application/json",
+                ),
+                (
+                    "unimol_training_metrics",
+                    "model/training_metrics.json",
+                    "application/json",
+                ),
+            ),
+            "unimol-prediction-output-v1": (
+                (
+                    "unimol_predictions",
+                    "predictions.csv",
+                    "text/csv",
+                ),
+                (
+                    "unimol_prediction_audit",
+                    "prediction_audit.json",
+                    "application/json",
+                ),
+            ),
         }
         roster = roster_by_contract.get(request.output_contract)
         if roster is None:
@@ -1687,10 +1913,13 @@ class MollyWorker:
             descriptor = _open_regular_no_follow(path)
             try:
                 identity, sha256 = _descriptor_digest(descriptor)
-                if request.output_contract == "reinvent4-generation-output-v1":
+                if request.output_contract in {
+                    "reinvent4-generation-output-v1",
+                    "unimol-prediction-output-v1",
+                } and media_type == "text/csv":
                     os.lseek(descriptor, 0, os.SEEK_SET)
                     verification_payloads[relative_path] = os.read(descriptor, 4096)
-                elif media_type == "application/json":
+                elif media_type in {"application/json", "application/yaml"}:
                     if identity.size > 16 * 1024 * 1024:
                         raise WorkerProtocolError("output_content_invalid")
                     os.lseek(descriptor, 0, os.SEEK_SET)
@@ -1782,6 +2011,7 @@ class MollyWorker:
             "early_stopping",
             "kfold",
             "gpu_device",
+            "seed",
         }
         if set(payload).difference(allowed):
             raise WorkerProtocolError("invalid_unimol_config")
@@ -1827,6 +2057,46 @@ class MollyWorker:
             "early_stopping": bounded_int("early_stopping", 3, 1, 1000),
             "kfold": kfold,
             "gpu_device": bounded_int("gpu_device", 0, 0, 64),
+            "seed": bounded_int("seed", 1729, 0, 2**31 - 1),
+        }
+
+    @staticmethod
+    def _validate_unimol_prediction_config(
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        allowed = {
+            "candidate_id_col",
+            "gpu_device",
+            "smiles_col",
+            "target_property",
+        }
+        if set(payload) != allowed:
+            raise WorkerProtocolError("invalid_unimol_prediction_config")
+
+        def column(name: str) -> str:
+            value = str(payload.get(name) or "").strip()
+            if (
+                not value
+                or len(value) > 200
+                or any(ord(char) < 32 for char in value)
+            ):
+                raise WorkerProtocolError("invalid_unimol_prediction_config")
+            return value
+
+        gpu_value = payload.get("gpu_device")
+        if isinstance(gpu_value, bool):
+            raise WorkerProtocolError("invalid_unimol_prediction_config")
+        try:
+            gpu_device = int(gpu_value)
+        except (TypeError, ValueError) as exc:
+            raise WorkerProtocolError("invalid_unimol_prediction_config") from exc
+        if gpu_device < 0 or gpu_device > 64:
+            raise WorkerProtocolError("invalid_unimol_prediction_config")
+        return {
+            "candidate_id_col": column("candidate_id_col"),
+            "gpu_device": gpu_device,
+            "smiles_col": column("smiles_col"),
+            "target_property": column("target_property"),
         }
 
     def _run_adapter_command(
@@ -2112,6 +2382,10 @@ data_path = Path(payload["data_path"])
 data_suffix = payload["data_suffix"]
 scratch_path = Path(payload["scratch_path"])
 model_output = Path(payload["model_output"])
+model_config_output = Path(payload["model_config_output"])
+model_weights_output = Path(payload["model_weights_output"])
+publish_model_directory = bool(payload["publish_model_directory"])
+target_scaler_output = Path(payload["target_scaler_output"])
 metrics_output = Path(payload["metrics_output"])
 
 from unimol_tools import MolTrain
@@ -2129,6 +2403,8 @@ trainer = MolTrain(
     early_stopping=config["early_stopping"],
     metrics="mae,r2,mse",
     split="random",
+    split_seed=config["seed"],
+    seed=config["seed"],
     kfold=config["kfold"],
     save_path=str(scratch_path),
     remove_hs=False,
@@ -2142,29 +2418,107 @@ trainer = MolTrain(
     model_name="unimolv1",
     conf_cache_level=1,
 )
-result = trainer.fit(str(bound_data_path))
+trainer.fit(str(bound_data_path))
 
-models = sorted(
-    path
-    for path in scratch_path.rglob("*")
-    if path.is_file() and path.suffix.lower() in {".pt", ".pth"}
-)
-if len(models) != 1:
-    raise RuntimeError("Uni-Mol must publish exactly one model for kfold=1")
-model_output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-shutil.copyfile(models[0], model_output)
-os.chmod(model_output, 0o600)
+model_path = scratch_path / "model_0.pth"
+config_path = scratch_path / "config.yaml"
+target_scaler_path = scratch_path / "target_scaler.ss"
+if not all(path.is_file() for path in (model_path, config_path, target_scaler_path)):
+    raise RuntimeError("Uni-Mol prediction-capable model directory is incomplete")
+if publish_model_directory:
+    for source, destination in (
+        (config_path, model_config_output),
+        (model_path, model_weights_output),
+        (target_scaler_path, target_scaler_output),
+    ):
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        shutil.copyfile(source, destination)
+        os.chmod(destination, 0o600)
+else:
+    model_output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    shutil.copyfile(model_path, model_output)
+    os.chmod(model_output, 0o600)
 
-metrics = {}
-if isinstance(result, dict):
-    for key, value in result.items():
-        if isinstance(value, (bool, int, float, str)) or value is None:
-            metrics[str(key)] = value
+import numpy as np
+
+predicted = np.asarray(trainer.cv_pred, dtype=float).reshape(-1)
+observed = np.asarray(
+    trainer.datahub.data["raw_data"][config["target_col"]], dtype=float
+).reshape(-1)
+if predicted.shape != observed.shape or predicted.size == 0:
+    raise RuntimeError("Uni-Mol training metrics roster is invalid")
+residual = predicted - observed
+denominator = float(np.sum((observed - np.mean(observed)) ** 2))
+metrics = {
+    "mae": float(np.mean(np.abs(residual))),
+    "mse": float(np.mean(residual ** 2)),
+    "r2": (1.0 - float(np.sum(residual ** 2)) / denominator) if denominator else 0.0,
+    "row_count": int(predicted.size),
+}
 metrics_output.write_text(
     json.dumps({"metrics": metrics}, sort_keys=True, separators=(",", ":")) + "\n",
     encoding="utf-8",
 )
 os.chmod(metrics_output, 0o600)
+'''
+
+
+_UNIMOL_PREDICTION_RUNNER = r'''from __future__ import annotations
+
+import csv
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+os.umask(0o077)
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+config = payload["config"]
+scratch_path = Path(payload["scratch_path"])
+model_dir = scratch_path / "model"
+model_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
+for source_key, filename in (
+    ("model_config_path", "config.yaml"),
+    ("model_weights_path", "model_0.pth"),
+    ("target_scaler_path", "target_scaler.ss"),
+):
+    destination = model_dir / filename
+    shutil.copyfile(Path(payload[source_key]), destination)
+    os.chmod(destination, 0o400)
+
+data_path = Path(payload["data_path"])
+with data_path.open("r", encoding="utf-8", newline="") as handle:
+    rows = list(csv.DictReader(handle))
+if not rows:
+    raise RuntimeError("Uni-Mol prediction roster is empty")
+candidate_id_col = config["candidate_id_col"]
+smiles_col = config["smiles_col"]
+candidate_ids = [str(row.get(candidate_id_col) or "") for row in rows]
+if (
+    any(not candidate_id for candidate_id in candidate_ids)
+    or len(candidate_ids) != len(set(candidate_ids))
+    or any(not str(row.get(smiles_col) or "") for row in rows)
+):
+    raise RuntimeError("Uni-Mol prediction roster identity is invalid")
+
+from unimol_tools import MolPredict
+
+predicted = MolPredict(load_model=str(model_dir)).predict(data=str(data_path))
+values = list(predicted.reshape(-1))
+if len(values) != len(candidate_ids):
+    raise RuntimeError("Uni-Mol prediction result roster mismatch")
+output = Path(payload["predictions_output"])
+with output.open("x", encoding="utf-8", newline="") as handle:
+    writer = csv.writer(handle, lineterminator="\n")
+    writer.writerow(["candidate_id", "predicted_value"])
+    for candidate_id, value in zip(candidate_ids, values, strict=True):
+        numeric = float(value)
+        if not __import__("math").isfinite(numeric):
+            raise RuntimeError("Uni-Mol prediction is not finite")
+        writer.writerow([candidate_id, format(numeric, ".17g")])
+os.chmod(output, 0o600)
 '''
 
 

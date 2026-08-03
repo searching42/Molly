@@ -43,6 +43,9 @@ IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION = (
 IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION = (
     "scientific-agent-permission-policy.v4"
 )
+MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION = (
+    "scientific-agent-permission-policy.v5"
+)
 TASK_EXECUTION_BINDING_VERSION = "agent-task-execution-binding.v1"
 TASK_AUTHORITY_BINDING_VERSION = "agent-task-authority-binding.v1"
 RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION = "agent-task-authority-binding.v2"
@@ -72,6 +75,12 @@ RECOGNIZED_EXECUTION_ROUTES = (
 )
 RECOGNIZED_REMOTE_TASK_TYPES = (
     "document_parsing",
+    "model_training",
+    "molecular_generation",
+)
+RECOGNIZED_REMOTE_TASK_TYPES_V2 = (
+    "document_parsing",
+    "model_inference",
     "model_training",
     "molecular_generation",
 )
@@ -399,6 +408,16 @@ IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST = _agent_digest(
     IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL
 )
 
+MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL: Mapping[str, Any] = {
+    **IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL,
+    "schema_version": "scientific_agent_permission_policy_material.v5",
+    "policy_version": MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    "recognized_remote_task_types": list(RECOGNIZED_REMOTE_TASK_TYPES_V2),
+}
+MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST = _agent_digest(
+    MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL
+)
+
 
 _OUTCOME_PRIORITY = {
     AgentPermissionOutcome.ALLOW: 1,
@@ -440,6 +459,12 @@ def permission_policy_identity(
             version=IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
             digest=IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
             material=IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL,
+        )
+    if version == MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION:
+        return PermissionPolicyIdentity(
+            version=MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+            digest=MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
+            material=MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL,
         )
     raise ValueError("unknown scientific agent permission policy version")
 
@@ -572,6 +597,7 @@ def _local_adapter_binding_version(policy_version: str) -> str:
     if policy_version in {
         IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
         IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+        MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
     }:
         return IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
     raise ValueError("unknown scientific agent permission policy version")
@@ -685,6 +711,7 @@ def derive_local_task_authority_material(
         RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
         IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
         IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+        MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
     }:
         raise ValueError("unknown scientific agent permission policy version")
     proposal = publication.proposal
@@ -734,6 +761,7 @@ def derive_local_task_authority_material(
     resource_aware = policy_version in {
         RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
         IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+        MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
     }
     task_authority = _task_authority_digest(
         task_id=task_id,
@@ -812,8 +840,15 @@ class ScientificAgentPermissionEngine:
             item.execution_route == "remote_execution_service"
             for item in proposal.dispatch_intents
         )
+        has_remote_model_inference = any(
+            item.execution_route == "remote_execution_service"
+            and item.remote_task_type == "model_inference"
+            for item in proposal.dispatch_intents
+        )
         selected_policy_version = policy_version or (
-            IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
+            MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
+            if has_remote_model_inference and self.resource_authority_resolver is not None
+            else IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
             if has_remote_tasks and self.resource_authority_resolver is not None
             else IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION
         )
@@ -821,6 +856,7 @@ class ScientificAgentPermissionEngine:
         resource_aware = selected_policy_version in {
             RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
             IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+            MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
         }
 
         global_findings: list[AgentPermissionFinding] = []
@@ -1229,7 +1265,13 @@ class ScientificAgentPermissionEngine:
                     "Task dispatch route is unknown.",
                 )
             elif execution_route == "remote_execution_service":
-                if remote_task_type not in RECOGNIZED_REMOTE_TASK_TYPES:
+                recognized_remote_types = (
+                    RECOGNIZED_REMOTE_TASK_TYPES_V2
+                    if selected_policy_version
+                    == MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
+                    else RECOGNIZED_REMOTE_TASK_TYPES
+                )
+                if remote_task_type not in recognized_remote_types:
                     add_task(
                         "remote_task_type_unknown",
                         AgentPermissionOutcome.DENY,
@@ -1558,6 +1600,9 @@ __all__ = [
     "IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION",
     "IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST",
     "IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL",
+    "MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION",
+    "MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST",
+    "MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL",
     "REASON_CODE_VOCABULARY",
     "PermissionPolicyIdentity",
     "permission_policy_identity",

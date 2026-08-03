@@ -187,6 +187,7 @@
         {
           "enum": [
             "document_parsing",
+            "model_inference",
             "model_training",
             "molecular_generation"
           ],
@@ -216,6 +217,7 @@
           {
             "enum": [
               "document_parsing",
+              "model_inference",
               "model_training",
               "molecular_generation"
             ],

@@ -22,9 +22,13 @@ from ai4s_agent.oled_bounded_discovery_session_actions import (
     OledBoundedDiscoverySessionActionService,
 )
 from ai4s_agent.orchestrator import Orchestrator
+from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.remote_execution_lifecycle import RemoteExecutionLifecycleService
 from ai4s_agent.remote_resource_authority import RemoteResourceAuthorityPolicyStore
-from ai4s_agent.resource_profiles import ResourceProfileStore
+from ai4s_agent.resource_profiles import (
+    BR1_REAL_TOOL_EXECUTION_PROFILE_IDS,
+    ResourceProfileStore,
+)
 from ai4s_agent.routes import run_control as run_control_routes
 from ai4s_agent.routes.agents import _as_bool, register_agent_routes
 from ai4s_agent.routes.conversations import register_conversation_routes
@@ -106,6 +110,7 @@ def register_routes(
     base_runs_dir: Path | None = None,
     workspace_dir: Path | None = None,
     user_config_dir: Path | None = None,
+    scientific_task_registry: AtomicTaskRegistry | None = None,
 ) -> None:
     runs = Path(base_runs_dir or DEFAULT_RUNS_DIR).resolve()
     workspace = _workspace_from_config(base_runs_dir=base_runs_dir, workspace_dir=workspace_dir)
@@ -118,9 +123,22 @@ def register_routes(
         projects=projects,
         conversations=conversations,
     )
+    br1_real_tool_registry = False
+    if scientific_task_registry is not None:
+        try:
+            scientific_task_registry.get("predict_private_unimol_v1")
+        except ValueError:
+            pass
+        else:
+            br1_real_tool_registry = True
     resource_profiles = ResourceProfileStore(
         workspace_dir=workspace,
         config_dir=user_config_dir,
+        execution_profile_ids=(
+            BR1_REAL_TOOL_EXECUTION_PROFILE_IDS
+            if br1_real_tool_registry
+            else None
+        ),
     )
     resource_authority_policies = RemoteResourceAuthorityPolicyStore(
         config_dir=user_config_dir,
@@ -171,6 +189,7 @@ def register_routes(
         resource_profiles=resource_profiles,
         llm_settings=llm_settings,
         llm_providers=llm_providers,
+        registry=scientific_task_registry,
         tracer=harness_tracer,
     )
     register_scientific_agent_permission_routes(
@@ -179,6 +198,7 @@ def register_routes(
         proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
         resource_profiles=resource_profiles,
         resource_authority_policy_store=resource_authority_policies,
+        registry=scientific_task_registry,
         tracer=harness_tracer,
     )
     harness_controller = ScientificAgentHarnessController(
@@ -187,7 +207,7 @@ def register_routes(
         authorization_service=app.extensions["scientific_agent_authorization_service"],
         control_store=app.extensions["scientific_agent_plan_control_store"],
         resource_authority_service=app.extensions["remote_resource_authority_service"],
-        executor=RunPlanExecutor(storage=projects),
+        executor=RunPlanExecutor(storage=projects, registry=scientific_task_registry),
         remote_executions=remote_executions,
         tracer=harness_tracer,
     )

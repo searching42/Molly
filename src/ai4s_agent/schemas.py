@@ -1111,6 +1111,7 @@ ScientificExecutionRoute = Literal[
 
 ScientificRemoteTaskType = Literal[
     "document_parsing",
+    "model_inference",
     "model_training",
     "molecular_generation",
 ]
