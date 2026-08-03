@@ -20,4 +20,3 @@ request: configure the server-owned resource authority policy and provide an
 authoritatively mapped BR1 Raw Dataset that preserves material role, emission
 mechanism, measurement conditions, comparability, and paper evidence. A future
 attempt must use a new clean acceptance ID and run ID.
-
