@@ -17,10 +17,16 @@ Status: `BLOCKED` during preflight.
 - Inspection/Top-N: not created
 - OTel: not applicable because execution did not start
 - LangSmith: `not_applicable_no_llm_call`
+- Canonical blocker roster, in fixed order:
+  `REMOTE_RESOURCE_AUTHORITY_POLICY_MISSING`,
+  `SOURCE_PROVENANCE_MISSING`, `DATA_CONTRACT_INCOMPLETE`,
+  `CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED`
 - Focused tests: `46 passed`
 - Local PR Fast after review fixes: `1157 passed, 5473 deselected`
-- GitHub PR Fast / CodeQL at reviewed pre-fix HEAD `940caac`: passed
-- Full CI at that HEAD: not triggered for the Draft PR
+- GitHub PR Fast / CodeQL at exact HEAD
+  `7935f22b3a7df2f128e0f8e5e4c24bf02169dbc9`: passed
+- Full CI run `30779825797` at that exact HEAD: passed, including static
+  validation and all four weighted shards
 
 No old model, prediction, candidate roster, deterministic fake provider, or
 `existing_output` was used. This evidence can only establish a fail-closed

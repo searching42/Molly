@@ -25,6 +25,18 @@ Molly therefore failed closed before formal execution. It did not dispatch
 Uni-Mol or REINVENT4, did not use `existing_output`, and did not create public
 evidence that could be mistaken for real-tool runtime validation.
 
+The canonical blocker roster, in fixed order across the acceptance-manifest
+status, blocked evidence, preflight summary, and runtime findings, is:
+
+1. `REMOTE_RESOURCE_AUTHORITY_POLICY_MISSING`
+2. `SOURCE_PROVENANCE_MISSING`
+3. `DATA_CONTRACT_INCOMPLETE`
+4. `CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED`
+
+GitHub PR Fast, CodeQL, and Full CI run `30779825797` passed at exact HEAD
+`7935f22b3a7df2f128e0f8e5e4c24bf02169dbc9`. Full CI included static
+validation and all four weighted shards.
+
 The blocker must be resolved by the repository owner outside the project
 request: configure the server-owned resource authority policy and provide an
 authoritatively mapped BR1 Raw Dataset that preserves material role, emission

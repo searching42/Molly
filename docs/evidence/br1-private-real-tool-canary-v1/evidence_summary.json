@@ -1,10 +1,10 @@
 {
   "base_merge_commit": "e9316ad64fd219a26740b3424f541e00a9409d39",
   "blocker_codes": [
-    "CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED",
-    "DATA_CONTRACT_INCOMPLETE",
     "REMOTE_RESOURCE_AUTHORITY_POLICY_MISSING",
-    "SOURCE_PROVENANCE_MISSING"
+    "SOURCE_PROVENANCE_MISSING",
+    "DATA_CONTRACT_INCOMPLETE",
+    "CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED"
   ],
   "claim_boundary": "No private real-tool acceptance or scientific result is claimed.",
   "formal_acceptance_started": false,

@@ -8,18 +8,12 @@
       "type": "string"
     },
     "blocker_codes": {
-      "items": {
-        "enum": [
-          "CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED",
-          "DATA_CONTRACT_INCOMPLETE",
-          "REMOTE_RESOURCE_AUTHORITY_POLICY_MISSING",
-          "SOURCE_PROVENANCE_MISSING"
-        ],
-        "type": "string"
-      },
-      "minItems": 1,
-      "type": "array",
-      "uniqueItems": true
+      "const": [
+        "REMOTE_RESOURCE_AUTHORITY_POLICY_MISSING",
+        "SOURCE_PROVENANCE_MISSING",
+        "DATA_CONTRACT_INCOMPLETE",
+        "CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED"
+      ]
     },
     "claim_boundary": {
       "const": "No private real-tool acceptance or scientific result is claimed."

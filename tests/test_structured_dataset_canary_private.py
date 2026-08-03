@@ -89,6 +89,15 @@ def test_ci_evidence_schema_accepts_real_canary_evidence(tmp_path: Path) -> None
 def test_blocked_preflight_uses_distinct_evidence_schema() -> None:
     evidence_root = Path("docs/evidence/br1-private-real-tool-canary-v1")
     evidence = json.loads((evidence_root / "evidence_summary.json").read_text())
+    acceptance_manifest = json.loads(
+        (evidence_root / "acceptance_manifest.json").read_text()
+    )
+    preflight_summary = json.loads(
+        (evidence_root / "preflight_summary.json").read_text()
+    )
+    runtime_findings = json.loads(
+        (evidence_root / "runtime_findings.json").read_text()
+    )
     schema = json.loads(
         (
             Path("docs/schemas")
@@ -103,3 +112,16 @@ def test_blocked_preflight_uses_distinct_evidence_schema() -> None:
     assert evidence["formal_acceptance_started"] is False
     assert evidence["training_dispatch_count"] == 0
     assert evidence["generation_dispatch_count"] == 0
+
+    canonical_blockers = [
+        "REMOTE_RESOURCE_AUTHORITY_POLICY_MISSING",
+        "SOURCE_PROVENANCE_MISSING",
+        "DATA_CONTRACT_INCOMPLETE",
+        "CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED",
+    ]
+    assert evidence["blocker_codes"] == canonical_blockers
+    assert acceptance_manifest["reason_codes"] == canonical_blockers
+    assert preflight_summary["blocker_codes"] == canonical_blockers
+    assert [finding["code"] for finding in runtime_findings["findings"]] == (
+        canonical_blockers
+    )

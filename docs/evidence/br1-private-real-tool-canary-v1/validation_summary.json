@@ -1,8 +1,9 @@
 {
   "github_checks": {
     "codeql": "passed",
-    "full_ci": "not_triggered_for_draft_pr",
-    "observed_head": "940caac610fe20f7aa6bfb7377febfb7ddc18108",
+    "full_ci": "passed",
+    "full_ci_run_id": 30779825797,
+    "observed_head": "7935f22b3a7df2f128e0f8e5e4c24bf02169dbc9",
     "pr_fast": "passed"
   },
   "compileall": "pass",
