@@ -26,6 +26,7 @@ from ai4s_agent.resource_profiles import (
     CapabilityProbeResult,
     ConnectionProfile,
     CudaCapabilityDetails,
+    DEFAULT_EXECUTION_PROFILE_IDS,
     ResourceProfileStore,
 )
 from ai4s_agent.schemas import (
@@ -65,6 +66,7 @@ from ai4s_agent.scientific_agent_plan import (
 from ai4s_agent.scientific_agent_permissions import (
     IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
     IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
     PERMISSION_POLICY_DIGEST,
     RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
     RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
@@ -118,6 +120,7 @@ def _remote_task(
 ) -> AtomicTaskSpec:
     permission = {
         "document_parsing": "external_document_processing",
+        "model_inference": "model_inference_compute",
         "model_training": "model_training_compute",
         "molecular_generation": "candidate_generation_compute",
     }[task_type]
@@ -211,6 +214,7 @@ def _configured_case(
     profiles = ResourceProfileStore(
         workspace_dir=storage.workspace_dir,
         config_dir=config,
+        execution_profile_ids={*DEFAULT_EXECUTION_PROFILE_IDS, profile_id},
     )
     connection = profiles.save_connection(
         ConnectionProfile(
@@ -819,6 +823,7 @@ def _multiprocess_publish_worker(
         ("molecular_generation", "reinvent4-cpu-v1", ["cpu", "reinvent4"], (0, 1, 600), "unknown"),
         ("document_parsing", "mineru-v1", ["gpu", "mineru"], (1, 4, 600), "available"),
         ("model_training", "unimol-train-v1", ["gpu", "unimol"], (1, 4, 1200), "available"),
+        ("model_inference", "unimol-predict-br1-v1", ["gpu", "unimol"], (1, 4, 1200), "available"),
     ],
 )
 def test_configured_authority_enables_exact_non_dispatched_authorization_chain(
@@ -888,7 +893,9 @@ def test_configured_authority_enables_exact_non_dispatched_authorization_chain(
     )
     assert permission.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
     assert permission.policy_version == (
-        IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
+        MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
+        if task_type == "model_inference"
+        else IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
     )
     request = AgentPlanAuthorizationRequest(
         expected_proposal_digest=proposal.proposal_digest,

@@ -13,6 +13,7 @@ import pytest
 import ai4s_agent.resource_profiles as resource_profiles
 from ai4s_agent.app import create_app
 from ai4s_agent.resource_profiles import (
+    DEFAULT_EXECUTION_PROFILE_IDS,
     EXECUTION_PROFILES,
     CapabilityProbeResult,
     CapabilityProbeService,
@@ -440,7 +441,10 @@ def test_legacy_worker_migration_tombstone_uses_pinned_parent_directory(
 def test_execution_profiles_are_fixed_allowlisted_contracts() -> None:
     assert set(EXECUTION_PROFILES) == {
         "mineru-v1",
+        "reinvent4-br1-v2",
         "reinvent4-cpu-v1",
+        "unimol-predict-br1-v1",
+        "unimol-train-br1-v2",
         "unimol-train-v1",
     }
     reinvent = EXECUTION_PROFILES["reinvent4-cpu-v1"]
@@ -450,6 +454,19 @@ def test_execution_profiles_are_fixed_allowlisted_contracts() -> None:
     assert reinvent.resource_limits.gpu_count_max == 0
     assert "command" not in reinvent.model_dump(mode="json")
     assert reinvent.digest().startswith("sha256:")
+    training = EXECUTION_PROFILES["unimol-train-br1-v2"]
+    prediction = EXECUTION_PROFILES["unimol-predict-br1-v1"]
+    assert training.task_type == "model_training"
+    assert training.output_contract == "unimol-training-output-v2"
+    assert prediction.task_type == "model_inference"
+    assert prediction.output_contract == "unimol-prediction-output-v1"
+    assert prediction.allowed_input_purposes == [
+        "model-config",
+        "model-weights",
+        "prediction-config",
+        "prediction-data",
+        "target-scaler",
+    ]
 
 
 def test_compute_resource_ui_guides_users_through_fixed_connection_roles(
@@ -1249,7 +1266,7 @@ def test_compute_settings_api_persists_connection_and_lists_execution_contracts(
     assert state.status_code == 200
     assert state.json["connections"][0]["ssh_host_alias"] == "molly-compute-worker-main"
     assert {item["profile_id"] for item in state.json["execution_profiles"]} == set(
-        EXECUTION_PROFILES
+        DEFAULT_EXECUTION_PROFILE_IDS
     )
     assert state.json["environments"] == []
 

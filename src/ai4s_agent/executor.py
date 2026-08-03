@@ -106,6 +106,20 @@ _STRUCTURED_DATASET_TASK_IDS = frozenset(
         "train_structured_dataset_canary",
         "generate_structured_dataset_canary",
         "evaluate_structured_dataset_canary",
+        "prepare_private_unimol_training_v1",
+        "package_private_unimol_model_v1",
+        "prepare_private_reinvent4_generation_v1",
+        "package_private_reinvent4_generation_v1",
+        "evaluate_private_structured_dataset_canary_v1",
+    }
+)
+_PRIVATE_REAL_TOOL_LOCAL_TASK_IDS = frozenset(
+    {
+        "prepare_private_unimol_training_v1",
+        "package_private_unimol_model_v1",
+        "prepare_private_reinvent4_generation_v1",
+        "package_private_reinvent4_generation_v1",
+        "evaluate_private_structured_dataset_canary_v1",
     }
 )
 _IMMUTABLE_EXECUTION_RECORD_TASK_IDS = frozenset(
@@ -1027,6 +1041,23 @@ class RunPlanExecutor:
         self, *, project_id: str, run_id: str, task_id: str
     ) -> None:
         if task_id not in _STRUCTURED_DATASET_TASK_IDS:
+            return
+        if task_id in _PRIVATE_REAL_TOOL_LOCAL_TASK_IDS:
+            from ai4s_agent.adapters.structured_dataset_canary import (
+                verify_private_real_tool_harness_task_publication,
+            )
+
+            run_dir = self.storage.run_dir(project_id, run_id)
+            artifact_paths = self._artifact_paths_from_registry(
+                project_id, run_id, run_dir
+            )
+            verify_private_real_tool_harness_task_publication(
+                storage=self.storage,
+                project_id=project_id,
+                run_id=run_id,
+                task_id=task_id,
+                artifact_paths=artifact_paths,
+            )
             return
         from ai4s_agent.structured_dataset_canary import (
             StructuredDatasetCanaryService,

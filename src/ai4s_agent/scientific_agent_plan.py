@@ -33,7 +33,7 @@ from ai4s_agent.observability_correlation import (
     privacy_safe_telemetry_attributes,
 )
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
-from ai4s_agent.resource_profiles import EXECUTION_PROFILES, ResourceProfileStore
+from ai4s_agent.resource_profiles import ResourceProfileStore
 from ai4s_agent.schemas import (
     AgentArtifactObservation,
     AgentBudgetObservation,
@@ -913,7 +913,7 @@ class AgentProjectObservationBuilder:
         connections = store.list_connections(include_disabled=True)
         observations: list[AgentExecutionProfileObservation] = []
         private_material: list[dict[str, Any]] = []
-        for profile_id, profile in sorted(EXECUTION_PROFILES.items()):
+        for profile_id, profile in sorted(store.execution_profiles.items()):
             matching_connections: list[dict[str, Any]] = []
             declared_ready_connections: list[str] = []
             verified_ready_connections: list[str] = []

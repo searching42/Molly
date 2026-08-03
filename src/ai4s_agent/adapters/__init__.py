@@ -66,9 +66,14 @@ from ai4s_agent.adapters.oled_bounded_discovery_controller import (
 from ai4s_agent.adapters.runtime import AdapterRuntimeError
 from ai4s_agent.adapters.structured_dataset_canary import (
     confirm_structured_dataset_canary_adapter,
+    evaluate_private_structured_dataset_canary_v1_adapter,
     evaluate_structured_dataset_canary_adapter,
     generate_structured_dataset_canary_adapter,
+    package_private_reinvent4_generation_v1_adapter,
+    package_private_unimol_model_v1_adapter,
     prepare_private_structured_dataset_canary_v2_adapter,
+    prepare_private_reinvent4_generation_v1_adapter,
+    prepare_private_unimol_training_v1_adapter,
     prepare_structured_dataset_canary_adapter,
     train_structured_dataset_canary_adapter,
 )
@@ -151,6 +156,11 @@ __all__ = [
     "prepare_structured_dataset_canary_adapter",
     "prepare_private_structured_dataset_canary_v2_adapter",
     "confirm_structured_dataset_canary_adapter",
+    "prepare_private_unimol_training_v1_adapter",
+    "package_private_unimol_model_v1_adapter",
+    "prepare_private_reinvent4_generation_v1_adapter",
+    "package_private_reinvent4_generation_v1_adapter",
+    "evaluate_private_structured_dataset_canary_v1_adapter",
     "train_structured_dataset_canary_adapter",
     "generate_structured_dataset_canary_adapter",
     "evaluate_structured_dataset_canary_adapter",

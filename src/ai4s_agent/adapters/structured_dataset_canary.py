@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
+import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
@@ -13,6 +15,9 @@ from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.structured_dataset_canary import (
     StructuredDatasetCanaryError,
     StructuredDatasetCanaryService,
+    _component_split_assignments,
+    _molecule_identity,
+    validate_candidates,
 )
 from ai4s_agent.structured_dataset_confirmation import (
     digest_bytes,
@@ -92,6 +97,24 @@ def _authority_manifest(
             "dataset authority manifest violates its checked-in schema"
         )
     return payload, digest_bytes(raw)
+
+
+def _json_object(path: Path, *, label: str) -> dict[str, Any]:
+    raw, _ = read_regular_file_bound(path, max_bytes=16 * 1024 * 1024)
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StructuredDatasetCanaryError(f"{label} must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise StructuredDatasetCanaryError(f"{label} must be a JSON object")
+    return payload
+
+
+def _content_digest(path: Path, *, max_bytes: int) -> str:
+    _, digest = read_regular_file_bound(
+        path, max_bytes=max_bytes, capture=False
+    )
+    return "sha256:" + digest
 
 
 def _validate_single_solvent_mapping(
@@ -299,6 +322,1000 @@ def confirm_structured_dataset_canary_adapter(payload: dict[str, Any]) -> dict[s
             "confirmed_training_dataset_csv": str(root / "confirmed_dataset.csv"),
         },
     }
+
+
+def prepare_private_unimol_training_v1_adapter(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    service = _service(payload)
+    project_id = str(payload["project_id"])
+    run_id = str(payload["run_id"])
+    confirmed = _publication(
+        payload, "confirmed_training_dataset", "publication_digest"
+    )
+    receipt = _publication(
+        payload, "confirmation_receipt", "confirmation_receipt_digest"
+    )
+    confirmed_path = _input_path(payload, "confirmed_training_dataset_csv")
+    service._verify_confirmed_binding(confirmed, receipt)
+    rows = service._confirmed_rows(confirmed_path, confirmed)
+    seed = int(payload["seed"])
+    samples: list[dict[str, Any]] = []
+    rows_by_id = {str(row["row_id"]): row for row in rows}
+    for row in rows:
+        identity = _molecule_identity(str(row["smiles"]))
+        if identity is None:
+            raise StructuredDatasetCanaryError(
+                "confirmed training row lacks a valid molecular identity"
+            )
+        samples.append(
+            {
+                "row_id": str(row["row_id"]),
+                "inchikey": identity["inchikey"],
+                "paper_id": str(row["paper_id"]),
+            }
+        )
+    assignments, components = _component_split_assignments(samples, seed=seed)
+    split_by_row = {item["row_id"]: item["split"] for item in assignments}
+    training_rows = [
+        rows_by_id[row_id]
+        for row_id in sorted(rows_by_id)
+        if split_by_row[row_id] == "train"
+    ]
+    if len(training_rows) < 3:
+        raise StructuredDatasetCanaryError(
+            "component split leaves too few rows for private Uni-Mol training"
+        )
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        stream,
+        fieldnames=["smiles", "target_value"],
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    writer.writerows(
+        {
+            "smiles": row["smiles"],
+            "target_value": row["target_value"],
+        }
+        for row in training_rows
+    )
+    training_bytes = stream.getvalue().encode("utf-8")
+    training_digest = digest_bytes(training_bytes)
+    split_manifest = {
+        "schema_version": "br1_private_split_manifest.v1",
+        "project_id": project_id,
+        "run_id": run_id,
+        "confirmed_dataset_id": confirmed["confirmed_dataset_id"],
+        "confirmed_dataset_digest": confirmed["publication_digest"],
+        "strategy": "molecule_paper_bipartite_components_with_external_holdout",
+        "seed": seed,
+        "assignments": assignments,
+        "components": components,
+        "component_roster_digest": digest_json(components),
+        "training_row_roster": [str(row["row_id"]) for row in training_rows],
+        "training_row_roster_digest": digest_json(
+            [str(row["row_id"]) for row in training_rows]
+        ),
+        "training_csv_digest": training_digest,
+    }
+    config = {
+        "batch_size": int(payload["batch_size"]),
+        "early_stopping": int(payload["early_stopping"]),
+        "epochs": int(payload["epochs"]),
+        "gpu_device": int(payload["gpu_device"]),
+        "kfold": 1,
+        "learning_rate": float(payload["learning_rate"]),
+        "seed": seed,
+        "smiles_col": "smiles",
+        "target_col": "target_value",
+    }
+    request = {
+        "schema_version": "br1_private_unimol_training_request.v1",
+        "project_id": project_id,
+        "run_id": run_id,
+        "confirmed_dataset_id": confirmed["confirmed_dataset_id"],
+        "confirmed_dataset_digest": confirmed["publication_digest"],
+        "confirmation_receipt_id": receipt["confirmation_receipt_id"],
+        "confirmation_receipt_digest": receipt["confirmation_receipt_digest"],
+        "logical_profile_id": "unimol-train-br1-v2",
+        "provider": "unimol",
+        "seed": seed,
+        "split_manifest_digest": digest_json(split_manifest),
+        "training_config_digest": digest_json(config),
+        "training_csv_digest": training_digest,
+        "fresh_training_required": True,
+        "existing_output": False,
+    }
+    root = service._root(project_id, run_id)
+    service._publish_bytes(
+        project_id, run_id, "unimol_training_dataset.csv", training_bytes
+    )
+    service._publish(
+        project_id,
+        run_id,
+        "unimol_split_manifest.json",
+        split_manifest,
+        "split_manifest_digest",
+    )
+    service._publish_bytes(
+        project_id,
+        run_id,
+        "unimol_training_config.json",
+        (json.dumps(config, sort_keys=True, separators=(",", ":")) + "\n").encode(
+            "utf-8"
+        ),
+    )
+    service._publish(
+        project_id,
+        run_id,
+        "unimol_training_request.json",
+        request,
+        "training_request_digest",
+    )
+    return {
+        "status": "success",
+        "outputs": {
+            "unimol_split_manifest": str(root / "unimol_split_manifest.json"),
+            "unimol_training_dataset_csv": str(
+                root / "unimol_training_dataset.csv"
+            ),
+            "unimol_training_request": str(root / "unimol_training_request.json"),
+            "unimol_training_config": str(root / "unimol_training_config.json"),
+        },
+    }
+
+
+def package_private_unimol_model_v1_adapter(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    service = _service(payload)
+    project_id = str(payload["project_id"])
+    run_id = str(payload["run_id"])
+    confirmed = _publication(
+        payload, "confirmed_training_dataset", "publication_digest"
+    )
+    receipt = _publication(
+        payload, "confirmation_receipt", "confirmation_receipt_digest"
+    )
+    request = _publication(
+        payload, "unimol_training_request", "training_request_digest"
+    )
+    split = _publication(payload, "unimol_split_manifest", "split_manifest_digest")
+    audit = _json_object(
+        _input_path(payload, "unimol_training_audit"), label="Uni-Mol training audit"
+    )
+    metrics = _json_object(
+        _input_path(payload, "unimol_training_metrics"),
+        label="Uni-Mol training metrics",
+    )
+    service._verify_confirmed_binding(confirmed, receipt)
+    if (
+        request.get("project_id") != project_id
+        or request.get("run_id") != run_id
+        or request.get("confirmed_dataset_digest") != confirmed["publication_digest"]
+        or request.get("confirmation_receipt_digest")
+        != receipt["confirmation_receipt_digest"]
+        or request.get("split_manifest_digest") != split["split_manifest_digest"]
+        or request.get("fresh_training_required") is not True
+        or request.get("existing_output") is not False
+        or audit.get("schema_version") != "unimol_training_audit.v1"
+        or audit.get("config", {}).get("seed") != request.get("seed")
+        or digest_json(audit.get("config")) != request.get("training_config_digest")
+        or not isinstance(metrics.get("metrics"), dict)
+    ):
+        raise StructuredDatasetCanaryError(
+            "private Uni-Mol request and verified outputs are misbound"
+        )
+    model_artifacts = {
+        "config": _content_digest(
+            _input_path(payload, "unimol_model_config"), max_bytes=16 * 1024 * 1024
+        ),
+        "target_scaler": _content_digest(
+            _input_path(payload, "unimol_target_scaler"),
+            max_bytes=16 * 1024 * 1024,
+        ),
+        "weights": _content_digest(
+            _input_path(payload, "unimol_model_weights"),
+            max_bytes=20 * 1024 * 1024 * 1024,
+        ),
+    }
+    checkpoint = {
+        "schema_version": "br1_private_unimol_checkpoint_manifest.v1",
+        "project_id": project_id,
+        "run_id": run_id,
+        "confirmed_dataset_digest": confirmed["publication_digest"],
+        "confirmation_receipt_digest": receipt["confirmation_receipt_digest"],
+        "training_request_digest": request["training_request_digest"],
+        "seed": request["seed"],
+        "model_artifact_digests": model_artifacts,
+    }
+    root = service._root(project_id, run_id)
+    checkpoint = service._publish(
+        project_id,
+        run_id,
+        "model_checkpoint.json",
+        checkpoint,
+        "checkpoint_manifest_digest",
+    )
+    package = {
+        "schema_version": "structured_dataset_model_package.v1",
+        "model_package_id": f"model-{run_id}",
+        "project_id": project_id,
+        "run_id": run_id,
+        "confirmed_dataset_id": confirmed["confirmed_dataset_id"],
+        "confirmed_dataset_digest": confirmed["publication_digest"],
+        "confirmation_receipt_id": receipt["confirmation_receipt_id"],
+        "confirmation_receipt_digest": receipt["confirmation_receipt_digest"],
+        "training_request_digest": request["training_request_digest"],
+        "training_logical_profile_id": request["logical_profile_id"],
+        "split_manifest": split,
+        "training_configuration_digest": request["training_config_digest"],
+        "random_seed": request["seed"],
+        "software_version": str(audit.get("provider_version") or "unknown"),
+        "model_architecture": "unimol_tools_moltrain_regression",
+        "provider": "unimol",
+        "checkpoint_digest": checkpoint["checkpoint_manifest_digest"],
+        "model_artifact_digests": model_artifacts,
+        "metrics": metrics["metrics"],
+        "applicability_domain_metadata": {
+            "policy": "chemical_similarity_validation_against_training_roster",
+            "threshold": 0.20,
+        },
+        "created_by_task": "package_private_unimol_model_v1",
+        "fresh_training": True,
+        "existing_output_used": False,
+        "created_at": str(payload["created_at"]),
+    }
+    package = service._publish(
+        project_id, run_id, "model_package.json", package, "publication_digest"
+    )
+    request_bytes, _ = read_regular_file_bound(
+        _input_path(payload, "unimol_training_request"), max_bytes=16 * 1024 * 1024
+    )
+    service._publish_bytes(project_id, run_id, "training_request.json", request_bytes)
+    return {
+        "status": "success",
+        "outputs": {
+            "training_request": str(root / "training_request.json"),
+            "trained_model": str(root / "model_checkpoint.json"),
+            "model_package": str(root / "model_package.json"),
+        },
+        "model_package_digest": package["publication_digest"],
+    }
+
+
+def prepare_private_reinvent4_generation_v1_adapter(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    service = _service(payload)
+    project_id = str(payload["project_id"])
+    run_id = str(payload["run_id"])
+    confirmed = _publication(
+        payload, "confirmed_training_dataset", "publication_digest"
+    )
+    model = _publication(payload, "model_package", "publication_digest")
+    service._verify_model_confirmed_binding(model, confirmed, run_id)
+    template_path = _input_path(payload, "reinvent4_config_template")
+    template, template_sha = read_regular_file_bound(
+        template_path, max_bytes=16 * 1024 * 1024
+    )
+    if (
+        b"{{molly_output_csv}}" not in template
+        or b"{{molly_seed}}" not in template
+    ):
+        raise StructuredDatasetCanaryError(
+            "REINVENT4 config template lacks required Molly bindings"
+        )
+    seed = int(payload["seed"])
+    request = {
+        "schema_version": "br1_private_reinvent4_generation_request.v1",
+        "project_id": project_id,
+        "run_id": run_id,
+        "model_package_id": model["model_package_id"],
+        "model_package_digest": model["publication_digest"],
+        "confirmed_dataset_id": confirmed["confirmed_dataset_id"],
+        "confirmed_dataset_digest": confirmed["publication_digest"],
+        "logical_profile_id": "reinvent4-br1-v2",
+        "provider": "reinvent4",
+        "config_template_digest": "sha256:" + template_sha,
+        "seed": seed,
+        "existing_output": False,
+    }
+    execution_request = {"seed": seed}
+    root = service._root(project_id, run_id)
+    service._publish(
+        project_id,
+        run_id,
+        "generation_request.json",
+        request,
+        "generation_request_digest",
+    )
+    service._publish_bytes(
+        project_id, run_id, "reinvent4_bound_config.toml", template
+    )
+    service._publish_bytes(
+        project_id,
+        run_id,
+        "reinvent4_execution_request.json",
+        (
+            json.dumps(execution_request, sort_keys=True, separators=(",", ":"))
+            + "\n"
+        ).encode("utf-8"),
+    )
+    return {
+        "status": "success",
+        "outputs": {
+            "generation_request": str(root / "generation_request.json"),
+            "reinvent4_bound_config": str(root / "reinvent4_bound_config.toml"),
+            "reinvent4_execution_request": str(
+                root / "reinvent4_execution_request.json"
+            ),
+        },
+    }
+
+
+def package_private_reinvent4_generation_v1_adapter(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    service = _service(payload)
+    project_id = str(payload["project_id"])
+    run_id = str(payload["run_id"])
+    confirmed = _publication(
+        payload, "confirmed_training_dataset", "publication_digest"
+    )
+    model = _publication(payload, "model_package", "publication_digest")
+    request = _publication(payload, "generation_request", "generation_request_digest")
+    audit = _json_object(
+        _input_path(payload, "reinvent4_generation_audit"),
+        label="REINVENT4 generation audit",
+    )
+    service._verify_model_confirmed_binding(model, confirmed, run_id)
+    candidates_path = _input_path(payload, "reinvent4_candidates")
+    candidates_bytes, candidates_sha = read_regular_file_bound(
+        candidates_path, max_bytes=2 * 1024 * 1024 * 1024
+    )
+    try:
+        source_rows = list(
+            csv.DictReader(
+                io.StringIO(candidates_bytes.decode("utf-8"), newline="")
+            )
+        )
+    except UnicodeDecodeError as exc:
+        raise StructuredDatasetCanaryError(
+            "REINVENT4 candidate output must be UTF-8 CSV"
+        ) from exc
+    if (
+        not source_rows
+        or "SMILES" not in source_rows[0]
+        or audit.get("schema_version") != "reinvent4_generation_audit.v1"
+        or audit.get("seed") != request.get("seed")
+        or request.get("project_id") != project_id
+        or request.get("run_id") != run_id
+        or request.get("model_package_digest") != model["publication_digest"]
+        or request.get("confirmed_dataset_digest")
+        != confirmed["publication_digest"]
+        or request.get("existing_output") is not False
+    ):
+        raise StructuredDatasetCanaryError(
+            "private REINVENT4 request and verified outputs are misbound"
+        )
+    roster = [
+        {
+            "candidate_id": f"candidate-{index:06d}",
+            "smiles": str(row.get("SMILES") or "").strip(),
+            "source_row_index": index,
+        }
+        for index, row in enumerate(source_rows, start=1)
+    ]
+    if any(not item["smiles"] for item in roster):
+        raise StructuredDatasetCanaryError(
+            "REINVENT4 candidate output contains an empty SMILES"
+        )
+    roster_stream = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        roster_stream,
+        fieldnames=["candidate_id", "smiles"],
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    writer.writerows(
+        {"candidate_id": item["candidate_id"], "smiles": item["smiles"]}
+        for item in roster
+    )
+    roster_csv = roster_stream.getvalue().encode("utf-8")
+    publication = {
+        "schema_version": "structured_dataset_generation_publication.v1",
+        "generation_publication_id": f"generation-{run_id}",
+        "project_id": project_id,
+        "run_id": run_id,
+        "model_package_id": model["model_package_id"],
+        "model_package_digest": model["publication_digest"],
+        "confirmed_dataset_id": confirmed["confirmed_dataset_id"],
+        "confirmed_dataset_digest": confirmed["publication_digest"],
+        "generation_request_digest": request["generation_request_digest"],
+        "execution_authority": "harness_controller_remote_execution_service",
+        "generation_config": {
+            "backend": "reinvent4",
+            "config_template_digest": request["config_template_digest"],
+            "effective_config_digest": audit.get("effective_config_digest"),
+        },
+        "seed": request["seed"],
+        "software_version": str(audit.get("provider_version") or "unknown"),
+        "raw_generated_output_digest": "sha256:" + candidates_sha,
+        "candidate_roster": roster,
+        "candidate_roster_digest": digest_json(roster),
+        "candidate_roster_csv_digest": digest_bytes(roster_csv),
+        "existing_output_used": False,
+        "created_at": str(payload["created_at"]),
+    }
+    prediction_config = {
+        "candidate_id_col": "candidate_id",
+        "gpu_device": 0,
+        "smiles_col": "smiles",
+        "target_property": "PLQY",
+    }
+    root = service._root(project_id, run_id)
+    service._publish_bytes(
+        project_id,
+        run_id,
+        "generated_candidates.json",
+        (
+            json.dumps(roster, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8"),
+    )
+    service._publish_bytes(
+        project_id, run_id, "generated_candidates.csv", roster_csv
+    )
+    publication = service._publish(
+        project_id,
+        run_id,
+        "generation.json",
+        publication,
+        "publication_digest",
+    )
+    service._publish_bytes(
+        project_id,
+        run_id,
+        "unimol_prediction_config.json",
+        (
+            json.dumps(prediction_config, sort_keys=True, separators=(",", ":"))
+            + "\n"
+        ).encode("utf-8"),
+    )
+    return {
+        "status": "success",
+        "outputs": {
+            "candidate_dataset": str(root / "generated_candidates.json"),
+            "candidate_dataset_csv": str(root / "generated_candidates.csv"),
+            "generation_publication": str(root / "generation.json"),
+            "unimol_prediction_config": str(
+                root / "unimol_prediction_config.json"
+            ),
+        },
+        "generation_publication_digest": publication["publication_digest"],
+    }
+
+
+def evaluate_private_structured_dataset_canary_v1_adapter(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    service = _service(payload)
+    project_id = str(payload["project_id"])
+    run_id = str(payload["run_id"])
+    raw = _publication(payload, "raw_dataset", "raw_publication_digest")
+    raw_rows = service._raw_rows(_input_path(payload, "raw_dataset_csv"), raw)
+    review = _publication(payload, "review_snapshot", "review_snapshot_digest")
+    receipt = _publication(
+        payload, "confirmation_receipt", "confirmation_receipt_digest"
+    )
+    confirmed = _publication(
+        payload, "confirmed_training_dataset", "publication_digest"
+    )
+    confirmed_path = _input_path(payload, "confirmed_training_dataset_csv")
+    model = _publication(payload, "model_package", "publication_digest")
+    generation = _publication(
+        payload, "generation_publication", "publication_digest"
+    )
+    candidates = _candidate_roster(payload)
+    prediction_config = _json_object(
+        _input_path(payload, "unimol_prediction_config"),
+        label="Uni-Mol prediction config",
+    )
+    prediction_audit = _json_object(
+        _input_path(payload, "unimol_prediction_audit"),
+        label="Uni-Mol prediction audit",
+    )
+    service._verify_confirmation_chain(
+        project_id=project_id,
+        run_id=run_id,
+        raw=raw,
+        review=review,
+        receipt=receipt,
+        rows=raw_rows,
+    )
+    service._verify_confirmed_binding(confirmed, receipt)
+    service._confirmed_rows(confirmed_path, confirmed)
+    service._verify_model_binding(model, confirmed, receipt, run_id)
+    service._verify_generation_binding(generation, model, confirmed, run_id)
+    candidate_csv_digest = _content_digest(
+        _input_path(payload, "candidate_dataset_csv"),
+        max_bytes=2 * 1024 * 1024 * 1024,
+    )
+    if (
+        generation.get("candidate_roster") != candidates
+        or generation.get("candidate_roster_digest") != digest_json(candidates)
+        or generation.get("candidate_roster_csv_digest") != candidate_csv_digest
+        or prediction_audit.get("schema_version")
+        != "unimol_prediction_audit.v1"
+        or prediction_audit.get("provider_version") != model.get("software_version")
+        or prediction_audit.get("config") != prediction_config
+    ):
+        raise StructuredDatasetCanaryError(
+            "current model, generation, and prediction authority are misbound"
+        )
+    prediction_bytes, _ = read_regular_file_bound(
+        _input_path(payload, "unimol_predictions"),
+        max_bytes=2 * 1024 * 1024 * 1024,
+    )
+    try:
+        prediction_rows = list(
+            csv.DictReader(
+                io.StringIO(prediction_bytes.decode("utf-8"), newline="")
+            )
+        )
+    except UnicodeDecodeError as exc:
+        raise StructuredDatasetCanaryError(
+            "Uni-Mol predictions must be UTF-8 CSV"
+        ) from exc
+    expected_ids = [str(item["candidate_id"]) for item in candidates]
+    if [str(item.get("candidate_id") or "") for item in prediction_rows] != expected_ids:
+        raise StructuredDatasetCanaryError(
+            "Uni-Mol prediction roster does not exactly bind current candidates"
+        )
+    predictions: list[dict[str, Any]] = []
+    for candidate, row in zip(candidates, prediction_rows, strict=True):
+        try:
+            value = float(str(row.get("predicted_value") or ""))
+        except ValueError as exc:
+            raise StructuredDatasetCanaryError(
+                "Uni-Mol prediction is not numeric"
+            ) from exc
+        if not math.isfinite(value):
+            raise StructuredDatasetCanaryError("Uni-Mol prediction is not finite")
+        predictions.append(
+            {
+                "candidate_id": candidate["candidate_id"],
+                "smiles": candidate["smiles"],
+                "predicted_property": value,
+            }
+        )
+    timestamp = str(payload["created_at"])
+    prediction = service._publish(
+        project_id,
+        run_id,
+        "prediction.json",
+        {
+            "schema_version": "structured_dataset_prediction_publication.v1",
+            "prediction_publication_id": f"prediction-{run_id}",
+            "project_id": project_id,
+            "run_id": run_id,
+            "model_package_id": model["model_package_id"],
+            "model_package_digest": model["publication_digest"],
+            "candidate_roster_digest": generation["candidate_roster_digest"],
+            "generation_publication_digest": generation["publication_digest"],
+            "prediction_configuration": prediction_config,
+            "prediction_configuration_digest": digest_json(prediction_config),
+            "prediction_roster": predictions,
+            "prediction_roster_digest": digest_json(predictions),
+            "provider_version": prediction_audit["provider_version"],
+            "created_at": timestamp,
+        },
+        "publication_digest",
+    )
+    validation_seed = int(payload["validation_seed"])
+    training_rows = service._confirmed_rows(confirmed_path, confirmed)
+    validation_rows, summary = validate_candidates(
+        candidates,
+        training_rows,
+        seed=validation_seed,
+        ad_similarity_threshold=0.20,
+    )
+    validation = service._publish(
+        project_id,
+        run_id,
+        "validation.json",
+        {
+            "schema_version": "structured_dataset_candidate_validation.v1",
+            "validation_id": f"validation-{run_id}",
+            "project_id": project_id,
+            "run_id": run_id,
+            "generation_publication_digest": generation["publication_digest"],
+            "candidate_roster_digest": generation["candidate_roster_digest"],
+            "generation_seed": generation["seed"],
+            "validation_seed": validation_seed,
+            "candidate_validation": validation_rows,
+            "validation_summary": summary,
+            "created_at": timestamp,
+        },
+        "publication_digest",
+    )
+    validation_by_id = {item["candidate_id"]: item for item in validation_rows}
+    ranked: list[dict[str, Any]] = []
+    for item in predictions:
+        checked = validation_by_id[item["candidate_id"]]
+        eligible = bool(
+            checked["valid"]
+            and not checked["duplicate"]
+            and not checked["training_exact_duplicate"]
+            and checked["ad_status"] != "OOD"
+        )
+        ranked.append(dict(item) | {"eligible": eligible, "validation": checked})
+    ranked.sort(
+        key=lambda item: (
+            not item["eligible"],
+            -float(item["predicted_property"]),
+            str(item["validation"].get("inchikey") or "~"),
+            str(item["candidate_id"]),
+        )
+    )
+    for index, item in enumerate(ranked, start=1):
+        item["rank"] = index if item["eligible"] else None
+    top_n = int(payload["top_n"])
+    selected = [item for item in ranked if item["eligible"]][:top_n]
+    ranking_config = {
+        "objective": "maximize_predicted_PLQY",
+        "ranking_direction": "descending",
+        "filters": ["valid", "unique", "not_training_exact_duplicate"],
+        "ad_ood_handling": "display_all_exclude_OOD_from_topn",
+        "top_n_size": top_n,
+        "tie_breaking": ["inchikey_ascending", "candidate_id_ascending"],
+    }
+    ranking = service._publish(
+        project_id,
+        run_id,
+        "ranking.json",
+        {
+            "schema_version": "structured_dataset_ranking_publication.v1",
+            "ranking_publication_id": f"ranking-{run_id}",
+            "project_id": project_id,
+            "run_id": run_id,
+            "model_package_digest": model["publication_digest"],
+            "generation_publication_digest": generation["publication_digest"],
+            "prediction_publication_digest": prediction["publication_digest"],
+            "validation_publication_digest": validation["publication_digest"],
+            "ranking_configuration": ranking_config,
+            "ranking_digest": digest_json(
+                {"config": ranking_config, "rows": ranked}
+            ),
+            "ranked_candidates": ranked,
+            "created_at": timestamp,
+        },
+        "publication_digest",
+    )
+    top_rows = [
+        service._topn_row(item, model, generation, ranking) for item in selected
+    ]
+    topn = service._publish(
+        project_id,
+        run_id,
+        "topn.json",
+        {
+            "schema_version": "structured_dataset_computational_topn.v1",
+            "artifact_name": "Computational Top-N",
+            "topn_id": f"computational-topn-{run_id}",
+            "project_id": project_id,
+            "run_id": run_id,
+            "model_package_id": model["model_package_id"],
+            "model_package_digest": model["publication_digest"],
+            "confirmed_dataset_id": confirmed["confirmed_dataset_id"],
+            "confirmed_dataset_digest": confirmed["publication_digest"],
+            "generation_publication_id": generation["generation_publication_id"],
+            "generation_publication_digest": generation["publication_digest"],
+            "prediction_publication_digest": prediction["publication_digest"],
+            "ranking_publication_digest": ranking["publication_digest"],
+            "ranking_digest": ranking["ranking_digest"],
+            "validation_publication_digest": validation["publication_digest"],
+            "validation_summary": summary,
+            "seed": generation["seed"],
+            "software_versions": {
+                "model": model["software_version"],
+                "generator": generation["software_version"],
+                "chemistry": "rdkit",
+            },
+            "applicability_ood_summary": {
+                "ood_count": summary["ood_count"],
+                "ood_excluded_from_topn": True,
+            },
+            "candidates": top_rows,
+            "candidate_roster_digest": digest_json(top_rows),
+            "claim_boundary": "Model-ranked Computational Candidates; no experimental validation or material discovery claim",
+            "scientific_scope": confirmed["scientific_scope"],
+            "created_at": timestamp,
+        },
+        "publication_digest",
+    )
+    bindings = {
+        "raw": raw["raw_publication_digest"],
+        "review": review["review_snapshot_digest"],
+        "receipt": receipt["confirmation_receipt_digest"],
+        "confirmed": confirmed["publication_digest"],
+        "model": model["publication_digest"],
+        "generation": generation["publication_digest"],
+        "prediction": prediction["publication_digest"],
+        "validation": validation["publication_digest"],
+        "ranking": ranking["publication_digest"],
+        "topn": topn["publication_digest"],
+    }
+    evidence = service._publish(
+        project_id,
+        run_id,
+        "evidence.json",
+        {
+            "schema_version": "structured_dataset_private_runtime_chain_evidence.v1",
+            "project_id": project_id,
+            "run_id": run_id,
+            "bindings": bindings,
+            "replay_digest": digest_json(bindings),
+            "private_real_tool_chain": True,
+            "controller_terminal_replay_review": "pending",
+            "claim_boundary": "Computational Top-N only",
+            "created_at": timestamp,
+        },
+        "evidence_digest",
+    )
+    root = service._root(project_id, run_id)
+    return {
+        "status": "success",
+        "outputs": {
+            "prediction_publication": str(root / "prediction.json"),
+            "candidate_validation": str(root / "validation.json"),
+            "ranking_publication": str(root / "ranking.json"),
+            "computational_top_n": str(root / "topn.json"),
+            "structured_dataset_canary_evidence": str(root / "evidence.json"),
+        },
+        "evidence_digest": evidence["evidence_digest"],
+    }
+
+
+def verify_private_real_tool_harness_task_publication(
+    *,
+    storage: ProjectStorage,
+    project_id: str,
+    run_id: str,
+    task_id: str,
+    artifact_paths: Mapping[str, str],
+) -> None:
+    """Rebuild the private BR1 local-task semantics from current Registry paths."""
+
+    def path(artifact_id: str) -> Path:
+        value = str(artifact_paths.get(artifact_id) or "").strip()
+        if not value:
+            raise StructuredDatasetCanaryError(
+                f"current Registry artifact is missing: {artifact_id}"
+            )
+        return Path(value).absolute()
+
+    def publication(artifact_id: str, digest_field: str) -> dict[str, Any]:
+        value = read_json_artifact(path(artifact_id), digest_field=digest_field)
+        if value.get("project_id") != project_id or value.get("run_id") != run_id:
+            raise StructuredDatasetCanaryError(
+                f"current Registry artifact scope mismatch: {artifact_id}"
+            )
+        return value
+
+    service = StructuredDatasetCanaryService(
+        storage=storage,
+        trusted_actors=set(),
+        harness_authority_managed=True,
+    )
+    confirmed = publication("confirmed_training_dataset", "publication_digest")
+    receipt = publication("confirmation_receipt", "confirmation_receipt_digest")
+    service._verify_confirmed_binding(confirmed, receipt)
+
+    if task_id == "prepare_private_unimol_training_v1":
+        rows = service._confirmed_rows(path("confirmed_training_dataset_csv"), confirmed)
+        request = publication("unimol_training_request", "training_request_digest")
+        split = publication("unimol_split_manifest", "split_manifest_digest")
+        config = _json_object(path("unimol_training_config"), label="Uni-Mol config")
+        training_bytes, _ = read_regular_file_bound(
+            path("unimol_training_dataset_csv"), max_bytes=2 * 1024 * 1024 * 1024
+        )
+        samples = []
+        rows_by_id = {str(row["row_id"]): row for row in rows}
+        for row in rows:
+            identity = _molecule_identity(str(row["smiles"]))
+            if identity is None:
+                raise StructuredDatasetCanaryError(
+                    "confirmed training row lacks molecular identity"
+                )
+            samples.append(
+                {
+                    "row_id": str(row["row_id"]),
+                    "inchikey": identity["inchikey"],
+                    "paper_id": str(row["paper_id"]),
+                }
+            )
+        assignments, components = _component_split_assignments(
+            samples, seed=int(request["seed"])
+        )
+        expected_training_ids = sorted(
+            item["row_id"] for item in assignments if item["split"] == "train"
+        )
+        expected_stream = io.StringIO(newline="")
+        writer = csv.DictWriter(
+            expected_stream,
+            fieldnames=["smiles", "target_value"],
+            lineterminator="\n",
+        )
+        writer.writeheader()
+        writer.writerows(
+            {
+                "smiles": rows_by_id[row_id]["smiles"],
+                "target_value": rows_by_id[row_id]["target_value"],
+            }
+            for row_id in expected_training_ids
+        )
+        expected_training = expected_stream.getvalue().encode("utf-8")
+        if (
+            split.get("assignments") != assignments
+            or split.get("components") != components
+            or split.get("training_row_roster") != expected_training_ids
+            or split.get("training_csv_digest") != digest_bytes(expected_training)
+            or training_bytes != expected_training
+            or request.get("confirmed_dataset_digest")
+            != confirmed["publication_digest"]
+            or request.get("confirmation_receipt_digest")
+            != receipt["confirmation_receipt_digest"]
+            or request.get("split_manifest_digest") != split["split_manifest_digest"]
+            or request.get("training_config_digest") != digest_json(config)
+            or request.get("training_csv_digest") != digest_bytes(training_bytes)
+            or request.get("fresh_training_required") is not True
+            or request.get("existing_output") is not False
+        ):
+            raise StructuredDatasetCanaryError(
+                "private Uni-Mol training preparation is not derivationally exact"
+            )
+        return
+
+    model = publication("model_package", "publication_digest")
+    service._verify_model_binding(model, confirmed, receipt, run_id)
+    if task_id == "package_private_unimol_model_v1":
+        request = publication("unimol_training_request", "training_request_digest")
+        split = publication("unimol_split_manifest", "split_manifest_digest")
+        checkpoint = publication("trained_model", "checkpoint_manifest_digest")
+        audit = _json_object(path("unimol_training_audit"), label="Uni-Mol audit")
+        metrics = _json_object(path("unimol_training_metrics"), label="Uni-Mol metrics")
+        model_artifacts = {
+            "config": _content_digest(path("unimol_model_config"), max_bytes=16 * 1024 * 1024),
+            "target_scaler": _content_digest(path("unimol_target_scaler"), max_bytes=16 * 1024 * 1024),
+            "weights": _content_digest(path("unimol_model_weights"), max_bytes=20 * 1024 * 1024 * 1024),
+        }
+        training_request_bytes, _ = read_regular_file_bound(
+            path("training_request"), max_bytes=16 * 1024 * 1024
+        )
+        source_request_bytes, _ = read_regular_file_bound(
+            path("unimol_training_request"), max_bytes=16 * 1024 * 1024
+        )
+        if (
+            training_request_bytes != source_request_bytes
+            or checkpoint.get("model_artifact_digests") != model_artifacts
+            or checkpoint.get("training_request_digest")
+            != request["training_request_digest"]
+            or model.get("model_artifact_digests") != model_artifacts
+            or model.get("checkpoint_digest")
+            != checkpoint["checkpoint_manifest_digest"]
+            or model.get("split_manifest") != split
+            or model.get("metrics") != metrics.get("metrics")
+            or model.get("software_version") != audit.get("provider_version")
+            or audit.get("config", {}).get("seed") != model.get("random_seed")
+            or digest_json(audit.get("config"))
+            != request.get("training_config_digest")
+            or model.get("fresh_training") is not True
+            or model.get("existing_output_used") is not False
+        ):
+            raise StructuredDatasetCanaryError(
+                "private Uni-Mol Model Package verification failed"
+            )
+        return
+
+    if task_id == "prepare_private_reinvent4_generation_v1":
+        request = publication("generation_request", "generation_request_digest")
+        template, template_digest = read_regular_file_bound(
+            path("reinvent4_config_template"), max_bytes=16 * 1024 * 1024
+        )
+        bound, _ = read_regular_file_bound(
+            path("reinvent4_bound_config"), max_bytes=16 * 1024 * 1024
+        )
+        execution = _json_object(
+            path("reinvent4_execution_request"), label="REINVENT4 execution request"
+        )
+        if (
+            bound != template
+            or request.get("config_template_digest")
+            != "sha256:" + template_digest
+            or execution != {"seed": request.get("seed")}
+            or request.get("model_package_digest") != model["publication_digest"]
+            or request.get("confirmed_dataset_digest")
+            != confirmed["publication_digest"]
+            or request.get("existing_output") is not False
+        ):
+            raise StructuredDatasetCanaryError(
+                "private REINVENT4 request preparation is not exact"
+            )
+        return
+
+    generation = publication("generation_publication", "publication_digest")
+    service._verify_generation_binding(generation, model, confirmed, run_id)
+    if task_id == "package_private_reinvent4_generation_v1":
+        request = publication("generation_request", "generation_request_digest")
+        audit = _json_object(
+            path("reinvent4_generation_audit"), label="REINVENT4 audit"
+        )
+        raw_candidates, raw_digest = read_regular_file_bound(
+            path("reinvent4_candidates"), max_bytes=2 * 1024 * 1024 * 1024
+        )
+        source_rows = list(
+            csv.DictReader(io.StringIO(raw_candidates.decode("utf-8"), newline=""))
+        )
+        expected_roster = [
+            {
+                "candidate_id": f"candidate-{index:06d}",
+                "smiles": str(row.get("SMILES") or "").strip(),
+                "source_row_index": index,
+            }
+            for index, row in enumerate(source_rows, start=1)
+        ]
+        candidate_value = json.loads(
+            read_regular_file_bound(
+                path("candidate_dataset"), max_bytes=2 * 1024 * 1024 * 1024
+            )[0].decode("utf-8")
+        )
+        if (
+            candidate_value != expected_roster
+            or generation.get("candidate_roster") != expected_roster
+            or generation.get("candidate_roster_digest")
+            != digest_json(expected_roster)
+            or generation.get("raw_generated_output_digest")
+            != "sha256:" + raw_digest
+            or generation.get("generation_request_digest")
+            != request["generation_request_digest"]
+            or generation.get("generation_config", {}).get(
+                "effective_config_digest"
+            )
+            != audit.get("effective_config_digest")
+            or generation.get("software_version") != audit.get("provider_version")
+            or generation.get("existing_output_used") is not False
+        ):
+            raise StructuredDatasetCanaryError(
+                "private REINVENT4 generation package verification failed"
+            )
+        return
+
+    if task_id != "evaluate_private_structured_dataset_canary_v1":
+        raise StructuredDatasetCanaryError("unknown private BR1 local task")
+    prediction = publication("prediction_publication", "publication_digest")
+    validation = publication("candidate_validation", "publication_digest")
+    ranking = publication("ranking_publication", "publication_digest")
+    topn = publication("computational_top_n", "publication_digest")
+    evidence = publication("structured_dataset_canary_evidence", "evidence_digest")
+    if (
+        prediction.get("model_package_digest") != model["publication_digest"]
+        or prediction.get("generation_publication_digest")
+        != generation["publication_digest"]
+        or validation.get("generation_publication_digest")
+        != generation["publication_digest"]
+        or ranking.get("prediction_publication_digest")
+        != prediction["publication_digest"]
+        or ranking.get("validation_publication_digest")
+        != validation["publication_digest"]
+        or topn.get("ranking_publication_digest") != ranking["publication_digest"]
+        or topn.get("artifact_name") != "Computational Top-N"
+        or evidence.get("bindings", {}).get("topn") != topn["publication_digest"]
+    ):
+        raise StructuredDatasetCanaryError(
+            "private BR1 prediction/ranking publication chain is misbound"
+        )
 
 
 def train_structured_dataset_canary_adapter(payload: dict[str, Any]) -> dict[str, Any]:

@@ -8,6 +8,7 @@ from typing import Any, Callable, Sequence
 
 _MIB = 1024 * 1024
 _GIB = 1024 * _MIB
+_SHA256_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _RESERVED_AUTHORITY_IDS = frozenset(
     {
         "artifact_registry",
@@ -37,6 +38,15 @@ _REINVENT4 = (
         max_bytes=2 * _GIB,
     ),
 )
+_REINVENT4_V2 = (
+    *_REINVENT4,
+    _ExactArtifact(
+        artifact_id="reinvent4_generation_audit",
+        relative_path="generation_audit.json",
+        media_type="application/json",
+        max_bytes=16 * _MIB,
+    ),
+)
 _UNIMOL = (
     _ExactArtifact(
         artifact_id="unimol_model",
@@ -53,6 +63,52 @@ _UNIMOL = (
     _ExactArtifact(
         artifact_id="unimol_training_metrics",
         relative_path="model/training_metrics.json",
+        media_type="application/json",
+        max_bytes=16 * _MIB,
+    ),
+)
+_UNIMOL_V2 = (
+    _ExactArtifact(
+        artifact_id="unimol_model_config",
+        relative_path="model/config.yaml",
+        media_type="application/yaml",
+        max_bytes=16 * _MIB,
+    ),
+    _ExactArtifact(
+        artifact_id="unimol_model_weights",
+        relative_path="model/model_0.pth",
+        media_type="application/octet-stream",
+        max_bytes=20 * _GIB,
+    ),
+    _ExactArtifact(
+        artifact_id="unimol_target_scaler",
+        relative_path="model/target_scaler.ss",
+        media_type="application/octet-stream",
+        max_bytes=16 * _MIB,
+    ),
+    _ExactArtifact(
+        artifact_id="unimol_training_audit",
+        relative_path="model/training_audit.json",
+        media_type="application/json",
+        max_bytes=16 * _MIB,
+    ),
+    _ExactArtifact(
+        artifact_id="unimol_training_metrics",
+        relative_path="model/training_metrics.json",
+        media_type="application/json",
+        max_bytes=16 * _MIB,
+    ),
+)
+_UNIMOL_PREDICTION = (
+    _ExactArtifact(
+        artifact_id="unimol_predictions",
+        relative_path="predictions.csv",
+        media_type="text/csv",
+        max_bytes=2 * _GIB,
+    ),
+    _ExactArtifact(
+        artifact_id="unimol_prediction_audit",
+        relative_path="prediction_audit.json",
         media_type="application/json",
         max_bytes=16 * _MIB,
     ),
@@ -78,8 +134,17 @@ def verify_remote_output_contract(
     if output_contract == "reinvent4-generation-output-v1":
         _verify_exact(artifacts, _REINVENT4, max_total=2 * _GIB)
         return
+    if output_contract == "reinvent4-generation-output-v2":
+        _verify_exact(artifacts, _REINVENT4_V2, max_total=2 * _GIB)
+        return
     if output_contract == "unimol-training-output-v1":
         _verify_exact(artifacts, _UNIMOL, max_total=21 * _GIB)
+        return
+    if output_contract == "unimol-training-output-v2":
+        _verify_exact(artifacts, _UNIMOL_V2, max_total=21 * _GIB)
+        return
+    if output_contract == "unimol-prediction-output-v1":
+        _verify_exact(artifacts, _UNIMOL_PREDICTION, max_total=2 * _GIB)
         return
     if output_contract == "parsed-corpus-output-v1":
         _verify_mineru(artifacts)
@@ -96,12 +161,35 @@ def verify_remote_output_contents(
 
     verify_remote_output_contract(output_contract, artifacts)
     by_id = {str(item.artifact_id): item for item in artifacts}
-    if output_contract == "reinvent4-generation-output-v1":
+    if output_contract in {
+        "reinvent4-generation-output-v1",
+        "reinvent4-generation-output-v2",
+    }:
         payload = read_bytes(by_id["reinvent4_candidates"].relative_path)
         if not payload.startswith(b"SMILES,") or b"\x00" in payload[:4096]:
             raise ValueError("REINVENT4 candidates CSV does not satisfy its output contract")
+        if output_contract == "reinvent4-generation-output-v2":
+            audit = _json_object(
+                read_bytes(
+                    by_id["reinvent4_generation_audit"].relative_path
+                ),
+                "REINVENT4 generation audit",
+            )
+            if (
+                audit.get("schema_version") != "reinvent4_generation_audit.v1"
+                or not _safe_version(audit.get("provider_version"))
+                or not _SHA256_DIGEST.fullmatch(
+                    str(audit.get("effective_config_digest") or "")
+                )
+                or isinstance(audit.get("seed"), bool)
+                or not isinstance(audit.get("seed"), int)
+            ):
+                raise ValueError("REINVENT4 generation audit output schema is invalid")
         return
-    if output_contract == "unimol-training-output-v1":
+    if output_contract in {
+        "unimol-training-output-v1",
+        "unimol-training-output-v2",
+    }:
         metrics = _json_object(
             read_bytes(by_id["unimol_training_metrics"].relative_path),
             "UniMol metrics",
@@ -114,6 +202,32 @@ def verify_remote_output_contents(
             raise ValueError("UniMol metrics output is missing metrics")
         if audit.get("schema_version") != "unimol_training_audit.v1":
             raise ValueError("UniMol audit output schema is invalid")
+        if output_contract == "unimol-training-output-v2" and (
+            not _safe_version(audit.get("provider_version"))
+            or not isinstance(audit.get("config"), dict)
+            or isinstance(audit["config"].get("seed"), bool)
+            or not isinstance(audit["config"].get("seed"), int)
+        ):
+            raise ValueError("UniMol audit output authority is incomplete")
+        if output_contract == "unimol-training-output-v2":
+            config = read_bytes(by_id["unimol_model_config"].relative_path)
+            if not config.strip() or b"\x00" in config:
+                raise ValueError("UniMol model config output is invalid")
+        return
+    if output_contract == "unimol-prediction-output-v1":
+        predictions = read_bytes(by_id["unimol_predictions"].relative_path)
+        audit = _json_object(
+            read_bytes(by_id["unimol_prediction_audit"].relative_path),
+            "UniMol prediction audit",
+        )
+        if not predictions.startswith(b"candidate_id,predicted_value\n"):
+            raise ValueError("UniMol predictions CSV does not satisfy its output contract")
+        if (
+            audit.get("schema_version") != "unimol_prediction_audit.v1"
+            or not _safe_version(audit.get("provider_version"))
+            or not isinstance(audit.get("config"), dict)
+        ):
+            raise ValueError("UniMol prediction audit output schema is invalid")
         return
     manifest = _json_object(
         read_bytes(by_id["parsed_corpus_manifest"].relative_path),
@@ -241,6 +355,16 @@ def _json_object(payload: bytes, label: str) -> dict[str, Any]:
     if not isinstance(decoded, dict):
         raise ValueError(f"{label} must contain an object")
     return decoded
+
+
+def _safe_version(value: Any) -> bool:
+    return bool(
+        isinstance(value, str)
+        and value
+        and len(value) <= 128
+        and value == value.strip()
+        and not any(ord(char) < 32 for char in value)
+    )
 
 
 __all__ = ["verify_remote_output_contents", "verify_remote_output_contract"]
