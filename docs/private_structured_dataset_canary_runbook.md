@@ -33,6 +33,9 @@ Confirm that the private dataset satisfies molecule/InChIKey grouping, paper gro
    training method; if the installed provider has no explicitly documented
    read-only preprocessing API, the result must be `BLOCKED` with
    `PROVIDER_PREFLIGHT_API_UNAVAILABLE`.
+   Before exporting or using the summary, verify it against the exact private
+   report with the report-bound summary verifier. A schema-valid summary that
+   is not the deterministic projection of that report must be rejected.
 3. If the summary is `PASS`, freeze the final Raw CSV, source manifest and mapping policy bytes and run Raw Dataset inspection and review snapshot creation through the Molly project/run.
 4. Before presenting or accepting the Gate, re-read the exact Registry-bound Raw CSV and deterministically rebuild the v2 review. Require exact equality for molecule identity, normalized condition, observed payload, source context, observation/conflict grouping, duplicate/conflict findings, reason codes, actions and confirmed/excluded rosters; nested digest self-consistency alone is insufficient. Then have a trusted human approve that exact snapshot and verify that the shared GateDecision and receipt bind the current project, run, raw/review digests, row rosters, target, role and condition policy.
 5. If the summary is `REVIEW_REQUIRED`, stop and submit only the counts and reason summary to the owner for an explicit exclusion decision. Do not silently project or delete unsupported rows.

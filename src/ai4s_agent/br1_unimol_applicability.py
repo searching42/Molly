@@ -745,6 +745,7 @@ def _public_summary(report: Mapping[str, Any]) -> dict[str, Any]:
         "execution_profile_digest": report["execution_profile_digest"],
         "provider_name": report["provider_name"],
         "provider_version": report["provider_version"],
+        "expected_provider_version": report["expected_provider_version"],
         "applicability_policy_version": report["applicability_policy_version"],
         "applicability_policy_digest": report["applicability_policy_digest"],
         "input_row_count": report["input_row_count"],
@@ -1151,6 +1152,27 @@ def verify_br1_unimol_applicability_report(
         raise ApplicabilityPreflightError("applicability report semantic mismatch")
 
 
+def verify_br1_unimol_applicability_summary(
+    summary: Mapping[str, Any],
+    *,
+    report: Mapping[str, Any],
+) -> None:
+    """Verify that a public summary is the exact projection of one report.
+
+    A summary digest or schema check alone cannot establish provenance because
+    a forged summary can be re-signed.  The private report is therefore the
+    trusted source of every public field, including status, counts, reason
+    counts, provider authority and the report digest.
+    """
+
+    _validate_report_contract(report)
+    _validate_summary_contract(summary)
+    expected_summary = _public_summary(report)
+    _validate_summary_contract(expected_summary)
+    if canonical_json_bytes(summary) != canonical_json_bytes(expected_summary):
+        raise ApplicabilityPreflightError("applicability summary projection mismatch")
+
+
 def verify_br1_unimol_applicability_report_against_inputs(
     report: Mapping[str, Any],
     raw_dataset: Path,
@@ -1193,8 +1215,10 @@ def write_br1_unimol_applicability_report(
 def write_br1_unimol_applicability_summary(
     summary: Mapping[str, Any],
     output_path: Path,
+    *,
+    report: Mapping[str, Any],
 ) -> None:
-    _validate_summary_contract(summary)
+    verify_br1_unimol_applicability_summary(summary, report=report)
     _write_immutable_json(output_path, summary)
 
 
@@ -1256,7 +1280,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             created_at=args.created_at,
         )
         write_br1_unimol_applicability_report(result.report, args.output_report)
-        write_br1_unimol_applicability_summary(result.public_summary, args.public_summary)
+        write_br1_unimol_applicability_summary(
+            result.public_summary,
+            args.public_summary,
+            report=result.report,
+        )
     except Exception:
         sys.stderr.write("BR1 applicability preflight output failed closed.\n")
         return 2
@@ -1291,6 +1319,7 @@ __all__ = [
     "run_br1_unimol_applicability_preflight",
     "verify_br1_unimol_applicability_report",
     "verify_br1_unimol_applicability_report_against_inputs",
+    "verify_br1_unimol_applicability_summary",
     "write_br1_unimol_applicability_report",
     "write_br1_unimol_applicability_summary",
 ]

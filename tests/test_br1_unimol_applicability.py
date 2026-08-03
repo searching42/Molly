@@ -181,6 +181,7 @@ def test_all_rows_supported_is_pass_and_validates_both_schemas(tmp_path: Path) -
     assert result.report["unsupported_row_count"] == 0
     assert result.report["unresolved_row_count"] == 0
     assert result.report["expected_provider_version"] == "0.1.5"
+    assert result.public_summary["expected_provider_version"] == "0.1.5"
     assert [item["row_id"] for item in result.report["row_results"]] == ["r-1", "r-2"]
     assert result.report["row_results"][0]["canonical_molecule_identity_digest"].startswith(
         "sha256:"
@@ -543,6 +544,10 @@ def test_default_discovery_does_not_construct_or_fit_moltrain(
 
 def test_public_summary_has_no_private_row_or_environment_material(tmp_path: Path) -> None:
     result = _run(tmp_path, [_row("private-row-001", "CCO")])
+    applicability.verify_br1_unimol_applicability_summary(
+        result.public_summary,
+        report=result.report,
+    )
     rendered = json.dumps(result.public_summary, sort_keys=True)
     rendered_report = json.dumps(result.report, sort_keys=True)
 
@@ -553,6 +558,109 @@ def test_public_summary_has_no_private_row_or_environment_material(tmp_path: Pat
     assert "MOLLY_WORKER_CONFIG" not in rendered
     assert "stdout" not in rendered
     assert "stderr" not in rendered
+
+
+def test_summary_projection_rejects_forged_pass_from_blocked_report(
+    tmp_path: Path,
+) -> None:
+    result = _run(
+        tmp_path,
+        [_row("r-1", "CCO")],
+        expected_provider_version=None,
+    )
+    forged = copy.deepcopy(result.public_summary)
+    forged["overall_status"] = "PASS"
+
+    with pytest.raises(
+        applicability.ApplicabilityPreflightError,
+        match="summary projection mismatch",
+    ):
+        applicability.verify_br1_unimol_applicability_summary(
+            forged,
+            report=result.report,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "input_row_count",
+        "supported_row_count",
+        "unsupported_row_count",
+        "unresolved_row_count",
+        "reason_counts",
+        "report_digest",
+        "expected_provider_version",
+    ],
+)
+def test_summary_projection_rejects_forged_semantic_fields(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    result = _run(
+        tmp_path / "source",
+        [_row("r-1", "CCO")],
+        expected_provider_version=None,
+    )
+    foreign = _run(tmp_path / "foreign", [_row("r-2", "CCN")])
+    forged = copy.deepcopy(result.public_summary)
+    if mutation.endswith("_row_count"):
+        forged[mutation] = forged[mutation] + 1
+    elif mutation == "reason_counts":
+        forged["reason_counts"] = {"PROVIDER_VERSION_AUTHORITY_UNAVAILABLE": 99}
+    elif mutation == "report_digest":
+        forged["report_digest"] = foreign.report["report_digest"]
+    else:
+        forged["expected_provider_version"] = "0.1.5"
+
+    with pytest.raises(
+        applicability.ApplicabilityPreflightError,
+        match="summary projection mismatch",
+    ):
+        applicability.verify_br1_unimol_applicability_summary(
+            forged,
+            report=result.report,
+        )
+
+
+def test_summary_projection_rejects_binding_to_another_legal_report(
+    tmp_path: Path,
+) -> None:
+    first = _run(tmp_path / "first", [_row("r-1", "CCO")])
+    second = _run(tmp_path / "second", [_row("r-2", "CCN")])
+
+    with pytest.raises(
+        applicability.ApplicabilityPreflightError,
+        match="summary projection mismatch",
+    ):
+        applicability.verify_br1_unimol_applicability_summary(
+            first.public_summary,
+            report=second.report,
+        )
+
+
+def test_summary_writer_requires_exact_report_projection(
+    tmp_path: Path,
+) -> None:
+    result = _run(
+        tmp_path / "source",
+        [_row("r-1", "CCO")],
+        expected_provider_version=None,
+    )
+    forged = copy.deepcopy(result.public_summary)
+    forged["overall_status"] = "PASS"
+    output_path = tmp_path / "summary.json"
+
+    with pytest.raises(
+        applicability.ApplicabilityPreflightError,
+        match="summary projection mismatch",
+    ):
+        applicability.write_br1_unimol_applicability_summary(
+            forged,
+            output_path,
+            report=result.report,
+        )
+    assert not output_path.exists()
 
 
 def test_same_inputs_and_frozen_time_have_exact_replay(tmp_path: Path) -> None:

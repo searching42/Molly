@@ -15,6 +15,7 @@
     "execution_profile_digest",
     "provider_name",
     "provider_version",
+    "expected_provider_version",
     "applicability_policy_version",
     "applicability_policy_digest",
     "input_row_count",
@@ -36,6 +37,12 @@
     "execution_profile_digest": {"oneOf": [{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, {"const": "unavailable"}]},
     "provider_name": {"type": "string", "minLength": 1},
     "provider_version": {"type": "string", "minLength": 1},
+    "expected_provider_version": {
+      "oneOf": [
+        {"type": "string", "pattern": "^(?!unavailable$)[A-Za-z0-9][A-Za-z0-9._+~:-]{0,63}$"},
+        {"const": "unavailable"}
+      ]
+    },
     "applicability_policy_version": {"const": "br1_unimol_applicability_policy.v1"},
     "applicability_policy_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "input_row_count": {"type": "integer", "minimum": 0},
