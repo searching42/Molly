@@ -1518,7 +1518,6 @@ def _run_provider_json_script(
     environment = dict(os.environ)
     environment.update(
         {
-            "PYTHONNOUSERSITE": "1",
             "CUDA_VISIBLE_DEVICES": "",
             "MOLLY_PREFLIGHT": "1",
         }
