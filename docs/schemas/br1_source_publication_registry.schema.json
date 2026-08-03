@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molly.local/schemas/br1_source_publication_registry.schema.json",
+  "title": "BR1 Source Publication Registry Binding v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "registry_id",
+    "artifact_id",
+    "publication_schema_version",
+    "publication_digest",
+    "raw_dataset_digest",
+    "source_dataset_manifest_digest",
+    "mapping_policy_digest",
+    "input_row_count",
+    "registry_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "br1_source_publication_registry.v1"},
+    "registry_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,95}$"},
+    "artifact_id": {"const": "raw_dataset"},
+    "publication_schema_version": {"const": "structured_raw_dataset.v1"},
+    "publication_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "raw_dataset_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source_dataset_manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "mapping_policy_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "input_row_count": {"type": "integer", "minimum": 1},
+    "registry_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

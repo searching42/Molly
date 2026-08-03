@@ -15,13 +15,26 @@ import ai4s_agent.br1_unimol_applicability as applicability
 from ai4s_agent.br1_unimol_applicability import (
     EXECUTION_PROFILE_ID,
     PROVIDER_NAME,
+    ProviderCapabilityContract,
     ProviderCapabilities,
     ProviderPreprocessResult,
     run_br1_unimol_applicability_preflight,
     verify_br1_unimol_applicability_report,
 )
 from ai4s_agent.resource_profiles import EXECUTION_PROFILES
-from ai4s_agent.structured_dataset_confirmation import canonical_json_bytes, digest_bytes
+from ai4s_agent.br1_preflight_authority import (
+    CANONICALIZATION_CONTRACT_VERSION,
+    canonical_provider_input_bytes,
+    canonical_source_dataset_bytes,
+    mapping_binding,
+    mapping_binding_semantic_material,
+)
+from ai4s_agent.structured_dataset_confirmation import (
+    bind_publication,
+    canonical_json_bytes,
+    digest_bytes,
+    digest_json,
+)
 
 
 NOW = "2026-08-03T12:00:00Z"
@@ -52,6 +65,35 @@ class FakeProvider:
         supported_elements=("B", "C", "F", "H", "N", "O", "P", "S", "Cl", "Br", "I"),
         atom_count_limit=512,
         formal_charge_policy="neutral_only",
+    )
+    capability_contract = ProviderCapabilityContract(
+        adapter_contract_version="br1_unimol_provider_adapter.v1",
+        provider_name=PROVIDER_NAME,
+        provider_version="0.1.5",
+        compatible_execution_profiles=(EXECUTION_PROFILE_ID,),
+        molecule_representations=("smiles",),
+        required_fields=("smiles",),
+        optional_fields=(),
+        target_field="target_value",
+        row_identity_field="row_id",
+        condition_context_fields=(
+            "material_role",
+            "emission_mechanism",
+            "medium",
+            "host",
+            "doping_ratio",
+            "temperature",
+            "measurement_condition",
+            "comparable",
+            "paper_id",
+            "paper_evidence",
+        ),
+        missing_value_policy="reject",
+        filter_policy="no_implicit_filter",
+        duplicate_row_policy="reject_duplicate_standard_inchikey",
+        canonical_row_order="row_id_ascending",
+        output_columns=("smiles", "target_value"),
+        applicability_preflight_available=True,
     )
 
     def __init__(self, callback=None) -> None:
@@ -145,7 +187,83 @@ def _write_inputs(
     }
     source_path.write_bytes(canonical_json_bytes(source))
     mapping_path.write_bytes(canonical_json_bytes(_mapping()))
+    source_digest = digest_bytes(source_path.read_bytes())
+    mapping_digest = digest_bytes(mapping_path.read_bytes())
+    publication = {
+        "schema_version": "structured_raw_dataset.v1",
+        "dataset_id": "raw-br1-fixture",
+        "project_id": "br1",
+        "run_id": "preflight-fixture",
+        "status": "candidate_unconfirmed",
+        "dataset_digest": digest_bytes(raw_bytes),
+        "source_kind": "private",
+        "row_count": len(rows),
+        "column_roster": list(CSV_COLUMNS),
+        "source_dataset_manifest_digest": source_digest,
+        "mapping_policy_digest": mapping_digest,
+    }
+    publication = bind_publication(
+        publication,
+        digest_field="raw_publication_digest",
+    )
+    publication_path = tmp_path / "raw-publication.json"
+    publication_path.write_bytes(canonical_json_bytes(publication))
+    registry_material = {
+        "schema_version": "br1_source_publication_registry.v1",
+        "registry_id": "br1-preflight-fixture",
+        "artifact_id": "raw_dataset",
+        "publication_schema_version": "structured_raw_dataset.v1",
+        "publication_digest": publication["raw_publication_digest"],
+        "raw_dataset_digest": digest_bytes(raw_bytes),
+        "source_dataset_manifest_digest": source_digest,
+        "mapping_policy_digest": mapping_digest,
+        "input_row_count": len(rows),
+    }
+    registry = dict(registry_material)
+    registry["registry_digest"] = digest_json(registry_material)
+    registry_path = tmp_path / "source-publication-registry.json"
+    registry_path.write_bytes(canonical_json_bytes(registry))
+    binding = mapping_binding("0.1.5")
+    authority_material = {
+        "schema_version": "br1_preflight_source_authority.v1",
+        "authority_contract_version": "br1_preflight_source_authority.v1",
+        "source_artifact_id": "raw_dataset",
+        "source_publication_registry_id": registry["registry_id"],
+        "source_publication_registry_digest": registry["registry_digest"],
+        "source_publication_digest": publication["raw_publication_digest"],
+        "source_dataset_manifest_digest": source_digest,
+        "mapping_policy_digest": mapping_digest,
+        "mapping_policy_version": "br1_raw_dataset_mapping_policy.v1",
+        "mapping_binding": binding,
+        "mapping_binding_digest": digest_json(mapping_binding_semantic_material(binding)),
+        "raw_dataset_digest": digest_bytes(raw_bytes),
+        "canonical_source_dataset_digest": digest_bytes(
+            canonical_source_dataset_bytes(rows)
+        ),
+        "canonical_provider_input_digest": digest_bytes(
+            canonical_provider_input_bytes(rows)
+        ),
+        "input_row_count": len(rows),
+        "canonicalization_contract_version": CANONICALIZATION_CONTRACT_VERSION,
+        "provider_name": PROVIDER_NAME,
+        "expected_provider_version": "0.1.5",
+        "execution_profile_id": EXECUTION_PROFILE_ID,
+        "execution_profile_digest": PROFILE_DIGEST,
+    }
+    authority = dict(authority_material)
+    authority["authority_digest"] = digest_json(authority_material)
+    authority_path = tmp_path / "source-authority.json"
+    authority_path.write_bytes(canonical_json_bytes(authority))
     return raw_path, source_path, mapping_path
+
+
+def _authority_kwargs(paths: tuple[Path, Path, Path]) -> dict[str, Path]:
+    root = paths[0].parent
+    return {
+        "source_authority": root / "source-authority.json",
+        "source_publication": root / "raw-publication.json",
+        "source_publication_registry": root / "source-publication-registry.json",
+    }
 
 
 _DEFAULT_PROVIDER = object()
@@ -163,6 +281,7 @@ def _run(
     expected_provider_version = kwargs.pop("expected_provider_version", "0.1.5")
     return run_br1_unimol_applicability_preflight(
         *paths,
+        **_authority_kwargs(paths),
         provider=selected_provider,
         repository_commit=COMMIT,
         worker_implementation_digest=WORKER_DIGEST,
@@ -242,6 +361,173 @@ def test_header_only_dataset_is_blocked_and_row_count_is_bound(tmp_path: Path) -
     assert "RAW_DATASET_CONTRACT_INVALID" in result.report["global_reason_codes"]
 
 
+def test_missing_source_authority_blocks_before_provider_preprocessing(
+    tmp_path: Path,
+) -> None:
+    paths = _write_inputs(tmp_path, [_row("r-1", "CCO")])
+    provider = FakeProvider()
+    result = run_br1_unimol_applicability_preflight(
+        *paths,
+        provider=provider,
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        expected_provider_version="0.1.5",
+        created_at=NOW,
+    )
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "SOURCE_AUTHORITY_INVALID" in result.report["global_reason_codes"]
+    assert provider.calls == []
+    assert result.report["dispatch_assertions"]["provider_preprocessing_dispatched"] is False
+
+
+def test_authority_mapping_binding_is_exact_and_fail_closed(tmp_path: Path) -> None:
+    paths = _write_inputs(tmp_path, [_row("r-1", "CCO")])
+    authority_path = _authority_kwargs(paths)["source_authority"]
+    authority = json.loads(authority_path.read_text())
+    foreign_binding = mapping_binding("0.1.4")
+    authority["mapping_binding"] = foreign_binding
+    authority["mapping_binding_digest"] = digest_json(
+        mapping_binding_semantic_material(foreign_binding)
+    )
+    authority_without_digest = dict(authority)
+    authority_without_digest.pop("authority_digest")
+    authority["authority_digest"] = digest_json(authority_without_digest)
+    authority_path.write_bytes(canonical_json_bytes(authority))
+
+    provider = FakeProvider()
+    result = run_br1_unimol_applicability_preflight(
+        *paths,
+        **_authority_kwargs(paths),
+        provider=provider,
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        expected_provider_version="0.1.5",
+        created_at=NOW,
+    )
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "MAPPING_POLICY_INVALID" in result.report["global_reason_codes"]
+    assert provider.calls == []
+
+
+def test_raw_replacement_after_authority_is_not_sent_to_provider(
+    tmp_path: Path,
+) -> None:
+    paths = _write_inputs(tmp_path, [_row("r-1", "CCO"), _row("r-2", "CCN")])
+    paths[0].write_bytes(_csv_bytes([_row("r-1", "CCN"), _row("r-2", "CCO")]))
+    provider = FakeProvider()
+    result = run_br1_unimol_applicability_preflight(
+        *paths,
+        **_authority_kwargs(paths),
+        provider=provider,
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        expected_provider_version="0.1.5",
+        created_at=NOW,
+    )
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "INPUT_DIGEST_MISMATCH" in result.report["global_reason_codes"]
+    assert provider.calls == []
+
+
+def test_foreign_publication_registry_is_rejected(tmp_path: Path) -> None:
+    paths = _write_inputs(tmp_path, [_row("r-1", "CCO")])
+    registry_path = _authority_kwargs(paths)["source_publication_registry"]
+    registry = json.loads(registry_path.read_text())
+    registry["registry_id"] = "foreign-publication"
+    registry_without_digest = dict(registry)
+    registry_without_digest.pop("registry_digest")
+    registry["registry_digest"] = digest_json(registry_without_digest)
+    registry_path.write_bytes(canonical_json_bytes(registry))
+
+    result = run_br1_unimol_applicability_preflight(
+        *paths,
+        **_authority_kwargs(paths),
+        provider=FakeProvider(),
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        expected_provider_version="0.1.5",
+        created_at=NOW,
+    )
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "SOURCE_PUBLICATION_REGISTRY_INVALID" in result.report["global_reason_codes"]
+
+
+def test_provider_capability_contract_is_required(tmp_path: Path) -> None:
+    provider = FakeProvider()
+    provider.capability_contract = None
+    result = _run(tmp_path, [_row("r-1", "CCO")], provider=provider)
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert result.report["provider_capability_contract"] is None
+    assert "PROVIDER_ADAPTER_CONTRACT_UNAVAILABLE" in result.report["global_reason_codes"]
+    assert provider.calls == []
+
+
+def test_capability_profile_compatibility_is_exact(tmp_path: Path) -> None:
+    provider = FakeProvider()
+    provider.capability_contract = ProviderCapabilityContract(
+        **{
+            **provider.capability_contract.__dict__,
+            "compatible_execution_profiles": ("foreign-profile",),
+        }
+    )
+    result = _run(tmp_path, [_row("r-1", "CCO")], provider=provider)
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "EXECUTION_PROFILE_UNAVAILABLE" in result.report["global_reason_codes"]
+    assert provider.calls == []
+
+
+def test_report_input_identity_cannot_be_coherently_resigned(
+    tmp_path: Path,
+) -> None:
+    trusted = _run(tmp_path, [_row("r-1", "CCO")]).report
+    forged = copy.deepcopy(trusted)
+    forged["input_identity"]["staged_provider_input_digest"] = "sha256:" + "e" * 64
+    forged["report_digest"] = applicability._report_digest(forged)
+
+    with pytest.raises(
+        applicability.ApplicabilityPreflightError,
+        match="input identity mismatch",
+    ):
+        applicability.verify_br1_unimol_applicability_report(
+            forged,
+            expected_report=trusted,
+        )
+
+
+def test_report_records_canonical_identity_and_no_dispatch_assertions(
+    tmp_path: Path,
+) -> None:
+    result = _run(tmp_path, [_row("r-1", "CCO")])
+    identity = result.report["input_identity"]
+    assert identity["expected_raw_dataset_digest"] == identity["observed_raw_dataset_digest"]
+    assert (
+        identity["expected_canonical_provider_input_digest"]
+        == identity["observed_canonical_provider_input_digest"]
+        == identity["staged_provider_input_digest"]
+        == identity["provider_actual_input_digest"]
+    )
+    assert result.report["dispatch_assertions"] == {
+        "provider_capability_probe_dispatched": False,
+        "provider_preprocessing_dispatched": True,
+        "training_dispatched": False,
+        "generation_dispatched": False,
+        "prediction_dispatched": False,
+        "ranking_dispatched": False,
+        "model_artifacts_created": False,
+        "scaler_created": False,
+        "training_metrics_created": False,
+    }
+
+
 def test_report_verifier_rejects_input_row_count_rebinding(tmp_path: Path) -> None:
     trusted = _run(tmp_path, [_row("r-1", "CCO")]).report
     forged = copy.deepcopy(trusted)
@@ -302,6 +588,19 @@ def test_conformer_failure_and_provider_exception_never_pass(tmp_path: Path) -> 
     assert failed_item["status"] == "UNRESOLVED"
     assert failed_item["reason_codes"] == ["UNIMOL_PREPROCESS_FAILED"]
     assert failed_result.report["overall_status"] == "BLOCKED"
+
+
+def test_provider_unsupported_without_reason_is_unresolved(tmp_path: Path) -> None:
+    provider = FakeProvider(
+        lambda smiles: ProviderPreprocessResult("UNSUPPORTED", "SUPPORTED")
+    )
+    result = _run(tmp_path, [_row("r-1", "CCO")], provider=provider)
+
+    item = result.report["row_results"][0]
+    assert item["provider_preprocessing_status"] == "UNSUPPORTED"
+    assert item["status"] == "UNRESOLVED"
+    assert item["reason_codes"] == ["UNIMOL_PREPROCESS_FAILED"]
+    assert result.report["overall_status"] == "BLOCKED"
 
 
 @pytest.mark.parametrize(
@@ -378,6 +677,7 @@ def test_manifest_digest_mismatch_and_mapping_policy_invalid_block(tmp_path: Pat
     paths = _write_inputs(tmp_path / "digest", [_row("r-1", "CCO")], derived_digest="d" * 64)
     result = run_br1_unimol_applicability_preflight(
         *paths,
+        **_authority_kwargs(paths),
         provider=FakeProvider(),
         repository_commit=COMMIT,
         worker_implementation_digest=WORKER_DIGEST,
@@ -393,6 +693,7 @@ def test_manifest_digest_mismatch_and_mapping_policy_invalid_block(tmp_path: Pat
     invalid_paths[2].write_bytes(canonical_json_bytes(invalid_mapping))
     invalid = run_br1_unimol_applicability_preflight(
         *invalid_paths,
+        **_authority_kwargs(invalid_paths),
         provider=FakeProvider(),
         repository_commit=COMMIT,
         worker_implementation_digest=WORKER_DIGEST,
@@ -425,6 +726,7 @@ def test_unknown_authority_version_or_extra_field_blocks(tmp_path: Path) -> None
 
     result = run_br1_unimol_applicability_preflight(
         *paths,
+        **_authority_kwargs(paths),
         provider=FakeProvider(),
         repository_commit=COMMIT,
         worker_implementation_digest=WORKER_DIGEST,
@@ -450,6 +752,7 @@ def test_replaced_and_symlink_input_are_rejected_without_exception_leak(
     monkeypatch.setattr(applicability, "read_regular_file_bound", replaced)
     result = run_br1_unimol_applicability_preflight(
         *paths,
+        **_authority_kwargs(paths),
         provider=FakeProvider(),
         repository_commit=COMMIT,
         worker_implementation_digest=WORKER_DIGEST,
@@ -466,6 +769,7 @@ def test_replaced_and_symlink_input_are_rejected_without_exception_leak(
     symlink_paths = (paths[0], symlink_source, paths[2])
     symlink_result = run_br1_unimol_applicability_preflight(
         *symlink_paths,
+        **_authority_kwargs(symlink_paths),
         provider=FakeProvider(),
         repository_commit=COMMIT,
         worker_implementation_digest=WORKER_DIGEST,
@@ -685,6 +989,12 @@ def test_preflight_cli_writes_only_report_and_privacy_safe_summary(
             str(paths[1]),
             "--mapping-policy",
             str(paths[2]),
+            "--source-authority",
+            str(_authority_kwargs(paths)["source_authority"]),
+            "--source-publication",
+            str(_authority_kwargs(paths)["source_publication"]),
+            "--source-publication-registry",
+            str(_authority_kwargs(paths)["source_publication_registry"]),
             "--output-report",
             str(report_path),
             "--public-summary",
