@@ -34,6 +34,19 @@ from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import SchemaError
 
 from ai4s_agent._utils import now_iso
+from ai4s_agent.br1_preflight_authority import (
+    CANONICALIZATION_CONTRACT_VERSION,
+    SOURCE_AUTHORITY_SCHEMA,
+    SOURCE_PUBLICATION_REGISTRY_SCHEMA,
+    canonical_field_value,
+    canonical_mapping_binding,
+    canonical_provider_input_bytes,
+    canonical_provider_input_bytes_from_rows,
+    canonical_provider_rows,
+    canonical_source_dataset_bytes,
+    mapping_binding,
+    mapping_binding_semantic_material,
+)
 from ai4s_agent.generation_publication import publish_fresh_bytes, read_regular_file_bound
 from ai4s_agent.resource_profiles import EXECUTION_PROFILES
 from ai4s_agent.structured_dataset_canary import _molecule_identity
@@ -41,7 +54,9 @@ from ai4s_agent.structured_dataset_confirmation import (
     REQUIRED_COLUMNS,
     _read_csv,
     canonical_json_bytes,
+    digest_bytes,
     digest_json,
+    read_json_artifact,
 )
 
 try:  # pragma: no cover - the dependency is already a dev dependency.
@@ -109,10 +124,13 @@ REASON_CODES = (
     "RAW_DATASET_CONTRACT_INVALID",
     "ROW_ID_INVALID",
     "PROVIDER_CAPABILITY_UNAVAILABLE",
+    "PROVIDER_ADAPTER_CONTRACT_UNAVAILABLE",
     "PROVIDER_PREPROCESS_NOT_RUN",
     "CONFORMER_PREPROCESS_NOT_RUN",
     "WORKER_IMPLEMENTATION_UNAVAILABLE",
     "EXECUTION_PROFILE_UNAVAILABLE",
+    "SOURCE_PUBLICATION_REGISTRY_INVALID",
+    "CANONICAL_INPUT_INVALID",
 )
 _REASON_SET = frozenset(REASON_CODES)
 _UNRESOLVED_REASON_CODES = frozenset(
@@ -122,10 +140,13 @@ _UNRESOLVED_REASON_CODES = frozenset(
         "PROVIDER_VERSION_AUTHORITY_UNAVAILABLE",
         "PROVIDER_PREFLIGHT_API_UNAVAILABLE",
         "PROVIDER_CAPABILITY_UNAVAILABLE",
+        "PROVIDER_ADAPTER_CONTRACT_UNAVAILABLE",
         "PROVIDER_PREPROCESS_NOT_RUN",
         "CONFORMER_PREPROCESS_NOT_RUN",
         "WORKER_IMPLEMENTATION_UNAVAILABLE",
         "EXECUTION_PROFILE_UNAVAILABLE",
+        "SOURCE_PUBLICATION_REGISTRY_INVALID",
+        "CANONICAL_INPUT_INVALID",
     }
 )
 
@@ -173,6 +194,60 @@ class ProviderCapabilities:
 
 
 @dataclass(frozen=True)
+class ProviderCapabilityContract:
+    """Project-owned, versioned capability declaration for one provider."""
+
+    adapter_contract_version: str
+    provider_name: str
+    provider_version: str
+    compatible_execution_profiles: tuple[str, ...]
+    molecule_representations: tuple[str, ...]
+    required_fields: tuple[str, ...]
+    optional_fields: tuple[str, ...]
+    target_field: str
+    row_identity_field: str
+    condition_context_fields: tuple[str, ...]
+    missing_value_policy: str
+    filter_policy: str
+    duplicate_row_policy: str
+    canonical_row_order: str
+    output_columns: tuple[str, ...]
+    applicability_preflight_available: bool
+    training_dispatched: bool = False
+    generation_dispatched: bool = False
+    prediction_dispatched: bool = False
+    ranking_dispatched: bool = False
+
+    def semantic_material(self) -> dict[str, Any]:
+        return {
+            "adapter_contract_version": self.adapter_contract_version,
+            "provider_name": self.provider_name,
+            "provider_version": self.provider_version,
+            "compatible_execution_profiles": sorted(self.compatible_execution_profiles),
+            "molecule_representations": sorted(self.molecule_representations),
+            "required_fields": list(self.required_fields),
+            "optional_fields": list(self.optional_fields),
+            "target_field": self.target_field,
+            "row_identity_field": self.row_identity_field,
+            "condition_context_fields": list(self.condition_context_fields),
+            "missing_value_policy": self.missing_value_policy,
+            "filter_policy": self.filter_policy,
+            "duplicate_row_policy": self.duplicate_row_policy,
+            "canonical_row_order": self.canonical_row_order,
+            "output_columns": list(self.output_columns),
+            "applicability_preflight_available": self.applicability_preflight_available,
+            "training_dispatched": self.training_dispatched,
+            "generation_dispatched": self.generation_dispatched,
+            "prediction_dispatched": self.prediction_dispatched,
+            "ranking_dispatched": self.ranking_dispatched,
+        }
+
+    @property
+    def digest(self) -> str:
+        return digest_json(self.semantic_material())
+
+
+@dataclass(frozen=True)
 class ProviderPreprocessResult:
     """One side-effect-free provider preprocessing result."""
 
@@ -187,9 +262,15 @@ class UniMolProviderPreprocessor(Protocol):
     provider_name: str
     provider_version: str
     capabilities: ProviderCapabilities | None
+    capability_contract: ProviderCapabilityContract | None
 
     def preprocess(self, smiles: str) -> ProviderPreprocessResult:
         """Validate/preprocess one molecule without fitting or publishing files."""
+
+    def preprocess_many(
+        self, smiles: Sequence[str]
+    ) -> Sequence[ProviderPreprocessResult]:
+        """Optional batch form used by the real cross-interpreter adapter."""
 
 
 @dataclass(frozen=True)
@@ -203,6 +284,7 @@ class _UnavailableProvider:
         self.provider_name = PROVIDER_NAME
         self.provider_version = provider_version or _UNAVAILABLE
         self.capabilities: ProviderCapabilities | None = None
+        self.capability_contract: ProviderCapabilityContract | None = None
         self.availability_reason_codes = (
             "PROVIDER_PREFLIGHT_API_UNAVAILABLE",
         )
@@ -214,6 +296,11 @@ class _UnavailableProvider:
             conformer_status="UNRESOLVED",
             reason_codes=("PROVIDER_PREFLIGHT_API_UNAVAILABLE",),
         )
+
+    def preprocess_many(
+        self, smiles: Sequence[str]
+    ) -> Sequence[ProviderPreprocessResult]:
+        return [self.preprocess(item) for item in smiles]
 
 
 def _schema_path(filename: str) -> Path:
@@ -309,6 +396,319 @@ def _normalise_digest(value: Any) -> str | None:
     if _HEX_SHA256.fullmatch(raw):
         return "sha256:" + raw
     return None
+
+
+@dataclass(frozen=True)
+class _SourceAuthorityVerification:
+    valid: bool
+    digest: str
+    registry_digest: str
+    publication_digest: str
+    mapping_binding: dict[str, Any] | None
+    mapping_binding_digest: str
+    mapping_policy_version: str
+    identity: dict[str, Any]
+    reasons: frozenset[str]
+
+
+def _read_canonical_json_object(
+    path: Path,
+    *,
+    max_bytes: int,
+    filename: str | None = None,
+    schema_version: str | None = None,
+) -> tuple[dict[str, Any] | None, str, bool]:
+    try:
+        raw, raw_digest = read_regular_file_bound(path, max_bytes=max_bytes)
+    except Exception:
+        return None, _UNAVAILABLE, False
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, "sha256:" + raw_digest, False
+    if not isinstance(value, dict):
+        return None, "sha256:" + raw_digest, False
+    canonical = canonical_json_bytes(value)
+    if raw not in {canonical, canonical + b"\n"}:
+        return value, "sha256:" + raw_digest, False
+    if filename is not None and schema_version is not None:
+        if not _validate_checked_in_schema(
+            value,
+            filename=filename,
+            schema_version=schema_version,
+        ):
+            return value, "sha256:" + raw_digest, False
+    return value, "sha256:" + raw_digest, True
+
+
+def _authority_identity_skeleton(
+    *,
+    raw: _RawLoad,
+    source: _AuthorityLoad,
+    policy: _AuthorityLoad,
+) -> dict[str, Any]:
+    canonical_source_digest = _UNAVAILABLE
+    canonical_provider_digest = _UNAVAILABLE
+    if raw.valid:
+        try:
+            canonical_source_digest = digest_bytes(canonical_source_dataset_bytes(raw.rows))
+            canonical_provider_digest = digest_bytes(
+                canonical_provider_input_bytes(raw.rows)
+            )
+        except Exception:
+            canonical_source_digest = _UNAVAILABLE
+            canonical_provider_digest = _UNAVAILABLE
+    return {
+        "digest_algorithm": "sha256",
+        "canonicalization_contract_version": CANONICALIZATION_CONTRACT_VERSION,
+        "source_artifact_id": "raw_dataset",
+        "source_publication_registry_id": _UNAVAILABLE,
+        "source_publication_registry_digest": _UNAVAILABLE,
+        "source_publication_digest": _UNAVAILABLE,
+        "expected_raw_dataset_digest": (
+            _normalise_digest(source.payload.get("derived_raw_dataset_sha256"))
+            if source.payload is not None
+            else None
+        )
+        or _UNAVAILABLE,
+        "observed_raw_dataset_digest": raw.digest,
+        "expected_canonical_source_dataset_digest": _UNAVAILABLE,
+        "observed_canonical_source_dataset_digest": canonical_source_digest,
+        "expected_canonical_provider_input_digest": _UNAVAILABLE,
+        "observed_canonical_provider_input_digest": canonical_provider_digest,
+        "staged_provider_input_digest": canonical_provider_digest,
+        "source_dataset_manifest_digest": source.digest,
+        "mapping_policy_digest": policy.digest,
+        "mapping_binding_digest": _UNAVAILABLE,
+        "input_row_count": len(raw.rows),
+    }
+
+
+def _verify_source_authority(
+    *,
+    authority_path: Path | None,
+    publication_path: Path | None,
+    registry_path: Path | None,
+    raw: _RawLoad,
+    source: _AuthorityLoad,
+    policy: _AuthorityLoad,
+    expected_provider_version: str,
+    execution_profile_id: str,
+    execution_profile_digest: str,
+) -> _SourceAuthorityVerification:
+    identity = _authority_identity_skeleton(raw=raw, source=source, policy=policy)
+    reasons: set[str] = set()
+    authority_payload: dict[str, Any] | None = None
+    authority_digest = _UNAVAILABLE
+    registry_payload: dict[str, Any] | None = None
+    registry_digest = _UNAVAILABLE
+    registry_file_digest = _UNAVAILABLE
+    publication_payload: dict[str, Any] | None = None
+    publication_digest = _UNAVAILABLE
+    publication_file_digest = _UNAVAILABLE
+
+    if authority_path is None or publication_path is None or registry_path is None:
+        reasons.add("SOURCE_AUTHORITY_INVALID")
+    else:
+        authority_payload, authority_digest, authority_valid = _read_canonical_json_object(
+            authority_path,
+            max_bytes=_MAX_AUTHORITY_BYTES,
+            filename="br1_preflight_source_authority.schema.json",
+            schema_version=SOURCE_AUTHORITY_SCHEMA,
+        )
+        registry_payload, registry_file_digest, registry_valid = _read_canonical_json_object(
+            registry_path,
+            max_bytes=_MAX_AUTHORITY_BYTES,
+            filename="br1_source_publication_registry.schema.json",
+            schema_version=SOURCE_PUBLICATION_REGISTRY_SCHEMA,
+        )
+        try:
+            publication_payload = read_json_artifact(
+                publication_path,
+                digest_field="raw_publication_digest",
+            )
+            _, publication_raw_digest = read_regular_file_bound(
+                publication_path,
+                max_bytes=_MAX_AUTHORITY_BYTES,
+            )
+            publication_file_digest = "sha256:" + publication_raw_digest
+            publication_digest = str(
+                publication_payload.get("raw_publication_digest") or _UNAVAILABLE
+            )
+            publication_valid = True
+        except Exception:
+            publication_valid = False
+        if not authority_valid:
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if not registry_valid:
+            reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if not publication_valid:
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+
+    if authority_payload is not None:
+        authority_material = dict(authority_payload)
+        claimed_authority_digest = authority_material.pop("authority_digest", None)
+        if claimed_authority_digest != digest_json(authority_material):
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        identity.update(
+            {
+                "source_artifact_id": authority_payload.get("source_artifact_id", _UNAVAILABLE),
+                "source_publication_registry_id": authority_payload.get(
+                    "source_publication_registry_id", _UNAVAILABLE
+                ),
+                "source_publication_registry_digest": authority_payload.get(
+                    "source_publication_registry_digest", _UNAVAILABLE
+                ),
+                "source_publication_digest": authority_payload.get(
+                    "source_publication_digest", _UNAVAILABLE
+                ),
+                "expected_raw_dataset_digest": authority_payload.get(
+                    "raw_dataset_digest", _UNAVAILABLE
+                ),
+                "expected_canonical_source_dataset_digest": authority_payload.get(
+                    "canonical_source_dataset_digest", _UNAVAILABLE
+                ),
+                "expected_canonical_provider_input_digest": authority_payload.get(
+                    "canonical_provider_input_digest", _UNAVAILABLE
+                ),
+                "canonicalization_contract_version": authority_payload.get(
+                    "canonicalization_contract_version", _UNAVAILABLE
+                ),
+            }
+        )
+        if authority_payload.get("source_dataset_manifest_digest") != source.digest:
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if authority_payload.get("mapping_policy_digest") != policy.digest:
+            reasons.add("MAPPING_POLICY_INVALID")
+        if authority_payload.get("expected_provider_version") != expected_provider_version:
+            reasons.add("PROVIDER_VERSION_MISMATCH")
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if authority_payload.get("execution_profile_id") != execution_profile_id:
+            reasons.add("EXECUTION_PROFILE_UNAVAILABLE")
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if authority_payload.get("execution_profile_digest") != execution_profile_digest:
+            reasons.add("EXECUTION_PROFILE_UNAVAILABLE")
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        binding = authority_payload.get("mapping_binding")
+        expected_binding = mapping_binding(expected_provider_version)
+        if not isinstance(binding, dict) or canonical_mapping_binding(binding) != expected_binding:
+            reasons.add("MAPPING_POLICY_INVALID")
+        else:
+            binding_digest = digest_json(mapping_binding_semantic_material(binding))
+            if authority_payload.get("mapping_binding_digest") != binding_digest:
+                reasons.add("MAPPING_POLICY_INVALID")
+            identity["mapping_binding_digest"] = binding_digest
+
+    if registry_payload is not None:
+        registry_digest = str(
+            registry_payload.get("registry_digest") or _UNAVAILABLE
+        )
+        identity["source_publication_registry_id"] = str(
+            registry_payload.get("registry_id") or _UNAVAILABLE
+        )
+        identity["source_publication_registry_digest"] = registry_digest
+        registry_material = dict(registry_payload)
+        claimed_registry_digest = registry_material.pop("registry_digest", None)
+        if claimed_registry_digest != digest_json(registry_material):
+            reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+        if authority_payload is not None:
+            if registry_payload.get("registry_id") != authority_payload.get(
+                "source_publication_registry_id"
+            ):
+                reasons.add("SOURCE_AUTHORITY_INVALID")
+                reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+            if registry_payload.get("registry_digest") != authority_payload.get(
+                "source_publication_registry_digest"
+            ):
+                reasons.add("SOURCE_AUTHORITY_INVALID")
+                reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+        if registry_payload.get("raw_dataset_digest") != identity.get(
+            "expected_raw_dataset_digest"
+        ):
+            reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+        if registry_payload.get("source_dataset_manifest_digest") != source.digest:
+            reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+        if registry_payload.get("mapping_policy_digest") != policy.digest:
+            reasons.add("MAPPING_POLICY_INVALID")
+        if registry_payload.get("input_row_count") != len(raw.rows):
+            reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+        if publication_payload is not None and registry_payload.get(
+            "publication_digest"
+        ) != publication_payload.get("raw_publication_digest"):
+            reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+
+    if publication_payload is not None:
+        publication_semantic_digest = str(
+            publication_payload.get("raw_publication_digest") or ""
+        )
+        identity["source_publication_digest"] = (
+            publication_semantic_digest or _UNAVAILABLE
+        )
+        if authority_payload is not None and publication_semantic_digest != authority_payload.get(
+            "source_publication_digest"
+        ):
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if publication_payload.get("schema_version") != "structured_raw_dataset.v1":
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if publication_payload.get("dataset_digest") != raw.digest:
+            reasons.add("INPUT_DIGEST_MISMATCH")
+        if publication_payload.get("row_count") != len(raw.rows):
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if publication_payload.get("source_dataset_manifest_digest") != source.digest:
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if publication_payload.get("mapping_policy_digest") != policy.digest:
+            reasons.add("MAPPING_POLICY_INVALID")
+
+    expected_raw = _normalise_digest(
+        source.payload.get("derived_raw_dataset_sha256")
+        if source.payload is not None
+        else None
+    )
+    if expected_raw != raw.digest:
+        reasons.add("INPUT_DIGEST_MISMATCH")
+    if authority_payload is not None:
+        if authority_payload.get("raw_dataset_digest") != raw.digest:
+            reasons.add("INPUT_DIGEST_MISMATCH")
+        if authority_payload.get("input_row_count") != len(raw.rows):
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        observed_source = identity["observed_canonical_source_dataset_digest"]
+        observed_provider = identity["observed_canonical_provider_input_digest"]
+        if authority_payload.get("canonical_source_dataset_digest") != observed_source:
+            reasons.add("INPUT_DIGEST_MISMATCH")
+        if authority_payload.get("canonical_provider_input_digest") != observed_provider:
+            reasons.add("INPUT_DIGEST_MISMATCH")
+
+    binding_value = (
+        authority_payload.get("mapping_binding")
+        if authority_payload is not None
+        and isinstance(authority_payload.get("mapping_binding"), dict)
+        else None
+    )
+    if registry_payload is None:
+        identity["source_publication_registry_digest"] = registry_digest
+    if publication_payload is None:
+        identity["source_publication_digest"] = publication_digest
+    return _SourceAuthorityVerification(
+        valid=not reasons,
+        digest=authority_digest,
+        registry_digest=registry_digest,
+        publication_digest=publication_digest,
+        mapping_binding=binding_value,
+        mapping_binding_digest=(
+            str(authority_payload.get("mapping_binding_digest"))
+            if authority_payload is not None
+            and authority_payload.get("mapping_binding_digest")
+            else _UNAVAILABLE
+        ),
+        mapping_policy_version=(
+            str(authority_payload.get("mapping_policy_version"))
+            if authority_payload is not None
+            else str((policy.payload or {}).get("schema_version") or _UNAVAILABLE)
+        ),
+        identity=identity,
+        reasons=frozenset(reasons),
+    )
 
 
 def _valid_commit(value: Any) -> str | None:
@@ -508,9 +908,80 @@ def _normalise_capabilities(value: Any) -> ProviderCapabilities | None:
     )
 
 
+def _normalise_capability_contract(value: Any) -> ProviderCapabilityContract | None:
+    if isinstance(value, ProviderCapabilityContract):
+        contract = value
+    elif isinstance(value, Mapping):
+        try:
+            contract = ProviderCapabilityContract(
+                adapter_contract_version=str(value["adapter_contract_version"]),
+                provider_name=str(value["provider_name"]),
+                provider_version=str(value["provider_version"]),
+                compatible_execution_profiles=tuple(
+                    str(item) for item in value["compatible_execution_profiles"]
+                ),
+                molecule_representations=tuple(
+                    str(item) for item in value["molecule_representations"]
+                ),
+                required_fields=tuple(str(item) for item in value["required_fields"]),
+                optional_fields=tuple(str(item) for item in value["optional_fields"]),
+                target_field=str(value["target_field"]),
+                row_identity_field=str(value["row_identity_field"]),
+                condition_context_fields=tuple(
+                    str(item) for item in value["condition_context_fields"]
+                ),
+                missing_value_policy=str(value["missing_value_policy"]),
+                filter_policy=str(value["filter_policy"]),
+                duplicate_row_policy=str(value["duplicate_row_policy"]),
+                canonical_row_order=str(value["canonical_row_order"]),
+                output_columns=tuple(str(item) for item in value["output_columns"]),
+                applicability_preflight_available=bool(
+                    value["applicability_preflight_available"]
+                ),
+                training_dispatched=bool(value.get("training_dispatched", False)),
+                generation_dispatched=bool(value.get("generation_dispatched", False)),
+                prediction_dispatched=bool(value.get("prediction_dispatched", False)),
+                ranking_dispatched=bool(value.get("ranking_dispatched", False)),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+    else:
+        return None
+    if (
+        contract.adapter_contract_version != "br1_unimol_provider_adapter.v1"
+        or contract.provider_name != PROVIDER_NAME
+        or not contract.provider_version
+        or not contract.compatible_execution_profiles
+        or contract.molecule_representations != ("smiles",)
+        or contract.required_fields != ("smiles",)
+        or contract.optional_fields != ()
+        or contract.target_field != "target_value"
+        or contract.row_identity_field != "row_id"
+        or not contract.condition_context_fields
+        or contract.missing_value_policy != "reject"
+        or contract.filter_policy != "no_implicit_filter"
+        or contract.duplicate_row_policy != "reject_duplicate_standard_inchikey"
+        or contract.canonical_row_order != "row_id_ascending"
+        or contract.output_columns != ("smiles", "target_value")
+        or not contract.applicability_preflight_available
+        or contract.training_dispatched
+        or contract.generation_dispatched
+        or contract.prediction_dispatched
+        or contract.ranking_dispatched
+    ):
+        return None
+    return contract
+
+
 def _provider_metadata(
     provider: UniMolProviderPreprocessor,
-) -> tuple[str, str, ProviderCapabilities | None, set[str]]:
+) -> tuple[
+    str,
+    str,
+    ProviderCapabilities | None,
+    ProviderCapabilityContract | None,
+    set[str],
+]:
     try:
         raw_name = str(getattr(provider, "provider_name", "") or _UNAVAILABLE)
     except Exception:
@@ -526,6 +997,11 @@ def _provider_metadata(
     except Exception:
         raw_capabilities = None
     capabilities = _normalise_capabilities(raw_capabilities)
+    try:
+        raw_contract = getattr(provider, "capability_contract", None)
+    except Exception:
+        raw_contract = None
+    capability_contract = _normalise_capability_contract(raw_contract)
     reasons: set[str] = set()
     if raw_name != PROVIDER_NAME:
         reasons.add("PROVIDER_PREFLIGHT_API_UNAVAILABLE")
@@ -534,6 +1010,9 @@ def _provider_metadata(
     if capabilities is None:
         reasons.add("PROVIDER_CAPABILITY_UNAVAILABLE")
         reasons.add("PROVIDER_PREFLIGHT_API_UNAVAILABLE")
+    if capability_contract is None:
+        reasons.add("PROVIDER_ADAPTER_CONTRACT_UNAVAILABLE")
+        reasons.add("PROVIDER_PREFLIGHT_API_UNAVAILABLE")
     try:
         availability_reason_codes = getattr(provider, "availability_reason_codes", ())
     except Exception:
@@ -541,7 +1020,7 @@ def _provider_metadata(
     for reason in availability_reason_codes:
         if str(reason) in _REASON_SET:
             reasons.add(str(reason))
-    return name, version, capabilities, reasons
+    return name, version, capabilities, capability_contract, reasons
 
 
 def _normalise_provider_result(value: Any) -> ProviderPreprocessResult | None:
@@ -593,6 +1072,8 @@ def _row_result(
     global_authority_reasons: set[str],
     global_environment_reasons: set[str],
     mapping_valid: bool,
+    provider_called: bool = False,
+    provider_result: ProviderPreprocessResult | None = None,
 ) -> dict[str, Any]:
     row_id = str(row.get("row_id") or "")
     facts = _molecule_facts(str(row.get("smiles") or ""))
@@ -619,14 +1100,13 @@ def _row_result(
 
     provider_status = "NOT_RUN"
     conformer_status = "NOT_RUN"
-    provider_called = False
-    if not reasons and not global_authority_reasons and not global_environment_reasons:
-        provider_called = True
-        try:
-            raw_result = provider.preprocess(str(row.get("smiles") or ""))
-            result = _normalise_provider_result(raw_result)
-        except Exception:
-            result = None
+    if (
+        provider_called
+        and not reasons
+        and not global_authority_reasons
+        and not global_environment_reasons
+    ):
+        result = _normalise_provider_result(provider_result)
         if result is None:
             provider_status = "UNRESOLVED"
             conformer_status = "UNRESOLVED"
@@ -658,6 +1138,10 @@ def _row_result(
     else:
         provider_unresolved = provider_status in {"UNRESOLVED", "FAILED"} or (
             provider_called and provider_status == "NOT_RUN"
+        ) or (
+            provider_status == "UNSUPPORTED"
+            and conformer_status == "SUPPORTED"
+            and "UNIMOL_PREPROCESS_FAILED" in reasons
         )
         conformer_unresolved = provider_called and conformer_status in {
             "UNRESOLVED",
@@ -739,6 +1223,35 @@ def _public_summary(report: Mapping[str, Any]) -> dict[str, Any]:
         "raw_dataset_digest": report["raw_dataset_digest"],
         "source_dataset_manifest_digest": report["source_dataset_manifest_digest"],
         "mapping_policy_digest": report["mapping_policy_digest"],
+        "source_authority_digest": report["source_authority_digest"],
+        "source_publication_registry_digest": report[
+            "source_publication_registry_digest"
+        ],
+        "source_publication_digest": report["source_publication_digest"],
+        "mapping_policy_version": report["mapping_policy_version"],
+        "mapping_binding_digest": report["mapping_binding_digest"],
+        "canonicalization_contract_version": report[
+            "canonicalization_contract_version"
+        ],
+        "expected_canonical_source_dataset_digest": report["input_identity"][
+            "expected_canonical_source_dataset_digest"
+        ],
+        "observed_canonical_source_dataset_digest": report["input_identity"][
+            "observed_canonical_source_dataset_digest"
+        ],
+        "expected_canonical_provider_input_digest": report["input_identity"][
+            "expected_canonical_provider_input_digest"
+        ],
+        "observed_canonical_provider_input_digest": report["input_identity"][
+            "observed_canonical_provider_input_digest"
+        ],
+        "staged_provider_input_digest": report["input_identity"][
+            "staged_provider_input_digest"
+        ],
+        "provider_actual_input_digest": report["input_identity"][
+            "provider_actual_input_digest"
+        ],
+        "repository_commit": report["repository_commit"],
         "report_digest": report["report_digest"],
         "worker_implementation_digest": report["worker_implementation_digest"],
         "execution_profile_id": report["execution_profile_id"],
@@ -746,6 +1259,12 @@ def _public_summary(report: Mapping[str, Any]) -> dict[str, Any]:
         "provider_name": report["provider_name"],
         "provider_version": report["provider_version"],
         "expected_provider_version": report["expected_provider_version"],
+        "provider_capability_contract_version": report[
+            "provider_capability_contract_version"
+        ],
+        "provider_capability_contract_digest": report[
+            "provider_capability_contract_digest"
+        ],
         "applicability_policy_version": report["applicability_policy_version"],
         "applicability_policy_digest": report["applicability_policy_digest"],
         "input_row_count": report["input_row_count"],
@@ -842,16 +1361,280 @@ def _provider_version_from_python(provider_python: Path) -> str:
         return _UNAVAILABLE
 
 
+_PROVIDER_CAPABILITY_PROBE = r'''
+import contextlib
+import importlib.metadata
+import io
+import json
+import re
+from pathlib import Path
+
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    import unimol_tools
+    from unimol_tools.config import MODEL_CONFIG
+    from unimol_tools.weights import get_weight_dir
+
+    version = importlib.metadata.version("unimol-tools")
+    dictionary_name = MODEL_CONFIG["dict"]["molecule_all_h"]
+    dictionary_path = Path(get_weight_dir()) / dictionary_name
+    if not dictionary_path.is_file():
+        raise RuntimeError("provider dictionary unavailable")
+    elements = []
+    element_pattern = re.compile(r"^[A-Z][a-z]?$")
+    for line in dictionary_path.read_text(encoding="utf-8").splitlines():
+        token = line.split(" ", 1)[0].strip()
+        if element_pattern.fullmatch(token) and token not in elements:
+            elements.append(token)
+    if not elements:
+        raise RuntimeError("provider dictionary has no element roster")
+
+result = {
+    "provider_name": "unimol-tools",
+    "provider_version": str(version),
+    "dictionary_path": str(dictionary_path),
+    "capabilities": {
+        "supported_elements": sorted(elements),
+        "atom_count_limit": 256,
+        "formal_charge_policy": "any",
+        "fragment_policy": "single_component",
+    },
+    "capability_contract": {
+        "adapter_contract_version": "br1_unimol_provider_adapter.v1",
+        "provider_name": "unimol-tools",
+        "provider_version": str(version),
+        "compatible_execution_profiles": ["unimol-train-br1-v2"],
+        "molecule_representations": ["smiles"],
+        "required_fields": ["smiles"],
+        "optional_fields": [],
+        "target_field": "target_value",
+        "row_identity_field": "row_id",
+        "condition_context_fields": [
+            "material_role", "emission_mechanism", "medium", "host",
+            "doping_ratio", "temperature", "measurement_condition",
+            "comparable", "paper_id", "paper_evidence"
+        ],
+        "missing_value_policy": "reject",
+        "filter_policy": "no_implicit_filter",
+        "duplicate_row_policy": "reject_duplicate_standard_inchikey",
+        "canonical_row_order": "row_id_ascending",
+        "output_columns": ["smiles", "target_value"],
+        "applicability_preflight_available": True,
+        "training_dispatched": False,
+        "generation_dispatched": False,
+        "prediction_dispatched": False,
+        "ranking_dispatched": False,
+    },
+}
+print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+'''
+
+
+_PROVIDER_PREPROCESS = r'''
+import base64
+import contextlib
+import csv
+import hashlib
+import io
+import json
+import sys
+
+payload = json.loads(sys.stdin.read())
+smiles = payload.get("smiles")
+dictionary_path = payload.get("dictionary_path")
+if not isinstance(smiles, list) or not smiles or not isinstance(dictionary_path, str):
+    raise ValueError("invalid preflight payload")
+provider_input_digest = None
+encoded_input = payload.get("provider_input_bytes_b64")
+if encoded_input is not None:
+    if not isinstance(encoded_input, str):
+        raise ValueError("provider input bytes are invalid")
+    provider_input_bytes = base64.b64decode(encoded_input, validate=True)
+    provider_input_digest = "sha256:" + hashlib.sha256(provider_input_bytes).hexdigest()
+    expected_input_digest = str(payload.get("expected_provider_input_digest") or "")
+    if provider_input_digest != expected_input_digest:
+        raise RuntimeError("provider input digest mismatch")
+    parsed = list(csv.DictReader(io.StringIO(provider_input_bytes.decode("utf-8"))))
+    if not parsed or list(parsed[0].keys()) != ["smiles", "target_value"]:
+        raise ValueError("provider input schema is invalid")
+    parsed_smiles = [str(item.get("smiles") or "") for item in parsed]
+    if parsed_smiles != [str(item) for item in smiles]:
+        raise RuntimeError("provider input roster mismatch")
+
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    import numpy as np
+    from unimol_tools.data import DataHub
+
+    hub = DataHub(
+        data=[str(item) for item in smiles],
+        is_train=False,
+        save_path=None,
+        task="repr",
+        data_type="molecule",
+        model_name="unimolv1",
+        smiles_col="SMILES",
+        remove_hs=False,
+        seed=1729,
+        method="rdkit_random",
+        mode="fast",
+        max_atoms=256,
+        conf_cache_level=0,
+        multi_process=False,
+        use_cuda=False,
+        pretrained_dict_path=dictionary_path,
+    )
+    features = hub.data.get("unimol_input")
+    if not isinstance(features, list) or len(features) != len(smiles):
+        raise RuntimeError("provider preprocessing roster mismatch")
+    results = []
+    for feature in features:
+        coordinates = np.asarray(feature.get("src_coord"))
+        if (
+            coordinates.ndim != 2
+            or coordinates.shape[1] != 3
+            or coordinates.shape[0] < 3
+            or not np.isfinite(coordinates).all()
+            or np.all(coordinates == 0.0)
+        ):
+            results.append({
+                "status": "UNSUPPORTED",
+                "conformer_status": "FAILED",
+                "reason_codes": ["CONFORMER_GENERATION_FAILED"],
+            })
+        else:
+            results.append({
+                "status": "SUPPORTED",
+                "conformer_status": "SUPPORTED",
+                "reason_codes": [],
+            })
+
+print(json.dumps({"provider_input_digest": provider_input_digest, "results": results}, sort_keys=True, separators=(",", ":")))
+'''
+
+
+def _run_provider_json_script(
+    provider_python: Path,
+    script: str,
+    payload: Mapping[str, Any] | None = None,
+    *,
+    timeout: float,
+) -> dict[str, Any] | None:
+    environment = dict(os.environ)
+    environment.update(
+        {
+            "CUDA_VISIBLE_DEVICES": "",
+            "MOLLY_PREFLIGHT": "1",
+        }
+    )
+    try:
+        completed = subprocess.run(
+            [str(provider_python), "-c", script],
+            input=(
+                canonical_json_bytes(dict(payload)) if payload is not None else b"{}"
+            ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    try:
+        value = json.loads(bytes(completed.stdout).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+class _ConfiguredUniMolProvider:
+    def __init__(
+        self,
+        *,
+        provider_python: Path,
+        provider_version: str,
+        dictionary_path: str,
+        capabilities: ProviderCapabilities,
+        capability_contract: ProviderCapabilityContract,
+    ) -> None:
+        self.provider_name = PROVIDER_NAME
+        self.provider_version = provider_version
+        self.dictionary_path = dictionary_path
+        self.capabilities = capabilities
+        self.capability_contract = capability_contract
+        self.provider_python = provider_python
+        self.last_provider_input_digest = _UNAVAILABLE
+
+    def preprocess(self, smiles: str) -> ProviderPreprocessResult:
+        return self.preprocess_many([smiles])[0]
+
+    def preprocess_many(
+        self, smiles: Sequence[str]
+    ) -> Sequence[ProviderPreprocessResult]:
+        return self._preprocess_many(smiles)
+
+    def preprocess_many_rows(
+        self,
+        rows: Sequence[Mapping[str, Any]],
+        provider_input_bytes: bytes,
+        provider_input_digest: str,
+    ) -> Sequence[ProviderPreprocessResult]:
+        return self._preprocess_many(
+            [str(row.get("smiles") or "") for row in rows],
+            provider_input_bytes=provider_input_bytes,
+            provider_input_digest=provider_input_digest,
+        )
+
+    def _preprocess_many(
+        self,
+        smiles: Sequence[str],
+        *,
+        provider_input_bytes: bytes | None = None,
+        provider_input_digest: str | None = None,
+    ) -> Sequence[ProviderPreprocessResult]:
+        payload = {
+            "smiles": [str(item) for item in smiles],
+            "dictionary_path": self.dictionary_path,
+        }
+        if provider_input_bytes is not None:
+            import base64
+
+            payload["provider_input_bytes_b64"] = base64.b64encode(
+                provider_input_bytes
+            ).decode("ascii")
+            payload["expected_provider_input_digest"] = provider_input_digest
+        value = _run_provider_json_script(
+            self.provider_python,
+            _PROVIDER_PREPROCESS,
+            payload,
+            timeout=max(60.0, 10.0 + len(smiles) * 2.0),
+        )
+        if value is None or not isinstance(value.get("results"), list):
+            raise RuntimeError("provider preflight adapter returned no result")
+        self.last_provider_input_digest = str(
+            value.get("provider_input_digest") or _UNAVAILABLE
+        )
+        results = [
+            _normalise_provider_result(item) for item in value["results"]
+        ]
+        if len(results) != len(smiles) or any(item is None for item in results):
+            raise RuntimeError("provider preflight adapter result is invalid")
+        return [item for item in results if item is not None]
+
+
 def discover_unimol_provider_preprocessor(
     *,
     provider_python: Path | None = None,
+    execution_profile_id: str = EXECUTION_PROFILE_ID,
 ) -> UniMolProviderPreprocessor:
-    """Discover only a documented read-only API in the configured interpreter.
+    """Discover the project-owned read-only adapter in the configured provider.
 
-    The current worker's provider path is intentionally *not* treated as such
-    an API.  A provider must expose the explicit marker and factory below in
-    its installed public module; otherwise this function returns an
-    unavailable provider without constructing a trainer or running fit.
+    The adapter runs a provider-owned ``DataHub`` in a subprocess with
+    ``is_train=False`` and ``conf_cache_level=0``.  It never imports or
+    constructs ``MolTrain`` and does not infer applicability from a training
+    call.  The subprocess boundary is required because the worker Python and
+    the configured Uni-Mol Python may be different environments.
     """
 
     configured = _configured_provider_python(provider_python)
@@ -860,36 +1643,38 @@ def discover_unimol_provider_preprocessor(
     version = _provider_version_from_python(configured)
     if version == _UNAVAILABLE:
         return _UnavailableProvider()
-    if configured.resolve() != Path(sys.executable).resolve():
+    capability = _run_provider_json_script(
+        configured,
+        _PROVIDER_CAPABILITY_PROBE,
+        timeout=30.0,
+    )
+    if capability is None:
         return _UnavailableProvider(provider_version=version)
     try:
-        # A provider module is outside this repository's privacy boundary.  It
-        # may import optional libraries or print diagnostics during import or
-        # factory construction, so discard both streams before accepting it.
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
-            io.StringIO()
+        if (
+            capability.get("provider_name") != PROVIDER_NAME
+            or capability.get("provider_version") != version
         ):
-            module = importlib.import_module("unimol_tools")
-            marker = getattr(module, "MOLLY_READ_ONLY_APPLICABILITY_API", None)
-            factory = getattr(
-                module, "build_read_only_applicability_preprocessor", None
-            )
-            if marker != REPORT_SCHEMA or not callable(factory):
-                return _UnavailableProvider(provider_version=version)
-            candidate = factory()
-            if str(getattr(candidate, "provider_name", "")) != PROVIDER_NAME:
-                return _UnavailableProvider(provider_version=version)
-            if str(getattr(candidate, "provider_version", "")) != version:
-                return _UnavailableProvider(provider_version=version)
-            if (
-                _normalise_capabilities(getattr(candidate, "capabilities", None))
-                is None
-            ):
-                return _UnavailableProvider(provider_version=version)
-            if not callable(getattr(candidate, "preprocess", None)):
-                return _UnavailableProvider(provider_version=version)
-            return candidate
-    except Exception:
+            return _UnavailableProvider(provider_version=version)
+        capabilities = _normalise_capabilities(capability.get("capabilities"))
+        contract = _normalise_capability_contract(
+            capability.get("capability_contract")
+        )
+        if capabilities is None or contract is None:
+            return _UnavailableProvider(provider_version=version)
+        if execution_profile_id not in contract.compatible_execution_profiles:
+            return _UnavailableProvider(provider_version=version)
+        dictionary_path = str(capability.get("dictionary_path") or "")
+        if not dictionary_path:
+            return _UnavailableProvider(provider_version=version)
+        return _ConfiguredUniMolProvider(
+            provider_python=configured,
+            provider_version=version,
+            dictionary_path=dictionary_path,
+            capabilities=capabilities,
+            capability_contract=contract,
+        )
+    except (TypeError, ValueError):
         return _UnavailableProvider(provider_version=version)
 
 
@@ -898,6 +1683,9 @@ def run_br1_unimol_applicability_preflight(
     source_manifest: Path,
     mapping_policy: Path,
     *,
+    source_authority: Path | None = None,
+    source_publication: Path | None = None,
+    source_publication_registry: Path | None = None,
     provider: UniMolProviderPreprocessor | None = None,
     provider_python: Path | None = None,
     expected_provider_version: str | None = None,
@@ -924,61 +1712,13 @@ def run_br1_unimol_applicability_preflight(
     raw = _read_raw_dataset(raw_dataset)
 
     global_authority_reasons: set[str] = set()
-    if not source.valid:
-        global_authority_reasons.add("SOURCE_AUTHORITY_INVALID")
-    if not policy.valid:
-        global_authority_reasons.add("MAPPING_POLICY_INVALID")
-    if not raw.valid:
-        global_authority_reasons.add("RAW_DATASET_CONTRACT_INVALID")
-    if (
-        source.payload is not None
-        and _normalise_digest(source.payload.get("derived_raw_dataset_sha256"))
-        != raw.digest
-    ):
-        global_authority_reasons.add("INPUT_DIGEST_MISMATCH")
-
-    mapping_valid = bool(
-        policy.valid
-        and policy.payload is not None
-        and _frozen_mapping_valid(policy.payload)
-    )
-    if policy.valid and not mapping_valid:
-        global_authority_reasons.add("MAPPING_POLICY_INVALID")
-    if raw.valid and mapping_valid and policy.payload is not None:
-        if not _rows_match_frozen_mapping(raw.rows, policy.payload):
-            global_authority_reasons.add("MAPPING_POLICY_INVALID")
-
-    if raw.valid and raw.columns:
-        missing = set(REQUIRED_COLUMNS).difference(raw.columns)
-        if missing:
-            global_authority_reasons.add("RAW_DATASET_CONTRACT_INVALID")
-        row_ids = [str(row.get("row_id") or "") for row in raw.rows]
-        if any(not row_id for row_id in row_ids) or len(row_ids) != len(set(row_ids)):
-            global_authority_reasons.add("ROW_ID_INVALID")
-
-    rows = list(raw.rows) if raw.valid else []
-    if not rows:
-        # Keep this explicit even though the current shared CSV helper rejects
-        # header-only input. The report contract must remain fail-closed if the
-        # helper ever becomes permissive or an injected parser returns no rows.
-        global_authority_reasons.add("RAW_DATASET_CONTRACT_INVALID")
-
-    if provider is None:
-        provider = discover_unimol_provider_preprocessor(
-            provider_python=provider_python
-        )
-    provider_name, provider_version, capabilities, provider_reasons = _provider_metadata(provider)
-    environment_reasons = set(provider_reasons)
+    environment_reasons: set[str] = set()
     expected_version = _safe_provider_version(
         expected_provider_version,
         allow_unavailable=False,
     )
     if expected_version == _UNAVAILABLE:
         environment_reasons.add("PROVIDER_VERSION_AUTHORITY_UNAVAILABLE")
-    elif provider_version == _UNAVAILABLE:
-        environment_reasons.add("PROVIDER_VERSION_UNAVAILABLE")
-    elif provider_version != expected_version:
-        environment_reasons.add("PROVIDER_VERSION_MISMATCH")
 
     commit = _resolve_repository_commit(repository_commit)
     if commit == "0" * 40:
@@ -990,11 +1730,10 @@ def run_br1_unimol_applicability_preflight(
         worker_digest = _UNAVAILABLE
     if worker_digest == _UNAVAILABLE:
         environment_reasons.add("WORKER_IMPLEMENTATION_UNAVAILABLE")
+
     requested_profile_id = str(execution_profile_id or "")
     canonical_profile_digest = _resolve_profile_digest(requested_profile_id)
-    profile_digest = execution_profile_digest or _resolve_profile_digest(
-        requested_profile_id
-    )
+    profile_digest = execution_profile_digest or canonical_profile_digest
     if profile_digest != _UNAVAILABLE and not _SHA256.fullmatch(profile_digest):
         profile_digest = _UNAVAILABLE
     if (
@@ -1013,7 +1752,197 @@ def run_br1_unimol_applicability_preflight(
     if profile_id_for_report != EXECUTION_PROFILE_ID:
         environment_reasons.add("EXECUTION_PROFILE_UNAVAILABLE")
 
+    if not source.valid:
+        global_authority_reasons.add("SOURCE_AUTHORITY_INVALID")
+    if not policy.valid:
+        global_authority_reasons.add("MAPPING_POLICY_INVALID")
+    if not raw.valid:
+        global_authority_reasons.add("RAW_DATASET_CONTRACT_INVALID")
+    if (
+        source.payload is not None
+        and _normalise_digest(source.payload.get("derived_raw_dataset_sha256"))
+        != raw.digest
+    ):
+        global_authority_reasons.add("INPUT_DIGEST_MISMATCH")
+
+    authority = _verify_source_authority(
+        authority_path=source_authority,
+        publication_path=source_publication,
+        registry_path=source_publication_registry,
+        raw=raw,
+        source=source,
+        policy=policy,
+        expected_provider_version=expected_version,
+        execution_profile_id=profile_id_for_report,
+        execution_profile_digest=profile_digest,
+    )
+    global_authority_reasons.update(authority.reasons)
+
+    # The authority check is intentionally followed by a second stable read.
+    # A file replacement between the first read and provider staging must not
+    # be converted into a row-level result or sent to the provider.
+    reread = _read_raw_dataset(raw_dataset)
+    if raw.valid and reread.valid:
+        if (
+            raw.digest != reread.digest
+            or raw.columns != reread.columns
+            or raw.rows != reread.rows
+        ):
+            global_authority_reasons.add("INPUT_DIGEST_MISMATCH")
+            global_authority_reasons.add("CANONICAL_INPUT_INVALID")
+    elif raw.valid != reread.valid or raw.digest != reread.digest:
+        global_authority_reasons.add("INPUT_DIGEST_MISMATCH")
+        global_authority_reasons.add("CANONICAL_INPUT_INVALID")
+
+    mapping_valid = bool(
+        policy.valid
+        and policy.payload is not None
+        and _frozen_mapping_valid(policy.payload)
+        and authority.mapping_binding is not None
+        and authority.mapping_binding_digest
+        != _UNAVAILABLE
+        and "MAPPING_POLICY_INVALID" not in authority.reasons
+    )
+    if policy.valid and not mapping_valid:
+        global_authority_reasons.add("MAPPING_POLICY_INVALID")
+    if raw.valid and mapping_valid and policy.payload is not None:
+        if not _rows_match_frozen_mapping(raw.rows, policy.payload):
+            global_authority_reasons.add("MAPPING_POLICY_INVALID")
+
+    if raw.valid and raw.columns:
+        missing = set(REQUIRED_COLUMNS).difference(raw.columns)
+        if missing:
+            global_authority_reasons.add("RAW_DATASET_CONTRACT_INVALID")
+        row_ids = [str(row.get("row_id") or "") for row in raw.rows]
+        canonical_row_ids = [
+            canonical_field_value("row_id", row.get("row_id", ""))
+            for row in raw.rows
+        ]
+        if (
+            any(
+                not row_id or row_id != canonical_row_id
+                for row_id, canonical_row_id in zip(row_ids, canonical_row_ids)
+            )
+            or len(row_ids) != len(set(row_ids))
+            or len(canonical_row_ids) != len(set(canonical_row_ids))
+        ):
+            global_authority_reasons.add("ROW_ID_INVALID")
+
+    rows = list(raw.rows) if raw.valid else []
+    if not rows:
+        # Keep this explicit even though the current shared CSV helper rejects
+        # header-only input. The report contract must remain fail-closed if the
+        # helper ever becomes permissive or an injected parser returns no rows.
+        global_authority_reasons.add("RAW_DATASET_CONTRACT_INVALID")
+
+    provider_was_discovered = provider is None
+    if provider is None:
+        provider = discover_unimol_provider_preprocessor(
+            provider_python=provider_python,
+            execution_profile_id=profile_id_for_report,
+        )
+    (
+        provider_name,
+        provider_version,
+        capabilities,
+        capability_contract,
+        provider_reasons,
+    ) = _provider_metadata(provider)
+    environment_reasons.update(provider_reasons)
+    if provider_version == _UNAVAILABLE:
+        environment_reasons.add("PROVIDER_VERSION_UNAVAILABLE")
+    elif provider_version != expected_version:
+        environment_reasons.add("PROVIDER_VERSION_MISMATCH")
+    if capability_contract is not None:
+        if capability_contract.provider_version != provider_version:
+            environment_reasons.add("PROVIDER_VERSION_MISMATCH")
+        if expected_version != _UNAVAILABLE and capability_contract.provider_version != expected_version:
+            environment_reasons.add("PROVIDER_VERSION_MISMATCH")
+        if profile_id_for_report not in capability_contract.compatible_execution_profiles:
+            environment_reasons.add("EXECUTION_PROFILE_UNAVAILABLE")
+            environment_reasons.add("PROVIDER_CAPABILITY_UNAVAILABLE")
+
     capabilities_digest = capabilities.digest if capabilities is not None else _UNAVAILABLE
+    capability_contract_material = (
+        capability_contract.semantic_material()
+        if capability_contract is not None
+        else None
+    )
+    capability_contract_digest = (
+        capability_contract.digest
+        if capability_contract is not None
+        else _UNAVAILABLE
+    )
+    rows_for_provider = list(rows)
+    preliminary_results = [
+        _row_result(
+            row,
+            capabilities=capabilities,
+            provider=provider,
+            global_authority_reasons=global_authority_reasons,
+            global_environment_reasons=environment_reasons,
+            mapping_valid=mapping_valid,
+        )
+        for row in rows
+    ]
+    provider_results: dict[str, ProviderPreprocessResult | None] = {}
+    provider_preprocessing_dispatched = False
+    provider_actual_input_digest = _UNAVAILABLE
+    eligible_rows = [
+        row
+        for row, preliminary in zip(rows_for_provider, preliminary_results)
+        if not preliminary["reason_codes"]
+        and not global_authority_reasons
+        and not environment_reasons
+    ]
+    if eligible_rows:
+        provider_preprocessing_dispatched = True
+        provider_rows: list[Mapping[str, Any]] = []
+        try:
+            provider_rows = canonical_provider_rows(eligible_rows)
+            provider_input_bytes = canonical_provider_input_bytes_from_rows(provider_rows)
+            provider_input_digest = digest_bytes(provider_input_bytes)
+            preprocess_many_rows = getattr(provider, "preprocess_many_rows", None)
+            if callable(preprocess_many_rows):
+                raw_provider_results = preprocess_many_rows(
+                    provider_rows,
+                    provider_input_bytes,
+                    provider_input_digest,
+                )
+            else:
+                preprocess_many = getattr(provider, "preprocess_many", None)
+                if callable(preprocess_many):
+                    raw_provider_results = preprocess_many(
+                        [str(row.get("smiles") or "") for row in provider_rows]
+                    )
+                else:
+                    raw_provider_results = [
+                        provider.preprocess(str(row.get("smiles") or ""))
+                        for row in provider_rows
+                    ]
+            if len(raw_provider_results) != len(provider_rows):
+                raise RuntimeError("provider preflight result count mismatch")
+            for row, raw_result in zip(provider_rows, raw_provider_results):
+                provider_results[str(row.get("row_id") or "")] = (
+                    _normalise_provider_result(raw_result)
+                )
+            observed_provider_input_digest = getattr(
+                provider, "last_provider_input_digest", None
+            )
+            if observed_provider_input_digest:
+                provider_actual_input_digest = str(observed_provider_input_digest)
+            elif not callable(preprocess_many_rows):
+                # Injected test adapters do not cross an interpreter boundary;
+                # their equivalent input is the same canonical byte string.
+                provider_actual_input_digest = provider_input_digest
+            else:
+                provider_actual_input_digest = _UNAVAILABLE
+            if provider_actual_input_digest != provider_input_digest:
+                global_authority_reasons.add("INPUT_DIGEST_MISMATCH")
+        except Exception:
+            for row in provider_rows or eligible_rows:
+                provider_results[str(row.get("row_id") or "")] = None
+
     row_results = [
         _row_result(
             row,
@@ -1022,6 +1951,11 @@ def run_br1_unimol_applicability_preflight(
             global_authority_reasons=global_authority_reasons,
             global_environment_reasons=environment_reasons,
             mapping_valid=mapping_valid,
+            provider_called=(
+                provider_preprocessing_dispatched
+                and str(row.get("row_id") or "") in provider_results
+            ),
+            provider_result=provider_results.get(str(row.get("row_id") or "")),
         )
         for row in rows
     ]
@@ -1037,11 +1971,36 @@ def run_br1_unimol_applicability_preflight(
         if environment_reasons
         else "VERIFIED"
     )
+    input_identity = dict(authority.identity)
+    input_identity["mapping_binding_digest"] = authority.mapping_binding_digest
+    input_identity["provider_actual_input_digest"] = provider_actual_input_digest
+    input_identity["staged_provider_input_digest"] = input_identity.get(
+        "observed_canonical_provider_input_digest",
+        _UNAVAILABLE,
+    )
+    dispatch_assertions = {
+        "provider_capability_probe_dispatched": bool(provider_was_discovered),
+        "provider_preprocessing_dispatched": provider_preprocessing_dispatched,
+        "training_dispatched": False,
+        "generation_dispatched": False,
+        "prediction_dispatched": False,
+        "ranking_dispatched": False,
+        "model_artifacts_created": False,
+        "scaler_created": False,
+        "training_metrics_created": False,
+    }
     report: dict[str, Any] = {
         "schema_version": REPORT_SCHEMA,
         "raw_dataset_digest": raw.digest,
         "source_dataset_manifest_digest": source.digest,
         "mapping_policy_digest": policy.digest,
+        "source_authority_digest": authority.digest,
+        "source_publication_registry_digest": authority.registry_digest,
+        "source_publication_digest": authority.publication_digest,
+        "mapping_policy_version": authority.mapping_policy_version,
+        "mapping_binding_digest": authority.mapping_binding_digest,
+        "canonicalization_contract_version": CANONICALIZATION_CONTRACT_VERSION,
+        "input_identity": input_identity,
         "repository_commit": commit,
         "worker_implementation_digest": worker_digest,
         "execution_profile_id": profile_id_for_report,
@@ -1050,6 +2009,14 @@ def run_br1_unimol_applicability_preflight(
         "provider_version": provider_version,
         "expected_provider_version": expected_version,
         "provider_capabilities_digest": capabilities_digest,
+        "provider_capability_contract": capability_contract_material,
+        "provider_capability_contract_version": (
+            capability_contract.adapter_contract_version
+            if capability_contract is not None
+            else _UNAVAILABLE
+        ),
+        "provider_capability_contract_digest": capability_contract_digest,
+        "dispatch_assertions": dispatch_assertions,
         "applicability_policy_version": APPLICABILITY_POLICY_VERSION,
         "applicability_policy_digest": APPLICABILITY_POLICY_DIGEST,
         "input_row_count": len(rows),
@@ -1111,6 +2078,8 @@ def _validate_report_contract(report: Mapping[str, Any]) -> None:
         for status, count in counts.items()
     ):
         raise ApplicabilityPreflightError("report row counts mismatch")
+    if sum(counts.values()) != report["input_row_count"]:
+        raise ApplicabilityPreflightError("report status counts do not conserve input rows")
     for status, digest_field in (
         ("SUPPORTED", "supported_row_roster_digest"),
         ("UNSUPPORTED", "unsupported_row_roster_digest"),
@@ -1120,6 +2089,60 @@ def _validate_report_contract(report: Mapping[str, Any]) -> None:
             raise ApplicabilityPreflightError("report row roster digest mismatch")
     if report["reason_counts"] != _reason_counts(row_results, global_reasons):
         raise ApplicabilityPreflightError("report reason counts mismatch")
+    identity = report["input_identity"]
+    identity_pairs = {
+        "observed_raw_dataset_digest": report["raw_dataset_digest"],
+        "source_dataset_manifest_digest": report["source_dataset_manifest_digest"],
+        "mapping_policy_digest": report["mapping_policy_digest"],
+        "mapping_binding_digest": report["mapping_binding_digest"],
+        "source_publication_registry_digest": report[
+            "source_publication_registry_digest"
+        ],
+        "source_publication_digest": report["source_publication_digest"],
+        "input_row_count": report["input_row_count"],
+        "canonicalization_contract_version": report[
+            "canonicalization_contract_version"
+        ],
+    }
+    for key, expected in identity_pairs.items():
+        if identity.get(key) != expected:
+            raise ApplicabilityPreflightError("report input identity mismatch")
+    if identity["staged_provider_input_digest"] != identity[
+        "observed_canonical_provider_input_digest"
+    ]:
+        raise ApplicabilityPreflightError("report input identity mismatch")
+    if (
+        identity["provider_actual_input_digest"] != _UNAVAILABLE
+        and identity["provider_actual_input_digest"]
+        != identity["staged_provider_input_digest"]
+    ):
+        raise ApplicabilityPreflightError("report input identity mismatch")
+    contract = report["provider_capability_contract"]
+    expected_contract_digest = (
+        digest_json(contract) if contract is not None else _UNAVAILABLE
+    )
+    if report["provider_capability_contract_digest"] != expected_contract_digest:
+        raise ApplicabilityPreflightError("provider capability contract digest mismatch")
+    if contract is None and report["provider_capability_contract_version"] != _UNAVAILABLE:
+        raise ApplicabilityPreflightError("provider capability contract version mismatch")
+    if contract is not None and report["provider_capability_contract_version"] != contract[
+        "adapter_contract_version"
+    ]:
+        raise ApplicabilityPreflightError("provider capability contract version mismatch")
+    dispatch = report["dispatch_assertions"]
+    if any(
+        dispatch[key]
+        for key in (
+            "training_dispatched",
+            "generation_dispatched",
+            "prediction_dispatched",
+            "ranking_dispatched",
+            "model_artifacts_created",
+            "scaler_created",
+            "training_metrics_created",
+        )
+    ):
+        raise ApplicabilityPreflightError("preflight dispatch assertion violated")
     if report["report_digest"] != _report_digest(report):
         raise ApplicabilityPreflightError("report digest mismatch")
 
@@ -1179,6 +2202,9 @@ def verify_br1_unimol_applicability_report_against_inputs(
     source_manifest: Path,
     mapping_policy: Path,
     *,
+    source_authority: Path | None = None,
+    source_publication: Path | None = None,
+    source_publication_registry: Path | None = None,
     provider: UniMolProviderPreprocessor,
     repository_commit: str,
     worker_implementation_digest: str,
@@ -1194,6 +2220,9 @@ def verify_br1_unimol_applicability_report_against_inputs(
         raw_dataset,
         source_manifest,
         mapping_policy,
+        source_authority=source_authority,
+        source_publication=source_publication,
+        source_publication_registry=source_publication_registry,
         provider=provider,
         expected_provider_version=expected_provider_version,
         repository_commit=repository_commit,
@@ -1251,6 +2280,9 @@ def _build_parser() -> Any:
     parser.add_argument("--raw-dataset", type=Path, required=True)
     parser.add_argument("--source-manifest", type=Path, required=True)
     parser.add_argument("--mapping-policy", type=Path, required=True)
+    parser.add_argument("--source-authority", type=Path, required=True)
+    parser.add_argument("--source-publication", type=Path, required=True)
+    parser.add_argument("--source-publication-registry", type=Path, required=True)
     parser.add_argument("--output-report", type=Path, required=True)
     parser.add_argument("--public-summary", type=Path, required=True)
     parser.add_argument("--provider-python", type=Path)
@@ -1265,14 +2297,14 @@ def _build_parser() -> Any:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
-        provider = discover_unimol_provider_preprocessor(
-            provider_python=args.provider_python
-        )
         result = run_br1_unimol_applicability_preflight(
             args.raw_dataset,
             args.source_manifest,
             args.mapping_policy,
-            provider=provider,
+            source_authority=args.source_authority,
+            source_publication=args.source_publication,
+            source_publication_registry=args.source_publication_registry,
+            provider_python=args.provider_python,
             expected_provider_version=args.expected_provider_version,
             repository_commit=args.repository_commit,
             worker_implementation_path=args.worker_implementation,

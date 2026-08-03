@@ -11,13 +11,16 @@ Confirm that the private dataset satisfies molecule/InChIKey grouping, paper gro
 ## Procedure
 
 1. Deploy the reviewed repository commit and the matching `molly-worker` package. Confirm the server registry is exactly `br1-private-real-tool-v3` and the Uni-Mol execution profile is exactly `unimol-train-br1-v2`.
-2. In the actual configured Uni-Mol Python environment, run the operator-side applicability preflight against the exact Raw CSV, `source_dataset_manifest.v1`, and `br1_raw_dataset_mapping_policy.v1`. The command accepts private paths only; publish the complete report privately and export only the summary:
+2. In the actual configured Uni-Mol Python environment, run the operator-side applicability preflight against the exact Raw CSV, `source_dataset_manifest.v1`, `br1_raw_dataset_mapping_policy.v1`, and the matching source publication/authority artifacts. The command accepts private paths only; publish the complete report privately and export only the summary:
 
    ```bash
    python scripts/run_br1_unimol_applicability_preflight.py \
      --raw-dataset <private-path> \
      --source-manifest <private-path> \
      --mapping-policy <private-path> \
+     --source-authority <private-path> \
+     --source-publication <private-path> \
+     --source-publication-registry <private-path> \
      --output-report <private-path> \
      --public-summary <private-path> \
      --expected-provider-version <reviewed-unimol-tools-version>
@@ -28,11 +31,17 @@ Confirm that the private dataset satisfies molecule/InChIKey grouping, paper gro
    not inside a Git checkout. The expected provider version must come from the
    reviewed worker/capability authority and is exact-compared with the
    installed provider version; omitting it is `BLOCKED` with
-   `PROVIDER_VERSION_AUTHORITY_UNAVAILABLE`. Do not put that value, provider
-   paths, or probe output in public evidence. The preflight never calls a
-   training method; if the installed provider has no explicitly documented
-   read-only preprocessing API, the result must be `BLOCKED` with
-   `PROVIDER_PREFLIGHT_API_UNAVAILABLE`.
+   `PROVIDER_VERSION_AUTHORITY_UNAVAILABLE`. The source authority binds the
+   source artifact, publication registry, raw digest, canonical source bytes,
+   mapping binding, canonical provider-input bytes, row count, provider
+   version, and profile digest. The runner rereads the Raw CSV before any
+   provider preprocessing and rejects a digest or canonical-byte change.
+   Do not put provider paths or probe output in public evidence. The
+   project-owned `unimol-tools 0.1.5` adapter uses `DataHub(is_train=False,
+   conf_cache_level=0)` in the configured provider Python environment; it
+   never constructs `MolTrain`, calls `fit()`, or creates model artifacts.
+   A missing or unverified capability contract remains `BLOCKED` with an
+   unresolved provider reason; no training attempt may be used as a probe.
    Before exporting or using the summary, verify it against the exact private
    report with the report-bound summary verifier. A schema-valid summary that
    is not the deterministic projection of that report must be rejected.
@@ -55,28 +64,73 @@ Private evidence adds Uni-Mol provider/version, verified training publication, R
 
 Do not mark `M3H-013 I/T/V / DONE` until fresh Uni-Mol, real REINVENT4, current-run prediction/ranking/validation, restart/replay evidence and repository-owner exact-HEAD review all exist. BR1 alone never closes M3H-GATE-006, M3.5 or Molly v1.
 
-## 2026-08-03 preflight result
+## 2026-08-03 authoritative remote applicability baseline
 
-The first post-merge private preflight failed closed before an acceptance ID or
-run was created. The repository-owned Uni-Mol and REINVENT4 logical profiles
-had current available capability probes, but the server-owned remote resource
-authority policy was not configured. The supplied source CSV also required an
-authoritative BR1 Raw Dataset mapping because it did not contain the required
-contract columns as-is.
+The first post-merge Uni-Mol applicability preflight was run remotely against
+the private 1,999-row input and failed closed. Its reviewed repository commit
+was `19ae10a1c866964d6b993c7dfd100e930127acde`; the provider was
+`unimol-tools 0.1.5` under `unimol-train-br1-v2`. The private report contract
+and deterministic summary projection verified, but the result was:
 
-The uploaded source also lacked dataset name/version, source URL, license and
-download date. Those values remain unknown and are recorded as
-`SOURCE_PROVENANCE_MISSING`. In the numeric-QY subset, repeated chromophores
-across solvent conditions conflict with an InChIKey-only duplicate exclusion;
-this is recorded as `CONDITION_AWARE_IDENTITY_POLICY_UNRESOLVED`. Do not map
-that subset into BR1 Raw Dataset rows until source provenance, field mapping and
-the condition-aware identity policy are authoritative.
+```text
+status=BLOCKED
+input=1999  supported=0  unsupported=0  unresolved=1999
+report_digest=sha256:f47b6a50d4fa73f6bfcf2384918e484fc2a46d38c68a93b24d1ea1a66c7f17db
+reasons=INPUT_DIGEST_MISMATCH,SOURCE_AUTHORITY_INVALID,
+        MAPPING_POLICY_INVALID,PROVIDER_PREFLIGHT_API_UNAVAILABLE,
+        PROVIDER_CAPABILITY_UNAVAILABLE
+```
 
-No Controller execution, confirmation, training, generation, restart or replay
-was attempted. The privacy-safe finding is recorded in
-`docs/evidence/br1-private-real-tool-canary-v1/`. After both blockers are
-resolved, use a new clean acceptance ID and run ID; do not amend this blocked
-preflight into a successful acceptance.
+`SUPPORTED=0` is not a claim that all molecules are unsupported. Every row
+was `UNRESOLVED` because the input/authority chain and provider applicability
+capability were not closed. No acceptance ID/run, Controller execution,
+training, generation, prediction, ranking, restart, or replay was attempted.
+
+## BR1 preflight remediation v1
+
+The remediation implementation keeps applicability evidence outside the
+runtime task graph and uses this explicit identity chain:
+
+```text
+authorized source artifact
+  -> canonical source reconstruction
+  -> server-owned mapping binding
+  -> canonical provider-input bytes
+  -> remote staged-input digest
+  -> provider actual-input digest
+```
+
+`br1_preflight_source_authority.v1` binds the source publication registry,
+source and mapping digests, row count, canonicalization contract, mapping
+binding, provider/version, profile/digest, and canonical source/provider
+digests. `br1_unimol_provider_adapter.v1` describes the exact provider
+representation, fields, context, missing-value, duplicate, ordering and
+no-dispatch rules. The private report records expected/observed/staged/actual
+input digests and dispatch assertions; the public summary is still generated
+only by exact projection from that report.
+
+The fresh remote execution of remediation HEAD
+`c23b7a0eb8897b0d65bd33b4763eb8f8815f46f7` used the matching worker,
+`unimol-tools 0.1.5`, and `unimol-train-br1-v2`. The provider capability
+contract was discovered and verified, but the private staging still had no
+new source authority/publication registry artifacts, so the result remained:
+
+```text
+status=BLOCKED
+input=1999  supported=0  unsupported=0  unresolved=1999
+report_digest=sha256:e86467ab217f99d8a755b963d1bb46adcb5ddfdb7d736f4819ae818d72e6901e
+summary_digest=sha256:57443e3f4c5767ef579af931299d029eb0d69b5ce948b073eb3af785cc17da86
+reasons=INPUT_DIGEST_MISMATCH,MAPPING_POLICY_INVALID,
+        SOURCE_AUTHORITY_INVALID,SOURCE_PUBLICATION_REGISTRY_INVALID
+```
+
+The report contract and report-bound summary projection both passed. The
+report recorded `provider_capability_probe_dispatched=true`, while
+`provider_preprocessing_dispatched`, training, generation, prediction,
+ranking, model artifact, scaler and metrics assertions were all false because
+authority validation stopped the run before row-level provider preprocessing.
+This is fresh pre-acceptance evidence, not a claim of applicability or owner
+acceptance; a new authority-bound run is still required.
 
 ## Applicability preflight handoff
 
@@ -92,9 +146,8 @@ ID/run ID.
 
 ## Development-branch evidence boundary
 
-Real applicability preflight: `NOT EXECUTED`. The development environment has
-not produced an authoritative private applicability report. The default
-discovery path is only expected to return `BLOCKED` with
-`PROVIDER_PREFLIGHT_API_UNAVAILABLE` until a matching environment exposes the
-versioned read-only provider API; that expectation is not a real-environment
-preflight result.
+Real applicability preflight on the remediation HEAD: `EXECUTED REMOTELY`,
+with the `BLOCKED` result recorded above. The remote run did not close the
+source/mapping authority chain and therefore cannot freeze the data or start
+acceptance. A local fake-provider test or a development-branch run is not a
+private applicability result.
