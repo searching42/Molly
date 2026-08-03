@@ -1,0 +1,531 @@
+from __future__ import annotations
+
+import copy
+import csv
+import io
+import json
+import sys
+import types
+from pathlib import Path
+
+import pytest
+from jsonschema import Draft202012Validator
+
+import ai4s_agent.br1_unimol_applicability as applicability
+from ai4s_agent.br1_unimol_applicability import (
+    EXECUTION_PROFILE_ID,
+    PROVIDER_NAME,
+    ProviderCapabilities,
+    ProviderPreprocessResult,
+    run_br1_unimol_applicability_preflight,
+    verify_br1_unimol_applicability_report,
+)
+from ai4s_agent.resource_profiles import EXECUTION_PROFILES
+from ai4s_agent.structured_dataset_confirmation import canonical_json_bytes, digest_bytes
+
+
+NOW = "2026-08-03T12:00:00Z"
+COMMIT = "a" * 40
+WORKER_DIGEST = "sha256:" + "b" * 64
+PROFILE_DIGEST = EXECUTION_PROFILES[EXECUTION_PROFILE_ID].digest()
+CSV_COLUMNS = [
+    "row_id",
+    "smiles",
+    "target_value",
+    "material_role",
+    "emission_mechanism",
+    "medium",
+    "host",
+    "doping_ratio",
+    "temperature",
+    "measurement_condition",
+    "paper_evidence",
+    "comparable",
+    "paper_id",
+]
+
+
+class FakeProvider:
+    provider_name = PROVIDER_NAME
+    provider_version = "0.1.5"
+    capabilities = ProviderCapabilities(
+        supported_elements=("B", "C", "F", "H", "N", "O", "P", "S", "Cl", "Br", "I"),
+        atom_count_limit=512,
+        formal_charge_policy="neutral_only",
+    )
+
+    def __init__(self, callback=None) -> None:
+        self.calls: list[str] = []
+        self.callback = callback or (
+            lambda smiles: ProviderPreprocessResult("SUPPORTED", "SUPPORTED")
+        )
+
+    def preprocess(self, smiles: str) -> ProviderPreprocessResult:
+        self.calls.append(smiles)
+        return self.callback(smiles)
+
+
+def _condition() -> str:
+    return json.dumps(
+        {
+            "phase": "solution",
+            "solvent_smiles": "ClCCl",
+            "temperature": "not_reported",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _row(row_id: str, smiles: str, target: str = "0.5") -> dict[str, str]:
+    return {
+        "row_id": row_id,
+        "smiles": smiles,
+        "target_value": target,
+        "material_role": "emitter",
+        "emission_mechanism": "unknown",
+        "medium": "solution",
+        "host": "",
+        "doping_ratio": "",
+        "temperature": "not_reported",
+        "measurement_condition": _condition(),
+        "paper_evidence": "paper-evidence",
+        "comparable": "partially_comparable_single_solvent",
+        "paper_id": "paper-1",
+    }
+
+
+def _csv_bytes(rows: list[dict[str, str]]) -> bytes:
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=CSV_COLUMNS, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return stream.getvalue().encode("utf-8")
+
+
+def _mapping() -> dict[str, object]:
+    return {
+        "schema_version": "br1_raw_dataset_mapping_policy.v1",
+        "target_property": "PLQY",
+        "scientific_scope": "broader_organic_emitter_plqy",
+        "scope_downgraded": True,
+        "source_solvent_smiles": "ClCCl",
+        "target_unit": "fraction",
+        "identity_key": "standard_inchikey",
+        "duplicate_tie_break": "lowest_source_tag",
+        "material_role": "emitter",
+        "emission_mechanism": "unknown",
+        "temperature_policy": "not_reported",
+        "condition_merge_policy": "explicit_single_solvent_filter_no_merge",
+        "comparability_policy": "partially_comparable_single_solvent",
+    }
+
+
+def _write_inputs(
+    tmp_path: Path,
+    rows: list[dict[str, str]],
+    *,
+    derived_digest: str | None = None,
+) -> tuple[Path, Path, Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    raw_path = tmp_path / "raw.csv"
+    source_path = tmp_path / "source.json"
+    mapping_path = tmp_path / "mapping.json"
+    raw_bytes = _csv_bytes(rows)
+    raw_path.write_bytes(raw_bytes)
+    source = {
+        "schema_version": "source_dataset_manifest.v1",
+        "dataset_name": "BR1 fixture",
+        "dataset_version": "1",
+        "dataset_doi": "10.1000/example",
+        "license": "CC BY 4.0",
+        "download_date": "2026-08-03",
+        "original_file_sha256": "c" * 64,
+        "derived_raw_dataset_sha256": derived_digest or digest_bytes(raw_bytes),
+    }
+    source_path.write_bytes(canonical_json_bytes(source))
+    mapping_path.write_bytes(canonical_json_bytes(_mapping()))
+    return raw_path, source_path, mapping_path
+
+
+_DEFAULT_PROVIDER = object()
+
+
+def _run(
+    tmp_path: Path,
+    rows: list[dict[str, str]],
+    *,
+    provider=_DEFAULT_PROVIDER,
+    **kwargs,
+):
+    paths = _write_inputs(tmp_path, rows)
+    selected_provider = FakeProvider() if provider is _DEFAULT_PROVIDER else provider
+    return run_br1_unimol_applicability_preflight(
+        *paths,
+        provider=selected_provider,
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        created_at=NOW,
+        **kwargs,
+    )
+
+
+def test_all_rows_supported_is_pass_and_validates_both_schemas(tmp_path: Path) -> None:
+    result = _run(tmp_path, [_row("r-2", "CCO"), _row("r-1", "c1ccccc1O")])
+
+    assert result.report["overall_status"] == "PASS"
+    assert result.report["supported_row_count"] == 2
+    assert result.report["unsupported_row_count"] == 0
+    assert result.report["unresolved_row_count"] == 0
+    assert [item["row_id"] for item in result.report["row_results"]] == ["r-1", "r-2"]
+    assert result.report["row_results"][0]["canonical_molecule_identity_digest"].startswith(
+        "sha256:"
+    )
+    schemas = Path("docs/schemas")
+    Draft202012Validator(
+        json.loads((schemas / "br1_unimol_applicability_report.schema.json").read_text())
+    ).validate(result.report)
+    Draft202012Validator(
+        json.loads((schemas / "br1_unimol_applicability_summary.schema.json").read_text())
+    ).validate(result.public_summary)
+
+
+@pytest.mark.parametrize(
+    ("smiles", "reason"),
+    [
+        ("not-a-smiles", "INVALID_SMILES"),
+        ("CC.O", "MULTICOMPONENT_MOLECULE"),
+        ("[NH4+]", "FORMAL_CHARGE_UNSUPPORTED"),
+    ],
+)
+def test_molecule_failures_are_unsupported_and_provider_is_not_called(
+    tmp_path: Path,
+    smiles: str,
+    reason: str,
+) -> None:
+    provider = FakeProvider()
+    result = _run(tmp_path, [_row("r-1", smiles)], provider=provider)
+
+    item = result.report["row_results"][0]
+    assert item["status"] == "UNSUPPORTED"
+    assert reason in item["reason_codes"]
+    assert provider.calls == []
+    assert result.report["overall_status"] == "REVIEW_REQUIRED"
+
+
+def test_nonfinite_and_out_of_range_targets_fail_closed(tmp_path: Path) -> None:
+    provider = FakeProvider()
+    result = _run(
+        tmp_path,
+        [_row("r-nan", "CCO", "nan"), _row("r-high", "CCN", "1.01")],
+        provider=provider,
+    )
+
+    by_id = {item["row_id"]: item for item in result.report["row_results"]}
+    assert by_id["r-nan"]["reason_codes"] == ["NONFINITE_TARGET"]
+    assert by_id["r-high"]["reason_codes"] == ["TARGET_OUT_OF_RANGE"]
+    assert provider.calls == []
+    assert result.report["overall_status"] == "REVIEW_REQUIRED"
+
+
+def test_unsupported_element_and_atom_limit_are_reported(tmp_path: Path) -> None:
+    element_provider = FakeProvider()
+    element_provider.capabilities = ProviderCapabilities(
+        supported_elements=("C", "H", "N", "O"),
+        atom_count_limit=512,
+        formal_charge_policy="neutral_only",
+    )
+    element_result = _run(tmp_path / "element", [_row("r-1", "CCl")], provider=element_provider)
+    assert element_result.report["row_results"][0]["reason_codes"] == ["UNSUPPORTED_ELEMENT"]
+
+    atom_provider = FakeProvider()
+    atom_provider.capabilities = ProviderCapabilities(
+        supported_elements=("C", "H", "N", "O"),
+        atom_count_limit=2,
+        formal_charge_policy="neutral_only",
+    )
+    atom_result = _run(tmp_path / "atom", [_row("r-1", "CCO")], provider=atom_provider)
+    assert atom_result.report["row_results"][0]["reason_codes"] == [
+        "ATOM_COUNT_LIMIT_EXCEEDED"
+    ]
+
+
+def test_conformer_failure_and_provider_exception_never_pass(tmp_path: Path) -> None:
+    conformer = FakeProvider(
+        lambda smiles: ProviderPreprocessResult("UNSUPPORTED", "FAILED")
+    )
+    result = _run(tmp_path / "conformer", [_row("r-1", "CCO")], provider=conformer)
+    item = result.report["row_results"][0]
+    assert item["status"] == "UNSUPPORTED"
+    assert item["conformer_preprocessing_status"] == "FAILED"
+    assert set(item["reason_codes"]) == {
+        "CONFORMER_GENERATION_FAILED",
+        "UNIMOL_PREPROCESS_FAILED",
+    }
+
+    def fail(_: str):
+        raise RuntimeError("provider exception contains private details")
+
+    failed = FakeProvider(fail)
+    failed_result = _run(tmp_path / "provider", [_row("r-1", "CCO")], provider=failed)
+    failed_item = failed_result.report["row_results"][0]
+    assert failed_item["status"] == "UNRESOLVED"
+    assert failed_item["reason_codes"] == ["UNIMOL_PREPROCESS_FAILED"]
+    assert failed_result.report["overall_status"] == "BLOCKED"
+
+
+@pytest.mark.parametrize(
+    ("version", "expected", "reason"),
+    [
+        ("unavailable", None, "PROVIDER_VERSION_UNAVAILABLE"),
+        ("0.1.5", "0.1.4", "PROVIDER_VERSION_MISMATCH"),
+    ],
+)
+def test_provider_version_authority_is_fail_closed(
+    tmp_path: Path,
+    version: str,
+    expected: str | None,
+    reason: str,
+) -> None:
+    provider = FakeProvider()
+    provider.provider_version = version
+    result = _run(
+        tmp_path,
+        [_row("r-1", "CCO")],
+        provider=provider,
+        expected_provider_version=expected,
+    )
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert result.report["unresolved_row_count"] == 1
+    assert reason in result.report["row_results"][0]["reason_codes"] or reason in result.report[
+        "global_reason_codes"
+    ]
+
+
+def test_manifest_digest_mismatch_and_mapping_policy_invalid_block(tmp_path: Path) -> None:
+    paths = _write_inputs(tmp_path / "digest", [_row("r-1", "CCO")], derived_digest="d" * 64)
+    result = run_br1_unimol_applicability_preflight(
+        *paths,
+        provider=FakeProvider(),
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        created_at=NOW,
+    )
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "INPUT_DIGEST_MISMATCH" in result.report["global_reason_codes"]
+    assert result.report["row_results"][0]["status"] == "UNRESOLVED"
+
+    invalid_paths = _write_inputs(tmp_path / "mapping", [_row("r-1", "CCO")])
+    invalid_mapping = _mapping() | {"comparability_policy": "not-frozen"}
+    invalid_paths[2].write_bytes(canonical_json_bytes(invalid_mapping))
+    invalid = run_br1_unimol_applicability_preflight(
+        *invalid_paths,
+        provider=FakeProvider(),
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        created_at=NOW,
+    )
+    assert invalid.report["overall_status"] == "BLOCKED"
+    assert "MAPPING_POLICY_INVALID" in invalid.report["global_reason_codes"]
+
+
+def test_mapping_rejects_duplicate_standard_inchikeys(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        [_row("r-1", "CCO"), _row("r-2", "C(C)O")],
+    )
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "MAPPING_POLICY_INVALID" in result.report["global_reason_codes"]
+    assert all(
+        item["status"] == "UNRESOLVED"
+        for item in result.report["row_results"]
+    )
+
+
+def test_unknown_authority_version_or_extra_field_blocks(tmp_path: Path) -> None:
+    paths = _write_inputs(tmp_path, [_row("r-1", "CCO")])
+    source = json.loads(paths[1].read_text())
+    source["unexpected"] = "must not be accepted"
+    paths[1].write_bytes(canonical_json_bytes(source))
+
+    result = run_br1_unimol_applicability_preflight(
+        *paths,
+        provider=FakeProvider(),
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        created_at=NOW,
+    )
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "SOURCE_AUTHORITY_INVALID" in result.report["global_reason_codes"]
+
+
+def test_replaced_and_symlink_input_are_rejected_without_exception_leak(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _write_inputs(tmp_path / "replace", [_row("r-1", "CCO")])
+    raw_path = paths[0]
+    original = applicability.read_regular_file_bound
+
+    def replaced(path: Path, **kwargs):
+        if Path(path) == raw_path:
+            raise ValueError("private path replaced during read")
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(applicability, "read_regular_file_bound", replaced)
+    result = run_br1_unimol_applicability_preflight(
+        *paths,
+        provider=FakeProvider(),
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        created_at=NOW,
+    )
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "RAW_DATASET_CONTRACT_INVALID" in result.report["global_reason_codes"]
+
+    real_source = tmp_path / "symlink-source.json"
+    real_source.write_bytes(paths[1].read_bytes())
+    symlink_source = tmp_path / "source-link.json"
+    symlink_source.symlink_to(real_source)
+    symlink_paths = (paths[0], symlink_source, paths[2])
+    symlink_result = run_br1_unimol_applicability_preflight(
+        *symlink_paths,
+        provider=FakeProvider(),
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        created_at=NOW,
+    )
+    assert symlink_result.report["overall_status"] == "BLOCKED"
+    assert "SOURCE_AUTHORITY_INVALID" in symlink_result.report["global_reason_codes"]
+
+
+def test_row_order_is_canonical_even_when_input_csv_order_changes(tmp_path: Path) -> None:
+    first_rows = [_row("r-2", "CCO"), _row("r-1", "c1ccccc1O")]
+    second_rows = list(reversed(first_rows))
+    first = _run(tmp_path / "first", first_rows)
+    second = _run(tmp_path / "second", second_rows)
+
+    assert first.report["row_results"] == second.report["row_results"]
+    assert first.report["supported_row_roster_digest"] == second.report[
+        "supported_row_roster_digest"
+    ]
+    assert first.report["raw_dataset_digest"] != second.report["raw_dataset_digest"]
+
+
+def test_coherent_resign_of_status_reason_and_roster_fails_against_trusted_report(
+    tmp_path: Path,
+) -> None:
+    original = _run(tmp_path, [_row("r-1", "CCO"), _row("r-2", "CCN")]).report
+    forged = copy.deepcopy(original)
+    forged["row_results"][0]["provider_preprocessing_status"] = "UNSUPPORTED"
+    forged["row_results"][0]["conformer_preprocessing_status"] = "UNSUPPORTED"
+    forged["row_results"][0]["status"] = "UNSUPPORTED"
+    forged["row_results"][0]["reason_codes"] = ["UNIMOL_PREPROCESS_FAILED"]
+    forged["supported_row_count"] = 1
+    forged["unsupported_row_count"] = 1
+    forged["overall_status"] = "REVIEW_REQUIRED"
+    forged["supported_row_roster_digest"] = applicability._roster_digest(
+        forged["row_results"], "SUPPORTED"
+    )
+    forged["unsupported_row_roster_digest"] = applicability._roster_digest(
+        forged["row_results"], "UNSUPPORTED"
+    )
+    forged["reason_counts"] = applicability._reason_counts(
+        forged["row_results"], forged["global_reason_codes"]
+    )
+    forged["report_digest"] = applicability._report_digest(forged)
+
+    with pytest.raises(applicability.ApplicabilityPreflightError, match="semantic mismatch"):
+        verify_br1_unimol_applicability_report(forged, expected_report=original)
+
+
+def test_default_discovery_does_not_construct_or_fit_moltrain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fit_calls: list[str] = []
+
+    class MolTrain:
+        def fit(self, *_args, **_kwargs):
+            fit_calls.append("fit")
+
+    fake_module = types.ModuleType("unimol_tools")
+    fake_module.MolTrain = MolTrain
+    monkeypatch.setitem(sys.modules, "unimol_tools", fake_module)
+    monkeypatch.setattr(applicability.importlib.metadata, "version", lambda _: "0.1.5")
+
+    result = _run(tmp_path, [_row("r-1", "CCO")], provider=None)
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "PROVIDER_PREFLIGHT_API_UNAVAILABLE" in result.report["global_reason_codes"]
+    assert fit_calls == []
+    assert not any(
+        path.name.endswith((".pth", ".pt", ".ss"))
+        or "checkpoint" in path.name
+        or "metrics" in path.name
+        for path in tmp_path.rglob("*")
+    )
+
+
+def test_public_summary_has_no_private_row_or_environment_material(tmp_path: Path) -> None:
+    result = _run(tmp_path, [_row("private-row-001", "CCO")])
+    rendered = json.dumps(result.public_summary, sort_keys=True)
+    rendered_report = json.dumps(result.report, sort_keys=True)
+
+    assert "private-row-001" not in rendered
+    assert "CCO" not in rendered
+    assert "CCO" not in rendered_report
+    assert str(tmp_path) not in rendered
+    assert "MOLLY_WORKER_CONFIG" not in rendered
+    assert "stdout" not in rendered
+    assert "stderr" not in rendered
+
+
+def test_same_inputs_and_frozen_time_have_exact_replay(tmp_path: Path) -> None:
+    rows = [_row("r-1", "CCO"), _row("r-2", "CCN")]
+    first = _run(tmp_path / "first", rows)
+    second = _run(tmp_path / "second", rows)
+    assert first.report == second.report
+    assert first.public_summary == second.public_summary
+
+
+def test_preflight_cli_writes_only_report_and_privacy_safe_summary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths = _write_inputs(tmp_path / "cli", [_row("private-row", "CCO")])
+    report_path = tmp_path / "cli-output" / "report.json"
+    summary_path = tmp_path / "cli-output" / "summary.json"
+    code = applicability.main(
+        [
+            "--raw-dataset",
+            str(paths[0]),
+            "--source-manifest",
+            str(paths[1]),
+            "--mapping-policy",
+            str(paths[2]),
+            "--output-report",
+            str(report_path),
+            "--public-summary",
+            str(summary_path),
+            "--repository-commit",
+            COMMIT,
+            "--created-at",
+            NOW,
+        ]
+    )
+    output = capsys.readouterr()
+    assert code == 0
+    assert report_path.is_file()
+    assert summary_path.is_file()
+    assert str(paths[0]) not in output.out + output.err
+    assert "private-row" not in output.out + output.err
+    assert "CCO" not in output.out + output.err
+    assert set(path.name for path in report_path.parent.iterdir()) == {
+        "report.json",
+        "summary.json",
+    }
