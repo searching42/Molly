@@ -109,12 +109,28 @@ no-dispatch rules. The private report records expected/observed/staged/actual
 input digests and dispatch assertions; the public summary is still generated
 only by exact projection from that report.
 
-The fresh remote run after this remediation must use the reviewed commit and
-matching worker, regenerate the authority artifacts from the private source,
-verify the actual staged bytes, and then run the report and summary verifiers.
-If any authority or provider capability remains incomplete, the result stays
-`BLOCKED`; this PR cannot create an acceptance ID/run or launch training,
-generation, prediction, or ranking.
+The fresh remote execution of remediation HEAD
+`c23b7a0eb8897b0d65bd33b4763eb8f8815f46f7` used the matching worker,
+`unimol-tools 0.1.5`, and `unimol-train-br1-v2`. The provider capability
+contract was discovered and verified, but the private staging still had no
+new source authority/publication registry artifacts, so the result remained:
+
+```text
+status=BLOCKED
+input=1999  supported=0  unsupported=0  unresolved=1999
+report_digest=sha256:e86467ab217f99d8a755b963d1bb46adcb5ddfdb7d736f4819ae818d72e6901e
+summary_digest=sha256:57443e3f4c5767ef579af931299d029eb0d69b5ce948b073eb3af785cc17da86
+reasons=INPUT_DIGEST_MISMATCH,MAPPING_POLICY_INVALID,
+        SOURCE_AUTHORITY_INVALID,SOURCE_PUBLICATION_REGISTRY_INVALID
+```
+
+The report contract and report-bound summary projection both passed. The
+report recorded `provider_capability_probe_dispatched=true`, while
+`provider_preprocessing_dispatched`, training, generation, prediction,
+ranking, model artifact, scaler and metrics assertions were all false because
+authority validation stopped the run before row-level provider preprocessing.
+This is fresh pre-acceptance evidence, not a claim of applicability or owner
+acceptance; a new authority-bound run is still required.
 
 ## Applicability preflight handoff
 
@@ -130,8 +146,8 @@ ID/run ID.
 
 ## Development-branch evidence boundary
 
-Real applicability preflight on the remediation HEAD: `NOT EXECUTED` until
-the fresh remote run is performed. The previous remote result above is the
-only authoritative baseline. A local fake-provider test or a development
-branch run is not a private applicability result and cannot be used to freeze
-the data or start acceptance.
+Real applicability preflight on the remediation HEAD: `EXECUTED REMOTELY`,
+with the `BLOCKED` result recorded above. The remote run did not close the
+source/mapping authority chain and therefore cannot freeze the data or start
+acceptance. A local fake-provider test or a development-branch run is not a
+private applicability result.
