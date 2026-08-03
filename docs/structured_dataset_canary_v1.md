@@ -14,17 +14,28 @@ Every backend input is the exact immutable path supplied by `RunPlanExecutor` fr
 
 ## Condition-aware review snapshot v2
 
-The frozen `structured_dataset_review_snapshot.v1` reader and exact replay
-bytes remain supported. New private-source BR1 preparation selects
-`structured_dataset_review_snapshot.v2` only when both a content-bound
-`source_dataset_manifest` and a content-bound `br1_mapping_policy` are present.
-Supplying only one fails closed. Their content digests are bound into the Raw
-Dataset publication, review snapshot and confirmation chain; the source files
-remain private.
+The frozen `prepare_structured_dataset_canary` task, default Tool Catalog,
+`structured_dataset_review_snapshot.v1` reader and exact replay bytes remain
+supported and unchanged. V1 is the CI/synthetic path and cannot infer or opt
+into private mode from client-selected optional artifacts.
 
-The source manifest must bind dataset identity/version/DOI/license, download
+Private BR1 preparation uses a separately constructed server-owned v2 task
+registry. That registry replaces the v1 prepare node with
+`prepare_private_structured_dataset_canary_v2`, makes `uploaded_dataset`,
+`source_dataset_manifest`, and `br1_mapping_policy` required inputs, and binds
+the downstream confirmation dependency to that exact task. Trusted private
+server bootstrap must inject the same registry into observation, planning,
+proposal verification, Permission, authorization, Controller and executor.
+The resulting versioned Tool Catalog and plan authorization bind the exact
+manifest and mapping-policy bytes; no boolean inside client JSON creates owner
+authority. Their content digests are also bound into the Raw Dataset,
+condition-aware review and confirmation chain. The private files remain
+private.
+
+The checked-in schemas are validated at the adapter boundary. The source
+manifest must bind dataset identity/version/DOI/license, download
 date, original source digest and derived Raw CSV digest. The mapping policy
-must be owner-approved and freeze target/unit, scientific scope and downgrade,
+must freeze target/unit, scientific scope and downgrade,
 single-solvent condition policy, molecular identity, duplicate tie-break and
 `partially_comparable_single_solvent` semantics. Invalid or inconsistent scope
 metadata fails before the review snapshot is created.
@@ -55,6 +66,15 @@ uses `partially_comparable_single_solvent`; a stronger unqualified comparable
 claim is rejected by v2. The human receipt is
 `structured_dataset_confirmation_receipt.v2` and exact-binds the v2 snapshot
 schema and digest. V1 publications are never rewritten.
+
+The prepare-task Controller verifier runs the versioned review verifier for
+both normal completion and committed-output crash reconstruction. V2
+verification rebinds every review row to the exact Raw CSV, checks source and
+mapping digests against the Raw publication, reconstructs source evidence,
+checks action rosters and normalization policy, and cross-binds property,
+molecule, condition, source and conflict identities. Malformed evidence,
+missing source-row/paper identity, and DOI/paper disagreement deterministically
+exclude the row before human confirmation.
 
 ## CI Reference Canary
 

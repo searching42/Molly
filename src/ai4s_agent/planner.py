@@ -1023,15 +1023,10 @@ DEFAULT_ATOMIC_TASKS: tuple[AtomicTaskSpec, ...] = (
         remote_task_type=None,
         backend_execution_routes={},
         backend_remote_task_types={},
-        optional_input_artifacts=[
-            "source_dataset_manifest",
-            "br1_mapping_policy",
-        ],
+        optional_input_artifacts=[],
         input_artifact_alternatives=[],
         accepted_input_trust_classes_by_artifact={
-            "uploaded_dataset": ["content_bound_input"],
-            "source_dataset_manifest": ["content_bound_input"],
-            "br1_mapping_policy": ["content_bound_input"],
+            "uploaded_dataset": ["content_bound_input"]
         },
         budget_dimensions=["max_records"],
         supports_plan_preapproval=False,
@@ -1259,6 +1254,75 @@ class AtomicTaskRegistry:
 
     def producers_for(self, artifact_id: str) -> list[str]:
         return list(self._artifact_producers.get(artifact_id, []))
+
+
+def private_structured_dataset_task_registry_v2() -> AtomicTaskRegistry:
+    """Build the explicitly selected private BR1 v2 catalog boundary.
+
+    The default registry remains byte-for-byte frozen for PR-BM v1 replay.
+    Trusted private server bootstrap must inject this registry consistently
+    into planning, permission, Controller, and execution services.
+    """
+
+    prepare_v2 = AtomicTaskSpec(
+        task_id="prepare_private_structured_dataset_canary_v2",
+        required_artifacts=[
+            "uploaded_dataset",
+            "source_dataset_manifest",
+            "br1_mapping_policy",
+        ],
+        output_artifacts=["raw_dataset", "raw_dataset_csv", "review_snapshot"],
+        risk_level=RiskLevel.LOW,
+        default_adapter="prepare_private_structured_dataset_canary_v2_adapter",
+        scientific_tool_id="prepare_private_structured_dataset_canary_v2",
+        label="Prepare private structured dataset canary v2",
+        description=(
+            "Publish a private-source Raw Dataset and condition-aware immutable "
+            "review snapshot from exact source and mapping authority inputs."
+        ),
+        effect_class="derive_local",
+        required_permissions=["read_content_bound_input", "derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="scientific-planner-option-identity.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
+        accepted_input_trust_classes_by_artifact={
+            "uploaded_dataset": ["content_bound_input"],
+            "source_dataset_manifest": ["content_bound_input"],
+            "br1_mapping_policy": ["content_bound_input"],
+        },
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="artifact_registry_and_stage_verifier.v2",
+        planner_visible=True,
+    )
+    tasks: list[AtomicTaskSpec] = []
+    for task in DEFAULT_ATOMIC_TASKS:
+        if task.task_id == "prepare_structured_dataset_canary":
+            tasks.append(prepare_v2)
+        elif task.task_id == "confirm_structured_dataset_canary":
+            tasks.append(
+                task.model_copy(
+                    update={
+                        "depends_on": [
+                            "prepare_private_structured_dataset_canary_v2"
+                        ]
+                    }
+                )
+            )
+        else:
+            tasks.append(task)
+    return AtomicTaskRegistry(tasks)
 
 
 def build_plan(run_id: str, prompt: str) -> PlanModel:

@@ -473,25 +473,25 @@ def build_review_snapshot_v2(
                 proposed_action = "exclude"
                 reasons.append("invalid_measurement_condition")
 
-        evidence = _paper_evidence(row.get("paper_evidence"))
-        source_context = {
-            "schema_version": "scientific_source_context.v1",
-            "source_dataset_manifest_digest": source_manifest_digest,
-            "source_dataset_row_id": str(
-                evidence.get("source_dataset_row_id") or row_id
-            ),
-            "paper_id": str(row.get("paper_id") or "").strip(),
-            "document_digest": _optional_digest(evidence.get("document_digest")),
-            "evidence_anchor_digest": digest_json(
-                {"paper_evidence": evidence}
-            ),
-            "experiment_id": _optional_text(evidence.get("experiment_id")),
-            "replicate_id": _optional_text(evidence.get("replicate_id")),
-        }
-        source_context_digest = digest_json(source_context)
+        source_context: dict[str, Any] | None
+        source_context_digest: str | None
+        try:
+            source_context = _build_source_context(
+                row, source_manifest_digest=source_manifest_digest
+            )
+            source_context_digest = digest_json(source_context)
+        except ValueError as exc:
+            proposed_action = "exclude"
+            reasons.append(str(exc))
+            source_context = None
+            source_context_digest = None
         observation_identity = None
         conflict_group = None
-        if molecule is not None and normalized_condition is not None:
+        if (
+            molecule is not None
+            and normalized_condition is not None
+            and source_context_digest is not None
+        ):
             observation_identity = build_scientific_observation_identity(
                 property_id=str(raw["target_property"]),
                 standard_inchikey=molecular_identity,
@@ -580,6 +580,10 @@ def build_review_snapshot_v2(
                 "condition_distinct_observation_retained",
                 "invalid_measurement_condition",
                 "comparability_semantics_not_approved",
+                "invalid_paper_evidence",
+                "missing_paper_id",
+                "paper_evidence_mismatch",
+                "missing_source_dataset_row_id",
             }:
                 findings.append({"row_id": item["row_id"], "finding": reason})
         review_rows.append(
@@ -646,13 +650,46 @@ def build_review_snapshot_v2(
     return bind_publication(payload, digest_field="review_snapshot_digest")
 
 
-def verify_review_snapshot(review: Mapping[str, Any]) -> None:
+def verify_review_snapshot(
+    review: Mapping[str, Any],
+    *,
+    raw: Mapping[str, Any] | None = None,
+    rows: Iterable[Mapping[str, str]] | None = None,
+) -> None:
     verify_publication(review, digest_field="review_snapshot_digest")
     schema_version = str(review.get("schema_version") or "")
     if schema_version == REVIEW_SNAPSHOT_SCHEMA:
         return
     if schema_version != REVIEW_SNAPSHOT_SCHEMA_V2:
         raise ConfirmationAuthorityError("unsupported review snapshot schema version")
+    if raw is None:
+        raise ConfirmationAuthorityError(
+            "review snapshot v2 requires its exact Raw Dataset publication"
+        )
+    verify_publication(raw, digest_field="raw_publication_digest")
+    if (
+        raw.get("source_kind") != "private"
+        or raw.get("review_snapshot_policy") != REVIEW_SNAPSHOT_SCHEMA_V2
+        or raw.get("comparability_policy")
+        != "partially_comparable_single_solvent"
+    ):
+        raise ConfirmationAuthorityError("Raw Dataset v2 policy binding mismatch")
+    raw_bindings = {
+        "project_id": raw.get("project_id"),
+        "run_id": raw.get("run_id"),
+        "raw_dataset_id": raw.get("dataset_id"),
+        "raw_dataset_digest": raw.get("dataset_digest"),
+        "raw_publication_digest": raw.get("raw_publication_digest"),
+        "source_dataset_manifest_digest": raw.get(
+            "source_dataset_manifest_digest"
+        ),
+        "mapping_policy_digest": raw.get("mapping_policy_digest"),
+    }
+    for field, expected in raw_bindings.items():
+        if review.get(field) != expected:
+            raise ConfirmationAuthorityError(
+                f"review snapshot Raw Dataset {field} binding mismatch"
+            )
     if _DIGEST.fullmatch(str(review.get("source_dataset_manifest_digest") or "")) is None:
         raise ConfirmationAuthorityError("review snapshot source manifest digest is invalid")
     if _DIGEST.fullmatch(str(review.get("mapping_policy_digest") or "")) is None:
@@ -662,6 +699,50 @@ def verify_review_snapshot(review: Mapping[str, Any]) -> None:
         raise ConfirmationAuthorityError("review snapshot row roster is invalid")
     if review.get("row_roster_digest") != digest_json(row_roster):
         raise ConfirmationAuthorityError("review snapshot row roster digest mismatch")
+    expected_normalization = {
+        **dict(raw.get("normalization_metadata") or {}),
+        "identity_policy": SCIENTIFIC_OBSERVATION_IDENTITY_SCHEMA,
+        "conflict_group_policy": SCIENTIFIC_CONFLICT_GROUP_SCHEMA,
+        "normalized_condition_policy": NORMALIZED_MEASUREMENT_CONDITION_SCHEMA,
+        "split_grouping_policy": "inchikey_paper_bipartite_components.v1",
+    }
+    if review.get("normalization_summary") != expected_normalization:
+        raise ConfirmationAuthorityError("review snapshot normalization policy mismatch")
+    scope = review.get("confirmation_scope")
+    if not isinstance(scope, Mapping) or (
+        scope.get("target_property") != raw.get("target_property")
+        or scope.get("scientific_scope") != raw.get("scientific_scope")
+        or scope.get("scope_downgraded") != raw.get("scope_downgraded")
+    ):
+        raise ConfirmationAuthorityError("review snapshot scientific scope mismatch")
+    confirmed = [
+        str(item.get("row_id") or "")
+        for item in row_roster
+        if isinstance(item, Mapping) and item.get("proposed_action") == "confirm"
+    ]
+    excluded = [
+        str(item.get("row_id") or "")
+        for item in row_roster
+        if isinstance(item, Mapping) and item.get("proposed_action") == "exclude"
+    ]
+    if any(
+        not isinstance(item, Mapping)
+        or item.get("proposed_action") not in {"confirm", "exclude"}
+        for item in row_roster
+    ):
+        raise ConfirmationAuthorityError("review snapshot row action is invalid")
+    if review.get("proposed_confirmed_row_roster") != confirmed:
+        raise ConfirmationAuthorityError("review snapshot confirmed roster mismatch")
+    if review.get("proposed_excluded_row_roster") != excluded:
+        raise ConfirmationAuthorityError("review snapshot excluded roster mismatch")
+    row_ids = confirmed + excluded
+    if len(row_ids) != len(set(row_ids)):
+        raise ConfirmationAuthorityError("review snapshot row IDs are not unique")
+    raw_rows = None
+    if rows is not None:
+        raw_rows = {str(item.get("row_id") or ""): dict(item) for item in rows}
+        if set(raw_rows) != set(row_ids):
+            raise ConfirmationAuthorityError("review snapshot Raw row roster mismatch")
     for item in row_roster:
         if not isinstance(item, Mapping):
             raise ConfirmationAuthorityError("review snapshot row is invalid")
@@ -669,31 +750,110 @@ def verify_review_snapshot(review: Mapping[str, Any]) -> None:
         observation = item.get("observation_identity")
         conflict = item.get("conflict_group")
         source_context = item.get("source_context")
-        if not isinstance(source_context, Mapping) or item.get(
-            "source_context_digest"
-        ) != digest_json(source_context):
+        if raw_rows is not None:
+            source_row = raw_rows[str(item.get("row_id") or "")]
+            if item.get("row_digest") != digest_json(_raw_row_identity(source_row)):
+                raise ConfirmationAuthorityError("review snapshot Raw row digest mismatch")
+            try:
+                expected_source_context = _build_source_context(
+                    source_row,
+                    source_manifest_digest=str(
+                        review["source_dataset_manifest_digest"]
+                    ),
+                )
+            except ValueError:
+                expected_source_context = None
+            if source_context != expected_source_context:
+                raise ConfirmationAuthorityError("source context Raw row binding mismatch")
+        if source_context is not None and (
+            not isinstance(source_context, Mapping)
+            or item.get("source_context_digest") != digest_json(source_context)
+        ):
             raise ConfirmationAuthorityError("source context digest mismatch")
+        if isinstance(source_context, Mapping):
+            anchor_material = {
+                "source_dataset_row_id": source_context.get(
+                    "source_dataset_row_id"
+                ),
+                "evidence_paper_id": source_context.get("evidence_paper_id"),
+                "document_digest": source_context.get("document_digest"),
+                "experiment_id": source_context.get("experiment_id"),
+                "replicate_id": source_context.get("replicate_id"),
+            }
+            if (
+                source_context.get("schema_version")
+                != "scientific_source_context.v1"
+                or not str(
+                    source_context.get("source_dataset_row_id") or ""
+                ).strip()
+                or source_context.get("paper_id")
+                != source_context.get("evidence_paper_id")
+                or source_context.get("source_dataset_manifest_digest")
+                != review.get("source_dataset_manifest_digest")
+                or source_context.get("evidence_anchor_digest")
+                != digest_json(anchor_material)
+            ):
+                raise ConfirmationAuthorityError("source context semantic binding mismatch")
+        elif item.get("source_context_digest") is not None:
+            raise ConfirmationAuthorityError("absent source context has a digest")
         observed_payload = item.get("observed_payload")
         if not isinstance(observed_payload, Mapping) or item.get(
             "observed_payload_digest"
         ) != digest_json(observed_payload):
             raise ConfirmationAuthorityError("observed payload digest mismatch")
-        if condition is None or observation is None or conflict is None:
+        if (
+            set(observed_payload)
+            != {"schema_version", "value", "unit", "reported_text", "uncertainty"}
+            or observed_payload.get("schema_version")
+            != "scientific_observed_payload.v1"
+            or observed_payload.get("unit") != "fraction"
+        ):
+            raise ConfirmationAuthorityError("observed payload schema mismatch")
+        missing_identity_parts = [
+            value is None for value in (condition, observation, conflict)
+        ]
+        if any(missing_identity_parts) and not all(missing_identity_parts):
+            raise ConfirmationAuthorityError("review row identity is partially present")
+        if all(missing_identity_parts):
             if item.get("proposed_action") != "exclude":
                 raise ConfirmationAuthorityError(
                     "confirmed review row lacks condition-aware identity"
                 )
             continue
+        if not all(
+            isinstance(value, Mapping)
+            for value in (condition, observation, conflict)
+        ):
+            raise ConfirmationAuthorityError("review row identity type is invalid")
+        if not isinstance(source_context, Mapping):
+            raise ConfirmationAuthorityError("confirmed review row lacks source context")
         condition_material = dict(condition)
         condition_digest = str(condition_material.pop("condition_digest", ""))
         if condition_digest != digest_json(condition_material):
             raise ConfirmationAuthorityError("normalized condition digest mismatch")
+        if condition.get("schema_version") != NORMALIZED_MEASUREMENT_CONDITION_SCHEMA:
+            raise ConfirmationAuthorityError("normalized condition schema mismatch")
         observation_material = dict(observation)
         observation_digest = str(
             observation_material.pop("observation_identity_digest", "")
         )
         if observation_digest != digest_json(observation_material):
             raise ConfirmationAuthorityError("observation identity digest mismatch")
+        if set(observation) != {
+            "schema_version",
+            "property_id",
+            "standard_inchikey",
+            "normalized_condition_digest",
+            "source_context_digest",
+            "observation_identity_digest",
+        } or observation.get("schema_version") != SCIENTIFIC_OBSERVATION_IDENTITY_SCHEMA:
+            raise ConfirmationAuthorityError("observation identity schema mismatch")
+        target_property = str(raw.get("target_property") or "")
+        if (
+            observation.get("property_id") != target_property
+            or conflict.get("property_id") != target_property
+        ):
+            raise ConfirmationAuthorityError("scientific property binding mismatch")
         if observation.get("normalized_condition_digest") != condition_digest:
             raise ConfirmationAuthorityError(
                 "observation identity condition binding mismatch"
@@ -708,12 +868,22 @@ def verify_review_snapshot(review: Mapping[str, Any]) -> None:
         conflict_digest = str(conflict_material.pop("conflict_group_digest", ""))
         if conflict_digest != digest_json(conflict_material):
             raise ConfirmationAuthorityError("conflict group digest mismatch")
+        if set(conflict) != {
+            "schema_version",
+            "property_id",
+            "standard_inchikey",
+            "normalized_condition_digest",
+            "conflict_group_digest",
+        } or conflict.get("schema_version") != SCIENTIFIC_CONFLICT_GROUP_SCHEMA:
+            raise ConfirmationAuthorityError("conflict group schema mismatch")
         if conflict.get("normalized_condition_digest") != condition_digest:
             raise ConfirmationAuthorityError("conflict group condition binding mismatch")
         if observation.get("standard_inchikey") != conflict.get(
             "standard_inchikey"
         ):
             raise ConfirmationAuthorityError("conflict group molecule binding mismatch")
+        if observation.get("standard_inchikey") != item.get("molecular_identity"):
+            raise ConfirmationAuthorityError("observation molecule binding mismatch")
 
 
 def _normalized_phase(primary: Any, fallback: Any) -> str:
@@ -818,9 +988,57 @@ def _paper_evidence(value: Any) -> dict[str, Any]:
     raw = str(value or "")
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return dict(payload) if isinstance(payload, Mapping) else {}
+    except json.JSONDecodeError as exc:
+        raise ValueError("invalid_paper_evidence") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError("invalid_paper_evidence")
+    return dict(payload)
+
+
+def _normalized_paper_id(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    for prefix in ("https://doi.org/", "http://doi.org/", "doi:"):
+        if raw.startswith(prefix):
+            raw = raw[len(prefix) :]
+    return raw.strip()
+
+
+def _build_source_context(
+    row: Mapping[str, str], *, source_manifest_digest: str
+) -> dict[str, Any]:
+    evidence = _paper_evidence(row.get("paper_evidence"))
+    paper_id = _normalized_paper_id(row.get("paper_id"))
+    if not paper_id:
+        raise ValueError("missing_paper_id")
+    evidence_paper_id = _normalized_paper_id(
+        evidence.get("doi") or evidence.get("paper_id")
+    )
+    if not evidence_paper_id or evidence_paper_id != paper_id:
+        raise ValueError("paper_evidence_mismatch")
+    source_row_id = str(evidence.get("source_dataset_row_id") or "").strip()
+    if not source_row_id:
+        raise ValueError("missing_source_dataset_row_id")
+    document_digest = _optional_digest(evidence.get("document_digest"))
+    experiment_id = _optional_text(evidence.get("experiment_id"))
+    replicate_id = _optional_text(evidence.get("replicate_id"))
+    anchor_material = {
+        "source_dataset_row_id": source_row_id,
+        "evidence_paper_id": evidence_paper_id,
+        "document_digest": document_digest,
+        "experiment_id": experiment_id,
+        "replicate_id": replicate_id,
+    }
+    return {
+        "schema_version": "scientific_source_context.v1",
+        "source_dataset_manifest_digest": source_manifest_digest,
+        "source_dataset_row_id": source_row_id,
+        "paper_id": paper_id,
+        "evidence_paper_id": evidence_paper_id,
+        "document_digest": document_digest,
+        "evidence_anchor_digest": digest_json(anchor_material),
+        "experiment_id": experiment_id,
+        "replicate_id": replicate_id,
+    }
 
 
 def _optional_digest(value: Any) -> str | None:
@@ -852,7 +1070,7 @@ def build_confirmation_authority(
     gate_decision: GateDecision | None = None,
 ) -> tuple[GateDecision, dict[str, Any]]:
     verify_publication(raw, digest_field="raw_publication_digest")
-    verify_review_snapshot(review)
+    verify_review_snapshot(review, raw=raw)
     clean_actor = str(actor or "").strip()
     if clean_actor not in set(trusted_actors):
         raise ConfirmationAuthorityError("confirmation actor is not trusted")
@@ -957,7 +1175,7 @@ def verify_confirmation_authority(
     if receipt is None:
         raise ConfirmationAuthorityError("confirmation receipt is required")
     verify_publication(raw, digest_field="raw_publication_digest")
-    verify_review_snapshot(review)
+    verify_review_snapshot(review, raw=raw)
     verify_publication(receipt, digest_field="confirmation_receipt_digest")
     review_schema = str(review.get("schema_version") or "")
     expected_receipt_schema = (

@@ -1415,9 +1415,9 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ### 2026-08-03：BR1 condition-aware observation correctness follow-up
 
-- 决策：冻结的 `structured_dataset_review_snapshot.v1` 继续只读并保留 exact replay；新的 private-source preparation 只有在 source manifest 与 mapping policy 同时 content-bound 时才使用 condition-aware `structured_dataset_review_snapshot.v2`。
+- 决策：冻结的默认 `prepare_structured_dataset_canary` Catalog、`structured_dataset_review_snapshot.v1` 与 Permission/authorization bytes 继续只读并保留 exact replay；private-source preparation 必须由可信服务端显式注入独立 v2 task registry，且 source manifest 与 mapping policy 均为 required content-bound input，客户端不能通过省略 artifact 降级到 synthetic v1。
 - 依据：Deep4Chem/DB for chromophore 单溶剂子集审计证明 CSV 基本格式与 molecule–paper component split 充分，但 source provenance、有限可比性和 observation/conflict identity 不能由 v1 的 molecule-only 去重准确表达。
-- 实现边界：新增 normalized condition、source-aware observation identity、source-independent conflict group 与 v2 confirmation binding；target value 仍是 payload，不进入 identity；split 仍使用 InChIKey–paper 二部图 connected components。server-owned remote resource authority 的通用 operator 配置方法写入 README，但 policy 不得把 local Planner route 变成 remote route。
+- 实现边界：新增 normalized condition、source-aware observation identity、source-independent conflict group 与 v2 confirmation binding；target value 仍是 payload，不进入 identity；split 仍使用 InChIKey–paper 二部图 connected components。v2 prepare 在 normal completion 与 crash reconstruction 均执行 Raw/source/mapping/row/identity 交叉验证；mapping policy 的 owner authority 来自绑定其 digest 的 trusted plan authorization，不来自客户端布尔字段。server-owned remote resource authority 的通用 operator 配置方法写入 README，但 policy 不得把 local Planner route 变成 remote route。
 - 影响任务：这是 `M3H-013` 正式验收前的最小 correctness 修复，不构成真实 Uni-Mol training、REINVENT4 generation 或 runtime `V`。`M3H-013` 继续 `I/T(partial)/— / BLOCKED`，`M3H-014` 继续 `I/T(partial)/— / READY`，其余 Gate/M3.5/Molly v1 状态不变。
 - 新增风险：InChIKey-only duplicate exclusion 会静默丢弃同一分子不同 solvent/condition 记录；来源名称、版本、URL、license 或 download date 被推断；pre-PR 瞬时 CI 状态被固化为当前 exact-HEAD 事实。
 - 批准人：待 repository-owner 对修复后 exact HEAD re-review；保持 Draft。

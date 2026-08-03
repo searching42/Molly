@@ -68,6 +68,7 @@ from ai4s_agent.adapters.structured_dataset_canary import (
     confirm_structured_dataset_canary_adapter,
     evaluate_structured_dataset_canary_adapter,
     generate_structured_dataset_canary_adapter,
+    prepare_private_structured_dataset_canary_v2_adapter,
     prepare_structured_dataset_canary_adapter,
     train_structured_dataset_canary_adapter,
 )
@@ -148,6 +149,7 @@ __all__ = [
     "execute_oled_candidate_decision_adapter",
     "execute_oled_bounded_discovery_controller_adapter",
     "prepare_structured_dataset_canary_adapter",
+    "prepare_private_structured_dataset_canary_v2_adapter",
     "confirm_structured_dataset_canary_adapter",
     "train_structured_dataset_canary_adapter",
     "generate_structured_dataset_canary_adapter",

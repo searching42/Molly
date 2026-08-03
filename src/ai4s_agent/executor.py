@@ -101,6 +101,7 @@ _BOUNDED_CONTROLLER_TASK_ID = "execute_oled_bounded_discovery_controller"
 _STRUCTURED_DATASET_TASK_IDS = frozenset(
     {
         "prepare_structured_dataset_canary",
+        "prepare_private_structured_dataset_canary_v2",
         "confirm_structured_dataset_canary",
         "train_structured_dataset_canary",
         "generate_structured_dataset_canary",
@@ -1862,13 +1863,7 @@ class RunPlanExecutor:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         approved = approved_gates or set()
-        if task_id in {
-            "prepare_structured_dataset_canary",
-            "confirm_structured_dataset_canary",
-            "train_structured_dataset_canary",
-            "generate_structured_dataset_canary",
-            "evaluate_structured_dataset_canary",
-        }:
+        if task_id in _STRUCTURED_DATASET_TASK_IDS:
             task_options = self._payload_options(options)
             payload: dict[str, Any] = {
                 "project_id": run_dir.parents[1].name,
@@ -3233,13 +3228,7 @@ class RunPlanExecutor:
         payload: dict[str, Any],
     ) -> None:
         result_rel = self._relative(run_dir, result_path)
-        if task_id in {
-            "prepare_structured_dataset_canary",
-            "confirm_structured_dataset_canary",
-            "train_structured_dataset_canary",
-            "generate_structured_dataset_canary",
-            "evaluate_structured_dataset_canary",
-        }:
+        if task_id in _STRUCTURED_DATASET_TASK_IDS:
             outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
             spec = self.registry.get(task_id)
             if set(outputs) != set(spec.output_artifacts):

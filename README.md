@@ -155,6 +155,17 @@ commit it. Public evidence may include safe logical IDs, policy/AuthoritySet
 digests and outcome classes only. See the full
 [server-owned authority contract](docs/server-owned-remote-resource-authority-v1.md).
 
+Private BR1 dataset preparation also uses a server-owned catalog boundary.
+Construct `private_structured_dataset_task_registry_v2()` during trusted
+private service bootstrap and inject that same registry into Planner,
+Permission/authorization, Controller and `RunPlanExecutor`. The default
+registry deliberately retains only the frozen CI/synthetic v1 prepare task.
+The private registry exposes the required-input
+`prepare_private_structured_dataset_canary_v2` task and removes the v1 prepare
+node, so omitted provenance inputs cannot downgrade private CSV to synthetic
+v1. The exact plan authorization—not a JSON `owner_approved` flag—is owner
+authority for the mapping-policy digest.
+
 - [Local deployment and private configuration](docs/local_deployment.md)
 - [Private remote worker setup](docs/remote_worker_setup.md)
 - [Remote execution lifecycle](docs/stage6b-remote-execution-lifecycle.md)
