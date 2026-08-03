@@ -1747,8 +1747,22 @@ def private_structured_dataset_real_tool_task_registry_v3() -> AtomicTaskRegistr
             description="Bind current-model predictions, chemical validation, deterministic ranking, and Computational Top-N.",
             effect_class="derive_local",
             required_permissions=["derive_project_artifact"],
-            option_schema=_closed_option_schema(),
-            default_planner_options={},
+            option_schema=_closed_option_schema(
+                {
+                    "top_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                    },
+                    "validation_seed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 2147483647,
+                    },
+                },
+                required=["top_n", "validation_seed"],
+            ),
+            default_planner_options={"top_n": 5, "validation_seed": 1729},
             backend_default_planner_options={},
             review_required_option_ids=[],
             option_compiler_version="br1-private-evaluation-options.v1",

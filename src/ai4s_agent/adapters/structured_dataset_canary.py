@@ -1063,8 +1063,20 @@ def _build_private_evaluation_publications(
     prediction_provider_version: str,
     prediction_remote_binding: Mapping[str, Any],
     training_rows: list[dict[str, str]],
+    top_n: int,
+    validation_seed: int,
+    compiled_options_digest: str,
     timestamp: str,
 ) -> dict[str, dict[str, Any]]:
+    evaluation_configuration = _private_evaluation_configuration(
+        top_n=top_n,
+        validation_seed=validation_seed,
+    )
+    evaluation_configuration_digest = digest_json(evaluation_configuration)
+    if compiled_options_digest != evaluation_configuration_digest:
+        raise StructuredDatasetCanaryError(
+            "private BR1 evaluation options do not bind compiled authority"
+        )
     prediction = bind_publication(
         {
             "schema_version": "structured_dataset_prediction_publication.v1",
@@ -1085,7 +1097,6 @@ def _build_private_evaluation_publications(
         },
         digest_field="publication_digest",
     )
-    validation_seed = 1729
     validation_rows, summary = validate_candidates(
         candidates,
         training_rows,
@@ -1102,6 +1113,9 @@ def _build_private_evaluation_publications(
             "candidate_roster_digest": generation["candidate_roster_digest"],
             "generation_seed": generation["seed"],
             "validation_seed": validation_seed,
+            "evaluation_configuration": evaluation_configuration,
+            "evaluation_configuration_digest": evaluation_configuration_digest,
+            "compiled_options_digest": compiled_options_digest,
             "selection_domain": "unimol_training_split_only",
             "selection_training_row_roster_digest": digest_json(
                 sorted(str(row["row_id"]) for row in training_rows)
@@ -1138,7 +1152,7 @@ def _build_private_evaluation_publications(
         "ranking_direction": "descending",
         "filters": ["valid", "unique", "not_training_exact_duplicate"],
         "ad_ood_handling": "display_all_exclude_OOD_from_topn",
-        "top_n_size": 5,
+        "top_n_size": top_n,
         "tie_breaking": ["inchikey_ascending", "candidate_id_ascending"],
     }
     ranking = bind_publication(
@@ -1151,6 +1165,9 @@ def _build_private_evaluation_publications(
             "generation_publication_digest": generation["publication_digest"],
             "prediction_publication_digest": prediction["publication_digest"],
             "validation_publication_digest": validation["publication_digest"],
+            "evaluation_configuration": evaluation_configuration,
+            "evaluation_configuration_digest": evaluation_configuration_digest,
+            "compiled_options_digest": compiled_options_digest,
             "ranking_configuration": ranking_config,
             "ranking_digest": digest_json(
                 {"config": ranking_config, "rows": ranked}
@@ -1160,7 +1177,7 @@ def _build_private_evaluation_publications(
         },
         digest_field="publication_digest",
     )
-    selected = [item for item in ranked if item["eligible"]][:5]
+    selected = [item for item in ranked if item["eligible"]][:top_n]
     top_rows = [
         service._topn_row(item, model, generation, ranking) for item in selected
     ]
@@ -1182,6 +1199,9 @@ def _build_private_evaluation_publications(
             "ranking_digest": ranking["ranking_digest"],
             "validation_publication_digest": validation["publication_digest"],
             "validation_summary": summary,
+            "evaluation_configuration": evaluation_configuration,
+            "evaluation_configuration_digest": evaluation_configuration_digest,
+            "compiled_options_digest": compiled_options_digest,
             "seed": generation["seed"],
             "software_versions": {
                 "model": model["software_version"],
@@ -1219,6 +1239,9 @@ def _build_private_evaluation_publications(
             "run_id": run_id,
             "bindings": bindings,
             "replay_digest": digest_json(bindings),
+            "evaluation_configuration": evaluation_configuration,
+            "evaluation_configuration_digest": evaluation_configuration_digest,
+            "compiled_options_digest": compiled_options_digest,
             "private_real_tool_chain": True,
             "controller_terminal_replay_review": "pending",
             "claim_boundary": "Computational Top-N only",
@@ -1233,6 +1256,30 @@ def _build_private_evaluation_publications(
         "computational_top_n": topn,
         "structured_dataset_canary_evidence": evidence,
     }
+
+
+def _private_evaluation_configuration(
+    *, top_n: Any, validation_seed: Any
+) -> dict[str, int]:
+    if (
+        isinstance(top_n, bool)
+        or not isinstance(top_n, int)
+        or top_n < 1
+        or top_n > 100
+    ):
+        raise StructuredDatasetCanaryError(
+            "private BR1 top_n must be an integer between 1 and 100"
+        )
+    if (
+        isinstance(validation_seed, bool)
+        or not isinstance(validation_seed, int)
+        or validation_seed < 0
+        or validation_seed > 2147483647
+    ):
+        raise StructuredDatasetCanaryError(
+            "private BR1 validation_seed must be a non-negative 32-bit integer"
+        )
+    return {"top_n": top_n, "validation_seed": validation_seed}
 
 
 def _verify_exact_evaluation_publications(
@@ -1373,6 +1420,11 @@ def evaluate_private_structured_dataset_canary_v1_adapter(
         confirmed=confirmed,
         split=split,
     )
+    evaluation_configuration = _private_evaluation_configuration(
+        top_n=payload.get("top_n"),
+        validation_seed=payload.get("validation_seed"),
+    )
+    compiled_options_digest = digest_json(evaluation_configuration)
     publications = _build_private_evaluation_publications(
         service=service,
         project_id=project_id,
@@ -1389,6 +1441,9 @@ def evaluate_private_structured_dataset_canary_v1_adapter(
         prediction_provider_version=str(prediction_audit["provider_version"]),
         prediction_remote_binding=prediction_remote_binding,
         training_rows=training_rows,
+        top_n=evaluation_configuration["top_n"],
+        validation_seed=evaluation_configuration["validation_seed"],
+        compiled_options_digest=compiled_options_digest,
         timestamp=str(payload["created_at"]),
     )
     publication_files = {
@@ -1429,6 +1484,8 @@ def verify_private_real_tool_harness_task_publication(
     run_id: str,
     task_id: str,
     artifact_paths: Mapping[str, str],
+    task_options: Mapping[str, Any] | None = None,
+    expected_compiled_options_digest: str = "",
 ) -> None:
     """Rebuild the private BR1 local-task semantics from current Registry paths."""
 
@@ -1839,6 +1896,15 @@ def verify_private_real_tool_harness_task_publication(
         ),
     }
     timestamp = str(actual["prediction_publication"].get("created_at") or "")
+    evaluation_configuration = _private_evaluation_configuration(
+        top_n=(task_options or {}).get("top_n"),
+        validation_seed=(task_options or {}).get("validation_seed"),
+    )
+    compiled_options_digest = digest_json(evaluation_configuration)
+    if expected_compiled_options_digest != compiled_options_digest:
+        raise StructuredDatasetCanaryError(
+            "private BR1 recovery options do not bind compiled authority"
+        )
     expected = _build_private_evaluation_publications(
         service=service,
         project_id=project_id,
@@ -1855,6 +1921,9 @@ def verify_private_real_tool_harness_task_publication(
         prediction_provider_version=str(prediction_audit["provider_version"]),
         prediction_remote_binding=prediction_remote_binding,
         training_rows=training_rows,
+        top_n=evaluation_configuration["top_n"],
+        validation_seed=evaluation_configuration["validation_seed"],
+        compiled_options_digest=compiled_options_digest,
         timestamp=timestamp,
     )
     _verify_exact_evaluation_publications(actual, expected)

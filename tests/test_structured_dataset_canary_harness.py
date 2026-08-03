@@ -206,6 +206,8 @@ def test_normal_and_recovery_paths_both_call_structured_v2_verifier(
         run_plan=plan,
         task_index=0,
         result={"ok": True, "status": RunStatus.SUCCEEDED.value},
+        task_options={},
+        expected_compiled_options_digest="",
     )
 
     storage.write_stage_state(

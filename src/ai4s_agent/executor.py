@@ -474,6 +474,8 @@ class RunPlanExecutor:
             run_plan=run_plan,
             task_index=task_index,
             result=result,
+            task_options=task_options,
+            expected_compiled_options_digest=expected_compiled_options_digest,
         )
         if (
             task_completion_recorder is not None
@@ -658,6 +660,8 @@ class RunPlanExecutor:
             run_plan=run_plan,
             task_index=task_index,
             result=result,
+            task_options=task_options,
+            expected_compiled_options_digest=expected_compiled_options_digest,
         )
         if (
             task_completion_recorder is not None
@@ -751,6 +755,8 @@ class RunPlanExecutor:
         run_plan: RunPlan,
         task_index: int,
         result: dict[str, Any],
+        task_options: dict[str, Any],
+        expected_compiled_options_digest: str,
     ) -> None:
         if result.get("ok") is not True or result.get("status") != RunStatus.SUCCEEDED.value:
             return
@@ -766,6 +772,8 @@ class RunPlanExecutor:
             project_id=project_id,
             run_id=run_plan.run_id,
             task_id=task.task_id,
+            task_options=task_options,
+            expected_compiled_options_digest=expected_compiled_options_digest,
         )
 
     def verify_one_task_committed_outputs(
@@ -818,6 +826,8 @@ class RunPlanExecutor:
             project_id=project_id,
             run_id=run_plan.run_id,
             task_id=task.task_id,
+            task_options=task_options,
+            expected_compiled_options_digest=expected_compiled_options_digest,
         )
         execution_record_id = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id, "")
         if not execution_record_id:
@@ -1038,7 +1048,13 @@ class RunPlanExecutor:
         raise ValueError("immutable local task lacks a task-specific verifier")
 
     def _verify_structured_dataset_task(
-        self, *, project_id: str, run_id: str, task_id: str
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        task_id: str,
+        task_options: dict[str, Any],
+        expected_compiled_options_digest: str,
     ) -> None:
         if task_id not in _STRUCTURED_DATASET_TASK_IDS:
             return
@@ -1057,6 +1073,10 @@ class RunPlanExecutor:
                 run_id=run_id,
                 task_id=task_id,
                 artifact_paths=artifact_paths,
+                task_options=task_options,
+                expected_compiled_options_digest=(
+                    expected_compiled_options_digest
+                ),
             )
             return
         from ai4s_agent.structured_dataset_canary import (

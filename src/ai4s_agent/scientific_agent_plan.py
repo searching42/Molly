@@ -1024,6 +1024,11 @@ class PlannerOptionCompiler:
     version = PLANNER_OPTION_COMPILER_VERSION
     _SUPPORTED_COMPILERS = frozenset(
         {
+            "br1-private-evaluation-options.v1",
+            "br1-private-local-package-options.v1",
+            "br1-private-reinvent4-options.v1",
+            "br1-private-remote-task-options.v1",
+            "br1-private-unimol-training-options.v1",
             "scientific-planner-option-identity.v1",
             "scientific-planner-option-clean-dataset.v1",
             "scientific-planner-option-train-model.v1",
@@ -1116,7 +1121,14 @@ class PlannerOptionCompiler:
                 f"unsupported registered option compiler: {compiler}"
             )
         options = dict(planner_options)
-        if compiler == "scientific-planner-option-identity.v1":
+        if compiler in {
+            "br1-private-evaluation-options.v1",
+            "br1-private-local-package-options.v1",
+            "br1-private-reinvent4-options.v1",
+            "br1-private-remote-task-options.v1",
+            "br1-private-unimol-training-options.v1",
+            "scientific-planner-option-identity.v1",
+        }:
             return options
         if compiler == "scientific-planner-option-clean-dataset.v1":
             return {

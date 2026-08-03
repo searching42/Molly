@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
+import ai4s_agent.adapters.structured_dataset_canary as structured_adapter
 from ai4s_agent.adapters.structured_dataset_canary import (
+    _build_private_evaluation_publications,
     _training_rows_from_split,
     _verify_remote_execution_binding,
     _verify_exact_evaluation_publications,
@@ -20,6 +22,11 @@ from ai4s_agent.planner import (
     AtomicTaskRegistry,
     private_structured_dataset_real_tool_task_registry_v3,
     private_structured_dataset_task_registry_v2,
+)
+from ai4s_agent.executor import RunPlanExecutor
+from ai4s_agent.scientific_agent_plan import (
+    PlannerOptionCompiler,
+    build_scientific_tool_catalog,
 )
 from ai4s_agent.remote_execution_lifecycle import (
     RemoteOutputArtifact,
@@ -175,6 +182,33 @@ def test_private_real_tool_v3_does_not_mutate_frozen_v1_or_v2_catalogs() -> None
     assert private_v3.get("train_private_unimol_v1").remote_task_type == "model_training"
     assert private_v3.get("generate_private_reinvent4_v1").remote_task_type == "molecular_generation"
     assert private_v3.get("predict_private_unimol_v1").remote_task_type == "model_inference"
+    evaluation = private_v3.get("evaluate_private_structured_dataset_canary_v1")
+    assert evaluation.default_planner_options == {
+        "top_n": 5,
+        "validation_seed": 1729,
+    }
+    assert evaluation.option_schema["required"] == ["top_n", "validation_seed"]
+    catalog = build_scientific_tool_catalog(private_v3)
+    compiler = PlannerOptionCompiler()
+    for tool in (
+        item
+        for item in catalog.tools
+        if item.option_compiler_version.startswith("br1-private-")
+    ):
+        effective = compiler.materialize_effective_options(
+            tool=tool,
+            planner_options={},
+        )
+        assert compiler.compile(tool=tool, planner_options=effective) == effective
+    evaluation_tool = next(
+        tool
+        for tool in catalog.tools
+        if tool.tool_id == "evaluate_private_structured_dataset_canary_v1"
+    )
+    assert compiler.compile(
+        tool=evaluation_tool,
+        planner_options={"top_n": 2, "validation_seed": 7},
+    ) == {"top_n": 2, "validation_seed": 7}
 
 
 def test_private_real_tool_v3_requires_remote_outputs_before_packaging() -> None:
@@ -272,6 +306,200 @@ def test_final_publication_verifier_rejects_coherent_resign(
         bind_publication(evidence, digest_field="evidence_digest")
     with pytest.raises(Exception, match="not derivationally exact"):
         _verify_exact_evaluation_publications(replaced, expected)
+
+
+def _deterministic_test_validation(
+    candidates,
+    training_rows,
+    *,
+    seed,
+    ad_similarity_threshold,
+):
+    del training_rows, ad_similarity_threshold
+    rows = [
+        {
+            "candidate_id": item["candidate_id"],
+            "valid": True,
+            "duplicate": False,
+            "training_exact_duplicate": False,
+            "ad_status": "IN_DOMAIN",
+            "canonical_smiles": item["smiles"],
+            "inchi": f"InChI=1S/{item['candidate_id']}",
+            "inchikey": f"KEY-{item['candidate_id']}",
+            "nearest_neighbor_identity": "training-1",
+            "nearest_neighbor_similarity": 0.5,
+            "scaffold_novelty": True,
+            "findings": [],
+        }
+        for item in candidates
+    ]
+    return rows, {"ood_count": 0, "validation_seed": seed}
+
+
+def _build_test_evaluation_publications(
+    *,
+    tmp_path: Path,
+    top_n: int,
+    validation_seed: int,
+) -> dict[str, dict[str, object]]:
+    configuration = {"top_n": top_n, "validation_seed": validation_seed}
+    candidates = [
+        {"candidate_id": f"candidate-{index}", "smiles": smiles}
+        for index, smiles in enumerate(["CCCO", "CCCN", "CCCOC"], start=1)
+    ]
+    predictions = [
+        {
+            "candidate_id": item["candidate_id"],
+            "smiles": item["smiles"],
+            "predicted_property": 1.0 - index / 10,
+        }
+        for index, item in enumerate(candidates, start=1)
+    ]
+    service = StructuredDatasetCanaryService(
+        storage=ProjectStorage(tmp_path / "workspace"),
+        trusted_actors=set(),
+        harness_authority_managed=True,
+    )
+    return _build_private_evaluation_publications(
+        service=service,
+        project_id="project-options",
+        run_id="run-options",
+        raw={"raw_publication_digest": digest_json({"raw": 1})},
+        review={"review_snapshot_digest": digest_json({"review": 1})},
+        receipt={"confirmation_receipt_digest": digest_json({"receipt": 1})},
+        confirmed={
+            "confirmed_dataset_id": "confirmed-options",
+            "publication_digest": digest_json({"confirmed": 1}),
+            "scientific_scope": "broader_organic_emitter_plqy",
+        },
+        model={
+            "model_package_id": "model-options",
+            "publication_digest": digest_json({"model": 1}),
+            "software_version": "0.1.5",
+        },
+        generation={
+            "generation_publication_id": "generation-options",
+            "publication_digest": digest_json({"generation": 1}),
+            "candidate_roster_digest": digest_json(candidates),
+            "seed": 1729,
+            "software_version": "4.5.8",
+        },
+        candidates=candidates,
+        predictions=predictions,
+        prediction_config={"target_property": "PLQY"},
+        prediction_provider_version="0.1.5",
+        prediction_remote_binding={"request_id": "prediction-options"},
+        training_rows=[{"row_id": "training-1", "smiles": "CCO"}],
+        top_n=top_n,
+        validation_seed=validation_seed,
+        compiled_options_digest=digest_json(configuration),
+        timestamp="2026-08-03T00:00:00Z",
+    )
+
+
+def test_nondefault_evaluation_options_are_bound_and_exactly_replayable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        structured_adapter,
+        "validate_candidates",
+        _deterministic_test_validation,
+    )
+    actual = _build_test_evaluation_publications(
+        tmp_path=tmp_path,
+        top_n=2,
+        validation_seed=7,
+    )
+    replayed = _build_test_evaluation_publications(
+        tmp_path=tmp_path,
+        top_n=2,
+        validation_seed=7,
+    )
+    defaults = _build_test_evaluation_publications(
+        tmp_path=tmp_path,
+        top_n=5,
+        validation_seed=1729,
+    )
+
+    assert actual == replayed
+    _verify_exact_evaluation_publications(actual, replayed)
+    assert actual["candidate_validation"]["validation_seed"] == 7
+    assert actual["ranking_publication"]["ranking_configuration"]["top_n_size"] == 2
+    assert len(actual["computational_top_n"]["candidates"]) == 2
+    assert actual["computational_top_n"]["evaluation_configuration"] == {
+        "top_n": 2,
+        "validation_seed": 7,
+    }
+    assert (
+        actual["computational_top_n"]["publication_digest"]
+        != defaults["computational_top_n"]["publication_digest"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("published_top_n", "published_validation_seed"),
+    [(5, 7), (2, 1729)],
+)
+def test_recovery_rejects_publications_built_with_stale_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    published_top_n: int,
+    published_validation_seed: int,
+) -> None:
+    monkeypatch.setattr(
+        structured_adapter,
+        "validate_candidates",
+        _deterministic_test_validation,
+    )
+    authority = _build_test_evaluation_publications(
+        tmp_path=tmp_path,
+        top_n=2,
+        validation_seed=7,
+    )
+    stale = _build_test_evaluation_publications(
+        tmp_path=tmp_path,
+        top_n=published_top_n,
+        validation_seed=published_validation_seed,
+    )
+    with pytest.raises(Exception, match="not derivationally exact"):
+        _verify_exact_evaluation_publications(stale, authority)
+
+
+def test_executor_passes_immutable_evaluation_options_to_recovery_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage = ProjectStorage(tmp_path / "workspace")
+    storage.create_project(
+        "project-options",
+        name="Options",
+        created_at="2026-08-03T00:00:00Z",
+    )
+    captured: dict[str, object] = {}
+
+    def capture(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        structured_adapter,
+        "verify_private_real_tool_harness_task_publication",
+        capture,
+    )
+    executor = RunPlanExecutor(
+        storage=storage,
+        registry=private_structured_dataset_real_tool_task_registry_v3(),
+    )
+    options = {"top_n": 2, "validation_seed": 7}
+    executor._verify_structured_dataset_task(
+        project_id="project-options",
+        run_id="run-options",
+        task_id="evaluate_private_structured_dataset_canary_v1",
+        task_options=options,
+        expected_compiled_options_digest=digest_json(options),
+    )
+    assert captured["task_options"] == options
+    assert captured["expected_compiled_options_digest"] == digest_json(options)
 
 
 def test_private_registry_is_injected_through_one_server_bootstrap(
