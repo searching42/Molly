@@ -2281,10 +2281,6 @@ def _build_parser() -> Any:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
-        provider = discover_unimol_provider_preprocessor(
-            provider_python=args.provider_python,
-            execution_profile_id=args.execution_profile_id,
-        )
         result = run_br1_unimol_applicability_preflight(
             args.raw_dataset,
             args.source_manifest,
@@ -2292,7 +2288,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             source_authority=args.source_authority,
             source_publication=args.source_publication,
             source_publication_registry=args.source_publication_registry,
-            provider=provider,
+            provider_python=args.provider_python,
             expected_provider_version=args.expected_provider_version,
             repository_commit=args.repository_commit,
             worker_implementation_path=args.worker_implementation,
