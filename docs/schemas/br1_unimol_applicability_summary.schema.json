@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molly.local/schemas/br1_unimol_applicability_summary.schema.json",
+  "title": "BR1 Uni-Mol Applicability Privacy-safe Summary v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "raw_dataset_digest",
+    "source_dataset_manifest_digest",
+    "mapping_policy_digest",
+    "report_digest",
+    "worker_implementation_digest",
+    "execution_profile_id",
+    "execution_profile_digest",
+    "provider_name",
+    "provider_version",
+    "expected_provider_version",
+    "applicability_policy_version",
+    "applicability_policy_digest",
+    "input_row_count",
+    "supported_row_count",
+    "unsupported_row_count",
+    "unresolved_row_count",
+    "reason_counts",
+    "overall_status",
+    "claim_boundary"
+  ],
+  "properties": {
+    "schema_version": {"const": "br1_unimol_applicability_summary.v1"},
+    "raw_dataset_digest": {"oneOf": [{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, {"const": "unavailable"}]},
+    "source_dataset_manifest_digest": {"oneOf": [{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, {"const": "unavailable"}]},
+    "mapping_policy_digest": {"oneOf": [{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, {"const": "unavailable"}]},
+    "report_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "worker_implementation_digest": {"oneOf": [{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, {"const": "unavailable"}]},
+    "execution_profile_id": {"type": "string", "minLength": 1},
+    "execution_profile_digest": {"oneOf": [{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, {"const": "unavailable"}]},
+    "provider_name": {"type": "string", "minLength": 1},
+    "provider_version": {"type": "string", "minLength": 1},
+    "expected_provider_version": {
+      "oneOf": [
+        {"type": "string", "pattern": "^(?!unavailable$)[A-Za-z0-9][A-Za-z0-9._+~:-]{0,63}$"},
+        {"const": "unavailable"}
+      ]
+    },
+    "applicability_policy_version": {"const": "br1_unimol_applicability_policy.v1"},
+    "applicability_policy_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "input_row_count": {"type": "integer", "minimum": 0},
+    "supported_row_count": {"type": "integer", "minimum": 0},
+    "unsupported_row_count": {"type": "integer", "minimum": 0},
+    "unresolved_row_count": {"type": "integer", "minimum": 0},
+    "reason_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^[A-Z0-9_]+$": {"type": "integer", "minimum": 1}}
+    },
+    "overall_status": {"enum": ["PASS", "REVIEW_REQUIRED", "BLOCKED"]},
+    "claim_boundary": {"const": "Applicability preflight only; no training, generation, prediction, acceptance, or scientific validity is claimed."}
+  }
+}

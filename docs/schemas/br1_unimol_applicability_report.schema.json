@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molly.local/schemas/br1_unimol_applicability_report.schema.json",
+  "title": "BR1 Uni-Mol Applicability Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {
+      "oneOf": [
+        {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        {"const": "unavailable"}
+      ]
+    },
+    "reason": {"type": "string", "enum": [
+      "INVALID_SMILES",
+      "NONFINITE_TARGET",
+      "TARGET_OUT_OF_RANGE",
+      "MULTICOMPONENT_MOLECULE",
+      "FORMAL_CHARGE_UNSUPPORTED",
+      "UNSUPPORTED_ELEMENT",
+      "ATOM_COUNT_LIMIT_EXCEEDED",
+      "CONFORMER_GENERATION_FAILED",
+      "UNIMOL_PREPROCESS_FAILED",
+      "PROVIDER_VERSION_UNAVAILABLE",
+      "PROVIDER_VERSION_MISMATCH",
+      "PROVIDER_VERSION_AUTHORITY_UNAVAILABLE",
+      "PROVIDER_PREFLIGHT_API_UNAVAILABLE",
+      "INPUT_DIGEST_MISMATCH",
+      "SOURCE_AUTHORITY_INVALID",
+      "MAPPING_POLICY_INVALID",
+      "RAW_DATASET_CONTRACT_INVALID",
+      "ROW_ID_INVALID",
+      "PROVIDER_CAPABILITY_UNAVAILABLE",
+      "PROVIDER_PREPROCESS_NOT_RUN",
+      "CONFORMER_PREPROCESS_NOT_RUN",
+      "WORKER_IMPLEMENTATION_UNAVAILABLE",
+      "EXECUTION_PROFILE_UNAVAILABLE"
+    ]},
+    "row_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "row_id",
+        "standard_inchikey",
+        "canonical_molecule_identity_digest",
+        "target_validity",
+        "element_roster",
+        "atom_count",
+        "formal_charge",
+        "fragment_count",
+        "provider_preprocessing_status",
+        "conformer_preprocessing_status",
+        "status",
+        "reason_codes"
+      ],
+      "properties": {
+        "row_id": {"type": "string"},
+        "standard_inchikey": {"type": ["string", "null"]},
+        "canonical_molecule_identity_digest": {"oneOf": [{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, {"type": "null"}]},
+        "target_validity": {"enum": ["VALID", "INVALID", "UNRESOLVED"]},
+        "element_roster": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "atom_count": {"type": ["integer", "null"], "minimum": 0},
+        "formal_charge": {"type": ["integer", "null"]},
+        "fragment_count": {"type": ["integer", "null"], "minimum": 0},
+        "provider_preprocessing_status": {"enum": ["SUPPORTED", "UNSUPPORTED", "UNRESOLVED", "NOT_RUN", "FAILED"]},
+        "conformer_preprocessing_status": {"enum": ["SUPPORTED", "UNSUPPORTED", "UNRESOLVED", "NOT_RUN", "FAILED"]},
+        "status": {"enum": ["SUPPORTED", "UNSUPPORTED", "UNRESOLVED"]},
+        "reason_codes": {"type": "array", "items": {"$ref": "#/$defs/reason"}, "uniqueItems": true}
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "raw_dataset_digest",
+    "source_dataset_manifest_digest",
+    "mapping_policy_digest",
+    "repository_commit",
+    "worker_implementation_digest",
+    "execution_profile_id",
+    "execution_profile_digest",
+    "provider_name",
+    "provider_version",
+    "expected_provider_version",
+    "provider_capabilities_digest",
+    "applicability_policy_version",
+    "applicability_policy_digest",
+    "input_row_count",
+    "supported_row_count",
+    "unsupported_row_count",
+    "unresolved_row_count",
+    "supported_row_roster_digest",
+    "unsupported_row_roster_digest",
+    "unresolved_row_roster_digest",
+    "reason_counts",
+    "global_reason_codes",
+    "authority_verification_status",
+    "overall_status",
+    "row_results",
+    "created_at",
+    "claim_boundary",
+    "report_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "br1_unimol_applicability_report.v1"},
+    "raw_dataset_digest": {"$ref": "#/$defs/digest"},
+    "source_dataset_manifest_digest": {"$ref": "#/$defs/digest"},
+    "mapping_policy_digest": {"$ref": "#/$defs/digest"},
+    "repository_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "worker_implementation_digest": {"$ref": "#/$defs/digest"},
+    "execution_profile_id": {"type": "string", "minLength": 1},
+    "execution_profile_digest": {"$ref": "#/$defs/digest"},
+    "provider_name": {"type": "string", "minLength": 1},
+    "provider_version": {"type": "string", "minLength": 1},
+    "expected_provider_version": {
+      "oneOf": [
+        {"type": "string", "pattern": "^(?!unavailable$)[A-Za-z0-9][A-Za-z0-9._+~:-]{0,63}$"},
+        {"const": "unavailable"}
+      ]
+    },
+    "provider_capabilities_digest": {"$ref": "#/$defs/digest"},
+    "applicability_policy_version": {"const": "br1_unimol_applicability_policy.v1"},
+    "applicability_policy_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "input_row_count": {"type": "integer", "minimum": 0},
+    "supported_row_count": {"type": "integer", "minimum": 0},
+    "unsupported_row_count": {"type": "integer", "minimum": 0},
+    "unresolved_row_count": {"type": "integer", "minimum": 0},
+    "supported_row_roster_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "unsupported_row_roster_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "unresolved_row_roster_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "reason_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^[A-Z0-9_]+$": {"type": "integer", "minimum": 1}}
+    },
+    "global_reason_codes": {"type": "array", "items": {"$ref": "#/$defs/reason"}, "uniqueItems": true},
+    "authority_verification_status": {"enum": ["VERIFIED", "INVALID", "UNRESOLVED"]},
+    "overall_status": {"enum": ["PASS", "REVIEW_REQUIRED", "BLOCKED"]},
+    "row_results": {"type": "array", "items": {"$ref": "#/$defs/row_result"}},
+    "created_at": {"type": "string", "format": "date-time"},
+    "claim_boundary": {"const": "Applicability preflight only; no training, generation, prediction, acceptance, or scientific validity is claimed."},
+    "report_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}
