@@ -23,6 +23,7 @@
       "UNIMOL_PREPROCESS_FAILED",
       "PROVIDER_VERSION_UNAVAILABLE",
       "PROVIDER_VERSION_MISMATCH",
+      "PROVIDER_VERSION_AUTHORITY_UNAVAILABLE",
       "PROVIDER_PREFLIGHT_API_UNAVAILABLE",
       "INPUT_DIGEST_MISMATCH",
       "SOURCE_AUTHORITY_INVALID",
@@ -30,6 +31,8 @@
       "RAW_DATASET_CONTRACT_INVALID",
       "ROW_ID_INVALID",
       "PROVIDER_CAPABILITY_UNAVAILABLE",
+      "PROVIDER_PREPROCESS_NOT_RUN",
+      "CONFORMER_PREPROCESS_NOT_RUN",
       "WORKER_IMPLEMENTATION_UNAVAILABLE",
       "EXECUTION_PROFILE_UNAVAILABLE"
     ]},
@@ -77,6 +80,7 @@
     "execution_profile_digest",
     "provider_name",
     "provider_version",
+    "expected_provider_version",
     "provider_capabilities_digest",
     "applicability_policy_version",
     "applicability_policy_digest",
@@ -107,6 +111,12 @@
     "execution_profile_digest": {"$ref": "#/$defs/digest"},
     "provider_name": {"type": "string", "minLength": 1},
     "provider_version": {"type": "string", "minLength": 1},
+    "expected_provider_version": {
+      "oneOf": [
+        {"type": "string", "pattern": "^(?!unavailable$)[A-Za-z0-9][A-Za-z0-9._+~:-]{0,63}$"},
+        {"const": "unavailable"}
+      ]
+    },
     "provider_capabilities_digest": {"$ref": "#/$defs/digest"},
     "applicability_policy_version": {"const": "br1_unimol_applicability_policy.v1"},
     "applicability_policy_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},

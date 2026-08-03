@@ -19,15 +19,19 @@ Confirm that the private dataset satisfies molecule/InChIKey grouping, paper gro
      --source-manifest <private-path> \
      --mapping-policy <private-path> \
      --output-report <private-path> \
-     --public-summary <private-path>
+     --public-summary <private-path> \
+     --expected-provider-version <reviewed-unimol-tools-version>
    ```
 
    Pass the reviewed commit through `--repository-commit` or the private
    `MOLLY_REPOSITORY_COMMIT` environment variable when the installed worker is
-   not inside a Git checkout. Do not put that value, provider paths, or probe
-   output in public evidence. The preflight never calls a training method; if
-   the installed provider has no explicitly documented read-only preprocessing
-   API, the result must be `BLOCKED` with
+   not inside a Git checkout. The expected provider version must come from the
+   reviewed worker/capability authority and is exact-compared with the
+   installed provider version; omitting it is `BLOCKED` with
+   `PROVIDER_VERSION_AUTHORITY_UNAVAILABLE`. Do not put that value, provider
+   paths, or probe output in public evidence. The preflight never calls a
+   training method; if the installed provider has no explicitly documented
+   read-only preprocessing API, the result must be `BLOCKED` with
    `PROVIDER_PREFLIGHT_API_UNAVAILABLE`.
 3. If the summary is `PASS`, freeze the final Raw CSV, source manifest and mapping policy bytes and run Raw Dataset inspection and review snapshot creation through the Molly project/run.
 4. Before presenting or accepting the Gate, re-read the exact Registry-bound Raw CSV and deterministically rebuild the v2 review. Require exact equality for molecule identity, normalized condition, observed payload, source context, observation/conflict grouping, duplicate/conflict findings, reason codes, actions and confirmed/excluded rosters; nested digest self-consistency alone is insufficient. Then have a trusted human approve that exact snapshot and verify that the shared GateDecision and receipt bind the current project, run, raw/review digests, row rosters, target, role and condition policy.
@@ -82,3 +86,12 @@ ID/run ID.
 - `PASS`: freeze the final Raw CSV, source manifest and mapping policy, then create a new clean BR1 acceptance.
 - `REVIEW_REQUIRED`: provide counts and reason summary to the owner and wait for an explicit exclusion decision.
 - `BLOCKED`: repair provider/environment authority or select a supported data range; do not start acceptance.
+
+## Development-branch evidence boundary
+
+Real applicability preflight: `NOT EXECUTED`. The development environment has
+not produced an authoritative private applicability report. The default
+discovery path is only expected to return `BLOCKED` with
+`PROVIDER_PREFLIGHT_API_UNAVAILABLE` until a matching environment exposes the
+versioned read-only provider API; that expectation is not a real-environment
+preflight result.

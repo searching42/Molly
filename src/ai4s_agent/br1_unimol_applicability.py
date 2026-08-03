@@ -101,6 +101,7 @@ REASON_CODES = (
     "UNIMOL_PREPROCESS_FAILED",
     "PROVIDER_VERSION_UNAVAILABLE",
     "PROVIDER_VERSION_MISMATCH",
+    "PROVIDER_VERSION_AUTHORITY_UNAVAILABLE",
     "PROVIDER_PREFLIGHT_API_UNAVAILABLE",
     "INPUT_DIGEST_MISMATCH",
     "SOURCE_AUTHORITY_INVALID",
@@ -108,10 +109,25 @@ REASON_CODES = (
     "RAW_DATASET_CONTRACT_INVALID",
     "ROW_ID_INVALID",
     "PROVIDER_CAPABILITY_UNAVAILABLE",
+    "PROVIDER_PREPROCESS_NOT_RUN",
+    "CONFORMER_PREPROCESS_NOT_RUN",
     "WORKER_IMPLEMENTATION_UNAVAILABLE",
     "EXECUTION_PROFILE_UNAVAILABLE",
 )
 _REASON_SET = frozenset(REASON_CODES)
+_UNRESOLVED_REASON_CODES = frozenset(
+    {
+        "PROVIDER_VERSION_UNAVAILABLE",
+        "PROVIDER_VERSION_MISMATCH",
+        "PROVIDER_VERSION_AUTHORITY_UNAVAILABLE",
+        "PROVIDER_PREFLIGHT_API_UNAVAILABLE",
+        "PROVIDER_CAPABILITY_UNAVAILABLE",
+        "PROVIDER_PREPROCESS_NOT_RUN",
+        "CONFORMER_PREPROCESS_NOT_RUN",
+        "WORKER_IMPLEMENTATION_UNAVAILABLE",
+        "EXECUTION_PROFILE_UNAVAILABLE",
+    }
+)
 
 
 APPLICABILITY_POLICY: dict[str, Any] = {
@@ -298,6 +314,15 @@ def _normalise_digest(value: Any) -> str | None:
 def _valid_commit(value: Any) -> str | None:
     raw = str(value or "").strip().lower()
     return raw if _COMMIT.fullmatch(raw) else None
+
+
+def _safe_provider_version(value: Any, *, allow_unavailable: bool) -> str:
+    raw = str(value or "").strip()
+    if allow_unavailable and raw == _UNAVAILABLE:
+        return _UNAVAILABLE
+    if raw == _UNAVAILABLE or _SAFE_PROVIDER_VERSION.fullmatch(raw) is None:
+        return _UNAVAILABLE
+    return raw
 
 
 def _frozen_mapping_valid(policy: Mapping[str, Any]) -> bool:
@@ -495,11 +520,7 @@ def _provider_metadata(
         raw_version = str(getattr(provider, "provider_version", "") or _UNAVAILABLE)
     except Exception:
         raw_version = _UNAVAILABLE
-    version = (
-        raw_version
-        if raw_version == _UNAVAILABLE or _SAFE_PROVIDER_VERSION.fullmatch(raw_version)
-        else _UNAVAILABLE
-    )
+    version = _safe_provider_version(raw_version, allow_unavailable=True)
     try:
         raw_capabilities = getattr(provider, "capabilities", None)
     except Exception:
@@ -598,7 +619,9 @@ def _row_result(
 
     provider_status = "NOT_RUN"
     conformer_status = "NOT_RUN"
+    provider_called = False
     if not reasons and not global_authority_reasons and not global_environment_reasons:
+        provider_called = True
         try:
             raw_result = provider.preprocess(str(row.get("smiles") or ""))
             result = _normalise_provider_result(raw_result)
@@ -613,8 +636,13 @@ def _row_result(
             conformer_status = result.conformer_status
             reasons.update(result.reason_codes)
             if result.status in {"UNSUPPORTED", "UNRESOLVED", "FAILED", "NOT_RUN"} and not result.reason_codes:
-                reasons.add("UNIMOL_PREPROCESS_FAILED")
-            if result.conformer_status in {"FAILED", "UNSUPPORTED"}:
+                if result.status == "NOT_RUN":
+                    reasons.add("PROVIDER_PREPROCESS_NOT_RUN")
+                else:
+                    reasons.add("UNIMOL_PREPROCESS_FAILED")
+            if result.conformer_status == "NOT_RUN":
+                reasons.add("CONFORMER_PREPROCESS_NOT_RUN")
+            elif result.conformer_status in {"FAILED", "UNSUPPORTED"}:
                 reasons.add("CONFORMER_GENERATION_FAILED")
             elif result.conformer_status == "UNRESOLVED":
                 reasons.add("CONFORMER_GENERATION_FAILED")
@@ -627,10 +655,22 @@ def _row_result(
         status = "UNRESOLVED"
     elif not reasons and provider_status == "SUPPORTED" and conformer_status == "SUPPORTED":
         status = "SUPPORTED"
-    elif provider_status in {"UNRESOLVED", "FAILED"} or conformer_status == "UNRESOLVED":
-        status = "UNRESOLVED"
     else:
-        status = "UNSUPPORTED"
+        provider_unresolved = provider_status in {"UNRESOLVED", "FAILED"} or (
+            provider_called and provider_status == "NOT_RUN"
+        )
+        conformer_unresolved = provider_called and conformer_status in {
+            "UNRESOLVED",
+            "NOT_RUN",
+        }
+        if (
+            provider_unresolved
+            or conformer_unresolved
+            or reasons.intersection(_UNRESOLVED_REASON_CODES)
+        ):
+            status = "UNRESOLVED"
+        else:
+            status = "UNSUPPORTED"
 
     return {
         "row_id": row_id,
@@ -674,12 +714,13 @@ def _reason_counts(
 
 def _overall_status(
     *,
+    input_row_count: int,
     supported: int,
     unsupported: int,
     unresolved: int,
     global_reason_codes: Sequence[str],
 ) -> str:
-    if unresolved > 0 or global_reason_codes:
+    if input_row_count <= 0 or unresolved > 0 or global_reason_codes:
         return "BLOCKED"
     if unsupported > 0:
         return "REVIEW_REQUIRED"
@@ -914,17 +955,29 @@ def run_br1_unimol_applicability_preflight(
         if any(not row_id for row_id in row_ids) or len(row_ids) != len(set(row_ids)):
             global_authority_reasons.add("ROW_ID_INVALID")
 
+    rows = list(raw.rows) if raw.valid else []
+    if not rows:
+        # Keep this explicit even though the current shared CSV helper rejects
+        # header-only input. The report contract must remain fail-closed if the
+        # helper ever becomes permissive or an injected parser returns no rows.
+        global_authority_reasons.add("RAW_DATASET_CONTRACT_INVALID")
+
     if provider is None:
         provider = discover_unimol_provider_preprocessor(
             provider_python=provider_python
         )
     provider_name, provider_version, capabilities, provider_reasons = _provider_metadata(provider)
     environment_reasons = set(provider_reasons)
-    if expected_provider_version is not None:
-        if provider_version == _UNAVAILABLE:
-            environment_reasons.add("PROVIDER_VERSION_UNAVAILABLE")
-        elif provider_version != str(expected_provider_version):
-            environment_reasons.add("PROVIDER_VERSION_MISMATCH")
+    expected_version = _safe_provider_version(
+        expected_provider_version,
+        allow_unavailable=False,
+    )
+    if expected_version == _UNAVAILABLE:
+        environment_reasons.add("PROVIDER_VERSION_AUTHORITY_UNAVAILABLE")
+    elif provider_version == _UNAVAILABLE:
+        environment_reasons.add("PROVIDER_VERSION_UNAVAILABLE")
+    elif provider_version != expected_version:
+        environment_reasons.add("PROVIDER_VERSION_MISMATCH")
 
     commit = _resolve_repository_commit(repository_commit)
     if commit == "0" * 40:
@@ -960,7 +1013,6 @@ def run_br1_unimol_applicability_preflight(
         environment_reasons.add("EXECUTION_PROFILE_UNAVAILABLE")
 
     capabilities_digest = capabilities.digest if capabilities is not None else _UNAVAILABLE
-    rows = list(raw.rows) if raw.valid else []
     row_results = [
         _row_result(
             row,
@@ -995,6 +1047,7 @@ def run_br1_unimol_applicability_preflight(
         "execution_profile_digest": profile_digest,
         "provider_name": provider_name,
         "provider_version": provider_version,
+        "expected_provider_version": expected_version,
         "provider_capabilities_digest": capabilities_digest,
         "applicability_policy_version": APPLICABILITY_POLICY_VERSION,
         "applicability_policy_digest": APPLICABILITY_POLICY_DIGEST,
@@ -1009,6 +1062,7 @@ def run_br1_unimol_applicability_preflight(
         "global_reason_codes": global_reasons,
         "authority_verification_status": authority_status,
         "overall_status": _overall_status(
+            input_row_count=len(rows),
             supported=supported,
             unsupported=unsupported,
             unresolved=unresolved,
@@ -1035,6 +1089,8 @@ def _validate_report_contract(report: Mapping[str, Any]) -> None:
     ):
         raise ApplicabilityPreflightError("applicability report schema validation failed")
     row_results = list(report["row_results"])
+    if report["input_row_count"] != len(row_results):
+        raise ApplicabilityPreflightError("report input row count mismatch")
     if row_results != sorted(row_results, key=lambda item: str(item["row_id"])):
         raise ApplicabilityPreflightError("row results are not deterministically sorted")
     for item in row_results:
@@ -1174,7 +1230,7 @@ def _build_parser() -> Any:
     parser.add_argument("--output-report", type=Path, required=True)
     parser.add_argument("--public-summary", type=Path, required=True)
     parser.add_argument("--provider-python", type=Path)
-    parser.add_argument("--expected-provider-version")
+    parser.add_argument("--expected-provider-version", required=True)
     parser.add_argument("--repository-commit")
     parser.add_argument("--worker-implementation", type=Path)
     parser.add_argument("--created-at")

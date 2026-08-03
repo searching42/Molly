@@ -160,12 +160,14 @@ def _run(
 ):
     paths = _write_inputs(tmp_path, rows)
     selected_provider = FakeProvider() if provider is _DEFAULT_PROVIDER else provider
+    expected_provider_version = kwargs.pop("expected_provider_version", "0.1.5")
     return run_br1_unimol_applicability_preflight(
         *paths,
         provider=selected_provider,
         repository_commit=COMMIT,
         worker_implementation_digest=WORKER_DIGEST,
         execution_profile_digest=PROFILE_DIGEST,
+        expected_provider_version=expected_provider_version,
         created_at=NOW,
         **kwargs,
     )
@@ -178,6 +180,7 @@ def test_all_rows_supported_is_pass_and_validates_both_schemas(tmp_path: Path) -
     assert result.report["supported_row_count"] == 2
     assert result.report["unsupported_row_count"] == 0
     assert result.report["unresolved_row_count"] == 0
+    assert result.report["expected_provider_version"] == "0.1.5"
     assert [item["row_id"] for item in result.report["row_results"]] == ["r-1", "r-2"]
     assert result.report["row_results"][0]["canonical_molecule_identity_digest"].startswith(
         "sha256:"
@@ -229,6 +232,31 @@ def test_nonfinite_and_out_of_range_targets_fail_closed(tmp_path: Path) -> None:
     assert result.report["overall_status"] == "REVIEW_REQUIRED"
 
 
+def test_header_only_dataset_is_blocked_and_row_count_is_bound(tmp_path: Path) -> None:
+    result = _run(tmp_path, [])
+
+    assert result.report["input_row_count"] == 0
+    assert result.report["input_row_count"] == len(result.report["row_results"])
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "RAW_DATASET_CONTRACT_INVALID" in result.report["global_reason_codes"]
+
+
+def test_report_verifier_rejects_input_row_count_rebinding(tmp_path: Path) -> None:
+    trusted = _run(tmp_path, [_row("r-1", "CCO")]).report
+    forged = copy.deepcopy(trusted)
+    forged["input_row_count"] = 0
+    forged["report_digest"] = applicability._report_digest(forged)
+
+    with pytest.raises(
+        applicability.ApplicabilityPreflightError,
+        match="input row count mismatch",
+    ):
+        applicability.verify_br1_unimol_applicability_report(
+            forged,
+            expected_report=trusted,
+        )
+
+
 def test_unsupported_element_and_atom_limit_are_reported(tmp_path: Path) -> None:
     element_provider = FakeProvider()
     element_provider.capabilities = ProviderCapabilities(
@@ -278,7 +306,7 @@ def test_conformer_failure_and_provider_exception_never_pass(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     ("version", "expected", "reason"),
     [
-        ("unavailable", None, "PROVIDER_VERSION_UNAVAILABLE"),
+        ("unavailable", "0.1.5", "PROVIDER_VERSION_UNAVAILABLE"),
         ("0.1.5", "0.1.4", "PROVIDER_VERSION_MISMATCH"),
     ],
 )
@@ -302,6 +330,47 @@ def test_provider_version_authority_is_fail_closed(
     assert reason in result.report["row_results"][0]["reason_codes"] or reason in result.report[
         "global_reason_codes"
     ]
+
+
+def test_actual_provider_version_without_expected_authority_is_blocked(
+    tmp_path: Path,
+) -> None:
+    result = _run(
+        tmp_path,
+        [_row("r-1", "CCO")],
+        expected_provider_version=None,
+    )
+
+    assert result.report["provider_version"] == "0.1.5"
+    assert result.report["expected_provider_version"] == "unavailable"
+    assert result.report["overall_status"] == "BLOCKED"
+    assert (
+        "PROVIDER_VERSION_AUTHORITY_UNAVAILABLE"
+        in result.report["global_reason_codes"]
+    )
+
+
+@pytest.mark.parametrize(
+    "preprocess_result",
+    [
+        ProviderPreprocessResult("SUPPORTED", "NOT_RUN"),
+        ProviderPreprocessResult("NOT_RUN", "NOT_RUN"),
+    ],
+)
+def test_not_run_provider_outcomes_are_unresolved(
+    tmp_path: Path,
+    preprocess_result: ProviderPreprocessResult,
+) -> None:
+    provider = FakeProvider(lambda smiles: preprocess_result)
+    result = _run(tmp_path, [_row("r-1", "CCO")], provider=provider)
+
+    item = result.report["row_results"][0]
+    assert item["status"] == "UNRESOLVED"
+    assert result.report["overall_status"] == "BLOCKED"
+    assert (
+        "CONFORMER_PREPROCESS_NOT_RUN" in item["reason_codes"]
+        or "PROVIDER_PREPROCESS_NOT_RUN" in item["reason_codes"]
+    )
 
 
 def test_manifest_digest_mismatch_and_mapping_policy_invalid_block(tmp_path: Path) -> None:
@@ -514,6 +583,8 @@ def test_preflight_cli_writes_only_report_and_privacy_safe_summary(
             str(summary_path),
             "--repository-commit",
             COMMIT,
+            "--expected-provider-version",
+            "0.1.5",
             "--created-at",
             NOW,
         ]
