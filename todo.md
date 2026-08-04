@@ -1460,6 +1460,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 依据：历史 remediation execution HEAD `c23b7a0eb8897b0d65bd33b4763eb8f8815f46f7` 的 `BLOCKED` 证据不覆盖 PR #32 merge 后的 HEAD；新的 identity chain 必须区分 Raw physical digest、canonical source/provider digest、manifest/mapping/publication/registry/authority digest，并拒绝手工重签或覆盖不同 artifact。
 - 影响任务：`M3H-013` 继续 `I/T(partial)/— / BLOCKED`，因为新的真实 applicability 尚未闭合；`M3H-014` 继续 `I/T(partial)/— / READY`。本 PR 不创建 acceptance ID/run，不训练、不生成、不预测、不排名、不冻结最终数据、不推进 BR2。
 - 新增风险：真实 Raw Dataset 的历史 comparability marker 与冻结 mapping contract 可能仍存在语义不一致；materializer 不把其当作隐式 alias，不改写 Raw CSV，fresh preflight 必须继续报告 `MAPPING_POLICY_INVALID`/`BLOCKED`，直至 owner 另行明确处理。
+- 新远端证据：在 PR execution HEAD `a81e50505b44840f49400427663644f01c801023`、`unimol-tools 0.1.5`、`unimol-train-br1-v2` 和 matching worker 上，fresh materializer 成功生成并验证 1,999 行 authority chain；preflight 为 `BLOCKED`、`1999/0/0/1999`，唯一 reason count 为 `MAPPING_POLICY_INVALID:1999`。report digest 为 `sha256:a4a39f95afefd4e9f9dd176223c64b8174ac663f00e04cf70066706d64bbc241`，summary semantic digest 为 `sha256:2f074b82dbf4ee36e21ebb7b92375b6fd55b5600ffea2f254af6c320b94962d4`；report contract、summary exact projection 和相同冻结时间 exact replay 均通过。provider capability probe 为 true，但 preprocessing/training/generation/prediction/ranking/model artifacts 均未派发或创建。
 - 批准人：本 PR 仍待 repository-owner review；不把 PR #32 的 engineering acceptance解释为 BR1 数据 applicability acceptance。
 
 后续路线调整必须追加：

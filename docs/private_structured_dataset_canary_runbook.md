@@ -185,6 +185,50 @@ or source-row semantic mismatch remains `BLOCKED`; the materializer never
 rewrites the Raw CSV, silently changes comparability, filters rows, or turns a
 legacy marker into an implicit alias.
 
+## 2026-08-04 fresh source authority and applicability evidence
+
+The fresh operator run used PR execution code HEAD
+`a81e50505b44840f49400427663644f01c801023` in a new restricted staging
+directory, the `unimol-tools 0.1.5` provider, the
+`unimol-train-br1-v2` profile, and the matching worker implementation digest
+`sha256:e0b9f18a20fb31dc9fd2cde178f8771832e11408c74d16e3b88ab217ed0f397e`.
+The materializer succeeded and verified a 1,999-row chain. Its privacy-safe
+identity evidence was:
+
+```text
+raw_dataset_digest=sha256:755c8bb312c25deffb7bba4a77904e8337646959ecc802575444b2620f848efa
+source_manifest_digest=sha256:a2b54d72acaafd565e09fb2dc93c344507c8524186bb8c317572140bcdabeccf
+mapping_policy_digest=sha256:68b019534aaa08c93c6c82c8fa25cf5f23ca98d9b0267623068a2f3c3d35a814
+canonical_source_dataset_digest=sha256:817d936c343fd63edc50acc85472a2c407df9c60d9d34884bc7f2228b8aab85c
+canonical_provider_input_digest=sha256:d8770caf126c68c5b81788d256b985e7d72d60b6bfcbc7b82ca3fc790d8e2da5
+source_materialization_binding_digest=sha256:b3ecf2e46167b5ba467c5730ff77149cd0dbbe4e0e64902a5940a24580716ff1
+source_publication_digest=sha256:b3e21eb56f372c7842a854391a42786b04ea36feb55f5dc798fda489ba33ee14
+registry_digest=sha256:3a24307efcd81d97996713718354a4410837e1baa09c4bbd5edf2f7cef7bfb87
+authority_digest=sha256:ae482586d4c13492a371c0b1f1ba1cff1be99ea8eba0a7085d2db938b12b96a1
+```
+
+The fresh preflight result was:
+
+```text
+status=BLOCKED
+input=1999  supported=0  unsupported=0  unresolved=1999
+provider=unimol-tools  provider_version=0.1.5
+execution_profile=unimol-train-br1-v2
+report_digest=sha256:a4a39f95afefd4e9f9dd176223c64b8174ac663f00e04cf70066706d64bbc241
+summary_semantic_digest=sha256:2f074b82dbf4ee36e21ebb7b92375b6fd55b5600ffea2f254af6c320b94962d4
+reason_counts=MAPPING_POLICY_INVALID:1999
+```
+
+The report contract verifier passed and the summary was a canonical exact
+projection of that report. A second run with the same inputs, authority,
+provider/profile, and frozen timestamp produced byte-identical report and
+summary. Capability discovery ran, but provider preprocessing was not
+dispatched because the exact mapping contract did not match the source rows;
+training, generation, prediction, ranking, model, checkpoint, scaler, and
+metrics assertions were all false. The staging directory remained restricted
+(`0700`, files `0400/0600`, no symlinks). This is a fresh blocked
+pre-acceptance result, not an applicability acceptance or data freeze.
+
 ## Applicability preflight handoff
 
 This preflight is operator evidence before acceptance, not a second runtime
