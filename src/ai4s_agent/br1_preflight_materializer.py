@@ -30,11 +30,13 @@ from ai4s_agent.br1_preflight_authority import (
     CANONICALIZATION_CONTRACT_VERSION,
     EXECUTION_PROFILE_ID,
     PROVIDER_NAME,
+    ROW_COMPARABLE_VALUE,
     SOURCE_COLUMN_ORDER,
     canonical_provider_input_bytes,
     canonical_source_dataset_bytes,
     mapping_binding,
     mapping_binding_semantic_material,
+    source_to_raw_mapping,
     source_materialization_binding,
     source_materialization_binding_digest,
 )
@@ -60,21 +62,7 @@ _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,95}$")
 _MAX_INPUT_BYTES = 32 * 1024 * 1024
 _MAX_JSON_BYTES = 8 * 1024 * 1024
-_EXPECTED_SOURCE_FIELD_MAPPING = {
-    "comparable": "fixed:true_within_frozen_single_solvent_scope",
-    "doping_ratio": "fixed:not_applicable",
-    "emission_mechanism": "fixed:unknown",
-    "host": "fixed:not_applicable",
-    "material_role": "fixed:emitter",
-    "measurement_condition": "fixed:canonical_json",
-    "medium": "fixed:solution",
-    "paper_evidence": "Reference DOI + fixed paper evidence level",
-    "paper_id": "normalized Reference DOI",
-    "row_id": "d4c-v3-{Tag}",
-    "smiles": "Chromophore",
-    "target_value": "Quantum yield",
-    "temperature": "fixed:not_reported",
-}
+_EXPECTED_SOURCE_FIELD_MAPPING = source_to_raw_mapping()["field_mapping"]
 
 
 class SourceAuthorityMaterializationError(ValueError):
@@ -240,17 +228,19 @@ def _build_exact_mapping_policy(
     legacy_field_mapping = legacy.get("field_mapping")
     if not isinstance(legacy_field_mapping, Mapping):
         raise SourceAuthorityMaterializationError("mapping policy field mapping is missing")
-    expected_field_mapping = {field: field for field in REQUIRED_COLUMNS}
     if dict(legacy_field_mapping) != _EXPECTED_SOURCE_FIELD_MAPPING:
         raise SourceAuthorityMaterializationError("mapping policy source field mapping is not exact")
     solvent = str(legacy.get("source_solvent_smiles") or "").strip()
     if solvent != "ClCCl":
         raise SourceAuthorityMaterializationError("mapping policy solvent is not the frozen BR1 solvent")
 
-    # These values are server-owned contract constants.  In particular, the
-    # historical comparable marker is not silently treated as an alias: rows
-    # carrying that marker are checked later by the preflight and remain
-    # blocked unless they satisfy this exact policy.
+    # These values are server-owned contract constants.  The dataset-level
+    # comparability scope is deliberately distinct from the per-row literal
+    # emitted by the source-to-Raw mapping.
+    source_mapping = source_to_raw_mapping()
+    source_mapping_digest = digest_json(source_mapping)
+    binding = mapping_binding(expected_provider_version)
+    binding_digest = digest_json(mapping_binding_semantic_material(binding))
     policy: dict[str, Any] = {
         "schema_version": "br1_raw_dataset_mapping_policy.v1",
         "target_property": "PLQY",
@@ -265,15 +255,18 @@ def _build_exact_mapping_policy(
         "temperature_policy": "not_reported",
         "condition_merge_policy": "explicit_single_solvent_filter_no_merge",
         "comparability_policy": "partially_comparable_single_solvent",
-        "field_mapping": expected_field_mapping,
+        "row_comparable_value": ROW_COMPARABLE_VALUE,
+        "source_to_raw_mapping": source_mapping,
+        "source_to_raw_mapping_digest": source_mapping_digest,
+        "raw_to_provider_mapping_binding": binding,
+        "raw_to_provider_mapping_binding_digest": binding_digest,
+        # Existing source-authority artifacts use these names. They are an
+        # exact compatibility projection, never a second accepted mapping.
+        "mapping_binding": binding,
+        "mapping_binding_digest": binding_digest,
     }
-    binding = mapping_binding(expected_provider_version)
     if binding["execution_profile_id"] != execution_profile_id:
         raise SourceAuthorityMaterializationError("mapping binding profile mismatch")
-    policy["mapping_binding"] = binding
-    policy["mapping_binding_digest"] = digest_json(
-        mapping_binding_semantic_material(binding)
-    )
     return policy
 
 
@@ -498,11 +491,16 @@ def _verify_materialized_chain(
         raise SourceAuthorityMaterializationError("source reviewed implementation binding mismatch")
 
     expected_binding = mapping_binding(expected_provider_version)
-    policy_binding = policy.get("mapping_binding")
+    policy_binding = policy.get("raw_to_provider_mapping_binding")
     if not isinstance(policy_binding, dict) or policy_binding != expected_binding:
         raise SourceAuthorityMaterializationError("mapping binding is not exact")
     expected_mapping_binding_digest = digest_json(mapping_binding_semantic_material(expected_binding))
-    if policy.get("mapping_binding_digest") != expected_mapping_binding_digest:
+    if (
+        policy.get("raw_to_provider_mapping_binding_digest")
+        != expected_mapping_binding_digest
+        or policy.get("mapping_binding") != expected_binding
+        or policy.get("mapping_binding_digest") != expected_mapping_binding_digest
+    ):
         raise SourceAuthorityMaterializationError("mapping binding digest mismatch")
 
     if publication.get("dataset_digest") != raw_digest:
@@ -681,7 +679,7 @@ def materialize_br1_preflight_authority(
         source_manifest_digest=source_digest,
         mapping_policy_digest=policy_digest,
         binding=binding,
-        mapping_binding_value=policy["mapping_binding"],
+        mapping_binding_value=policy["raw_to_provider_mapping_binding"],
         raw_dataset_digest=raw_digest,
         canonical_source_digest=canonical_source_digest,
         canonical_provider_digest=canonical_provider_digest,

@@ -11,8 +11,10 @@ import pytest
 from ai4s_agent.br1_preflight_authority import (
     CANONICALIZATION_CONTRACT_VERSION,
     EXECUTION_PROFILE_ID,
+    ROW_COMPARABLE_VALUE,
     canonical_provider_input_bytes,
     canonical_source_dataset_bytes,
+    source_to_raw_mapping,
     source_materialization_binding_digest,
 )
 from ai4s_agent.br1_preflight_materializer import (
@@ -55,7 +57,7 @@ def _row(row_id: str, smiles: str) -> dict[str, str]:
         "temperature": "not_reported",
         "measurement_condition": _condition(),
         "paper_evidence": "paper-evidence",
-        "comparable": "partially_comparable_single_solvent",
+        "comparable": "true_within_frozen_single_solvent_scope",
         "paper_id": "paper-1",
     }
 
@@ -157,11 +159,22 @@ def test_materializer_is_deterministic_and_binds_all_identity_digests(tmp_path: 
 
     authority = json.loads(first.authority_path.read_text())
     source = json.loads(first.source_manifest_path.read_text())
+    policy = json.loads(first.mapping_policy_path.read_text())
     assert authority["source_materialization_binding"] == source["materialization_binding"]
     assert authority["source_materialization_binding_digest"] == source_materialization_binding_digest(
         source["materialization_binding"]
     )
     assert authority["canonical_provider_input_digest"] == first.canonical_provider_input_digest
+    assert policy["comparability_policy"] == "partially_comparable_single_solvent"
+    assert policy["row_comparable_value"] == ROW_COMPARABLE_VALUE
+    assert policy["source_to_raw_mapping"] == source_to_raw_mapping()
+    assert policy["source_to_raw_mapping"]["field_mapping"]["comparable"] == (
+        "fixed:true_within_frozen_single_solvent_scope"
+    )
+    assert policy["raw_to_provider_mapping_binding"] == policy["mapping_binding"]
+    assert policy["raw_to_provider_mapping_binding_digest"] == policy[
+        "mapping_binding_digest"
+    ]
 
 
 def test_authorized_noncanonical_raw_order_has_one_canonical_provider_identity(

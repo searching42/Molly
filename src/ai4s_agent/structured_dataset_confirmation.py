@@ -15,6 +15,7 @@ from ai4s_agent.schemas import GateDecision, GateName
 
 
 RAW_DATASET_SCHEMA = "structured_raw_dataset.v1"
+BR1_ROW_COMPARABLE_VALUE = "true_within_frozen_single_solvent_scope"
 REVIEW_SNAPSHOT_SCHEMA = "structured_dataset_review_snapshot.v1"
 REVIEW_SNAPSHOT_SCHEMA_V2 = "structured_dataset_review_snapshot.v2"
 CONFIRMATION_RECEIPT_SCHEMA = "structured_dataset_confirmation_receipt.v1"
@@ -128,6 +129,7 @@ def build_raw_dataset(
     scientific_scope: str | None = None,
     scope_downgraded: bool | None = None,
     comparability_policy: str | None = None,
+    row_comparable_value: str | None = None,
     created_at: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     _require_id(project_id, "project_id")
@@ -193,9 +195,12 @@ def build_raw_dataset(
             raise ValueError("private raw dataset scope downgrade is inconsistent")
         if comparability_policy != "partially_comparable_single_solvent":
             raise ValueError("private raw dataset comparability policy is invalid")
+        if row_comparable_value != BR1_ROW_COMPARABLE_VALUE:
+            raise ValueError("private raw dataset row comparable value is invalid")
         payload["scientific_scope"] = scientific_scope
         payload["scope_downgraded"] = scope_downgraded
         payload["comparability_policy"] = comparability_policy
+        payload["row_comparable_value"] = row_comparable_value
         payload["review_snapshot_policy"] = REVIEW_SNAPSHOT_SCHEMA_V2
     bind_publication(payload, digest_field="raw_publication_digest")
     return payload, rows
@@ -456,9 +461,8 @@ def build_review_snapshot_v2(
         if str(row.get("material_role") or "").strip().lower() != "emitter":
             proposed_action = "exclude"
             reasons.append("wrong_material_role")
-        if (
-            str(row.get("comparable") or "").strip()
-            != raw["comparability_policy"]
+        if str(row.get("comparable") or "").strip() != raw.get(
+            "row_comparable_value"
         ):
             proposed_action = "exclude"
             reasons.append("comparability_semantics_not_approved")

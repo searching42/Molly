@@ -155,6 +155,21 @@ filter, duplicate and canonical-order rules. Physical Raw CSV order remains
 part of the Raw Dataset digest; canonical source/provider digests use the
 fixed `row_id` order.
 
+The mapping policy has two explicit semantic layers. `source_to_raw_mapping`
+contains the legacy source field origins, fixed values and conversion rules;
+its `row_comparable_value` is the literal required in every Raw observation.
+The dataset-level `comparability_policy` remains the broader scientific scope
+and is not a row literal. `raw_to_provider_mapping_binding` contains the
+provider-facing identity, required fields, missing-value, duplicate and
+canonical-order contract. The existing `mapping_binding` fields are retained
+only as an exact compatibility projection and must equal the provider-facing
+binding byte-for-semantic-material. The preflight records privacy-safe,
+counted mapping diagnostics such as
+`ROW_COMPARABLE_VALUE_MISMATCH`, condition/solvent/temperature mismatches,
+role/mechanism mismatches, duplicate Standard InChIKeys and
+`SOURCE_TO_RAW_MAPPING_MISMATCH`; it never emits row IDs or molecule values in
+the public summary.
+
 In the configured remote private environment, create a fresh
 permission-restricted staging directory and
 run the materializer with private paths and the exact reviewed implementation

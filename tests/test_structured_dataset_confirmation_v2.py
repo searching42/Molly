@@ -14,6 +14,12 @@ from ai4s_agent.structured_dataset_canary import (
     _component_split_assignments,
     _molecule_identity,
 )
+from ai4s_agent.br1_preflight_authority import (
+    ROW_COMPARABLE_VALUE,
+    mapping_binding,
+    mapping_binding_semantic_material,
+    source_to_raw_mapping,
+)
 from ai4s_agent.adapters.structured_dataset_canary import (
     _authority_manifest,
     _validate_single_solvent_mapping,
@@ -92,7 +98,7 @@ def _row(
             }
         ),
         "paper_evidence": json.dumps(evidence, sort_keys=True),
-        "comparable": "partially_comparable_single_solvent",
+        "comparable": ROW_COMPARABLE_VALUE,
         "paper_id": paper_id,
     }
 
@@ -112,6 +118,7 @@ def _raw_and_review(rows: list[dict[str, str]]) -> tuple[dict, dict]:
         scientific_scope="broader_organic_emitter_plqy",
         scope_downgraded=True,
         comparability_policy="partially_comparable_single_solvent",
+        row_comparable_value=ROW_COMPARABLE_VALUE,
         created_at=NOW,
     )
     review = build_review_snapshot_v2(
@@ -211,7 +218,19 @@ def test_private_v2_adapter_requires_and_binds_both_authority_inputs(
         "temperature_policy": "not_reported",
         "condition_merge_policy": "explicit_single_solvent_filter_no_merge",
         "comparability_policy": "partially_comparable_single_solvent",
+        "row_comparable_value": ROW_COMPARABLE_VALUE,
+        "source_to_raw_mapping": source_to_raw_mapping(),
+        "source_to_raw_mapping_digest": digest_json(source_to_raw_mapping()),
     }
+    provider_binding = mapping_binding("0.1.5")
+    mapping["raw_to_provider_mapping_binding"] = provider_binding
+    mapping["raw_to_provider_mapping_binding_digest"] = digest_json(
+        mapping_binding_semantic_material(provider_binding)
+    )
+    mapping["mapping_binding"] = provider_binding
+    mapping["mapping_binding_digest"] = mapping[
+        "raw_to_provider_mapping_binding_digest"
+    ]
     source_path = inputs / "source.json"
     mapping_path = inputs / "mapping.json"
     source_path.write_bytes(canonical_json_bytes(source))
@@ -692,6 +711,7 @@ def test_private_raw_scope_and_comparability_fail_closed(
         "scientific_scope": "broader_organic_emitter_plqy",
         "scope_downgraded": True,
         "comparability_policy": "partially_comparable_single_solvent",
+        "row_comparable_value": ROW_COMPARABLE_VALUE,
         "created_at": NOW,
     }
     options.update(updates)
@@ -713,12 +733,22 @@ def test_private_adapter_enforces_frozen_single_solvent_scope(
     policy = {
         "source_solvent_smiles": "ClCCl",
         "comparability_policy": "partially_comparable_single_solvent",
+        "row_comparable_value": ROW_COMPARABLE_VALUE,
         "temperature_policy": "not_reported",
         "material_role": "emitter",
         "emission_mechanism": "unknown",
     }
 
     _validate_single_solvent_mapping(path, policy)
+    rows[0]["comparable"] = "partially_comparable_single_solvent"
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    path.write_text(stream.getvalue(), encoding="utf-8")
+    with pytest.raises(StructuredDatasetCanaryError, match="frozen single-solvent"):
+        _validate_single_solvent_mapping(path, policy)
+    rows[0]["comparable"] = ROW_COMPARABLE_VALUE
     rows[0]["measurement_condition"] = json.dumps(
         {"phase": "solution", "solvent_smiles": "O"}
     )
@@ -748,7 +778,19 @@ def test_adapter_validates_checked_in_mapping_schema_and_rejects_owner_flag(
         "temperature_policy": "not_reported",
         "condition_merge_policy": "explicit_single_solvent_filter_no_merge",
         "comparability_policy": "partially_comparable_single_solvent",
+        "row_comparable_value": ROW_COMPARABLE_VALUE,
+        "source_to_raw_mapping": source_to_raw_mapping(),
+        "source_to_raw_mapping_digest": digest_json(source_to_raw_mapping()),
     }
+    provider_binding = mapping_binding("0.1.5")
+    policy["raw_to_provider_mapping_binding"] = provider_binding
+    policy["raw_to_provider_mapping_binding_digest"] = digest_json(
+        mapping_binding_semantic_material(provider_binding)
+    )
+    policy["mapping_binding"] = provider_binding
+    policy["mapping_binding_digest"] = policy[
+        "raw_to_provider_mapping_binding_digest"
+    ]
     path = tmp_path / "mapping.json"
     path.write_text(json.dumps(policy), encoding="utf-8")
     _, first_digest = _authority_manifest(

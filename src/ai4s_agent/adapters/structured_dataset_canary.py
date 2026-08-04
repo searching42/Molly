@@ -11,6 +11,10 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from ai4s_agent.generation_publication import read_regular_file_bound
+from ai4s_agent.br1_preflight_authority import (
+    ROW_COMPARABLE_VALUE,
+    validate_br1_mapping_policy_contract,
+)
 from ai4s_agent.remote_execution_lifecycle import (
     RemoteExecutionRequest,
     RemotePublication,
@@ -312,7 +316,7 @@ def _validate_single_solvent_mapping(
     try:
         rows = csv.DictReader(raw.decode("utf-8-sig").splitlines())
         expected_solvent = str(mapping_policy["source_solvent_smiles"])
-        expected_comparability = str(mapping_policy["comparability_policy"])
+        expected_comparable = str(mapping_policy["row_comparable_value"])
         seen_molecules: set[str] = set()
         from ai4s_agent.structured_dataset_canary import _molecule_identity
 
@@ -330,7 +334,7 @@ def _validate_single_solvent_mapping(
                 or condition.get("temperature")
                 != mapping_policy["temperature_policy"]
                 or str(row.get("medium") or "") != "solution"
-                or str(row.get("comparable") or "") != expected_comparability
+                or str(row.get("comparable") or "") != expected_comparable
                 or str(row.get("material_role") or "")
                 != mapping_policy["material_role"]
                 or str(row.get("emission_mechanism") or "")
@@ -430,6 +434,16 @@ def prepare_private_structured_dataset_canary_v2_adapter(
             raise StructuredDatasetCanaryError(
                 f"BR1 mapping policy field is not frozen: {field}"
             )
+    if (
+        not validate_br1_mapping_policy_contract(
+            mapping_policy,
+            expected_provider_version="0.1.5",
+        )
+        or mapping_policy.get("row_comparable_value") != ROW_COMPARABLE_VALUE
+    ):
+        raise StructuredDatasetCanaryError(
+            "BR1 source-to-Raw or Raw-to-provider mapping contract is invalid"
+        )
     if mapping_policy.get("duplicate_tie_break") not in {
         "lowest_source_tag",
         "normalized_doi_first",
@@ -457,6 +471,7 @@ def prepare_private_structured_dataset_canary_v2_adapter(
         scientific_scope=str(mapping_policy["scientific_scope"]),
         scope_downgraded=bool(mapping_policy["scope_downgraded"]),
         comparability_policy=str(mapping_policy["comparability_policy"]),
+        row_comparable_value=str(mapping_policy["row_comparable_value"]),
     )
     return _publish_prepare(service, project_id, run_id, raw, timestamp)
 

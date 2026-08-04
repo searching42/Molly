@@ -37,7 +37,6 @@ from ai4s_agent._utils import now_iso
 from ai4s_agent.br1_preflight_authority import (
     CANONICALIZATION_CONTRACT_VERSION,
     SOURCE_AUTHORITY_SCHEMA,
-    SOURCE_COLUMN_ORDER,
     SOURCE_PUBLICATION_REGISTRY_SCHEMA,
     canonical_field_value,
     canonical_mapping_binding,
@@ -48,6 +47,7 @@ from ai4s_agent.br1_preflight_authority import (
     mapping_binding,
     mapping_binding_semantic_material,
     source_materialization_binding_digest,
+    validate_br1_mapping_policy_contract,
 )
 from ai4s_agent.generation_publication import publish_fresh_bytes, read_regular_file_bound
 from ai4s_agent.resource_profiles import EXECUTION_PROFILES
@@ -151,6 +151,19 @@ _UNRESOLVED_REASON_CODES = frozenset(
         "CANONICAL_INPUT_INVALID",
     }
 )
+
+MAPPING_DIAGNOSTIC_CODES = (
+    "ROW_COMPARABLE_VALUE_MISMATCH",
+    "MEASUREMENT_CONDITION_PHASE_MISMATCH",
+    "SOLVENT_MISMATCH",
+    "TEMPERATURE_POLICY_MISMATCH",
+    "MATERIAL_ROLE_MISMATCH",
+    "EMISSION_MECHANISM_MISMATCH",
+    "MEDIUM_MISMATCH",
+    "DUPLICATE_STANDARD_INCHIKEY",
+    "SOURCE_TO_RAW_MAPPING_MISMATCH",
+)
+_MAPPING_DIAGNOSTIC_SET = frozenset(MAPPING_DIAGNOSTIC_CODES)
 
 
 APPLICABILITY_POLICY: dict[str, Any] = {
@@ -815,7 +828,11 @@ def _safe_provider_version(value: Any, *, allow_unavailable: bool) -> str:
     return raw
 
 
-def _frozen_mapping_valid(policy: Mapping[str, Any]) -> bool:
+def _frozen_mapping_valid(
+    policy: Mapping[str, Any],
+    *,
+    expected_provider_version: str | None = None,
+) -> bool:
     frozen: dict[str, Any] = {
         "target_property": "PLQY",
         "scientific_scope": "broader_organic_emitter_plqy",
@@ -830,14 +847,10 @@ def _frozen_mapping_valid(policy: Mapping[str, Any]) -> bool:
     }
     if any(policy.get(key) != value for key, value in frozen.items()):
         return False
-    # The checked-in v1 mapping schema remains compatible with the existing
-    # structured-dataset adapter, which also reads this schema.  The BR1
-    # preflight has a stricter boundary: its materialized policy must carry the
-    # exact canonical Raw Dataset field mapping instead of relying on aliases
-    # or implicit column discovery.
-    if policy.get("field_mapping") != {
-        field: field for field in SOURCE_COLUMN_ORDER
-    }:
+    if not validate_br1_mapping_policy_contract(
+        policy,
+        expected_provider_version=expected_provider_version,
+    ):
         return False
     if policy.get("duplicate_tie_break") not in {
         "lowest_source_tag",
@@ -850,56 +863,76 @@ def _frozen_mapping_valid(policy: Mapping[str, Any]) -> bool:
     return True
 
 
-def _row_matches_frozen_mapping(
+def _row_mapping_diagnostic_codes(
     row: Mapping[str, str],
     policy: Mapping[str, Any],
-) -> bool:
+) -> set[str]:
+    reasons: set[str] = set()
     try:
         condition = json.loads(str(row.get("measurement_condition") or ""))
     except (TypeError, json.JSONDecodeError):
-        return False
+        return {"SOURCE_TO_RAW_MAPPING_MISMATCH"}
     if not isinstance(condition, dict):
-        return False
-    return (
-        condition.get("phase") == "solution"
-        and condition.get("solvent_smiles") == policy.get("source_solvent_smiles")
-        and condition.get("temperature") == policy.get("temperature_policy")
-        and str(row.get("medium") or "") == "solution"
-        and str(row.get("comparable") or "")
-        == str(policy.get("comparability_policy") or "")
-        and str(row.get("material_role") or "")
-        == str(policy.get("material_role") or "")
-        and str(row.get("emission_mechanism") or "")
-        == str(policy.get("emission_mechanism") or "")
-        and str(row.get("temperature") or "")
-        == str(policy.get("temperature_policy") or "")
-    )
+        return {"SOURCE_TO_RAW_MAPPING_MISMATCH"}
+    if condition.get("phase") != "solution":
+        reasons.add("MEASUREMENT_CONDITION_PHASE_MISMATCH")
+    if condition.get("solvent_smiles") != policy.get("source_solvent_smiles"):
+        reasons.add("SOLVENT_MISMATCH")
+    if condition.get("temperature") != policy.get("temperature_policy"):
+        reasons.add("TEMPERATURE_POLICY_MISMATCH")
+    if str(row.get("medium") or "") != "solution":
+        reasons.add("MEDIUM_MISMATCH")
+    if str(row.get("comparable") or "") != str(
+        policy.get("row_comparable_value") or ""
+    ):
+        reasons.add("ROW_COMPARABLE_VALUE_MISMATCH")
+    if str(row.get("material_role") or "") != str(
+        policy.get("material_role") or ""
+    ):
+        reasons.add("MATERIAL_ROLE_MISMATCH")
+    if str(row.get("emission_mechanism") or "") != str(
+        policy.get("emission_mechanism") or ""
+    ):
+        reasons.add("EMISSION_MECHANISM_MISMATCH")
+    if str(row.get("temperature") or "") != str(
+        policy.get("temperature_policy") or ""
+    ):
+        reasons.add("TEMPERATURE_POLICY_MISMATCH")
+    return reasons
 
 
-def _rows_match_frozen_mapping(
+def _mapping_diagnostics(
     rows: Sequence[Mapping[str, str]],
     policy: Mapping[str, Any],
-) -> bool:
-    """Mirror the existing private-v2 single-solvent row authority.
+) -> dict[str, Any]:
+    """Return privacy-safe, row-counted diagnostics for the mapping layer."""
 
-    The runtime adapter rejects repeated standard InChIKeys because its frozen
-    mapping is one observation per molecule. Invalid SMILES are left for the
-    row-level applicability result to classify as ``UNSUPPORTED`` rather than
-    being silently collapsed into a mapping-only failure.
-    """
-
-    seen_inchikeys: set[str] = set()
+    reason_counts: dict[str, int] = {}
+    row_reason_sets: list[set[str]] = []
+    inchikeys: list[str | None] = []
     for row in rows:
-        if not _row_matches_frozen_mapping(row, policy):
-            return False
+        row_reason_sets.append(_row_mapping_diagnostic_codes(row, policy))
         identity = _safe_molecule_identity(str(row.get("smiles") or ""))
-        if identity is None:
-            continue
-        inchikey = str(identity.get("inchikey") or "")
-        if not inchikey or inchikey in seen_inchikeys:
-            return False
-        seen_inchikeys.add(inchikey)
-    return True
+        inchikeys.append(
+            str(identity.get("inchikey") or "") if identity is not None else None
+        )
+    duplicate_ids = {
+        inchikey
+        for inchikey in inchikeys
+        if inchikey and inchikeys.count(inchikey) > 1
+    }
+    for inchikey, reasons in zip(inchikeys, row_reason_sets):
+        if inchikey in duplicate_ids:
+            reasons.add("DUPLICATE_STANDARD_INCHIKEY")
+        for reason in reasons:
+            if reason in _MAPPING_DIAGNOSTIC_SET:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    return {
+        "schema_version": "br1_mapping_diagnostics.v1",
+        "checked_row_count": len(rows),
+        "row_contract_valid": not reason_counts,
+        "reason_counts": dict(sorted(reason_counts.items())),
+    }
 
 
 def _quiet_molecule_call(call: Callable[[], Any]) -> Any:
@@ -1284,6 +1317,7 @@ def _roster_digest(row_results: Sequence[Mapping[str, Any]], status: str) -> str
 def _reason_counts(
     row_results: Sequence[Mapping[str, Any]],
     global_reason_codes: Sequence[str],
+    mapping_reason_counts: Mapping[str, int] | None = None,
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
     for item in row_results:
@@ -1292,6 +1326,8 @@ def _reason_counts(
     if not row_results:
         for reason in global_reason_codes:
             counts[str(reason)] = counts.get(str(reason), 0) + 1
+    for reason, count in (mapping_reason_counts or {}).items():
+        counts[str(reason)] = counts.get(str(reason), 0) + int(count)
     return dict(sorted(counts.items()))
 
 
@@ -1898,20 +1934,43 @@ def run_br1_unimol_applicability_preflight(
         global_authority_reasons.add("INPUT_DIGEST_MISMATCH")
         global_authority_reasons.add("CANONICAL_INPUT_INVALID")
 
-    mapping_valid = bool(
+    mapping_policy_contract_valid = bool(
         policy.valid
         and policy.payload is not None
-        and _frozen_mapping_valid(policy.payload)
+        and _frozen_mapping_valid(
+            policy.payload,
+            expected_provider_version=(
+                expected_version if expected_version != _UNAVAILABLE else None
+            ),
+        )
+    )
+    mapping_diagnostics = _mapping_diagnostics(
+        raw.rows if raw.valid else (),
+        policy.payload if policy.payload is not None else {},
+    )
+    if not mapping_policy_contract_valid:
+        mapping_diagnostic_counts = dict(mapping_diagnostics["reason_counts"])
+        mapping_diagnostic_counts["SOURCE_TO_RAW_MAPPING_MISMATCH"] = (
+            mapping_diagnostic_counts.get("SOURCE_TO_RAW_MAPPING_MISMATCH", 0) + 1
+        )
+        mapping_diagnostics["reason_counts"] = dict(
+            sorted(mapping_diagnostic_counts.items())
+        )
+    mapping_diagnostics["policy_contract_valid"] = mapping_policy_contract_valid
+    mapping_diagnostics["row_contract_valid"] = not bool(
+        mapping_diagnostics["reason_counts"]
+    )
+    mapping_valid = bool(
+        mapping_policy_contract_valid
         and authority.mapping_binding is not None
         and authority.mapping_binding_digest
         != _UNAVAILABLE
         and "MAPPING_POLICY_INVALID" not in authority.reasons
     )
-    if policy.valid and not mapping_valid:
+    if not mapping_valid:
         global_authority_reasons.add("MAPPING_POLICY_INVALID")
-    if raw.valid and mapping_valid and policy.payload is not None:
-        if not _rows_match_frozen_mapping(raw.rows, policy.payload):
-            global_authority_reasons.add("MAPPING_POLICY_INVALID")
+    if mapping_diagnostics["reason_counts"]:
+        global_authority_reasons.add("MAPPING_POLICY_INVALID")
 
     if raw.valid and raw.columns:
         missing = set(REQUIRED_COLUMNS).difference(raw.columns)
@@ -2133,7 +2192,12 @@ def run_br1_unimol_applicability_preflight(
         "supported_row_roster_digest": _roster_digest(row_results, "SUPPORTED"),
         "unsupported_row_roster_digest": _roster_digest(row_results, "UNSUPPORTED"),
         "unresolved_row_roster_digest": _roster_digest(row_results, "UNRESOLVED"),
-        "reason_counts": _reason_counts(row_results, global_reasons),
+        "mapping_diagnostics": mapping_diagnostics,
+        "reason_counts": _reason_counts(
+            row_results,
+            global_reasons,
+            mapping_diagnostics["reason_counts"],
+        ),
         "global_reason_codes": global_reasons,
         "authority_verification_status": authority_status,
         "overall_status": _overall_status(
@@ -2194,7 +2258,18 @@ def _validate_report_contract(report: Mapping[str, Any]) -> None:
     ):
         if report[digest_field] != _roster_digest(row_results, status):
             raise ApplicabilityPreflightError("report row roster digest mismatch")
-    if report["reason_counts"] != _reason_counts(row_results, global_reasons):
+    mapping_diagnostics = report["mapping_diagnostics"]
+    if mapping_diagnostics["checked_row_count"] != report["input_row_count"]:
+        raise ApplicabilityPreflightError("mapping diagnostic row count mismatch")
+    if mapping_diagnostics["row_contract_valid"] != (
+        not bool(mapping_diagnostics["reason_counts"])
+    ):
+        raise ApplicabilityPreflightError("mapping diagnostic validity mismatch")
+    if report["reason_counts"] != _reason_counts(
+        row_results,
+        global_reasons,
+        mapping_diagnostics["reason_counts"],
+    ):
         raise ApplicabilityPreflightError("report reason counts mismatch")
     identity = report["input_identity"]
     identity_pairs = {

@@ -21,10 +21,12 @@ from ai4s_agent.structured_dataset_confirmation import REQUIRED_COLUMNS, digest_
 CANONICALIZATION_CONTRACT_VERSION = "br1_provider_input_canonicalization.v1"
 MAPPING_BINDING_VERSION = "br1_preflight_mapping_binding.v1"
 SOURCE_MATERIALIZATION_BINDING_VERSION = "br1_source_manifest_materialization.v1"
+SOURCE_TO_RAW_MAPPING_VERSION = "br1_source_to_raw_mapping.v1"
 SOURCE_PUBLICATION_REGISTRY_SCHEMA = "br1_source_publication_registry.v1"
 SOURCE_AUTHORITY_SCHEMA = "br1_preflight_source_authority.v1"
 PROVIDER_NAME = "unimol-tools"
 EXECUTION_PROFILE_ID = "unimol-train-br1-v2"
+ROW_COMPARABLE_VALUE = "true_within_frozen_single_solvent_scope"
 
 SOURCE_COLUMN_ORDER = tuple(REQUIRED_COLUMNS)
 PROVIDER_INPUT_COLUMN_ORDER = ("smiles", "target_value")
@@ -40,6 +42,45 @@ CONDITION_CONTEXT_FIELDS = (
     "paper_id",
     "paper_evidence",
 )
+
+# This is the server-owned Deep4Chem/source-to-Raw contract.  It is kept
+# separate from ``comparability_policy``: the latter describes the scientific
+# scope of the complete dataset, while ``ROW_COMPARABLE_VALUE`` is the literal
+# emitted into each Raw observation.
+SOURCE_TO_RAW_FIELD_MAPPING = {
+    "comparable": "fixed:true_within_frozen_single_solvent_scope",
+    "doping_ratio": "fixed:not_applicable",
+    "emission_mechanism": "fixed:unknown",
+    "host": "fixed:not_applicable",
+    "material_role": "fixed:emitter",
+    "measurement_condition": "fixed:canonical_json",
+    "medium": "fixed:solution",
+    "paper_evidence": "Reference DOI + fixed paper evidence level",
+    "paper_id": "normalized Reference DOI",
+    "row_id": "d4c-v3-{Tag}",
+    "smiles": "Chromophore",
+    "target_value": "Quantum yield",
+    "temperature": "fixed:not_reported",
+}
+
+SOURCE_TO_RAW_FIXED_VALUES = {
+    "comparable": ROW_COMPARABLE_VALUE,
+    "doping_ratio": "not_applicable",
+    "emission_mechanism": "unknown",
+    "host": "not_applicable",
+    "material_role": "emitter",
+    "medium": "solution",
+    "temperature": "not_reported",
+}
+
+SOURCE_TO_RAW_CONVERSION_RULES = {
+    "measurement_condition": "canonical_json",
+    "paper_evidence": "reference_doi_plus_fixed_paper_evidence_level",
+    "paper_id": "normalized_reference_doi",
+    "row_id": "d4c-v3_tag_template",
+    "smiles": "source_chromophore_as_smiles",
+    "target_value": "quantum_yield_to_fraction",
+}
 
 
 def _canonical_decimal(value: str) -> str:
@@ -79,6 +120,69 @@ def canonical_field_value(field: str, value: Any) -> str:
                 separators=(",", ":"),
             )
     return rendered
+
+
+def source_to_raw_mapping() -> dict[str, Any]:
+    """Return the canonical source-to-Raw mapping contract."""
+
+    return {
+        "schema_version": SOURCE_TO_RAW_MAPPING_VERSION,
+        "field_mapping": dict(SOURCE_TO_RAW_FIELD_MAPPING),
+        "fixed_values": dict(SOURCE_TO_RAW_FIXED_VALUES),
+        "conversion_rules": dict(SOURCE_TO_RAW_CONVERSION_RULES),
+    }
+
+
+def validate_br1_mapping_policy_contract(
+    policy: Mapping[str, Any],
+    *,
+    expected_provider_version: str | None = None,
+) -> bool:
+    """Validate both mapping layers without accepting semantic aliases.
+
+    ``mapping_binding`` is retained as an exact compatibility projection for
+    the existing authority contract.  It is not a second source of truth:
+    both it and its digest must exactly equal
+    ``raw_to_provider_mapping_binding``.
+    """
+
+    if not isinstance(policy, Mapping):
+        return False
+    if policy.get("schema_version") != "br1_raw_dataset_mapping_policy.v1":
+        return False
+    if policy.get("row_comparable_value") != ROW_COMPARABLE_VALUE:
+        return False
+    source_mapping = policy.get("source_to_raw_mapping")
+    if not isinstance(source_mapping, Mapping):
+        return False
+    expected_source_mapping = source_to_raw_mapping()
+    if dict(source_mapping) != expected_source_mapping:
+        return False
+    if policy.get("source_to_raw_mapping_digest") != digest_json(expected_source_mapping):
+        return False
+
+    provider_binding = policy.get("raw_to_provider_mapping_binding")
+    if not isinstance(provider_binding, Mapping):
+        return False
+    provider_version = str(provider_binding.get("expected_provider_version") or "")
+    if not provider_version:
+        return False
+    if (
+        expected_provider_version is not None
+        and provider_version != str(expected_provider_version)
+    ):
+        return False
+    expected_binding = mapping_binding(provider_version)
+    if dict(provider_binding) != expected_binding:
+        return False
+    binding_digest = digest_json(mapping_binding_semantic_material(expected_binding))
+    if policy.get("raw_to_provider_mapping_binding_digest") != binding_digest:
+        return False
+    if policy.get("mapping_binding") != expected_binding:
+        return False
+    if policy.get("mapping_binding_digest") != binding_digest:
+        return False
+    return True
 
 
 def canonical_source_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
@@ -256,10 +360,15 @@ __all__ = [
     "MAPPING_BINDING_VERSION",
     "PROVIDER_INPUT_COLUMN_ORDER",
     "PROVIDER_NAME",
+    "ROW_COMPARABLE_VALUE",
     "SOURCE_AUTHORITY_SCHEMA",
     "SOURCE_MATERIALIZATION_BINDING_VERSION",
     "SOURCE_COLUMN_ORDER",
     "SOURCE_PUBLICATION_REGISTRY_SCHEMA",
+    "SOURCE_TO_RAW_CONVERSION_RULES",
+    "SOURCE_TO_RAW_FIELD_MAPPING",
+    "SOURCE_TO_RAW_FIXED_VALUES",
+    "SOURCE_TO_RAW_MAPPING_VERSION",
     "canonical_field_value",
     "canonical_mapping_binding",
     "canonical_provider_input_bytes",
@@ -267,6 +376,8 @@ __all__ = [
     "canonical_source_rows",
     "mapping_binding",
     "mapping_binding_semantic_material",
+    "source_to_raw_mapping",
     "source_materialization_binding",
     "source_materialization_binding_digest",
+    "validate_br1_mapping_policy_contract",
 ]

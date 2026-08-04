@@ -11,6 +11,35 @@
         {"const": "unavailable"}
       ]
     },
+    "mapping_diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "checked_row_count", "policy_contract_valid",
+        "row_contract_valid", "reason_counts"
+      ],
+      "properties": {
+        "schema_version": {"const": "br1_mapping_diagnostics.v1"},
+        "checked_row_count": {"type": "integer", "minimum": 0},
+        "policy_contract_valid": {"type": "boolean"},
+        "row_contract_valid": {"type": "boolean"},
+        "reason_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ROW_COMPARABLE_VALUE_MISMATCH": {"type": "integer", "minimum": 1},
+            "MEASUREMENT_CONDITION_PHASE_MISMATCH": {"type": "integer", "minimum": 1},
+            "SOLVENT_MISMATCH": {"type": "integer", "minimum": 1},
+            "TEMPERATURE_POLICY_MISMATCH": {"type": "integer", "minimum": 1},
+            "MATERIAL_ROLE_MISMATCH": {"type": "integer", "minimum": 1},
+            "EMISSION_MECHANISM_MISMATCH": {"type": "integer", "minimum": 1},
+            "MEDIUM_MISMATCH": {"type": "integer", "minimum": 1},
+            "DUPLICATE_STANDARD_INCHIKEY": {"type": "integer", "minimum": 1},
+            "SOURCE_TO_RAW_MAPPING_MISMATCH": {"type": "integer", "minimum": 1}
+          }
+        }
+      }
+    },
     "reason": {"type": "string", "enum": [
       "INVALID_SMILES",
       "NONFINITE_TARGET",
@@ -216,6 +245,7 @@
     "provider_capability_contract",
     "provider_capability_contract_version",
     "provider_capability_contract_digest",
+    "mapping_diagnostics",
     "dispatch_assertions",
     "applicability_policy_version",
     "applicability_policy_digest",
@@ -264,6 +294,7 @@
     "provider_capability_contract": {"oneOf": [{"$ref": "#/$defs/capability_contract"}, {"type": "null"}]},
     "provider_capability_contract_version": {"oneOf": [{"type": "string", "pattern": "^(?!unavailable$).+"}, {"const": "unavailable"}]},
     "provider_capability_contract_digest": {"$ref": "#/$defs/digest"},
+    "mapping_diagnostics": {"$ref": "#/$defs/mapping_diagnostics"},
     "dispatch_assertions": {"$ref": "#/$defs/dispatch_assertions"},
     "applicability_policy_version": {"const": "br1_unimol_applicability_policy.v1"},
     "applicability_policy_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},

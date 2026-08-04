@@ -1470,6 +1470,15 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 安全边界：provider capability probe 为 true，但 preprocessing、training、generation、prediction、ranking、model/checkpoint/scaler/metrics 均未派发或创建；fresh staging 为受限目录、无 symlink、无 forbidden artifact name。未创建 acceptance ID/run，未记录 BR1 applicability owner acceptance。
 - 影响任务：`M3H-013` 继续 `I/T(partial)/— / BLOCKED`；`M3H-014` 继续 `I/T(partial)/— / READY`。仍需 owner 决定是否修复或缩小 mapping scope；不得因本 preflight contract 或工程 CI 通过而冻结数据或启动 acceptance。
 
+### 2026-08-04：PR #33 mapping semantic remediation follow-up
+
+- 决策：在现有 Draft PR #33 内修复 exact mapping contract 的语义分叉；不创建新 PR，不修改 Raw CSV，不把 `comparability_policy` 当作 row literal，不接受两个 comparable 值作为 alias。
+- 实现：新增显式 `source_to_raw_mapping`、`row_comparable_value` 与 `raw_to_provider_mapping_binding`；保留 `mapping_binding` 仅作为 exact compatibility projection，并要求其与 provider-facing binding 完全一致。preflight 与 private v2 structured adapter 均按 `row_comparable_value` 验证 Raw 行。
+- 诊断：全局 bool mapping check 改为 privacy-safe counted diagnostics，覆盖 row comparable、phase/solvent/temperature、medium、material role、emission mechanism、duplicate Standard InChIKey 与 source-to-Raw contract mismatch；public summary 只投影 reason counts。
+- 验证：已加入 legacy source mapping → materializer → authority → applicability provider-dispatch PASS fixture，以及各类单行 mismatch/duplicate 对抗测试。新的 executable HEAD 需要重新部署并在匹配 worker 上重新 materialize authority chain、运行 fresh preflight；在新远端证据产生前不得改变 `M3H-013` 状态。
+- 影响任务：`M3H-013` 保持 `I/T(partial)/— / BLOCKED`；`M3H-014` 保持 `I/T(partial)/— / READY`；不创建 acceptance ID/run，不训练、不生成、不预测、不排名，不记录 BR1 applicability owner acceptance。
+- 批准人：待 repository-owner 对 PR #33 新 executable HEAD review；远端 fresh preflight 若仍有 blocker，必须记录精确 diagnostics，不得手工调整为通过。
+
 后续路线调整必须追加：
 
 ```text
