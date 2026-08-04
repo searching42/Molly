@@ -185,9 +185,9 @@ or source-row semantic mismatch remains `BLOCKED`; the materializer never
 rewrites the Raw CSV, silently changes comparability, filters rows, or turns a
 legacy marker into an implicit alias.
 
-## 2026-08-04 fresh source authority and applicability evidence
+## 2026-08-04 initial source authority and applicability evidence
 
-The fresh operator run used PR execution code HEAD
+The initial fresh operator run used PR execution code HEAD
 `a81e50505b44840f49400427663644f01c801023` in a new restricted staging
 directory, the `unimol-tools 0.1.5` provider, the
 `unimol-train-br1-v2` profile, and the matching worker implementation digest
@@ -228,6 +228,53 @@ training, generation, prediction, ranking, model, checkpoint, scaler, and
 metrics assertions were all false. The staging directory remained restricted
 (`0700`, files `0400/0600`, no symlinks). This is a fresh blocked
 pre-acceptance result, not an applicability acceptance or data freeze.
+
+## 2026-08-04 final executable HEAD fresh authority and applicability evidence
+
+After the exact mapping-boundary regression fix, the fresh operator run used
+execution code HEAD
+`69feba9611635a20411775686e337a17088078ee` in a new restricted staging
+directory, the `unimol-tools 0.1.5` provider, the
+`unimol-train-br1-v2` profile, and the matching worker implementation digest
+`sha256:e0b9f18a20fb31dc9fd2cde178f8771832e11408c74d16e3b88ab217ed0f397e`.
+The materializer succeeded and verified a 1,999-row chain. Its privacy-safe
+identity evidence was:
+
+```text
+raw_dataset_digest=sha256:755c8bb312c25deffb7bba4a77904e8337646959ecc802575444b2620f848efa
+source_manifest_digest=sha256:3427295d2ee603b501adc343b3a61484b15bb9c7836fa1ee454665014282d11c
+mapping_policy_digest=sha256:68b019534aaa08c93c6c82c8fa25cf5f23ca98d9b0267623068a2f3c3d35a814
+canonical_source_dataset_digest=sha256:817d936c343fd63edc50acc85472a2c407df9c60d9d34884bc7f2228b8aab85c
+canonical_provider_input_digest=sha256:d8770caf126c68c5b81788d256b985e7d72d60b6bfcbc7b82ca3fc790d8e2da5
+source_materialization_binding_digest=sha256:af30c28742e47f0ab4eadc28c22849b80af3f7ae702c38177148c9cc6891eb88
+source_publication_digest=sha256:84a97fa169870e453f2ab47f475690b2a8c87e68b4a00452a8439020788ee116
+registry_digest=sha256:4e5217e6120b792da25d886cd50badde93ad73e69706e311f451ff7133f8b48a
+authority_digest=sha256:e1457a8b489ece721241e76e5d56d429671b7f79ef734b288d923cfd9e7e5090
+```
+
+The final executable HEAD preflight result was:
+
+```text
+status=BLOCKED
+input=1999  supported=0  unsupported=0  unresolved=1999
+provider=unimol-tools  provider_version=0.1.5
+execution_profile=unimol-train-br1-v2
+report_digest=sha256:f14ed01da67d06dfc421b6e92d57cb70fb89b39398f506cf0aa7f12ee67dcab3
+summary_semantic_digest=sha256:1eddb45ac9ef4ba67c6e65c11ca21c433d050c39defbd86b28ab06534a2a7c0a
+reason_counts=MAPPING_POLICY_INVALID:1999
+```
+
+The report contract verifier passed and the summary was a canonical exact
+projection of that report. A second run with the same inputs, authority,
+provider/profile, and frozen timestamp produced byte-identical report and
+summary. Capability discovery ran, but provider preprocessing was not
+dispatched because the exact mapping contract did not match the source rows;
+training, generation, prediction, ranking, model, checkpoint, scaler, and
+metrics assertions were all false. The staging directory remained restricted
+(`0700`, files `0400`, no symlinks, nine private artifacts including replay
+copies). This is a fresh blocked pre-acceptance result, not an applicability
+acceptance or data freeze. The later PR tip is docs-only and does not change
+this executable evidence.
 
 ## Applicability preflight handoff
 

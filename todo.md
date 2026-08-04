@@ -1463,6 +1463,13 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新远端证据：在 PR execution HEAD `a81e50505b44840f49400427663644f01c801023`、`unimol-tools 0.1.5`、`unimol-train-br1-v2` 和 matching worker 上，fresh materializer 成功生成并验证 1,999 行 authority chain；preflight 为 `BLOCKED`、`1999/0/0/1999`，唯一 reason count 为 `MAPPING_POLICY_INVALID:1999`。report digest 为 `sha256:a4a39f95afefd4e9f9dd176223c64b8174ac663f00e04cf70066706d64bbc241`，summary semantic digest 为 `sha256:2f074b82dbf4ee36e21ebb7b92375b6fd55b5600ffea2f254af6c320b94962d4`；report contract、summary exact projection 和相同冻结时间 exact replay 均通过。provider capability probe 为 true，但 preprocessing/training/generation/prediction/ranking/model artifacts 均未派发或创建。
 - 批准人：本 PR 仍待 repository-owner review；不把 PR #32 的 engineering acceptance解释为 BR1 数据 applicability acceptance。
 
+### 2026-08-04：BR1 final executable HEAD fresh authority rerun
+
+- 决策：mapping-boundary regression 修复后，在执行代码 HEAD `69feba9611635a20411775686e337a17088078ee`、matching worker、`unimol-tools 0.1.5` 与 `unimol-train-br1-v2` 上重新 materialize 并运行 fresh read-only preflight；该 evidence 只覆盖该 executable HEAD，后续 PR tip 的文档提交不改变其语义。
+- 新远端证据：materializer 验证 1,999 行 authority chain；preflight 为 `BLOCKED`、`1999/0/0/1999`，唯一 reason count 为 `MAPPING_POLICY_INVALID:1999`。authority digest 为 `sha256:e1457a8b489ece721241e76e5d56d429671b7f79ef734b288d923cfd9e7e5090`，report digest 为 `sha256:f14ed01da67d06dfc421b6e92d57cb70fb89b39398f506cf0aa7f12ee67dcab3`，summary semantic digest 为 `sha256:1eddb45ac9ef4ba67c6e65c11ca21c433d050c39defbd86b28ab06534a2a7c0a`；report contract、summary exact projection 与相同冻结时间 report/summary byte replay 均通过。
+- 安全边界：provider capability probe 为 true，但 preprocessing、training、generation、prediction、ranking、model/checkpoint/scaler/metrics 均未派发或创建；fresh staging 为受限目录、无 symlink、无 forbidden artifact name。未创建 acceptance ID/run，未记录 BR1 applicability owner acceptance。
+- 影响任务：`M3H-013` 继续 `I/T(partial)/— / BLOCKED`；`M3H-014` 继续 `I/T(partial)/— / READY`。仍需 owner 决定是否修复或缩小 mapping scope；不得因本 preflight contract 或工程 CI 通过而冻结数据或启动 acceptance。
+
 后续路线调整必须追加：
 
 ```text
