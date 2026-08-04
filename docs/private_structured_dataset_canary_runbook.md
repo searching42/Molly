@@ -155,7 +155,8 @@ filter, duplicate and canonical-order rules. Physical Raw CSV order remains
 part of the Raw Dataset digest; canonical source/provider digests use the
 fixed `row_id` order.
 
-On `workstation2`, create a fresh permission-restricted staging directory and
+In the configured remote private environment, create a fresh
+permission-restricted staging directory and
 run the materializer with private paths and the exact reviewed implementation
 identities:
 

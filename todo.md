@@ -1454,7 +1454,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ### 2026-08-04：PR #32 合并后启动 BR1 source authority materialization v1
 
-- 决策：PR #32 reviewed HEAD `300a6e92ea848f435dec3861fb556e6ecfedc999` 已完成 engineering acceptance，并由 squash merge commit `2638d204caccfb2530561f5b33cc8cf02c643337` 合入 `main`。新 Draft PR 只实现 workstation2 私有 BR1 source authority 的 deterministic materialization 与 fresh applicability preflight 入口，不记录 BR1 applicability owner acceptance。
+- 决策：PR #32 reviewed HEAD `300a6e92ea848f435dec3861fb556e6ecfedc999` 已完成 engineering acceptance，并由 squash merge commit `2638d204caccfb2530561f5b33cc8cf02c643337` 合入 `main`。新 Draft PR 只实现远端私有 BR1 source authority 的 deterministic materialization 与 fresh applicability preflight 入口，不记录 BR1 applicability owner acceptance。
 - 原计划：沿用历史 remote blocked report，直接等待数据冻结和 clean acceptance。
 - 新计划：从真实 Raw CSV、既有私有 provenance 输入和 exact `unimol-tools 0.1.5` / `unimol-train-br1-v2` authority 重新生成 source manifest、exact mapping policy、publication、registry、authority；所有 digest 由 writer 从实际 bytes/semantic material 计算，生成后立即 exact verify，再在 matching worker 上运行 read-only fresh preflight。
 - 依据：历史 remediation execution HEAD `c23b7a0eb8897b0d65bd33b4763eb8f8815f46f7` 的 `BLOCKED` 证据不覆盖 PR #32 merge 后的 HEAD；新的 identity chain 必须区分 Raw physical digest、canonical source/provider digest、manifest/mapping/publication/registry/authority digest，并拒绝手工重签或覆盖不同 artifact。
