@@ -28,6 +28,8 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerAdvanceRequest,
     AgentHarnessControllerReceiptOutcome,
     AgentHarnessControllerStartRequest,
+    AgentHarnessAuthorityClass,
+    AgentHarnessControllerInspectionFact,
     AgentHarnessGateApprovalRequest,
     AgentHarnessRemoteApprovalRequest,
     AgentPlanAuthorizationRequest,
@@ -82,6 +84,45 @@ def test_br1_unimol_prediction_remote_inputs_have_exact_purposes() -> None:
         "target-scaler",
         "application/octet-stream",
     )
+
+
+def test_controller_disambiguates_repeated_source_fact_names() -> None:
+    facts = [
+        AgentHarnessControllerInspectionFact(
+            name="authorized_input_artifact",
+            authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+            source_id="uploaded_dataset",
+            source_digest="sha256:" + "1" * 64,
+            state="current",
+        ),
+        AgentHarnessControllerInspectionFact(
+            name="authorized_input_artifact",
+            authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+            source_id="source_dataset_manifest",
+            source_digest="sha256:" + "2" * 64,
+            state="current",
+        ),
+        AgentHarnessControllerInspectionFact(
+            name="authorized_input_artifact",
+            authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+            source_id="br1_mapping_policy",
+            source_digest="sha256:" + "3" * 64,
+            state="current",
+        ),
+    ]
+
+    bindings = ScientificAgentHarnessController._bindings_from_facts(facts)
+
+    assert [item.name for item in bindings] == [
+        "authorized_input_artifact",
+        "authorized_input_artifact_source_dataset_manifest",
+        "authorized_input_artifact_br1_mapping_policy",
+    ]
+    assert [item.source_id for item in bindings] == [
+        "uploaded_dataset",
+        "source_dataset_manifest",
+        "br1_mapping_policy",
+    ]
 
 
 class _FakeHarnessSpan:

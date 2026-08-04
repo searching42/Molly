@@ -3205,13 +3205,28 @@ class ScientificAgentHarnessController:
 
     @staticmethod
     def _bindings_from_facts(facts: list[AgentHarnessControllerInspectionFact]) -> list[AgentHarnessControllerSourceBinding]:
-        return [
-            AgentHarnessControllerSourceBinding(
-                name=item.name, source_id=item.source_id, source_digest=item.source_digest,
-                authority_class=item.authority_class,
+        bindings: list[AgentHarnessControllerSourceBinding] = []
+        used_names: set[str] = set()
+        for item in facts:
+            if not item.source_id or not item.source_digest:
+                continue
+            name = item.name
+            if name in used_names:
+                name = f"{item.name}_{item.source_id}"
+                suffix = 2
+                while name in used_names:
+                    name = f"{item.name}_{item.source_id}_{suffix}"
+                    suffix += 1
+            used_names.add(name)
+            bindings.append(
+                AgentHarnessControllerSourceBinding(
+                    name=name,
+                    source_id=item.source_id,
+                    source_digest=item.source_digest,
+                    authority_class=item.authority_class,
+                )
             )
-            for item in facts if item.source_id and item.source_digest
-        ]
+        return bindings
 
     def _latest_receipt(self, execution: Any):
         receipts = self.control_store.list_harness_controller_action_receipts(
