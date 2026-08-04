@@ -83,7 +83,21 @@ def _legacy_source() -> dict[str, object]:
 def _legacy_mapping() -> dict[str, object]:
     return {
         "schema_version": "br1_raw_dataset_mapping_policy.v1",
-        "field_mapping": {field: field for field in REQUIRED_COLUMNS},
+        "field_mapping": {
+            "comparable": "fixed:true_within_frozen_single_solvent_scope",
+            "doping_ratio": "fixed:not_applicable",
+            "emission_mechanism": "fixed:unknown",
+            "host": "fixed:not_applicable",
+            "material_role": "fixed:emitter",
+            "measurement_condition": "fixed:canonical_json",
+            "medium": "fixed:solution",
+            "paper_evidence": "Reference DOI + fixed paper evidence level",
+            "paper_id": "normalized Reference DOI",
+            "row_id": "d4c-v3-{Tag}",
+            "smiles": "Chromophore",
+            "target_value": "Quantum yield",
+            "temperature": "fixed:not_reported",
+        },
         "source_solvent_smiles": "ClCCl",
         "unimol_provider_version": "0.1.5",
         "unimol_model_name": "unimolv1",

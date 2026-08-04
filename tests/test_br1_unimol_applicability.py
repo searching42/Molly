@@ -201,6 +201,7 @@ def _mapping() -> dict[str, object]:
         "temperature_policy": "not_reported",
         "condition_merge_policy": "explicit_single_solvent_filter_no_merge",
         "comparability_policy": "partially_comparable_single_solvent",
+        "field_mapping": {field: field for field in CSV_COLUMNS},
     }
 
 

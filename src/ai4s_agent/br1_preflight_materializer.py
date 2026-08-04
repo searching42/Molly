@@ -60,6 +60,21 @@ _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,95}$")
 _MAX_INPUT_BYTES = 32 * 1024 * 1024
 _MAX_JSON_BYTES = 8 * 1024 * 1024
+_EXPECTED_SOURCE_FIELD_MAPPING = {
+    "comparable": "fixed:true_within_frozen_single_solvent_scope",
+    "doping_ratio": "fixed:not_applicable",
+    "emission_mechanism": "fixed:unknown",
+    "host": "fixed:not_applicable",
+    "material_role": "fixed:emitter",
+    "measurement_condition": "fixed:canonical_json",
+    "medium": "fixed:solution",
+    "paper_evidence": "Reference DOI + fixed paper evidence level",
+    "paper_id": "normalized Reference DOI",
+    "row_id": "d4c-v3-{Tag}",
+    "smiles": "Chromophore",
+    "target_value": "Quantum yield",
+    "temperature": "fixed:not_reported",
+}
 
 
 class SourceAuthorityMaterializationError(ValueError):
@@ -226,8 +241,8 @@ def _build_exact_mapping_policy(
     if not isinstance(legacy_field_mapping, Mapping):
         raise SourceAuthorityMaterializationError("mapping policy field mapping is missing")
     expected_field_mapping = {field: field for field in REQUIRED_COLUMNS}
-    if dict(legacy_field_mapping) != expected_field_mapping:
-        raise SourceAuthorityMaterializationError("mapping policy field mapping is not exact")
+    if dict(legacy_field_mapping) != _EXPECTED_SOURCE_FIELD_MAPPING:
+        raise SourceAuthorityMaterializationError("mapping policy source field mapping is not exact")
     solvent = str(legacy.get("source_solvent_smiles") or "").strip()
     if solvent != "ClCCl":
         raise SourceAuthorityMaterializationError("mapping policy solvent is not the frozen BR1 solvent")
@@ -250,6 +265,7 @@ def _build_exact_mapping_policy(
         "temperature_policy": "not_reported",
         "condition_merge_policy": "explicit_single_solvent_filter_no_merge",
         "comparability_policy": "partially_comparable_single_solvent",
+        "field_mapping": expected_field_mapping,
     }
     binding = mapping_binding(expected_provider_version)
     if binding["execution_profile_id"] != execution_profile_id:
