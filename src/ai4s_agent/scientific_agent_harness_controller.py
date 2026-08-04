@@ -75,10 +75,19 @@ from ai4s_agent.scientific_agent_plan import (
 )
 
 
-CONTROLLER_POLICY_VERSION = "scientific-agent-harness-controller-policy.v1"
+CONTROLLER_POLICY_VERSION = "scientific-agent-harness-controller-policy.v2"
 CONTROLLER_REQUEST_VERSION = "agent_harness_controller_request_checkpoint.v1"
 _MAX_REQUEST_BYTES = 4 * 1024 * 1024
 _CONTROLLER_REQUEST_LOCKS: dict[str, threading.RLock] = defaultdict(threading.RLock)
+_SOURCE_BINDING_POLICY_VERSION = "scientific-agent-harness-source-binding-policy.v2"
+_SOURCE_BINDING_NAME_MAX_LENGTH = 96
+_SOURCE_BINDING_NAME_SEPARATOR = "_"
+_SOURCE_BINDING_DIGEST_SUFFIX_LENGTH = 32
+_SOURCE_BINDING_PREFIX_LENGTH = (
+    _SOURCE_BINDING_NAME_MAX_LENGTH
+    - len(_SOURCE_BINDING_NAME_SEPARATOR)
+    - _SOURCE_BINDING_DIGEST_SUFFIX_LENGTH
+)
 _POLICY_MATERIAL: Mapping[str, Any] = {
     "schema_version": CONTROLLER_POLICY_VERSION,
     "recognized_action_kinds": sorted(item.value for item in AgentHarnessControllerAction),
@@ -114,7 +123,26 @@ _POLICY_MATERIAL: Mapping[str, Any] = {
     "recovery_policy": "reconcile_committed_authority_never_rerun_unknown_local_effect",
     "adoption_policy": "verified_stage_registry_or_remote_publication_only",
     "terminal_policy": "authoritative_sources_plus_committed_controller_receipt",
-    "source_binding_policy": "ids_and_sha256_digests_only",
+    "source_binding_policy": {
+        "schema_version": _SOURCE_BINDING_POLICY_VERSION,
+        "identity_fields": [
+            "name",
+            "source_id",
+            "source_digest",
+            "authority_class",
+            "collision_mode",
+        ],
+        "name_max_length": _SOURCE_BINDING_NAME_MAX_LENGTH,
+        "separator": _SOURCE_BINDING_NAME_SEPARATOR,
+        "digest_algorithm": "sha256",
+        "digest_suffix_hex_length": _SOURCE_BINDING_DIGEST_SUFFIX_LENGTH,
+        "prefix_policy": "truncate_original_name_to_fit_digest_suffix",
+        "ordering_policy": "source_id_source_digest_name_authority_class_ascending",
+        "duplicate_exact_fact_policy": "reject",
+        "duplicate_source_id_policy": "reject",
+        "collision_policy": "deterministic_fixed_point_over_full_fact_roster",
+        "collision_mode_policy": "identity_bound_non_ordinal",
+    },
     "local_adapter_authority_policy": (
         "permission_engine_shared_task_authority_and_callable_implementation_digest"
     ),
@@ -3204,29 +3232,111 @@ class ScientificAgentHarnessController:
         return AgentHarnessControllerSourceBinding(name=name, source_id=source_id, source_digest=source_digest)
 
     @staticmethod
-    def _bindings_from_facts(facts: list[AgentHarnessControllerInspectionFact]) -> list[AgentHarnessControllerSourceBinding]:
-        bindings: list[AgentHarnessControllerSourceBinding] = []
-        used_names: set[str] = set()
-        for item in facts:
-            if not item.source_id or not item.source_digest:
-                continue
-            name = item.name
-            if name in used_names:
-                name = f"{item.name}_{item.source_id}"
-                suffix = 2
-                while name in used_names:
-                    name = f"{item.name}_{item.source_id}_{suffix}"
-                    suffix += 1
-            used_names.add(name)
-            bindings.append(
-                AgentHarnessControllerSourceBinding(
-                    name=name,
-                    source_id=item.source_id,
-                    source_digest=item.source_digest,
-                    authority_class=item.authority_class,
-                )
+    def _bounded_source_binding_name(
+        item: AgentHarnessControllerInspectionFact,
+        *,
+        collision_mode: int,
+    ) -> str:
+        identity_digest = _agent_digest(
+            {
+                "schema_version": _SOURCE_BINDING_POLICY_VERSION,
+                "name": item.name,
+                "source_id": item.source_id,
+                "source_digest": item.source_digest,
+                "authority_class": item.authority_class.value,
+                "collision_mode": collision_mode,
+            }
+        ).split(":", 1)[1]
+        return (
+            f"{item.name[:_SOURCE_BINDING_PREFIX_LENGTH]}"
+            f"{_SOURCE_BINDING_NAME_SEPARATOR}"
+            f"{identity_digest[:_SOURCE_BINDING_DIGEST_SUFFIX_LENGTH]}"
+        )
+
+    @staticmethod
+    def _bindings_from_facts(
+        facts: list[AgentHarnessControllerInspectionFact],
+    ) -> list[AgentHarnessControllerSourceBinding]:
+        source_facts = sorted(
+            [item for item in facts if item.source_id and item.source_digest],
+            key=lambda item: (
+                item.source_id,
+                item.source_digest,
+                item.name,
+                item.authority_class.value,
+            ),
+        )
+        seen_exact_facts: set[tuple[str, str, str, str]] = set()
+        seen_source_ids: set[str] = set()
+        for item in source_facts:
+            exact_identity = (
+                item.name,
+                item.source_id,
+                item.source_digest,
+                item.authority_class.value,
             )
-        return bindings
+            if exact_identity in seen_exact_facts:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "duplicate exact source fact"
+                )
+            if item.source_id in seen_source_ids:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "source fact IDs are not unique"
+                )
+            seen_exact_facts.add(exact_identity)
+            seen_source_ids.add(item.source_id)
+
+        name_counts: dict[str, int] = defaultdict(int)
+        for item in source_facts:
+            name_counts[item.name] += 1
+        disambiguated_indices = {
+            index
+            for index, item in enumerate(source_facts)
+            if name_counts[item.name] > 1
+        }
+        singleton_name_to_index = {
+            item.name: index
+            for index, item in enumerate(source_facts)
+            if name_counts[item.name] == 1
+        }
+
+        for collision_mode in range(16):
+            generated_names = {
+                index: ScientificAgentHarnessController._bounded_source_binding_name(
+                    item,
+                    collision_mode=collision_mode,
+                )
+                for index, item in enumerate(source_facts)
+                if index in disambiguated_indices
+            }
+            colliding_singletons = {
+                singleton_name_to_index[name]
+                for name in generated_names.values()
+                if name in singleton_name_to_index
+                and singleton_name_to_index[name] not in disambiguated_indices
+            }
+            if colliding_singletons:
+                disambiguated_indices.update(colliding_singletons)
+                continue
+
+            names = [
+                generated_names.get(index, item.name)
+                for index, item in enumerate(source_facts)
+            ]
+            if len(names) == len(set(names)):
+                return [
+                    AgentHarnessControllerSourceBinding(
+                        name=name,
+                        source_id=item.source_id,
+                        source_digest=item.source_digest,
+                        authority_class=item.authority_class,
+                    )
+                    for item, name in zip(source_facts, names)
+                ]
+
+        raise ScientificAgentHarnessControllerVerificationError(
+            "source binding names cannot be made unique"
+        )
 
     def _latest_receipt(self, execution: Any):
         receipts = self.control_store.list_harness_controller_action_receipts(

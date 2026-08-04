@@ -4384,8 +4384,8 @@ class AgentHarnessControllerExecution(BaseModel):
     task_slots: list[AgentHarnessControllerTaskSlot]
     source_bindings: list[AgentHarnessControllerSourceBinding]
     source_bindings_digest: str
-    controller_policy_version: Literal["scientific-agent-harness-controller-policy.v1"] = (
-        "scientific-agent-harness-controller-policy.v1"
+    controller_policy_version: Literal["scientific-agent-harness-controller-policy.v2"] = (
+        "scientific-agent-harness-controller-policy.v2"
     )
     controller_policy_digest: str
     actor: str

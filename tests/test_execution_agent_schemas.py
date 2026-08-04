@@ -115,5 +115,5 @@ def test_execution_agent_policy_and_controller_policy_are_hash_seed_stable() -> 
         "sha256:520b9dba4907192337eb004ade113eb4072b7f8589d2710e14c4df44772dcdcf"
     )
     assert CONTROLLER_POLICY_DIGEST == (
-        "sha256:2611cf3836b19505259f6edd17024f5d3b41a835c049aaf8f5776b73853ecb6c"
+        "sha256:044fe7aa0f725f5cf622665f8a936ab1bf9294f057b0eba1c0d4d0a519bbb48c"
     )

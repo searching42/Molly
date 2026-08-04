@@ -71,7 +71,8 @@ intent and its complete chain. The controller execution binds at least:
 - the current complete remote AuthoritySet ID/digest when any task is remote;
 - a deterministic attempt-zero task-slot roster;
 - trusted actor identity/source and the request binding; and
-- fixed `scientific-agent-harness-controller-policy.v1` identity.
+- fixed `scientific-agent-harness-controller-policy.v2` identity, including
+  bounded digest-derived source-binding name disambiguation.
 
 Time, retry count, trace/span IDs, exporter state, and HTTP metadata are
 operational fields and are excluded from semantic identity. A controller
