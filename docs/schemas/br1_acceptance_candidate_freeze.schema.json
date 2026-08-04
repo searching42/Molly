@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molly.local/schemas/br1_acceptance_candidate_freeze.schema.json",
+  "title": "BR1 Acceptance Candidate Freeze v1",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "size_bytes", "sha256"],
+      "properties": {
+        "relative_path": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"$ref": "#/$defs/digest"}
+      }
+    }
+  },
+  "required": [
+    "schema_version", "package_id", "status", "artifact_roster",
+    "raw_dataset_digest", "canonical_source_dataset_digest",
+    "canonical_provider_input_digest", "input_row_count",
+    "source_dataset_manifest_digest", "mapping_policy_digest",
+    "source_publication_digest", "source_publication_registry_digest",
+    "source_authority_digest", "source_authority_file_digest",
+    "report_digest", "summary_digest",
+    "repository_commit", "worker_implementation_digest", "provider_name",
+    "expected_provider_version", "execution_profile_id",
+    "execution_profile_digest", "claim_boundary", "freeze_package_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "br1_acceptance_candidate_freeze.v1"},
+    "package_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,95}$"},
+    "status": {"const": "FROZEN"},
+    "artifact_roster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw_dataset", "source_manifest", "mapping_policy"],
+      "properties": {
+        "raw_dataset": {"$ref": "#/$defs/artifact"},
+        "source_manifest": {"$ref": "#/$defs/artifact"},
+        "mapping_policy": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "raw_dataset_digest": {"$ref": "#/$defs/digest"},
+    "canonical_source_dataset_digest": {"$ref": "#/$defs/digest"},
+    "canonical_provider_input_digest": {"$ref": "#/$defs/digest"},
+    "input_row_count": {"type": "integer", "minimum": 1},
+    "source_dataset_manifest_digest": {"$ref": "#/$defs/digest"},
+    "mapping_policy_digest": {"$ref": "#/$defs/digest"},
+    "source_publication_digest": {"$ref": "#/$defs/digest"},
+    "source_publication_registry_digest": {"$ref": "#/$defs/digest"},
+    "source_authority_digest": {"$ref": "#/$defs/digest"},
+    "source_authority_file_digest": {"$ref": "#/$defs/digest"},
+    "report_digest": {"$ref": "#/$defs/digest"},
+    "summary_digest": {"$ref": "#/$defs/digest"},
+    "repository_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "worker_implementation_digest": {"$ref": "#/$defs/digest"},
+    "provider_name": {"const": "unimol-tools"},
+    "expected_provider_version": {"const": "0.1.5"},
+    "execution_profile_id": {"const": "unimol-train-br1-v2"},
+    "execution_profile_digest": {"$ref": "#/$defs/digest"},
+    "claim_boundary": {"type": "string", "minLength": 1},
+    "freeze_package_digest": {"$ref": "#/$defs/digest"}
+  }
+}

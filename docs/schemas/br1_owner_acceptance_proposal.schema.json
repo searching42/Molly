@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molly.local/schemas/br1_owner_acceptance_proposal.schema.json",
+  "title": "BR1 Owner Acceptance Proposal v1",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "count": {"type": "integer", "minimum": 0},
+    "reason_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^[A-Z0-9_]+$": {"type": "integer", "minimum": 1}}
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "size_bytes", "sha256"],
+      "properties": {
+        "relative_path": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"$ref": "#/$defs/digest"}
+      }
+    }
+  },
+  "required": [
+    "schema_version", "proposal_id", "proposal_revision", "decision_status",
+    "created_at", "freeze_package_id", "freeze_package_digest",
+    "repository_commit", "worker_implementation_digest", "provider_name",
+    "expected_provider_version", "execution_profile_id", "execution_profile_digest",
+    "raw_dataset_digest", "source_dataset_manifest_digest", "mapping_policy_digest",
+    "canonical_source_dataset_digest", "canonical_provider_input_digest",
+    "source_publication_digest", "source_publication_registry_digest",
+    "source_authority_digest", "source_authority_file_digest",
+    "report_digest", "summary_digest",
+    "input_row_count", "supported_row_count", "unsupported_row_count",
+    "unresolved_row_count", "reason_counts", "mapping_diagnostics",
+    "no_dispatch_assertions", "frozen_artifact_roster", "claim_boundary",
+    "remaining_owner_action", "proposal_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "br1_owner_acceptance_proposal.v1"},
+    "proposal_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,95}$"},
+    "proposal_revision": {"const": "1"},
+    "decision_status": {"const": "WAITING_OWNER"},
+    "created_at": {"type": "string", "minLength": 1},
+    "freeze_package_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,95}$"},
+    "freeze_package_digest": {"$ref": "#/$defs/digest"},
+    "repository_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "worker_implementation_digest": {"$ref": "#/$defs/digest"},
+    "provider_name": {"const": "unimol-tools"},
+    "expected_provider_version": {"const": "0.1.5"},
+    "execution_profile_id": {"const": "unimol-train-br1-v2"},
+    "execution_profile_digest": {"$ref": "#/$defs/digest"},
+    "raw_dataset_digest": {"$ref": "#/$defs/digest"},
+    "source_dataset_manifest_digest": {"$ref": "#/$defs/digest"},
+    "mapping_policy_digest": {"$ref": "#/$defs/digest"},
+    "canonical_source_dataset_digest": {"$ref": "#/$defs/digest"},
+    "canonical_provider_input_digest": {"$ref": "#/$defs/digest"},
+    "source_publication_digest": {"$ref": "#/$defs/digest"},
+    "source_publication_registry_digest": {"$ref": "#/$defs/digest"},
+    "source_authority_digest": {"$ref": "#/$defs/digest"},
+    "source_authority_file_digest": {"$ref": "#/$defs/digest"},
+    "report_digest": {"$ref": "#/$defs/digest"},
+    "summary_digest": {"$ref": "#/$defs/digest"},
+    "input_row_count": {"$ref": "#/$defs/count"},
+    "supported_row_count": {"$ref": "#/$defs/count"},
+    "unsupported_row_count": {"$ref": "#/$defs/count"},
+    "unresolved_row_count": {"$ref": "#/$defs/count"},
+    "reason_counts": {"$ref": "#/$defs/reason_counts"},
+    "mapping_diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "checked_row_count", "policy_contract_valid",
+        "row_contract_valid", "reason_counts"
+      ],
+      "properties": {
+        "schema_version": {"const": "br1_mapping_diagnostics.v1"},
+        "checked_row_count": {"type": "integer", "minimum": 0},
+        "policy_contract_valid": {"type": "boolean"},
+        "row_contract_valid": {"type": "boolean"},
+        "reason_counts": {"$ref": "#/$defs/reason_counts"}
+      }
+    },
+    "no_dispatch_assertions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_capability_probe_dispatched", "provider_preprocessing_dispatched",
+        "training_dispatched", "generation_dispatched", "prediction_dispatched",
+        "ranking_dispatched", "model_artifacts_created", "scaler_created",
+        "training_metrics_created"
+      ],
+      "properties": {
+        "provider_capability_probe_dispatched": {"type": "boolean"},
+        "provider_preprocessing_dispatched": {"type": "boolean"},
+        "training_dispatched": {"const": false},
+        "generation_dispatched": {"const": false},
+        "prediction_dispatched": {"const": false},
+        "ranking_dispatched": {"const": false},
+        "model_artifacts_created": {"const": false},
+        "scaler_created": {"const": false},
+        "training_metrics_created": {"const": false}
+      }
+    },
+    "frozen_artifact_roster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw_dataset", "source_manifest", "mapping_policy"],
+      "properties": {
+        "raw_dataset": {"$ref": "#/$defs/artifact"},
+        "source_manifest": {"$ref": "#/$defs/artifact"},
+        "mapping_policy": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "claim_boundary": {"type": "string", "minLength": 1},
+    "remaining_owner_action": {"type": "string", "minLength": 1},
+    "proposal_digest": {"$ref": "#/$defs/digest"}
+  }
+}

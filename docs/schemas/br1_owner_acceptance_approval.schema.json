@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molly.local/schemas/br1_owner_acceptance_approval.schema.json",
+  "title": "BR1 Owner Acceptance Approval v1",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "required": [
+    "schema_version", "decision_status", "decision", "owner_id", "decided_at",
+    "proposal_digest", "repository_commit", "raw_dataset_digest",
+    "source_dataset_manifest_digest", "mapping_policy_digest", "report_digest",
+    "summary_digest", "freeze_package_id", "freeze_package_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "br1_owner_acceptance_approval.v1"},
+    "decision_status": {"const": "APPROVED"},
+    "decision": {"const": "ACCEPT_EXACT_PROPOSAL"},
+    "owner_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,95}$"},
+    "decided_at": {"type": "string", "minLength": 1},
+    "proposal_digest": {"$ref": "#/$defs/digest"},
+    "repository_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "raw_dataset_digest": {"$ref": "#/$defs/digest"},
+    "source_dataset_manifest_digest": {"$ref": "#/$defs/digest"},
+    "mapping_policy_digest": {"$ref": "#/$defs/digest"},
+    "report_digest": {"$ref": "#/$defs/digest"},
+    "summary_digest": {"$ref": "#/$defs/digest"},
+    "freeze_package_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,95}$"},
+    "freeze_package_digest": {"$ref": "#/$defs/digest"}
+  }
+}
