@@ -48,8 +48,9 @@ proposal application lock
   -> existing local or remote lifecycle lock
 ```
 
-The public Controller request schemas and
-`scientific-agent-harness-controller-policy.v1` bytes are unchanged.
+The public Controller request schemas remain unchanged. The Controller policy
+identity is `scientific-agent-harness-controller-policy.v2`; its source-binding
+material includes bounded, digest-derived duplicate-name disambiguation.
 
 ## Observation and privacy
 

@@ -477,11 +477,24 @@ identities, no-dispatch assertions, and the explicit claim boundary:
 preflight PASS and candidate freeze are not data-quality approval,
 confirmation-Gate approval, training authorization, or BR1 completion.
 
-No exact-bound trusted owner approval was present. The current decision state
-is `WAITING_OWNER`; this prompt, the preflight PASS, the freeze package, CI,
-and Codex output are not owner approval. No acceptance ID/run, Permission
-authorization, Controller action, review snapshot, Confirmed Dataset, or Gate
-decision was created. `M3H-013` therefore remains `I/T(partial)/— / READY`:
-post-merge preflight authority complete, candidate inputs frozen, waiting for
-the exact-bound owner decision, with no acceptance run and no human Gate
-reached.
+No exact-bound trusted owner approval was present. The historical candidate
+proposal decision state is `WAITING_OWNER`; this prompt, the preflight PASS,
+the freeze package, CI, and Codex output are not owner approval. No acceptance
+ID/run, Permission authorization, Controller action, review snapshot,
+Confirmed Dataset, or Gate decision was created. Because PR #35 remains
+unaccepted and unmerged, `M3H-013` remains
+`I/T(partial)/— / BLOCKED`: the earlier post-merge preflight authority and
+candidate freeze exist as historical evidence, but no current acceptance may
+start and no human Gate has been reached.
+
+The subsequent PR #35 Controller follow-up is still Draft and has not been
+accepted or merged by the repository owner. Its historical-policy remediation
+keeps policy-v1 executions readable as immutable evidence, restricts new
+writes to policy v2, and fails closed before any decision/effect/dispatch on
+policy-v1 mutation. Until that engineering change is owner-approved and
+merged, the candidate package and proposal above remain historical
+superseded artifacts: they must not be reused for a new acceptance, and the
+next post-merge authority rebind must produce a fresh freeze package and
+exact-bound proposal. No acceptance run, review snapshot, Confirmed Dataset,
+Gate decision, training, generation, prediction, or ranking is authorized by
+this follow-up.

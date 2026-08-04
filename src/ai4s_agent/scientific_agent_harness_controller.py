@@ -51,6 +51,7 @@ from ai4s_agent.schemas import (
     AgentPermissionPhase,
     AgentPlanAuthorization,
     RunStatus,
+    AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2,
     _agent_digest,
 )
 from ai4s_agent.scientific_agent_authorization import AgentPlanControlStore
@@ -75,10 +76,19 @@ from ai4s_agent.scientific_agent_plan import (
 )
 
 
-CONTROLLER_POLICY_VERSION = "scientific-agent-harness-controller-policy.v1"
+CONTROLLER_POLICY_VERSION = AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2
 CONTROLLER_REQUEST_VERSION = "agent_harness_controller_request_checkpoint.v1"
 _MAX_REQUEST_BYTES = 4 * 1024 * 1024
 _CONTROLLER_REQUEST_LOCKS: dict[str, threading.RLock] = defaultdict(threading.RLock)
+_SOURCE_BINDING_POLICY_VERSION = "scientific-agent-harness-source-binding-policy.v2"
+_SOURCE_BINDING_NAME_MAX_LENGTH = 96
+_SOURCE_BINDING_NAME_SEPARATOR = "_"
+_SOURCE_BINDING_DIGEST_SUFFIX_LENGTH = 32
+_SOURCE_BINDING_PREFIX_LENGTH = (
+    _SOURCE_BINDING_NAME_MAX_LENGTH
+    - len(_SOURCE_BINDING_NAME_SEPARATOR)
+    - _SOURCE_BINDING_DIGEST_SUFFIX_LENGTH
+)
 _POLICY_MATERIAL: Mapping[str, Any] = {
     "schema_version": CONTROLLER_POLICY_VERSION,
     "recognized_action_kinds": sorted(item.value for item in AgentHarnessControllerAction),
@@ -114,7 +124,26 @@ _POLICY_MATERIAL: Mapping[str, Any] = {
     "recovery_policy": "reconcile_committed_authority_never_rerun_unknown_local_effect",
     "adoption_policy": "verified_stage_registry_or_remote_publication_only",
     "terminal_policy": "authoritative_sources_plus_committed_controller_receipt",
-    "source_binding_policy": "ids_and_sha256_digests_only",
+    "source_binding_policy": {
+        "schema_version": _SOURCE_BINDING_POLICY_VERSION,
+        "identity_fields": [
+            "name",
+            "source_id",
+            "source_digest",
+            "authority_class",
+            "collision_mode",
+        ],
+        "name_max_length": _SOURCE_BINDING_NAME_MAX_LENGTH,
+        "separator": _SOURCE_BINDING_NAME_SEPARATOR,
+        "digest_algorithm": "sha256",
+        "digest_suffix_hex_length": _SOURCE_BINDING_DIGEST_SUFFIX_LENGTH,
+        "prefix_policy": "truncate_original_name_to_fit_digest_suffix",
+        "ordering_policy": "source_id_source_digest_name_authority_class_ascending",
+        "duplicate_exact_fact_policy": "reject",
+        "duplicate_source_id_policy": "reject",
+        "collision_policy": "deterministic_fixed_point_over_full_fact_roster",
+        "collision_mode_policy": "identity_bound_non_ordinal",
+    },
     "local_adapter_authority_policy": (
         "permission_engine_shared_task_authority_and_callable_implementation_digest"
     ),
@@ -479,6 +508,82 @@ class ScientificAgentHarnessController:
         self.clock = clock
         self.requests = AgentHarnessControllerStore(control_store=control_store)
 
+    @staticmethod
+    def _is_current_controller_policy(
+        execution: AgentHarnessControllerExecution,
+    ) -> bool:
+        return execution.controller_policy_version == CONTROLLER_POLICY_VERSION
+
+    @classmethod
+    def _require_current_controller_policy(
+        cls,
+        execution: AgentHarnessControllerExecution,
+    ) -> None:
+        if not cls._is_current_controller_policy(execution):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "historical Controller execution has a policy/authority mismatch and is read-only"
+            )
+
+    def _historical_inspection(
+        self,
+        execution: AgentHarnessControllerExecution,
+    ) -> AgentHarnessControllerInspection:
+        """Build a non-authorizing inspection for an immutable legacy execution.
+
+        Historical executions are evidence only.  This projection deliberately
+        avoids re-verifying current plan, input, stage, or Registry authority,
+        and exposes no executable next action beyond a terminal stop marker.
+        """
+
+        facts = [
+            AgentHarnessControllerInspectionFact(
+                name="controller_execution",
+                authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+                source_id=execution.controller_execution_id,
+                source_digest=execution.execution_digest,
+                state="historical",
+                detail="historical Controller execution; read-only evidence",
+            ),
+            AgentHarnessControllerInspectionFact(
+                name="controller_policy",
+                authority_class=AgentHarnessAuthorityClass.OBSERVATIONAL,
+                source_id="controller-policy",
+                source_digest=execution.controller_policy_digest,
+                state="historical",
+                detail="historical Controller policy; current mutation is not permitted",
+            ),
+        ]
+        facts.extend(
+            AgentHarnessControllerInspectionFact(
+                name=binding.name,
+                authority_class=binding.authority_class,
+                source_id=binding.source_id,
+                source_digest=binding.source_digest,
+                state="historical",
+                detail="historical source binding; read-only evidence",
+            )
+            for binding in execution.source_bindings
+        )
+        return AgentHarnessControllerInspection(
+            controller_execution_id=execution.controller_execution_id,
+            controller_execution_digest=execution.execution_digest,
+            status=AgentHarnessControllerStatus.FAILED,
+            next_action=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+            facts=facts,
+            source_roster_digest=_agent_digest(
+                [item.model_dump(mode="json") for item in facts]
+            ),
+            inspected_at=self.clock(),
+        )
+
+    def _read_only_inspection(
+        self,
+        execution: AgentHarnessControllerExecution,
+    ) -> AgentHarnessControllerInspection:
+        if self._is_current_controller_policy(execution):
+            return self._inspect(execution)
+        return self._historical_inspection(execution)
+
     def create(
         self,
         *,
@@ -524,6 +629,7 @@ class ScientificAgentHarnessController:
                     )
                 if existing:
                     execution = existing[0]
+                    self._require_current_controller_policy(execution)
                     if (
                         execution.request_digest != request_digest
                         or execution.client_request_id != request.client_request_id
@@ -634,10 +740,15 @@ class ScientificAgentHarnessController:
                 "phase": "read",
             },
         ) as inspect_span:
-            execution = self.verify_execution(
+            execution = self.control_store.read_harness_controller_execution(
                 project_id=project_id,
                 controller_execution_id=controller_execution_id,
             )
+            if self._is_current_controller_policy(execution):
+                execution = self.verify_execution(
+                    project_id=project_id,
+                    controller_execution_id=controller_execution_id,
+                )
             for key, value in _controller_telemetry_attributes(
                 execution,
                 operation="agent.controller.inspect",
@@ -647,7 +758,7 @@ class ScientificAgentHarnessController:
                 inspect_span.set_attribute(key, value)
             return ControllerAdvanceResult(
                 execution=execution,
-                inspection=self._inspect(execution),
+                inspection=self._read_only_inspection(execution),
             )
 
     def read_execution_agent_snapshot(
@@ -682,10 +793,11 @@ class ScientificAgentHarnessController:
             project_id=project_id,
             controller_execution_id=controller_execution_id,
             expected_execution_digest=expected_controller_execution_digest,
+            allow_historical=True,
         ) as execution:
             yield ControllerAdvanceResult(
                 execution=execution,
-                inspection=self._inspect(execution),
+                inspection=self._read_only_inspection(execution),
                 receipt=self._latest_receipt(execution),
             )
 
@@ -696,6 +808,7 @@ class ScientificAgentHarnessController:
         project_id: str,
         controller_execution_id: str,
         expected_execution_digest: str = "",
+        allow_historical: bool = False,
     ):
         """Pin the execution-wide lock before reading mutable run authority."""
 
@@ -703,10 +816,17 @@ class ScientificAgentHarnessController:
             project_id=project_id,
             controller_execution_id=controller_execution_id,
         ):
-            execution = self.verify_execution(
+            execution = self.control_store.read_harness_controller_execution(
                 project_id=project_id,
                 controller_execution_id=controller_execution_id,
             )
+            if self._is_current_controller_policy(execution):
+                execution = self.verify_execution(
+                    project_id=project_id,
+                    controller_execution_id=controller_execution_id,
+                )
+            elif not allow_historical:
+                self._require_current_controller_policy(execution)
             if (
                 expected_execution_digest
                 and execution.execution_digest != expected_execution_digest
@@ -996,6 +1116,7 @@ class ScientificAgentHarnessController:
             project_id=project_id,
             controller_execution_id=controller_execution_id,
         )
+        self._require_current_controller_policy(execution)
         try:
             intent = self.authorization_service.verify_start_intent(
                 project_id=project_id,
@@ -1538,6 +1659,7 @@ class ScientificAgentHarnessController:
         return self._inspection(execution, status, slot, AgentHarnessControllerAction.STOP_TASK_TERMINAL, facts)
 
     def _advance_in_session(self, *, execution: Any, session: ControllerRequestSession) -> ControllerAdvanceResult:
+        self._require_current_controller_policy(execution)
         receipt_marker = self.requests.read_marker(session.request_dir / "receipt.json")
         if receipt_marker is not None:
             receipt = self.control_store.read_harness_controller_action_receipt(
@@ -1726,6 +1848,7 @@ class ScientificAgentHarnessController:
         action: AgentHarnessControllerAction,
         require_recovery: bool,
     ) -> ControllerAdvanceResult:
+        self._require_current_controller_policy(execution)
         receipt_marker = self.requests.read_marker(session.request_dir / "receipt.json")
         if receipt_marker is not None:
             receipt = self.control_store.read_harness_controller_action_receipt(
@@ -1957,6 +2080,7 @@ class ScientificAgentHarnessController:
         *,
         reconcile_only: bool = False,
     ) -> AgentHarnessControllerActionReceipt:
+        self._require_current_controller_policy(execution)
         before_stage = self.storage.read_stage_state(execution.project_id, execution.run_id)
         before_registry = self.storage.read_artifact_registry(execution.project_id, execution.run_id)
         slot = execution.task_slots[decision.task_index] if decision.task_index is not None else None
@@ -3204,14 +3328,111 @@ class ScientificAgentHarnessController:
         return AgentHarnessControllerSourceBinding(name=name, source_id=source_id, source_digest=source_digest)
 
     @staticmethod
-    def _bindings_from_facts(facts: list[AgentHarnessControllerInspectionFact]) -> list[AgentHarnessControllerSourceBinding]:
-        return [
-            AgentHarnessControllerSourceBinding(
-                name=item.name, source_id=item.source_id, source_digest=item.source_digest,
-                authority_class=item.authority_class,
+    def _bounded_source_binding_name(
+        item: AgentHarnessControllerInspectionFact,
+        *,
+        collision_mode: int,
+    ) -> str:
+        identity_digest = _agent_digest(
+            {
+                "schema_version": _SOURCE_BINDING_POLICY_VERSION,
+                "name": item.name,
+                "source_id": item.source_id,
+                "source_digest": item.source_digest,
+                "authority_class": item.authority_class.value,
+                "collision_mode": collision_mode,
+            }
+        ).split(":", 1)[1]
+        return (
+            f"{item.name[:_SOURCE_BINDING_PREFIX_LENGTH]}"
+            f"{_SOURCE_BINDING_NAME_SEPARATOR}"
+            f"{identity_digest[:_SOURCE_BINDING_DIGEST_SUFFIX_LENGTH]}"
+        )
+
+    @staticmethod
+    def _bindings_from_facts(
+        facts: list[AgentHarnessControllerInspectionFact],
+    ) -> list[AgentHarnessControllerSourceBinding]:
+        source_facts = sorted(
+            [item for item in facts if item.source_id and item.source_digest],
+            key=lambda item: (
+                item.source_id,
+                item.source_digest,
+                item.name,
+                item.authority_class.value,
+            ),
+        )
+        seen_exact_facts: set[tuple[str, str, str, str]] = set()
+        seen_source_ids: set[str] = set()
+        for item in source_facts:
+            exact_identity = (
+                item.name,
+                item.source_id,
+                item.source_digest,
+                item.authority_class.value,
             )
-            for item in facts if item.source_id and item.source_digest
-        ]
+            if exact_identity in seen_exact_facts:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "duplicate exact source fact"
+                )
+            if item.source_id in seen_source_ids:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "source fact IDs are not unique"
+                )
+            seen_exact_facts.add(exact_identity)
+            seen_source_ids.add(item.source_id)
+
+        name_counts: dict[str, int] = defaultdict(int)
+        for item in source_facts:
+            name_counts[item.name] += 1
+        disambiguated_indices = {
+            index
+            for index, item in enumerate(source_facts)
+            if name_counts[item.name] > 1
+        }
+        singleton_name_to_index = {
+            item.name: index
+            for index, item in enumerate(source_facts)
+            if name_counts[item.name] == 1
+        }
+
+        for collision_mode in range(16):
+            generated_names = {
+                index: ScientificAgentHarnessController._bounded_source_binding_name(
+                    item,
+                    collision_mode=collision_mode,
+                )
+                for index, item in enumerate(source_facts)
+                if index in disambiguated_indices
+            }
+            colliding_singletons = {
+                singleton_name_to_index[name]
+                for name in generated_names.values()
+                if name in singleton_name_to_index
+                and singleton_name_to_index[name] not in disambiguated_indices
+            }
+            if colliding_singletons:
+                disambiguated_indices.update(colliding_singletons)
+                continue
+
+            names = [
+                generated_names.get(index, item.name)
+                for index, item in enumerate(source_facts)
+            ]
+            if len(names) == len(set(names)):
+                return [
+                    AgentHarnessControllerSourceBinding(
+                        name=name,
+                        source_id=item.source_id,
+                        source_digest=item.source_digest,
+                        authority_class=item.authority_class,
+                    )
+                    for item, name in zip(source_facts, names)
+                ]
+
+        raise ScientificAgentHarnessControllerVerificationError(
+            "source binding names cannot be made unique"
+        )
 
     def _latest_receipt(self, execution: Any):
         receipts = self.control_store.list_harness_controller_action_receipts(

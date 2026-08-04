@@ -297,8 +297,11 @@
       "type": "string"
     },
     "controller_policy_version": {
-      "const": "scientific-agent-harness-controller-policy.v1",
-      "default": "scientific-agent-harness-controller-policy.v1",
+      "default": "scientific-agent-harness-controller-policy.v2",
+      "enum": [
+        "scientific-agent-harness-controller-policy.v1",
+        "scientific-agent-harness-controller-policy.v2"
+      ],
       "title": "Controller Policy Version",
       "type": "string"
     },

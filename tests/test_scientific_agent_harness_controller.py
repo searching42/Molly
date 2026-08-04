@@ -26,10 +26,14 @@ from ai4s_agent.schemas import (
     AgentExecutionPlanLLMResponse,
     AgentHarnessControllerAction,
     AgentHarnessControllerAdvanceRequest,
+    AgentHarnessControllerExecution,
     AgentHarnessControllerReceiptOutcome,
     AgentHarnessControllerStartRequest,
+    AgentHarnessAuthorityClass,
+    AgentHarnessControllerInspectionFact,
     AgentHarnessGateApprovalRequest,
     AgentHarnessRemoteApprovalRequest,
+    AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1,
     AgentPlanAuthorizationRequest,
     AgentRemoteResourceAuthorityRequest,
     AtomicTaskSpec,
@@ -38,6 +42,7 @@ from ai4s_agent.schemas import (
 )
 from ai4s_agent.scientific_agent_authorization import (
     AgentPlanControlStore,
+    ScientificAgentAuthorizationVerificationError,
     ScientificAgentAuthorizationService,
 )
 from ai4s_agent.scientific_agent_harness_controller import (
@@ -81,6 +86,309 @@ def test_br1_unimol_prediction_remote_inputs_have_exact_purposes() -> None:
     assert contract("model_inference", ".ss") == (
         "target-scaler",
         "application/octet-stream",
+    )
+
+
+def test_controller_disambiguates_repeated_source_fact_names() -> None:
+    facts = _br1_source_facts()
+
+    bindings = ScientificAgentHarnessController._bindings_from_facts(facts)
+    by_source_id = {item.source_id: item for item in bindings}
+
+    assert set(by_source_id) == {
+        "uploaded_dataset",
+        "source_dataset_manifest",
+        "br1_mapping_policy",
+    }
+    assert len({item.name for item in bindings}) == 3
+    assert all(
+        item.name.startswith("authorized_input_artifact_")
+        and len(item.name) <= 96
+        for item in bindings
+    )
+
+
+def _br1_source_facts() -> list[AgentHarnessControllerInspectionFact]:
+    return [
+        AgentHarnessControllerInspectionFact(
+            name="authorized_input_artifact",
+            authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+            source_id="uploaded_dataset",
+            source_digest="sha256:" + "1" * 64,
+            state="current",
+        ),
+        AgentHarnessControllerInspectionFact(
+            name="authorized_input_artifact",
+            authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+            source_id="source_dataset_manifest",
+            source_digest="sha256:" + "2" * 64,
+            state="current",
+        ),
+        AgentHarnessControllerInspectionFact(
+            name="authorized_input_artifact",
+            authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+            source_id="br1_mapping_policy",
+            source_digest="sha256:" + "3" * 64,
+            state="current",
+        ),
+    ]
+
+
+def test_source_binding_identity_is_order_independent_and_rejects_exact_duplicates() -> None:
+    facts = _br1_source_facts()
+    first = ScientificAgentHarnessController._bindings_from_facts(facts)
+    reordered = ScientificAgentHarnessController._bindings_from_facts(list(reversed(facts)))
+
+    assert [item.model_dump(mode="json") for item in first] == [
+        item.model_dump(mode="json") for item in reordered
+    ]
+    assert _agent_digest([item.model_dump(mode="json") for item in first]) == _agent_digest(
+        [item.model_dump(mode="json") for item in reordered]
+    )
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="duplicate exact source fact",
+    ):
+        ScientificAgentHarnessController._bindings_from_facts(facts + [facts[0]])
+
+
+def test_source_binding_disambiguation_handles_maximum_identifiers() -> None:
+    facts = [
+        AgentHarnessControllerInspectionFact(
+            name="a" * 96,
+            authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+            source_id="s" * 96,
+            source_digest="sha256:" + "4" * 64,
+            state="current",
+        ),
+        AgentHarnessControllerInspectionFact(
+            name="a" * 96,
+            authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+            source_id="t" * 96,
+            source_digest="sha256:" + "5" * 64,
+            state="current",
+        ),
+    ]
+
+    bindings = ScientificAgentHarnessController._bindings_from_facts(facts)
+
+    assert len(bindings) == 2
+    assert len({item.name for item in bindings}) == 2
+    assert all(len(item.name) == 96 for item in bindings)
+
+
+def test_source_binding_generated_name_collision_is_resolved_without_order_dependency() -> None:
+    duplicate_facts = _br1_source_facts()[:2]
+    generated = ScientificAgentHarnessController._bindings_from_facts(duplicate_facts)
+    colliding_name = generated[0].name
+    collision_fact = AgentHarnessControllerInspectionFact(
+        name=colliding_name,
+        authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+        source_id="collision_source",
+        source_digest="sha256:" + "6" * 64,
+        state="current",
+    )
+
+    first = ScientificAgentHarnessController._bindings_from_facts(
+        duplicate_facts + [collision_fact]
+    )
+    reordered = ScientificAgentHarnessController._bindings_from_facts(
+        [collision_fact, *reversed(duplicate_facts)]
+    )
+
+    assert len({item.name for item in first}) == 3
+    assert [item.model_dump(mode="json") for item in first] == [
+        item.model_dump(mode="json") for item in reordered
+    ]
+
+
+def test_source_binding_rejects_non_identical_duplicate_source_ids() -> None:
+    facts = _br1_source_facts()
+    conflicting = AgentHarnessControllerInspectionFact(
+        name="different_source_fact",
+        authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+        source_id=facts[0].source_id,
+        source_digest="sha256:" + "9" * 64,
+        state="current",
+    )
+
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="source fact IDs are not unique",
+    ):
+        ScientificAgentHarnessController._bindings_from_facts(
+            [*facts, conflicting]
+        )
+
+
+def test_historical_v1_controller_execution_is_readable_but_immutable(
+    tmp_path: Path,
+) -> None:
+    storage, control_store, controller, intent = _local_authority_chain(tmp_path)
+    authorization = controller.authorization_service.verify_authorization(
+        project_id="project-1",
+        authorization_id=intent.authorization_id,
+        verify_current=True,
+    )
+    publication = controller.proposal_store.read(
+        project_id="project-1",
+        proposal_id=intent.proposal_id,
+        verify_current=True,
+    )
+    permission = control_store.read_permission_decision(
+        project_id="project-1",
+        decision_id=intent.permission_decision_id,
+    )
+    legacy_base = controller._build_execution(
+        intent=intent,
+        authorization=authorization,
+        publication=publication,
+        permission=permission,
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        client_request_id="historical-v1-source-request",
+        request_digest="sha256:" + "c" * 64,
+        created_at=_NOW,
+    )
+    legacy_payload = legacy_base.model_dump(mode="json")
+    legacy_payload.update(
+        {
+            "project_id": "project-1",
+            "run_id": "historical-run",
+            "start_intent_id": "historical-start-intent",
+            "controller_execution_id": "",
+            "execution_digest": "",
+            "controller_policy_version": AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1,
+            "controller_policy_digest": "sha256:" + "b" * 64,
+        }
+    )
+    legacy = AgentHarnessControllerExecution.model_validate(legacy_payload)
+
+    with pytest.raises(
+        ScientificAgentAuthorizationVerificationError,
+        match="read-only",
+    ):
+        control_store.publish_harness_controller_execution(legacy)
+
+    # Simulate an already-published v1 artifact without permitting the v1
+    # model to enter the current writer path.
+    control_store._publish_model(
+        project_id=legacy.project_id,
+        kind="harness_controller_execution",
+        artifact_id=legacy.controller_execution_id,
+        model=legacy,
+    )
+    root = control_store._collection_root(
+        project_id=legacy.project_id,
+        kind="harness_controller_execution",
+        create=False,
+    )
+    assert root is not None
+    target = control_store._safe_target(
+        root=root,
+        artifact_id=legacy.controller_execution_id,
+    )
+    legacy_bytes = (target / "controller_execution.json").read_bytes()
+
+    read_back = control_store.read_harness_controller_execution(
+        project_id=legacy.project_id,
+        controller_execution_id=legacy.controller_execution_id,
+    )
+    assert read_back.controller_policy_version == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1
+    assert read_back.execution_digest == legacy.execution_digest
+    assert (target / "controller_execution.json").read_bytes() == legacy_bytes
+
+    listed = control_store.list_harness_controller_executions(project_id="project-1")
+    assert [item.controller_execution_id for item in listed] == [
+        legacy.controller_execution_id
+    ]
+
+    before_decisions = control_store.list_harness_controller_decisions(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    )
+    before_receipts = control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    )
+    before_dispatches = control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    )
+
+    historical = controller.get(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    )
+    assert historical.execution.controller_policy_version == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1
+    assert historical.inspection.next_action == AgentHarnessControllerAction.STOP_TASK_TERMINAL
+    assert all(item.state == "historical" for item in historical.inspection.facts)
+    historical_snapshot = controller.read_execution_agent_snapshot(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+        expected_controller_execution_digest=legacy.execution_digest,
+    )
+    assert historical_snapshot.inspection.inspection_digest == historical.inspection.inspection_digest
+
+    request = AgentHarnessControllerAdvanceRequest(
+        expected_controller_execution_digest=legacy.execution_digest,
+        client_request_id="historical-v1-mutation-1",
+    )
+    for operation in (
+        lambda: controller.advance(
+            project_id="project-1",
+            controller_execution_id=legacy.controller_execution_id,
+            request=request,
+        ),
+        lambda: controller.cancel(
+            project_id="project-1",
+            controller_execution_id=legacy.controller_execution_id,
+            request=request,
+        ),
+        lambda: controller.recover(
+            project_id="project-1",
+            controller_execution_id=legacy.controller_execution_id,
+            request=request,
+        ),
+    ):
+        with pytest.raises(
+            ScientificAgentHarnessControllerVerificationError,
+            match="policy/authority mismatch|read-only",
+        ):
+            operation()
+
+    assert control_store.list_harness_controller_decisions(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    ) == before_decisions
+    assert control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    ) == before_receipts
+    assert control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    ) == before_dispatches
+
+    created = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="v2-sibling-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert created.execution.controller_policy_version == "scientific-agent-harness-controller-policy.v2"
+    assert len(control_store.list_harness_controller_executions(project_id="project-1")) == 2
+    prohibited = {"training", "generation", "prediction", "ranking"}
+    assert not any(
+        any(term in receipt.task_id for term in prohibited)
+        for receipt in control_store.list_harness_local_dispatch_receipts(
+            project_id="project-1",
+            controller_execution_id=legacy.controller_execution_id,
+        )
     )
 
 
@@ -239,6 +547,45 @@ def _local_authority_chain(
         clock=lambda: _NOW,
     )
     return storage, control_store, controller, approved.start_intent
+
+
+def _patch_controller_with_br1_source_facts(
+    controller: ScientificAgentHarnessController,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    duplicate_exact_fact: bool = False,
+) -> list[object]:
+    original_inspect = controller._inspect
+    observed: list[object] = []
+
+    def inspect_with_br1_sources(
+        execution: object,
+        *,
+        verify_authority: bool = False,
+    ) -> object:
+        inspection = original_inspect(
+            execution,
+            verify_authority=verify_authority,
+        )
+        payload = inspection.model_dump(mode="json")
+        facts = [
+            item
+            for item in payload["facts"]
+            if item["name"] != "authorized_input_artifact"
+        ]
+        source_facts = _br1_source_facts()
+        if duplicate_exact_fact:
+            source_facts.append(source_facts[0])
+        facts.extend(item.model_dump(mode="json") for item in source_facts)
+        payload["facts"] = facts
+        payload["source_roster_digest"] = _agent_digest(facts)
+        payload["inspection_digest"] = ""
+        rebuilt = type(inspection).model_validate(payload)
+        observed.append(rebuilt)
+        return rebuilt
+
+    monkeypatch.setattr(controller, "_inspect", inspect_with_br1_sources)
+    return observed
 
 
 def _reopen_local_controller(workspace_dir: str) -> ScientificAgentHarnessController:
@@ -696,6 +1043,133 @@ def test_controller_executes_exactly_one_local_task_and_replays_receipt(tmp_path
         controller_execution_id=first.execution.controller_execution_id,
     )
     assert [item.receipt_id for item in receipts] == [first.receipt.receipt_id]
+
+
+def test_controller_binds_br1_sources_before_effect_and_replays_exactly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, control_store, controller, intent = _local_authority_chain(tmp_path)
+    inspections = _patch_controller_with_br1_source_facts(controller, monkeypatch)
+    events: list[tuple[str, int]] = []
+    original_publish = control_store.publish_harness_controller_decision
+    original_execute = controller._execute_decision
+
+    def publish_decision(*, project_id: str, decision: object) -> object:
+        dispatches = control_store.list_harness_local_dispatch_receipts(
+            project_id="project-1",
+            controller_execution_id=decision.controller_execution_id,
+        )
+        events.append(("decision", len(dispatches)))
+        return original_publish(project_id=project_id, decision=decision)
+
+    def execute_decision(*args: object, **kwargs: object) -> object:
+        assert events == [("decision", 0)]
+        execution = args[0]
+        events.append(
+            (
+                "effect",
+                len(
+                    control_store.list_harness_local_dispatch_receipts(
+                        project_id="project-1",
+                        controller_execution_id=execution.controller_execution_id,
+                    )
+                ),
+            )
+        )
+        return original_execute(*args, **kwargs)
+
+    monkeypatch.setattr(control_store, "publish_harness_controller_decision", publish_decision)
+    monkeypatch.setattr(controller, "_execute_decision", execute_decision)
+    request = AgentHarnessControllerStartRequest(
+        expected_start_intent_digest=intent.start_intent_digest,
+        client_request_id="br1-binding-integration-create-1",
+    )
+
+    first = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=request,
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+
+    assert first.decision is not None
+    assert events == [("decision", 0), ("effect", 0)]
+    assert inspections
+    persisted = control_store.read_harness_controller_decision(
+        project_id="project-1",
+        decision_id=first.decision.decision_id,
+    )
+    assert persisted == first.decision
+    assert len({item.name for item in persisted.source_bindings}) == 5
+    assert all(len(item.name) <= 96 for item in persisted.source_bindings)
+    assert persisted.source_bindings_digest == _agent_digest(
+        [item.model_dump(mode="json") for item in persisted.source_bindings]
+    )
+    assert controller._decision_is_fresh(persisted, inspections[1])
+
+    replay = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=request,
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert replay.receipt is not None
+    assert first.receipt is not None
+    assert replay.receipt.receipt_id == first.receipt.receipt_id
+    dispatches = control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=first.execution.controller_execution_id,
+    )
+    assert len(dispatches) == 1
+    assert {item.task_id for item in dispatches}.isdisjoint(
+        {"train", "training", "generate", "generation", "predict", "prediction", "rank", "ranking"}
+    )
+    assert storage.read_stage_state("project-1", "run-1") is not None
+
+
+def test_controller_duplicate_exact_br1_source_fails_before_any_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, control_store, controller, intent = _local_authority_chain(tmp_path)
+    _patch_controller_with_br1_source_facts(
+        controller,
+        monkeypatch,
+        duplicate_exact_fact=True,
+    )
+
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="duplicate exact source fact",
+    ):
+        controller.create(
+            project_id="project-1",
+            start_intent_id=intent.start_intent_id,
+            request=AgentHarnessControllerStartRequest(
+                expected_start_intent_digest=intent.start_intent_digest,
+                client_request_id="br1-binding-duplicate-create-1",
+            ),
+            actor="alice",
+            actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        )
+
+    executions = control_store.list_harness_controller_executions(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+    )
+    assert len(executions) == 1
+    assert control_store.list_harness_controller_decisions(
+        project_id="project-1",
+        controller_execution_id=executions[0].controller_execution_id,
+    ) == []
+    assert control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=executions[0].controller_execution_id,
+    ) == []
+    assert storage.read_stage_state("project-1", "run-1") is None
 
 
 def test_controller_freezes_local_default_adapter_binding_before_gate(
