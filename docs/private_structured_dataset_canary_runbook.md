@@ -498,3 +498,89 @@ next post-merge authority rebind must produce a fresh freeze package and
 exact-bound proposal. No acceptance run, review snapshot, Confirmed Dataset,
 Gate decision, training, generation, prediction, or ranking is authorized by
 this follow-up.
+
+## 2026-08-04 PR #35 post-merge authority rebind and acceptance readiness v2
+
+PR #35 was subsequently merged by the repository owner. Its actual merge
+commit is `bf82cfd75d23abfe17328f362bd76b79b134b138`; all evidence in this
+section is bound to that commit and is independent of the historical PR #33
+and pre-PR #35 artifacts.
+
+The matching worker implementation digest is
+`sha256:1445ee01fbb3748caea3ddf889726df48ad36d49e0bfb66b3d079d93d6f3aa72`.
+The provider is `unimol-tools` version `0.1.5`, with execution profile
+`unimol-train-br1-v2` and profile digest
+`sha256:8d700004761bcac419ef853828607a4ebad47a88892be22624ec551e52246ac5`.
+
+The fresh private authority chain was materialized and reread with schema,
+semantic-digest, exact cross-artifact binding, post-write immutability, and
+Registry-binding verification. Its privacy-safe identities are:
+
+```text
+input_row_count=1999
+raw_dataset_digest=sha256:755c8bb312c25deffb7bba4a77904e8337646959ecc802575444b2620f848efa
+canonical_source_dataset_digest=sha256:817d936c343fd63edc50acc85472a2c407df9c60d9d34884bc7f2228b8aab85c
+canonical_provider_input_digest=sha256:d8770caf126c68c5b81788d256b985e7d72d60b6bfcbc7b82ca3fc790d8e2da5
+source_manifest_digest=sha256:4657ce19dbeb0b433eadfc98b664c085c19e2778fd001035c8c0e17e2f044a36
+mapping_policy_digest=sha256:0f58c28e37f436c77fd167577cdc88e0966fcd816e5afa1e0b94e314b63a6912
+source_materialization_binding_digest=sha256:9fb6f0ab8e61fbcd35cc3f7649cafe4503465479f663d39f05c64b04446ae759
+source_publication_digest=sha256:689258012a1f3530928bd3d93c610a408446a9a1673b6f5001523fe4697a7d9b
+source_publication_registry_digest=sha256:f102fc53931540748af361b6f08dea3851b6964ba2f5a7ab102ba485a1ad8dbc
+source_authority_digest=sha256:20d4ba17e9706eda7f38f03d94e14c9dd1e240557393754dee1a17f60b2553ac
+source_authority_file_digest=sha256:27728342555a8215f92ac40e72a1608867b7ccce068388731c3de8604ce135da
+```
+
+The stable Raw and canonical source/provider identities exactly match the
+historical PASS. The mapping policy semantic material is unchanged, so its
+digest is unchanged; all commit/worker/publication/Registry/authority-bound
+identities were regenerated for the actual PR #35 merge.
+
+The fresh read-only applicability preflight returned:
+
+```text
+status=PASS
+provider=unimol-tools  provider_version=0.1.5
+execution_profile=unimol-train-br1-v2
+repository_commit=bf82cfd75d23abfe17328f362bd76b79b134b138
+input=1999  supported=1999  unsupported=0  unresolved=0
+reason_counts={}
+mapping_diagnostics={}
+report_digest=sha256:24f431dc201441594858f316fd20980a75b414c6a0e8766edd02fc60e52ce3e8
+summary_semantic_digest=sha256:4f04b9e9cba2d88495e0b052f0a6926da6c95d61e673fe826cabca7e17ce8f70
+```
+
+The expected Raw digest equaled the observed Raw digest. The observed
+canonical provider-input digest equaled the staged and provider-actual input
+digests. The report contract verifier, report-bound summary projection,
+authority-chain reread, and fixed-time report/summary byte replay all passed.
+Capability probing and provider preprocessing were dispatched. Training,
+generation, prediction, ranking, model artifacts, scaler, training metrics,
+and checkpoint artifacts were not dispatched or created. The private staging
+and freeze artifacts were restricted regular files with no symlinks; private
+reports were not committed to Git.
+
+Because preflight was `PASS`, the exact verified Raw CSV, source manifest, and
+mapping policy were frozen into the new Registry-bound candidate package:
+
+```text
+package_id=br1-post-merge-freeze-bf82cfd-v1
+package_digest=sha256:d4cf65eea053fb3bd77c2197d6625f4f9859951b580f11a1b20c01625c42e2af
+proposal_id=br1-owner-proposal-bf82cfd-v1
+proposal_digest=sha256:a845be702adc50e7577a685debee22cf37929363e5810421ac93496db1ac11c9
+status=WAITING_OWNER
+```
+
+The freeze package and proposal were replay-verified, protected against
+different-byte overwrite, and checked for exact artifact copies. The
+proposal is privacy-safe and explicitly states that preflight PASS and
+candidate freeze are not data-quality approval, confirmation-Gate approval,
+training authorization, or BR1 completion.
+
+The only discovered owner approval is bound to the prior PR #33 merge and the
+historical freeze/report/summary identities; it fails exact comparison against
+this proposal and is not reused. No exact-bound approval for the current
+proposal is present. Therefore no acceptance ID/run, Permission
+authorization, Controller action, review snapshot, Confirmed Dataset, or
+human Gate was created. `M3H-013` remains `I/T(partial)/— / READY` while
+waiting for an explicit owner decision. No training, generation, prediction,
+or ranking is authorized by this evidence.
