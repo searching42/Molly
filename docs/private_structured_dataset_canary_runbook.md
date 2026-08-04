@@ -292,6 +292,85 @@ copies). This is a fresh blocked pre-acceptance result, not an applicability
 acceptance or data freeze. The later PR tip is docs-only and does not change
 this executable evidence.
 
+## 2026-08-04 mapping-semantic remediation fresh PASS
+
+The mapping-semantic fix was deployed and executed on executable HEAD
+`ee4962aa511e8bd4edfe8e4867818f3881d797fa` with the matching worker,
+`unimol-tools 0.1.5`, and profile `unimol-train-br1-v2`. This is the first
+remote evidence in this runbook that covers the corrected two-layer mapping
+contract. The older `c23b7a0...`, `a81e505...`, and `69feba9...` runs remain
+historical evidence for the executable HEADs on which they ran; they do not
+cover this HEAD.
+
+The fresh restricted staging contained these private semantic artifacts:
+
+- `source_dataset_manifest.v1`
+- `br1_raw_dataset_mapping_policy.v1`
+- source publication
+- source publication registry
+- `br1_preflight_source_authority.v1`
+- `br1_unimol_applicability_report.v1`
+- `br1_unimol_applicability_summary.v1`
+
+The Raw CSV and source provenance inputs remained private inputs and were not
+committed or exported. The materializer reread stable regular-file bytes,
+computed all digests from the actual inputs, refused replacement/overwrite of
+different artifacts, and immediately re-verified the complete chain. The
+privacy-safe materialization evidence was:
+
+```text
+input_row_count=1999
+raw_dataset_digest=sha256:755c8bb312c25deffb7bba4a77904e8337646959ecc802575444b2620f848efa
+source_manifest_digest=sha256:8c3958cfc0c5477a49db40ee689607a4b441235ffcfda82ce15bdb06898aef71
+mapping_policy_digest=sha256:0f58c28e37f436c77fd167577cdc88e0966fcd816e5afa1e0b94e314b63a6912
+canonical_source_dataset_digest=sha256:817d936c343fd63edc50acc85472a2c407df9c60d9d34884bc7f2228b8aab85c
+canonical_provider_input_digest=sha256:d8770caf126c68c5b81788d256b985e7d72d60b6bfcbc7b82ca3fc790d8e2da5
+source_materialization_binding_digest=sha256:99bdb75c8333183d4fa9331bf31f2f98c564bc0dab8a2a2a69d3818cde02751b
+source_publication_digest=sha256:d99a0a973813012b29a7e56384d198afdfb16102c7bb9d20d23d94bd26b60de2
+registry_digest=sha256:c94eee683acd81e5a7ea7d0aeecdcdb5cdada73adb11ce2d25fed4a61ce636ef
+authority_digest=sha256:9971c2fdd55a09b8320218d0f928298ea1af99fe7f97cbd9d3501e732a5f3555
+```
+
+The source-to-Raw layer now binds the legacy source field origins and the
+literal `row_comparable_value=true_within_frozen_single_solvent_scope`; the
+dataset-level `comparability_policy=partially_comparable_single_solvent`
+remains a scientific scope, not a row literal. The Raw-to-provider layer
+independently binds `smiles`, `target_value`, `row_id`, condition/context,
+missing-value, duplicate, and canonical row-order rules. Mapping diagnostics
+are counted and privacy-safe; the fresh run produced no mapping diagnostic
+reasons.
+
+The fresh private preflight result was:
+
+```text
+status=PASS
+provider=unimol-tools  provider_version=0.1.5
+expected_provider_version=0.1.5
+execution_profile=unimol-train-br1-v2
+repository_commit=ee4962aa511e8bd4edfe8e4867818f3881d797fa
+input=1999  supported=1999  unsupported=0  unresolved=0
+reason_counts={}
+mapping_diagnostics={}
+report_digest=sha256:c49d61f7f74b14bcdf77c27c307c60859e548f193ba803071f02081a82a44751
+summary_semantic_digest=sha256:4bdab1a196f18d030efbf62c7a9c3a03baa98c6d184583fe4135a498bc4da9ba
+```
+
+The report contract verifier passed, and the public summary was rebuilt from
+that private report and passed canonical exact comparison. Authority
+verification passed. The expected Raw digest equaled the observed Raw digest;
+the expected canonical provider-input digest equaled the staged and provider
+actual input digests. Capability discovery and provider preprocessing were
+dispatched. Training, generation, prediction, ranking, model artifacts,
+scaler, and training metrics were not dispatched or created. The private
+staging directory was mode `0700` with no forbidden artifacts.
+
+This `PASS` closes the applicability preflight engineering blocker for this
+reviewed executable HEAD. It does not freeze the final BR1 dataset, create an
+acceptance ID/run, or constitute BR1 applicability owner acceptance. An owner
+must independently review the privacy-safe evidence before the final Raw CSV,
+source manifest, and mapping policy are frozen and a clean BR1 acceptance is
+created.
+
 ## Applicability preflight handoff
 
 This preflight is operator evidence before acceptance, not a second runtime
@@ -306,8 +385,10 @@ ID/run ID.
 
 ## Development-branch evidence boundary
 
-Real applicability preflight on the remediation HEAD: `EXECUTED REMOTELY`,
-with the `BLOCKED` result recorded above. The remote run did not close the
-source/mapping authority chain and therefore cannot freeze the data or start
-acceptance. A local fake-provider test or a development-branch run is not a
-private applicability result.
+The latest remote applicability preflight was executed on the reviewed
+executable HEAD `ee4962aa511e8bd4edfe8e4867818f3881d797fa` and returned
+`PASS` as recorded above. This closes the source/mapping/provider applicability
+preflight authority for that HEAD, but it is not owner acceptance, data
+freeze, or a BR1 acceptance run. Historical blocked evidence remains
+immutable and is not evidence for this HEAD. A local fake-provider test is
+not a private applicability result.

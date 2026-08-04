@@ -452,7 +452,7 @@ M3.5 至少支持两种用户模式：
 | `M3H-010` unified verified run inspection/read projection | `I/T/—` | `DONE` | PR #25 reviewed HEAD `e10ac49ce6049aa8730766be793c64aee01a8f4d` 已通过 owner review，并由 squash merge commit `df64c318ce2576e42da245403c63c4f570facee9` 合入 `main`；单一 `agent_run_inspection.v1`、canonical source roster/digest、current/historical 分流与 strict read-only API 已成为 BQ2 读取边界；不据此产生 Gate `V` 或 runtime acceptance |
 | `M3H-011` Replanner 与 plan revision | `I/T/—` | `DONE` | PR #23 在 reviewed HEAD `1f7ba18a6e79281190b10c2ca18f7d59adb97ed7` 通过 repository-owner review、PR Fast、4-shard Full CI 与 Actions/Python/JavaScript-TypeScript CodeQL，并由 merge commit `1dd70e6746ef0518a38aa0471fd657a5d4172ba5` 合入 `main`；material revision 创建新 proposal/semantic-plan digest，旧 proposal 与 authorization 保持 immutable，successor 必须重新 Permission evaluation 并获得新 trusted-user authorization；Replanner 不 authorize、start、advance、retry、recover、cancel 或 dispatch，无 exact verifier evidence binding 的 standalone `verifier_outcome` trigger 不属于 v1；不据此标记 `M3H-GATE-005 V`、M3.5 或 Molly v1 完成 |
 | `M3H-012` 统一 Plan/Tool/Permission/Replan UI | `I(partial)/T(partial)/—` | `DEFERRED` | PR-BQ3；待 BQ1 与 BQ2/BR1/BR2 契约稳定后解锁，优先复用 Flask UI 和现有 strict API，不建立第二权威 |
-| `M3H-013` Structured Dataset Canary | `I/T(partial)/—` | `BLOCKED` | PR #30 reviewed HEAD `34a4438e31c054f01d77e58b86c14dc21111ccde`、squash merge `a28ea6fe19db9c81e43a40174498c636bd0f1bf8` 的 v3 real-tool runtime bridge 已合入；PR #31 reviewed HEAD `1eb6bf87083eeb286c28e5436c7af4c72b9a9356`、squash merge `19ae10a1c866964d6b993c7dfd100e930127acde` 的 applicability preflight contract 已合入。此前远端 1,999 行 preflight 为 `BLOCKED`（`SUPPORTED=0`、`UNSUPPORTED=0`、`UNRESOLVED=1999`）；本 remediation 已闭合 provider capability discovery，但当前剩余 blocker 是 `INPUT_DIGEST_MISMATCH`、`SOURCE_AUTHORITY_INVALID`、`MAPPING_POLICY_INVALID`、`SOURCE_PUBLICATION_REGISTRY_INVALID`，随后才可在 reviewed commit/worker 上获得逐行 applicability evidence、进行 clean acceptance ID/run、restart/recovery/exact replay。未启动正式 run、training、generation、prediction 或 ranking，无 runtime `V`、不标 `DONE` |
+| `M3H-013` Structured Dataset Canary | `I/T(partial)/—` | `READY` | PR #30 reviewed HEAD `34a4438e31c054f01d77e58b86c14dc21111ccde`、squash merge `a28ea6fe19db9c81e43a40174498c636bd0f1bf8` 的 v3 real-tool runtime bridge 已合入；PR #31 reviewed HEAD `1eb6bf87083eeb286c28e5436c7af4c72b9a9356`、squash merge `19ae10a1c866964d6b993c7dfd100e930127acde` 的 applicability preflight contract 已合入。PR #33 executable HEAD `ee4962aa511e8bd4edfe8e4867818f3881d797fa` 已在 matching worker、`unimol-tools 0.1.5`、`unimol-train-br1-v2` 上完成 fresh authority materialization 与 read-only applicability preflight：`PASS`，`1999/1999/0/0`，无 blocker reason。该 `PASS` 仅表示 preflight authority 已闭合，仍待独立 owner BR1 applicability/acceptance decision；未冻结最终数据、未创建 acceptance ID/run、未启动 training/generation/prediction/ranking，无 runtime `V`、不标 `DONE` |
 | `M3H-014` PDF–MinerU–LLM Canary | `I/T(partial)/—` | `READY` | PR-BR2；下一 P0 实现动作，尚无 branch、PR 或 implementation commit；真实 OLED/emitter PDF 经 evidence-bound extraction 与 contextual mapping 形成 candidate raw dataset，必须在 confirmation Gate 前进入 `WAITING_USER` |
 | `M3H-015` observability 与最终 v1 验收 | `I(partial)/T(partial)/—` | `IN_PROGRESS` | PR-BQ2 实现 OTel/LangSmith、统一 correlation、privacy allowlist、optional/lazy 与 fail-open seam；PR-BR3 仍负责最终 UI-driven runtime、restart、recovery、exact replay、privacy 与 adversarial acceptance evidence，故整个任务不标 `I/T/—` 或 `DONE`；telemetry 始终 non-authoritative |
 
@@ -1479,6 +1479,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 影响任务：`M3H-013` 保持 `I/T(partial)/— / BLOCKED`；`M3H-014` 保持 `I/T(partial)/— / READY`；不创建 acceptance ID/run，不训练、不生成、不预测、不排名，不记录 BR1 applicability owner acceptance。
 - 批准人：待 repository-owner 对 PR #33 新 executable HEAD review；远端 fresh preflight 若仍有 blocker，必须记录精确 diagnostics，不得手工调整为通过。
 
+### 2026-08-04：PR #33 mapping semantic remediation fresh remote PASS
+
+- 决策：在 PR #33 的 executable HEAD `ee4962aa511e8bd4edfe8e4867818f3881d797fa` 上，使用匹配 worker、`unimol-tools 0.1.5` 与 `unimol-train-br1-v2`，从私有 Raw CSV 和 provenance 输入重新 materialize 并验证完整 source authority chain；该结果只覆盖该 executable HEAD，不把后续文档提交或历史 remote run 混入证据。
+- 实现结果：`source_to_raw_mapping` 与 `raw_to_provider_mapping_binding` 已分离；`row_comparable_value=true_within_frozen_single_solvent_scope` 与 dataset-level `comparability_policy=partially_comparable_single_solvent` 各自保持正确语义。preflight 使用 counted、privacy-safe mapping diagnostics，不修改 Raw CSV、不接受 comparable alias、不静默过滤或删除 duplicate。
+- 新远端证据：1,999 行 authority chain materialization 与 exact verification 通过；`PASS`、`SUPPORTED=1999`、`UNSUPPORTED=0`、`UNRESOLVED=0`，`reason_counts={}`、`mapping_diagnostics={}`。Raw digest 为 `sha256:755c8bb312c25deffb7bba4a77904e8337646959ecc802575444b2620f848efa`，canonical source digest 为 `sha256:817d936c343fd63edc50acc85472a2c407df9c60d9d34884bc7f2228b8aab85c`，canonical provider digest 为 `sha256:d8770caf126c68c5b81788d256b985e7d72d60b6bfcbc7b82ca3fc790d8e2da5`，source manifest/mapping/publication/registry/authority digests 已保存在私有 staging 与 PR 的 privacy-safe evidence 中。
+- 证据验证：private report digest 为 `sha256:c49d61f7f74b14bcdf77c27c307c60859e548f193ba803071f02081a82a44751`，public summary semantic digest 为 `sha256:4bdab1a196f18d030efbf62c7a9c3a03baa98c6d184583fe4135a498bc4da9ba`；report contract、report-bound summary deterministic projection、authority verification 与 expected/staged/provider-actual digest equality 均通过。
+- 安全边界：provider capability probe 与 preprocessing 已派发；training、generation、prediction、ranking、model/checkpoint/scaler/metrics 均未派发或创建。私有 staging 受限、无 forbidden artifacts；未创建 acceptance ID/run，未记录 BR1 applicability owner acceptance。
+- 影响任务：`M3H-013` applicability preflight 已完成并等待独立 owner BR1 applicability/acceptance decision，保持 `I/T(partial)/— / READY`，不标记 `V` 或 `DONE`；`M3H-014` 保持 `I/T(partial)/— / READY`。不得因 preflight `PASS` 自动冻结数据、创建 acceptance、启动训练或推进 BR2。
+- 批准人：待 repository-owner 对 PR #33 最终 Draft HEAD 进行 engineering review；owner 必须单独决定是否冻结最终 Raw CSV、source manifest、mapping policy 并创建新的 clean BR1 acceptance。
+
 后续路线调整必须追加：
 
 ```text
@@ -1500,11 +1510,11 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ### 后续 P0 实现动作：PR-BR2 — `M3H-014` PDF–MinerU–LLM Canary（READY）
 
-### 当前 P0 验收动作：BR1 Private Real-Tool Canary — `M3H-013`（BLOCKED）
+### 当前 P0 验收动作：BR1 Private Real-Tool Canary — `M3H-013`（READY，等待独立 owner applicability/acceptance decision）
 
 任务：复用 Molly 现有 Planner、Permission、immutable authorization、Controller、Executor/RemoteExecutionService、Gate、StageState、Artifact Registry、verified publication、`AgentRunInspection v1` 与 observability seam，实现 Raw CSV → exact confirmation → Confirmed Dataset → current-run fresh model → generation → prediction/ranking → chemical validation → `Computational Top-N` 的两层 canary。公共 CI 只证明同契约 deterministic reference path；Private Real-Tool Canary 必须另有 fresh Uni-Mol、real REINVENT4 与脱敏 owner-reviewed evidence。
 
-当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY` 而非 `DONE`；`M3H-001`～`M3H-011` 为 `I/T/— / DONE`；`M3H-013` 为 `I/T(partial)/— / BLOCKED`；`M3H-014` 为 `I/T(partial)/— / READY`；`M3H-015` 继续为 `I(partial)/T(partial)/— / IN_PROGRESS`。Private Real-Tool Canary、BR2、BQ3 与 BR3 最终验收均未完成；无 Gate `V`，不声明 M3.5 或 Molly v1 完成。
+当前状态：M3 为 `I/T/V / DONE`；M3.5 为 `READY` 而非 `DONE`；`M3H-001`～`M3H-011` 为 `I/T/— / DONE`；`M3H-013` 为 `I/T(partial)/— / READY`，其 applicability preflight authority 已闭合但独立 BR1 acceptance 尚未开始；`M3H-014` 为 `I/T(partial)/— / READY`；`M3H-015` 继续为 `I(partial)/T(partial)/— / IN_PROGRESS`。Private Real-Tool Canary、BR2、BQ3 与 BR3 最终验收均未完成；无 Gate `V`，不声明 M3.5 或 Molly v1 完成。
 
 必须验证：
 
