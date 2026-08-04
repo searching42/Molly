@@ -46,6 +46,7 @@ from ai4s_agent.br1_preflight_authority import (
     canonical_source_dataset_bytes,
     mapping_binding,
     mapping_binding_semantic_material,
+    source_materialization_binding_digest,
 )
 from ai4s_agent.generation_publication import publish_fresh_bytes, read_regular_file_bound
 from ai4s_agent.resource_profiles import EXECUTION_PROFILES
@@ -478,6 +479,7 @@ def _authority_identity_skeleton(
         "observed_canonical_provider_input_digest": canonical_provider_digest,
         "staged_provider_input_digest": canonical_provider_digest,
         "source_dataset_manifest_digest": source.digest,
+        "source_materialization_binding_digest": _UNAVAILABLE,
         "mapping_policy_digest": policy.digest,
         "mapping_binding_digest": _UNAVAILABLE,
         "input_row_count": len(raw.rows),
@@ -495,6 +497,8 @@ def _verify_source_authority(
     expected_provider_version: str,
     execution_profile_id: str,
     execution_profile_digest: str,
+    repository_commit: str,
+    worker_implementation_digest: str,
 ) -> _SourceAuthorityVerification:
     identity = _authority_identity_skeleton(raw=raw, source=source, policy=policy)
     reasons: set[str] = set()
@@ -506,6 +510,25 @@ def _verify_source_authority(
     publication_payload: dict[str, Any] | None = None
     publication_digest = _UNAVAILABLE
     publication_file_digest = _UNAVAILABLE
+    source_binding = (
+        source.payload.get("materialization_binding")
+        if source.payload is not None
+        else None
+    )
+    source_binding_digest = _UNAVAILABLE
+    if isinstance(source_binding, dict):
+        try:
+            source_binding_digest = source_materialization_binding_digest(source_binding)
+        except Exception:
+            source_binding_digest = _UNAVAILABLE
+    else:
+        reasons.add("SOURCE_AUTHORITY_INVALID")
+    if (
+        source.payload is not None
+        and source.payload.get("materialization_binding_digest") != source_binding_digest
+    ):
+        reasons.add("SOURCE_AUTHORITY_INVALID")
+    identity["source_materialization_binding_digest"] = source_binding_digest
 
     if authority_path is None or publication_path is None or registry_path is None:
         reasons.add("SOURCE_AUTHORITY_INVALID")
@@ -590,6 +613,35 @@ def _verify_source_authority(
         if authority_payload.get("execution_profile_digest") != execution_profile_digest:
             reasons.add("EXECUTION_PROFILE_UNAVAILABLE")
             reasons.add("SOURCE_AUTHORITY_INVALID")
+        if authority_payload.get("repository_commit") != repository_commit:
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if authority_payload.get("worker_implementation_digest") != worker_implementation_digest:
+            reasons.add("WORKER_IMPLEMENTATION_UNAVAILABLE")
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if authority_payload.get("source_materialization_binding") != source_binding:
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if authority_payload.get("source_materialization_binding_digest") != source_binding_digest:
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if authority_payload.get("source_kind") != "private":
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if authority_payload.get("column_roster") != list(raw.columns):
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if (
+            isinstance(source_binding, dict)
+            and (
+                source_binding.get("raw_dataset_digest") != raw.digest
+                or source_binding.get("input_row_count") != len(raw.rows)
+                or source_binding.get("column_roster") != list(raw.columns)
+                or source_binding.get("mapping_policy_digest") != policy.digest
+                or source_binding.get("provider_name") != PROVIDER_NAME
+                or source_binding.get("expected_provider_version") != expected_provider_version
+                or source_binding.get("execution_profile_id") != execution_profile_id
+                or source_binding.get("execution_profile_digest") != execution_profile_digest
+                or source_binding.get("repository_commit") != repository_commit
+                or source_binding.get("worker_implementation_digest") != worker_implementation_digest
+            )
+        ):
+            reasons.add("SOURCE_AUTHORITY_INVALID")
         binding = authority_payload.get("mapping_binding")
         expected_binding = mapping_binding(expected_provider_version)
         if not isinstance(binding, dict) or canonical_mapping_binding(binding) != expected_binding:
@@ -599,6 +651,17 @@ def _verify_source_authority(
             if authority_payload.get("mapping_binding_digest") != binding_digest:
                 reasons.add("MAPPING_POLICY_INVALID")
             identity["mapping_binding_digest"] = binding_digest
+        policy_binding = (policy.payload or {}).get("mapping_binding")
+        policy_binding_digest = (policy.payload or {}).get("mapping_binding_digest")
+        if (
+            not isinstance(policy_binding, dict)
+            or canonical_mapping_binding(policy_binding) != expected_binding
+            or policy_binding_digest
+            != digest_json(mapping_binding_semantic_material(policy_binding))
+        ):
+            reasons.add("MAPPING_POLICY_INVALID")
+        elif policy_binding != binding:
+            reasons.add("MAPPING_POLICY_INVALID")
 
     if registry_payload is not None:
         registry_digest = str(
@@ -633,6 +696,18 @@ def _verify_source_authority(
             reasons.add("MAPPING_POLICY_INVALID")
         if registry_payload.get("input_row_count") != len(raw.rows):
             reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+        if registry_payload.get("publication_identity") != (
+            source_binding.get("publication_identity") if isinstance(source_binding, dict) else None
+        ):
+            reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+        if registry_payload.get("column_roster") != list(raw.columns):
+            reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+        if registry_payload.get("source_kind") != "private":
+            reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+        if registry_payload.get("source_materialization_binding_digest") != source_binding_digest:
+            reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
+        if registry_payload.get("canonicalization_contract_version") != CANONICALIZATION_CONTRACT_VERSION:
+            reasons.add("SOURCE_PUBLICATION_REGISTRY_INVALID")
         if publication_payload is not None and registry_payload.get(
             "publication_digest"
         ) != publication_payload.get("raw_publication_digest"):
@@ -658,6 +733,20 @@ def _verify_source_authority(
         if publication_payload.get("source_dataset_manifest_digest") != source.digest:
             reasons.add("SOURCE_AUTHORITY_INVALID")
         if publication_payload.get("mapping_policy_digest") != policy.digest:
+            reasons.add("MAPPING_POLICY_INVALID")
+        if publication_payload.get("publication_identity") != (
+            source_binding.get("publication_identity") if isinstance(source_binding, dict) else None
+        ):
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if publication_payload.get("source_kind") != "private":
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if publication_payload.get("column_roster") != list(raw.columns):
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if publication_payload.get("source_materialization_binding_digest") != source_binding_digest:
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if publication_payload.get("canonicalization_contract_version") != CANONICALIZATION_CONTRACT_VERSION:
+            reasons.add("SOURCE_AUTHORITY_INVALID")
+        if publication_payload.get("mapping_binding_digest") != identity.get("mapping_binding_digest"):
             reasons.add("MAPPING_POLICY_INVALID")
 
     expected_raw = _normalise_digest(
@@ -1222,6 +1311,9 @@ def _public_summary(report: Mapping[str, Any]) -> dict[str, Any]:
         "schema_version": SUMMARY_SCHEMA,
         "raw_dataset_digest": report["raw_dataset_digest"],
         "source_dataset_manifest_digest": report["source_dataset_manifest_digest"],
+        "source_materialization_binding_digest": report[
+            "source_materialization_binding_digest"
+        ],
         "mapping_policy_digest": report["mapping_policy_digest"],
         "source_authority_digest": report["source_authority_digest"],
         "source_publication_registry_digest": report[
@@ -1775,6 +1867,8 @@ def run_br1_unimol_applicability_preflight(
         expected_provider_version=expected_version,
         execution_profile_id=profile_id_for_report,
         execution_profile_digest=profile_digest,
+        repository_commit=commit,
+        worker_implementation_digest=worker_digest,
     )
     global_authority_reasons.update(authority.reasons)
 
@@ -1993,6 +2087,9 @@ def run_br1_unimol_applicability_preflight(
         "schema_version": REPORT_SCHEMA,
         "raw_dataset_digest": raw.digest,
         "source_dataset_manifest_digest": source.digest,
+        "source_materialization_binding_digest": authority.identity[
+            "source_materialization_binding_digest"
+        ],
         "mapping_policy_digest": policy.digest,
         "source_authority_digest": authority.digest,
         "source_publication_registry_digest": authority.registry_digest,
@@ -2093,6 +2190,9 @@ def _validate_report_contract(report: Mapping[str, Any]) -> None:
     identity_pairs = {
         "observed_raw_dataset_digest": report["raw_dataset_digest"],
         "source_dataset_manifest_digest": report["source_dataset_manifest_digest"],
+        "source_materialization_binding_digest": report[
+            "source_materialization_binding_digest"
+        ],
         "mapping_policy_digest": report["mapping_policy_digest"],
         "mapping_binding_digest": report["mapping_binding_digest"],
         "source_publication_registry_digest": report[

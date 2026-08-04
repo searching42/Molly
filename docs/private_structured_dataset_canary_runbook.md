@@ -132,6 +132,59 @@ authority validation stopped the run before row-level provider preprocessing.
 This is fresh pre-acceptance evidence, not a claim of applicability or owner
 acceptance; a new authority-bound run is still required.
 
+## BR1 source authority materialization v1
+
+The remediation writer now materializes a fresh private authority chain from
+the actual Raw CSV and the two private legacy provenance inputs. It is a
+deterministic operator-side writer, not a runtime task or acceptance writer.
+It rereads stable regular-file bytes, validates the exact Raw Dataset columns,
+row identity and target contract, computes the physical Raw CSV digest, and
+writes immutable `source_dataset_manifest.v1`,
+`br1_raw_dataset_mapping_policy.v1`, structured publication, publication
+registry, and `br1_preflight_source_authority.v1` artifacts. The writer
+computes every digest itself and refuses to overwrite a different existing
+artifact.
+
+The source manifest's materialization binding and the private publication,
+registry, and authority bind the source artifact identity, source kind, row
+count, physical column roster, mapping identity, publication identity,
+canonicalization contract, provider/version, profile digest, repository
+commit, and worker implementation digest. The mapping binding separately
+binds the exact molecule, target, row identity, condition/context, missing,
+filter, duplicate and canonical-order rules. Physical Raw CSV order remains
+part of the Raw Dataset digest; canonical source/provider digests use the
+fixed `row_id` order.
+
+On `workstation2`, create a fresh permission-restricted staging directory and
+run the materializer with private paths and the exact reviewed implementation
+identities:
+
+```bash
+python scripts/materialize_br1_preflight_authority.py \
+  --raw-dataset <private-raw-csv> \
+  --source-manifest-input <private-source-manifest> \
+  --mapping-policy-input <private-mapping-policy> \
+  --output-source-manifest <fresh-private-source-manifest> \
+  --output-mapping-policy <fresh-private-mapping-policy> \
+  --output-source-publication <fresh-private-source-publication> \
+  --output-registry <fresh-private-source-publication-registry> \
+  --output-authority <fresh-private-source-authority> \
+  --expected-provider-version 0.1.5 \
+  --execution-profile-id unimol-train-br1-v2 \
+  --execution-profile-digest <reviewed-profile-digest> \
+  --repository-commit <reviewed-commit> \
+  --worker-implementation-digest <matching-worker-digest> \
+  --publication-identity <fresh-private-publication-id> \
+  --registry-id <fresh-private-registry-id>
+```
+
+Immediately run the applicability preflight against those newly materialized
+artifacts. Verify the private report contract and then verify the public
+summary by deterministic exact projection from that report. A mapping-policy
+or source-row semantic mismatch remains `BLOCKED`; the materializer never
+rewrites the Raw CSV, silently changes comparability, filters rows, or turns a
+legacy marker into an implicit alias.
+
 ## Applicability preflight handoff
 
 This preflight is operator evidence before acceptance, not a second runtime

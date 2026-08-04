@@ -4,6 +4,41 @@
   "title": "BR1 Raw Dataset Mapping Policy v1",
   "type": "object",
   "additionalProperties": false,
+  "dependentRequired": {
+    "mapping_binding": ["mapping_binding_digest"],
+    "mapping_binding_digest": ["mapping_binding"]
+  },
+  "$defs": {
+    "mapping_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "mapping_policy_schema_version", "source_schema_version",
+        "provider_name", "expected_provider_version", "execution_profile_id",
+        "molecule_representation_field", "target_field", "row_identity_field",
+        "condition_context_fields", "required_source_columns", "missing_value_policy",
+        "filter_policy", "duplicate_row_policy", "canonical_row_order", "output_columns"
+      ],
+      "properties": {
+        "schema_version": {"const": "br1_preflight_mapping_binding.v1"},
+        "mapping_policy_schema_version": {"const": "br1_raw_dataset_mapping_policy.v1"},
+        "source_schema_version": {"const": "structured_raw_dataset.v1"},
+        "provider_name": {"const": "unimol-tools"},
+        "expected_provider_version": {"type": "string", "minLength": 1},
+        "execution_profile_id": {"const": "unimol-train-br1-v2"},
+        "molecule_representation_field": {"const": "smiles"},
+        "target_field": {"const": "target_value"},
+        "row_identity_field": {"const": "row_id"},
+        "condition_context_fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "required_source_columns": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "missing_value_policy": {"const": "reject"},
+        "filter_policy": {"const": "no_implicit_filter"},
+        "duplicate_row_policy": {"const": "reject_duplicate_standard_inchikey"},
+        "canonical_row_order": {"const": "row_id_ascending"},
+        "output_columns": {"const": ["smiles", "target_value"]}
+      }
+    }
+  },
   "required": [
     "schema_version", "target_property", "scientific_scope",
     "scope_downgraded", "source_solvent_smiles", "target_unit",
@@ -24,6 +59,8 @@
     "emission_mechanism": {"const": "unknown"},
     "temperature_policy": {"type": "string", "minLength": 1},
     "condition_merge_policy": {"const": "explicit_single_solvent_filter_no_merge"},
-    "comparability_policy": {"const": "partially_comparable_single_solvent"}
+    "comparability_policy": {"const": "partially_comparable_single_solvent"},
+    "mapping_binding": {"$ref": "#/$defs/mapping_binding"},
+    "mapping_binding_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
   }
 }

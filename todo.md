@@ -1452,6 +1452,16 @@ RL 是最后的探索路线，不是当前产品承诺。
 - 新增风险：真实 source publication/registry authority 可能仍未闭合；provider adapter 只能证明其明确实现的 preprocessing 语义，不能把 RDKit 可解析或 capability schema 通过解释为全部分子 supported；任何未证明的行继续必须是 `UNSUPPORTED` 或 `UNRESOLVED`。
 - 批准人：待 repository-owner 对本 Draft PR exact HEAD 复核；保持 Draft、不得转 Ready、不得合并。
 
+### 2026-08-04：PR #32 合并后启动 BR1 source authority materialization v1
+
+- 决策：PR #32 reviewed HEAD `300a6e92ea848f435dec3861fb556e6ecfedc999` 已完成 engineering acceptance，并由 squash merge commit `2638d204caccfb2530561f5b33cc8cf02c643337` 合入 `main`。新 Draft PR 只实现 workstation2 私有 BR1 source authority 的 deterministic materialization 与 fresh applicability preflight 入口，不记录 BR1 applicability owner acceptance。
+- 原计划：沿用历史 remote blocked report，直接等待数据冻结和 clean acceptance。
+- 新计划：从真实 Raw CSV、既有私有 provenance 输入和 exact `unimol-tools 0.1.5` / `unimol-train-br1-v2` authority 重新生成 source manifest、exact mapping policy、publication、registry、authority；所有 digest 由 writer 从实际 bytes/semantic material 计算，生成后立即 exact verify，再在 matching worker 上运行 read-only fresh preflight。
+- 依据：历史 remediation execution HEAD `c23b7a0eb8897b0d65bd33b4763eb8f8815f46f7` 的 `BLOCKED` 证据不覆盖 PR #32 merge 后的 HEAD；新的 identity chain 必须区分 Raw physical digest、canonical source/provider digest、manifest/mapping/publication/registry/authority digest，并拒绝手工重签或覆盖不同 artifact。
+- 影响任务：`M3H-013` 继续 `I/T(partial)/— / BLOCKED`，因为新的真实 applicability 尚未闭合；`M3H-014` 继续 `I/T(partial)/— / READY`。本 PR 不创建 acceptance ID/run，不训练、不生成、不预测、不排名、不冻结最终数据、不推进 BR2。
+- 新增风险：真实 Raw Dataset 的历史 comparability marker 与冻结 mapping contract 可能仍存在语义不一致；materializer 不把其当作隐式 alias，不改写 Raw CSV，fresh preflight 必须继续报告 `MAPPING_POLICY_INVALID`/`BLOCKED`，直至 owner 另行明确处理。
+- 批准人：本 PR 仍待 repository-owner review；不把 PR #32 的 engineering acceptance解释为 BR1 数据 applicability acceptance。
+
 后续路线调整必须追加：
 
 ```text
@@ -1469,7 +1479,7 @@ RL 是最后的探索路线，不是当前产品承诺。
 
 ## 17. 下一步执行队列
 
-### 下一 P0 实现 follow-up：BR1 Uni-Mol Applicability Preflight v1（本 Draft PR）
+### 下一 P0 实现 follow-up：BR1 source authority materialization and fresh preflight v1（本 Draft PR）
 
 ### 后续 P0 实现动作：PR-BR2 — `M3H-014` PDF–MinerU–LLM Canary（READY）
 

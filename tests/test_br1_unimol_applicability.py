@@ -31,6 +31,8 @@ from ai4s_agent.br1_preflight_authority import (
     canonical_source_dataset_bytes,
     mapping_binding,
     mapping_binding_semantic_material,
+    source_materialization_binding,
+    source_materialization_binding_digest,
 )
 from ai4s_agent.structured_dataset_confirmation import (
     bind_publication,
@@ -214,6 +216,28 @@ def _write_inputs(
     mapping_path = tmp_path / "mapping.json"
     raw_bytes = _csv_bytes(rows)
     raw_path.write_bytes(raw_bytes)
+    mapping = _mapping()
+    mapping_execution_binding = mapping_binding("0.1.5")
+    mapping["mapping_binding"] = mapping_execution_binding
+    mapping["mapping_binding_digest"] = digest_json(
+        mapping_binding_semantic_material(mapping_execution_binding)
+    )
+    mapping_path.write_bytes(canonical_json_bytes(mapping))
+    mapping_digest = digest_bytes(mapping_path.read_bytes())
+    source_binding = source_materialization_binding(
+        raw_dataset_digest=digest_bytes(raw_bytes),
+        input_row_count=len(rows),
+        column_roster=CSV_COLUMNS,
+        mapping_policy_digest=mapping_digest,
+        mapping_policy_version="br1_raw_dataset_mapping_policy.v1",
+        publication_identity="br1-preflight-fixture-publication",
+        provider_name=PROVIDER_NAME,
+        expected_provider_version="0.1.5",
+        execution_profile_id=EXECUTION_PROFILE_ID,
+        execution_profile_digest=PROFILE_DIGEST,
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+    )
     source = {
         "schema_version": "source_dataset_manifest.v1",
         "dataset_name": "BR1 fixture",
@@ -223,11 +247,13 @@ def _write_inputs(
         "download_date": "2026-08-03",
         "original_file_sha256": "c" * 64,
         "derived_raw_dataset_sha256": derived_digest or digest_bytes(raw_bytes),
+        "materialization_binding": source_binding,
+        "materialization_binding_digest": source_materialization_binding_digest(
+            source_binding
+        ),
     }
     source_path.write_bytes(canonical_json_bytes(source))
-    mapping_path.write_bytes(canonical_json_bytes(_mapping()))
     source_digest = digest_bytes(source_path.read_bytes())
-    mapping_digest = digest_bytes(mapping_path.read_bytes())
     publication = {
         "schema_version": "structured_raw_dataset.v1",
         "dataset_id": "raw-br1-fixture",
@@ -236,10 +262,23 @@ def _write_inputs(
         "status": "candidate_unconfirmed",
         "dataset_digest": digest_bytes(raw_bytes),
         "source_kind": "private",
+        "source_artifact_id": "raw_dataset",
+        "publication_identity": "br1-preflight-fixture-publication",
         "row_count": len(rows),
         "column_roster": list(CSV_COLUMNS),
         "source_dataset_manifest_digest": source_digest,
         "mapping_policy_digest": mapping_digest,
+        "source_materialization_binding_digest": source_materialization_binding_digest(
+            source_binding
+        ),
+        "canonical_source_dataset_digest": digest_bytes(
+            canonical_source_dataset_bytes(rows)
+        ),
+        "canonical_provider_input_digest": digest_bytes(
+            canonical_provider_input_bytes(rows)
+        ),
+        "canonicalization_contract_version": CANONICALIZATION_CONTRACT_VERSION,
+        "mapping_binding_digest": mapping["mapping_binding_digest"],
     }
     publication = bind_publication(
         publication,
@@ -253,16 +292,23 @@ def _write_inputs(
         "artifact_id": "raw_dataset",
         "publication_schema_version": "structured_raw_dataset.v1",
         "publication_digest": publication["raw_publication_digest"],
+        "publication_identity": publication["publication_identity"],
         "raw_dataset_digest": digest_bytes(raw_bytes),
         "source_dataset_manifest_digest": source_digest,
         "mapping_policy_digest": mapping_digest,
         "input_row_count": len(rows),
+        "column_roster": list(CSV_COLUMNS),
+        "source_kind": "private",
+        "source_materialization_binding_digest": source_materialization_binding_digest(
+            source_binding
+        ),
+        "canonicalization_contract_version": CANONICALIZATION_CONTRACT_VERSION,
     }
     registry = dict(registry_material)
     registry["registry_digest"] = digest_json(registry_material)
     registry_path = tmp_path / "source-publication-registry.json"
     registry_path.write_bytes(canonical_json_bytes(registry))
-    binding = mapping_binding("0.1.5")
+    binding = mapping_execution_binding
     authority_material = {
         "schema_version": "br1_preflight_source_authority.v1",
         "authority_contract_version": "br1_preflight_source_authority.v1",
@@ -273,6 +319,13 @@ def _write_inputs(
         "source_dataset_manifest_digest": source_digest,
         "mapping_policy_digest": mapping_digest,
         "mapping_policy_version": "br1_raw_dataset_mapping_policy.v1",
+        "source_materialization_binding": source_binding,
+        "source_materialization_binding_digest": source_materialization_binding_digest(
+            source_binding
+        ),
+        "publication_identity": publication["publication_identity"],
+        "source_kind": "private",
+        "column_roster": list(CSV_COLUMNS),
         "mapping_binding": binding,
         "mapping_binding_digest": digest_json(mapping_binding_semantic_material(binding)),
         "raw_dataset_digest": digest_bytes(raw_bytes),
@@ -288,6 +341,8 @@ def _write_inputs(
         "expected_provider_version": "0.1.5",
         "execution_profile_id": EXECUTION_PROFILE_ID,
         "execution_profile_digest": PROFILE_DIGEST,
+        "repository_commit": COMMIT,
+        "worker_implementation_digest": WORKER_DIGEST,
     }
     authority = dict(authority_material)
     authority["authority_digest"] = digest_json(authority_material)

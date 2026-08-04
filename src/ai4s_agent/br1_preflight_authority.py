@@ -15,11 +15,12 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
 
-from ai4s_agent.structured_dataset_confirmation import REQUIRED_COLUMNS
+from ai4s_agent.structured_dataset_confirmation import REQUIRED_COLUMNS, digest_json
 
 
 CANONICALIZATION_CONTRACT_VERSION = "br1_provider_input_canonicalization.v1"
 MAPPING_BINDING_VERSION = "br1_preflight_mapping_binding.v1"
+SOURCE_MATERIALIZATION_BINDING_VERSION = "br1_source_manifest_materialization.v1"
 SOURCE_PUBLICATION_REGISTRY_SCHEMA = "br1_source_publication_registry.v1"
 SOURCE_AUTHORITY_SCHEMA = "br1_preflight_source_authority.v1"
 PROVIDER_NAME = "unimol-tools"
@@ -197,6 +198,57 @@ def canonical_mapping_binding(binding: Mapping[str, Any]) -> dict[str, Any]:
     return dict(mapping_binding_semantic_material(binding))
 
 
+def source_materialization_binding(
+    *,
+    raw_dataset_digest: str,
+    input_row_count: int,
+    column_roster: Sequence[str],
+    mapping_policy_digest: str,
+    mapping_policy_version: str,
+    publication_identity: str,
+    provider_name: str,
+    expected_provider_version: str,
+    execution_profile_id: str,
+    execution_profile_digest: str,
+    repository_commit: str,
+    worker_implementation_digest: str,
+) -> dict[str, Any]:
+    """Build the non-self-referential source identity binding.
+
+    ``source_dataset_manifest_digest`` is deliberately not part of this
+    object: including a file's digest inside that same file would create a
+    circular identity.  The publication, registry, and authority bind this
+    object together with the manifest's actual bytes digest.
+    """
+
+    return {
+        "schema_version": SOURCE_MATERIALIZATION_BINDING_VERSION,
+        "source_artifact_id": "raw_dataset",
+        "source_kind": "private",
+        "raw_dataset_digest": str(raw_dataset_digest),
+        "input_row_count": int(input_row_count),
+        "column_roster": list(column_roster),
+        "mapping_policy_digest": str(mapping_policy_digest),
+        "mapping_policy_version": str(mapping_policy_version),
+        "publication_identity": str(publication_identity),
+        "canonicalization_contract_version": CANONICALIZATION_CONTRACT_VERSION,
+        "provider_name": str(provider_name),
+        "expected_provider_version": str(expected_provider_version),
+        "execution_profile_id": str(execution_profile_id),
+        "execution_profile_digest": str(execution_profile_digest),
+        "repository_commit": str(repository_commit),
+        "worker_implementation_digest": str(worker_implementation_digest),
+    }
+
+
+def source_materialization_binding_digest(
+    binding: Mapping[str, Any],
+) -> str:
+    """Digest only the canonical semantic source-materialization binding."""
+
+    return digest_json(dict(binding))
+
+
 __all__ = [
     "CANONICALIZATION_CONTRACT_VERSION",
     "CONDITION_CONTEXT_FIELDS",
@@ -205,6 +257,7 @@ __all__ = [
     "PROVIDER_INPUT_COLUMN_ORDER",
     "PROVIDER_NAME",
     "SOURCE_AUTHORITY_SCHEMA",
+    "SOURCE_MATERIALIZATION_BINDING_VERSION",
     "SOURCE_COLUMN_ORDER",
     "SOURCE_PUBLICATION_REGISTRY_SCHEMA",
     "canonical_field_value",
@@ -214,4 +267,6 @@ __all__ = [
     "canonical_source_rows",
     "mapping_binding",
     "mapping_binding_semantic_material",
+    "source_materialization_binding",
+    "source_materialization_binding_digest",
 ]
