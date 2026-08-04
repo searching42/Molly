@@ -37,6 +37,7 @@ from ai4s_agent._utils import now_iso
 from ai4s_agent.br1_preflight_authority import (
     CANONICALIZATION_CONTRACT_VERSION,
     SOURCE_AUTHORITY_SCHEMA,
+    SOURCE_COLUMN_ORDER,
     SOURCE_PUBLICATION_REGISTRY_SCHEMA,
     canonical_field_value,
     canonical_mapping_binding,
@@ -828,6 +829,15 @@ def _frozen_mapping_valid(policy: Mapping[str, Any]) -> bool:
         "temperature_policy": "not_reported",
     }
     if any(policy.get(key) != value for key, value in frozen.items()):
+        return False
+    # The checked-in v1 mapping schema remains compatible with the existing
+    # structured-dataset adapter, which also reads this schema.  The BR1
+    # preflight has a stricter boundary: its materialized policy must carry the
+    # exact canonical Raw Dataset field mapping instead of relying on aliases
+    # or implicit column discovery.
+    if policy.get("field_mapping") != {
+        field: field for field in SOURCE_COLUMN_ORDER
+    }:
         return False
     if policy.get("duplicate_tie_break") not in {
         "lowest_source_tag",

@@ -505,6 +505,29 @@ def test_authority_mapping_binding_is_exact_and_fail_closed(tmp_path: Path) -> N
 
     assert result.report["overall_status"] == "BLOCKED"
     assert "MAPPING_POLICY_INVALID" in result.report["global_reason_codes"]
+
+
+def test_preflight_requires_exact_canonical_field_mapping(tmp_path: Path) -> None:
+    rows = [_row("r1", "CCO")]
+    paths = _write_inputs(tmp_path, rows)
+    mapping = json.loads(paths[2].read_text(encoding="utf-8"))
+    mapping.pop("field_mapping")
+    paths[2].write_bytes(canonical_json_bytes(mapping))
+    provider = FakeProvider()
+
+    result = run_br1_unimol_applicability_preflight(
+        *paths,
+        **_authority_kwargs(paths),
+        provider=provider,
+        expected_provider_version="0.1.5",
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        created_at=NOW,
+    )
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "MAPPING_POLICY_INVALID" in result.report["global_reason_codes"]
     assert provider.calls == []
 
 

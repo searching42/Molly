@@ -44,7 +44,7 @@
     "scope_downgraded", "source_solvent_smiles", "target_unit",
     "identity_key", "duplicate_tie_break", "material_role",
     "emission_mechanism", "temperature_policy", "condition_merge_policy",
-    "comparability_policy", "field_mapping"
+    "comparability_policy"
   ],
   "properties": {
     "schema_version": {"const": "br1_raw_dataset_mapping_policy.v1"},
