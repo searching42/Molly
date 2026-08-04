@@ -392,3 +392,96 @@ preflight authority for that HEAD, but it is not owner acceptance, data
 freeze, or a BR1 acceptance run. Historical blocked evidence remains
 immutable and is not evidence for this HEAD. A local fake-provider test is
 not a private applicability result.
+
+## 2026-08-04 PR #33 post-merge authority rebind and acceptance readiness v1
+
+PR #33 was owner-reviewed and merged before this run. Its actual merge commit
+is `5307dd7c446aee21c4d0d026b1e1d94d9b628236`; the PR #33 executable reviewed
+commit remains `ee4962aa511e8bd4edfe8e4867818f3881d797fa`, and its final
+docs-only tip remains `007047fc08bfbc3bff37d69f3fec01e64f015b96`. The fresh
+post-merge authority in this section is bound to the actual merge commit, not
+to the PR #33 development executable commit.
+
+The matching post-merge worker implementation digest is
+`sha256:1445ee01fbb3748caea3ddf889726df48ad36d49e0bfb66b3d079d93d6f3aa72`.
+The provider is `unimol-tools` version `0.1.5`, with profile
+`unimol-train-br1-v2` and execution-profile digest
+`sha256:8d700004761bcac419ef853828607a4ebad47a88892be22624ec551e52246ac5`.
+The post-merge materializer created a fresh private chain with a restricted
+directory, regular non-symlink files, and private file modes. Its safe roster
+and identities are:
+
+```text
+input_row_count=1999
+raw_dataset_digest=sha256:755c8bb312c25deffb7bba4a77904e8337646959ecc802575444b2620f848efa
+source_manifest_digest=sha256:e8b348c826c27b3d092a9fa71d8182cc1243f5f037ae766e52a16b58a10a6779
+mapping_policy_digest=sha256:0f58c28e37f436c77fd167577cdc88e0966fcd816e5afa1e0b94e314b63a6912
+canonical_source_dataset_digest=sha256:817d936c343fd63edc50acc85472a2c407df9c60d9d34884bc7f2228b8aab85c
+canonical_provider_input_digest=sha256:d8770caf126c68c5b81788d256b985e7d72d60b6bfcbc7b82ca3fc790d8e2da5
+source_materialization_binding_digest=sha256:b157ac49c9117da5a279cf5b9fc7ea8e4316e67da3b8200826a5687f075b3f80
+source_publication_digest=sha256:aefed7e096584e6bc61fdfc1950cddf6a4797bfba5b3ba2e3636000b8003f860
+source_publication_registry_digest=sha256:d3cd4e0775cb3db2ac73c53c54a4b6ab706f3b41282cdb534da0dd410d931e93
+source_authority_digest=sha256:d3cb679d180480fe6e63a9671b407ce587fd56b139510f1c1418860e91bbe071
+source_authority_file_digest=sha256:6fdf943f9c4a7e54235a05ad5851f70c5f5c3cd23f9a59b985ee44fd68b95da4
+```
+
+The stable Raw, canonical source, and canonical provider identities exactly
+match the historical PASS. The source manifest, materialization binding,
+publication, registry, and authority identities are newly bound to the
+post-merge commit and matching worker. The mapping policy semantic material
+was unchanged, so its digest remains the historical
+`sha256:0f58c28e37f436c77fd167577cdc88e0966fcd816e5afa1e0b94e314b63a6912`.
+
+The fresh read-only applicability preflight returned:
+
+```text
+status=PASS
+provider=unimol-tools  provider_version=0.1.5
+execution_profile=unimol-train-br1-v2
+repository_commit=5307dd7c446aee21c4d0d026b1e1d94d9b628236
+input=1999  supported=1999  unsupported=0  unresolved=0
+reason_counts={}
+mapping_diagnostics={}
+report_digest=sha256:1dcbbcabdb0e8b5ef78bcd9282180a1b2af0664a8aaa5c59a33f53df0b69fa2e
+summary_semantic_digest=sha256:bd157f42e7ac364190f7daeff8449607c30172a0429a110ec9839d875f483939
+```
+
+The expected Raw digest equaled the observed Raw digest. The expected
+canonical provider-input digest equaled the observed, staged, and provider
+actual input digests. The report contract verifier, summary projection
+verifier, and materialized authority-chain verifier passed. A second run with
+the same fixed timestamp and exact authority chain produced byte-identical
+report and public summary; both replay artifacts passed the same verifiers.
+Capability probing and provider preprocessing were dispatched. Training,
+generation, prediction, ranking, model-artifact, scaler, checkpoint, and
+training-metrics assertions were all false.
+
+Because the preflight was PASS, the exact bytes that it verified were frozen
+into the existing Registry-bound candidate-freeze contract. The private
+package is:
+
+```text
+package_id=br1-post-merge-freeze-5307dd7-v1
+package_digest=sha256:9ebec7236d0261588ca63abd684da9382bedef940a24c5274e3c9287c3e050e9
+proposal_id=br1-owner-proposal-5307dd7-v1
+proposal_digest=sha256:3644200e5e125b02a5f2daed8c6a1603d58dfcd80ab8b3963904410cbc9e47bc
+status=FROZEN_WAITING_OWNER
+```
+
+The package contains only the exact Raw CSV, source manifest, mapping policy,
+freeze record, and privacy-safe proposal. The package and all contained files
+were replay-verified, schema-verified, bound to the post-merge authority,
+protected against different-byte overwrite, and checked for symlinks. The
+proposal contains counts, reason/mapping diagnostics, all required authority
+identities, no-dispatch assertions, and the explicit claim boundary:
+preflight PASS and candidate freeze are not data-quality approval,
+confirmation-Gate approval, training authorization, or BR1 completion.
+
+No exact-bound trusted owner approval was present. The current decision state
+is `WAITING_OWNER`; this prompt, the preflight PASS, the freeze package, CI,
+and Codex output are not owner approval. No acceptance ID/run, Permission
+authorization, Controller action, review snapshot, Confirmed Dataset, or Gate
+decision was created. `M3H-013` therefore remains `I/T(partial)/— / READY`:
+post-merge preflight authority complete, candidate inputs frozen, waiting for
+the exact-bound owner decision, with no acceptance run and no human Gate
+reached.

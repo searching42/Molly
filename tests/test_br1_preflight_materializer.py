@@ -133,8 +133,10 @@ def _materialize(root: Path, rows: list[dict[str, str]], **kwargs):
         expected_provider_version="0.1.5",
         execution_profile_id=EXECUTION_PROFILE_ID,
         execution_profile_digest=PROFILE_DIGEST,
-        repository_commit=COMMIT,
-        worker_implementation_digest=WORKER_DIGEST,
+        repository_commit=kwargs.get("repository_commit", COMMIT),
+        worker_implementation_digest=kwargs.get(
+            "worker_implementation_digest", WORKER_DIGEST
+        ),
         publication_identity=kwargs.get(
             "publication_identity", "br1-materializer-fixture-publication"
         ),
@@ -191,6 +193,53 @@ def test_authorized_noncanonical_raw_order_has_one_canonical_provider_identity(
     canonical = first.canonical_provider_input_digest
     assert digest_bytes(canonical_provider_input_bytes([_row("r-1", "CCO"), _row("r-2", "CCN")])) == canonical
     assert digest_bytes(canonical_source_dataset_bytes([_row("r-1", "CCO"), _row("r-2", "CCN")])) == first.canonical_source_dataset_digest
+
+
+def test_commit_or_worker_change_rebinds_authority_but_preserves_stable_inputs(
+    tmp_path: Path,
+) -> None:
+    rows = [_row("r-1", "CCO"), _row("r-2", "CCN")]
+    development = _materialize(tmp_path / "development", rows)
+    post_merge = _materialize(
+        tmp_path / "post-merge",
+        rows,
+        repository_commit="c" * 40,
+        worker_implementation_digest="sha256:" + "d" * 64,
+    )
+
+    assert post_merge.raw_dataset_digest == development.raw_dataset_digest
+    assert post_merge.canonical_source_dataset_digest == development.canonical_source_dataset_digest
+    assert post_merge.canonical_provider_input_digest == development.canonical_provider_input_digest
+    assert post_merge.mapping_policy_digest == development.mapping_policy_digest
+    assert post_merge.source_manifest_digest != development.source_manifest_digest
+    assert post_merge.source_materialization_binding_digest != development.source_materialization_binding_digest
+    assert post_merge.source_publication_digest != development.source_publication_digest
+    assert post_merge.registry_digest != development.registry_digest
+    assert post_merge.authority_digest != development.authority_digest
+
+    authority = json.loads(post_merge.authority_path.read_text())
+    assert authority["repository_commit"] == "c" * 40
+    assert authority["worker_implementation_digest"] == "sha256:" + "d" * 64
+
+
+def test_development_authority_is_rejected_for_post_merge_commit(
+    tmp_path: Path,
+) -> None:
+    artifacts = _materialize(tmp_path, [_row("r-1", "CCO")])
+    with pytest.raises(SourceAuthorityMaterializationError):
+        _verify_materialized_chain(
+            raw_path=tmp_path / "raw.csv",
+            source_manifest_path=artifacts.source_manifest_path,
+            mapping_policy_path=artifacts.mapping_policy_path,
+            publication_path=artifacts.source_publication_path,
+            registry_path=artifacts.registry_path,
+            authority_path=artifacts.authority_path,
+            expected_provider_version="0.1.5",
+            execution_profile_id=EXECUTION_PROFILE_ID,
+            execution_profile_digest=PROFILE_DIGEST,
+            repository_commit="c" * 40,
+            worker_implementation_digest=WORKER_DIGEST,
+        )
 
 
 def test_raw_replacement_is_not_hidden_by_reusing_old_authority(tmp_path: Path) -> None:
