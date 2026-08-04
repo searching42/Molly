@@ -26,12 +26,14 @@ from ai4s_agent.schemas import (
     AgentExecutionPlanLLMResponse,
     AgentHarnessControllerAction,
     AgentHarnessControllerAdvanceRequest,
+    AgentHarnessControllerExecution,
     AgentHarnessControllerReceiptOutcome,
     AgentHarnessControllerStartRequest,
     AgentHarnessAuthorityClass,
     AgentHarnessControllerInspectionFact,
     AgentHarnessGateApprovalRequest,
     AgentHarnessRemoteApprovalRequest,
+    AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1,
     AgentPlanAuthorizationRequest,
     AgentRemoteResourceAuthorityRequest,
     AtomicTaskSpec,
@@ -40,6 +42,7 @@ from ai4s_agent.schemas import (
 )
 from ai4s_agent.scientific_agent_authorization import (
     AgentPlanControlStore,
+    ScientificAgentAuthorizationVerificationError,
     ScientificAgentAuthorizationService,
 )
 from ai4s_agent.scientific_agent_harness_controller import (
@@ -197,6 +200,196 @@ def test_source_binding_generated_name_collision_is_resolved_without_order_depen
     assert [item.model_dump(mode="json") for item in first] == [
         item.model_dump(mode="json") for item in reordered
     ]
+
+
+def test_source_binding_rejects_non_identical_duplicate_source_ids() -> None:
+    facts = _br1_source_facts()
+    conflicting = AgentHarnessControllerInspectionFact(
+        name="different_source_fact",
+        authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+        source_id=facts[0].source_id,
+        source_digest="sha256:" + "9" * 64,
+        state="current",
+    )
+
+    with pytest.raises(
+        ScientificAgentHarnessControllerVerificationError,
+        match="source fact IDs are not unique",
+    ):
+        ScientificAgentHarnessController._bindings_from_facts(
+            [*facts, conflicting]
+        )
+
+
+def test_historical_v1_controller_execution_is_readable_but_immutable(
+    tmp_path: Path,
+) -> None:
+    storage, control_store, controller, intent = _local_authority_chain(tmp_path)
+    authorization = controller.authorization_service.verify_authorization(
+        project_id="project-1",
+        authorization_id=intent.authorization_id,
+        verify_current=True,
+    )
+    publication = controller.proposal_store.read(
+        project_id="project-1",
+        proposal_id=intent.proposal_id,
+        verify_current=True,
+    )
+    permission = control_store.read_permission_decision(
+        project_id="project-1",
+        decision_id=intent.permission_decision_id,
+    )
+    legacy_base = controller._build_execution(
+        intent=intent,
+        authorization=authorization,
+        publication=publication,
+        permission=permission,
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        client_request_id="historical-v1-source-request",
+        request_digest="sha256:" + "c" * 64,
+        created_at=_NOW,
+    )
+    legacy_payload = legacy_base.model_dump(mode="json")
+    legacy_payload.update(
+        {
+            "project_id": "project-1",
+            "run_id": "historical-run",
+            "start_intent_id": "historical-start-intent",
+            "controller_execution_id": "",
+            "execution_digest": "",
+            "controller_policy_version": AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1,
+            "controller_policy_digest": "sha256:" + "b" * 64,
+        }
+    )
+    legacy = AgentHarnessControllerExecution.model_validate(legacy_payload)
+
+    with pytest.raises(
+        ScientificAgentAuthorizationVerificationError,
+        match="read-only",
+    ):
+        control_store.publish_harness_controller_execution(legacy)
+
+    # Simulate an already-published v1 artifact without permitting the v1
+    # model to enter the current writer path.
+    control_store._publish_model(
+        project_id=legacy.project_id,
+        kind="harness_controller_execution",
+        artifact_id=legacy.controller_execution_id,
+        model=legacy,
+    )
+    root = control_store._collection_root(
+        project_id=legacy.project_id,
+        kind="harness_controller_execution",
+        create=False,
+    )
+    assert root is not None
+    target = control_store._safe_target(
+        root=root,
+        artifact_id=legacy.controller_execution_id,
+    )
+    legacy_bytes = (target / "controller_execution.json").read_bytes()
+
+    read_back = control_store.read_harness_controller_execution(
+        project_id=legacy.project_id,
+        controller_execution_id=legacy.controller_execution_id,
+    )
+    assert read_back.controller_policy_version == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1
+    assert read_back.execution_digest == legacy.execution_digest
+    assert (target / "controller_execution.json").read_bytes() == legacy_bytes
+
+    listed = control_store.list_harness_controller_executions(project_id="project-1")
+    assert [item.controller_execution_id for item in listed] == [
+        legacy.controller_execution_id
+    ]
+
+    before_decisions = control_store.list_harness_controller_decisions(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    )
+    before_receipts = control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    )
+    before_dispatches = control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    )
+
+    historical = controller.get(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    )
+    assert historical.execution.controller_policy_version == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1
+    assert historical.inspection.next_action == AgentHarnessControllerAction.STOP_TASK_TERMINAL
+    assert all(item.state == "historical" for item in historical.inspection.facts)
+    historical_snapshot = controller.read_execution_agent_snapshot(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+        expected_controller_execution_digest=legacy.execution_digest,
+    )
+    assert historical_snapshot.inspection.inspection_digest == historical.inspection.inspection_digest
+
+    request = AgentHarnessControllerAdvanceRequest(
+        expected_controller_execution_digest=legacy.execution_digest,
+        client_request_id="historical-v1-mutation-1",
+    )
+    for operation in (
+        lambda: controller.advance(
+            project_id="project-1",
+            controller_execution_id=legacy.controller_execution_id,
+            request=request,
+        ),
+        lambda: controller.cancel(
+            project_id="project-1",
+            controller_execution_id=legacy.controller_execution_id,
+            request=request,
+        ),
+        lambda: controller.recover(
+            project_id="project-1",
+            controller_execution_id=legacy.controller_execution_id,
+            request=request,
+        ),
+    ):
+        with pytest.raises(
+            ScientificAgentHarnessControllerVerificationError,
+            match="policy/authority mismatch|read-only",
+        ):
+            operation()
+
+    assert control_store.list_harness_controller_decisions(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    ) == before_decisions
+    assert control_store.list_harness_controller_action_receipts(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    ) == before_receipts
+    assert control_store.list_harness_local_dispatch_receipts(
+        project_id="project-1",
+        controller_execution_id=legacy.controller_execution_id,
+    ) == before_dispatches
+
+    created = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="v2-sibling-create-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    assert created.execution.controller_policy_version == "scientific-agent-harness-controller-policy.v2"
+    assert len(control_store.list_harness_controller_executions(project_id="project-1")) == 2
+    prohibited = {"training", "generation", "prediction", "ranking"}
+    assert not any(
+        any(term in receipt.task_id for term in prohibited)
+        for receipt in control_store.list_harness_local_dispatch_receipts(
+            project_id="project-1",
+            controller_execution_id=legacy.controller_execution_id,
+        )
+    )
 
 
 class _FakeHarnessSpan:

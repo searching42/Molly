@@ -22,6 +22,8 @@ from ai4s_agent.schemas import (
     AgentAuthorizationMode,
     AgentExecutionPlanLLMResponse,
     AgentHarnessControllerStartRequest,
+    AgentHarnessControllerExecution,
+    AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1,
     AgentPlanAuthorizationRequest,
     AgentPlanFeedbackRequest,
     AgentPlanRevisionApplicationReceipt,
@@ -847,6 +849,73 @@ def test_successor_current_controller_isolated_from_terminal_historical_executio
         "current",
         "historical",
     }
+
+
+def test_policy_v1_execution_with_current_proposal_is_historical_only(
+    tmp_path: Path,
+) -> None:
+    (
+        storage,
+        _proposal_store,
+        authorization_service,
+        control_store,
+        controller,
+        service,
+        _proposal,
+    ) = _chain(tmp_path)
+    intent = authorization_service.approve_and_start(
+        project_id="project-1",
+        proposal_id=_proposal.proposal_id,
+        request=AgentPlanAuthorizationRequest(
+            expected_proposal_digest=_proposal.proposal_digest,
+            authorization_mode=AgentAuthorizationMode.STEPWISE,
+            requested_preauthorized_gate_ids=[],
+            confirmed=True,
+            client_request_id="v1-history-authorization-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    ).start_intent
+    current = controller.create(
+        project_id="project-1",
+        start_intent_id=intent.start_intent_id,
+        request=AgentHarnessControllerStartRequest(
+            expected_start_intent_digest=intent.start_intent_digest,
+            client_request_id="v1-history-current-controller-1",
+        ),
+        actor="alice",
+        actor_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+    )
+    legacy_payload = current.execution.model_dump(mode="json")
+    legacy_payload.update(
+        {
+            "controller_execution_id": "",
+            "execution_digest": "",
+            "controller_policy_version": AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1,
+            "controller_policy_digest": "sha256:" + "e" * 64,
+            "client_request_id": "v1-history-legacy-controller-1",
+        }
+    )
+    legacy = AgentHarnessControllerExecution.model_validate(legacy_payload)
+    control_store._publish_model(
+        project_id="project-1",
+        kind="harness_controller_execution",
+        artifact_id=legacy.controller_execution_id,
+        model=legacy,
+    )
+
+    inspected = service.inspect(project_id="project-1", run_id="run-1")
+    assert inspected.controller is not None
+    assert inspected.controller.execution.object_id == current.execution.controller_execution_id
+    historical = [
+        item
+        for item in inspected.source_roster
+        if item.source_kind == "controller_execution"
+        and item.currentness == "historical"
+    ]
+    assert [item.source_id for item in historical] == [
+        legacy.controller_execution_id
+    ]
 
 
 def test_recovery_required_succeeded_stage_never_claims_verified_task_success(

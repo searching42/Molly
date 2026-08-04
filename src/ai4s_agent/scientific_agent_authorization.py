@@ -38,6 +38,7 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerActionReceipt,
     AgentHarnessControllerDecision,
     AgentHarnessControllerExecution,
+    AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2,
     AgentHarnessLocalDispatchReceipt,
     AgentHarnessLocalExecutionPublication,
     AgentPermissionDecision,
@@ -421,6 +422,10 @@ class AgentPlanControlStore:
     def publish_harness_controller_execution(
         self, execution: AgentHarnessControllerExecution
     ) -> AgentHarnessControllerExecution:
+        if execution.controller_policy_version != AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2:
+            raise ScientificAgentAuthorizationVerificationError(
+                "historical Controller execution is read-only and cannot be published"
+            )
         return self._publish_model(
             project_id=execution.project_id,
             kind="harness_controller_execution",

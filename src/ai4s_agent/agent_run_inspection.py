@@ -23,6 +23,7 @@ from ai4s_agent.schemas import (
     AgentRunReplannerInspection,
     AgentRunTaskInspection,
     AgentRunToolCallInspection,
+    AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2,
     _agent_digest,
 )
 from ai4s_agent.scientific_agent_replanner import (
@@ -274,14 +275,19 @@ class AgentRunInspectionService:
             item
             for item in executions
             if item.proposal_id == head.proposal.proposal_id
+            and item.controller_policy_version
+            == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2
         ]
         execution = self._zero_or_one(
             current_executions, "CURRENT_CONTROLLER_EXECUTION"
         )
+        current_execution_ids = {
+            item.controller_execution_id for item in current_executions
+        }
         historical_executions = [
             item
             for item in executions
-            if item.proposal_id != head.proposal.proposal_id
+            if item.controller_execution_id not in current_execution_ids
         ]
         historical_decisions: list[Any] = []
         historical_receipts: list[Any] = []

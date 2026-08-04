@@ -4341,6 +4341,14 @@ class AgentHarnessRemoteExecutionSlotBinding(BaseModel):
         return payload
 
 
+AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1 = (
+    "scientific-agent-harness-controller-policy.v1"
+)
+AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2 = (
+    "scientific-agent-harness-controller-policy.v2"
+)
+
+
 class AgentHarnessControllerExecution(BaseModel):
     """Immutable authority binding for one exact authorized plan execution."""
 
@@ -4384,9 +4392,14 @@ class AgentHarnessControllerExecution(BaseModel):
     task_slots: list[AgentHarnessControllerTaskSlot]
     source_bindings: list[AgentHarnessControllerSourceBinding]
     source_bindings_digest: str
-    controller_policy_version: Literal["scientific-agent-harness-controller-policy.v2"] = (
-        "scientific-agent-harness-controller-policy.v2"
-    )
+    # The outer execution artifact remains v1, but its policy binding has a
+    # version-dispatched read contract.  v1 is retained solely so persisted
+    # historical executions remain inspectable after the controller policy
+    # advances.  New writers enforce the current v2 value at their boundary.
+    controller_policy_version: Literal[
+        AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1,
+        AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2,
+    ] = AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2
     controller_policy_digest: str
     actor: str
     actor_source: str

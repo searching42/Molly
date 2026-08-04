@@ -51,6 +51,7 @@ from ai4s_agent.schemas import (
     AgentPermissionPhase,
     AgentPlanAuthorization,
     RunStatus,
+    AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2,
     _agent_digest,
 )
 from ai4s_agent.scientific_agent_authorization import AgentPlanControlStore
@@ -75,7 +76,7 @@ from ai4s_agent.scientific_agent_plan import (
 )
 
 
-CONTROLLER_POLICY_VERSION = "scientific-agent-harness-controller-policy.v2"
+CONTROLLER_POLICY_VERSION = AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2
 CONTROLLER_REQUEST_VERSION = "agent_harness_controller_request_checkpoint.v1"
 _MAX_REQUEST_BYTES = 4 * 1024 * 1024
 _CONTROLLER_REQUEST_LOCKS: dict[str, threading.RLock] = defaultdict(threading.RLock)
@@ -507,6 +508,82 @@ class ScientificAgentHarnessController:
         self.clock = clock
         self.requests = AgentHarnessControllerStore(control_store=control_store)
 
+    @staticmethod
+    def _is_current_controller_policy(
+        execution: AgentHarnessControllerExecution,
+    ) -> bool:
+        return execution.controller_policy_version == CONTROLLER_POLICY_VERSION
+
+    @classmethod
+    def _require_current_controller_policy(
+        cls,
+        execution: AgentHarnessControllerExecution,
+    ) -> None:
+        if not cls._is_current_controller_policy(execution):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "historical Controller execution has a policy/authority mismatch and is read-only"
+            )
+
+    def _historical_inspection(
+        self,
+        execution: AgentHarnessControllerExecution,
+    ) -> AgentHarnessControllerInspection:
+        """Build a non-authorizing inspection for an immutable legacy execution.
+
+        Historical executions are evidence only.  This projection deliberately
+        avoids re-verifying current plan, input, stage, or Registry authority,
+        and exposes no executable next action beyond a terminal stop marker.
+        """
+
+        facts = [
+            AgentHarnessControllerInspectionFact(
+                name="controller_execution",
+                authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+                source_id=execution.controller_execution_id,
+                source_digest=execution.execution_digest,
+                state="historical",
+                detail="historical Controller execution; read-only evidence",
+            ),
+            AgentHarnessControllerInspectionFact(
+                name="controller_policy",
+                authority_class=AgentHarnessAuthorityClass.OBSERVATIONAL,
+                source_id="controller-policy",
+                source_digest=execution.controller_policy_digest,
+                state="historical",
+                detail="historical Controller policy; current mutation is not permitted",
+            ),
+        ]
+        facts.extend(
+            AgentHarnessControllerInspectionFact(
+                name=binding.name,
+                authority_class=binding.authority_class,
+                source_id=binding.source_id,
+                source_digest=binding.source_digest,
+                state="historical",
+                detail="historical source binding; read-only evidence",
+            )
+            for binding in execution.source_bindings
+        )
+        return AgentHarnessControllerInspection(
+            controller_execution_id=execution.controller_execution_id,
+            controller_execution_digest=execution.execution_digest,
+            status=AgentHarnessControllerStatus.FAILED,
+            next_action=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+            facts=facts,
+            source_roster_digest=_agent_digest(
+                [item.model_dump(mode="json") for item in facts]
+            ),
+            inspected_at=self.clock(),
+        )
+
+    def _read_only_inspection(
+        self,
+        execution: AgentHarnessControllerExecution,
+    ) -> AgentHarnessControllerInspection:
+        if self._is_current_controller_policy(execution):
+            return self._inspect(execution)
+        return self._historical_inspection(execution)
+
     def create(
         self,
         *,
@@ -552,6 +629,7 @@ class ScientificAgentHarnessController:
                     )
                 if existing:
                     execution = existing[0]
+                    self._require_current_controller_policy(execution)
                     if (
                         execution.request_digest != request_digest
                         or execution.client_request_id != request.client_request_id
@@ -662,10 +740,15 @@ class ScientificAgentHarnessController:
                 "phase": "read",
             },
         ) as inspect_span:
-            execution = self.verify_execution(
+            execution = self.control_store.read_harness_controller_execution(
                 project_id=project_id,
                 controller_execution_id=controller_execution_id,
             )
+            if self._is_current_controller_policy(execution):
+                execution = self.verify_execution(
+                    project_id=project_id,
+                    controller_execution_id=controller_execution_id,
+                )
             for key, value in _controller_telemetry_attributes(
                 execution,
                 operation="agent.controller.inspect",
@@ -675,7 +758,7 @@ class ScientificAgentHarnessController:
                 inspect_span.set_attribute(key, value)
             return ControllerAdvanceResult(
                 execution=execution,
-                inspection=self._inspect(execution),
+                inspection=self._read_only_inspection(execution),
             )
 
     def read_execution_agent_snapshot(
@@ -710,10 +793,11 @@ class ScientificAgentHarnessController:
             project_id=project_id,
             controller_execution_id=controller_execution_id,
             expected_execution_digest=expected_controller_execution_digest,
+            allow_historical=True,
         ) as execution:
             yield ControllerAdvanceResult(
                 execution=execution,
-                inspection=self._inspect(execution),
+                inspection=self._read_only_inspection(execution),
                 receipt=self._latest_receipt(execution),
             )
 
@@ -724,6 +808,7 @@ class ScientificAgentHarnessController:
         project_id: str,
         controller_execution_id: str,
         expected_execution_digest: str = "",
+        allow_historical: bool = False,
     ):
         """Pin the execution-wide lock before reading mutable run authority."""
 
@@ -731,10 +816,17 @@ class ScientificAgentHarnessController:
             project_id=project_id,
             controller_execution_id=controller_execution_id,
         ):
-            execution = self.verify_execution(
+            execution = self.control_store.read_harness_controller_execution(
                 project_id=project_id,
                 controller_execution_id=controller_execution_id,
             )
+            if self._is_current_controller_policy(execution):
+                execution = self.verify_execution(
+                    project_id=project_id,
+                    controller_execution_id=controller_execution_id,
+                )
+            elif not allow_historical:
+                self._require_current_controller_policy(execution)
             if (
                 expected_execution_digest
                 and execution.execution_digest != expected_execution_digest
@@ -1024,6 +1116,7 @@ class ScientificAgentHarnessController:
             project_id=project_id,
             controller_execution_id=controller_execution_id,
         )
+        self._require_current_controller_policy(execution)
         try:
             intent = self.authorization_service.verify_start_intent(
                 project_id=project_id,
@@ -1566,6 +1659,7 @@ class ScientificAgentHarnessController:
         return self._inspection(execution, status, slot, AgentHarnessControllerAction.STOP_TASK_TERMINAL, facts)
 
     def _advance_in_session(self, *, execution: Any, session: ControllerRequestSession) -> ControllerAdvanceResult:
+        self._require_current_controller_policy(execution)
         receipt_marker = self.requests.read_marker(session.request_dir / "receipt.json")
         if receipt_marker is not None:
             receipt = self.control_store.read_harness_controller_action_receipt(
@@ -1754,6 +1848,7 @@ class ScientificAgentHarnessController:
         action: AgentHarnessControllerAction,
         require_recovery: bool,
     ) -> ControllerAdvanceResult:
+        self._require_current_controller_policy(execution)
         receipt_marker = self.requests.read_marker(session.request_dir / "receipt.json")
         if receipt_marker is not None:
             receipt = self.control_store.read_harness_controller_action_receipt(
@@ -1985,6 +2080,7 @@ class ScientificAgentHarnessController:
         *,
         reconcile_only: bool = False,
     ) -> AgentHarnessControllerActionReceipt:
+        self._require_current_controller_policy(execution)
         before_stage = self.storage.read_stage_state(execution.project_id, execution.run_id)
         before_registry = self.storage.read_artifact_registry(execution.project_id, execution.run_id)
         slot = execution.task_slots[decision.task_index] if decision.task_index is not None else None

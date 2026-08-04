@@ -80,6 +80,20 @@ execution is immutable after manifest-last publication. Current verification
 re-derives all source material; stale authority fails closed without an
 execution side effect.
 
+### Historical Controller-policy compatibility
+
+The outer `agent_harness_controller_execution.v1` artifact has a
+version-dispatched read contract for both
+`scientific-agent-harness-controller-policy.v1` and
+`scientific-agent-harness-controller-policy.v2`. This preserves exact
+historical v1 bytes, model identity, and execution digest as read-only
+evidence while the current writer emits v2 only. A historical v1 execution is
+never migrated, treated as current authority, advanced, recovered, cancelled,
+or used to create a decision/effect/dispatch. Current mutation verification
+fails closed with a policy/authority mismatch. Historical inspection returns a
+non-authorizing terminal projection and does not rebind current plan, input,
+StageState, or Registry authority.
+
 ## Deterministic action table
 
 One `advance` call evaluates the first incomplete task in RunPlan order. A
