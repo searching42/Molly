@@ -6,6 +6,12 @@ from pathlib import Path
 import pytest
 
 from ai4s_agent.agent_run_inspection import AgentRunInspectionService
+from ai4s_agent.br1_preflight_authority import (
+    ROW_COMPARABLE_VALUE,
+    mapping_binding,
+    mapping_binding_semantic_material,
+    source_to_raw_mapping,
+)
 from ai4s_agent.adapters.structured_dataset_canary import (
     confirm_structured_dataset_canary_adapter,
 )
@@ -116,7 +122,19 @@ def test_prepare_v2_verifier_rejects_resigned_nested_semantic_forgery(
         "temperature_policy": "not_reported",
         "condition_merge_policy": "explicit_single_solvent_filter_no_merge",
         "comparability_policy": "partially_comparable_single_solvent",
+        "row_comparable_value": ROW_COMPARABLE_VALUE,
+        "source_to_raw_mapping": source_to_raw_mapping(),
+        "source_to_raw_mapping_digest": digest_json(source_to_raw_mapping()),
     }
+    provider_binding = mapping_binding("0.1.5")
+    mapping_policy["raw_to_provider_mapping_binding"] = provider_binding
+    mapping_policy["raw_to_provider_mapping_binding_digest"] = digest_json(
+        mapping_binding_semantic_material(provider_binding)
+    )
+    mapping_policy["mapping_binding"] = provider_binding
+    mapping_policy["mapping_binding_digest"] = mapping_policy[
+        "raw_to_provider_mapping_binding_digest"
+    ]
     source_bytes = canonical_json_bytes(source_manifest)
     mapping_bytes = canonical_json_bytes(mapping_policy)
     raw, parsed = build_raw_dataset(
@@ -129,6 +147,7 @@ def test_prepare_v2_verifier_rejects_resigned_nested_semantic_forgery(
         scientific_scope="broader_organic_emitter_plqy",
         scope_downgraded=True,
         comparability_policy="partially_comparable_single_solvent",
+        row_comparable_value=ROW_COMPARABLE_VALUE,
         created_at=NOW,
     )
     review = build_review_snapshot_v2(

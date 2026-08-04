@@ -92,6 +92,7 @@ class StructuredDatasetCanaryService:
         scientific_scope: str | None = None,
         scope_downgraded: bool | None = None,
         comparability_policy: str | None = None,
+        row_comparable_value: str | None = None,
     ) -> dict[str, Any]:
         with self._span("dataset.inspect", project_id, run_id, "inspect"):
             raw_bytes, source_digest = read_regular_file_bound(source, max_bytes=16 * 1024 * 1024)
@@ -105,6 +106,7 @@ class StructuredDatasetCanaryService:
                 scientific_scope=scientific_scope,
                 scope_downgraded=scope_downgraded,
                 comparability_policy=comparability_policy,
+                row_comparable_value=row_comparable_value,
                 created_at=timestamp,
             )
             if raw["dataset_digest"] != "sha256:" + source_digest:

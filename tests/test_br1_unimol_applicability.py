@@ -13,6 +13,9 @@ import pytest
 from jsonschema import Draft202012Validator
 
 import ai4s_agent.br1_unimol_applicability as applicability
+from ai4s_agent.br1_preflight_materializer import (
+    materialize_br1_preflight_authority,
+)
 from ai4s_agent.br1_unimol_applicability import (
     EXECUTION_PROFILE_ID,
     PROVIDER_NAME,
@@ -31,6 +34,10 @@ from ai4s_agent.br1_preflight_authority import (
     canonical_source_dataset_bytes,
     mapping_binding,
     mapping_binding_semantic_material,
+    source_materialization_binding,
+    source_materialization_binding_digest,
+    ROW_COMPARABLE_VALUE,
+    source_to_raw_mapping,
 )
 from ai4s_agent.structured_dataset_confirmation import (
     bind_publication,
@@ -171,7 +178,7 @@ def _row(row_id: str, smiles: str, target: str = "0.5") -> dict[str, str]:
         "temperature": "not_reported",
         "measurement_condition": _condition(),
         "paper_evidence": "paper-evidence",
-        "comparable": "partially_comparable_single_solvent",
+        "comparable": ROW_COMPARABLE_VALUE,
         "paper_id": "paper-1",
     }
 
@@ -199,6 +206,10 @@ def _mapping() -> dict[str, object]:
         "temperature_policy": "not_reported",
         "condition_merge_policy": "explicit_single_solvent_filter_no_merge",
         "comparability_policy": "partially_comparable_single_solvent",
+        "field_mapping": {field: field for field in CSV_COLUMNS},
+        "row_comparable_value": ROW_COMPARABLE_VALUE,
+        "source_to_raw_mapping": source_to_raw_mapping(),
+        "source_to_raw_mapping_digest": digest_json(source_to_raw_mapping()),
     }
 
 
@@ -214,6 +225,32 @@ def _write_inputs(
     mapping_path = tmp_path / "mapping.json"
     raw_bytes = _csv_bytes(rows)
     raw_path.write_bytes(raw_bytes)
+    mapping = _mapping()
+    mapping_execution_binding = mapping_binding("0.1.5")
+    mapping["mapping_binding"] = mapping_execution_binding
+    mapping["mapping_binding_digest"] = digest_json(
+        mapping_binding_semantic_material(mapping_execution_binding)
+    )
+    mapping["raw_to_provider_mapping_binding"] = mapping_execution_binding
+    mapping["raw_to_provider_mapping_binding_digest"] = mapping[
+        "mapping_binding_digest"
+    ]
+    mapping_path.write_bytes(canonical_json_bytes(mapping))
+    mapping_digest = digest_bytes(mapping_path.read_bytes())
+    source_binding = source_materialization_binding(
+        raw_dataset_digest=digest_bytes(raw_bytes),
+        input_row_count=len(rows),
+        column_roster=CSV_COLUMNS,
+        mapping_policy_digest=mapping_digest,
+        mapping_policy_version="br1_raw_dataset_mapping_policy.v1",
+        publication_identity="br1-preflight-fixture-publication",
+        provider_name=PROVIDER_NAME,
+        expected_provider_version="0.1.5",
+        execution_profile_id=EXECUTION_PROFILE_ID,
+        execution_profile_digest=PROFILE_DIGEST,
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+    )
     source = {
         "schema_version": "source_dataset_manifest.v1",
         "dataset_name": "BR1 fixture",
@@ -223,11 +260,13 @@ def _write_inputs(
         "download_date": "2026-08-03",
         "original_file_sha256": "c" * 64,
         "derived_raw_dataset_sha256": derived_digest or digest_bytes(raw_bytes),
+        "materialization_binding": source_binding,
+        "materialization_binding_digest": source_materialization_binding_digest(
+            source_binding
+        ),
     }
     source_path.write_bytes(canonical_json_bytes(source))
-    mapping_path.write_bytes(canonical_json_bytes(_mapping()))
     source_digest = digest_bytes(source_path.read_bytes())
-    mapping_digest = digest_bytes(mapping_path.read_bytes())
     publication = {
         "schema_version": "structured_raw_dataset.v1",
         "dataset_id": "raw-br1-fixture",
@@ -236,10 +275,23 @@ def _write_inputs(
         "status": "candidate_unconfirmed",
         "dataset_digest": digest_bytes(raw_bytes),
         "source_kind": "private",
+        "source_artifact_id": "raw_dataset",
+        "publication_identity": "br1-preflight-fixture-publication",
         "row_count": len(rows),
         "column_roster": list(CSV_COLUMNS),
         "source_dataset_manifest_digest": source_digest,
         "mapping_policy_digest": mapping_digest,
+        "source_materialization_binding_digest": source_materialization_binding_digest(
+            source_binding
+        ),
+        "canonical_source_dataset_digest": digest_bytes(
+            canonical_source_dataset_bytes(rows)
+        ),
+        "canonical_provider_input_digest": digest_bytes(
+            canonical_provider_input_bytes(rows)
+        ),
+        "canonicalization_contract_version": CANONICALIZATION_CONTRACT_VERSION,
+        "mapping_binding_digest": mapping["mapping_binding_digest"],
     }
     publication = bind_publication(
         publication,
@@ -253,16 +305,23 @@ def _write_inputs(
         "artifact_id": "raw_dataset",
         "publication_schema_version": "structured_raw_dataset.v1",
         "publication_digest": publication["raw_publication_digest"],
+        "publication_identity": publication["publication_identity"],
         "raw_dataset_digest": digest_bytes(raw_bytes),
         "source_dataset_manifest_digest": source_digest,
         "mapping_policy_digest": mapping_digest,
         "input_row_count": len(rows),
+        "column_roster": list(CSV_COLUMNS),
+        "source_kind": "private",
+        "source_materialization_binding_digest": source_materialization_binding_digest(
+            source_binding
+        ),
+        "canonicalization_contract_version": CANONICALIZATION_CONTRACT_VERSION,
     }
     registry = dict(registry_material)
     registry["registry_digest"] = digest_json(registry_material)
     registry_path = tmp_path / "source-publication-registry.json"
     registry_path.write_bytes(canonical_json_bytes(registry))
-    binding = mapping_binding("0.1.5")
+    binding = mapping_execution_binding
     authority_material = {
         "schema_version": "br1_preflight_source_authority.v1",
         "authority_contract_version": "br1_preflight_source_authority.v1",
@@ -273,6 +332,13 @@ def _write_inputs(
         "source_dataset_manifest_digest": source_digest,
         "mapping_policy_digest": mapping_digest,
         "mapping_policy_version": "br1_raw_dataset_mapping_policy.v1",
+        "source_materialization_binding": source_binding,
+        "source_materialization_binding_digest": source_materialization_binding_digest(
+            source_binding
+        ),
+        "publication_identity": publication["publication_identity"],
+        "source_kind": "private",
+        "column_roster": list(CSV_COLUMNS),
         "mapping_binding": binding,
         "mapping_binding_digest": digest_json(mapping_binding_semantic_material(binding)),
         "raw_dataset_digest": digest_bytes(raw_bytes),
@@ -288,6 +354,8 @@ def _write_inputs(
         "expected_provider_version": "0.1.5",
         "execution_profile_id": EXECUTION_PROFILE_ID,
         "execution_profile_digest": PROFILE_DIGEST,
+        "repository_commit": COMMIT,
+        "worker_implementation_digest": WORKER_DIGEST,
     }
     authority = dict(authority_material)
     authority["authority_digest"] = digest_json(authority_material)
@@ -338,6 +406,14 @@ def test_all_rows_supported_is_pass_and_validates_both_schemas(tmp_path: Path) -
     assert result.report["supported_row_count"] == 2
     assert result.report["unsupported_row_count"] == 0
     assert result.report["unresolved_row_count"] == 0
+    assert result.report["mapping_diagnostics"] == {
+        "schema_version": "br1_mapping_diagnostics.v1",
+        "checked_row_count": 2,
+        "policy_contract_valid": True,
+        "row_contract_valid": True,
+        "reason_counts": {},
+    }
+    assert result.report["dispatch_assertions"]["provider_preprocessing_dispatched"] is True
     assert result.report["expected_provider_version"] == "0.1.5"
     assert result.public_summary["expected_provider_version"] == "0.1.5"
     assert [item["row_id"] for item in result.report["row_results"]] == ["r-1", "r-2"]
@@ -351,6 +427,150 @@ def test_all_rows_supported_is_pass_and_validates_both_schemas(tmp_path: Path) -
     Draft202012Validator(
         json.loads((schemas / "br1_unimol_applicability_summary.schema.json").read_text())
     ).validate(result.public_summary)
+
+
+def test_mapping_diagnostics_separate_row_literal_from_dataset_scope(
+    tmp_path: Path,
+) -> None:
+    row = _row("r-1", "CCO")
+    row["comparable"] = "partially_comparable_single_solvent"
+    result = _run(tmp_path, [row])
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert result.report["global_reason_codes"] == ["MAPPING_POLICY_INVALID"]
+    assert result.report["mapping_diagnostics"]["reason_counts"] == {
+        "ROW_COMPARABLE_VALUE_MISMATCH": 1
+    }
+    assert result.report["reason_counts"]["ROW_COMPARABLE_VALUE_MISMATCH"] == 1
+    assert result.report["dispatch_assertions"]["provider_preprocessing_dispatched"] is False
+    assert "r-1" not in json.dumps(result.report["mapping_diagnostics"])
+    assert "CCO" not in json.dumps(result.report["mapping_diagnostics"])
+
+
+def test_legacy_source_mapping_materializer_to_preflight_preserves_two_layers(
+    tmp_path: Path,
+) -> None:
+    row = _row("r-1", "CCO")
+    row["host"] = "not_applicable"
+    row["doping_ratio"] = "not_applicable"
+    raw_path = tmp_path / "raw.csv"
+    raw_path.write_bytes(_csv_bytes([row]))
+    legacy_source_path = tmp_path / "legacy-source.json"
+    legacy_source_path.write_bytes(
+        canonical_json_bytes(
+            {
+                "schema_version": "source_dataset_manifest.v1",
+                "dataset_name": "BR1 fixture",
+                "dataset_version": "3",
+                "dataset_doi": "10.1000/example",
+                "license": "CC BY 4.0",
+                "download_date": "2026-08-03",
+                "source_file_sha256": "sha256:" + "c" * 64,
+            }
+        )
+    )
+    legacy_mapping_path = tmp_path / "legacy-mapping.json"
+    legacy_mapping_path.write_bytes(
+        canonical_json_bytes(
+            {
+                "schema_version": "br1_raw_dataset_mapping_policy.v1",
+                "field_mapping": source_to_raw_mapping()["field_mapping"],
+                "source_solvent_smiles": "ClCCl",
+                "unimol_provider_version": "0.1.5",
+                "unimol_model_name": "unimolv1",
+            }
+        )
+    )
+    output_paths = {
+        "output_source_manifest": tmp_path / "source-manifest.json",
+        "output_mapping_policy": tmp_path / "mapping-policy.json",
+        "output_source_publication": tmp_path / "source-publication.json",
+        "output_registry": tmp_path / "registry.json",
+        "output_authority": tmp_path / "authority.json",
+    }
+    artifacts = materialize_br1_preflight_authority(
+        raw_path,
+        legacy_source_path,
+        legacy_mapping_path,
+        **output_paths,
+        expected_provider_version="0.1.5",
+        execution_profile_id=EXECUTION_PROFILE_ID,
+        execution_profile_digest=PROFILE_DIGEST,
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        publication_identity="br1-materializer-e2e-publication",
+        registry_id="br1-materializer-e2e-registry",
+    )
+    provider = FakeProvider()
+    result = run_br1_unimol_applicability_preflight(
+        raw_path,
+        artifacts.source_manifest_path,
+        artifacts.mapping_policy_path,
+        source_authority=artifacts.authority_path,
+        source_publication=artifacts.source_publication_path,
+        source_publication_registry=artifacts.registry_path,
+        provider=provider,
+        expected_provider_version="0.1.5",
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
+        created_at=NOW,
+    )
+
+    assert result.report["overall_status"] == "PASS"
+    assert result.report["mapping_diagnostics"]["reason_counts"] == {}
+    assert result.report["dispatch_assertions"]["provider_preprocessing_dispatched"] is True
+    assert provider.calls == ["CCO"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        (
+            "measurement_condition",
+            json.dumps(
+                {"phase": "film", "solvent_smiles": "ClCCl", "temperature": "not_reported"},
+                separators=(",", ":"),
+            ),
+            "MEASUREMENT_CONDITION_PHASE_MISMATCH",
+        ),
+        (
+            "measurement_condition",
+            json.dumps(
+                {"phase": "solution", "solvent_smiles": "O", "temperature": "not_reported"},
+                separators=(",", ":"),
+            ),
+            "SOLVENT_MISMATCH",
+        ),
+        ("temperature", "298 K", "TEMPERATURE_POLICY_MISMATCH"),
+        ("material_role", "host", "MATERIAL_ROLE_MISMATCH"),
+        ("emission_mechanism", "TADF", "EMISSION_MECHANISM_MISMATCH"),
+        ("medium", "film", "MEDIUM_MISMATCH"),
+    ],
+)
+def test_mapping_diagnostics_classify_single_row_contract_mismatch(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    reason: str,
+) -> None:
+    row = _row("r-1", "CCO")
+    row[field] = value
+    result = _run(tmp_path, [row])
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert result.report["mapping_diagnostics"]["reason_counts"] == {reason: 1}
+
+
+def test_mapping_diagnostics_count_all_rows_with_duplicate_standard_inchikey(
+    tmp_path: Path,
+) -> None:
+    result = _run(tmp_path, [_row("r-1", "CCO"), _row("r-2", "C(C)O")])
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert result.report["mapping_diagnostics"]["reason_counts"] == {
+        "DUPLICATE_STANDARD_INCHIKEY": 2
+    }
 
 
 @pytest.mark.parametrize(
@@ -444,6 +664,29 @@ def test_authority_mapping_binding_is_exact_and_fail_closed(tmp_path: Path) -> N
         worker_implementation_digest=WORKER_DIGEST,
         execution_profile_digest=PROFILE_DIGEST,
         expected_provider_version="0.1.5",
+        created_at=NOW,
+    )
+
+    assert result.report["overall_status"] == "BLOCKED"
+    assert "MAPPING_POLICY_INVALID" in result.report["global_reason_codes"]
+
+
+def test_preflight_requires_exact_canonical_field_mapping(tmp_path: Path) -> None:
+    rows = [_row("r1", "CCO")]
+    paths = _write_inputs(tmp_path, rows)
+    mapping = json.loads(paths[2].read_text(encoding="utf-8"))
+    mapping.pop("field_mapping")
+    paths[2].write_bytes(canonical_json_bytes(mapping))
+    provider = FakeProvider()
+
+    result = run_br1_unimol_applicability_preflight(
+        *paths,
+        **_authority_kwargs(paths),
+        provider=provider,
+        expected_provider_version="0.1.5",
+        repository_commit=COMMIT,
+        worker_implementation_digest=WORKER_DIGEST,
+        execution_profile_digest=PROFILE_DIGEST,
         created_at=NOW,
     )
 

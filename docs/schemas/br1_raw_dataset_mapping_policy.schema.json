@@ -4,12 +4,115 @@
   "title": "BR1 Raw Dataset Mapping Policy v1",
   "type": "object",
   "additionalProperties": false,
+  "dependentRequired": {
+    "mapping_binding": ["mapping_binding_digest"],
+    "mapping_binding_digest": ["mapping_binding"]
+  },
+  "$defs": {
+    "source_to_raw_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "field_mapping", "fixed_values", "conversion_rules"],
+      "properties": {
+        "schema_version": {"const": "br1_source_to_raw_mapping.v1"},
+        "field_mapping": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "comparable", "doping_ratio", "emission_mechanism", "host",
+            "material_role", "measurement_condition", "medium", "paper_evidence",
+            "paper_id", "row_id", "smiles", "target_value", "temperature"
+          ],
+          "properties": {
+            "comparable": {"const": "fixed:true_within_frozen_single_solvent_scope"},
+            "doping_ratio": {"const": "fixed:not_applicable"},
+            "emission_mechanism": {"const": "fixed:unknown"},
+            "host": {"const": "fixed:not_applicable"},
+            "material_role": {"const": "fixed:emitter"},
+            "measurement_condition": {"const": "fixed:canonical_json"},
+            "medium": {"const": "fixed:solution"},
+            "paper_evidence": {"const": "Reference DOI + fixed paper evidence level"},
+            "paper_id": {"const": "normalized Reference DOI"},
+            "row_id": {"const": "d4c-v3-{Tag}"},
+            "smiles": {"const": "Chromophore"},
+            "target_value": {"const": "Quantum yield"},
+            "temperature": {"const": "fixed:not_reported"}
+          }
+        },
+        "fixed_values": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "comparable", "doping_ratio", "emission_mechanism", "host",
+            "material_role", "medium", "temperature"
+          ],
+          "properties": {
+            "comparable": {"const": "true_within_frozen_single_solvent_scope"},
+            "doping_ratio": {"const": "not_applicable"},
+            "emission_mechanism": {"const": "unknown"},
+            "host": {"const": "not_applicable"},
+            "material_role": {"const": "emitter"},
+            "medium": {"const": "solution"},
+            "temperature": {"const": "not_reported"}
+          }
+        },
+        "conversion_rules": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "measurement_condition", "paper_evidence", "paper_id", "row_id",
+            "smiles", "target_value"
+          ],
+          "properties": {
+            "measurement_condition": {"const": "canonical_json"},
+            "paper_evidence": {"const": "reference_doi_plus_fixed_paper_evidence_level"},
+            "paper_id": {"const": "normalized_reference_doi"},
+            "row_id": {"const": "d4c-v3_tag_template"},
+            "smiles": {"const": "source_chromophore_as_smiles"},
+            "target_value": {"const": "quantum_yield_to_fraction"}
+          }
+        }
+      }
+    },
+    "mapping_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "mapping_policy_schema_version", "source_schema_version",
+        "provider_name", "expected_provider_version", "execution_profile_id",
+        "molecule_representation_field", "target_field", "row_identity_field",
+        "condition_context_fields", "required_source_columns", "missing_value_policy",
+        "filter_policy", "duplicate_row_policy", "canonical_row_order", "output_columns"
+      ],
+      "properties": {
+        "schema_version": {"const": "br1_preflight_mapping_binding.v1"},
+        "mapping_policy_schema_version": {"const": "br1_raw_dataset_mapping_policy.v1"},
+        "source_schema_version": {"const": "structured_raw_dataset.v1"},
+        "provider_name": {"const": "unimol-tools"},
+        "expected_provider_version": {"type": "string", "minLength": 1},
+        "execution_profile_id": {"const": "unimol-train-br1-v2"},
+        "molecule_representation_field": {"const": "smiles"},
+        "target_field": {"const": "target_value"},
+        "row_identity_field": {"const": "row_id"},
+        "condition_context_fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "required_source_columns": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "missing_value_policy": {"const": "reject"},
+        "filter_policy": {"const": "no_implicit_filter"},
+        "duplicate_row_policy": {"const": "reject_duplicate_standard_inchikey"},
+        "canonical_row_order": {"const": "row_id_ascending"},
+        "output_columns": {"const": ["smiles", "target_value"]}
+      }
+    }
+  },
   "required": [
     "schema_version", "target_property", "scientific_scope",
     "scope_downgraded", "source_solvent_smiles", "target_unit",
     "identity_key", "duplicate_tie_break", "material_role",
     "emission_mechanism", "temperature_policy", "condition_merge_policy",
-    "comparability_policy"
+    "comparability_policy", "row_comparable_value",
+    "source_to_raw_mapping", "source_to_raw_mapping_digest",
+    "raw_to_provider_mapping_binding", "raw_to_provider_mapping_binding_digest",
+    "mapping_binding", "mapping_binding_digest"
   ],
   "properties": {
     "schema_version": {"const": "br1_raw_dataset_mapping_policy.v1"},
@@ -24,6 +127,38 @@
     "emission_mechanism": {"const": "unknown"},
     "temperature_policy": {"type": "string", "minLength": 1},
     "condition_merge_policy": {"const": "explicit_single_solvent_filter_no_merge"},
-    "comparability_policy": {"const": "partially_comparable_single_solvent"}
+    "comparability_policy": {"const": "partially_comparable_single_solvent"},
+    "row_comparable_value": {"const": "true_within_frozen_single_solvent_scope"},
+    "source_to_raw_mapping": {"$ref": "#/$defs/source_to_raw_mapping"},
+    "source_to_raw_mapping_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "raw_to_provider_mapping_binding": {"$ref": "#/$defs/mapping_binding"},
+    "raw_to_provider_mapping_binding_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "field_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "row_id", "smiles", "target_value", "material_role",
+        "emission_mechanism", "medium", "host", "doping_ratio",
+        "temperature", "measurement_condition", "paper_evidence",
+        "comparable", "paper_id"
+      ],
+      "properties": {
+        "row_id": {"const": "row_id"},
+        "smiles": {"const": "smiles"},
+        "target_value": {"const": "target_value"},
+        "material_role": {"const": "material_role"},
+        "emission_mechanism": {"const": "emission_mechanism"},
+        "medium": {"const": "medium"},
+        "host": {"const": "host"},
+        "doping_ratio": {"const": "doping_ratio"},
+        "temperature": {"const": "temperature"},
+        "measurement_condition": {"const": "measurement_condition"},
+        "paper_evidence": {"const": "paper_evidence"},
+        "comparable": {"const": "comparable"},
+        "paper_id": {"const": "paper_id"}
+      }
+    },
+    "mapping_binding": {"$ref": "#/$defs/mapping_binding"},
+    "mapping_binding_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
   }
 }

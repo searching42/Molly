@@ -6,6 +6,37 @@
   "additionalProperties": false,
   "$defs": {
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source_materialization_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "source_artifact_id", "source_kind",
+        "raw_dataset_digest", "input_row_count", "column_roster",
+        "mapping_policy_digest", "mapping_policy_version",
+        "publication_identity", "canonicalization_contract_version",
+        "provider_name", "expected_provider_version", "execution_profile_id",
+        "execution_profile_digest", "repository_commit",
+        "worker_implementation_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "br1_source_manifest_materialization.v1"},
+        "source_artifact_id": {"const": "raw_dataset"},
+        "source_kind": {"const": "private"},
+        "raw_dataset_digest": {"$ref": "#/$defs/digest"},
+        "input_row_count": {"type": "integer", "minimum": 1},
+        "column_roster": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "mapping_policy_digest": {"$ref": "#/$defs/digest"},
+        "mapping_policy_version": {"const": "br1_raw_dataset_mapping_policy.v1"},
+        "publication_identity": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,95}$"},
+        "canonicalization_contract_version": {"const": "br1_provider_input_canonicalization.v1"},
+        "provider_name": {"const": "unimol-tools"},
+        "expected_provider_version": {"type": "string", "minLength": 1},
+        "execution_profile_id": {"const": "unimol-train-br1-v2"},
+        "execution_profile_digest": {"$ref": "#/$defs/digest"},
+        "repository_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "worker_implementation_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
     "mapping_binding": {
       "type": "object",
       "additionalProperties": false,
@@ -57,6 +88,11 @@
     "source_dataset_manifest_digest",
     "mapping_policy_digest",
     "mapping_policy_version",
+    "source_materialization_binding",
+    "source_materialization_binding_digest",
+    "publication_identity",
+    "source_kind",
+    "column_roster",
     "mapping_binding",
     "mapping_binding_digest",
     "raw_dataset_digest",
@@ -68,6 +104,8 @@
     "expected_provider_version",
     "execution_profile_id",
     "execution_profile_digest",
+    "repository_commit",
+    "worker_implementation_digest",
     "authority_digest"
   ],
   "properties": {
@@ -80,6 +118,11 @@
     "source_dataset_manifest_digest": {"$ref": "#/$defs/digest"},
     "mapping_policy_digest": {"$ref": "#/$defs/digest"},
     "mapping_policy_version": {"const": "br1_raw_dataset_mapping_policy.v1"},
+    "source_materialization_binding": {"$ref": "#/$defs/source_materialization_binding"},
+    "source_materialization_binding_digest": {"$ref": "#/$defs/digest"},
+    "publication_identity": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,95}$"},
+    "source_kind": {"const": "private"},
+    "column_roster": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
     "mapping_binding": {"$ref": "#/$defs/mapping_binding"},
     "mapping_binding_digest": {"$ref": "#/$defs/digest"},
     "raw_dataset_digest": {"$ref": "#/$defs/digest"},
@@ -91,6 +134,8 @@
     "expected_provider_version": {"type": "string", "minLength": 1},
     "execution_profile_id": {"const": "unimol-train-br1-v2"},
     "execution_profile_digest": {"$ref": "#/$defs/digest"},
+    "repository_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "worker_implementation_digest": {"$ref": "#/$defs/digest"},
     "authority_digest": {"$ref": "#/$defs/digest"}
   }
 }
