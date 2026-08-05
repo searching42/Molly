@@ -26,6 +26,7 @@ from ai4s_agent.domains.oled_mineru_semantic_mapping import (
     OledSchemaCandidate,
     OledSchemaCandidateType,
 )
+from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.harness_tracing import _validate_attribute
 from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.planner import br2_real_tool_observability_smoke_task_registry_v1
@@ -34,6 +35,7 @@ from ai4s_agent.scientific_agent_plan import (
     build_scientific_tool_catalog,
 )
 from ai4s_agent.schemas import ParsedDocument, ParsedDocumentElement, ParsedTable
+from ai4s_agent.storage import ProjectStorage
 
 
 def _parsed_document() -> ParsedDocument:
@@ -164,6 +166,31 @@ def test_br2_closed_option_compilers_are_registered_and_fail_closed() -> None:
         assert compiler.compile(tool=tool, planner_options={}) == {}
         with pytest.raises(ValueError, match="options rejected by the server schema|BR2 closed task options"):
             compiler.compile(tool=tool, planner_options={"unexpected": True})
+
+
+def test_br2_parse_bridge_precedes_phase3_payload_compatibility(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path / "storage")
+    source = tmp_path / "approved.pdf"
+    source.write_bytes(b"%PDF-br2-payload-contract")
+    run_id = "run-br2-phase3-payload-contract"
+    run_dir = storage.run_dir("project-br2-contract", run_id)
+    executor = RunPlanExecutor(
+        storage=storage,
+        registry=br2_real_tool_observability_smoke_task_registry_v1(),
+    )
+
+    payload = executor._payload_for(
+        "parse_document",
+        run_id=run_id,
+        run_dir=run_dir,
+        artifact_paths={"pdf_corpus": str(source)},
+        options={},
+    )
+
+    assert payload["output_root"] == str(run_dir / "parse_document")
+    assert payload["input_pdf_path"] == str(source.resolve())
+    assert "output_dir" not in payload
+    assert "input_pdf" not in payload
 
 
 def test_mineru_parse_bridge_publishes_fresh_contract_outputs(

@@ -153,6 +153,17 @@ def install_phase3_executor_support() -> None:
                 approved_gates=approved_gates,
                 options=options,
             )
+        if _br2_parse_bridge_selected(self, task_id):
+            return original_payload_for(
+                self,
+                task_id,
+                run_id=run_id,
+                run_dir=run_dir,
+                artifact_paths=artifact_paths,
+                actor=actor,
+                approved_gates=approved_gates,
+                options=options,
+            )
         if task_id in _PHASE3_OUTPUT_DIRS:
             return _phase3_payload_for(
                 self,
@@ -201,6 +212,18 @@ def install_phase3_executor_support() -> None:
                 artifact_paths=artifact_paths,
                 payload=payload,
             )
+        if _br2_parse_bridge_selected(self, task_id):
+            return original_collect_artifacts(
+                self,
+                project_id=project_id,
+                run_id=run_id,
+                run_dir=run_dir,
+                task_id=task_id,
+                result=result,
+                result_path=result_path,
+                artifact_paths=artifact_paths,
+                payload=payload,
+            )
         if task_id in _PHASE3_OUTPUT_DIRS:
             _collect_phase3_artifacts(
                 self,
@@ -228,6 +251,20 @@ def install_phase3_executor_support() -> None:
     payload_for_with_phase3._phase3_payload_support = True  # type: ignore[attr-defined]
     RunPlanExecutor._payload_for = payload_for_with_phase3  # type: ignore[method-assign]
     RunPlanExecutor._collect_artifacts = collect_artifacts_with_phase3  # type: ignore[method-assign]
+
+
+def _br2_parse_bridge_selected(executor: Any, task_id: str) -> bool:
+    """Let the registered BR2 parse adapter win over Phase-3 compatibility."""
+
+    if task_id != "parse_document":
+        return False
+    try:
+        spec = executor.registry.get(task_id)
+    except (AttributeError, ValueError):
+        return False
+    return str(getattr(spec, "default_adapter", "") or "") == (
+        "parse_document_mineru_bridge_adapter"
+    )
 
 
 def _phase3_payload_for(
