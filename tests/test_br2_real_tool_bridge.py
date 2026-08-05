@@ -29,6 +29,10 @@ from ai4s_agent.domains.oled_mineru_semantic_mapping import (
 from ai4s_agent.harness_tracing import _validate_attribute
 from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.planner import br2_real_tool_observability_smoke_task_registry_v1
+from ai4s_agent.scientific_agent_plan import (
+    PlannerOptionCompiler,
+    build_scientific_tool_catalog,
+)
 from ai4s_agent.schemas import ParsedDocument, ParsedDocumentElement, ParsedTable
 
 
@@ -143,6 +147,23 @@ def test_br2_registry_is_narrow_and_reuses_existing_authority() -> None:
     assert registry.get("await_oled_candidate_confirmation").gates == [
         "gate_3_train_config"
     ]
+
+
+def test_br2_closed_option_compilers_are_registered_and_fail_closed() -> None:
+    registry = br2_real_tool_observability_smoke_task_registry_v1()
+    catalog = build_scientific_tool_catalog(registry)
+    tools = {item.task_id: item for item in catalog.tools}
+    compiler = PlannerOptionCompiler()
+    for task_id in {
+        "extract_oled_evidence",
+        "map_oled_contextual_semantics",
+        "prepare_oled_candidate_raw_dataset",
+        "await_oled_candidate_confirmation",
+    }:
+        tool = tools[task_id]
+        assert compiler.compile(tool=tool, planner_options={}) == {}
+        with pytest.raises(ValueError, match="options rejected by the server schema|BR2 closed task options"):
+            compiler.compile(tool=tool, planner_options={"unexpected": True})
 
 
 def test_mineru_parse_bridge_publishes_fresh_contract_outputs(

@@ -1034,6 +1034,10 @@ class PlannerOptionCompiler:
             "scientific-planner-option-train-model.v1",
             "scientific-planner-option-generate-candidates.v1",
             "scientific-planner-option-filter-rank.v1",
+            "br2-oled-evidence-options.v1",
+            "br2-oled-contextual-mapping-options.v1",
+            "br2-oled-candidate-package-options.v1",
+            "br2-oled-confirmation-gate-options.v1",
         }
     )
 
@@ -1130,6 +1134,17 @@ class PlannerOptionCompiler:
             "scientific-planner-option-identity.v1",
         }:
             return options
+        if compiler in {
+            "br2-oled-evidence-options.v1",
+            "br2-oled-contextual-mapping-options.v1",
+            "br2-oled-candidate-package-options.v1",
+            "br2-oled-confirmation-gate-options.v1",
+        }:
+            if options:
+                raise ScientificAgentPlanError(
+                    f"BR2 closed task options must be empty: {tool.tool_id}"
+                )
+            return {}
         if compiler == "scientific-planner-option-clean-dataset.v1":
             return {
                 "drop_empty_target_rows": bool(options.get("drop_empty_target_rows", False)),
