@@ -64,6 +64,12 @@ from ai4s_agent.adapters.oled_bounded_discovery_controller import (
     execute_oled_bounded_discovery_controller_adapter,
 )
 from ai4s_agent.adapters.runtime import AdapterRuntimeError
+from ai4s_agent.adapters.br2_real_tool_bridge import (
+    await_oled_candidate_confirmation_adapter,
+    extract_oled_evidence_bridge_adapter,
+    map_oled_contextual_semantics_bridge_adapter,
+    prepare_oled_candidate_raw_dataset_bridge_adapter,
+)
 from ai4s_agent.adapters.structured_dataset_canary import (
     confirm_structured_dataset_canary_adapter,
     evaluate_private_structured_dataset_canary_v1_adapter,
@@ -109,6 +115,10 @@ def parse_document_grobid_adapter(payload: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "AdapterRuntimeError",
+    "extract_oled_evidence_bridge_adapter",
+    "map_oled_contextual_semantics_bridge_adapter",
+    "prepare_oled_candidate_raw_dataset_bridge_adapter",
+    "await_oled_candidate_confirmation_adapter",
     "legacy_full_flow_adapter",
     "parse_task_adapter",
     "inspect_dataset_service",

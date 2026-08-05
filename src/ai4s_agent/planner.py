@@ -1803,6 +1803,237 @@ def private_structured_dataset_real_tool_task_registry_v3() -> AtomicTaskRegistr
     return AtomicTaskRegistry([*retained, *tasks])
 
 
+def br2_real_tool_observability_smoke_task_registry_v1() -> AtomicTaskRegistry:
+    """Build the narrow BR2 real-tool smoke catalog.
+
+    This is a server-owned projection of the existing Planner/Permission/
+    Authorization/Controller/Executor authority.  It deliberately exposes no
+    training, generation, prediction, ranking, or confirmation task.
+    """
+
+    parse_document = AtomicTaskRegistry().get("parse_document")
+    trust = {
+        "registered_intermediate": ["registered_intermediate", "verified_output"],
+        "content_bound_input": ["content_bound_input"],
+    }
+    extraction = AtomicTaskSpec(
+        task_id="extract_oled_evidence",
+        required_artifacts=["parsed_document"],
+        output_artifacts=[
+            "oled_mineru_candidates",
+            "oled_semantic_mapping_packets",
+            "oled_deterministic_schema_candidates",
+            "oled_extraction_report",
+            "oled_llm_context_request",
+        ],
+        risk_level=RiskLevel.LOW,
+        default_adapter="extract_oled_evidence_bridge_adapter",
+        depends_on=["parse_document"],
+        scientific_tool_id="extract_oled_evidence",
+        label="Extract deterministic OLED evidence",
+        description=(
+            "Extract evidence-bound OLED MinerU candidates and deterministic semantic "
+            "mapping packets from the registered ParsedDocument."
+        ),
+        effect_class="derive_local",
+        required_permissions=["read_content_bound_input", "derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="br2-oled-evidence-options.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        optional_input_artifacts=["parsed_document_markdown"],
+        input_artifact_alternatives=[],
+        accepted_input_trust_classes_by_artifact={
+            "parsed_document": trust["registered_intermediate"],
+            "parsed_document_markdown": trust["registered_intermediate"],
+        },
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="br2_oled_evidence_contract.v1",
+        planner_visible=True,
+    )
+    contextual_mapping = AtomicTaskSpec(
+        task_id="map_oled_contextual_semantics",
+        required_artifacts=[
+            "parsed_document",
+            "oled_mineru_candidates",
+            "oled_semantic_mapping_packets",
+            "oled_deterministic_schema_candidates",
+            "oled_extraction_report",
+            "oled_llm_context_request",
+            "external_llm_content_authorization",
+        ],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
+        output_artifacts=[
+            "oled_contextual_mapping_result",
+            "oled_ontology_extension_proposals",
+            "oled_llm_invocation_summary",
+        ],
+        risk_level=RiskLevel.MEDIUM,
+        default_adapter="map_oled_contextual_semantics_bridge_adapter",
+        depends_on=["extract_oled_evidence"],
+        scientific_tool_id="map_oled_contextual_semantics",
+        label="Map OLED semantics with contextual LLM",
+        description=(
+            "Send only authorized ParsedDocument text, tables, and evidence packets "
+            "to the configured contextual provider and publish review-only proposals."
+        ),
+        effect_class="external_io",
+        required_permissions=["external_document_processing", "derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="br2-oled-contextual-mapping-options.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            "parsed_document": trust["registered_intermediate"],
+            "oled_mineru_candidates": trust["registered_intermediate"],
+            "oled_semantic_mapping_packets": trust["registered_intermediate"],
+            "oled_deterministic_schema_candidates": trust["registered_intermediate"],
+            "oled_extraction_report": trust["registered_intermediate"],
+            "oled_llm_context_request": trust["registered_intermediate"],
+            "external_llm_content_authorization": trust["content_bound_input"],
+        },
+        budget_dimensions=["max_runtime_sec"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="br2_oled_contextual_mapping_contract.v1",
+        planner_visible=True,
+    )
+    candidate_dataset = AtomicTaskSpec(
+        task_id="prepare_oled_candidate_raw_dataset",
+        required_artifacts=[
+            "parsed_document",
+            "oled_mineru_candidates",
+            "oled_deterministic_schema_candidates",
+            "oled_llm_context_request",
+            "oled_contextual_mapping_result",
+        ],
+        input_artifact_alternatives=[],
+        output_artifacts=[
+            "candidate_raw_dataset",
+            "candidate_raw_dataset_csv",
+            "candidate_raw_dataset_summary",
+            "evidence_manifest",
+            "review_snapshot",
+        ],
+        risk_level=RiskLevel.LOW,
+        default_adapter="prepare_oled_candidate_raw_dataset_bridge_adapter",
+        depends_on=["map_oled_contextual_semantics"],
+        scientific_tool_id="prepare_oled_candidate_raw_dataset",
+        label="Prepare OLED candidate raw dataset",
+        description=(
+            "Publish non-empty evidence-bound candidate raw JSON/CSV and a review "
+            "snapshot without accepting LLM proposals."
+        ),
+        effect_class="derive_local",
+        required_permissions=["derive_project_artifact"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="br2-oled-candidate-package-options.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        optional_input_artifacts=[
+            "oled_semantic_mapping_packets",
+            "oled_extraction_report",
+            "oled_ontology_extension_proposals",
+            "oled_llm_invocation_summary",
+        ],
+        accepted_input_trust_classes_by_artifact={
+            artifact_id: trust["registered_intermediate"]
+            for artifact_id in (
+                "parsed_document",
+                "oled_mineru_candidates",
+                "oled_deterministic_schema_candidates",
+                "oled_llm_context_request",
+                "oled_contextual_mapping_result",
+                "oled_semantic_mapping_packets",
+                "oled_extraction_report",
+                "oled_ontology_extension_proposals",
+                "oled_llm_invocation_summary",
+            )
+        },
+        budget_dimensions=["max_records"],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="br2_oled_candidate_raw_dataset_contract.v1",
+        planner_visible=True,
+    )
+    confirmation_gate = AtomicTaskSpec(
+        task_id="await_oled_candidate_confirmation",
+        required_artifacts=[
+            "candidate_raw_dataset",
+            "candidate_raw_dataset_summary",
+            "evidence_manifest",
+            "review_snapshot",
+        ],
+        optional_input_artifacts=[],
+        input_artifact_alternatives=[],
+        output_artifacts=[],
+        risk_level=RiskLevel.HIGH,
+        gates=[GateName.TRAIN_CONFIG.value],
+        default_adapter="await_oled_candidate_confirmation_adapter",
+        depends_on=["prepare_oled_candidate_raw_dataset"],
+        scientific_tool_id="await_oled_candidate_confirmation",
+        label="Await human confirmation of OLED candidates",
+        description=(
+            "Stop at the existing data-review confirmation Gate; never auto-approve, "
+            "create a Confirmed Dataset, or dispatch downstream science."
+        ),
+        effect_class="scientific_confirm",
+        required_permissions=["scientific_dataset_confirmation"],
+        option_schema=_closed_option_schema(),
+        default_planner_options={},
+        backend_default_planner_options={},
+        review_required_option_ids=[],
+        option_compiler_version="br2-oled-confirmation-gate-options.v1",
+        logical_profile_requirements=[],
+        backend_profile_requirements={},
+        execution_route="local_executor",
+        remote_task_type=None,
+        backend_execution_routes={},
+        backend_remote_task_types={},
+        accepted_input_trust_classes_by_artifact={
+            artifact_id: trust["registered_intermediate"]
+            for artifact_id in (
+                "candidate_raw_dataset",
+                "candidate_raw_dataset_summary",
+                "evidence_manifest",
+                "review_snapshot",
+            )
+        },
+        budget_dimensions=[],
+        supports_plan_preapproval=False,
+        idempotency_policy="server_checked",
+        verification_policy="br2_oled_waiting_user_gate.v1",
+        planner_visible=True,
+    )
+    return AtomicTaskRegistry(
+        [parse_document, extraction, contextual_mapping, candidate_dataset, confirmation_gate]
+    )
+
+
 def build_plan(run_id: str, prompt: str) -> PlanModel:
     steps = [
         PlanStep(

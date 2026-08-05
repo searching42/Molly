@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import threading
 import uuid
+import os
+import re
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
@@ -38,6 +40,13 @@ _LANGSMITH_LLM_SPANS = frozenset(
 )
 _MAX_EVENTS = 32
 _LANGSMITH_PROJECT_NAME = "molly-scientific-agent-harness"
+
+
+def _configured_project_name() -> str:
+    value = str(os.environ.get("LANGSMITH_PROJECT") or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value):
+        return value
+    return _LANGSMITH_PROJECT_NAME
 
 
 def _langsmith_safe_metadata(value: dict[str, Any]) -> dict[str, Any]:
@@ -112,11 +121,13 @@ class _LangSmithSpanContext(AbstractContextManager[HarnessSpan]):
         attributes: dict[str, str | int | bool],
         mode: str,
         health: HarnessTelemetryHealth,
+        project_name: str,
     ) -> None:
         self.client = client
         self.name = name
         self.mode = mode
         self.health = health
+        self.project_name = project_name
         self.span = _LangSmithSpan(attributes=attributes)
         self.run_id: uuid.UUID | None = None
 
@@ -126,7 +137,7 @@ class _LangSmithSpanContext(AbstractContextManager[HarnessSpan]):
             self.client.create_run(
                 id=run_id,
                 name=_export_span_name(self.name),
-                project_name=_LANGSMITH_PROJECT_NAME,
+                project_name=self.project_name,
                 run_type="llm",
                 inputs={},
                 extra={
@@ -182,6 +193,7 @@ class LangSmithHarnessTracer:
     client: Any
     mode: str
     health: HarnessTelemetryHealth
+    project_name: str = _LANGSMITH_PROJECT_NAME
     shutdown_timeout_seconds: float = 1.0
 
     def start_span(
@@ -208,6 +220,7 @@ class LangSmithHarnessTracer:
             attributes=validated,
             mode=self.mode,
             health=self.health,
+            project_name=self.project_name,
         )
 
     def shutdown(self) -> None:
@@ -270,6 +283,7 @@ def build_langsmith_harness_tracer(
         client=client,
         mode=config.langsmith_mode,
         health=health,
+        project_name=_configured_project_name(),
     )
 
 

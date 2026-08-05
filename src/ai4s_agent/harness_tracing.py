@@ -59,6 +59,15 @@ _SPAN_NAMES = frozenset(
         "candidate.predict",
         "candidate.rank",
         "candidate.validate",
+        "mineru.request",
+        "mineru.parse",
+        "parsed_document.publication",
+        "oled.deterministic_extraction",
+        "oled.semantic_packet_construction",
+        "document.contextual_mapping.llm_call",
+        "oled.candidate_raw_dataset.publication",
+        "oled.review_snapshot.creation",
+        "oled.gate.waiting",
     }
 )
 _EVENT_NAMES = frozenset(
@@ -214,6 +223,15 @@ _EXPORTED_SPAN_NAMES = {
     "candidate.predict": "agent.candidate.predict",
     "candidate.rank": "agent.candidate.rank",
     "candidate.validate": "agent.candidate.validate",
+    "mineru.request": "agent.mineru.request",
+    "mineru.parse": "agent.mineru.parse",
+    "parsed_document.publication": "agent.parsed_document.publication",
+    "oled.deterministic_extraction": "agent.oled.deterministic_extraction",
+    "oled.semantic_packet_construction": "agent.oled.semantic_packet_construction",
+    "document.contextual_mapping.llm_call": "agent.document.contextual_mapping.llm_call",
+    "oled.candidate_raw_dataset.publication": "agent.oled.candidate_raw_dataset.publication",
+    "oled.review_snapshot.creation": "agent.oled.review_snapshot.creation",
+    "oled.gate.waiting": "agent.oled.gate.waiting",
 }
 
 
@@ -872,7 +890,7 @@ def _build_otel_tracer(
             # Direct construction intentionally bypasses default/environment
             # detectors such as OTEL_RESOURCE_ATTRIBUTES.
             resource=Resource(
-                {"service.name": "molly-scientific-agent-harness"}
+                {"service.name": config.service_name}
             )
         )
         exporter = _PrivacySafeOTelExporter(

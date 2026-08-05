@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 from dataclasses import dataclass
 from typing import Mapping
@@ -27,6 +28,7 @@ class HarnessObservabilityConfig:
     structured_content_allowed: bool = False
     otel_config_valid: bool = True
     langsmith_config_valid: bool = True
+    service_name: str = "molly-scientific-agent-harness"
 
     @classmethod
     def from_environ(
@@ -57,12 +59,19 @@ class HarnessObservabilityConfig:
             # Misconfigured content capture never blocks business logic and never
             # uploads content. It deterministically degrades to metadata-only.
             langsmith_mode = "metadata_only"
+        service_name = str(
+            values.get("AI4S_HARNESS_SERVICE_NAME")
+            or "molly-scientific-agent-harness"
+        ).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", service_name):
+            service_name = "molly-scientific-agent-harness"
         return cls(
             otel_mode=otel_mode,
             langsmith_mode=langsmith_mode,
             structured_content_allowed=structured_allowed,
             otel_config_valid=otel_valid,
             langsmith_config_valid=langsmith_valid,
+            service_name=service_name,
         )
 
 

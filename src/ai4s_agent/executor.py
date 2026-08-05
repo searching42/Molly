@@ -58,6 +58,7 @@ from ai4s_agent.oled_supplementary_material_identity_review import (
 from ai4s_agent.oled_supplementary_scoped_candidate_response import (
     _read_regular_file_bound,
 )
+from ai4s_agent.harness_tracing import build_harness_observability
 from ai4s_agent.planner import AtomicTaskRegistry
 from ai4s_agent.schemas import (
     ArtifactRef,
@@ -98,6 +99,18 @@ _INVERSE_DESIGN_FROZEN_INPUTS_DIR = "frozen_inputs"
 _GENERATED_EVALUATION_TASK_ID = "execute_oled_generated_candidate_evaluation"
 _CANDIDATE_DECISION_TASK_ID = "execute_oled_candidate_decision"
 _BOUNDED_CONTROLLER_TASK_ID = "execute_oled_bounded_discovery_controller"
+_BR2_EVIDENCE_TASK_ID = "extract_oled_evidence"
+_BR2_CONTEXTUAL_MAPPING_TASK_ID = "map_oled_contextual_semantics"
+_BR2_CANDIDATE_DATASET_TASK_ID = "prepare_oled_candidate_raw_dataset"
+_BR2_CONFIRMATION_GATE_TASK_ID = "await_oled_candidate_confirmation"
+_BR2_BRIDGE_TASK_IDS = frozenset(
+    {
+        _BR2_EVIDENCE_TASK_ID,
+        _BR2_CONTEXTUAL_MAPPING_TASK_ID,
+        _BR2_CANDIDATE_DATASET_TASK_ID,
+        _BR2_CONFIRMATION_GATE_TASK_ID,
+    }
+)
 _STRUCTURED_DATASET_TASK_IDS = frozenset(
     {
         "prepare_structured_dataset_canary",
@@ -775,6 +788,11 @@ class RunPlanExecutor:
             task_options=task_options,
             expected_compiled_options_digest=expected_compiled_options_digest,
         )
+        self._verify_br2_bridge_task(
+            project_id=project_id,
+            run_id=run_plan.run_id,
+            task_id=task.task_id,
+        )
 
     def verify_one_task_committed_outputs(
         self,
@@ -828,6 +846,11 @@ class RunPlanExecutor:
             task_id=task.task_id,
             task_options=task_options,
             expected_compiled_options_digest=expected_compiled_options_digest,
+        )
+        self._verify_br2_bridge_task(
+            project_id=project_id,
+            run_id=run_plan.run_id,
+            task_id=task.task_id,
         )
         execution_record_id = _IMMUTABLE_RECORD_BY_TASK.get(task.task_id, "")
         if not execution_record_id:
@@ -1047,6 +1070,63 @@ class RunPlanExecutor:
             return
         raise ValueError("immutable local task lacks a task-specific verifier")
 
+    def _verify_br2_bridge_task(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        task_id: str,
+    ) -> None:
+        if task_id not in _BR2_BRIDGE_TASK_IDS:
+            return
+        if task_id == _BR2_CONFIRMATION_GATE_TASK_ID:
+            return
+        from ai4s_agent.domains.oled_br2_candidate_raw_dataset import (
+            OledBr2CandidateRawDataset,
+            OledBr2ReviewSnapshot,
+        )
+        from ai4s_agent.domains.oled_llm_context_mapping import (
+            OledLLMContextMappingResult,
+        )
+
+        run_dir = self.storage.run_dir(project_id, run_id)
+        artifact_paths = self._artifact_paths_from_registry(project_id, run_id, run_dir)
+        if task_id == _BR2_EVIDENCE_TASK_ID:
+            candidates = self._read_json_file(
+                Path(self._require_artifact(artifact_paths, "oled_mineru_candidates"))
+            )
+            packets = self._read_json_file(
+                Path(self._require_artifact(artifact_paths, "oled_semantic_mapping_packets"))
+            )
+            if not candidates.get("candidates") or not packets.get("packets"):
+                raise ValueError("BR2 evidence bridge output is empty")
+            return
+        if task_id == _BR2_CONTEXTUAL_MAPPING_TASK_ID:
+            result = OledLLMContextMappingResult.model_validate(
+                self._read_json_file(
+                    Path(
+                        self._require_artifact(
+                            artifact_paths, "oled_contextual_mapping_result"
+                        )
+                    )
+                )
+            )
+            if result.status != "ready_for_human_review":
+                raise ValueError("BR2 contextual mapping output is not review-ready")
+            return
+        dataset = OledBr2CandidateRawDataset.model_validate(
+            self._read_json_file(
+                Path(self._require_artifact(artifact_paths, "candidate_raw_dataset"))
+            )
+        )
+        snapshot = OledBr2ReviewSnapshot.model_validate(
+            self._read_json_file(
+                Path(self._require_artifact(artifact_paths, "review_snapshot"))
+            )
+        )
+        if not dataset.rows or snapshot.row_count != len(dataset.rows):
+            raise ValueError("BR2 candidate raw dataset/review snapshot contract is incomplete")
+
     def _verify_structured_dataset_task(
         self,
         *,
@@ -1167,6 +1247,12 @@ class RunPlanExecutor:
                     approved_gates=set(),
                     options=task_options.get(task.task_id, {}),
                 )
+                if task.task_id == _BR2_CONFIRMATION_GATE_TASK_ID:
+                    self._emit_br2_gate_waiting_span(
+                        project_id=project_id,
+                        run_id=run_id,
+                        task_id=task.task_id,
+                    )
                 self._write_stage(
                     project_id=project_id,
                     run_id=run_id,
@@ -1594,6 +1680,39 @@ class RunPlanExecutor:
         return {"ok": True, "run_id": run_id, "status": RunStatus.SUCCEEDED.value, "executed_tasks": executed}
 
     @staticmethod
+    def _emit_br2_gate_waiting_span(
+        *,
+        project_id: str,
+        run_id: str,
+        task_id: str,
+    ) -> None:
+        tracer = None
+        try:
+            tracer, _health = build_harness_observability()
+            with tracer.start_span(
+                "oled.gate.waiting",
+                attributes={
+                    "project_id": project_id,
+                    "run_id": run_id,
+                    "task_id": task_id,
+                    "operation": "agent.oled.gate.waiting",
+                    "component": "executor",
+                    "phase": "waiting_user",
+                    "telemetry_authoritative": False,
+                },
+            ):
+                pass
+        except Exception:
+            # Observability is deliberately fail-open and never changes Gate state.
+            return
+        finally:
+            if tracer is not None:
+                try:
+                    tracer.shutdown()
+                except Exception:
+                    pass
+
+    @staticmethod
     def _adapter_for(adapter_name: str | None) -> AdapterFn:
         if not adapter_name:
             raise ValueError("task has no default adapter")
@@ -1914,6 +2033,65 @@ class RunPlanExecutor:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         approved = approved_gates or set()
+        if task_id in _BR2_BRIDGE_TASK_IDS:
+            task_options = self._payload_options(options)
+            if task_options:
+                raise ValueError(f"{task_id} does not accept task options")
+            base: dict[str, Any] = {
+                "project_id": run_dir.parents[1].name,
+                "run_id": run_id,
+                "task_id": task_id,
+                "output_root": str(run_dir / task_id),
+            }
+            if task_id == _BR2_EVIDENCE_TASK_ID:
+                base.update(
+                    {
+                        "parsed_document_path": self._absolute_artifact_path(
+                            artifact_paths, "parsed_document"
+                        ),
+                        "parsed_document_markdown_path": self._optional_absolute_artifact_path(
+                            artifact_paths, "parsed_document_markdown"
+                        ),
+                    }
+                )
+            elif task_id == _BR2_CONTEXTUAL_MAPPING_TASK_ID:
+                for artifact_id, payload_key in (
+                    ("parsed_document", "parsed_document_path"),
+                    ("oled_llm_context_request", "oled_llm_context_request_path"),
+                    (
+                        "external_llm_content_authorization",
+                        "external_llm_content_authorization_path",
+                    ),
+                ):
+                    base[payload_key] = self._absolute_artifact_path(
+                        artifact_paths, artifact_id
+                    )
+                base["workspace_dir"] = str(Path.cwd())
+                config_dir = os.environ.get("MOLLY_CONFIG_DIR", "").strip()
+                if config_dir:
+                    base["llm_config_dir"] = config_dir
+            elif task_id == _BR2_CANDIDATE_DATASET_TASK_ID:
+                for artifact_id, payload_key in (
+                    ("parsed_document", "parsed_document_path"),
+                    ("oled_mineru_candidates", "oled_mineru_candidates_path"),
+                    (
+                        "oled_deterministic_schema_candidates",
+                        "oled_deterministic_schema_candidates_path",
+                    ),
+                    (
+                        "oled_contextual_mapping_result",
+                        "oled_contextual_mapping_result_path",
+                    ),
+                    ("oled_llm_context_request", "oled_llm_context_request_path"),
+                ):
+                    base[payload_key] = self._absolute_artifact_path(
+                        artifact_paths, artifact_id
+                    )
+            else:
+                base["review_snapshot_path"] = self._optional_absolute_artifact_path(
+                    artifact_paths, "review_snapshot"
+                )
+            return base
         if task_id in _STRUCTURED_DATASET_TASK_IDS:
             task_options = self._payload_options(options)
             payload: dict[str, Any] = {
@@ -3289,6 +3467,19 @@ class RunPlanExecutor:
         payload: dict[str, Any],
     ) -> None:
         result_rel = self._relative(run_dir, result_path)
+        if task_id in _BR2_BRIDGE_TASK_IDS:
+            outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+            spec = self.registry.get(task_id)
+            if set(outputs) != set(spec.output_artifacts):
+                raise ValueError("BR2 bridge task output roster is incomplete")
+            for artifact_id in spec.output_artifacts:
+                output_path = Path(str(outputs[artifact_id])).expanduser().absolute()
+                if not output_path.is_file() or output_path.is_symlink():
+                    raise ValueError("BR2 bridge task output is missing")
+                relative = self._relative(run_dir, output_path)
+                self._register(project_id, run_id, artifact_id, relative)
+                artifact_paths[artifact_id] = str(output_path)
+            return
         if task_id in _STRUCTURED_DATASET_TASK_IDS:
             outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
             spec = self.registry.get(task_id)
