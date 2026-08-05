@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import hashlib
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Mapping
@@ -42,12 +43,20 @@ from ai4s_agent.domains.oled_mineru_semantic_mapping import (
     build_oled_semantic_mapping_packets,
     map_oled_mineru_candidates_to_schema_candidates,
 )
+from ai4s_agent.document_parse_mineru import MinerUApiDocumentParseProvider
+from ai4s_agent.document_parse_provider import DocumentParseRequest
+from ai4s_agent.document_parse_service import DocumentParseService
 from ai4s_agent.harness_tracing import build_harness_observability
 from ai4s_agent.llm_provider import LLMProvider, create_llm_provider
 from ai4s_agent.llm_settings import LLMSettingsStore
 from ai4s_agent.llm_provider_resolution import (
     is_external_llm_config,
     temporary_provider,
+)
+from ai4s_agent.mineru_api_client import MinerUApiClient
+from ai4s_agent.mineru_endpoint_profiles import (
+    load_mineru_endpoint_profile_config,
+    resolve_mineru_endpoint_profile,
 )
 from ai4s_agent.oled_llm_context_request import OledLLMContextRequestArtifact
 from ai4s_agent.schemas import ParsedDocument, _agent_digest
@@ -59,6 +68,86 @@ BR2_CONTEXTUAL_ALLOWED_CONTENT = frozenset(
     {"parsed_document_text", "parsed_tables", "evidence_packets"}
 )
 BR2_DOWNSTREAM_KEYS = ("training", "generation", "prediction", "ranking")
+
+
+def parse_document_mineru_bridge_adapter(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run the registered MinerU API contract through the local Controller path."""
+
+    try:
+        run_id = _required_text(payload, "run_id")
+        input_pdf = _input_path(payload, "input_pdf_path")
+        if input_pdf.suffix.lower() != ".pdf" or not input_pdf.is_file():
+            return _failed("pdf_input_unavailable")
+        output_root = _output_root(payload)
+        profile_config = _required_text(payload, "mineru_profile_config")
+        resolved = resolve_mineru_endpoint_profile(
+            load_mineru_endpoint_profile_config(profile_config),
+            profile_name=_required_text(payload, "mineru_profile_name"),
+            policy_name=_required_text(payload, "mineru_policy_name"),
+            profile_source_path=profile_config,
+        )
+        profile = resolved.profile
+        source_digest = "sha256:" + hashlib.sha256(input_pdf.read_bytes()).hexdigest()
+        request = DocumentParseRequest(
+            run_id=f"{run_id}-mineru",
+            input_pdf=str(input_pdf),
+            output_dir=str(output_root),
+            provider="mineru_api",
+            parse_method=profile.parse_method,
+            backend=profile.backend,
+            effort=profile.effort,
+            start_page=13,
+            end_page=14,
+            allow_remote_upload=profile.allow_remote_upload,
+            expected_source_pdf_sha256=source_digest,
+        )
+        client = MinerUApiClient(
+            base_url=profile.api_url,
+            health_path=profile.health_path,
+            api_token=os.environ.get("MINERU_API_TOKEN") or os.environ.get("AI4S_MINERU_API_TOKEN") or "",
+            http_timeout_sec=profile.http_timeout_sec,
+            task_timeout_sec=profile.task_timeout_sec,
+            poll_interval_sec=profile.poll_interval_sec,
+            max_poll_attempts=profile.max_poll_attempts,
+        )
+        with _telemetry_span("mineru.request", payload, phase="mineru_request"):
+            with _telemetry_span("mineru.parse", payload, phase="mineru_parse") as parse_span:
+                result = DocumentParseService(
+                    mineru_provider=MinerUApiDocumentParseProvider(client=client),
+                ).parse(request)
+                parse_span.set_attribute("status", result.status)
+                if result.remote_task_id:
+                    parse_span.set_attribute("remote_task_type", "mineru_api_task")
+        if not result.ok or result.parsed_document is None:
+            error = result.error.model_dump(mode="json") if result.error else {}
+            return _failed("mineru_task_failed", details={"error_code": str(error.get("code") or "parse_failed")})
+        parsed_document = result.parsed_document
+        if not parsed_document.elements and not parsed_document.tables:
+            return _failed("parsed_document_empty")
+        tables_path = _write_json_new(
+            output_root / "parsed_tables.json",
+            {
+                "schema_version": "br2_parsed_tables.v1",
+                "run_id": run_id,
+                "paper_id": parsed_document.paper_id,
+                "tables": [table.model_dump(mode="json") for table in parsed_document.tables],
+            },
+        )
+        with _telemetry_span("parsed_document.publication", payload, phase="parsed_document_publication") as publication_span:
+            publication_span.set_attribute("output_count", len(parsed_document.elements) + len(parsed_document.tables))
+        outputs = result.outputs
+        return {
+            "status": "success",
+            "adapter": "parse_document_mineru_bridge",
+            "outputs": {
+                "parsed_document": str(outputs.parsed_document_json),
+                "parsed_document_markdown": str(outputs.parsed_document_markdown),
+                "parsed_tables": str(tables_path),
+                "parser_audit": str(outputs.parser_audit_json),
+            },
+        }
+    except Exception as exc:
+        return _failed("mineru_bridge_failed", details={"exception_type": type(exc).__name__})
 
 
 class OledBr2ExternalLLMContentAuthorization(BaseModel):

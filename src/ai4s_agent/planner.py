@@ -1811,7 +1811,25 @@ def br2_real_tool_observability_smoke_task_registry_v1() -> AtomicTaskRegistry:
     training, generation, prediction, ranking, or confirmation task.
     """
 
-    parse_document = AtomicTaskRegistry().get("parse_document")
+    parse_document = AtomicTaskRegistry().get("parse_document").model_copy(
+        update={
+            "default_adapter": "parse_document_mineru_bridge_adapter",
+            "output_artifacts": [
+                "parsed_document",
+                "parsed_document_markdown",
+                "parsed_tables",
+                "parser_audit",
+            ],
+            "logical_profile_requirements": [],
+            "execution_route": "local_executor",
+            "remote_task_type": None,
+            "description": (
+                "Parse the approved PDF through the configured server-owned MinerU API "
+                "bridge and publish a fresh ParsedDocument with parser audit."
+            ),
+            "verification_policy": "br2_mineru_parsed_document_contract.v1",
+        }
+    )
     trust = {
         "registered_intermediate": ["registered_intermediate", "verified_output"],
         "content_bound_input": ["content_bound_input"],

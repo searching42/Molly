@@ -68,6 +68,7 @@ from ai4s_agent.adapters.br2_real_tool_bridge import (
     await_oled_candidate_confirmation_adapter,
     extract_oled_evidence_bridge_adapter,
     map_oled_contextual_semantics_bridge_adapter,
+    parse_document_mineru_bridge_adapter,
     prepare_oled_candidate_raw_dataset_bridge_adapter,
 )
 from ai4s_agent.adapters.structured_dataset_canary import (
@@ -117,6 +118,7 @@ __all__ = [
     "AdapterRuntimeError",
     "extract_oled_evidence_bridge_adapter",
     "map_oled_contextual_semantics_bridge_adapter",
+    "parse_document_mineru_bridge_adapter",
     "prepare_oled_candidate_raw_dataset_bridge_adapter",
     "await_oled_candidate_confirmation_adapter",
     "legacy_full_flow_adapter",

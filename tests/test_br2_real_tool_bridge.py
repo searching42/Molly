@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +11,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.pr_fast]
 from ai4s_agent.adapters.br2_real_tool_bridge import (
     OledBr2ExternalLLMContentAuthorization,
     extract_oled_evidence_bridge_adapter,
+    parse_document_mineru_bridge_adapter,
     prepare_oled_candidate_raw_dataset_bridge_adapter,
 )
 from ai4s_agent.domains.oled_br2_candidate_raw_dataset import (
@@ -134,9 +136,88 @@ def test_br2_registry_is_narrow_and_reuses_existing_authority() -> None:
     assert not task_ids.intersection(
         {"train_model", "generate_candidates", "predict_candidates", "filter_rank"}
     )
+    parse_spec = registry.get("parse_document")
+    assert parse_spec.default_adapter == "parse_document_mineru_bridge_adapter"
+    assert parse_spec.gates == ["gate_2_data_mining"]
+    assert parse_spec.execution_route == "local_executor"
     assert registry.get("await_oled_candidate_confirmation").gates == [
         "gate_3_train_config"
     ]
+
+
+def test_mineru_parse_bridge_publishes_fresh_contract_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "approved.pdf"
+    source.write_bytes(b"%PDF-contract-fixture")
+    profile = tmp_path / "mineru-profile.json"
+    _write_json(
+        profile,
+        {
+            "schema_version": "mineru_endpoint_profiles.v1",
+            "profiles": [
+                {
+                    "name": "contract-loopback",
+                    "api_url": "http://127.0.0.1:18000",
+                    "endpoint_kind": "mineru-api",
+                }
+            ],
+            "routing_policies": [
+                {"name": "manual-primary", "default_profile": "contract-loopback"}
+            ],
+        },
+    )
+
+    class FakeDocumentParseService:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def parse(self, request: object) -> object:
+            output_dir = Path(str(request.output_dir))
+            document = _parsed_document()
+            parsed_path = output_dir / "parsed.json"
+            markdown_path = output_dir / "parsed.md"
+            audit_path = output_dir / "audit.json"
+            _write_json(parsed_path, document.model_dump(mode="json"))
+            markdown_path.write_text("# contract", encoding="utf-8")
+            _write_json(audit_path, {"run_id": str(request.run_id), "status": "success"})
+            return SimpleNamespace(
+                ok=True,
+                status="success",
+                remote_task_id="task-contract",
+                parsed_document=document,
+                outputs=SimpleNamespace(
+                    parsed_document_json=str(parsed_path),
+                    parsed_document_markdown=str(markdown_path),
+                    parser_audit_json=str(audit_path),
+                ),
+                error=None,
+            )
+
+    monkeypatch.setattr(
+        "ai4s_agent.adapters.br2_real_tool_bridge.DocumentParseService",
+        FakeDocumentParseService,
+    )
+    result = parse_document_mineru_bridge_adapter(
+        {
+            "project_id": "project-br2-contract",
+            "run_id": "run-br2-parse-contract",
+            "task_id": "parse_document",
+            "input_pdf_path": str(source),
+            "output_root": str(tmp_path / "parse-output"),
+            "mineru_profile_config": str(profile),
+            "mineru_profile_name": "contract-loopback",
+            "mineru_policy_name": "manual-primary",
+        }
+    )
+    assert result["status"] == "success"
+    assert set(result["outputs"]) == {
+        "parsed_document",
+        "parsed_document_markdown",
+        "parsed_tables",
+        "parser_audit",
+    }
+    assert json.loads(Path(result["outputs"]["parsed_tables"]).read_text())["tables"]
 
 
 def test_stub_contract_runs_extraction_mapping_and_candidate_package(tmp_path: Path) -> None:

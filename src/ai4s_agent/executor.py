@@ -105,6 +105,7 @@ _BR2_CANDIDATE_DATASET_TASK_ID = "prepare_oled_candidate_raw_dataset"
 _BR2_CONFIRMATION_GATE_TASK_ID = "await_oled_candidate_confirmation"
 _BR2_BRIDGE_TASK_IDS = frozenset(
     {
+        "parse_document",
         _BR2_EVIDENCE_TASK_ID,
         _BR2_CONTEXTUAL_MAPPING_TASK_ID,
         _BR2_CANDIDATE_DATASET_TASK_ID,
@@ -1091,6 +1092,26 @@ class RunPlanExecutor:
 
         run_dir = self.storage.run_dir(project_id, run_id)
         artifact_paths = self._artifact_paths_from_registry(project_id, run_id, run_dir)
+        if task_id == "parse_document":
+            from ai4s_agent.schemas import ParsedDocument
+
+            parsed_document = ParsedDocument.model_validate(
+                self._read_json_file(
+                    Path(self._require_artifact(artifact_paths, "parsed_document"))
+                )
+            )
+            tables_payload = self._read_json_file(
+                Path(self._require_artifact(artifact_paths, "parsed_tables"))
+            )
+            audit_payload = self._read_json_file(
+                Path(self._require_artifact(artifact_paths, "parser_audit"))
+            )
+            if (
+                not parsed_document.elements
+                and not parsed_document.tables
+            ) or not tables_payload.get("tables") or not audit_payload:
+                raise ValueError("BR2 MinerU ParsedDocument publication is incomplete")
+            return
         if task_id == _BR2_EVIDENCE_TASK_ID:
             candidates = self._read_json_file(
                 Path(self._require_artifact(artifact_paths, "oled_mineru_candidates"))
@@ -2043,7 +2064,24 @@ class RunPlanExecutor:
                 "task_id": task_id,
                 "output_root": str(run_dir / task_id),
             }
-            if task_id == _BR2_EVIDENCE_TASK_ID:
+            if task_id == "parse_document":
+                base.update(
+                    {
+                        "input_pdf_path": self._absolute_artifact_path(
+                            artifact_paths, "pdf_corpus"
+                        ),
+                        "mineru_profile_config": os.environ.get(
+                            "MOLLY_BR2_MINERU_PROFILE_CONFIG", ""
+                        ),
+                        "mineru_profile_name": os.environ.get(
+                            "MOLLY_BR2_MINERU_PROFILE_NAME", ""
+                        ),
+                        "mineru_policy_name": os.environ.get(
+                            "MOLLY_BR2_MINERU_POLICY_NAME", ""
+                        ),
+                    }
+                )
+            elif task_id == _BR2_EVIDENCE_TASK_ID:
                 base.update(
                     {
                         "parsed_document_path": self._absolute_artifact_path(
