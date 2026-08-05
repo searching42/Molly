@@ -1803,6 +1803,7 @@ class ScientificAgentPlanService:
                     "planner.llm_call",
                     attributes=attributes,
                 ) as llm_span:
+                    started = time.perf_counter()
                     invocation = provider.complete_json(
                         messages=build_scientific_agent_plan_messages(
                             observation=observation
@@ -1810,6 +1811,24 @@ class ScientificAgentPlanService:
                         prompt_version=SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION,
                         response_model=AgentExecutionPlanLLMResponse,
                     )
+                    llm_span.set_attribute(
+                        "duration_ms",
+                        max(0, int(round((time.perf_counter() - started) * 1000.0))),
+                    )
+                    llm_span.set_attribute(
+                        "prompt_version", SCIENTIFIC_AGENT_PLAN_PROMPT_VERSION
+                    )
+                    llm_span.set_attribute(
+                        "provider_kind", invocation.provider
+                    )
+                    llm_span.set_attribute(
+                        "provider_model_digest",
+                        _canonical_digest(
+                            {"provider": invocation.provider, "model": invocation.model}
+                        ),
+                    )
+                    if invocation.response_id:
+                        llm_span.set_attribute("response_id", invocation.response_id)
                     llm_span.set_attribute(
                         "response_digest",
                         _canonical_digest(invocation.parsed_output),
