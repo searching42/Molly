@@ -163,6 +163,8 @@ _STRING_ATTRIBUTE_KEYS = frozenset(
         "provider_model_digest",
         "request_digest",
         "response_digest",
+        "prompt_version",
+        "response_id",
         "exception_type_code",
         "content_mode",
     }

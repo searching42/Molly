@@ -273,10 +273,12 @@ def map_oled_contextual_semantics_bridge_adapter(payload: dict[str, Any]) -> dic
             phase="provider_call",
             request_digest=request_digest,
         ) as span:
+            span.set_attribute("prompt_version", request.prompt_version)
             started = time.monotonic()
             with temporary_provider(config) as provider:
                 result = run_oled_llm_context_mapping(request, provider=provider)
             latency_ms = round((time.monotonic() - started) * 1000.0, 3)
+            span.set_attribute("duration_ms", max(0, int(round(latency_ms))))
             span.set_attribute("status", result.status)
             if result.llm_invocation is not None:
                 span.set_attribute(
@@ -284,6 +286,8 @@ def map_oled_contextual_semantics_bridge_adapter(payload: dict[str, Any]) -> dic
                     _agent_digest({"provider": result.llm_invocation.provider, "model": result.llm_invocation.model}),
                 )
                 span.set_attribute("response_digest", stable_digest(result.llm_invocation.parsed_output))
+                if result.llm_invocation.response_id:
+                    span.set_attribute("response_id", result.llm_invocation.response_id)
         if result.status != "ready_for_human_review":
             return _failed(
                 "contextual_mapping_not_ready_for_human_review",

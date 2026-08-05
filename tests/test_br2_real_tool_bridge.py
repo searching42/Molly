@@ -24,6 +24,7 @@ from ai4s_agent.domains.oled_mineru_semantic_mapping import (
     OledSchemaCandidate,
     OledSchemaCandidateType,
 )
+from ai4s_agent.harness_tracing import _validate_attribute
 from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.planner import br2_real_tool_observability_smoke_task_registry_v1
 from ai4s_agent.schemas import ParsedDocument, ParsedDocumentElement, ParsedTable
@@ -283,3 +284,8 @@ def test_external_authorization_rejects_raw_pdf_and_downstream_scope() -> None:
             model="deepseek-v4-flash-ascend1",
             raw_pdf_allowed=True,
         )
+
+
+def test_contextual_llm_observability_accepts_prompt_and_response_identifiers() -> None:
+    assert _validate_attribute("prompt_version", "oled.contextual_semantic_mapping.v5")[1]
+    assert _validate_attribute("response_id", "resp-20260805-1")[1]
