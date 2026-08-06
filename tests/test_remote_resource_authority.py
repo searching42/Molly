@@ -980,10 +980,10 @@ def test_pr_bm2_v2_decision_authorization_and_start_intent_exact_replay(
         "sha256:e5279fe137409cf3490beac8b29c32c3c3212537f67e924fdd875aebe4d6d124"
     )
     assert authorization_decision.task_decisions[0].task_authority_digest == (
-        "sha256:24acc3e767361f83490a4c0b17341b03d5e7f35d181a5f58c129fdc679516ae0"
+        "sha256:810f46dbd00eaabba082ff3ccc8dd8fb99a981c26be8abf05d35a80dd606418f"
     )
     assert authorization_decision.decision_digest == (
-        "sha256:07a366c61dfcc547fe8265bebc0fb52df2fcf217919e2ebe033e7f2bb22081b9"
+        "sha256:de982e2c33ce4328e4c5b33e7150e430c775a095f467c1eb7880f5726b91aabf"
     )
     authorization_service.control_store.publish_permission_decision(
         authorization_decision
@@ -1022,10 +1022,10 @@ def test_pr_bm2_v2_decision_authorization_and_start_intent_exact_replay(
     )
     authorization_service.control_store.publish_start_intent(start_intent)
     assert authorization.authorization_digest == (
-        "sha256:39318e0b268d4dd70836be756b7152c9d3dd57108c7b6f12877255dc2f85b3bd"
+        "sha256:f9f6c4d1652a05bbf33a34bd5aa1dc15e1de0b1a898f1d8297754e580ecfdd45"
     )
     assert start_intent.start_intent_digest == (
-        "sha256:f09d3283927c0cee00d0ab971e7ef5521d61f0d5260044886ccd07a4e31fdca8"
+        "sha256:4ef78950d3edf35c2b6950b5e6d7c2c9f136146f2eef253243ed2cbfff1f91cf"
     )
     assert authorization_service.verify_authorization(
         project_id="project-1",

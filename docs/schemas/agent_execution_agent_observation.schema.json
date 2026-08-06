@@ -4,21 +4,21 @@
       "additionalProperties": false,
       "description": "Privacy-safe projection of one exact Controller inspection fact.",
       "properties": {
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "authority_class": {
           "$ref": "#/$defs/AgentHarnessAuthorityClass"
         },
-        "source_id": {
-          "default": "",
-          "title": "Source Id",
+        "name": {
+          "title": "Name",
           "type": "string"
         },
         "source_digest": {
           "default": "",
           "title": "Source Digest",
+          "type": "string"
+        },
+        "source_id": {
+          "default": "",
+          "title": "Source Id",
           "type": "string"
         },
         "state": {
@@ -106,58 +106,58 @@
   "additionalProperties": false,
   "description": "Allowlisted Controller snapshot sent to the bounded Execution Agent.",
   "properties": {
-    "schema_version": {
-      "const": "agent_execution_agent_observation.v1",
-      "default": "agent_execution_agent_observation.v1",
-      "title": "Schema Version",
-      "type": "string"
-    },
-    "observation_id": {
+    "compiled_options_digest": {
       "default": "",
-      "title": "Observation Id",
+      "title": "Compiled Options Digest",
       "type": "string"
     },
-    "observation_digest": {
-      "default": "",
-      "title": "Observation Digest",
-      "type": "string"
+    "controller_action_boundary_class": {
+      "$ref": "#/$defs/AgentHarnessControllerActionBoundaryClass"
     },
-    "project_id": {
-      "title": "Project Id",
-      "type": "string"
-    },
-    "run_id": {
-      "title": "Run Id",
+    "controller_execution_digest": {
+      "title": "Controller Execution Digest",
       "type": "string"
     },
     "controller_execution_id": {
       "title": "Controller Execution Id",
       "type": "string"
     },
-    "controller_execution_digest": {
-      "title": "Controller Execution Digest",
+    "controller_policy_digest": {
+      "title": "Controller Policy Digest",
       "type": "string"
     },
     "controller_policy_version": {
       "title": "Controller Policy Version",
       "type": "string"
     },
-    "controller_policy_digest": {
-      "title": "Controller Policy Digest",
-      "type": "string"
-    },
-    "inspection_digest": {
-      "title": "Inspection Digest",
-      "type": "string"
-    },
     "controller_status": {
       "$ref": "#/$defs/AgentHarnessControllerStatus"
     },
-    "next_controller_action": {
-      "$ref": "#/$defs/AgentHarnessControllerAction"
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
     },
-    "controller_action_boundary_class": {
-      "$ref": "#/$defs/AgentHarnessControllerActionBoundaryClass"
+    "current_attempt_ordinal": {
+      "default": 0,
+      "maximum": 1023,
+      "minimum": 0,
+      "title": "Current Attempt Ordinal",
+      "type": "integer"
+    },
+    "current_execution_route": {
+      "default": "",
+      "enum": [
+        "",
+        "local_executor",
+        "remote_execution_service"
+      ],
+      "title": "Current Execution Route",
+      "type": "string"
+    },
+    "current_slot_id": {
+      "default": "",
+      "title": "Current Slot Id",
+      "type": "string"
     },
     "current_task_id": {
       "default": "",
@@ -178,36 +178,12 @@
       "default": null,
       "title": "Current Task Index"
     },
-    "current_execution_route": {
-      "default": "",
-      "enum": [
-        "",
-        "local_executor",
-        "remote_execution_service"
-      ],
-      "title": "Current Execution Route",
+    "execution_agent_policy_digest": {
+      "title": "Execution Agent Policy Digest",
       "type": "string"
     },
-    "current_attempt_ordinal": {
-      "default": 0,
-      "maximum": 1023,
-      "minimum": 0,
-      "title": "Current Attempt Ordinal",
-      "type": "integer"
-    },
-    "current_slot_id": {
-      "default": "",
-      "title": "Current Slot Id",
-      "type": "string"
-    },
-    "task_authority_digest": {
-      "default": "",
-      "title": "Task Authority Digest",
-      "type": "string"
-    },
-    "compiled_options_digest": {
-      "default": "",
-      "title": "Compiled Options Digest",
+    "execution_agent_policy_version": {
+      "title": "Execution Agent Policy Version",
       "type": "string"
     },
     "input_artifacts_digest": {
@@ -215,19 +191,18 @@
       "title": "Input Artifacts Digest",
       "type": "string"
     },
-    "output_contract_digest": {
-      "default": "",
-      "title": "Output Contract Digest",
-      "type": "string"
-    },
-    "latest_controller_receipt_id": {
-      "default": "",
-      "title": "Latest Controller Receipt Id",
+    "inspection_digest": {
+      "title": "Inspection Digest",
       "type": "string"
     },
     "latest_controller_receipt_digest": {
       "default": "",
       "title": "Latest Controller Receipt Digest",
+      "type": "string"
+    },
+    "latest_controller_receipt_id": {
+      "default": "",
+      "title": "Latest Controller Receipt Id",
       "type": "string"
     },
     "latest_controller_receipt_outcome": {
@@ -248,6 +223,32 @@
       "title": "Latest Safe Reason Codes",
       "type": "array"
     },
+    "next_controller_action": {
+      "$ref": "#/$defs/AgentHarnessControllerAction"
+    },
+    "observation_digest": {
+      "default": "",
+      "title": "Observation Digest",
+      "type": "string"
+    },
+    "observation_id": {
+      "default": "",
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "output_contract_digest": {
+      "default": "",
+      "title": "Output Contract Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
     "safe_fact_bindings": {
       "items": {
         "$ref": "#/$defs/AgentExecutionSafeFactBinding"
@@ -259,24 +260,23 @@
       "title": "Safe Fact Bindings Digest",
       "type": "string"
     },
-    "tool_catalog_id": {
-      "title": "Tool Catalog Id",
+    "schema_version": {
+      "const": "agent_execution_agent_observation.v1",
+      "default": "agent_execution_agent_observation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "task_authority_digest": {
+      "default": "",
+      "title": "Task Authority Digest",
       "type": "string"
     },
     "tool_catalog_digest": {
       "title": "Tool Catalog Digest",
       "type": "string"
     },
-    "execution_agent_policy_version": {
-      "title": "Execution Agent Policy Version",
-      "type": "string"
-    },
-    "execution_agent_policy_digest": {
-      "title": "Execution Agent Policy Digest",
-      "type": "string"
-    },
-    "created_at": {
-      "title": "Created At",
+    "tool_catalog_id": {
+      "title": "Tool Catalog Id",
       "type": "string"
     }
   },

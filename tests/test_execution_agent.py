@@ -1045,6 +1045,35 @@ def test_user_boundary_receipt_is_adopted_after_snapshot_changes(tmp_path) -> No
     ) == result.application_receipt
 
 
+def test_execution_tool_catalog_projects_pending_task_option_schema(
+    tmp_path,
+) -> None:
+    storage, control_store, _, initial = local_controller_execution(tmp_path)
+    snapshot = _snapshot_with_action(
+        initial,
+        status=AgentHarnessControllerStatus.ACTIVE,
+        action=AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+    )
+    option_schema = {
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+        "required": ["count"],
+        "additionalProperties": False,
+    }
+    catalog, _ = build_execution_tool_catalog(
+        snapshot,
+        option_schema=option_schema,
+    )
+    assert len(catalog.tools) == 2
+    for tool in catalog.tools:
+        assert tool.option_schema == option_schema
+
+    plain_catalog, _ = build_execution_tool_catalog(snapshot)
+    assert all(tool.option_schema is None for tool in plain_catalog.tools)
+
+
 def test_sequential_turn_reaches_stable_terminal_observation(tmp_path) -> None:
     storage, _, controller, initial = local_controller_execution(tmp_path)
     service = execution_agent_service(storage=storage, controller=controller)

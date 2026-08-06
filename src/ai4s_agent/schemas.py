@@ -2167,6 +2167,11 @@ class AgentExecutionPlanProposal(BaseModel):
     # immutable publication identity.
     proposal_id: str = ""
     proposal_digest: str = ""
+    # Policy scope the user approves.  Computed from the proposal's structural
+    # and policy fields only; LLM-chosen option values are deliberately
+    # excluded so in-workflow choices validated against the option schema do
+    # not invalidate the authorization.
+    authorization_scope_digest: str = ""
     executable: Literal[False] = False
     created_at: str
 
@@ -2246,7 +2251,7 @@ class AgentExecutionPlanProposal(BaseModel):
     def validate_proposal_limits(cls, value: dict[str, Any]) -> dict[str, Any]:
         return _agent_limits(value, field="limits")
 
-    @field_validator("semantic_plan_digest", "proposal_digest")
+    @field_validator("semantic_plan_digest", "proposal_digest", "authorization_scope_digest")
     @classmethod
     def validate_optional_proposal_digests(cls, value: str, info: Any) -> str:
         return _agent_digest_value(value, field=info.field_name, allow_empty=True)
@@ -2294,11 +2299,48 @@ class AgentExecutionPlanProposal(BaseModel):
             raise ValueError("proposal_id must equal the immutable publication ID")
         object.__setattr__(self, "proposal_id", expected_publication_id)
 
+        expected_scope = _agent_digest(self.authorization_scope_material())
+        if self.authorization_scope_digest and self.authorization_scope_digest != expected_scope:
+            raise ValueError(
+                "agent execution plan authorization scope digest mismatch"
+            )
+        object.__setattr__(self, "authorization_scope_digest", expected_scope)
         expected = _agent_digest(self.publication_material())
         if self.proposal_digest and self.proposal_digest != expected:
             raise ValueError("agent execution plan proposal digest mismatch")
         object.__setattr__(self, "proposal_digest", expected)
         return self
+
+    def authorization_scope_material(self) -> dict[str, Any]:
+        """Policy material approved by the user; excludes LLM-chosen content.
+
+        The scope covers the workflow structure, selected inputs and profiles,
+        route bindings, budgets, gates and the scientific objective.  It
+        deliberately excludes planner/effective/compiled option values,
+        rationales and questions, so bounded LLM choices validated against the
+        registered option schema do not change the approved scope.
+        """
+
+        return {
+            "schema_version": "agent_execution_plan_authorization_scope.v1",
+            "project_id": self.project_id,
+            "run_id": self.run_id,
+            "goal": self.goal,
+            "user_constraints": self.user_constraints,
+            "observation_id": self.observation_id,
+            "observation_digest": self.observation_digest,
+            "tool_catalog_digest": self.tool_catalog_digest,
+            "run_plan": self.run_plan.model_dump(mode="json"),
+            "selected_artifacts": self.selected_artifacts,
+            "selected_profiles": self.selected_profiles,
+            "dispatch_intents": [
+                item.model_dump(mode="json") for item in self.dispatch_intents
+            ],
+            "limits": self.limits,
+            "stop_conditions": self.stop_conditions,
+            "success_criteria": self.success_criteria,
+            "required_gates": self.required_gates,
+        }
 
     def semantic_plan_material(self) -> dict[str, Any]:
         payload = self.model_dump(mode="json")
@@ -2306,6 +2348,7 @@ class AgentExecutionPlanProposal(BaseModel):
             "proposal_id",
             "publication_id",
             "proposal_digest",
+            "authorization_scope_digest",
             "semantic_plan_id",
             "semantic_plan_digest",
             "invocation_id",
@@ -3376,6 +3419,10 @@ class AgentPlanAuthorization(BaseModel):
     observation_digest: str
     tool_catalog_digest: str
     run_plan_digest: str
+    # Exact proposal-level policy scope this authorization covers.  Computed
+    # by the proposal; the authorization binds it verbatim so bounded
+    # in-workflow choices do not invalidate the approved scope.
+    authorization_scope_digest: str = ""
     run_plan: RunPlan
     task_ids: list[str]
     task_authority_digests: dict[str, str]
@@ -3436,6 +3483,15 @@ class AgentPlanAuthorization(BaseModel):
     @classmethod
     def validate_authorization_digest(cls, value: str) -> str:
         return _agent_digest_value(value, field="authorization_digest", allow_empty=True)
+
+    @field_validator("authorization_scope_digest")
+    @classmethod
+    def validate_authorization_scope_digest(cls, value: str) -> str:
+        return _agent_digest_value(
+            value,
+            field="authorization_scope_digest",
+            allow_empty=True,
+        )
 
     @field_validator("task_ids")
     @classmethod
@@ -3502,6 +3558,8 @@ class AgentPlanAuthorization(BaseModel):
             raise ValueError("authorization task roster must equal the ordered canonical RunPlan")
         if self.run_plan_digest != _agent_digest(self.run_plan.model_dump(mode="json")):
             raise ValueError("authorization RunPlan digest mismatch")
+        if not self.authorization_scope_digest:
+            raise ValueError("authorization scope digest is required")
         roster = set(self.task_ids)
         if set(self.task_authority_digests) != roster:
             raise ValueError("authorization task authority digests must exactly cover the RunPlan")
@@ -3543,6 +3601,11 @@ class AgentPlanAuthorization(BaseModel):
         payload.pop("authorization_id", None)
         payload.pop("authorization_digest", None)
         payload.pop("created_at", None)
+        # LLM-chosen option values are recorded for audit but are not part of
+        # the authorization identity.  The approved scope is carried by the
+        # proposal/authorization scope digests and per-task authority digests.
+        payload.pop("effective_planner_options", None)
+        payload.pop("compiled_task_options", None)
         return payload
 
 
@@ -4541,6 +4604,19 @@ class AgentHarnessControllerExecution(BaseModel):
         payload.pop("controller_execution_id", None)
         payload.pop("execution_digest", None)
         payload.pop("created_at", None)
+        # The execution identity binds the approved scope and per-task policy
+        # (authority, route, input/output contracts).  LLM-chosen option values
+        # are recorded per attempt for audit but are deliberately excluded from
+        # the identity so bounded in-workflow choices do not invalidate the
+        # execution.
+        payload["task_slots"] = [
+            {
+                key: value
+                for key, value in slot.items()
+                if key != "compiled_options_digest"
+            }
+            for slot in payload["task_slots"]
+        ]
         return payload
 
 
@@ -5496,7 +5572,14 @@ AGENT_EXECUTION_TOOL_BINDINGS: dict[
 
 
 class AgentExecutionToolSpec(BaseModel):
-    """One fixed, argument-free operation exposed to the Execution Agent."""
+    """One fixed operation exposed to the Execution Agent.
+
+    The operation itself remains argument-free: the agent selects the tool and
+    cannot supply arguments.  When the tool advances or gates a scientific
+    task, the server attaches that task's registered option schema so the
+    agent can reason about the step's parameter space.  Changing authorized
+    option values still requires the replan/authorization path.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -5508,6 +5591,7 @@ class AgentExecutionToolSpec(BaseModel):
     server_compiled_operation: AgentExecutionServerCompiledOperation
     application_eligible: Literal[True] = True
     user_boundary_kind: AgentExecutionUserBoundaryKind
+    option_schema: dict[str, Any] | None = None
 
     @field_validator("tool_id")
     @classmethod
@@ -5516,6 +5600,16 @@ class AgentExecutionToolSpec(BaseModel):
         if clean not in AGENT_EXECUTION_TOOL_BINDINGS:
             raise ValueError("execution tool ID is not in the fixed v1 roster")
         return clean
+
+    @field_validator("option_schema")
+    @classmethod
+    def validate_option_schema(
+        cls,
+        value: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        return _agent_validate_option_schema(value)
 
     @model_validator(mode="after")
     def validate_fixed_binding(self) -> "AgentExecutionToolSpec":

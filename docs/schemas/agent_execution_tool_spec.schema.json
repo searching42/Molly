@@ -35,29 +35,42 @@
     }
   },
   "additionalProperties": false,
-  "description": "One fixed, argument-free operation exposed to the Execution Agent.",
+  "description": "One fixed operation exposed to the Execution Agent.\n\nThe operation itself remains argument-free: the agent selects the tool and\ncannot supply arguments.  When the tool advances or gates a scientific\ntask, the server attaches that task's registered option schema so the\nagent can reason about the step's parameter space.  Changing authorized\noption values still requires the replan/authorization path.",
   "properties": {
+    "application_eligible": {
+      "const": true,
+      "default": true,
+      "title": "Application Eligible",
+      "type": "boolean"
+    },
+    "controller_action_boundary_class": {
+      "$ref": "#/$defs/AgentHarnessControllerActionBoundaryClass"
+    },
+    "option_schema": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Option Schema"
+    },
     "schema_version": {
       "const": "agent_execution_tool_spec.v1",
       "default": "agent_execution_tool_spec.v1",
       "title": "Schema Version",
       "type": "string"
     },
-    "tool_id": {
-      "title": "Tool Id",
-      "type": "string"
-    },
-    "controller_action_boundary_class": {
-      "$ref": "#/$defs/AgentHarnessControllerActionBoundaryClass"
-    },
     "server_compiled_operation": {
       "$ref": "#/$defs/AgentExecutionServerCompiledOperation"
     },
-    "application_eligible": {
-      "const": true,
-      "default": true,
-      "title": "Application Eligible",
-      "type": "boolean"
+    "tool_id": {
+      "title": "Tool Id",
+      "type": "string"
     },
     "user_boundary_kind": {
       "$ref": "#/$defs/AgentExecutionUserBoundaryKind"

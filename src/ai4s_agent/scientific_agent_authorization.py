@@ -1280,10 +1280,19 @@ class ScientificAgentAuthorizationService:
             raise ScientificAgentAuthorizationVerificationError(
                 "authorization permission decision binding is invalid"
             )
+        if authorization.authorization_scope_digest != (
+            publication.proposal.authorization_scope_digest
+        ):
+            raise ScientificAgentAuthorizationVerificationError(
+                "authorization scope no longer matches the verified proposal"
+            )
         regenerated_decision = self.permission_engine.evaluate(
             publication=publication,
             phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
             expected_proposal_digest=authorization.proposal_digest,
+            expected_authorization_scope_digest=(
+                authorization.authorization_scope_digest
+            ),
             authorization_mode=authorization.authorization_mode,
             requested_preauthorized_gate_ids=authorization.preauthorized_operational_gates,
             actor=authorization.actor,
@@ -1835,6 +1844,7 @@ class ScientificAgentAuthorizationService:
             observation_digest=proposal.observation_digest,
             tool_catalog_digest=proposal.tool_catalog_digest,
             run_plan_digest=_agent_digest(proposal.run_plan.model_dump(mode="json")),
+            authorization_scope_digest=proposal.authorization_scope_digest,
             run_plan=proposal.run_plan,
             task_ids=[item.task_id for item in proposal.run_plan.tasks],
             task_authority_digests={

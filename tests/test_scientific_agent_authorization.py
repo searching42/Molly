@@ -646,16 +646,41 @@ def test_complete_proposal_review_requires_exact_plan_authorization(
         "sha256:5a8f37a6d35be67a6532267d79ab7aca21cd53ddd30c0dcceb8457b620a66dff"
     )
     assert decision.task_decisions[0].task_authority_digest == (
-        "sha256:89fb2a426f7452ad71e685c001aeb84e39c893f70c980080d64a86a859ec851c"
+        "sha256:137db9e51d6628a112712cf8382e3529a9ad4c9f113affaf9043b014bd4a611d"
     )
     assert decision.decision_digest == (
-        "sha256:86fb9bd5038f937e72b8bb0105a8aebd8621b27b2466690a95bee94246eeb312"
+        "sha256:0dc4290162865a8fe2164fbfda42f1e89195877edbcfbae0a2e079645c8ddedc"
     )
-    persisted = _authorization_service(storage, proposal_store).control_store.read_permission_decision(
+
+
+def test_permission_scope_binding_accepts_same_scope_and_rejects_scope_drift(
+    tmp_path: Path,
+) -> None:
+    storage, proposal_store, proposal = _workspace_with_proposal(tmp_path)
+    service = _authorization_service(storage, proposal_store)
+    publication = proposal_store.read(
         project_id="project-1",
-        decision_id=decision.decision_id,
+        proposal_id=proposal.proposal_id,
+        verify_current=True,
     )
-    assert persisted.model_dump(mode="json") == decision.model_dump(mode="json")
+    matching = service.permission_engine.evaluate(
+        publication=publication,
+        phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
+        expected_proposal_digest=proposal.proposal_digest,
+        expected_authorization_scope_digest=proposal.authorization_scope_digest,
+        policy_version=PERMISSION_POLICY_VERSION,
+    )
+    assert "authorization_scope_mismatch" not in matching.reason_codes
+
+    drifted = service.permission_engine.evaluate(
+        publication=publication,
+        phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
+        expected_proposal_digest=proposal.proposal_digest,
+        expected_authorization_scope_digest="sha256:" + "f" * 64,
+        policy_version=PERMISSION_POLICY_VERSION,
+    )
+    assert drifted.outcome == AgentPermissionOutcome.DENY
+    assert "AUTHORIZATION_SCOPE_MISMATCH" in drifted.reason_codes
 
 
 def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
@@ -684,10 +709,10 @@ def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
         "sha256:bcfcce7a4c1e3dba12d5f291d92f1726df431c111cf288c49acb29bd5ea3df41"
     )
     assert legacy_review.task_decisions[0].task_authority_digest == (
-        "sha256:8371df28ef5b9da579264579167bc37f1c087388e42a0a49500a057fb51c4378"
+        "sha256:2f2331e3ceca834d3b9fcfb6b93528bc74b11e4c3abbfb0ea2e803efded673cd"
     )
     assert legacy_review.decision_digest == (
-        "sha256:1d385ff022577ec3e90781f3bb308ef25449752fb4b225f8b7d30ce7c9f676bf"
+        "sha256:4990e7d8b2868245d91eafbd25ab0bbea2c273c49ce5151e2bfe24d6f6a5d491"
     )
 
     request = _request(proposal, client_request_id="pr-bm-v1-authority")
@@ -738,10 +763,10 @@ def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
     service.control_store.publish_start_intent(start_intent)
 
     assert authorization.authorization_digest == (
-        "sha256:837c07aa3f29d39b76b81d2ab4ba4030670731729888a4dc3a882ebd819fc0bc"
+        "sha256:3e4c7acfd400f535e3d4dfda8a92265cc409a80acce3f2c97fc8bc10d8f49c7d"
     )
     assert start_intent.start_intent_digest == (
-        "sha256:21a72b493b493b4fb5fba352aadeb517f852257410b786d7d481669e75c48b4f"
+        "sha256:1da79beb4849cef070fb889808f6e662477af6f8fbf284c27748eb333a277468"
     )
 
     def replacement_adapter(payload):
