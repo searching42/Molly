@@ -26,7 +26,7 @@
 > * Controller executions dispatch `semantic_material()` on
 >   `controller_policy_version`: v1 keeps the per-slot
 >   `compiled_options_digest` and the concrete `compiled_task_options_digest`;
->   v2 binds the new `task_option_policy_digest` and records the concrete
+>   v2 binds the new `task_authority_roster_digest` and records the concrete
 >   options digest for audit only.
 > * Historical fixture replay tests
 >   (`tests/test_historical_v1_authority_fixture_replay.py`) prove old

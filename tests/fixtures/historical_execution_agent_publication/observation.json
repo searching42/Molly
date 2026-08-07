@@ -1,0 +1,66 @@
+{
+  "compiled_options_digest": "",
+  "controller_action_boundary_class": "ordinary_advance",
+  "controller_execution_digest": "sha256:c455dc2718ad371d8823610c589ab0fa0f7d016cdbe67a1bd4be063316d5ae2e",
+  "controller_execution_id": "controller-c455dc2718ad371d8823610c589ab0fa",
+  "controller_policy_digest": "sha256:044fe7aa0f725f5cf622665f8a936ab1bf9294f057b0eba1c0d4d0a519bbb48c",
+  "controller_policy_version": "scientific-agent-harness-controller-policy.v2",
+  "controller_status": "succeeded",
+  "created_at": "2026-08-01T00:00:00Z",
+  "current_attempt_ordinal": 0,
+  "current_execution_route": "",
+  "current_slot_id": "",
+  "current_task_id": "",
+  "current_task_index": null,
+  "execution_agent_policy_digest": "sha256:520b9dba4907192337eb004ade113eb4072b7f8589d2710e14c4df44772dcdcf",
+  "execution_agent_policy_version": "scientific-agent-execution-agent-policy.v1",
+  "input_artifacts_digest": "",
+  "inspection_digest": "sha256:d321a3d30516ef9a36cf1573160a4757931529a96fc39b1c4b6fb240d53f165c",
+  "latest_controller_receipt_digest": "sha256:64464adbb08ce8c102f7ceabc28a753abd5f75ff341d78332ba2f8ebe5f777e7",
+  "latest_controller_receipt_id": "controller-receipt-64464adbb08ce8c102f7ceabc28a753a",
+  "latest_controller_receipt_outcome": "committed",
+  "latest_safe_reason_codes": [
+    "TASK_COMPLETED"
+  ],
+  "next_controller_action": "complete_execution",
+  "observation_digest": "sha256:e388cf637ebd4bf120c24ccb5ae4cbe13cd515fc43df1c6ea45711e9b46d8e70",
+  "observation_id": "execution-observation-e388cf637ebd4bf120c24ccb5ae4cbe1",
+  "output_contract_digest": "",
+  "project_id": "project-1",
+  "run_id": "run-1",
+  "safe_fact_bindings": [
+    {
+      "authority_class": "authoritative",
+      "name": "controller_execution",
+      "source_digest": "sha256:c455dc2718ad371d8823610c589ab0fa0f7d016cdbe67a1bd4be063316d5ae2e",
+      "source_id": "controller-c455dc2718ad371d8823610c589ab0fa",
+      "state": "verified"
+    },
+    {
+      "authority_class": "authoritative",
+      "name": "artifact_registry",
+      "source_digest": "sha256:14238670f097ab7c22ac5a68c33f29a8a069e8ee82067c2bc3dafbb873d13c93",
+      "source_id": "registry-run-1",
+      "state": "verified"
+    },
+    {
+      "authority_class": "authoritative",
+      "name": "authorized_input_artifact",
+      "source_digest": "sha256:6f5135d1f77825f5def56ffe28aa749aeee7d4afe9412ad776f240133c5376a1",
+      "source_id": "uploaded_dataset",
+      "state": "verified"
+    },
+    {
+      "authority_class": "authoritative",
+      "name": "stage_state",
+      "source_digest": "sha256:722feea82f64f485971d91c20601661a5a225563834666c46d8e93b565296bc2",
+      "source_id": "stage-run-1",
+      "state": "succeeded"
+    }
+  ],
+  "safe_fact_bindings_digest": "sha256:7834bcb4f99b3a27653c0a8a2609cb0f8e139842aa2e9a95a9f5e729f4dee858",
+  "schema_version": "agent_execution_agent_observation.v1",
+  "task_authority_digest": "",
+  "tool_catalog_digest": "sha256:1be217d220c656ec064c88b27d260b819d9f568fa749d69ad9b64f8f7ceec26d",
+  "tool_catalog_id": "execution-tool-catalog-1be217d220c656ec064c88b27d260b81"
+}

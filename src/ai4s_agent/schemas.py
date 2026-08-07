@@ -10,7 +10,14 @@ from pathlib import Path
 from typing import Any, Literal
 
 from jsonschema import Draft202012Validator
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 def _validate_json_safe(value: Any, path: str = "value") -> Any:
@@ -2186,17 +2193,20 @@ class AgentExecutionPlanProposal(BaseModel):
     executable: Literal[False] = False
     created_at: str
 
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler, _info):
         """Emit the exact persisted field set for the declared schema version.
 
         ``authorization_scope_digest`` is a v2-only field.  v1 artifacts were
         published without it; dropping the empty value keeps historical v1
         publications byte-reproducible while v2 publications carry the scope
-        identity.  The digest algorithms below rely on the same projection, so
-        old v1 digests and new v2 digests are both exact.
+        identity.  Using Pydantic's serializer (rather than a ``model_dump``
+        override) makes the rule participate in nested parent serialization
+        too, so a v1 proposal embedded in e.g. a revision publication still
+        round-trips byte-exactly.
         """
 
-        payload = super().model_dump(**kwargs)
+        payload = handler(self)
         if self.schema_version == AGENT_EXECUTION_PLAN_PROPOSAL_V1:
             payload.pop("authorization_scope_digest", None)
         return payload
@@ -3493,7 +3503,8 @@ class AgentPlanAuthorization(BaseModel):
     created_at: str
     executable: Literal[False] = False
 
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler, _info):
         """Emit the exact persisted field set for the declared schema version.
 
         ``authorization_scope_digest`` is a v2-only field.  Dropping it for v1
@@ -3502,7 +3513,7 @@ class AgentPlanAuthorization(BaseModel):
         deliberately excludes the option values from its digest material.
         """
 
-        payload = super().model_dump(**kwargs)
+        payload = handler(self)
         if self.schema_version == AGENT_PLAN_AUTHORIZATION_V1:
             payload.pop("authorization_scope_digest", None)
         return payload
@@ -4510,12 +4521,15 @@ class AgentHarnessControllerExecution(BaseModel):
     task_authority_digests: dict[str, str]
     dispatch_intent_digests: dict[str, str]
     compiled_task_options_digest: str
-    # v2 controller policy binds the registered task option *policy* (schema,
-    # server defaults, review-required IDs, compiler version) as part of the
-    # execution identity.  ``compiled_task_options_digest`` keeps its original
-    # v1 semantics (exact digest of the compiled option values) and remains an
-    # audit field for both policies; it is not part of the v2 identity.
-    task_option_policy_digest: str = ""
+    # v2 controller policy binds the registered task authorities as part of
+    # the execution identity.  ``task_authority_roster_digest`` is a single
+    # digest over the per-task authority roster (each authority digest already
+    # includes the task's option *policy* digest, risk, permissions, gates,
+    # execution binding and budget dimensions).  ``compiled_task_options_digest``
+    # keeps its original v1 semantics (exact digest of the compiled option
+    # values) and remains an audit field for both policies; it is not part of
+    # the v2 identity.
+    task_authority_roster_digest: str = ""
     artifact_binding_digest: str
     gate_binding_digest: str
     budget_binding_digest: str
@@ -4543,17 +4557,18 @@ class AgentHarnessControllerExecution(BaseModel):
     created_at: str
     executable: Literal[True] = True
 
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler, _info):
         """Emit the exact persisted field set for the declared policy version.
 
-        ``task_option_policy_digest`` is a v2-only field.  v1 executions were
-        published without it; dropping the empty value keeps historical v1
-        executions byte-reproducible.
+        ``task_authority_roster_digest`` is a v2-only field.  v1 executions
+        were published without it; dropping the empty value keeps historical
+        v1 executions byte-reproducible.
         """
 
-        payload = super().model_dump(**kwargs)
+        payload = handler(self)
         if self.controller_policy_version == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1:
-            payload.pop("task_option_policy_digest", None)
+            payload.pop("task_authority_roster_digest", None)
         return payload
 
     @field_validator(
@@ -4606,7 +4621,7 @@ class AgentHarnessControllerExecution(BaseModel):
     @field_validator(
         "remote_authority_set_digest",
         "remote_authority_roster_digest",
-        "task_option_policy_digest",
+        "task_authority_roster_digest",
         "execution_digest",
     )
     @classmethod
@@ -4649,13 +4664,13 @@ class AgentHarnessControllerExecution(BaseModel):
             self.controller_policy_version
             == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1
         ):
-            if self.task_option_policy_digest:
+            if self.task_authority_roster_digest:
                 raise ValueError(
-                    "task option policy digest is not defined for v1 controller policy"
+                    "task authority roster digest is not defined for v1 controller policy"
                 )
-        elif not self.task_option_policy_digest:
+        elif not self.task_authority_roster_digest:
             raise ValueError(
-                "task option policy digest is required for v2 controller policy"
+                "task authority roster digest is required for v2 controller policy"
             )
         if len(self.task_slots) != len(self.ordered_task_ids):
             raise ValueError("task slots must exactly cover the ordered task roster")
@@ -5699,15 +5714,18 @@ class AgentExecutionToolSpec(BaseModel):
     user_boundary_kind: AgentExecutionUserBoundaryKind
     option_schema: dict[str, Any] | None = None
 
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler, _info):
         """Omit the optional option-schema projection when it is absent.
 
         Historical v1 tool catalogs were published without the field; dropping
         ``null`` keeps those publications byte-reproducible while catalogs
-        that carry a pending-task option schema still expose it.
+        that carry a pending-task option schema still expose it.  A
+        ``model_dump`` override would not participate when the catalog is
+        serialized as a parent model, so this must be a Pydantic serializer.
         """
 
-        payload = super().model_dump(**kwargs)
+        payload = handler(self)
         if payload.get("option_schema") is None:
             payload.pop("option_schema", None)
         return payload

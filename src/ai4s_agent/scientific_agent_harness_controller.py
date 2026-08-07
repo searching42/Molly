@@ -1376,16 +1376,18 @@ class ScientificAgentHarnessController:
             # ``compiled_task_options_digest`` keeps its original v1 semantics:
             # an exact digest of the compiled option values, recorded for
             # audit under both controller policies.  The v2 execution identity
-            # binds the option *policy* through ``task_option_policy_digest``
-            # instead, so bounded in-workflow choices validated against the
-            # registered schema do not invalidate the execution.
+            # binds the task-authority roster through
+            # ``task_authority_roster_digest`` (each authority digest already
+            # carries the registered option policy), so bounded in-workflow
+            # choices validated against the registered schema do not
+            # invalidate the execution identity.
             compiled_task_options_digest=_agent_digest(
                 authorization.compiled_task_options
             ),
-            task_option_policy_digest=_agent_digest(
+            task_authority_roster_digest=_agent_digest(
                 {
                     "schema_version": (
-                        "agent_harness_controller_option_policy.v1"
+                        "agent_harness_controller_task_authority_roster.v1"
                     ),
                     "task_authority_digests": (
                         authorization.task_authority_digests

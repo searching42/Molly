@@ -1,0 +1,17 @@
+{
+  "generated_from": "bf82cfd",
+  "project_id": "project-1",
+  "tool_call_proposal_id": "tool-call-proposal-6dd504756eb829deca913221b960c35c",
+  "selected_tool_id": "agent.pause_current.v1",
+  "catalog_tool_ids": [
+    "agent.pause_current.v1",
+    "controller.advance_current.v1"
+  ],
+  "files": [
+    "observation.json",
+    "publication_manifest.json",
+    "tool_call_proposal.json",
+    "tool_catalog.json",
+    "verification.json"
+  ]
+}

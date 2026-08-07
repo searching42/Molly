@@ -1,0 +1,8 @@
+{
+  "artifact_digest": "sha256:6dd504756eb829deca913221b960c35c1c92b5de78b3dbcb41195eff842287ce",
+  "artifact_id": "tool-call-proposal-6dd504756eb829deca913221b960c35c",
+  "artifact_type": "tool_call_proposal",
+  "executable": false,
+  "schema_version": "execution_agent_publication_verification.v1",
+  "verified": true
+}

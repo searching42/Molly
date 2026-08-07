@@ -44,6 +44,10 @@ from ai4s_agent.scientific_agent_plan import (
     AgentProjectObservationBuilder,
     ScientificAgentPlanProposalStore,
 )
+from ai4s_agent.schemas import (
+    AgentExecutionPlanProposal,
+    AgentPlanRevisionProposal,
+)
 from ai4s_agent.storage import ProjectStorage
 
 import pytest
@@ -174,6 +178,40 @@ def test_historical_v1_proposal_reads_and_roundtrips_byte_exact(tmp_path: Path) 
     # read-only verification compares regenerated payload bytes to disk.
     expected = _proposal_store_bytes(publication.proposal)
     assert expected == raw
+
+
+def test_historical_v1_proposal_nested_in_revision_serializes_byte_exact() -> None:
+    """A v1 proposal embedded as ``successor_candidate`` must not leak the
+    v2-only ``authorization_scope_digest`` through parent-model serialization."""
+
+    raw = (FIXTURE_ROOT / "publication" / "proposal.json").read_bytes()
+    proposal = AgentExecutionPlanProposal.model_validate_json(raw)
+    revision = AgentPlanRevisionProposal.model_construct(
+        schema_version="agent_plan_revision_proposal.v1",
+        project_id="project-1",
+        run_id="run-1",
+        proposal_id="proposal-x",
+        proposal_digest="sha256:" + "a" * 64,
+        semantic_plan_id="semantic-plan-x",
+        semantic_plan_digest="sha256:" + "b" * 64,
+        observation_id="observation-x",
+        observation_digest="sha256:" + "c" * 64,
+        tool_catalog_digest="sha256:" + "d" * 64,
+        run_plan_digest="sha256:" + "e" * 64,
+        revision_material="{}",
+        revision_material_digest="sha256:" + "f" * 64,
+        reason="historical v1 nested proposal audit",
+        requested_by="alice",
+        requested_by_source="config:AI4S_AGENT_AUTHORIZATION_OWNER",
+        created_at="2026-08-01T00:00:00Z",
+        successor_candidate=proposal,
+        successor_proposal_digest=proposal.proposal_digest,
+        revision_digest="",
+        executable=False,
+    )
+    nested = revision.model_dump(mode="json")["successor_candidate"]
+    assert "authorization_scope_digest" not in nested
+    assert nested == json.loads(raw)
 
 
 def test_historical_v1_authorization_reads_byte_exact_and_control_store_verifies(
@@ -355,7 +393,7 @@ def test_current_writer_never_emits_v1_controller_policy(tmp_path: Path) -> None
         "task_authority_digests": {"inspect_dataset": "sha256:" + "11" * 32},
         "dispatch_intent_digests": {"inspect_dataset": "sha256:" + "13" * 32},
         "compiled_task_options_digest": "sha256:" + "5" * 64,
-        "task_option_policy_digest": "sha256:" + "6" * 64,
+        "task_authority_roster_digest": "sha256:" + "6" * 64,
         "artifact_binding_digest": "sha256:" + "7" * 64,
         "gate_binding_digest": "sha256:" + "8" * 64,
         "budget_binding_digest": "sha256:" + "9" * 64,
@@ -376,7 +414,7 @@ def test_current_writer_never_emits_v1_controller_policy(tmp_path: Path) -> None
     execution = AgentHarnessControllerExecution.model_validate(payload)
     dumped = execution.model_dump(mode="json")
     assert dumped["controller_policy_version"] == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2
-    assert dumped["task_option_policy_digest"]
+    assert dumped["task_authority_roster_digest"]
 
 
 def _pretty_json(payload: object) -> bytes:

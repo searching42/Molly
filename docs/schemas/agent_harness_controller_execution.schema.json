@@ -247,9 +247,9 @@
       "title": "Compiled Task Options Digest",
       "type": "string"
     },
-    "task_option_policy_digest": {
+    "task_authority_roster_digest": {
       "default": "",
-      "title": "Task Option Policy Digest",
+      "title": "Task Authority Roster Digest",
       "type": "string"
     },
     "artifact_binding_digest": {
