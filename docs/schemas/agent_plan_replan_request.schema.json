@@ -14,6 +14,24 @@
   },
   "additionalProperties": false,
   "properties": {
+    "schema_version": {
+      "const": "agent_plan_replan_request.v1",
+      "default": "agent_plan_replan_request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
     "actor": {
       "title": "Actor",
       "type": "string"
@@ -22,80 +40,35 @@
       "title": "Actor Source",
       "type": "string"
     },
-    "baseline_authorization_digest": {
-      "title": "Baseline Authorization Digest",
-      "type": "string"
+    "trigger_kind": {
+      "$ref": "#/$defs/AgentPlanReplanTriggerKind"
     },
-    "baseline_authorization_id": {
-      "title": "Baseline Authorization Id",
+    "baseline_proposal_id": {
+      "title": "Baseline Proposal Id",
       "type": "string"
     },
     "baseline_proposal_digest": {
       "title": "Baseline Proposal Digest",
       "type": "string"
     },
-    "baseline_proposal_id": {
-      "title": "Baseline Proposal Id",
-      "type": "string"
-    },
-    "baseline_run_plan_digest": {
-      "title": "Baseline Run Plan Digest",
+    "baseline_semantic_plan_id": {
+      "title": "Baseline Semantic Plan Id",
       "type": "string"
     },
     "baseline_semantic_plan_digest": {
       "title": "Baseline Semantic Plan Digest",
       "type": "string"
     },
-    "baseline_semantic_plan_id": {
-      "title": "Baseline Semantic Plan Id",
+    "baseline_run_plan_digest": {
+      "title": "Baseline Run Plan Digest",
       "type": "string"
     },
-    "client_request_id": {
-      "title": "Client Request Id",
+    "baseline_authorization_id": {
+      "title": "Baseline Authorization Id",
       "type": "string"
     },
-    "controller_decision_digest": {
-      "default": "",
-      "title": "Controller Decision Digest",
-      "type": "string"
-    },
-    "controller_decision_id": {
-      "default": "",
-      "title": "Controller Decision Id",
-      "type": "string"
-    },
-    "controller_execution_digest": {
-      "default": "",
-      "title": "Controller Execution Digest",
-      "type": "string"
-    },
-    "controller_execution_id": {
-      "default": "",
-      "title": "Controller Execution Id",
-      "type": "string"
-    },
-    "controller_receipt_digest": {
-      "default": "",
-      "title": "Controller Receipt Digest",
-      "type": "string"
-    },
-    "controller_receipt_id": {
-      "default": "",
-      "title": "Controller Receipt Id",
-      "type": "string"
-    },
-    "created_at": {
-      "title": "Created At",
-      "type": "string"
-    },
-    "external_llm_approved": {
-      "const": true,
-      "title": "External Llm Approved",
-      "type": "boolean"
-    },
-    "feedback_receipt_digest": {
-      "default": "",
-      "title": "Feedback Receipt Digest",
+    "baseline_authorization_digest": {
+      "title": "Baseline Authorization Digest",
       "type": "string"
     },
     "feedback_receipt_id": {
@@ -103,38 +76,39 @@
       "title": "Feedback Receipt Id",
       "type": "string"
     },
-    "project_id": {
-      "title": "Project Id",
-      "type": "string"
-    },
-    "request_digest": {
+    "feedback_receipt_digest": {
       "default": "",
-      "title": "Request Digest",
+      "title": "Feedback Receipt Digest",
       "type": "string"
     },
-    "run_id": {
-      "title": "Run Id",
-      "type": "string"
-    },
-    "schema_version": {
-      "const": "agent_plan_replan_request.v1",
-      "default": "agent_plan_replan_request.v1",
-      "title": "Schema Version",
-      "type": "string"
-    },
-    "tool_call_application_receipt_digest": {
+    "controller_execution_id": {
       "default": "",
-      "title": "Tool Call Application Receipt Digest",
+      "title": "Controller Execution Id",
       "type": "string"
     },
-    "tool_call_application_receipt_id": {
+    "controller_execution_digest": {
       "default": "",
-      "title": "Tool Call Application Receipt Id",
+      "title": "Controller Execution Digest",
       "type": "string"
     },
-    "tool_call_proposal_digest": {
+    "controller_decision_id": {
       "default": "",
-      "title": "Tool Call Proposal Digest",
+      "title": "Controller Decision Id",
+      "type": "string"
+    },
+    "controller_decision_digest": {
+      "default": "",
+      "title": "Controller Decision Digest",
+      "type": "string"
+    },
+    "controller_receipt_id": {
+      "default": "",
+      "title": "Controller Receipt Id",
+      "type": "string"
+    },
+    "controller_receipt_digest": {
+      "default": "",
+      "title": "Controller Receipt Digest",
       "type": "string"
     },
     "tool_call_proposal_id": {
@@ -142,8 +116,34 @@
       "title": "Tool Call Proposal Id",
       "type": "string"
     },
-    "trigger_kind": {
-      "$ref": "#/$defs/AgentPlanReplanTriggerKind"
+    "tool_call_proposal_digest": {
+      "default": "",
+      "title": "Tool Call Proposal Digest",
+      "type": "string"
+    },
+    "tool_call_application_receipt_id": {
+      "default": "",
+      "title": "Tool Call Application Receipt Id",
+      "type": "string"
+    },
+    "tool_call_application_receipt_digest": {
+      "default": "",
+      "title": "Tool Call Application Receipt Digest",
+      "type": "string"
+    },
+    "external_llm_approved": {
+      "const": true,
+      "title": "External Llm Approved",
+      "type": "boolean"
+    },
+    "request_digest": {
+      "default": "",
+      "title": "Request Digest",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
     }
   },
   "required": [

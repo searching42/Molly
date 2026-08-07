@@ -1,0 +1,1893 @@
+{
+  "available_artifacts": [
+    {
+      "artifact_id": "uploaded_dataset",
+      "content_digest": "sha256:6f5135d1f77825f5def56ffe28aa749aeee7d4afe9412ad776f240133c5376a1",
+      "logical_kind": "uploaded_dataset",
+      "producer_task_id": null,
+      "provenance_completeness_summary": [
+        "content_bound_input",
+        "content_digest",
+        "registry_binding"
+      ],
+      "schema_summary": {},
+      "size_bytes": 21,
+      "trust_class": "content_bound_input",
+      "verification_state": "registered"
+    }
+  ],
+  "blocking_questions": [],
+  "budget_limits": {
+    "dimensions": [],
+    "limits": {},
+    "status": "not_configured"
+  },
+  "capability_summary": [],
+  "confirmed_dataset_summaries": [],
+  "created_at": "2026-08-01T00:00:00Z",
+  "current_run_status": "UNAVAILABLE",
+  "current_stage_summary": {
+    "error_code": "",
+    "executed_task_ids": [],
+    "failure_family": "",
+    "next_stage": "",
+    "required_gate_ids": [],
+    "stage_id": "unavailable",
+    "status": "UNAVAILABLE",
+    "verified_artifact_ids": []
+  },
+  "existing_plan_summary": {
+    "missing_artifacts": [],
+    "plan_digest": "",
+    "present": false,
+    "requested_task_ids": [],
+    "task_ids": []
+  },
+  "explicit_constraints": [],
+  "goal_context": "Inspect one exact dataset",
+  "logical_execution_profiles": [],
+  "next_stage": "",
+  "observation_digest": "sha256:803ddc90c3ecb0e56689b2202a4d04b26e8485103e9966fa14fa1db1a74f0805",
+  "observation_id": "observation-803ddc90c3ecb0e56689b2202a4d04b2",
+  "project_id": "project-1",
+  "run_id": "run-1",
+  "schema_version": "agent_project_observation.v1",
+  "source_bindings": [
+    {
+      "identity": "project-1:run-1:artifact_registry",
+      "present": true,
+      "source_digest": "sha256:97242d8b4a60b7c455eb64a949980ca86c5892550ad1c2c0053f16daff8f367d",
+      "source_id": "artifact_registry"
+    },
+    {
+      "identity": "project-1:run-1:confirmed_dataset_manifests",
+      "present": false,
+      "source_digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "source_id": "confirmed_dataset_manifests"
+    },
+    {
+      "identity": "project-1:run-1:run_plan",
+      "present": false,
+      "source_digest": "sha256:398b676e47d03a29016ee92fe378b8b4f1b3e965390c4c64ce78d27f79df74d1",
+      "source_id": "existing_run_plan"
+    },
+    {
+      "identity": "server:resource_profile_snapshot",
+      "present": false,
+      "source_digest": "sha256:3eeabb0a752ada5c3bbe7f5640bd1a27f00710e7cf76fb19886269b7cee97c9d",
+      "source_id": "resource_profile_snapshot"
+    },
+    {
+      "identity": "server:scientific_tool_catalog",
+      "present": true,
+      "source_digest": "sha256:0956e5ae55627f1383147b0e5241546361b778aa49d41f670c4d00cd787f4904",
+      "source_id": "scientific_tool_catalog"
+    },
+    {
+      "identity": "project-1:run-1:stage_state",
+      "present": false,
+      "source_digest": "sha256:398b676e47d03a29016ee92fe378b8b4f1b3e965390c4c64ce78d27f79df74d1",
+      "source_id": "stage_state"
+    }
+  ],
+  "tool_catalog": {
+    "catalog_digest": "sha256:0956e5ae55627f1383147b0e5241546361b778aa49d41f670c4d00cd787f4904",
+    "catalog_id": "scientific-tool-catalog-v1",
+    "excluded_task_ids": [
+      "acquire_literature_sources",
+      "build_dense_index",
+      "build_multi_index",
+      "check_public_dataset_leakage",
+      "execute_oled_bounded_discovery_controller",
+      "execute_oled_candidate_decision",
+      "execute_oled_experiment_batch_selection",
+      "execute_oled_generated_candidate_evaluation",
+      "execute_oled_inverse_design",
+      "execute_oled_local_demo",
+      "execute_oled_registry_candidate_screening",
+      "literature_to_dataset_workflow",
+      "parse_document_grobid",
+      "parse_document_pdfplumber",
+      "parse_document_pymupdf",
+      "parse_pdf_corpus_pdfplumber",
+      "prepare_literature_corpus_sources"
+    ],
+    "schema_version": "scientific_tool_catalog.v1",
+    "tools": [
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "property_catalog": [
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Evaluate whether the cleaned dataset supports the registered modeling workflow.",
+        "effect_class": "observe",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "property_catalog"
+        ],
+        "label": "Check trainability",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "trainability_report"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "property_catalog"
+        ],
+        "required_permissions": [
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "check_trainability",
+        "tool_id": "check_trainability",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "uploaded_dataset": [
+            "content_bound_input",
+            "registered_intermediate"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {
+          "drop_empty_target_rows": false,
+          "min_nonempty": 1,
+          "min_numeric_ratio": 0.5,
+          "strict_smiles_cleaning": true
+        },
+        "description": "Apply the registered data-cleaning workflow to a logical dataset profile.",
+        "effect_class": "derive_local",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "uploaded_dataset"
+        ],
+        "label": "Clean dataset",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-clean-dataset.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "drop_empty_target_rows": {
+              "type": "boolean"
+            },
+            "min_nonempty": {
+              "maximum": 1000000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "min_numeric_ratio": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "strict_smiles_cleaning": {
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "cleaned_train_dataset",
+          "cleaning_rules",
+          "property_catalog"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "uploaded_dataset"
+        ],
+        "required_permissions": [
+          "derive_project_artifact",
+          "read_content_bound_input"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "medium",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "clean_dataset",
+        "tool_id": "clean_dataset",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "candidate_training_dataset": [
+            "content_bound_input",
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "citation_provenance_report": [
+            "content_bound_input",
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "conflict_report": [
+            "content_bound_input",
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Prepare the registered dataset-confirmation task for review; it does not grant confirmation authority.",
+        "effect_class": "scientific_confirm",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "candidate_training_dataset",
+          "citation_provenance_report",
+          "conflict_report"
+        ],
+        "label": "Confirm extracted dataset",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "confirmed_training_dataset",
+          "extraction_confirmation_record"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [
+          "gate_2_data_mining"
+        ],
+        "required_input_artifact_ids": [
+          "candidate_training_dataset",
+          "citation_provenance_report",
+          "conflict_report"
+        ],
+        "required_permissions": [
+          "derive_project_artifact",
+          "scientific_dataset_confirmation"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "high",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "confirm_extracted_dataset",
+        "tool_id": "confirm_extracted_dataset",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "raw_dataset": [
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "raw_dataset_csv": [
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "review_snapshot": [
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Consume an exact Controller GateDecision and publish the Confirmed Dataset.",
+        "effect_class": "scientific_confirm",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "raw_dataset",
+          "raw_dataset_csv",
+          "review_snapshot"
+        ],
+        "label": "Confirm structured dataset canary",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "confirmation_receipt",
+          "confirmed_training_dataset",
+          "confirmed_training_dataset_csv"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [
+          "gate_3_train_config"
+        ],
+        "required_input_artifact_ids": [
+          "raw_dataset",
+          "raw_dataset_csv",
+          "review_snapshot"
+        ],
+        "required_permissions": [
+          "derive_project_artifact",
+          "scientific_dataset_confirmation"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "high",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "confirm_structured_dataset_canary",
+        "tool_id": "confirm_structured_dataset_canary",
+        "verification_policy": "controller_gate_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "conflict_report": [
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "evidence_hits": [
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "normalized_extracted_records": [
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Evaluate registered extraction quality evidence without changing scientific confirmation.",
+        "effect_class": "observe",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "conflict_report",
+          "evidence_hits",
+          "normalized_extracted_records"
+        ],
+        "label": "Evaluate extraction benchmark",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "extraction_benchmark_report"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "conflict_report",
+          "evidence_hits",
+          "normalized_extracted_records"
+        ],
+        "required_permissions": [
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "evaluate_extraction_benchmark",
+        "tool_id": "evaluate_extraction_benchmark",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "candidate_dataset": [
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input"
+          ],
+          "confirmation_receipt": [
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input"
+          ],
+          "confirmed_training_dataset": [
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input"
+          ],
+          "confirmed_training_dataset_csv": [
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input"
+          ],
+          "generation_publication": [
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input"
+          ],
+          "model_package": [
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input"
+          ],
+          "raw_dataset": [
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input"
+          ],
+          "raw_dataset_csv": [
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input"
+          ],
+          "review_snapshot": [
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input"
+          ],
+          "trained_model": [
+            "registered_intermediate",
+            "verified_output",
+            "confirmed_scientific_input"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records",
+          "max_runtime_sec"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {
+          "seed": 1729,
+          "top_n": 5
+        },
+        "description": "Predict, validate, rank, and publish Computational Top-N.",
+        "effect_class": "compute",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "candidate_dataset",
+          "confirmation_receipt",
+          "confirmed_training_dataset",
+          "confirmed_training_dataset_csv",
+          "generation_publication",
+          "model_package",
+          "raw_dataset",
+          "raw_dataset_csv",
+          "review_snapshot",
+          "trained_model"
+        ],
+        "label": "Evaluate structured dataset canary candidates",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "seed": {
+              "maximum": 2147483647,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "top_n": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "seed",
+            "top_n"
+          ],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "candidate_validation",
+          "computational_top_n",
+          "prediction_publication",
+          "ranking_publication",
+          "structured_dataset_canary_evidence"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "candidate_dataset",
+          "confirmation_receipt",
+          "confirmed_training_dataset",
+          "confirmed_training_dataset_csv",
+          "generation_publication",
+          "model_package",
+          "raw_dataset",
+          "raw_dataset_csv",
+          "review_snapshot",
+          "trained_model"
+        ],
+        "required_permissions": [
+          "derive_project_artifact",
+          "model_inference_compute"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "evaluate_structured_dataset_canary",
+        "tool_id": "evaluate_structured_dataset_canary",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "evidence_chunks": [
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "evidence_hits": [
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records",
+          "max_runtime_sec"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Extract structured records from registered evidence artifacts.",
+        "effect_class": "compute",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "evidence_chunks",
+          "evidence_hits"
+        ],
+        "label": "Extract scientific records",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "candidate_training_dataset",
+          "extracted_records",
+          "extraction_confidence_report",
+          "rejected_records"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "evidence_chunks",
+          "evidence_hits"
+        ],
+        "required_permissions": [
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "medium",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "extract_records",
+        "tool_id": "extract_records",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "candidate_predictions": [
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {
+          "constraints": [],
+          "objectives": null,
+          "top_n": null
+        },
+        "description": "Filter and rank candidate predictions with registered high-level criteria.",
+        "effect_class": "derive_local",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "candidate_predictions"
+        ],
+        "label": "Filter and rank candidates",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-filter-rank.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "constraints": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "maxLength": 96,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maximum": {
+                    "maximum": 1000000,
+                    "minimum": -1000000,
+                    "type": "number"
+                  },
+                  "minimum": {
+                    "maximum": 1000000,
+                    "minimum": -1000000,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "column"
+                ],
+                "type": "object"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "objectives": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "maxLength": 96,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "direction": {
+                    "enum": [
+                      "maximize",
+                      "minimize"
+                    ],
+                    "type": "string"
+                  },
+                  "weight": {
+                    "maximum": 1000000,
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "column",
+                  "direction",
+                  "weight"
+                ],
+                "type": "object"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "top_n": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "top_n",
+            "objectives"
+          ],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "ranked_candidates",
+          "topn_export"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "candidate_predictions"
+        ],
+        "required_permissions": [
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [
+          "objectives",
+          "top_n"
+        ],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "filter_rank",
+        "tool_id": "filter_rank",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "cleaned_train_dataset": [
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "confirmed_training_dataset": [
+            "confirmed_scientific_input"
+          ]
+        },
+        "backend_default_planner_options": {
+          "deterministic_stub": {},
+          "reinvent4": {}
+        },
+        "backend_execution_routes": {
+          "deterministic_stub": "local_executor",
+          "reinvent4": "remote_execution_service"
+        },
+        "backend_profile_requirements": {
+          "deterministic_stub": [],
+          "reinvent4": [
+            "molecular_generation"
+          ]
+        },
+        "backend_remote_task_types": {
+          "deterministic_stub": null,
+          "reinvent4": "molecular_generation"
+        },
+        "budget_dimensions": [
+          "max_runtime_sec",
+          "max_steps"
+        ],
+        "default_planner_backend": "deterministic_stub",
+        "default_planner_options": {
+          "backend": "deterministic_stub",
+          "count": 32,
+          "seed": 0
+        },
+        "description": "Generate candidate molecules using the registered logical generation workflow.",
+        "effect_class": "compute",
+        "execution_route": null,
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "cleaned_train_dataset",
+          "confirmed_training_dataset"
+        ],
+        "label": "Generate candidate molecules",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-generate-candidates.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "backend": {
+              "enum": [
+                "deterministic_stub",
+                "reinvent4"
+              ],
+              "type": "string"
+            },
+            "count": {
+              "maximum": 100000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "seed": {
+              "maximum": 2147483647,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "backend",
+            "count"
+          ],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [
+          "cleaned_train_dataset",
+          "confirmed_training_dataset"
+        ],
+        "output_artifact_ids": [
+          "candidate_dataset",
+          "generation_publication",
+          "generation_report"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [
+          "gate_5_final_threshold"
+        ],
+        "required_input_artifact_ids": [],
+        "required_permissions": [
+          "candidate_generation_compute",
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "medium",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "generate_candidates",
+        "tool_id": "generate_candidates",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "confirmed_training_dataset": [
+            "confirmed_scientific_input",
+            "verified_output"
+          ],
+          "model_package": [
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records",
+          "max_runtime_sec"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {
+          "seed": 1729
+        },
+        "description": "Generate a current-run deterministic candidate roster from the current model package.",
+        "effect_class": "compute",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "confirmed_training_dataset",
+          "model_package"
+        ],
+        "label": "Generate structured dataset canary candidates",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "seed": {
+              "maximum": 2147483647,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "seed"
+          ],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "candidate_dataset",
+          "generation_publication",
+          "generation_request"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [
+          "gate_5_final_threshold"
+        ],
+        "required_input_artifact_ids": [
+          "confirmed_training_dataset",
+          "model_package"
+        ],
+        "required_permissions": [
+          "candidate_generation_compute",
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "high",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "generate_structured_dataset_canary",
+        "tool_id": "generate_structured_dataset_canary",
+        "verification_policy": "controller_dispatch_publication_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "parsed_document": [
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Build the registered logical index from parsed document artifacts.",
+        "effect_class": "derive_local",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "parsed_document"
+        ],
+        "label": "Index parsed corpus",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "corpus_index",
+          "evidence_chunks"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "parsed_document"
+        ],
+        "required_permissions": [
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "index_corpus",
+        "tool_id": "index_corpus",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "confirmed_training_dataset": [
+            "confirmed_scientific_input"
+          ],
+          "uploaded_dataset": [
+            "content_bound_input",
+            "registered_intermediate"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Inspect a content-bound dataset and derive its logical profile.",
+        "effect_class": "observe",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [
+          [
+            "uploaded_dataset",
+            "confirmed_training_dataset"
+          ]
+        ],
+        "input_artifact_ids": [
+          "confirmed_training_dataset",
+          "uploaded_dataset"
+        ],
+        "label": "Inspect dataset",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [
+          "confirmed_training_dataset",
+          "uploaded_dataset"
+        ],
+        "output_artifact_ids": [
+          "dataset_profile",
+          "property_catalog"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [],
+        "required_permissions": [
+          "derive_project_artifact",
+          "read_content_bound_input"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "inspect_dataset",
+        "tool_id": "inspect_dataset",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "normalized_extracted_records": [
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Merge normalized records using registered provenance and conflict rules.",
+        "effect_class": "derive_local",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "normalized_extracted_records"
+        ],
+        "label": "Merge extracted records",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "candidate_training_dataset",
+          "conflict_report",
+          "merged_records"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "normalized_extracted_records"
+        ],
+        "required_permissions": [
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "medium",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "merge_extracted_records",
+        "tool_id": "merge_extracted_records",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "extracted_records": [
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Normalize units in registered extracted scientific records.",
+        "effect_class": "derive_local",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "extracted_records"
+        ],
+        "label": "Normalize extracted units",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "candidate_training_dataset",
+          "normalized_extracted_records",
+          "unit_normalization_report"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "extracted_records"
+        ],
+        "required_permissions": [
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "normalize_extracted_units",
+        "tool_id": "normalize_extracted_units",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "pdf_corpus": [
+            "content_bound_input",
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_gpu_hours",
+          "max_runtime_sec"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Parse a content-bound PDF corpus through the registered document-parsing workflow.",
+        "effect_class": "compute",
+        "execution_route": "remote_execution_service",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "pdf_corpus"
+        ],
+        "label": "Parse PDF corpus",
+        "logical_profile_requirements": [
+          "document_parsing"
+        ],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "parsed_document",
+          "parsed_tables",
+          "parser_audit"
+        ],
+        "planner_visible": true,
+        "remote_task_type": "document_parsing",
+        "required_gates": [
+          "gate_2_data_mining"
+        ],
+        "required_input_artifact_ids": [
+          "pdf_corpus"
+        ],
+        "required_permissions": [
+          "derive_project_artifact",
+          "external_document_processing",
+          "read_content_bound_input"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "medium",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "parse_document",
+        "tool_id": "parse_document",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "candidate_dataset": [
+            "verified_output"
+          ],
+          "model_metadata": [
+            "verified_output"
+          ],
+          "trained_model": [
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records",
+          "max_runtime_sec"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {
+          "property_id": null
+        },
+        "description": "Score generated candidates with the registered prediction workflow.",
+        "effect_class": "compute",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "candidate_dataset",
+          "model_metadata",
+          "trained_model"
+        ],
+        "label": "Predict candidate properties",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "property_id": {
+              "maxLength": 96,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [
+          "trained_model"
+        ],
+        "output_artifact_ids": [
+          "candidate_predictions"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "candidate_dataset",
+          "model_metadata"
+        ],
+        "required_permissions": [
+          "derive_project_artifact",
+          "model_inference_compute"
+        ],
+        "review_required_option_ids": [
+          "property_id"
+        ],
+        "risk_level": "medium",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "predict_candidates",
+        "tool_id": "predict_candidates",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "uploaded_dataset": [
+            "content_bound_input"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Publish a candidate Raw Dataset and immutable review snapshot.",
+        "effect_class": "derive_local",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "uploaded_dataset"
+        ],
+        "label": "Prepare structured dataset canary",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "raw_dataset",
+          "raw_dataset_csv",
+          "review_snapshot"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "uploaded_dataset"
+        ],
+        "required_permissions": [
+          "derive_project_artifact",
+          "read_content_bound_input"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "prepare_structured_dataset_canary",
+        "tool_id": "prepare_structured_dataset_canary",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "ranked_candidates": [
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Render a reviewable report from the registered ranked-candidate artifact.",
+        "effect_class": "mutate_artifacts",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "ranked_candidates"
+        ],
+        "label": "Render scientific report",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "report_html",
+          "report_markdown"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "ranked_candidates"
+        ],
+        "required_permissions": [
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "render_report",
+        "tool_id": "render_report",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "corpus_index": [
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {
+          "query": null,
+          "topk": 10
+        },
+        "description": "Retrieve bounded evidence from the registered corpus index.",
+        "effect_class": "derive_local",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "corpus_index"
+        ],
+        "label": "Retrieve evidence",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "query": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "topk": {
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "evidence_hits",
+          "retrieval_log"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "corpus_index"
+        ],
+        "required_permissions": [
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [
+          "query"
+        ],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "retrieve_evidence",
+        "tool_id": "retrieve_evidence",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "cleaned_train_dataset": [
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "confirmed_training_dataset": [
+            "confirmed_scientific_input"
+          ],
+          "trainability_report": [
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records",
+          "max_runtime_sec"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Produce the registered baseline assessment and backend recommendation.",
+        "effect_class": "observe",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [
+          [
+            "cleaned_train_dataset",
+            "confirmed_training_dataset"
+          ]
+        ],
+        "input_artifact_ids": [
+          "cleaned_train_dataset",
+          "confirmed_training_dataset",
+          "trainability_report"
+        ],
+        "label": "Run baseline assessment",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [
+          "cleaned_train_dataset",
+          "confirmed_training_dataset"
+        ],
+        "output_artifact_ids": [
+          "backend_recommendation",
+          "baseline_report"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "trainability_report"
+        ],
+        "required_permissions": [
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "run_baseline",
+        "tool_id": "run_baseline",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "evidence_hits": [
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "extracted_records": [
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "parsed_document": [
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {},
+        "description": "Build the registered provenance report for parsed and extracted records.",
+        "effect_class": "derive_local",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "evidence_hits",
+          "extracted_records",
+          "parsed_document"
+        ],
+        "label": "Track citation provenance",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "audit_summary",
+          "citation_provenance_report"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [],
+        "required_input_artifact_ids": [
+          "evidence_hits",
+          "extracted_records",
+          "parsed_document"
+        ],
+        "required_permissions": [
+          "derive_project_artifact"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "low",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "track_citation_provenance",
+        "tool_id": "track_citation_provenance",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "cleaned_train_dataset": [
+            "registered_intermediate",
+            "verified_output"
+          ],
+          "confirmed_training_dataset": [
+            "confirmed_scientific_input"
+          ],
+          "trainability_report": [
+            "registered_intermediate",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {
+          "baseline": {
+            "n_bits": 256
+          },
+          "unimol": {}
+        },
+        "backend_execution_routes": {
+          "baseline": "local_executor",
+          "unimol": "remote_execution_service"
+        },
+        "backend_profile_requirements": {
+          "baseline": [],
+          "unimol": [
+            "model_training"
+          ]
+        },
+        "backend_remote_task_types": {
+          "baseline": null,
+          "unimol": "model_training"
+        },
+        "budget_dimensions": [
+          "max_gpu_hours",
+          "max_runtime_sec"
+        ],
+        "default_planner_backend": "baseline",
+        "default_planner_options": {
+          "backend": "baseline",
+          "property_id": null
+        },
+        "description": "Train the registered model from a reviewed training dataset and trainability report.",
+        "effect_class": "compute",
+        "execution_route": null,
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [
+          [
+            "cleaned_train_dataset",
+            "confirmed_training_dataset"
+          ]
+        ],
+        "input_artifact_ids": [
+          "cleaned_train_dataset",
+          "confirmed_training_dataset",
+          "trainability_report"
+        ],
+        "label": "Train model",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-train-model.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "backend": {
+              "enum": [
+                "baseline",
+                "unimol"
+              ],
+              "type": "string"
+            },
+            "n_bits": {
+              "maximum": 8192,
+              "minimum": 32,
+              "type": "integer"
+            },
+            "property_id": {
+              "maxLength": 96,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "backend",
+            "property_id"
+          ],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [
+          "cleaned_train_dataset",
+          "confirmed_training_dataset"
+        ],
+        "output_artifact_ids": [
+          "domain_model_manifest",
+          "model_diagnostics_report",
+          "model_manifest",
+          "model_metadata",
+          "model_package_review",
+          "trained_model"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [
+          "gate_3_train_config"
+        ],
+        "required_input_artifact_ids": [
+          "trainability_report"
+        ],
+        "required_permissions": [
+          "derive_project_artifact",
+          "model_training_compute"
+        ],
+        "review_required_option_ids": [
+          "property_id"
+        ],
+        "risk_level": "high",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "train_model",
+        "tool_id": "train_model",
+        "verification_policy": "artifact_registry_and_stage_verifier"
+      },
+      {
+        "accepted_input_trust_classes_by_artifact": {
+          "confirmation_receipt": [
+            "verified_output"
+          ],
+          "confirmed_training_dataset": [
+            "confirmed_scientific_input",
+            "verified_output"
+          ],
+          "confirmed_training_dataset_csv": [
+            "confirmed_scientific_input",
+            "verified_output"
+          ]
+        },
+        "backend_default_planner_options": {},
+        "backend_execution_routes": {},
+        "backend_profile_requirements": {},
+        "backend_remote_task_types": {},
+        "budget_dimensions": [
+          "max_records",
+          "max_runtime_sec"
+        ],
+        "default_planner_backend": null,
+        "default_planner_options": {
+          "seed": 1729
+        },
+        "description": "Fresh-fit the CI baseline from the exact Confirmed Dataset.",
+        "effect_class": "compute",
+        "execution_route": "local_executor",
+        "idempotency_policy": "server_checked",
+        "input_artifact_alternatives": [],
+        "input_artifact_ids": [
+          "confirmation_receipt",
+          "confirmed_training_dataset",
+          "confirmed_training_dataset_csv"
+        ],
+        "label": "Train structured dataset canary model",
+        "logical_profile_requirements": [],
+        "option_compiler_version": "scientific-planner-option-identity.v1",
+        "option_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "seed": {
+              "maximum": 2147483647,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "seed"
+          ],
+          "type": "object"
+        },
+        "optional_input_artifact_ids": [],
+        "output_artifact_ids": [
+          "model_package",
+          "trained_model",
+          "training_request"
+        ],
+        "planner_visible": true,
+        "remote_task_type": null,
+        "required_gates": [
+          "gate_3_train_config"
+        ],
+        "required_input_artifact_ids": [
+          "confirmation_receipt",
+          "confirmed_training_dataset",
+          "confirmed_training_dataset_csv"
+        ],
+        "required_permissions": [
+          "derive_project_artifact",
+          "model_training_compute"
+        ],
+        "review_required_option_ids": [],
+        "risk_level": "high",
+        "schema_version": "scientific_tool_spec.v1",
+        "supports_plan_preapproval": false,
+        "task_id": "train_structured_dataset_canary",
+        "tool_id": "train_structured_dataset_canary",
+        "verification_policy": "controller_dispatch_publication_registry_and_stage_verifier"
+      }
+    ]
+  }
+}

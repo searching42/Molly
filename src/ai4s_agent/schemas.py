@@ -2119,12 +2119,21 @@ class AgentTaskDispatchIntent(BaseModel):
         return self
 
 
+AGENT_EXECUTION_PLAN_PROPOSAL_V1 = "agent_execution_plan_proposal.v1"
+AGENT_EXECUTION_PLAN_PROPOSAL_V2 = "agent_execution_plan_proposal.v2"
+AGENT_PLAN_AUTHORIZATION_V1 = "agent_plan_authorization.v1"
+AGENT_PLAN_AUTHORIZATION_V2 = "agent_plan_authorization.v2"
+
+
 class AgentExecutionPlanProposal(BaseModel):
     """Immutable review/control artifact.  It is never an execution authority."""
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["agent_execution_plan_proposal.v1"] = "agent_execution_plan_proposal.v1"
+    schema_version: Literal[
+        AGENT_EXECUTION_PLAN_PROPOSAL_V1,
+        AGENT_EXECUTION_PLAN_PROPOSAL_V2,
+    ] = AGENT_EXECUTION_PLAN_PROPOSAL_V1
     project_id: str
     run_id: str
     goal: str
@@ -2169,11 +2178,28 @@ class AgentExecutionPlanProposal(BaseModel):
     proposal_digest: str = ""
     # Policy scope the user approves.  Computed from the proposal's structural
     # and policy fields only; LLM-chosen option values are deliberately
-    # excluded so in-workflow choices validated against the option schema do
-    # not invalidate the authorization.
+    # excluded to establish a stable authorization-scope identity for future
+    # bounded option revision.  Current execution still requires an exact
+    # proposal and authorization binding: in-workflow value changes are not
+    # yet executable under an existing authorization.
     authorization_scope_digest: str = ""
     executable: Literal[False] = False
     created_at: str
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Emit the exact persisted field set for the declared schema version.
+
+        ``authorization_scope_digest`` is a v2-only field.  v1 artifacts were
+        published without it; dropping the empty value keeps historical v1
+        publications byte-reproducible while v2 publications carry the scope
+        identity.  The digest algorithms below rely on the same projection, so
+        old v1 digests and new v2 digests are both exact.
+        """
+
+        payload = super().model_dump(**kwargs)
+        if self.schema_version == AGENT_EXECUTION_PLAN_PROPOSAL_V1:
+            payload.pop("authorization_scope_digest", None)
+        return payload
 
     @field_validator("proposal_id", "semantic_plan_id", "publication_id")
     @classmethod
@@ -2299,12 +2325,21 @@ class AgentExecutionPlanProposal(BaseModel):
             raise ValueError("proposal_id must equal the immutable publication ID")
         object.__setattr__(self, "proposal_id", expected_publication_id)
 
-        expected_scope = _agent_digest(self.authorization_scope_material())
-        if self.authorization_scope_digest and self.authorization_scope_digest != expected_scope:
-            raise ValueError(
-                "agent execution plan authorization scope digest mismatch"
-            )
-        object.__setattr__(self, "authorization_scope_digest", expected_scope)
+        if self.schema_version == AGENT_EXECUTION_PLAN_PROPOSAL_V1:
+            if self.authorization_scope_digest:
+                raise ValueError(
+                    "authorization scope digest is not defined for v1 proposals"
+                )
+        else:
+            expected_scope = _agent_digest(self.authorization_scope_material())
+            if (
+                self.authorization_scope_digest
+                and self.authorization_scope_digest != expected_scope
+            ):
+                raise ValueError(
+                    "agent execution plan authorization scope digest mismatch"
+                )
+            object.__setattr__(self, "authorization_scope_digest", expected_scope)
         expected = _agent_digest(self.publication_material())
         if self.proposal_digest and self.proposal_digest != expected:
             raise ValueError("agent execution plan proposal digest mismatch")
@@ -2317,8 +2352,10 @@ class AgentExecutionPlanProposal(BaseModel):
         The scope covers the workflow structure, selected inputs and profiles,
         route bindings, budgets, gates and the scientific objective.  It
         deliberately excludes planner/effective/compiled option values,
-        rationales and questions, so bounded LLM choices validated against the
-        registered option schema do not change the approved scope.
+        rationales and questions so the scope identity is stable groundwork
+        for future bounded option revision.  This PR does not yet allow an
+        in-workflow value change under an existing authorization: execution
+        still binds the exact proposal digest.
         """
 
         return {
@@ -3407,7 +3444,10 @@ class AgentPlanAuthorization(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["agent_plan_authorization.v1"] = "agent_plan_authorization.v1"
+    schema_version: Literal[
+        AGENT_PLAN_AUTHORIZATION_V1,
+        AGENT_PLAN_AUTHORIZATION_V2,
+    ] = AGENT_PLAN_AUTHORIZATION_V1
     authorization_id: str = ""
     project_id: str
     run_id: str
@@ -3420,8 +3460,10 @@ class AgentPlanAuthorization(BaseModel):
     tool_catalog_digest: str
     run_plan_digest: str
     # Exact proposal-level policy scope this authorization covers.  Computed
-    # by the proposal; the authorization binds it verbatim so bounded
-    # in-workflow choices do not invalidate the approved scope.
+    # by the proposal; the authorization binds it verbatim as the stable
+    # scope identity for future bounded option revision.  The current v1/v2
+    # execution path still requires an exact proposal and authorization
+    # binding, so in-workflow value changes still need a new authorization.
     authorization_scope_digest: str = ""
     run_plan: RunPlan
     task_ids: list[str]
@@ -3450,6 +3492,20 @@ class AgentPlanAuthorization(BaseModel):
     authorization_digest: str = ""
     created_at: str
     executable: Literal[False] = False
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Emit the exact persisted field set for the declared schema version.
+
+        ``authorization_scope_digest`` is a v2-only field.  Dropping it for v1
+        keeps historical v1 authorizations byte-reproducible (the old digest
+        covered the concrete option values); v2 carries the scope identity and
+        deliberately excludes the option values from its digest material.
+        """
+
+        payload = super().model_dump(**kwargs)
+        if self.schema_version == AGENT_PLAN_AUTHORIZATION_V1:
+            payload.pop("authorization_scope_digest", None)
+        return payload
 
     @field_validator(
         "authorization_id",
@@ -3558,7 +3614,12 @@ class AgentPlanAuthorization(BaseModel):
             raise ValueError("authorization task roster must equal the ordered canonical RunPlan")
         if self.run_plan_digest != _agent_digest(self.run_plan.model_dump(mode="json")):
             raise ValueError("authorization RunPlan digest mismatch")
-        if not self.authorization_scope_digest:
+        if self.schema_version == AGENT_PLAN_AUTHORIZATION_V1:
+            if self.authorization_scope_digest:
+                raise ValueError(
+                    "authorization scope digest is not defined for v1 authorizations"
+                )
+        elif not self.authorization_scope_digest:
             raise ValueError("authorization scope digest is required")
         roster = set(self.task_ids)
         if set(self.task_authority_digests) != roster:
@@ -3601,11 +3662,15 @@ class AgentPlanAuthorization(BaseModel):
         payload.pop("authorization_id", None)
         payload.pop("authorization_digest", None)
         payload.pop("created_at", None)
-        # LLM-chosen option values are recorded for audit but are not part of
-        # the authorization identity.  The approved scope is carried by the
-        # proposal/authorization scope digests and per-task authority digests.
-        payload.pop("effective_planner_options", None)
-        payload.pop("compiled_task_options", None)
+        if self.schema_version == AGENT_PLAN_AUTHORIZATION_V2:
+            # LLM-chosen option values are recorded for audit but are not part
+            # of the v2 authorization identity.  The approved scope is carried
+            # by the proposal/authorization scope digests and per-task
+            # authority digests.  v1 keeps the concrete option values in its
+            # exact identity, exactly as historical v1 authorizations were
+            # published.
+            payload.pop("effective_planner_options", None)
+            payload.pop("compiled_task_options", None)
         return payload
 
 
@@ -4445,6 +4510,12 @@ class AgentHarnessControllerExecution(BaseModel):
     task_authority_digests: dict[str, str]
     dispatch_intent_digests: dict[str, str]
     compiled_task_options_digest: str
+    # v2 controller policy binds the registered task option *policy* (schema,
+    # server defaults, review-required IDs, compiler version) as part of the
+    # execution identity.  ``compiled_task_options_digest`` keeps its original
+    # v1 semantics (exact digest of the compiled option values) and remains an
+    # audit field for both policies; it is not part of the v2 identity.
+    task_option_policy_digest: str = ""
     artifact_binding_digest: str
     gate_binding_digest: str
     budget_binding_digest: str
@@ -4471,6 +4542,19 @@ class AgentHarnessControllerExecution(BaseModel):
     execution_digest: str = ""
     created_at: str
     executable: Literal[True] = True
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Emit the exact persisted field set for the declared policy version.
+
+        ``task_option_policy_digest`` is a v2-only field.  v1 executions were
+        published without it; dropping the empty value keeps historical v1
+        executions byte-reproducible.
+        """
+
+        payload = super().model_dump(**kwargs)
+        if self.controller_policy_version == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1:
+            payload.pop("task_option_policy_digest", None)
+        return payload
 
     @field_validator(
         "controller_execution_id",
@@ -4522,6 +4606,7 @@ class AgentHarnessControllerExecution(BaseModel):
     @field_validator(
         "remote_authority_set_digest",
         "remote_authority_roster_digest",
+        "task_option_policy_digest",
         "execution_digest",
     )
     @classmethod
@@ -4560,6 +4645,18 @@ class AgentHarnessControllerExecution(BaseModel):
 
     @model_validator(mode="after")
     def validate_execution(self) -> "AgentHarnessControllerExecution":
+        if (
+            self.controller_policy_version
+            == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V1
+        ):
+            if self.task_option_policy_digest:
+                raise ValueError(
+                    "task option policy digest is not defined for v1 controller policy"
+                )
+        elif not self.task_option_policy_digest:
+            raise ValueError(
+                "task option policy digest is required for v2 controller policy"
+            )
         if len(self.task_slots) != len(self.ordered_task_ids):
             raise ValueError("task slots must exactly cover the ordered task roster")
         for index, (task_id, slot) in enumerate(zip(self.ordered_task_ids, self.task_slots, strict=True)):
@@ -4604,19 +4701,28 @@ class AgentHarnessControllerExecution(BaseModel):
         payload.pop("controller_execution_id", None)
         payload.pop("execution_digest", None)
         payload.pop("created_at", None)
-        # The execution identity binds the approved scope and per-task policy
-        # (authority, route, input/output contracts).  LLM-chosen option values
-        # are recorded per attempt for audit but are deliberately excluded from
-        # the identity so bounded in-workflow choices do not invalidate the
-        # execution.
-        payload["task_slots"] = [
-            {
-                key: value
-                for key, value in slot.items()
-                if key != "compiled_options_digest"
-            }
-            for slot in payload["task_slots"]
-        ]
+        if (
+            self.controller_policy_version
+            == AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2
+        ):
+            # The v2 execution identity binds the approved scope and per-task
+            # option *policy* (scope-identity groundwork).  Concrete
+            # per-attempt option values remain recorded for audit but are
+            # deliberately excluded from the identity.  Bounded in-workflow
+            # option revision is not yet enabled: the execution still binds
+            # the exact proposal and authorization digests.
+            payload.pop("compiled_task_options_digest", None)
+            payload["task_slots"] = [
+                {
+                    key: value
+                    for key, value in slot.items()
+                    if key != "compiled_options_digest"
+                }
+                for slot in payload["task_slots"]
+            ]
+        # v1 keeps the exact legacy material: per-slot compiled option digests
+        # and the top-level compiled-task-options digest remain part of the
+        # identity, matching historical v1 executions byte-for-byte.
         return payload
 
 
@@ -5592,6 +5698,19 @@ class AgentExecutionToolSpec(BaseModel):
     application_eligible: Literal[True] = True
     user_boundary_kind: AgentExecutionUserBoundaryKind
     option_schema: dict[str, Any] | None = None
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Omit the optional option-schema projection when it is absent.
+
+        Historical v1 tool catalogs were published without the field; dropping
+        ``null`` keeps those publications byte-reproducible while catalogs
+        that carry a pending-task option schema still expose it.
+        """
+
+        payload = super().model_dump(**kwargs)
+        if payload.get("option_schema") is None:
+            payload.pop("option_schema", None)
+        return payload
 
     @field_validator("tool_id")
     @classmethod

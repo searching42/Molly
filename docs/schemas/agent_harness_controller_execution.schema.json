@@ -247,6 +247,11 @@
       "title": "Compiled Task Options Digest",
       "type": "string"
     },
+    "task_option_policy_digest": {
+      "default": "",
+      "title": "Task Option Policy Digest",
+      "type": "string"
+    },
     "artifact_binding_digest": {
       "title": "Artifact Binding Digest",
       "type": "string"

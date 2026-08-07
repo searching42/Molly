@@ -1,0 +1,43 @@
+{
+  "observation_digest": "sha256:803ddc90c3ecb0e56689b2202a4d04b26e8485103e9966fa14fa1db1a74f0805",
+  "observation_id": "observation-803ddc90c3ecb0e56689b2202a4d04b2",
+  "schema_version": "agent_plan_source_binding.v1",
+  "source_bindings": [
+    {
+      "identity": "project-1:run-1:artifact_registry",
+      "present": true,
+      "source_digest": "sha256:97242d8b4a60b7c455eb64a949980ca86c5892550ad1c2c0053f16daff8f367d",
+      "source_id": "artifact_registry"
+    },
+    {
+      "identity": "project-1:run-1:confirmed_dataset_manifests",
+      "present": false,
+      "source_digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "source_id": "confirmed_dataset_manifests"
+    },
+    {
+      "identity": "project-1:run-1:run_plan",
+      "present": false,
+      "source_digest": "sha256:398b676e47d03a29016ee92fe378b8b4f1b3e965390c4c64ce78d27f79df74d1",
+      "source_id": "existing_run_plan"
+    },
+    {
+      "identity": "server:resource_profile_snapshot",
+      "present": false,
+      "source_digest": "sha256:3eeabb0a752ada5c3bbe7f5640bd1a27f00710e7cf76fb19886269b7cee97c9d",
+      "source_id": "resource_profile_snapshot"
+    },
+    {
+      "identity": "server:scientific_tool_catalog",
+      "present": true,
+      "source_digest": "sha256:0956e5ae55627f1383147b0e5241546361b778aa49d41f670c4d00cd787f4904",
+      "source_id": "scientific_tool_catalog"
+    },
+    {
+      "identity": "project-1:run-1:stage_state",
+      "present": false,
+      "source_digest": "sha256:398b676e47d03a29016ee92fe378b8b4f1b3e965390c4c64ce78d27f79df74d1",
+      "source_id": "stage_state"
+    }
+  ]
+}

@@ -59,6 +59,7 @@ from ai4s_agent.scientific_agent_permissions import (
     IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
     IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
     MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    OPTION_POLICY_PERMISSION_POLICY_VERSION,
     derive_local_task_authority_material,
 )
 from ai4s_agent.scientific_agent_plan import (
@@ -1258,6 +1259,7 @@ class ScientificAgentHarnessController:
                     IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
                     IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
                     MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+                    OPTION_POLICY_PERMISSION_POLICY_VERSION,
                 }:
                     raise ScientificAgentHarnessControllerVerificationError(
                         "local Controller tasks require implementation-bound permission authority"
@@ -1371,7 +1373,16 @@ class ScientificAgentHarnessController:
             ),
             task_authority_digests=authorization.task_authority_digests,
             dispatch_intent_digests=dispatch_digests,
+            # ``compiled_task_options_digest`` keeps its original v1 semantics:
+            # an exact digest of the compiled option values, recorded for
+            # audit under both controller policies.  The v2 execution identity
+            # binds the option *policy* through ``task_option_policy_digest``
+            # instead, so bounded in-workflow choices validated against the
+            # registered schema do not invalidate the execution.
             compiled_task_options_digest=_agent_digest(
+                authorization.compiled_task_options
+            ),
+            task_option_policy_digest=_agent_digest(
                 {
                     "schema_version": (
                         "agent_harness_controller_option_policy.v1"
@@ -3632,6 +3643,8 @@ class ScientificAgentHarnessController:
                 and latest is not None
                 and latest.after_stage_digest == stage_digest
                 and latest.after_artifact_registry_digest == registry_digest
+                and latest.task_index is not None
+                and decision.task_index == latest.task_index + 1
                 and stage.status == RunStatus.SUCCEEDED
                 and stage.next_stage == decision.task_id
             )

@@ -1,0 +1,8 @@
+{
+  "artifact_digest": "sha256:d30c2dc1f6c3fdf61a55c797e7ef7e9903aca06d1a433c33bc942dd65e67e93f",
+  "artifact_id": "permission-d30c2dc1f6c3fdf61a55c797e7ef7e99",
+  "artifact_type": "permission_decision",
+  "executable": false,
+  "schema_version": "agent_plan_control_verification.v1",
+  "verified": true
+}

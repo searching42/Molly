@@ -3,31 +3,6 @@
     "AgentPlanDiffChange": {
       "additionalProperties": false,
       "properties": {
-        "after": {
-          "default": null,
-          "title": "After"
-        },
-        "after_present": {
-          "title": "After Present",
-          "type": "boolean"
-        },
-        "before": {
-          "default": null,
-          "title": "Before"
-        },
-        "before_present": {
-          "title": "Before Present",
-          "type": "boolean"
-        },
-        "change_kind": {
-          "enum": [
-            "added",
-            "removed",
-            "changed"
-          ],
-          "title": "Change Kind",
-          "type": "string"
-        },
         "dimension": {
           "enum": [
             "task",
@@ -45,6 +20,31 @@
         "path": {
           "title": "Path",
           "type": "string"
+        },
+        "change_kind": {
+          "enum": [
+            "added",
+            "removed",
+            "changed"
+          ],
+          "title": "Change Kind",
+          "type": "string"
+        },
+        "before_present": {
+          "title": "Before Present",
+          "type": "boolean"
+        },
+        "before": {
+          "default": null,
+          "title": "Before"
+        },
+        "after_present": {
+          "title": "After Present",
+          "type": "boolean"
+        },
+        "after": {
+          "default": null,
+          "title": "After"
         }
       },
       "required": [
@@ -60,12 +60,36 @@
   },
   "additionalProperties": false,
   "properties": {
-    "baseline_projection_digest": {
-      "title": "Baseline Projection Digest",
+    "schema_version": {
+      "const": "agent_plan_diff.v1",
+      "default": "agent_plan_diff.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "plan_diff_id": {
+      "default": "",
+      "title": "Plan Diff Id",
+      "type": "string"
+    },
+    "plan_diff_digest": {
+      "default": "",
+      "title": "Plan Diff Digest",
       "type": "string"
     },
     "baseline_semantic_plan_digest": {
       "title": "Baseline Semantic Plan Digest",
+      "type": "string"
+    },
+    "successor_semantic_plan_digest": {
+      "title": "Successor Semantic Plan Digest",
+      "type": "string"
+    },
+    "baseline_projection_digest": {
+      "title": "Baseline Projection Digest",
+      "type": "string"
+    },
+    "successor_projection_digest": {
+      "title": "Successor Projection Digest",
       "type": "string"
     },
     "changes": {
@@ -75,36 +99,12 @@
       "title": "Changes",
       "type": "array"
     },
-    "created_at": {
-      "title": "Created At",
-      "type": "string"
-    },
     "material_change": {
       "title": "Material Change",
       "type": "boolean"
     },
-    "plan_diff_digest": {
-      "default": "",
-      "title": "Plan Diff Digest",
-      "type": "string"
-    },
-    "plan_diff_id": {
-      "default": "",
-      "title": "Plan Diff Id",
-      "type": "string"
-    },
-    "schema_version": {
-      "const": "agent_plan_diff.v1",
-      "default": "agent_plan_diff.v1",
-      "title": "Schema Version",
-      "type": "string"
-    },
-    "successor_projection_digest": {
-      "title": "Successor Projection Digest",
-      "type": "string"
-    },
-    "successor_semantic_plan_digest": {
-      "title": "Successor Semantic Plan Digest",
+    "created_at": {
+      "title": "Created At",
       "type": "string"
     }
   },

@@ -1,0 +1,17 @@
+{
+  "artifact_digest": "sha256:d30c2dc1f6c3fdf61a55c797e7ef7e9903aca06d1a433c33bc942dd65e67e93f",
+  "artifact_id": "permission-d30c2dc1f6c3fdf61a55c797e7ef7e99",
+  "artifact_type": "permission_decision",
+  "complete": true,
+  "files": {
+    "permission_decision.json": {
+      "sha256": "5b49d013d8e18a848917b48b8a6550f560fd92a2945dae6909b775fc18689709",
+      "size_bytes": 2621
+    },
+    "verification.json": {
+      "sha256": "7358bca47607107f9cc480f3bedfafcee3841cabd093b4430caf90a2ceb77b87",
+      "size_bytes": 306
+    }
+  },
+  "schema_version": "agent_plan_control_publication_manifest.v1"
+}

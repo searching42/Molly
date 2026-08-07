@@ -1,0 +1,17 @@
+{
+  "artifact_digest": "sha256:ced2487b4f5a6fe518430b398f42a38f58b77b78f86809556794697c38c53c3f",
+  "artifact_id": "authorization-ced2487b4f5a6fe518430b398f42a38f",
+  "artifact_type": "authorization",
+  "complete": true,
+  "files": {
+    "authorization.json": {
+      "sha256": "a3395b1edf162f8d4e28c1b252849ee9e0337d4fad3cf3d0e47d51d334b9f836",
+      "size_bytes": 3216
+    },
+    "verification.json": {
+      "sha256": "a4fd5b2118f7bbd5bac0018180d1f9cfbc4f46628ac4c576ca95aa097407e244",
+      "size_bytes": 303
+    }
+  },
+  "schema_version": "agent_plan_control_publication_manifest.v1"
+}

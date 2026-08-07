@@ -1,18 +1,18 @@
 {
   "additionalProperties": false,
   "properties": {
-    "client_request_id": {
-      "title": "Client Request Id",
+    "schema_version": {
+      "const": "agent_plan_revision_application_request.v1",
+      "default": "agent_plan_revision_application_request.v1",
+      "title": "Schema Version",
       "type": "string"
     },
     "expected_revision_digest": {
       "title": "Expected Revision Digest",
       "type": "string"
     },
-    "schema_version": {
-      "const": "agent_plan_revision_application_request.v1",
-      "default": "agent_plan_revision_application_request.v1",
-      "title": "Schema Version",
+    "client_request_id": {
+      "title": "Client Request Id",
       "type": "string"
     }
   },

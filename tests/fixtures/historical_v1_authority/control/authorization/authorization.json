@@ -1,0 +1,94 @@
+{
+  "actor": "alice",
+  "actor_source": "config:AI4S_AGENT_AUTHORIZATION_OWNER",
+  "artifact_bindings": [
+    {
+      "artifact_id": "uploaded_dataset",
+      "content_digest": "sha256:6f5135d1f77825f5def56ffe28aa749aeee7d4afe9412ad776f240133c5376a1",
+      "producer_task_id": null,
+      "trust_class": "content_bound_input",
+      "verification_state": "registered"
+    }
+  ],
+  "authorization_digest": "sha256:ced2487b4f5a6fe518430b398f42a38f58b77b78f86809556794697c38c53c3f",
+  "authorization_id": "authorization-ced2487b4f5a6fe518430b398f42a38f",
+  "authorization_mode": "stepwise",
+  "client_request_id": "authorization-request-1",
+  "compiled_task_options": {
+    "inspect_dataset": {}
+  },
+  "created_at": "2026-08-01T00:00:00Z",
+  "dispatch_intents": [
+    {
+      "execution_route": "local_executor",
+      "logical_profile_id": null,
+      "remote_task_type": null,
+      "requested_resources": null,
+      "task_id": "inspect_dataset"
+    }
+  ],
+  "effective_planner_options": {
+    "inspect_dataset": {}
+  },
+  "executable": false,
+  "gate_bindings": [],
+  "limits": {},
+  "note": "",
+  "observation_digest": "sha256:803ddc90c3ecb0e56689b2202a4d04b26e8485103e9966fa14fa1db1a74f0805",
+  "observation_id": "observation-803ddc90c3ecb0e56689b2202a4d04b2",
+  "pending_gates": [],
+  "permission_decision_digest": "sha256:d30c2dc1f6c3fdf61a55c797e7ef7e9903aca06d1a433c33bc942dd65e67e93f",
+  "permission_decision_id": "permission-d30c2dc1f6c3fdf61a55c797e7ef7e99",
+  "permission_policy_digest": "sha256:5a8f37a6d35be67a6532267d79ab7aca21cd53ddd30c0dcceb8457b620a66dff",
+  "permission_policy_version": "scientific-agent-permission-policy.v3",
+  "preauthorized_operational_gates": [],
+  "profile_bindings": [],
+  "project_id": "project-1",
+  "proposal_digest": "sha256:b1ed6a4e73fbcda43179d99570bb4f9f4e1043cf81c1d65b01be1e73c2c228ad",
+  "proposal_id": "proposal-f1d88a31e6863245e4bb05883745a925",
+  "required_gates": [],
+  "run_id": "run-1",
+  "run_plan": {
+    "available_artifacts": [
+      "dataset_profile",
+      "property_catalog",
+      "uploaded_dataset"
+    ],
+    "missing_artifacts": [],
+    "requested_tasks": [
+      "inspect_dataset"
+    ],
+    "run_id": "run-1",
+    "tasks": [
+      {
+        "depends_on": [],
+        "output_artifacts": [
+          "dataset_profile",
+          "property_catalog"
+        ],
+        "required_artifacts": [
+          "uploaded_dataset"
+        ],
+        "task_id": "inspect_dataset",
+        "unresolved_requirements": []
+      }
+    ]
+  },
+  "run_plan_digest": "sha256:4649fe71d1d1f89dccb142f9763d9f67e95d18b2d4b33a7b9691f046427c7eb3",
+  "schema_version": "agent_plan_authorization.v1",
+  "semantic_plan_digest": "sha256:1671513e9da19eb19e045759f9463a8f390e5c47e7b306cfc1201be6d601d164",
+  "semantic_plan_id": "semantic-plan-1671513e9da19eb19e045759f9463a8f",
+  "stop_conditions": [
+    "stop on validation failure"
+  ],
+  "success_criteria": [
+    "produce a dataset profile"
+  ],
+  "task_authority_digests": {
+    "inspect_dataset": "sha256:e19c5267368fd998b8fd54acb3bd09944e61988c6960ce086280673b6d33addc"
+  },
+  "task_ids": [
+    "inspect_dataset"
+  ],
+  "tool_catalog_digest": "sha256:0956e5ae55627f1383147b0e5241546361b778aa49d41f670c4d00cd787f4904"
+}

@@ -1,0 +1,36 @@
+{
+  "complete": true,
+  "files": {
+    "llm_response.json": {
+      "sha256": "871c5cb50a2285d081f495673669c571facd946f871a74e879d21d03ff85b388",
+      "size_bytes": 523
+    },
+    "observation.json": {
+      "sha256": "058eb8c7cd1492ca2346ed9cb643cbe65d0ab2bc3f4e16f791766f03d62c73e1",
+      "size_bytes": 62327
+    },
+    "proposal.json": {
+      "sha256": "f38f5228bfb3942dea30215523d51f8fcadf6c9a4a94b9d15737b35e35795e9c",
+      "size_bytes": 3668
+    },
+    "proposal_summary.md": {
+      "sha256": "9eb377658915b34c1e970dee032c67b4d77b3766f72ee7c6fe1bc0c337d8d0b2",
+      "size_bytes": 1030
+    },
+    "source_binding.json": {
+      "sha256": "223de30788cb5e623aeb281cf4b07ccc7f6f2d68fa17036e1876ccecce78226a",
+      "size_bytes": 1630
+    },
+    "tool_catalog.json": {
+      "sha256": "c6a62025cd833c14eade04f70fa5450ea430b29a70229f4dbef0f035a34523d1",
+      "size_bytes": 55686
+    },
+    "verification.json": {
+      "sha256": "3381c6d33bb4b7d351a801548e965d39d6a26c8182154eb4a7a012e00c926dd8",
+      "size_bytes": 865
+    }
+  },
+  "proposal_digest": "sha256:b1ed6a4e73fbcda43179d99570bb4f9f4e1043cf81c1d65b01be1e73c2c228ad",
+  "proposal_id": "proposal-f1d88a31e6863245e4bb05883745a925",
+  "schema_version": "agent_plan_publication_manifest.v1"
+}

@@ -1,0 +1,25 @@
+{
+  "assumptions": [],
+  "limits": {},
+  "questions": [],
+  "rationales": [
+    "Execute the exact registered local task roster."
+  ],
+  "requested_tool_ids": [
+    "inspect_dataset"
+  ],
+  "schema_version": "agent_execution_plan_llm_response.v1",
+  "selected_input_artifact_ids": [
+    "uploaded_dataset"
+  ],
+  "selected_logical_profile_ids": [],
+  "stop_conditions": [
+    "stop on validation failure"
+  ],
+  "success_criteria": [
+    "produce a dataset profile"
+  ],
+  "task_options": {
+    "inspect_dataset": {}
+  }
+}

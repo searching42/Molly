@@ -1,9 +1,10 @@
 {
   "additionalProperties": false,
   "properties": {
-    "application_receipt_digest": {
-      "default": "",
-      "title": "Application Receipt Digest",
+    "schema_version": {
+      "const": "agent_plan_revision_application_receipt.v1",
+      "default": "agent_plan_revision_application_receipt.v1",
+      "title": "Schema Version",
       "type": "string"
     },
     "application_receipt_id": {
@@ -11,68 +12,65 @@
       "title": "Application Receipt Id",
       "type": "string"
     },
-    "baseline_proposal_digest": {
-      "title": "Baseline Proposal Digest",
-      "type": "string"
-    },
-    "baseline_proposal_id": {
-      "title": "Baseline Proposal Id",
-      "type": "string"
-    },
-    "client_request_id": {
-      "title": "Client Request Id",
-      "type": "string"
-    },
-    "created_at": {
-      "title": "Created At",
-      "type": "string"
-    },
-    "dispatched": {
-      "const": false,
-      "default": false,
-      "title": "Dispatched",
-      "type": "boolean"
-    },
-    "fresh_authorization_required": {
-      "const": true,
-      "default": true,
-      "title": "Fresh Authorization Required",
-      "type": "boolean"
-    },
-    "fresh_permission_required": {
-      "const": true,
-      "default": true,
-      "title": "Fresh Permission Required",
-      "type": "boolean"
-    },
-    "parent_proposal_id": {
-      "title": "Parent Proposal Id",
-      "type": "string"
-    },
-    "plan_diff_digest": {
-      "title": "Plan Diff Digest",
-      "type": "string"
-    },
-    "plan_diff_id": {
-      "title": "Plan Diff Id",
+    "application_receipt_digest": {
+      "default": "",
+      "title": "Application Receipt Digest",
       "type": "string"
     },
     "project_id": {
       "title": "Project Id",
       "type": "string"
     },
-    "revision_digest": {
-      "title": "Revision Digest",
-      "type": "string"
-    },
     "revision_id": {
       "title": "Revision Id",
       "type": "string"
     },
-    "schema_version": {
-      "const": "agent_plan_revision_application_receipt.v1",
-      "default": "agent_plan_revision_application_receipt.v1",
-      "title": "Schema Version",
+    "revision_digest": {
+      "title": "Revision Digest",
+      "type": "string"
+    },
+    "baseline_proposal_id": {
+      "title": "Baseline Proposal Id",
+      "type": "string"
+    },
+    "baseline_proposal_digest": {
+      "title": "Baseline Proposal Digest",
+      "type": "string"
+    },
+    "successor_proposal_id": {
+      "title": "Successor Proposal Id",
+      "type": "string"
+    },
+    "successor_proposal_digest": {
+      "title": "Successor Proposal Digest",
+      "type": "string"
+    },
+    "successor_semantic_plan_id": {
+      "title": "Successor Semantic Plan Id",
+      "type": "string"
+    },
+    "successor_semantic_plan_digest": {
+      "title": "Successor Semantic Plan Digest",
+      "type": "string"
+    },
+    "plan_diff_id": {
+      "title": "Plan Diff Id",
+      "type": "string"
+    },
+    "plan_diff_digest": {
+      "title": "Plan Diff Digest",
+      "type": "string"
+    },
+    "parent_proposal_id": {
+      "title": "Parent Proposal Id",
+      "type": "string"
+    },
+    "supersedes_proposal_id": {
+      "title": "Supersedes Proposal Id",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
       "type": "string"
     },
     "status": {
@@ -81,24 +79,26 @@
       "title": "Status",
       "type": "string"
     },
-    "successor_proposal_digest": {
-      "title": "Successor Proposal Digest",
-      "type": "string"
+    "fresh_permission_required": {
+      "const": true,
+      "default": true,
+      "title": "Fresh Permission Required",
+      "type": "boolean"
     },
-    "successor_proposal_id": {
-      "title": "Successor Proposal Id",
-      "type": "string"
+    "fresh_authorization_required": {
+      "const": true,
+      "default": true,
+      "title": "Fresh Authorization Required",
+      "type": "boolean"
     },
-    "successor_semantic_plan_digest": {
-      "title": "Successor Semantic Plan Digest",
-      "type": "string"
+    "dispatched": {
+      "const": false,
+      "default": false,
+      "title": "Dispatched",
+      "type": "boolean"
     },
-    "successor_semantic_plan_id": {
-      "title": "Successor Semantic Plan Id",
-      "type": "string"
-    },
-    "supersedes_proposal_id": {
-      "title": "Supersedes Proposal Id",
+    "created_at": {
+      "title": "Created At",
       "type": "string"
     }
   },

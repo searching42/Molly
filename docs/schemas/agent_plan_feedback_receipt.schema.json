@@ -2,6 +2,34 @@
   "additionalProperties": false,
   "description": "Privacy-safe binding to private feedback; never approval or truth.",
   "properties": {
+    "schema_version": {
+      "const": "agent_plan_feedback_receipt.v1",
+      "default": "agent_plan_feedback_receipt.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "feedback_receipt_id": {
+      "default": "",
+      "title": "Feedback Receipt Id",
+      "type": "string"
+    },
+    "feedback_receipt_digest": {
+      "default": "",
+      "title": "Feedback Receipt Digest",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "client_request_id": {
+      "title": "Client Request Id",
+      "type": "string"
+    },
     "actor": {
       "title": "Actor",
       "type": "string"
@@ -10,42 +38,14 @@
       "title": "Actor Source",
       "type": "string"
     },
-    "approval": {
-      "const": false,
-      "default": false,
-      "title": "Approval",
-      "type": "boolean"
-    },
-    "client_request_id": {
-      "title": "Client Request Id",
+    "source_kind": {
+      "const": "explicit_user_feedback",
+      "default": "explicit_user_feedback",
+      "title": "Source Kind",
       "type": "string"
-    },
-    "created_at": {
-      "title": "Created At",
-      "type": "string"
-    },
-    "executable": {
-      "const": false,
-      "default": false,
-      "title": "Executable",
-      "type": "boolean"
     },
     "feedback_payload_digest": {
       "title": "Feedback Payload Digest",
-      "type": "string"
-    },
-    "feedback_receipt_digest": {
-      "default": "",
-      "title": "Feedback Receipt Digest",
-      "type": "string"
-    },
-    "feedback_receipt_id": {
-      "default": "",
-      "title": "Feedback Receipt Id",
-      "type": "string"
-    },
-    "project_id": {
-      "title": "Project Id",
       "type": "string"
     },
     "reason_code": {
@@ -54,21 +54,21 @@
       "title": "Reason Code",
       "type": "string"
     },
-    "run_id": {
-      "title": "Run Id",
+    "created_at": {
+      "title": "Created At",
       "type": "string"
     },
-    "schema_version": {
-      "const": "agent_plan_feedback_receipt.v1",
-      "default": "agent_plan_feedback_receipt.v1",
-      "title": "Schema Version",
-      "type": "string"
+    "approval": {
+      "const": false,
+      "default": false,
+      "title": "Approval",
+      "type": "boolean"
     },
-    "source_kind": {
-      "const": "explicit_user_feedback",
-      "default": "explicit_user_feedback",
-      "title": "Source Kind",
-      "type": "string"
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
     }
   },
   "required": [

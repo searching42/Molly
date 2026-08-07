@@ -3,22 +3,22 @@
     "AgentExecutionPlanQuestion": {
       "additionalProperties": false,
       "properties": {
-        "blocks_proposal": {
-          "default": true,
-          "title": "Blocks Proposal",
-          "type": "boolean"
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
         },
         "prompt": {
           "title": "Prompt",
           "type": "string"
         },
-        "question_id": {
-          "title": "Question Id",
-          "type": "string"
-        },
         "reason": {
           "title": "Reason",
           "type": "string"
+        },
+        "blocks_proposal": {
+          "default": true,
+          "title": "Blocks Proposal",
+          "type": "boolean"
         }
       },
       "required": [
@@ -33,48 +33,30 @@
   "additionalProperties": false,
   "description": "Bounded revision intent. It cannot express dependencies or authority.",
   "properties": {
+    "schema_version": {
+      "const": "agent_replan_llm_response.v1",
+      "default": "agent_replan_llm_response.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "rationale_summary": {
+      "default": "",
+      "title": "Rationale Summary",
+      "type": "string"
+    },
+    "retain_tool_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Retain Tool Ids",
+      "type": "array"
+    },
     "add_tool_ids": {
       "items": {
         "type": "string"
       },
       "title": "Add Tool Ids",
       "type": "array"
-    },
-    "limits": {
-      "anyOf": [
-        {
-          "additionalProperties": true,
-          "type": "object"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Limits"
-    },
-    "no_change": {
-      "default": false,
-      "title": "No Change",
-      "type": "boolean"
-    },
-    "option_patch": {
-      "additionalProperties": {
-        "additionalProperties": true,
-        "type": "object"
-      },
-      "title": "Option Patch",
-      "type": "object"
-    },
-    "pause": {
-      "default": false,
-      "title": "Pause",
-      "type": "boolean"
-    },
-    "rationale_summary": {
-      "default": "",
-      "title": "Rationale Summary",
-      "type": "string"
     },
     "remove_tool_ids": {
       "items": {
@@ -90,18 +72,13 @@
       "title": "Replace Tool Ids",
       "type": "object"
     },
-    "retain_tool_ids": {
-      "items": {
-        "type": "string"
+    "option_patch": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
       },
-      "title": "Retain Tool Ids",
-      "type": "array"
-    },
-    "schema_version": {
-      "const": "agent_replan_llm_response.v1",
-      "default": "agent_replan_llm_response.v1",
-      "title": "Schema Version",
-      "type": "string"
+      "title": "Option Patch",
+      "type": "object"
     },
     "selected_input_artifact_ids": {
       "anyOf": [
@@ -132,6 +109,19 @@
       ],
       "default": null,
       "title": "Selected Logical Profile Ids"
+    },
+    "limits": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Limits"
     },
     "stop_conditions": {
       "anyOf": [
@@ -169,6 +159,16 @@
       },
       "title": "Unresolved Questions",
       "type": "array"
+    },
+    "pause": {
+      "default": false,
+      "title": "Pause",
+      "type": "boolean"
+    },
+    "no_change": {
+      "default": false,
+      "title": "No Change",
+      "type": "boolean"
     }
   },
   "title": "AgentReplanLLMResponse",

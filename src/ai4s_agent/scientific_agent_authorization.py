@@ -38,6 +38,7 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerActionReceipt,
     AgentHarnessControllerDecision,
     AgentHarnessControllerExecution,
+    AGENT_EXECUTION_PLAN_PROPOSAL_V2,
     AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2,
     AgentHarnessLocalDispatchReceipt,
     AgentHarnessLocalExecutionPublication,
@@ -49,6 +50,8 @@ from ai4s_agent.schemas import (
     AgentRemoteResourceAuthorityDecision,
     AgentRemoteResourceAuthoritySet,
     AgentPlanAuthorization,
+    AGENT_PLAN_AUTHORIZATION_V1,
+    AGENT_PLAN_AUTHORIZATION_V2,
     AgentPlanAuthorizationRequest,
     AgentPlanStartIntent,
     _agent_digest,
@@ -1834,6 +1837,11 @@ class ScientificAgentAuthorizationService:
         preauthorized = sorted(request.requested_preauthorized_gate_ids)
         pending = sorted(set(proposal.required_gates).difference(preauthorized))
         return AgentPlanAuthorization(
+            schema_version=(
+                AGENT_PLAN_AUTHORIZATION_V2
+                if proposal.schema_version == AGENT_EXECUTION_PLAN_PROPOSAL_V2
+                else AGENT_PLAN_AUTHORIZATION_V1
+            ),
             project_id=proposal.project_id,
             run_id=proposal.run_id,
             proposal_id=proposal.proposal_id,

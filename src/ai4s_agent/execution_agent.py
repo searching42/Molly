@@ -316,7 +316,15 @@ def build_execution_tool_catalog(
             controller_action_boundary_class=AGENT_EXECUTION_TOOL_BINDINGS[tool_id][0],
             server_compiled_operation=AGENT_EXECUTION_TOOL_BINDINGS[tool_id][1],
             user_boundary_kind=AGENT_EXECUTION_TOOL_BINDINGS[tool_id][2],
-            option_schema=option_schema,
+            # The pending task's option schema is context for the one tool
+            # that actually advances that task.  Attaching it to every tool in
+            # the catalog would inflate the prompt and falsely suggest that
+            # wait/recovery/terminal tools accept those parameters.
+            option_schema=(
+                option_schema
+                if tool_id == "controller.advance_current.v1"
+                else None
+            ),
         )
         for tool_id in tool_ids
     ]

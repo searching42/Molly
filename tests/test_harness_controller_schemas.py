@@ -70,6 +70,7 @@ def _execution() -> AgentHarnessControllerExecution:
         task_authority_digests={"inspect_dataset": _DIGEST},
         dispatch_intent_digests={"inspect_dataset": _DIGEST},
         compiled_task_options_digest=_DIGEST,
+        task_option_policy_digest=_DIGEST,
         artifact_binding_digest=_DIGEST,
         gate_binding_digest=_DIGEST,
         budget_binding_digest=_DIGEST,

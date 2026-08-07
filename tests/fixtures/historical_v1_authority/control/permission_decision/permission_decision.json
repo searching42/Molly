@@ -1,0 +1,67 @@
+{
+  "actor": "alice",
+  "actor_source": "config:AI4S_AGENT_AUTHORIZATION_OWNER",
+  "authorization_digest": "",
+  "authorization_id": "",
+  "authorization_mode": "stepwise",
+  "client_request_id": "authorization-request-1",
+  "created_at": "2026-08-01T00:00:00Z",
+  "decision_digest": "sha256:d30c2dc1f6c3fdf61a55c797e7ef7e9903aca06d1a433c33bc942dd65e67e93f",
+  "decision_id": "permission-d30c2dc1f6c3fdf61a55c797e7ef7e99",
+  "executable": false,
+  "findings": [
+    {
+      "detail": "A complete proposal still requires exact user plan authorization.",
+      "outcome": "REQUIRE_APPROVAL",
+      "reason_code": "PLAN_AUTHORIZATION_REQUIRED",
+      "task_id": ""
+    }
+  ],
+  "observation_digest": "sha256:803ddc90c3ecb0e56689b2202a4d04b26e8485103e9966fa14fa1db1a74f0805",
+  "observation_id": "observation-803ddc90c3ecb0e56689b2202a4d04b2",
+  "outcome": "REQUIRE_APPROVAL",
+  "phase": "authorization_candidate",
+  "policy_digest": "sha256:5a8f37a6d35be67a6532267d79ab7aca21cd53ddd30c0dcceb8457b620a66dff",
+  "policy_version": "scientific-agent-permission-policy.v3",
+  "project_id": "project-1",
+  "proposal_digest": "sha256:b1ed6a4e73fbcda43179d99570bb4f9f4e1043cf81c1d65b01be1e73c2c228ad",
+  "proposal_id": "proposal-f1d88a31e6863245e4bb05883745a925",
+  "reason_codes": [
+    "PERMISSION_RECOGNIZED",
+    "PLAN_AUTHORIZATION_REQUIRED"
+  ],
+  "requested_preauthorized_gate_ids": [],
+  "run_id": "run-1",
+  "schema_version": "agent_permission_decision.v1",
+  "semantic_plan_digest": "sha256:1671513e9da19eb19e045759f9463a8f390e5c47e7b306cfc1201be6d601d164",
+  "semantic_plan_id": "semantic-plan-1671513e9da19eb19e045759f9463a8f",
+  "task_decisions": [
+    {
+      "effect_class": "observe",
+      "execution_binding_digest": "sha256:1eab3706a5209628008bc2ba3ef9b4bcbbdece2a9ffacb9bf43deced580a5986",
+      "execution_route": "local_executor",
+      "findings": [
+        {
+          "detail": "All declared task permissions are recognized.",
+          "outcome": "ALLOW",
+          "reason_code": "PERMISSION_RECOGNIZED",
+          "task_id": "inspect_dataset"
+        }
+      ],
+      "outcome": "ALLOW",
+      "reason_codes": [
+        "PERMISSION_RECOGNIZED"
+      ],
+      "remote_task_type": null,
+      "required_gates": [],
+      "required_permissions": [
+        "derive_project_artifact",
+        "read_content_bound_input"
+      ],
+      "risk_level": "low",
+      "task_authority_digest": "sha256:e19c5267368fd998b8fd54acb3bd09944e61988c6960ce086280673b6d33addc",
+      "task_id": "inspect_dataset"
+    }
+  ],
+  "tool_catalog_digest": "sha256:0956e5ae55627f1383147b0e5241546361b778aa49d41f670c4d00cd787f4904"
+}

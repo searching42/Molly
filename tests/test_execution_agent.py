@@ -1067,8 +1067,11 @@ def test_execution_tool_catalog_projects_pending_task_option_schema(
         option_schema=option_schema,
     )
     assert len(catalog.tools) == 2
-    for tool in catalog.tools:
-        assert tool.option_schema == option_schema
+    by_id = {tool.tool_id: tool for tool in catalog.tools}
+    # Only the tool that actually advances the pending task carries the
+    # pending task's option schema; wait/recovery tools must not claim it.
+    assert by_id["controller.advance_current.v1"].option_schema == option_schema
+    assert by_id["agent.pause_current.v1"].option_schema is None
 
     plain_catalog, _ = build_execution_tool_catalog(snapshot)
     assert all(tool.option_schema is None for tool in plain_catalog.tools)

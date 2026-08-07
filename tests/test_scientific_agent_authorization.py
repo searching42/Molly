@@ -46,6 +46,7 @@ from ai4s_agent.scientific_agent_authorization import (
 from ai4s_agent.scientific_agent_permissions import (
     IMPLEMENTATION_BOUND_PERMISSION_POLICY_DIGEST,
     IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
+    OPTION_POLICY_PERMISSION_POLICY_VERSION,
     PERMISSION_POLICY_DIGEST,
     PERMISSION_POLICY_MATERIAL,
     PERMISSION_POLICY_VERSION,
@@ -149,6 +150,7 @@ def _permission_complete_hidden_task(task_id: str) -> AtomicTaskSpec:
         default_planner_options={},
         backend_default_planner_options={},
         review_required_option_ids=[],
+        budget_dimensions=[],
         execution_route="local_executor",
         remote_task_type=None,
         backend_execution_routes={},
@@ -641,15 +643,15 @@ def test_complete_proposal_review_requires_exact_plan_authorization(
     assert [item.task_id for item in decision.task_decisions] == [
         item.task_id for item in proposal.run_plan.tasks
     ]
-    assert decision.policy_version == IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION
+    assert decision.policy_version == OPTION_POLICY_PERMISSION_POLICY_VERSION
     assert decision.policy_digest == (
-        "sha256:5a8f37a6d35be67a6532267d79ab7aca21cd53ddd30c0dcceb8457b620a66dff"
+        "sha256:3bc77b1ae27c7e504313061ed9ee34b8d9ad0f9f0dbc99dd9d25e352cdd809f5"
     )
     assert decision.task_decisions[0].task_authority_digest == (
-        "sha256:137db9e51d6628a112712cf8382e3529a9ad4c9f113affaf9043b014bd4a611d"
+        "sha256:27c505c871e7a22b5ce0892d34ee7b8c8370c1e92081a932946f37fe17e82f9a"
     )
     assert decision.decision_digest == (
-        "sha256:0dc4290162865a8fe2164fbfda42f1e89195877edbcfbae0a2e079645c8ddedc"
+        "sha256:f63cf9315870ee2bcca963ef1ccea8ca435c4c015c06b75c10c65d32b40ec9bd"
     )
 
 
@@ -709,10 +711,10 @@ def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
         "sha256:bcfcce7a4c1e3dba12d5f291d92f1726df431c111cf288c49acb29bd5ea3df41"
     )
     assert legacy_review.task_decisions[0].task_authority_digest == (
-        "sha256:2f2331e3ceca834d3b9fcfb6b93528bc74b11e4c3abbfb0ea2e803efded673cd"
+        "sha256:8371df28ef5b9da579264579167bc37f1c087388e42a0a49500a057fb51c4378"
     )
     assert legacy_review.decision_digest == (
-        "sha256:4990e7d8b2868245d91eafbd25ab0bbea2c273c49ce5151e2bfe24d6f6a5d491"
+        "sha256:949f874324cf3e873e62581f66c7fb58c51f8208069ffe5673bcb301d289bfb4"
     )
 
     request = _request(proposal, client_request_id="pr-bm-v1-authority")
@@ -763,10 +765,10 @@ def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
     service.control_store.publish_start_intent(start_intent)
 
     assert authorization.authorization_digest == (
-        "sha256:3e4c7acfd400f535e3d4dfda8a92265cc409a80acce3f2c97fc8bc10d8f49c7d"
+        "sha256:56e972a9857a41013647217e418269a8e302b5dff79355d525d2ed053dfb181c"
     )
     assert start_intent.start_intent_digest == (
-        "sha256:1da79beb4849cef070fb889808f6e662477af6f8fbf284c27748eb333a277468"
+        "sha256:89bbb6e97f02e10d7c63b9c95f644fa5c6f68bf0134c1b02556389b8d88faa73"
     )
 
     def replacement_adapter(payload):
@@ -810,7 +812,7 @@ def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
         ("artifact_binding_drift", "ARTIFACT_BINDING_DRIFT"),
         ("profile_binding_drift", "PROFILE_BINDING_DRIFT"),
         ("budget_expansion", "BUDGET_LIMIT_EXCEEDED"),
-        ("resource_partial", "REMOTE_RESOURCE_INTENT_INCOMPLETE"),
+        ("resource_partial", "REMOTE_RESOURCE_AUTHORITY_REQUIRED"),
     ],
 )
 def test_permission_engine_denies_adversarial_or_incomplete_bindings(
@@ -1639,7 +1641,7 @@ def test_same_id_callable_implementation_drift_invalidates_v3_authorization(
     )
     assert (
         authorization.permission_policy_version
-        == IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION
+        == OPTION_POLICY_PERMISSION_POLICY_VERSION
     )
 
     def inspect_dataset_service(payload):
