@@ -1,0 +1,313 @@
+"""Conversation-first scientific Agent session routes and read-only SSE."""
+
+from __future__ import annotations
+
+import json
+import time
+from collections.abc import Iterator
+from typing import Any
+
+from flask import Flask, Response, after_this_request, jsonify, request, stream_with_context
+
+from ai4s_agent.actor_identity import resolve_authenticated_actor
+from ai4s_agent.llm_provider import LLMProviderError, LLMProviderManager
+from ai4s_agent.llm_provider_resolution import resolve_llm_provider_payload
+from ai4s_agent.llm_settings import LLMSettingsStore
+from ai4s_agent.scientific_agent_conversation import (
+    ScientificAgentConversationAuthorizationRequired,
+    ScientificAgentConversationPlanningFailed,
+    ScientificAgentConversationSessionError,
+    ScientificAgentConversationSessionService,
+    ScientificAgentConversationStaleAuthority,
+)
+
+
+_POLL_SECONDS = 0.75
+
+
+def _json_object() -> dict[str, Any]:
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be a JSON object")
+    return payload
+
+
+def _cursor() -> int:
+    raw: Any = request.headers.get("Last-Event-ID")
+    if raw is None or str(raw).strip() == "":
+        raw = request.args.get("after", "0")
+    clean = str(raw).strip()
+    if not clean.isdigit():
+        raise ValueError("Last-Event-ID must be a non-negative integer")
+    return int(clean)
+
+
+def _sse(*, event: str, data: dict[str, Any], event_id: int | None = None) -> str:
+    lines: list[str] = []
+    if event_id is not None:
+        lines.append(f"id: {event_id}")
+    lines.append(f"event: {event}")
+    encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    lines.extend(f"data: {line}" for line in encoded.splitlines() or [""])
+    return "\n".join(lines) + "\n\n"
+
+
+def _provider_error(exc: Exception):
+    message = str(exc)
+    if "external_llm_data_sharing_enabled=true" in message:
+        return jsonify(
+            {
+                "ok": False,
+                "error_code": "external_llm_data_sharing_required",
+                "error": "Enable the user-level external LLM data-sharing preference before sending conversation data.",
+            }
+        ), 400
+    if "external_llm_approved=true" in message:
+        return jsonify(
+            {
+                "ok": False,
+                "error_code": "external_llm_approval_required",
+                "error": "Explicit per-request consent is required for a temporary external LLM endpoint.",
+            }
+        ), 400
+    return jsonify(
+        {
+            "ok": False,
+            "error_code": "llm_conversation_unavailable",
+            "error": "The configured LLM could not be prepared for this conversation.",
+        }
+    ), 409
+
+
+def _no_store() -> None:
+    @after_this_request
+    def add_no_store(response):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        return response
+
+
+def register_scientific_agent_conversation_routes(
+    app: Flask,
+    *,
+    service: ScientificAgentConversationSessionService,
+    llm_settings: LLMSettingsStore,
+    llm_providers: LLMProviderManager,
+) -> None:
+    app.extensions["scientific_agent_conversation_session_service"] = service
+    app.extensions["scientific_agent_conversation_session_event_projector"] = service.projector
+
+    base = "/api/projects/<project_id>/conversations/<conversation_id>/agent-session"
+
+    @app.get(base)
+    def get_scientific_agent_conversation_session(project_id: str, conversation_id: str):
+        _no_store()
+        try:
+            return jsonify(
+                {
+                    "ok": True,
+                    **service.read_session_payload(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                    ),
+                }
+            )
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "conversation not found"}), 404
+        except (ScientificAgentConversationSessionError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+    @app.post(base + "/turn")
+    def scientific_agent_conversation_turn(project_id: str, conversation_id: str):
+        _no_store()
+        try:
+            payload = _json_object()
+            allowed = {"run_id", "llm_provider", "external_llm_approved"}
+            if set(payload).difference(allowed):
+                raise ValueError("conversation session turn contains an unsupported field")
+            session = service.read_session(
+                project_id=project_id,
+                conversation_id=conversation_id,
+            )
+            run_id = str(payload.get("run_id") or session.get("run_id") or "").strip()
+            if not run_id:
+                run_id = f"conversation-{conversation_id}"
+            resolution = resolve_llm_provider_payload(
+                payload,
+                settings=llm_settings,
+                providers=llm_providers,
+            )
+            actor = resolve_authenticated_actor(request, required=True)
+            with resolution.provider_context as provider:
+                result = service.handle_turn(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    provider=provider,
+                    provider_binding_digest=resolution.provider_binding_digest,
+                    actor=actor,
+                )
+            return jsonify({"ok": True, **result.as_dict()})
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "conversation not found"}), 404
+        except LLMProviderError as exc:
+            return _provider_error(exc)
+        except ValueError as exc:
+            if "external_llm_" in str(exc) or "external_llm_data_sharing" in str(exc):
+                return _provider_error(exc)
+            if isinstance(exc, ScientificAgentConversationAuthorizationRequired):
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error_code": "authorization_actor_required",
+                            "error": "Conversation approval requires a server-resolved actor.",
+                        }
+                    ),
+                    403,
+                )
+            if isinstance(exc, ScientificAgentConversationStaleAuthority):
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error_code": "stale_authority",
+                            "error": "The pending scientific Agent plan is stale and must be reviewed again.",
+                        }
+                    ),
+                    409,
+                )
+            if isinstance(exc, ScientificAgentConversationPlanningFailed):
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error_code": "scientific_agent_planning_failed",
+                            "error": "The scientific Agent could not publish a reviewable plan proposal.",
+                        }
+                    ),
+                    409,
+                )
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except ScientificAgentConversationAuthorizationRequired:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error_code": "authorization_actor_required",
+                        "error": "Conversation approval requires a server-resolved actor.",
+                    }
+                ),
+                403,
+            )
+        except ScientificAgentConversationStaleAuthority:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error_code": "stale_authority",
+                        "error": "The pending scientific Agent plan is stale and must be reviewed again.",
+                    }
+                ),
+                409,
+            )
+        except ScientificAgentConversationPlanningFailed:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error_code": "scientific_agent_planning_failed",
+                        "error": "The scientific Agent could not publish a reviewable plan proposal.",
+                    }
+                ),
+                409,
+            )
+        except Exception:
+            app.logger.warning("scientific_agent_conversation_turn_failed")
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error_code": "scientific_agent_session_failed",
+                        "error": "The scientific Agent session could not continue safely.",
+                    }
+                ),
+                409,
+            )
+
+    @app.get(base + "/events")
+    def stream_scientific_agent_conversation_events(project_id: str, conversation_id: str):
+        try:
+            after = _cursor()
+            initial = service.projector.project(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                after_event_id=after,
+            )
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "conversation not found"}), 404
+        except (ScientificAgentConversationSessionError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        once = str(request.args.get("once") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+
+        @stream_with_context
+        def generate() -> Iterator[str]:
+            nonlocal initial
+            cursor = after
+            yield "retry: 1500\n\n"
+            yield _sse(
+                event="snapshot",
+                data={
+                    "snapshot": initial["snapshot"],
+                    "cursor": initial["cursor"],
+                    "authority": initial["authority"],
+                },
+            )
+            while True:
+                for event in initial["durable_events"]:
+                    cursor = int(event["event_id"])
+                    yield _sse(
+                        event="agent.status",
+                        data=event,
+                        event_id=cursor,
+                    )
+                yield _sse(
+                    event="heartbeat",
+                    data={
+                        "schema_version": "scientific_agent_session_ephemeral_delta.v1",
+                        "event_type": "heartbeat",
+                        "durable": False,
+                    },
+                )
+                if once:
+                    return
+                time.sleep(_POLL_SECONDS)
+                try:
+                    initial = service.projector.project(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        after_event_id=cursor,
+                    )
+                except Exception:
+                    yield _sse(
+                        event="observer.error",
+                        data={
+                            "schema_version": "scientific_agent_session_ephemeral_delta.v1",
+                            "event_type": "observer.error",
+                            "durable": False,
+                            "message": "Agent session projection is temporarily unavailable.",
+                        },
+                    )
+                    return
+
+        response = Response(generate(), mimetype="text/event-stream")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Accel-Buffering"] = "no"
+        return response
+
+
+__all__ = ["register_scientific_agent_conversation_routes"]

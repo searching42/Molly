@@ -67,7 +67,7 @@ def test_index_page_uses_project_sidebar_and_chat_workspace(rendered_index_html:
     assert 'id="chat-review-artifacts"' in html
 
 
-def test_index_page_wires_project_chat_to_agent_payload_bridge(
+def test_index_page_wires_project_chat_to_scientific_agent_session(
     rendered_index_html: str,
 ) -> None:
     html = rendered_index_html
@@ -78,16 +78,20 @@ def test_index_page_wires_project_chat_to_agent_payload_bridge(
     assert "let conversationMessages" in html
     assert "let currentConversationDecision" in html
     assert "let currentResearchSourceProposal" in html
-    assert 'postJSON("/api/agent/conversation/next-turn"' in html
+    assert 'postJSON("/api/agent/conversation/next-turn"' not in html
     assert 'postJSON("/api/agent/conversation/research-sources"' in html
     assert 'postJSON("/api/run-plan/expand"' in html
     assert 'id="atomic-literature-button"' in html
-    assert 'id="atomic-training-button"' in html
+    assert 'id="atomic-training-button"' not in html
     assert "conversation_turn_decision" in html
     assert "research_source_proposal" in html
     assert "pending_cited_target_evidence" in html
     assert "agent_questions" in html
-    assert 'postJSON("/api/run-plan/execute"' in html
+    assert 'agent-session/turn' in html
+    assert 'agent-session/events' in html
+    assert "new EventSource(url)" in html
+    assert 'postJSON("/api/run-plan/execute"' not in html
+    assert 'postJSON("/api/run-plan/resume"' not in html
 
 
 def test_index_page_removes_legacy_wizard_cards(rendered_index_html: str) -> None:
@@ -147,27 +151,30 @@ def test_index_page_keeps_chat_run_id_stable_across_turns(rendered_index_html: s
     assert "currentRunId = \"\";" in html
 
 
-def test_index_page_replaces_wizard_submit_with_confirmed_dataset_execution_path(
+def test_index_page_replaces_wizard_submit_with_conversational_dataset_review(
     rendered_index_html: str,
 ) -> None:
     html = rendered_index_html
     assert 'id="submit-run-form"' not in html
     assert 'id="run-confirmation-form"' not in html
     assert 'id="data-confirmation-form"' not in html
-    assert 'id="dataset-confirmation-form"' in html
-    assert 'id="model-run-form"' in html
-    assert 'postJSON("/api/run-plan/execute"' in html
+    assert 'id="dataset-confirmation-form"' not in html
+    assert "function renderDatasetReview" in html
+    assert "renderdatasetreview" in html.lower()
+    assert 'postJSON("/api/run-plan/execute"' not in html
     assert "input_artifacts: { uploaded_dataset: datasetPath }" not in html
 
 
-def test_index_page_replaces_wizard_gate_controls_with_model_workflow_controls(
+def test_index_page_replaces_wizard_gate_controls_with_conversation_status(
     rendered_index_html: str,
 ) -> None:
     html = rendered_index_html
     assert 'id="gate-form"' not in html
     assert 'id="agent-approve-button"' not in html
-    assert 'id="model-run-approve"' in html
-    assert 'postJSON("/api/run-plan/resume"' in html
+    assert 'id="model-run-approve"' not in html
+    assert 'postJSON("/api/run-plan/resume"' not in html
+    assert "确认执行" in html
+    assert "Agent 状态流" in html
     assert "gate approval fell back to legacy orchestrator" not in html
 
 
@@ -193,17 +200,18 @@ def test_index_page_renders_modeling_agent_review_card_sections(
     assert "approval_controls" in html
 
 
-def test_index_page_exposes_only_supported_model_workflow_backends(
+def test_index_page_does_not_expose_manual_model_workflow_backends(
     rendered_index_html: str,
 ) -> None:
     html = rendered_index_html
     assert 'id="run-card-training-backend"' not in html
     assert 'id="run-card-prediction-backend"' not in html
     assert "function buildTaskOptions" not in html
-    assert "train_model_unimol_legacy_adapter" in html
+    assert "train_model_unimol_legacy_adapter" not in html
     assert "predict_candidates_unimol_legacy_adapter" not in html
-    assert "training.execute = false" in html
+    assert "training.execute = false" not in html
     assert "molly-gpu-main" not in html
+    assert "agent-session/turn" in html
 
 
 def test_index_page_hides_artifact_inputs_and_raw_response_panel(
@@ -407,7 +415,7 @@ def test_run_confirmation_card_endpoint_without_legacy_ui_card(tmp_path) -> None
     page_html = page.data.decode("utf-8")
     assert "运行确认卡" not in page_html
     assert 'id="run-confirmation-form"' not in page_html
-    assert 'id="generation-count"' in page_html
+    assert 'id="generation-count"' not in page_html
 
     resp = client.post(
         "/api/run-confirmation-card",
@@ -2309,7 +2317,7 @@ def test_agent_plan_proposal_requires_explicit_approval_for_external_default_llm
     )
 
     assert blocked.status_code == 400
-    assert "external_llm_approved=true is required" in blocked.json["error"]
+    assert "external_llm_data_sharing_enabled=true is required" in blocked.json["error"]
     assert local_fallback.status_code == 200
     assert local_fallback.json["proposal"]["planner_backend"] == "rule_based"
 

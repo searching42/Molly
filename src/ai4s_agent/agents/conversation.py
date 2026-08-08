@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ai4s_agent.agents.research import DOI_RE, URL_RE
@@ -37,6 +38,40 @@ class ConversationAgent:
     }
     TRAINING_TERMS = ("train", "training", "model", "predict", "optimize", "screen")
     EXPLICIT_APPROVAL_TERMS = ("approve", "approved", "allow", "allowed", "permission", "批准", "同意", "允许")
+    PLAN_APPROVAL_PHRASES = (
+        "确认执行",
+        "确认按此计划执行",
+        "确认按以上计划执行",
+        "同意执行",
+        "批准执行",
+        "按此计划执行",
+        "confirm execution",
+        "confirm and execute",
+        "approve execution",
+        "execute this plan",
+        "run this plan",
+    )
+    PLAN_REVISION_TERMS = (
+        "但",
+        "但是",
+        "不过",
+        "改",
+        "调整",
+        "降低",
+        "减少",
+        "增加",
+        "把",
+        "重新",
+        "maybe",
+        "however",
+        "but",
+        "change",
+        "adjust",
+        "lower",
+        "reduce",
+        "increase",
+        "instead",
+    )
     EVIDENCE_USE_TERMS = (
         "use this",
         "use that",
@@ -198,6 +233,34 @@ class ConversationAgent:
             requires_user_response=status != "ready_for_modeling_plan",
             executable=False,
         )
+
+    @classmethod
+    def recognize_plan_approval(cls, content: str) -> bool:
+        """Recognize only an exact, unqualified approval phrase.
+
+        This boundary is deliberately deterministic.  It is used only when a
+        current persisted proposal is already waiting for approval; an LLM
+        response can explain that state but can never turn an ambiguous user
+        sentence into execution authority.
+        """
+
+        raw = str(content or "").strip().lower()
+        if not raw or "?" in raw or "？" in raw:
+            return False
+        if any(term in raw for term in cls.PLAN_REVISION_TERMS):
+            return False
+        normalized = re.sub(r"[\s,，。.!！:：;；]+", "", raw)
+        normalized_phrases = {
+            re.sub(r"[\s,，。.!！:：;；]+", "", phrase.lower())
+            for phrase in cls.PLAN_APPROVAL_PHRASES
+        }
+        return normalized in normalized_phrases
+
+    @classmethod
+    def is_explicit_plan_approval(cls, content: str) -> bool:
+        """Compatibility/readability alias for the approval boundary."""
+
+        return cls.recognize_plan_approval(content)
 
     def prepare_research_source_payload(
         self,

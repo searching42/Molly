@@ -62,11 +62,23 @@ def resolve_llm_provider_payload(
                 ),
             )
         temporary = False
-    if is_external_llm_config(config) and payload.get("external_llm_approved") is not True:
-        raise ValueError(
-            "external_llm_approved=true is required before sending request data "
-            "to a non-loopback LLM endpoint"
-        )
+    if is_external_llm_config(config):
+        if temporary:
+            # A request-injected provider is an arbitrary endpoint.  The
+            # durable saved preference must never silently authorize it.
+            if payload.get("external_llm_approved") is not True:
+                raise ValueError(
+                    "external_llm_approved=true is required before sending request data "
+                    "to a temporary non-loopback LLM endpoint"
+                )
+        elif not settings.external_llm_data_sharing_enabled:
+            # Saved/configured profiles use the user-scoped preference.  An
+            # old per-request checkbox cannot override an explicit global
+            # opt-out.
+            raise ValueError(
+                "external_llm_data_sharing_enabled=true is required before sending "
+                "request data to the configured non-loopback LLM endpoint"
+            )
     material = config.model_dump(mode="json")
     material.pop("api_key", None)
     stub_response = material.pop("stub_response", {})

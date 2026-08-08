@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 def test_sidebar_matches_frozen_project_conversation_layout(rendered_index_html: str) -> None:
     html = rendered_index_html
 
@@ -43,7 +46,7 @@ def test_task_intermediate_state_files_are_persisted_in_conversation(
     assert "MollyTaskState.conversationDecisionMessages(conversationMessages)" in html
     assert "中间状态文件：" in module
     assert "状态读取成功，但未能写入持久化对话。" in html
-    assert "recordConversation: true" in html
+    assert "persistMessage: persistConversationMessageToContext" in html
     assert '"job_state.json"' in module
     assert '"background_job_state.json"' in module
     assert '"job.json"' not in module
@@ -62,7 +65,7 @@ def test_sidebar_exposes_literature_parse_without_bounded_oled_entry(
     assert 'id="parse-literature-button"' in html
     assert "<span>文献解析</span>" in html
     assert 'task_type: "literature_parse"' in html
-    assert 'id="atomic-training-button"' in html
+    assert 'id="atomic-training-button"' not in html
     assert 'id="atomic-toolbox-button"' in html
     assert "oled-bounded-sessions" not in html
     assert 'id="atomic-bounded-button"' not in html
@@ -109,28 +112,25 @@ def test_chat_keyboard_delete_and_safe_bold_markdown_contract(
     assert "root.innerHTML" not in html[html.index("function appendSafeBoldMarkdown"):html.index("async function recordTaskStateInConversation")]
 
 
-def test_model_training_action_exposes_confirmed_dataset_and_gated_execution(
+def test_conversation_is_the_scientific_agent_front_door(
     rendered_index_html: str,
 ) -> None:
     html = rendered_index_html
 
-    assert "<span>模型训练</span>" in html
-    assert "<span>提交训练任务</span>" not in html
-    assert 'id="model-training-workflow"' in html
-    assert 'id="dataset-confirmation-form"' in html
-    assert 'id="training-backend"' in html
-    assert 'id="generation-backend"' in html
-    assert 'postJSON("/api/run-plan/execute"' in html
-    assert 'postJSON("/api/run-plan/resume"' in html
-    assert "train_model_unimol_legacy_adapter" in html
-    assert 'generation.reinvent4_mode = "remote"' in html
-    assert 'id="reinvent4-config-help"' in html
-    assert "{{molly_output_csv}}" in html
-    assert "{{molly_design_request_sha256}}" in html
-    assert "自动创建独立的远端 attempt 目录" in html
-    assert "function persistModelWorkflowState()" in html
-    assert "function restoreModelWorkflowState()" in html
-    assert "sessionStorage.setItem(key" in html
+    assert 'id="model-training-workflow"' not in html
+    assert 'id="training-backend"' not in html
+    assert 'id="generation-backend"' not in html
+    assert 'postJSON("/api/run-plan/execute"' not in html
+    assert 'postJSON("/api/run-plan/resume"' not in html
+    assert "currentModelWorkflow" not in html
+    assert "persistModelWorkflowState" not in html
+    assert "restoreModelWorkflowState" not in html
+    assert 'agent-session/turn' in html
+    assert 'agent-session/events' in html
+    assert "new EventSource(url)" in html
+    assert "function renderScientificAgentPlan(summary)" in html
+    assert "确认执行" in html
+    assert "数据集审阅卡" in html
 
 
 def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html: str) -> None:
@@ -140,8 +140,11 @@ def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html:
     assert 'id="llm-api-key-source"' in html
     settings_start = html.index('id="llm-settings-form"')
     settings_form = html[settings_start:html.index("</form>", settings_start)]
-    assert 'id="conversation-external-llm-approved"' in settings_form
+    assert 'id="external-llm-data-sharing-enabled"' in settings_form
+    assert "这是用户级偏好" in settings_form
+    assert "跨项目和对话生效" in settings_form
     assert 'patchJSON("/api/settings/llm", payload)' in html
+    assert "external_llm_data_sharing_enabled" in html
     assert 'id="compute-connection-form"' in html
     assert 'id="compute-resource-role"' in html
     assert 'id="compute-workload-mineru"' in html
@@ -160,4 +163,3 @@ def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html:
     assert "molly-worker probe --json" in html
     assert "stage-input</code>、<code>verify-inputs</code>、<code>execute" in html
     assert "cancel</code> 和 <code>fetch-output" in html
-from pathlib import Path

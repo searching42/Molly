@@ -1,6 +1,14 @@
 from ai4s_agent.agents.conversation import ConversationAgent
 
 
+def test_plan_approval_boundary_requires_exact_unqualified_phrase() -> None:
+    assert ConversationAgent.recognize_plan_approval("确认执行") is True
+    assert ConversationAgent.recognize_plan_approval("确认按以上计划执行。") is True
+    assert ConversationAgent.recognize_plan_approval("这个方案似乎可以，但把生成数量调低一些") is False
+    assert ConversationAgent.recognize_plan_approval("确认执行，但先减少生成数量") is False
+    assert ConversationAgent.recognize_plan_approval("确认执行？") is False
+
+
 def test_conversation_turn_decision_is_ready_when_target_and_approval_are_present() -> None:
     agent = ConversationAgent()
 

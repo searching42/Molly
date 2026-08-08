@@ -44,7 +44,13 @@ def test_settings_are_user_scoped_and_profile_never_contains_secret(tmp_path: Pa
     client = _app(tmp_path).test_client()
     initial = client.get("/api/settings/llm")
     assert initial.status_code == 200
-    assert initial.json == {"ok": True, "configured": False, "config": None}
+    assert initial.json == {
+        "ok": True,
+        "configured": False,
+        "config": None,
+        "external_llm_data_sharing_enabled": False,
+        "settings_scope": "user",
+    }
 
     saved = client.patch(
         "/api/settings/llm",
@@ -70,6 +76,105 @@ def test_settings_are_user_scoped_and_profile_never_contains_secret(tmp_path: Pa
     fetched = client.get("/api/settings/llm")
     assert fetched.headers["Cache-Control"] == "no-store"
     assert "secret-token" not in fetched.get_data(as_text=True)
+
+
+def test_external_llm_data_sharing_preference_is_persistent_user_state(
+    tmp_path: Path,
+) -> None:
+    client = _app(tmp_path).test_client()
+
+    enabled = client.patch(
+        "/api/settings/llm",
+        json={"external_llm_data_sharing_enabled": True},
+    )
+    assert enabled.status_code == 200
+    assert enabled.json["settings_scope"] == "user"
+    assert enabled.json["external_llm_data_sharing_enabled"] is True
+    assert enabled.json["config"] is None
+
+    document = json.loads(
+        (tmp_path / "user-config" / "llm_profiles.json").read_text(encoding="utf-8")
+    )
+    assert document["preferences"] == {"external_llm_data_sharing_enabled": True}
+
+    fetched = client.get("/api/settings/llm")
+    assert fetched.json["external_llm_data_sharing_enabled"] is True
+
+    disabled = client.patch(
+        "/api/settings/llm",
+        json={"external_llm_data_sharing_enabled": False},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json["external_llm_data_sharing_enabled"] is False
+
+
+def test_existing_profile_migration_defaults_external_sharing_to_false(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    legacy = workspace / ".ai4s" / "llm_provider.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "provider": "openai_compatible",
+                "endpoint": "https://llm.example.test/v1",
+                "model": "legacy-model",
+                "api_key": "legacy-secret",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = LLMSettingsStore(workspace, config_dir=tmp_path / "config")
+    assert store.external_llm_data_sharing_enabled is False
+    document = json.loads(store.path.read_text(encoding="utf-8"))
+    assert document["preferences"] == {"external_llm_data_sharing_enabled": False}
+
+
+def test_legacy_saved_llm_profiles_document_remains_readable_with_false_default(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "llm_profiles.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "active_profile": {
+                    "profile_id": "legacy-profile",
+                    "provider": "openai_compatible",
+                    "endpoint": "http://127.0.0.1:8000/v1",
+                    "model": "legacy-model",
+                    "timeout_sec": 60,
+                    "api_key_source": "file",
+                    "api_key_ref": "legacy-profile",
+                    "api_key_env": "MOLLY_LLM_API_KEY",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    secrets_dir = config_dir / "secrets"
+    secrets_dir.mkdir()
+    (secrets_dir / "legacy-profile.key").write_text("legacy-secret", encoding="utf-8")
+
+    store = LLMSettingsStore(tmp_path / "workspace", config_dir=config_dir)
+    resolved = store.read()
+
+    assert resolved is not None
+    assert resolved.model == "legacy-model"
+    assert resolved.api_key == "legacy-secret"
+    assert store.external_llm_data_sharing_enabled is False
+
+
+def test_preference_update_rejects_non_boolean_values(tmp_path: Path) -> None:
+    response = _app(tmp_path).test_client().patch(
+        "/api/settings/llm",
+        json={"external_llm_data_sharing_enabled": "true"},
+    )
+    assert response.status_code == 400
+    assert "must be a boolean" in response.json["error"]
 
 
 def test_patch_omission_retains_key_and_delete_is_explicit(tmp_path: Path) -> None:
@@ -381,8 +486,8 @@ def test_profile_write_failure_rolls_back_secret_migration(tmp_path: Path, monke
     )
     original_write_profile = store._write_profile
 
-    def fail_after_new_profile(profile):
-        original_write_profile(profile)
+    def fail_after_new_profile(profile, **kwargs):
+        original_write_profile(profile, **kwargs)
         if profile["api_key_source"] == "keyring":
             raise OSError("simulated profile failure")
 

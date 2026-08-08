@@ -296,6 +296,14 @@ def register_agent_routes(
                 providers=llm_providers,
             )
         except (LLMProviderError, ValidationError, ValueError) as exc:
+            if "external_llm_data_sharing_enabled=true" in str(exc):
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error_code": "external_llm_data_sharing_required",
+                        "error": "Enable the user-level external LLM data-sharing preference before sending conversation data.",
+                    }
+                ), 400
             if "external_llm_approved=true" in str(exc):
                 return jsonify(
                     {

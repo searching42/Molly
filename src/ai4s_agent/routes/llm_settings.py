@@ -25,7 +25,13 @@ def register_llm_settings_routes(
     @app.get("/api/settings/llm")
     def get_llm_settings():
         no_store()
-        return jsonify({"ok": True, **settings.public_state()})
+        return jsonify(
+            {
+                "ok": True,
+                **settings.public_state(),
+                "settings_scope": "user",
+            }
+        )
 
     @app.patch("/api/settings/llm")
     def update_llm_settings():
@@ -45,7 +51,7 @@ def register_llm_settings_routes(
                 **settings.public_state(),
                 "settings_scope": "user",
                 "settings_file": settings.path.name,
-                "model": config.model,
+                "model": config.model if config is not None else "",
             }
         )
 

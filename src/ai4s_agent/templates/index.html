@@ -147,12 +147,6 @@
       .settings-list { display: grid; gap: 0.5rem; }
       .settings-list-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.5rem; align-items: center; border: 1px solid var(--line); border-radius: var(--radius); padding: 0.65rem; }
       .settings-list-item button { width: auto; min-width: 0; padding: 0.45rem 0.6rem; }
-      .model-workflow { display: grid; gap: 0.9rem; margin-top: 1rem; border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.25rem; background: rgba(255, 255, 255, 0.74); }
-      .model-workflow[hidden] { display: none; }
-      .model-workflow-header { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
-      .model-workflow-header button { width: auto; }
-      .workflow-state { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.75rem; background: rgba(245, 246, 247, 0.72); }
-      .workflow-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.65rem; }
       @media (max-width: 900px) { .app-shell { grid-template-columns: 1fr; padding: 0.75rem; } .project-sidebar { position: static; max-height: none; } .chat-panel { height: max(440px, calc(100dvh - 1.5rem)); } .composer-actions { grid-template-columns: 1fr; display: grid; } .composer-actions button { width: 100%; } .two-column, .split, .tool-grid, .button-row { grid-template-columns: 1fr; } }
     </style>
   </head>
@@ -188,7 +182,6 @@
           <div class="atomic-task-list">
             <button id="atomic-literature-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">⌕</span><span>查找文献</span></button>
             <button id="parse-literature-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">▤</span><span>文献解析</span></button>
-            <button id="atomic-training-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">△</span><span>模型训练</span></button>
             <button id="atomic-toolbox-button" type="button" class="atomic-task-button"><span class="atomic-task-icon">⋯</span><span>全部任务</span></button>
             <button id="approve-literature-button" type="button" class="ghost" hidden>批准批量解析</button>
           </div>
@@ -219,95 +212,6 @@
             <button id="conversation-submit-button" type="submit">发送</button>
           </div>
         </form>
-      </section>
-
-      <section id="model-training-workflow" class="model-workflow" aria-labelledby="model-training-title" hidden>
-        <header class="model-workflow-header">
-          <div>
-            <h2 id="model-training-title">模型训练与候选评估</h2>
-            <p class="small">先确认数据列映射，再创建 immutable RunPlan。训练与真实生成都会停在各自 Gate，未批准时不会执行。</p>
-          </div>
-          <button id="model-training-close" type="button" class="icon-button" aria-label="关闭模型训练">×</button>
-        </header>
-
-        <div id="dataset-workflow-state" class="workflow-state">尚未选择 CSV 数据集。</div>
-        <form id="dataset-confirmation-form">
-          <div class="split">
-            <div>
-              <label for="dataset-smiles-column">SMILES 列</label>
-              <select id="dataset-smiles-column" required></select>
-            </div>
-            <div>
-              <label for="dataset-target-column">目标列</label>
-              <select id="dataset-target-column" required></select>
-            </div>
-          </div>
-          <div class="split">
-            <div>
-              <label for="dataset-property-id">规范属性 ID</label>
-              <input id="dataset-property-id" value="plqy" pattern="[a-z][a-z0-9_]*" required />
-            </div>
-            <div>
-              <label for="dataset-confirmed-by">确认人</label>
-              <input id="dataset-confirmed-by" value="local-user" required />
-            </div>
-          </div>
-          <label class="checkbox-row" for="dataset-strict-smiles">
-            <input id="dataset-strict-smiles" type="checkbox" checked />
-            <span>严格验证并规范化 SMILES <small>无效结构不会进入 confirmed dataset</small></span>
-          </label>
-          <button id="dataset-confirm-button" type="submit">确认数据集</button>
-        </form>
-
-        <form id="model-run-form">
-          <div class="split">
-            <div>
-              <label for="training-backend">训练后端</label>
-              <select id="training-backend">
-                <option value="baseline">本地基线模型（可直接验收）</option>
-                <option value="unimol">Uni-Mol（远程接口）</option>
-              </select>
-            </div>
-            <div>
-              <label for="training-environment-id">Uni-Mol 运行环境</label>
-              <select id="training-environment-id"><option value="">未选择</option></select>
-            </div>
-          </div>
-          <div class="split">
-            <div>
-              <label for="generation-backend">候选生成后端</label>
-              <select id="generation-backend">
-                <option value="deterministic_stub">本地确定性 smoke</option>
-                <option value="reinvent4">真实 REINVENT4（远程）</option>
-              </select>
-            </div>
-            <div>
-              <label for="generation-environment-id">REINVENT4 运行环境</label>
-              <select id="generation-environment-id"><option value="">未选择</option></select>
-            </div>
-          </div>
-          <label for="reinvent4-config-path">REINVENT4 本地配置模板</label>
-          <input id="reinvent4-config-path" placeholder="/absolute/local/path/to/reinvent4_config.toml" aria-describedby="reinvent4-config-help" />
-          <p id="reinvent4-config-help" class="field-help">{% raw %}模板须保留完整的 sampling 配置，并包含 <code>{{molly_output_csv}}</code>、<code>{{molly_design_request_id}}</code>、<code>{{molly_seed}}</code>、<code>{{molly_design_request_sha256}}</code>。每次运行会冻结有效配置，并自动创建独立的远端 attempt 目录。{% endraw %}</p>
-          <div class="split">
-            <div>
-              <label for="generation-count">生成数量</label>
-              <input id="generation-count" type="number" min="1" max="100000" value="32" required />
-            </div>
-            <div>
-              <label for="model-topn">Top-N</label>
-              <input id="model-topn" type="number" min="1" max="10000" value="10" required />
-            </div>
-          </div>
-          <label for="model-run-actor">Gate 批准人</label>
-          <input id="model-run-actor" value="local-user" required />
-          <div class="workflow-actions">
-            <button id="model-run-start" type="submit">创建并执行到 Gate</button>
-            <button id="model-run-approve" type="button" class="alt" hidden>批准当前 Gate</button>
-            <button id="model-run-refresh" type="button" class="ghost" disabled>刷新运行状态</button>
-          </div>
-        </form>
-        <div id="model-workflow-status" class="workflow-state" aria-live="polite">等待数据集确认。</div>
       </section>
 
       <section id="chat-review-artifacts" class="review-card-grid artifact-tray" hidden></section>
@@ -507,9 +411,9 @@
           <label for="llm-api-key">API Key</label>
           <input id="llm-api-key" name="api_key" type="password" autocomplete="new-password" placeholder="留空则保留现有密钥" />
           <p class="small">远程 endpoint 必须使用 HTTPS；HTTP 仅允许 localhost/loopback。</p>
-          <label class="checkbox-row" for="conversation-external-llm-approved">
-            <input id="conversation-external-llm-approved" type="checkbox" />
-            <span>允许将本次项目对话发送到已配置的外部 LLM <small>仅对当前项目对话生效；切换项目或对话后会重新要求授权。结构化决策与 Gate 仍由 Molly 的确定性逻辑控制。</small></span>
+          <label class="checkbox-row" for="external-llm-data-sharing-enabled">
+            <input id="external-llm-data-sharing-enabled" type="checkbox" />
+            <span>允许将 Molly 对话和执行规划所需的数据发送到已配置的外部 LLM。 <small>这是用户级偏好，跨项目和对话生效，直到你关闭它；它不授予计划授权、Gate 批准或远程执行权限。</small></span>
           </label>
           <div class="button-row">
             <button id="llm-api-key-delete" type="button" class="ghost">删除已保存密钥</button>
@@ -633,7 +537,9 @@
       let currentComputeSettings = { connections: [], environments: [] };
       let currentRawDataset = null;
       let currentConfirmedDataset = null;
-      let currentModelWorkflow = null;
+      let agentSessionEventSource = null;
+      let agentSessionEventCursor = 0;
+      const renderedAgentSessionEvents = new Set();
       const fileLaunchWarning = document.getElementById("file-launch-warning");
       if (window.location.protocol === "file:") {
         fileLaunchWarning.classList.add("visible");
@@ -767,7 +673,6 @@
           }
           conversationLoadGeneration += 1;
           pendingConversationLoad = null;
-          resetExternalLLMApproval();
           invalidateConversationContext();
           const nextProject = knownProjects[0] || null;
           if (nextProject) {
@@ -786,13 +691,12 @@
             currentLiteratureIntake = null;
             currentRawDataset = null;
             currentConfirmedDataset = null;
-            currentModelWorkflow = null;
             syncProjectId("");
             syncRunId("");
             renderProjectList([]);
             renderConversationList([]);
             renderPendingConversationAttachments();
-            renderDatasetWorkflow();
+            renderDatasetReview();
             const stream = document.getElementById("conversation-stream");
             if (stream) stream.innerHTML = "";
             setText("conversation-status", "");
@@ -847,11 +751,6 @@
         });
       }
 
-      function resetExternalLLMApproval() {
-        const approval = document.getElementById("conversation-external-llm-approved");
-        if (approval) approval.checked = false;
-      }
-
       async function createConversation() {
         if (!activeProject.project_id || !knownProjects.some((item) => item.project_id === activeProject.project_id)) {
           render({ ok: false, error: "请先新建或选择一个项目。" });
@@ -901,7 +800,6 @@
             renderConversationList();
             return;
           }
-          resetExternalLLMApproval();
           invalidateConversationContext();
           currentConversationId = "";
           conversationMessages = [];
@@ -919,7 +817,6 @@
       function selectProject(project) {
         const projectId = String(project?.project_id || "");
         if (!projectId || deletedProjectIds.has(projectId)) return;
-        resetExternalLLMApproval();
         invalidateConversationContext();
         updateActiveProjectDisplay(project);
         syncProjectId(activeProject.project_id);
@@ -937,8 +834,7 @@
         currentLiteratureIntake = null;
         currentRawDataset = null;
         currentConfirmedDataset = null;
-        currentModelWorkflow = null;
-        renderDatasetWorkflow();
+        renderDatasetReview();
         document.getElementById("approve-literature-button").hidden = true;
         syncRunId("");
         const stream = document.getElementById("conversation-stream");
@@ -1078,67 +974,6 @@
           : [];
       }
 
-      function modelWorkflowStorageKey(projectId = activeProject.project_id) {
-        return `molly.modelWorkflow.${String(projectId || "").trim()}`;
-      }
-
-      function persistModelWorkflowState() {
-        const key = modelWorkflowStorageKey();
-        try {
-          if (!currentModelWorkflow) {
-            sessionStorage.removeItem(key);
-            return;
-          }
-          sessionStorage.setItem(key, JSON.stringify({
-            projectId: activeProject.project_id,
-            confirmationId: currentConfirmedDataset?.confirmation_id || "",
-            runId: currentModelWorkflow.runId,
-            runPlan: currentModelWorkflow.runPlan,
-            taskOptions: currentModelWorkflow.taskOptions,
-            trainingBackend: currentModelWorkflow.trainingBackend,
-            generationBackend: currentModelWorkflow.generationBackend,
-            lastExecution: currentModelWorkflow.lastExecution,
-          }));
-        } catch (_err) {
-          // The server remains authoritative; session storage only restores UI continuity.
-        }
-      }
-
-      function restoreModelWorkflowState() {
-        const key = modelWorkflowStorageKey();
-        let stored;
-        try {
-          stored = JSON.parse(String(sessionStorage.getItem(key) || "null"));
-        } catch (_err) {
-          try { sessionStorage.removeItem(key); } catch (_storageErr) {}
-          return false;
-        }
-        const sameDataset = stored?.confirmationId
-          && stored.confirmationId === currentConfirmedDataset?.confirmation_id;
-        const validShape = stored?.projectId === activeProject.project_id
-          && String(stored?.runId || "").trim()
-          && Array.isArray(stored?.runPlan)
-          && stored?.taskOptions && typeof stored.taskOptions === "object";
-        if (!sameDataset || !validShape) {
-          try { sessionStorage.removeItem(key); } catch (_err) {}
-          return false;
-        }
-        currentModelWorkflow = {
-          runId: String(stored.runId),
-          runPlan: stored.runPlan,
-          inputArtifacts: modelWorkflowInputArtifacts(),
-          taskOptions: stored.taskOptions,
-          trainingBackend: String(stored.trainingBackend || "local_baseline"),
-          generationBackend: String(stored.generationBackend || "deterministic"),
-          lastExecution: stored.lastExecution || null,
-        };
-        currentRunId = currentModelWorkflow.runId;
-        syncRunId(currentRunId);
-        renderDatasetWorkflow();
-        renderModelExecution(currentModelWorkflow.lastExecution);
-        return true;
-      }
-
       function replaceSelectOptions(selectId, values, selectedValue = "") {
         const select = document.getElementById(selectId);
         if (!select) return;
@@ -1159,22 +994,26 @@
         return normalized || "target";
       }
 
-      function renderDatasetWorkflow() {
-        const state = document.getElementById("dataset-workflow-state");
-        const confirmForm = document.getElementById("dataset-confirmation-form");
-        const runStart = document.getElementById("model-run-start");
-        if (!state || !confirmForm || !runStart) return;
+      function renderDatasetReview() {
+        const root = document.getElementById("chat-review-artifacts");
+        if (!root) return;
+        root.querySelectorAll('[data-review-kind="dataset"]')
+          .forEach((item) => item.remove());
         if (!currentRawDataset) {
-          state.textContent = "尚未选择 CSV 数据集。请从对话区上传 CSV；Molly 会先注册 raw dataset 并执行只读检查。";
-          confirmForm.hidden = true;
-          runStart.disabled = true;
-          setText("model-workflow-status", "等待数据集确认。");
+          root.hidden = !root.childElementCount;
           return;
         }
-        confirmForm.hidden = false;
+        root.hidden = false;
+        const article = document.createElement("article");
+        article.className = "review-section";
+        article.dataset.reviewKind = "dataset";
+        const heading = document.createElement("h3");
+        heading.textContent = "数据集输入审阅";
+        article.appendChild(heading);
         const profile = currentRawDataset.dataset_profile || {};
         const headers = Array.isArray(profile.headers) ? profile.headers.map(String) : [];
-        const candidates = Array.isArray(currentRawDataset.property_candidates) ? currentRawDataset.property_candidates : [];
+        const candidates = Array.isArray(currentRawDataset.property_candidates)
+          ? currentRawDataset.property_candidates : [];
         const preferredTarget = String(
           currentConfirmedDataset?.mapping?.target_column
           || candidates.find((item) => /quantum\s*yield|plqy|\bqy\b/i.test(String(item?.source_column || item?.property_id || "")))?.source_column
@@ -1182,31 +1021,99 @@
           || headers.find((item) => item !== profile.smiles_col)
           || ""
         );
-        replaceSelectOptions(
-          "dataset-smiles-column",
-          headers,
-          currentConfirmedDataset?.mapping?.smiles_column || profile.smiles_col || "",
-        );
-        replaceSelectOptions("dataset-target-column", headers, preferredTarget);
-        const propertyInput = document.getElementById("dataset-property-id");
-        if (propertyInput) {
-          propertyInput.value = String(
-            currentConfirmedDataset?.mapping?.property_id
-            || propertyIdFromColumn(preferredTarget)
-            || candidates.find((item) => String(item?.source_column || "") === preferredTarget)?.property_id
-          );
-        }
         const sourceName = currentRawDataset.source_attachment?.original_name || currentRawDataset.dataset_id;
+        const state = document.createElement("p");
+        state.className = "small";
         if (currentConfirmedDataset) {
           const summary = currentConfirmedDataset.summary || {};
           state.textContent = `${sourceName} · confirmed dataset · ${summary.row_count || 0} 行 · ${summary.numeric_label_count || 0} 个数值标签 · 属性 ${currentConfirmedDataset.mapping?.property_id || ""}`;
-          runStart.disabled = false;
-          setText("model-workflow-status", currentModelWorkflow ? "RunPlan 已创建；请审阅当前 Gate。" : "数据集已确认，可以创建训练与候选评估 RunPlan。");
         } else {
           state.textContent = `${sourceName} · raw dataset · ${profile.row_count || 0} 行 / ${profile.column_count || headers.length} 列。请核对列映射后明确确认。`;
-          runStart.disabled = true;
-          setText("model-workflow-status", "raw dataset 已检查，等待人工确认。");
         }
+        article.appendChild(state);
+        if (!currentConfirmedDataset) {
+          const form = document.createElement("form");
+          form.className = "dataset-review-form";
+          const selectField = (labelText, name, selected) => {
+            const wrapper = document.createElement("label");
+            wrapper.textContent = labelText;
+            const select = document.createElement("select");
+            select.name = name;
+            select.required = true;
+            headers.forEach((header) => {
+              const option = document.createElement("option");
+              option.value = header;
+              option.textContent = header;
+              option.selected = header === selected;
+              select.appendChild(option);
+            });
+            wrapper.appendChild(select);
+            return { wrapper, select };
+          };
+          const smiles = selectField("SMILES 列", "smiles_column", profile.smiles_col || headers[0] || "");
+          const target = selectField("目标列", "target_column", preferredTarget);
+          form.appendChild(smiles.wrapper);
+          form.appendChild(target.wrapper);
+          const property = document.createElement("input");
+          property.name = "property_id";
+          property.required = true;
+          property.pattern = "[a-z][a-z0-9_]*";
+          property.value = currentConfirmedDataset?.mapping?.property_id || propertyIdFromColumn(preferredTarget);
+          property.setAttribute("aria-label", "规范属性 ID");
+          form.appendChild(property);
+          target.select.addEventListener("change", () => {
+            property.value = propertyIdFromColumn(target.select.value);
+          });
+          const confirmedBy = document.createElement("input");
+          confirmedBy.name = "confirmed_by";
+          confirmedBy.required = true;
+          confirmedBy.value = "local-user";
+          confirmedBy.setAttribute("aria-label", "确认人");
+          form.appendChild(confirmedBy);
+          const strictLabel = document.createElement("label");
+          strictLabel.className = "checkbox-row";
+          const strict = document.createElement("input");
+          strict.type = "checkbox";
+          strict.name = "strict_smiles_cleaning";
+          strict.checked = true;
+          strictLabel.appendChild(strict);
+          const strictText = document.createElement("span");
+          strictText.textContent = "严格验证并规范化 SMILES";
+          strictLabel.appendChild(strictText);
+          form.appendChild(strictLabel);
+          const submit = document.createElement("button");
+          submit.type = "submit";
+          submit.textContent = "确认数据集输入";
+          form.appendChild(submit);
+          form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const payload = {
+              smiles_column: smiles.select.value.trim(),
+              target_column: target.select.value.trim(),
+              property_id: property.value.trim(),
+              confirmed_by: confirmedBy.value.trim(),
+              strict_smiles_cleaning: strict.checked,
+              drop_empty_target_rows: true,
+            };
+            try {
+              const response = await postJSON(
+                `/api/projects/${encodeURIComponent(activeProject.project_id)}/datasets/${encodeURIComponent(currentRawDataset.dataset_id)}/confirm`,
+                payload,
+              );
+              currentConfirmedDataset = response.confirmed_dataset || null;
+              renderDatasetReview();
+              appendConversationMessage(
+                "assistant",
+                `数据集已由 ${payload.confirmed_by} 确认：${payload.smiles_column} → SMILES，${payload.target_column} → ${payload.property_id}。现在可以在对话中描述下一步科学目标。`,
+              );
+            } catch (err) {
+              appendConversationMessage("system", `数据集确认失败：${normalizeErrorForRender(err).error}`);
+              render(err);
+            }
+          });
+          article.appendChild(form);
+        }
+        root.prepend(article);
       }
 
       async function loadProjectDatasets(projectId = activeProject.project_id) {
@@ -1216,7 +1123,7 @@
           currentRawDataset = datasets[0] || null;
           const confirmations = Array.isArray(currentRawDataset?.confirmations) ? currentRawDataset.confirmations : [];
           currentConfirmedDataset = confirmations[confirmations.length - 1] || null;
-          renderDatasetWorkflow();
+          renderDatasetReview();
           return response;
         } catch (err) {
           renderDatasetWorkflow();
@@ -1234,10 +1141,7 @@
         );
         currentRawDataset = response.dataset || null;
         currentConfirmedDataset = null;
-        currentModelWorkflow = null;
-        persistModelWorkflowState();
-        document.getElementById("model-training-workflow").hidden = false;
-        renderDatasetWorkflow();
+        renderDatasetReview();
         return response.dataset;
       }
 
@@ -1391,6 +1295,95 @@
         return data;
       }
 
+      function closeAgentSessionStream() {
+        if (agentSessionEventSource) {
+          agentSessionEventSource.close();
+          agentSessionEventSource = null;
+        }
+      }
+
+      function renderAgentSessionEvent(event) {
+        const eventId = String(event?.event_id || "");
+        if (eventId && renderedAgentSessionEvents.has(eventId)) return;
+        if (eventId) {
+          renderedAgentSessionEvents.add(eventId);
+          agentSessionEventCursor = Math.max(agentSessionEventCursor, Number(eventId) || 0);
+        }
+        const data = event?.data || {};
+        const message = String(data.message || "").trim();
+        if (message) appendConversationMessage("system", message);
+      }
+
+      function renderAgentSessionSnapshot(snapshot) {
+        const session = snapshot || {};
+        if (session.run_id) {
+          currentRunId = String(session.run_id);
+          syncRunId(currentRunId);
+        }
+        if (session.message) setText("conversation-status", String(session.message));
+      }
+
+      function connectAgentSessionStream(context) {
+        closeAgentSessionStream();
+        if (!context?.projectId || !context?.conversationId || window.location.protocol === "file:") return;
+        agentSessionEventCursor = 0;
+        renderedAgentSessionEvents.clear();
+        const url = `/api/projects/${encodeURIComponent(context.projectId)}/conversations/${encodeURIComponent(context.conversationId)}/agent-session/events?after=${agentSessionEventCursor}`;
+        const source = new EventSource(url);
+        agentSessionEventSource = source;
+        source.addEventListener("snapshot", (event) => {
+          try { renderAgentSessionSnapshot(JSON.parse(event.data || "{}").snapshot); } catch (_err) {}
+        });
+        source.addEventListener("agent.status", (event) => {
+          try { renderAgentSessionEvent(JSON.parse(event.data || "{}")); } catch (_err) {}
+        });
+        source.onerror = () => {
+          if (isConversationContextCurrent(context)) setText("conversation-status", "Agent 状态流暂时断开，浏览器会自动重连并按 durable cursor 恢复。");
+        };
+      }
+
+      function renderScientificAgentPlan(summary) {
+        const root = document.getElementById("chat-review-artifacts");
+        if (!root || !summary) return;
+        root.querySelectorAll('[data-review-kind="scientific-agent-plan"]')
+          .forEach((item) => item.remove());
+        root.hidden = false;
+        const article = document.createElement("article");
+        article.className = "review-section";
+        article.dataset.reviewKind = "scientific-agent-plan";
+        const heading = document.createElement("h3");
+        heading.textContent = "Scientific Agent 计划审阅";
+        article.appendChild(heading);
+        const intro = document.createElement("p");
+        intro.className = "small";
+        intro.textContent = "计划已持久化，但在你明确输入“确认执行”前不可执行。";
+        article.appendChild(intro);
+        appendReviewSection(article, "计划摘要", [
+          ["目标", summary.goal],
+          ["有序任务", (summary.tasks || []).map((item) => item.task_id)],
+          ["逻辑资源", summary.selected_profiles],
+          ["任务选项", summary.task_options],
+          ["预算/限制", summary.limits],
+          ["所需 Gate", summary.required_gates],
+          ["未解决问题", (summary.unresolved_questions || []).map((item) => item.prompt)],
+          ["风险或阻塞", summary.risks_or_blocking_conditions],
+        ], []);
+        const audit = document.createElement("p");
+        audit.className = "small";
+        audit.textContent = `审计元数据：${summary.proposal_id || ""} / ${summary.proposal_digest || ""}`;
+        article.appendChild(audit);
+        const details = document.createElement("details");
+        const rawSummary = document.createElement("summary");
+        rawSummary.textContent = "开发者/审计：查看原始提案 JSON";
+        const pre = document.createElement("pre");
+        pre.className = "output";
+        pre.textContent = JSON.stringify(summary.raw_proposal || {}, null, 2);
+        details.appendChild(rawSummary);
+        details.appendChild(pre);
+        article.appendChild(details);
+        root.prepend(article);
+      }
+
       async function postForm(url, formData) {
         if (window.location.protocol === "file:") throw fileLaunchProblem();
         const res = await fetch(url, {
@@ -1496,7 +1489,6 @@
             generation,
           });
           if (deletedConversationKeys.has(conversationIdentityKey(projectId, nextConversationId))) return;
-          if (nextConversationId !== currentConversationId) resetExternalLLMApproval();
           currentConversationId = nextConversationId;
           renderConversationList();
           const detail = await getJSON(
@@ -1534,6 +1526,7 @@
             .map((item) => ({ role: item.role, content: item.content }));
           currentRunId = `conversation-${currentConversationId}`.slice(0, 96);
           syncRunId(currentRunId);
+          closeAgentSessionStream();
           const stream = document.getElementById("conversation-stream");
           if (stream) stream.innerHTML = "";
           storedMessages.forEach((item) => appendConversationMessage(item.role, item.content, item.attachments));
@@ -1558,16 +1551,12 @@
             );
           }
           await loadProjectDatasets(projectId);
-          if (restoreModelWorkflowState()) {
-            try {
-              await refreshModelWorkflow({ renderRaw: false });
-            } catch (err) {
-              setText(
-                "model-workflow-status",
-                `已恢复 ${currentModelWorkflow.runId}，但暂时无法刷新服务端状态：${normalizeErrorForRender(err).error}`,
-              );
-            }
-          }
+          const agentSession = await getJSON(
+            `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(currentConversationId)}/agent-session`,
+          );
+          renderAgentSessionSnapshot(agentSession.session);
+          if (agentSession.plan_summary) renderScientificAgentPlan(agentSession.plan_summary);
+          connectAgentSessionStream({ projectId, conversationId: currentConversationId });
         } catch (err) {
           if (generation !== conversationLoadGeneration) return;
           setText("conversation-status", `加载对话失败：${normalizeErrorForRender(err).error}`);
@@ -1653,6 +1642,7 @@
           const state = await getJSON("/api/settings/llm");
           const config = state.config || {};
           currentLLMConfig = config;
+          document.getElementById("external-llm-data-sharing-enabled").checked = Boolean(state.external_llm_data_sharing_enabled);
           document.getElementById("llm-endpoint").value = config.endpoint || "";
           document.getElementById("llm-model").value = config.model || "";
           document.getElementById("llm-timeout").value = config.timeout_sec || 60;
@@ -2049,20 +2039,17 @@
           appendConversationMessage("user", persistedUser.content, persistedUser.attachments);
           input.value = "";
           const runId = syncGeneratedRunId(message);
-          const response = await postJSON("/api/agent/conversation/next-turn", {
-            project_id: projectId,
-            run_id: runId,
-            messages: conversationDecisionMessages(),
-            available_inputs: datasetAvailableInputs(),
-            external_llm_approved: document.getElementById("conversation-external-llm-approved").checked,
-          });
+          const response = await postJSON(
+            `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(currentConversationId)}/agent-session/turn`,
+            { run_id: runId },
+          );
           currentConversationDecision = response.decision || null;
           currentModelingPlanPayload = currentConversationDecision?.modeling_plan_payload || null;
           const pendingEvidence = currentConversationDecision?.pending_cited_target_evidence || currentModelingPlanPayload?.pending_cited_target_evidence || [];
           const agentQuestions = currentConversationDecision?.questions || currentModelingPlanPayload?.agent_questions || [];
           const ready = currentConversationDecision?.decision === "ready_for_modeling_plan";
           const assistantSource = response.llm_used ? "已配置 LLM 已响应；" : "未配置可用 LLM，已使用确定性决策摘要；";
-          setText("conversation-status", assistantSource + (ready ? "可进入模型训练或准备文献来源。" : "需要回答 Agent 追问或批准外部证据。"));
+          setText("conversation-status", assistantSource + (ready ? "已进入 Scientific Agent 计划审阅。" : "需要回答 Agent 追问或批准外部证据。"));
           const summary = response.assistant_message || currentConversationDecision?.summary || "已整理为可审阅的下一步决策。";
           const persistedAssistant = await persistConversationMessage("assistant", summary);
           conversationMessages.push({ role: "assistant", content: persistedAssistant.content });
@@ -2070,6 +2057,7 @@
           if (pendingEvidence.length) appendConversationMessage("system", `检测到 ${pendingEvidence.length} 条 pending_cited_target_evidence，批准前不会进入建模证据。`);
           renderConversationArtifact("conversation_turn_decision", currentConversationDecision);
           if (currentModelingPlanPayload) renderConversationArtifact("modeling_plan_payload", currentModelingPlanPayload);
+          if (response.plan_summary) renderScientificAgentPlan(response.plan_summary);
           renderAgentQuestions(agentQuestions);
           render(response);
         } catch (err) {
@@ -2115,7 +2103,7 @@
           setText(
             "conversation-status",
             inspected.length
-              ? `已注册 ${uploaded.length} 个附件，并将 ${inspected.length} 个 CSV 登记为 raw dataset；请在“模型训练”中确认列映射。`
+              ? `已注册 ${uploaded.length} 个附件，并将 ${inspected.length} 个 CSV 登记为 raw dataset；请在对话中的数据集审阅卡确认列映射。`
               : `已注册 ${uploaded.length} 个附件 artifact；发送消息时会绑定其 SHA-256 引用。`,
           );
         } catch (err) {
@@ -2222,269 +2210,6 @@
         }
       }
 
-      async function openModelTrainingWorkflow() {
-        const workflow = document.getElementById("model-training-workflow");
-        workflow.hidden = false;
-        await Promise.all([
-          loadProjectDatasets(activeProject.project_id),
-          loadComputeSettings("已加载运行环境；只有经过 Gate 批准的任务才会派发。"),
-        ]);
-        workflow.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-
-      function modelTaskOptions() {
-        const propertyId = String(currentConfirmedDataset?.mapping?.property_id || "").trim();
-        const trainingBackend = document.getElementById("training-backend").value;
-        const generationBackend = document.getElementById("generation-backend").value;
-        const count = Number(document.getElementById("generation-count").value || 32);
-        const topn = Number(document.getElementById("model-topn").value || 10);
-        const training = {
-          property_id: propertyId,
-          smiles_col: "SMILES",
-        };
-        if (trainingBackend === "unimol") {
-          training.adapter = "train_model_unimol_legacy_adapter";
-          training.execute = false;
-          training.environment_profile_id = String(document.getElementById("training-environment-id").value || "").trim();
-          training.target_col = propertyId;
-        }
-        const generation = {
-          backend: generationBackend,
-          count,
-          seed: 0,
-        };
-        if (generationBackend === "reinvent4") {
-          generation.execute = true;
-          generation.reinvent4_mode = "remote";
-          generation.environment_profile_id = String(document.getElementById("generation-environment-id").value || "").trim();
-          generation.reinvent4_config = String(document.getElementById("reinvent4-config-path").value || "").trim();
-        }
-        return {
-          train_model: training,
-          generate_candidates: generation,
-          filter_rank: { topn },
-        };
-      }
-
-      function validateModelRunConfiguration(taskOptions) {
-        if (!currentConfirmedDataset) throw new Error("请先确认 raw dataset 的 SMILES 列与目标列。");
-        const trainingBackend = document.getElementById("training-backend").value;
-        const generationBackend = document.getElementById("generation-backend").value;
-        if (trainingBackend === "unimol" && !taskOptions.train_model.environment_profile_id) {
-          throw new Error("Uni-Mol 需要先在设置中保存运行环境，并在此选择环境 ID。");
-        }
-        if (generationBackend === "reinvent4") {
-          if (!taskOptions.generate_candidates.environment_profile_id) {
-            throw new Error("真实 REINVENT4 需要选择运行环境 ID。");
-          }
-          if (!taskOptions.generate_candidates.reinvent4_config) {
-            throw new Error("真实 REINVENT4 需要填写本地配置模板的绝对路径。");
-          }
-        }
-      }
-
-      function modelWorkflowInputArtifacts() {
-        const artifacts = currentConfirmedDataset?.artifacts || {};
-        const required = ["cleaned_train_dataset", "property_catalog"];
-        required.forEach((artifactId) => {
-          if (!String(artifacts[artifactId] || "").trim()) throw new Error(`confirmed dataset 缺少 ${artifactId}`);
-        });
-        return Object.fromEntries(
-          Object.entries(artifacts).filter(([, value]) => String(value || "").trim()),
-        );
-      }
-
-      function modelWaitingTask(execution) {
-        return String(execution?.waiting_task || execution?.planned_task || "").trim();
-      }
-
-      function renderModelExecution(execution, statusResponse = null) {
-        const approve = document.getElementById("model-run-approve");
-        const refresh = document.getElementById("model-run-refresh");
-        refresh.disabled = !currentModelWorkflow?.runId;
-        if (!execution) {
-          approve.hidden = true;
-          renderDatasetWorkflow();
-          return;
-        }
-        const status = String(execution.status || statusResponse?.stage_status || "UNKNOWN");
-        const waitingTask = modelWaitingTask(execution);
-        const executed = Array.isArray(execution.executed_tasks) ? execution.executed_tasks : [];
-        const isPlannedUniMol = waitingTask === "train_model"
-          && execution.planned_task === "train_model"
-          && currentModelWorkflow?.trainingBackend === "unimol";
-        if (status === "WAITING_USER" && !isPlannedUniMol) {
-          approve.hidden = false;
-          approve.dataset.waitingTask = waitingTask;
-          approve.textContent = waitingTask === "train_model" ? "批准训练配置" : waitingTask === "generate_candidates" ? "批准候选生成" : "批准当前 Gate";
-          setText(
-            "model-workflow-status",
-            `${currentModelWorkflow.runId} 已执行：${executed.join(" → ") || "尚无"}。当前停在 ${waitingTask || "Gate"}，等待明确批准。`,
-          );
-          return;
-        }
-        approve.hidden = true;
-        if (isPlannedUniMol) {
-          setText(
-            "model-workflow-status",
-            `${currentModelWorkflow.runId} 已生成并冻结 Uni-Mol 远程执行接口。当前版本尚未把远端模型安全归档为本地 model package，因此 UI 不会继续派发或声称完成训练。`,
-          );
-          return;
-        }
-        if (["SUCCEEDED", "DONE"].includes(status)) {
-          const artifactNames = Object.keys(statusResponse?.artifacts || {});
-          const publication = artifactNames.includes("generation_publication") ? "；generation publication 已登记" : "";
-          const topn = artifactNames.includes("topn_export") ? "；Top-N 已导出" : "";
-          setText("model-workflow-status", `${currentModelWorkflow.runId} 已完成：${executed.join(" → ")}${publication}${topn}。`);
-          return;
-        }
-        if (status === "FAILED") {
-          const error = execution.error?.message || execution.result?.error?.message || "任务失败；服务端未提供可公开的详细原因。";
-          setText("model-workflow-status", `${currentModelWorkflow.runId} 失败：${error}`);
-          return;
-        }
-        setText("model-workflow-status", `${currentModelWorkflow.runId} 当前状态：${status}`);
-      }
-
-      async function refreshModelWorkflow({ renderRaw = true, recordConversation = false, context = null } = {}) {
-        const workflow = currentModelWorkflow;
-        const runId = String(workflow?.runId || "");
-        const frozenContext = context || captureConversationContext();
-        if (!runId || !frozenContext || !isConversationContextCurrent(frozenContext)) return null;
-        const projectId = frozenContext.projectId;
-        const response = await getJSON(
-          `/api/runs/${encodeURIComponent(runId)}?project_id=${encodeURIComponent(projectId)}`,
-        );
-        if (!isConversationContextCurrent(frozenContext) || currentModelWorkflow !== workflow || workflow.runId !== runId) return null;
-        if (!MollyTaskState.taskStateResponseSnapshot(response, {
-          runId,
-          projectId,
-          context: frozenContext,
-          getContext: currentConversationContext,
-        })) {
-          throw new Error("invalid_task_state_response");
-        }
-        const stage = response.stage || {};
-        const planned = stage.details?.planned_adapter ? stage.stage : "";
-        const execution = {
-          status: response.stage_status || stage.status || "UNKNOWN",
-          waiting_task: (response.stage_status || stage.status) === "WAITING_USER" && !planned ? stage.stage : "",
-          planned_task: planned,
-          executed_tasks: stage.details?.executed_tasks || workflow.lastExecution?.executed_tasks || [],
-        };
-        workflow.lastExecution = execution;
-        persistModelWorkflowState();
-        renderModelExecution(execution, response);
-        if (renderRaw) render(response);
-        if (recordConversation) {
-          await recordTaskStateInConversation(response, {
-            runId,
-            projectId,
-            context: frozenContext,
-          });
-        }
-        return response;
-      }
-
-      async function startModelRun() {
-        const context = captureConversationContext();
-        if (!context) throw new Error("服务端对话尚未就绪");
-        const taskOptions = modelTaskOptions();
-        validateModelRunConfiguration(taskOptions);
-        const trainingBackend = document.getElementById("training-backend").value;
-        const generationBackend = document.getElementById("generation-backend").value;
-        const propertyId = currentConfirmedDataset.mapping.property_id;
-        const runId = buildRunId(`model-training-${propertyId}`);
-        const requestedTasks = trainingBackend === "unimol"
-          ? ["run_baseline", "train_model"]
-          : ["run_baseline", "render_report"];
-        setText("model-workflow-status", "正在展开依赖并执行到第一个 Gate…");
-        const expanded = await postJSON("/api/run-plan/expand", {
-          run_id: runId,
-          requested_tasks: requestedTasks,
-          available_artifacts: ["cleaned_train_dataset", "property_catalog"],
-        });
-        if (!isConversationContextCurrent(context)) return null;
-        const inputArtifacts = modelWorkflowInputArtifacts();
-        currentRunId = runId;
-        syncRunId(runId);
-        const workflow = {
-          runId,
-          runPlan: expanded.run_plan,
-          inputArtifacts,
-          taskOptions,
-          trainingBackend,
-          generationBackend,
-          lastExecution: null,
-        };
-        currentModelWorkflow = workflow;
-        const response = await postJSON("/api/run-plan/execute", {
-          project_id: context.projectId,
-          run_plan: workflow.runPlan,
-          input_artifacts: inputArtifacts,
-          task_options: taskOptions,
-        });
-        if (!isConversationContextCurrent(context) || currentModelWorkflow !== workflow) return null;
-        workflow.lastExecution = response.execution || null;
-        persistModelWorkflowState();
-        renderModelExecution(response.execution || null);
-        appendConversationMessage(
-          "assistant",
-          `${runId} 已创建。任务在 ${modelWaitingTask(response.execution) || response.execution?.status || "当前阶段"} 停下供你审阅。`,
-        );
-        render(response);
-        try {
-          await refreshModelWorkflow({ renderRaw: false, recordConversation: true, context });
-        } catch (_err) {
-          if (isConversationContextCurrent(context)) {
-            appendConversationMessage("system", `${runId} 已启动，但暂时无法读取持久化状态文件。`);
-          }
-        }
-        return response;
-      }
-
-      async function approveCurrentModelGate() {
-        const context = captureConversationContext();
-        const workflow = currentModelWorkflow;
-        if (!context) throw new Error("服务端对话尚未就绪");
-        if (!workflow?.lastExecution) throw new Error("没有等待批准的模型运行。");
-        const waitingTask = modelWaitingTask(workflow.lastExecution);
-        const gate = waitingTask === "train_model"
-          ? "gate_3_train_config"
-          : waitingTask === "generate_candidates"
-          ? "gate_5_final_threshold"
-          : "";
-        if (!gate) throw new Error("当前状态没有可由此界面批准的 Gate。");
-        const actor = String(document.getElementById("model-run-actor").value || "").trim();
-        if (!actor) throw new Error("Gate 批准人不能为空。");
-        setText("model-workflow-status", `正在以 ${actor} 批准 ${gate}…`);
-        const response = await postJSON("/api/run-plan/resume", {
-          project_id: context.projectId,
-          run_plan: workflow.runPlan,
-          approved_gates: [gate],
-          actor,
-          note: `Approved from Molly model training UI for ${waitingTask}.`,
-          input_artifacts: workflow.inputArtifacts,
-          task_options: workflow.taskOptions,
-        });
-        if (!isConversationContextCurrent(context) || currentModelWorkflow !== workflow) return null;
-        workflow.lastExecution = response.execution || null;
-        persistModelWorkflowState();
-        renderModelExecution(response.execution || null);
-        try {
-          await refreshModelWorkflow({ renderRaw: false, recordConversation: true, context });
-        } catch (_err) {
-          if (isConversationContextCurrent(context)) {
-            appendConversationMessage("system", `${workflow.runId} 已继续执行，但暂时无法读取持久化状态文件。`);
-          }
-        }
-        if (["SUCCEEDED", "DONE"].includes(String(response.execution?.status || ""))) {
-          appendConversationMessage("assistant", `${workflow.runId} 已完成，可在运行 artifact registry 中审阅 model package、generation publication 与 Top-N。`);
-        }
-        render(response);
-        return response;
-      }
-
       async function loadAtomicTasks({ revealResults = false } = {}) {
         try {
           const response = await getJSON("/api/atomic-tasks");
@@ -2505,76 +2230,8 @@
 
       document.getElementById("new-conversation-button").addEventListener("click", createConversation);
       document.getElementById("atomic-literature-button").addEventListener("click", prepareResearchSources);
-      document.getElementById("atomic-training-button").addEventListener("click", () => {
-        void openModelTrainingWorkflow();
-      });
       document.getElementById("atomic-toolbox-button").addEventListener("click", () => {
         void loadAtomicTasks({ revealResults: true });
-      });
-      document.getElementById("model-training-close").addEventListener("click", () => {
-        document.getElementById("model-training-workflow").hidden = true;
-      });
-      document.getElementById("dataset-target-column").addEventListener("change", (event) => {
-        document.getElementById("dataset-property-id").value = propertyIdFromColumn(event.currentTarget.value);
-      });
-      document.getElementById("dataset-confirmation-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        if (!currentRawDataset) {
-          render({ ok: false, error: "请先从对话区上传 CSV 数据集。" });
-          return;
-        }
-        const payload = {
-          smiles_column: String(document.getElementById("dataset-smiles-column").value || "").trim(),
-          target_column: String(document.getElementById("dataset-target-column").value || "").trim(),
-          property_id: String(document.getElementById("dataset-property-id").value || "").trim(),
-          confirmed_by: String(document.getElementById("dataset-confirmed-by").value || "").trim(),
-          strict_smiles_cleaning: document.getElementById("dataset-strict-smiles").checked,
-          drop_empty_target_rows: true,
-        };
-        setText("model-workflow-status", "正在验证 SMILES、清洗目标列并写入 immutable confirmed dataset…");
-        try {
-          const response = await postJSON(
-            `/api/projects/${encodeURIComponent(activeProject.project_id)}/datasets/${encodeURIComponent(currentRawDataset.dataset_id)}/confirm`,
-            payload,
-          );
-          currentConfirmedDataset = response.confirmed_dataset || null;
-          currentModelWorkflow = null;
-          persistModelWorkflowState();
-          renderDatasetWorkflow();
-          appendConversationMessage(
-            "assistant",
-            `数据集已由 ${payload.confirmed_by} 确认：${payload.smiles_column} → SMILES，${payload.target_column} → ${payload.property_id}。`,
-          );
-          render(response);
-        } catch (err) {
-          setText("model-workflow-status", `数据集确认失败：${normalizeErrorForRender(err).error}`);
-          render(err);
-        }
-      });
-      document.getElementById("model-run-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        try {
-          await startModelRun();
-        } catch (err) {
-          setText("model-workflow-status", `无法启动：${normalizeErrorForRender(err).error}`);
-          render(err);
-        }
-      });
-      document.getElementById("model-run-approve").addEventListener("click", async () => {
-        try {
-          await approveCurrentModelGate();
-        } catch (err) {
-          setText("model-workflow-status", `Gate 批准失败：${normalizeErrorForRender(err).error}`);
-          render(err);
-        }
-      });
-      document.getElementById("model-run-refresh").addEventListener("click", async () => {
-        try {
-          await refreshModelWorkflow({ renderRaw: true, recordConversation: true });
-        } catch (err) {
-          setText("model-workflow-status", `刷新失败：${normalizeErrorForRender(err).error}`);
-          render(err);
-        }
       });
       document.getElementById("llm-settings-button").addEventListener("click", () => openLLMSettings(false));
       document.getElementById("llm-settings-close").addEventListener("click", closeLLMSettings);
@@ -2586,6 +2243,22 @@
           api_key_configured: false,
         });
       });
+      document.getElementById("external-llm-data-sharing-enabled").addEventListener("change", async (event) => {
+        try {
+          await patchJSON("/api/settings/llm", {
+            external_llm_data_sharing_enabled: Boolean(event.currentTarget.checked),
+          });
+          setText(
+            "llm-settings-status",
+            event.currentTarget.checked
+              ? "已保存用户级外部 LLM 数据共享偏好；它跨项目和对话生效。"
+              : "已关闭用户级外部 LLM 数据共享偏好。",
+          );
+        } catch (err) {
+          event.currentTarget.checked = !event.currentTarget.checked;
+          setText("llm-settings-status", `保存偏好失败：${normalizeErrorForRender(err).error}`);
+        }
+      });
       document.getElementById("llm-settings-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         const apiKey = String(document.getElementById("llm-api-key").value || "").trim();
@@ -2596,6 +2269,7 @@
           api_key_source: document.getElementById("llm-api-key-source").value,
           api_key_ref: String(document.getElementById("llm-api-key-ref").value || "default").trim(),
           api_key_env: String(document.getElementById("llm-api-key-env").value || "MOLLY_LLM_API_KEY").trim(),
+          external_llm_data_sharing_enabled: document.getElementById("external-llm-data-sharing-enabled").checked,
         };
         if (apiKey) payload.api_key = apiKey;
         setText("llm-settings-status", "正在保存设置…");
@@ -2677,7 +2351,7 @@
             payload,
           );
           form.reset();
-          await loadComputeSettings(`已保存运行环境 ${payload.environment_id}；可在模型训练界面选择。`);
+          await loadComputeSettings(`已保存运行环境 ${payload.environment_id}；对话计划会按需选择它。`);
         } catch (err) {
           setText("compute-settings-status", `运行环境保存失败：${normalizeErrorForRender(err).error}`);
         }
