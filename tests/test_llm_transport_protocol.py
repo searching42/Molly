@@ -519,7 +519,6 @@ def test_agent_plan_route_uses_server_settings_without_browser_secret(tmp_path, 
             "run_id": "run-saved-settings",
             "goal": "Render a report from existing predictions.",
             "available_artifacts": ["candidate_predictions"],
-            "external_llm_approved": True,
         },
     )
     assert response.status_code == 200
