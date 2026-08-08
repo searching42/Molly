@@ -132,6 +132,91 @@ def test_conversation_turn_publishes_real_review_only_scientific_proposal_and_ss
     assert "event: agent.status" not in reconnect.get_data(as_text=True)
 
 
+def test_session_sse_reconnect_recovers_from_a_torn_final_event_record(
+    tmp_path: Path,
+) -> None:
+    app, client = _create_conversation(tmp_path)
+    endpoint = "/api/projects/conversation-project/conversations/conversation-one/agent-session"
+    first = client.post(
+        endpoint + "/turn",
+        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
+    )
+    assert first.status_code == 200
+    service = app.extensions["scientific_agent_conversation_session_service"]
+    events_path = service._root(
+        "conversation-project",
+        "conversation-one",
+        create=False,
+    ) / "events.jsonl"
+    with events_path.open("ab") as handle:
+        handle.write(b'{"event_id":2,"truncated":')
+
+    stream = client.get(endpoint + "/events?once=true")
+    assert stream.status_code == 200
+    assert stream.get_data(as_text=True).count("event: agent.status") == 1
+    reconnect = client.get(
+        endpoint + "/events?once=true",
+        headers={"Last-Event-ID": "1"},
+    )
+    assert reconnect.status_code == 200
+    assert "event: agent.status" not in reconnect.get_data(as_text=True)
+
+    service._transition(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        status="approval_required",
+        reason_code="PLAN_APPROVAL_REQUIRED",
+        event_type="test.journal_repair",
+    )
+    assert len(service.read_events(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+    )) == 2
+    assert b"truncated" not in events_path.read_bytes()
+
+
+def test_session_state_recovers_when_state_write_fails_after_event_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, client = _create_conversation(tmp_path)
+    endpoint = "/api/projects/conversation-project/conversations/conversation-one/agent-session"
+    first = client.post(
+        endpoint + "/turn",
+        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
+    )
+    assert first.status_code == 200
+    service = app.extensions["scientific_agent_conversation_session_service"]
+    original_write_json = session_module.write_json
+
+    def fail_state_write(path, payload):
+        if Path(path).name == "state.json":
+            raise OSError("simulated state write crash")
+        return original_write_json(path, payload)
+
+    monkeypatch.setattr(session_module, "write_json", fail_state_write)
+    with pytest.raises(OSError, match="simulated state write crash"):
+        service._transition(
+            project_id="conversation-project",
+            conversation_id="conversation-one",
+            status="waiting_gate",
+            reason_code="USER_GATE_APPROVAL_REQUIRED",
+            event_type="test.state_recovery",
+        )
+
+    recovered = service.read_session(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+    )
+    assert recovered["status"] == "waiting_gate"
+    assert recovered["reason_code"] == "USER_GATE_APPROVAL_REQUIRED"
+    assert recovered["revision"] == 2
+    assert len(service.read_events(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+    )) == 2
+
+
 def test_ambiguous_conversational_revision_does_not_authorize_pending_plan(
     tmp_path: Path,
 ) -> None:
@@ -259,3 +344,183 @@ def test_plan_approval_does_not_auto_approve_a_later_gate(
     assert body["session"]["status"] == "waiting_gate"
     assert body["session"]["reason_code"] == "USER_GATE_APPROVAL_REQUIRED"
     assert execution_agent_calls == []
+
+
+@pytest.mark.parametrize(
+    ("boundary", "expected_status"),
+    [
+        (
+            AgentHarnessControllerActionBoundaryClass.USER_GATE_APPROVAL,
+            "waiting_gate",
+        ),
+        (
+            AgentHarnessControllerActionBoundaryClass.USER_REMOTE_APPROVAL,
+            "waiting_remote_approval",
+        ),
+        (
+            AgentHarnessControllerActionBoundaryClass.EXPLICIT_RECOVERY,
+            "recovery_required",
+        ),
+    ],
+)
+def test_active_controller_binding_survives_a_later_ordinary_chat_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: AgentHarnessControllerActionBoundaryClass,
+    expected_status: str,
+) -> None:
+    app, client = _create_conversation(tmp_path)
+    endpoint = "/api/projects/conversation-project/conversations/conversation-one/agent-session"
+    first = client.post(
+        endpoint + "/turn",
+        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
+    )
+    assert first.status_code == 200
+
+    service = app.extensions["scientific_agent_conversation_session_service"]
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: boundary,
+    )
+    appended = client.post(
+        "/api/projects/conversation-project/conversations/conversation-one/messages",
+        json={
+            "role": "user",
+            "content": "确认执行",
+            "client_message_id": f"user-message-{expected_status}",
+        },
+    )
+    assert appended.status_code == 201
+    approved = client.post(
+        endpoint + "/turn",
+        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
+    )
+    assert approved.status_code == 200, approved.get_json()
+    approved_body = approved.get_json()
+    assert approved_body["session"]["status"] == expected_status
+
+    plan_calls: list[bool] = []
+    original_create_proposal = service.plan_service.create_proposal
+
+    def spy_create_proposal(*args, **kwargs):
+        plan_calls.append(True)
+        return original_create_proposal(*args, **kwargs)
+
+    monkeypatch.setattr(service.plan_service, "create_proposal", spy_create_proposal)
+    ordinary = client.post(
+        "/api/projects/conversation-project/conversations/conversation-one/messages",
+        json={
+            "role": "user",
+            "content": "现在需要我做什么？",
+            "client_message_id": f"user-message-follow-up-{expected_status}",
+        },
+    )
+    assert ordinary.status_code == 201
+    followed = client.post(
+        endpoint + "/turn",
+        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
+    )
+
+    assert followed.status_code == 200, followed.get_json()
+    followed_body = followed.get_json()
+    assert followed_body["session"]["status"] == expected_status
+    for field in (
+        "proposal_id",
+        "authorization_id",
+        "start_intent_id",
+        "controller_execution_id",
+    ):
+        assert followed_body["session"][field] == approved_body["session"][field]
+    assert followed_body["proposal"]["proposal_id"] == approved_body["proposal"]["proposal_id"]
+    assert plan_calls == []
+
+
+def test_exact_approval_starts_without_external_llm_consent_for_existing_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, client = _create_conversation(tmp_path)
+    endpoint = "/api/projects/conversation-project/conversations/conversation-one/agent-session"
+    first = client.post(
+        endpoint + "/turn",
+        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
+    )
+    assert first.status_code == 200
+
+    saved = client.patch(
+        "/api/settings/llm",
+        json={
+            "endpoint": "https://llm.example.test/v1",
+            "model": "external-model",
+            "api_key_source": "file",
+            "api_key": "external-secret",
+        },
+    )
+    assert saved.status_code == 200, saved.get_json()
+    assert client.get("/api/settings/llm").get_json()["external_llm_data_sharing_enabled"] is False
+
+    service = app.extensions["scientific_agent_conversation_session_service"]
+    execution_agent_calls: list[bool] = []
+    original_create_proposal = service.execution_agent.create_proposal
+
+    def spy_create_proposal(*args, **kwargs):
+        execution_agent_calls.append(True)
+        return original_create_proposal(*args, **kwargs)
+
+    monkeypatch.setattr(service.execution_agent, "create_proposal", spy_create_proposal)
+    appended = client.post(
+        "/api/projects/conversation-project/conversations/conversation-one/messages",
+        json={
+            "role": "user",
+            "content": "确认执行",
+            "client_message_id": "user-message-external-consent-off",
+        },
+    )
+    assert appended.status_code == 201
+    approved = client.post(endpoint + "/turn", json={"run_id": "conversation-run"})
+
+    assert approved.status_code == 200, approved.get_json()
+    body = approved.get_json()
+    assert body["session"]["authorization_id"]
+    assert body["session"]["start_intent_id"]
+    assert body["session"]["controller_execution_id"]
+    assert execution_agent_calls == []
+
+
+def test_agent_session_routes_return_fixed_errors_without_exception_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, client = _create_conversation(tmp_path)
+    endpoint = "/api/projects/conversation-project/conversations/conversation-one/agent-session"
+    service = app.extensions["scientific_agent_conversation_session_service"]
+
+    def raise_internal_error(**_kwargs):
+        raise ValueError("secret/path and internal traceback details")
+
+    monkeypatch.setattr(service, "read_session_payload", raise_internal_error)
+    snapshot = client.get(endpoint)
+    assert snapshot.status_code == 400
+    assert snapshot.get_json() == {
+        "ok": False,
+        "error_code": "invalid_conversation_session_request",
+        "error": "Invalid conversation session request.",
+    }
+    assert "secret/path" not in snapshot.get_data(as_text=True)
+
+    invalid_turn = client.post(endpoint + "/turn", json={"secret": "internal"})
+    assert invalid_turn.status_code == 400
+    assert invalid_turn.get_json() == {
+        "ok": False,
+        "error_code": "invalid_conversation_session_request",
+        "error": "Invalid conversation session request.",
+    }
+
+    invalid_cursor = client.get(endpoint + "/events?after=secret")
+    assert invalid_cursor.status_code == 400
+    assert invalid_cursor.get_json() == {
+        "ok": False,
+        "error_code": "invalid_durable_event_cursor",
+        "error": "Invalid durable event cursor.",
+    }

@@ -131,6 +131,8 @@ def test_conversation_is_the_scientific_agent_front_door(
     assert "function renderScientificAgentPlan(summary)" in html
     assert "确认执行" in html
     assert "数据集审阅卡" in html
+    assert "renderDatasetWorkflow" not in html
+    assert html.count("if (!isConversationContextCurrent(context)) return;") >= 2
 
 
 def test_settings_keep_llm_and_remote_compute_configuration(rendered_index_html: str) -> None:

@@ -79,6 +79,23 @@ def _provider_error(exc: Exception):
     ), 409
 
 
+def _fixed_error(error_code: str, message: str, status: int):
+    return jsonify({"ok": False, "error_code": error_code, "error": message}), status
+
+
+def _provider_boundary_error(exc: Exception) -> bool:
+    message = str(exc)
+    return (
+        "external_llm_data_sharing_enabled=true" in message
+        or "external_llm_approved=true" in message
+        or "configured LLM settings are unavailable" in message
+    )
+
+
+def _approval_provider_fallback_allowed(exc: Exception) -> bool:
+    return isinstance(exc, LLMProviderError) or _provider_boundary_error(exc)
+
+
 def _no_store() -> None:
     @after_this_request
     def add_no_store(response):
@@ -114,8 +131,18 @@ def register_scientific_agent_conversation_routes(
             )
         except FileNotFoundError:
             return jsonify({"ok": False, "error": "conversation not found"}), 404
-        except (ScientificAgentConversationSessionError, ValueError) as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
+        except ScientificAgentConversationSessionError:
+            return _fixed_error(
+                "session_state_unavailable",
+                "Agent session state is unavailable.",
+                409,
+            )
+        except ValueError:
+            return _fixed_error(
+                "invalid_conversation_session_request",
+                "Invalid conversation session request.",
+                400,
+            )
 
     @app.post(base + "/turn")
     def scientific_agent_conversation_turn(project_id: str, conversation_id: str):
@@ -125,6 +152,10 @@ def register_scientific_agent_conversation_routes(
             allowed = {"run_id", "llm_provider", "external_llm_approved"}
             if set(payload).difference(allowed):
                 raise ValueError("conversation session turn contains an unsupported field")
+            turn_mode = service.classify_turn(
+                project_id=project_id,
+                conversation_id=conversation_id,
+            )
             session = service.read_session(
                 project_id=project_id,
                 conversation_id=conversation_id,
@@ -132,95 +163,90 @@ def register_scientific_agent_conversation_routes(
             run_id = str(payload.get("run_id") or session.get("run_id") or "").strip()
             if not run_id:
                 run_id = f"conversation-{conversation_id}"
-            resolution = resolve_llm_provider_payload(
-                payload,
-                settings=llm_settings,
-                providers=llm_providers,
-            )
-            actor = resolve_authenticated_actor(request, required=True)
-            with resolution.provider_context as provider:
-                result = service.handle_turn(
-                    project_id=project_id,
-                    conversation_id=conversation_id,
-                    run_id=run_id,
-                    provider=provider,
-                    provider_binding_digest=resolution.provider_binding_digest,
-                    actor=actor,
+            if turn_mode == "active":
+                resolution = resolve_llm_provider_payload(
+                    {"llm_provider": None},
+                    settings=llm_settings,
+                    providers=llm_providers,
                 )
+            else:
+                try:
+                    resolution = resolve_llm_provider_payload(
+                        payload,
+                        settings=llm_settings,
+                        providers=llm_providers,
+                    )
+                except (LLMProviderError, ValueError) as exc:
+                    if turn_mode != "approval" or not _approval_provider_fallback_allowed(exc):
+                        raise
+                    resolution = resolve_llm_provider_payload(
+                        {"llm_provider": None},
+                        settings=llm_settings,
+                        providers=llm_providers,
+                    )
+            actor = resolve_authenticated_actor(
+                request,
+                required=turn_mode == "approval",
+            )
+
+            def run_turn(resolved):
+                with resolved.provider_context as provider:
+                    return service.handle_turn(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        run_id=run_id,
+                        provider=provider,
+                        provider_binding_digest=resolved.provider_binding_digest,
+                        actor=actor,
+                    )
+
+            try:
+                result = run_turn(resolution)
+            except (LLMProviderError, ValueError) as exc:
+                if turn_mode != "approval" or not _approval_provider_fallback_allowed(exc):
+                    raise
+                fallback = resolve_llm_provider_payload(
+                    {"llm_provider": None},
+                    settings=llm_settings,
+                    providers=llm_providers,
+                )
+                result = run_turn(fallback)
             return jsonify({"ok": True, **result.as_dict()})
         except FileNotFoundError:
             return jsonify({"ok": False, "error": "conversation not found"}), 404
         except LLMProviderError as exc:
             return _provider_error(exc)
-        except ValueError as exc:
-            if "external_llm_" in str(exc) or "external_llm_data_sharing" in str(exc):
-                return _provider_error(exc)
-            if isinstance(exc, ScientificAgentConversationAuthorizationRequired):
-                return (
-                    jsonify(
-                        {
-                            "ok": False,
-                            "error_code": "authorization_actor_required",
-                            "error": "Conversation approval requires a server-resolved actor.",
-                        }
-                    ),
-                    403,
-                )
-            if isinstance(exc, ScientificAgentConversationStaleAuthority):
-                return (
-                    jsonify(
-                        {
-                            "ok": False,
-                            "error_code": "stale_authority",
-                            "error": "The pending scientific Agent plan is stale and must be reviewed again.",
-                        }
-                    ),
-                    409,
-                )
-            if isinstance(exc, ScientificAgentConversationPlanningFailed):
-                return (
-                    jsonify(
-                        {
-                            "ok": False,
-                            "error_code": "scientific_agent_planning_failed",
-                            "error": "The scientific Agent could not publish a reviewable plan proposal.",
-                        }
-                    ),
-                    409,
-                )
-            return jsonify({"ok": False, "error": str(exc)}), 400
         except ScientificAgentConversationAuthorizationRequired:
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error_code": "authorization_actor_required",
-                        "error": "Conversation approval requires a server-resolved actor.",
-                    }
-                ),
+            return _fixed_error(
+                "authorization_actor_required",
+                "Conversation approval requires a server-resolved actor.",
                 403,
             )
         except ScientificAgentConversationStaleAuthority:
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error_code": "stale_authority",
-                        "error": "The pending scientific Agent plan is stale and must be reviewed again.",
-                    }
-                ),
+            return _fixed_error(
+                "stale_authority",
+                "The pending scientific Agent plan is stale and must be reviewed again.",
                 409,
             )
         except ScientificAgentConversationPlanningFailed:
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error_code": "scientific_agent_planning_failed",
-                        "error": "The scientific Agent could not publish a reviewable plan proposal.",
-                    }
-                ),
+            return _fixed_error(
+                "scientific_agent_planning_failed",
+                "The scientific Agent could not publish a reviewable plan proposal.",
                 409,
+            )
+        except ScientificAgentConversationSessionError:
+            return _fixed_error(
+                "session_state_unavailable",
+                "The scientific Agent session is unavailable.",
+                409,
+            )
+        except ValueError as exc:
+            if _provider_boundary_error(exc):
+                return _provider_error(exc)
+            return _fixed_error(
+                "invalid_conversation_session_request",
+                "Invalid conversation session request.",
+                400,
             )
         except Exception:
             app.logger.warning("scientific_agent_conversation_turn_failed")
@@ -246,8 +272,18 @@ def register_scientific_agent_conversation_routes(
             )
         except FileNotFoundError:
             return jsonify({"ok": False, "error": "conversation not found"}), 404
-        except (ScientificAgentConversationSessionError, ValueError) as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
+        except ScientificAgentConversationSessionError:
+            return _fixed_error(
+                "session_projection_unavailable",
+                "Agent session projection is unavailable.",
+                409,
+            )
+        except ValueError:
+            return _fixed_error(
+                "invalid_durable_event_cursor",
+                "Invalid durable event cursor.",
+                400,
+            )
         once = str(request.args.get("once") or "").strip().lower() in {
             "1",
             "true",

@@ -661,6 +661,7 @@
         if (!projectId) return;
         if (!window.confirm(`删除项目“${String(name || projectId)}”？项目运行、工件和对话将从活动列表移除。`)) return;
         try {
+          if (activeProject.project_id === projectId) closeAgentSessionStream();
           await deleteJSON(`/api/projects/${encodeURIComponent(projectId)}`);
           deletedProjectIds.add(projectId);
           knownProjects = knownProjects.filter(
@@ -756,6 +757,7 @@
           render({ ok: false, error: "请先新建或选择一个项目。" });
           return;
         }
+        closeAgentSessionStream();
         setText("conversation-status", "正在创建新对话…");
         try {
           const response = await postJSON(
@@ -776,6 +778,10 @@
         if (!projectId || !conversationId) return;
         if (!window.confirm(`删除对话“${String(title || "新对话")}”？`)) return;
         try {
+          if (
+            activeProject.project_id === projectId &&
+            currentConversationId === conversationId
+          ) closeAgentSessionStream();
           await deleteJSON(
             `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}`,
           );
@@ -817,6 +823,7 @@
       function selectProject(project) {
         const projectId = String(project?.project_id || "");
         if (!projectId || deletedProjectIds.has(projectId)) return;
+        closeAgentSessionStream();
         invalidateConversationContext();
         updateActiveProjectDisplay(project);
         syncProjectId(activeProject.project_id);
@@ -1126,7 +1133,7 @@
           renderDatasetReview();
           return response;
         } catch (err) {
-          renderDatasetWorkflow();
+          renderDatasetReview();
           return normalizeErrorForRender(err);
         }
       }
@@ -1332,9 +1339,11 @@
         const source = new EventSource(url);
         agentSessionEventSource = source;
         source.addEventListener("snapshot", (event) => {
+          if (!isConversationContextCurrent(context)) return;
           try { renderAgentSessionSnapshot(JSON.parse(event.data || "{}").snapshot); } catch (_err) {}
         });
         source.addEventListener("agent.status", (event) => {
+          if (!isConversationContextCurrent(context)) return;
           try { renderAgentSessionEvent(JSON.parse(event.data || "{}")); } catch (_err) {}
         });
         source.onerror = () => {
@@ -1457,6 +1466,7 @@
       }
 
       async function loadProjectConversation(projectId, preferredConversationId = "") {
+        closeAgentSessionStream();
         invalidateConversationContext();
         const generation = ++conversationLoadGeneration;
         pendingConversationLoad = Object.freeze({

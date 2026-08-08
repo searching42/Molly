@@ -68,6 +68,15 @@ SESSION_PROJECTION_SCHEMA_VERSION = "scientific_agent_session_event_projection.v
 SESSION_EVENT_SCHEMA_VERSION = "scientific_agent_session_event.v1"
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MAX_AUTO_STEPS = 32
+ACTIVE_SESSION_STATUSES = frozenset(
+    {
+        "running",
+        "waiting_gate",
+        "waiting_remote_approval",
+        "recovery_required",
+        "unknown",
+    }
+)
 
 _SESSION_LOCKS: dict[str, threading.RLock] = {}
 _SESSION_LOCKS_GUARD = threading.Lock()
@@ -307,16 +316,36 @@ class ScientificAgentConversationSessionService:
         root = self._root(clean_project, clean_conversation, create=False)
         state_path = root / "state.json"
         if not state_path.exists():
-            return self._default_state(clean_project, clean_conversation)
-        try:
-            loaded = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ScientificAgentConversationSessionError(
-                "conversation session state is unavailable"
-            ) from exc
-        if not isinstance(loaded, dict) or loaded.get("schema_version") != SESSION_SCHEMA_VERSION:
-            raise ScientificAgentConversationSessionError("conversation session state is invalid")
-        return self._safe_state(loaded, clean_project, clean_conversation)
+            state = self._default_state(clean_project, clean_conversation)
+        else:
+            try:
+                loaded = json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ScientificAgentConversationSessionError(
+                    "conversation session state is unavailable"
+                ) from exc
+            if not isinstance(loaded, dict) or loaded.get("schema_version") != SESSION_SCHEMA_VERSION:
+                raise ScientificAgentConversationSessionError("conversation session state is invalid")
+            state = self._safe_state(loaded, clean_project, clean_conversation)
+
+        events = self.read_events(
+            project_id=clean_project,
+            conversation_id=clean_conversation,
+        )
+        if events:
+            latest_projection = events[-1].get("data", {}).get("state_projection")
+            if isinstance(latest_projection, dict):
+                try:
+                    latest_revision = int(latest_projection.get("revision") or 0)
+                except (TypeError, ValueError):
+                    latest_revision = 0
+                if latest_revision > int(state.get("revision") or 0):
+                    state = self._safe_state(
+                        {**state, **latest_projection},
+                        clean_project,
+                        clean_conversation,
+                    )
+        return state
 
     def read_events(self, *, project_id: str, conversation_id: str) -> list[dict[str, Any]]:
         clean_project = _clean_id(project_id, field="project_id")
@@ -325,37 +354,83 @@ class ScientificAgentConversationSessionService:
         path = root / "events.jsonl"
         if not path.exists():
             return []
+        events, _valid_end, _torn_tail = self._read_event_records(
+            path=path,
+            project_id=clean_project,
+            conversation_id=clean_conversation,
+            tolerate_torn_tail=True,
+        )
+        return events
+
+    @staticmethod
+    def _read_event_records(
+        *,
+        path: Path,
+        project_id: str,
+        conversation_id: str,
+        tolerate_torn_tail: bool,
+    ) -> tuple[list[dict[str, Any]], int, bool]:
         events: list[dict[str, Any]] = []
+        if not path.exists():
+            return events, 0, False
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            raw = path.read_bytes()
         except OSError as exc:
             raise ScientificAgentConversationSessionError(
                 "conversation session events are unavailable"
             ) from exc
-        for expected_id, line in enumerate(lines, start=1):
-            if not line.strip():
+        offset = 0
+        lines = raw.splitlines(keepends=True)
+        for line_index, raw_line in enumerate(lines):
+            line_start = offset
+            offset += len(raw_line)
+            if not raw_line.strip():
                 continue
             try:
+                line = raw_line.decode("utf-8")
                 event = json.loads(line)
-            except json.JSONDecodeError as exc:
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                is_final_unterminated_line = (
+                    line_index == len(lines) - 1
+                    and not raw_line.endswith((b"\n", b"\r"))
+                )
+                if tolerate_torn_tail and is_final_unterminated_line:
+                    return events, line_start, True
                 raise ScientificAgentConversationSessionError(
                     "conversation session event journal is invalid"
                 ) from exc
-            if not isinstance(event, dict) or int(event.get("event_id", -1)) != expected_id:
+            expected_id = len(events) + 1
+            try:
+                event_id = int(event.get("event_id", -1)) if isinstance(event, dict) else -1
+            except (TypeError, ValueError):
+                event_id = -1
+            if not isinstance(event, dict) or event_id != expected_id:
                 raise ScientificAgentConversationSessionError(
                     "conversation session event cursor is invalid"
                 )
             if (
                 event.get("schema_version") != SESSION_EVENT_SCHEMA_VERSION
-                or event.get("project_id") != clean_project
-                or event.get("conversation_id") != clean_conversation
+                or event.get("project_id") != project_id
+                or event.get("conversation_id") != conversation_id
                 or event.get("durable") is not True
             ):
                 raise ScientificAgentConversationSessionError(
                     "conversation session event binding is invalid"
                 )
             events.append(event)
-        return events
+        return events, offset, False
+
+    @staticmethod
+    def _repair_event_tail(path: Path, valid_end: int) -> None:
+        try:
+            with path.open("r+b") as handle:
+                handle.truncate(valid_end)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as exc:
+            raise ScientificAgentConversationSessionError(
+                "conversation session event journal is unavailable"
+            ) from exc
 
     def session_projection(self, state: dict[str, Any]) -> dict[str, Any]:
         """Return only safe session facts for the browser projection."""
@@ -376,6 +451,35 @@ class ScientificAgentConversationSessionService:
                 "authorization_id",
                 "start_intent_id",
                 "controller_execution_id",
+                "controller_status",
+                "current_task_id",
+                "updated_at",
+                "executable",
+            )
+        }
+
+    @staticmethod
+    def _event_state_projection(state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: state.get(key, "")
+            for key in (
+                "schema_version",
+                "project_id",
+                "conversation_id",
+                "run_id",
+                "status",
+                "reason_code",
+                "message",
+                "revision",
+                "conversation_digest",
+                "proposal_id",
+                "proposal_digest",
+                "authorization_id",
+                "authorization_digest",
+                "start_intent_id",
+                "start_intent_digest",
+                "controller_execution_id",
+                "controller_execution_digest",
                 "controller_status",
                 "current_task_id",
                 "updated_at",
@@ -434,16 +538,21 @@ class ScientificAgentConversationSessionService:
                     "executable": False,
                 }
             )
-            write_json(root / "state.json", state)
-            events = self.read_events(
+            events_path = root / "events.jsonl"
+            events, valid_end, torn_tail = self._read_event_records(
+                path=events_path,
                 project_id=clean_project,
                 conversation_id=clean_conversation,
+                tolerate_torn_tail=True,
             )
+            if torn_tail:
+                self._repair_event_tail(events_path, valid_end)
             safe_data: dict[str, Any] = {
                 "status": status,
                 "reason_code": reason_code,
                 "message": state["message"],
                 "revision": state["revision"],
+                "state_projection": self._event_state_projection(state),
             }
             for key, value in (event_data or {}).items():
                 if key in {
@@ -478,10 +587,11 @@ class ScientificAgentConversationSessionService:
                 "data": safe_data,
                 "durable": True,
             }
-            with (root / "events.jsonl").open("a", encoding="utf-8") as handle:
+            with events_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+            write_json(root / "state.json", state)
             return state
 
     def read_session_payload(
@@ -498,7 +608,11 @@ class ScientificAgentConversationSessionService:
         payload: dict[str, Any] = {"session": self.session_projection(state)}
         if state.get("proposal_id"):
             try:
-                publication = self._read_pending_publication(state, project_id)
+                publication = (
+                    self._read_active_publication(state, project_id)
+                    if state.get("status") in ACTIVE_SESSION_STATUSES
+                    else self._read_pending_publication(state, project_id)
+                )
             except ScientificAgentConversationSessionError:
                 payload["stale_authority"] = True
             else:
@@ -522,6 +636,44 @@ class ScientificAgentConversationSessionService:
             for message in messages
             if message.content.strip()
         ]
+
+    def classify_turn(self, *, project_id: str, conversation_id: str) -> str:
+        """Classify a turn before resolving any LLM provider.
+
+        Active execution sessions are read-only from an ordinary conversation
+        turn.  Exact approval of a pending immutable proposal is separately
+        deterministic; all other turns may use the normal conversation and
+        planning path.
+        """
+
+        clean_project = _clean_id(project_id, field="project_id")
+        clean_conversation = _clean_id(conversation_id, field="conversation_id")
+        self.conversations.get_conversation(clean_project, clean_conversation)
+        state = self.read_session(
+            project_id=clean_project,
+            conversation_id=clean_conversation,
+        )
+        if state.get("status") in ACTIVE_SESSION_STATUSES:
+            return "active"
+        if state.get("proposal_id") and state.get("status") in {
+            "approval_required",
+            "plan_review",
+        }:
+            messages = self._messages(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+            )
+            last_user = next(
+                (
+                    item["content"]
+                    for item in reversed(messages)
+                    if item["role"] == "user"
+                ),
+                "",
+            )
+            if ConversationAgent.recognize_plan_approval(last_user):
+                return "approval"
+        return "ordinary"
 
     def handle_turn(
         self,
@@ -559,6 +711,18 @@ class ScientificAgentConversationSessionService:
         clean_project = _clean_id(project_id, field="project_id")
         clean_conversation = _clean_id(conversation_id, field="conversation_id")
         clean_run = _clean_id(run_id, field="run_id")
+        self.conversations.get_conversation(clean_project, clean_conversation)
+        state = self.read_session(
+            project_id=clean_project,
+            conversation_id=clean_conversation,
+        )
+        if state.get("status") in ACTIVE_SESSION_STATUSES:
+            return self._handle_existing_execution(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+                run_id=clean_run,
+                state=state,
+            )
         messages = self._messages(
             project_id=clean_project,
             conversation_id=clean_conversation,
@@ -572,10 +736,6 @@ class ScientificAgentConversationSessionService:
         )
         decision_payload = decision.model_dump(mode="json")
         digest = _conversation_digest(messages)
-        state = self.read_session(
-            project_id=clean_project,
-            conversation_id=clean_conversation,
-        )
         last_user = next(
             (
                 item["content"]
@@ -758,6 +918,40 @@ class ScientificAgentConversationSessionService:
         if publication.proposal.proposal_digest != expected_digest:
             raise ScientificAgentConversationStaleAuthority(
                 "pending plan digest no longer matches the session"
+            )
+        return publication
+
+    def _read_active_publication(
+        self,
+        state: dict[str, Any],
+        project_id: str,
+    ) -> ScientificAgentPlanPublication:
+        """Read the immutable proposal already bound to an authorized run.
+
+        Later conversation messages may legitimately change the conversation
+        source digest. They do not change the exact proposal digest already
+        bound into Authorization, StartIntent, and Controller execution.
+        """
+
+        proposal_id = str(state.get("proposal_id") or "")
+        expected_digest = str(state.get("proposal_digest") or "")
+        if not proposal_id or not expected_digest:
+            raise ScientificAgentConversationStaleAuthority(
+                "active plan binding is incomplete"
+            )
+        try:
+            publication = self.proposal_store.read(
+                project_id=project_id,
+                proposal_id=proposal_id,
+                verify_current=False,
+            )
+        except (FileNotFoundError, ScientificAgentPlanError) as exc:
+            raise ScientificAgentConversationStaleAuthority(
+                "active plan publication is unavailable"
+            ) from exc
+        if publication.proposal.proposal_digest != expected_digest:
+            raise ScientificAgentConversationStaleAuthority(
+                "active plan digest no longer matches the session"
             )
         return publication
 
@@ -1145,6 +1339,79 @@ class ScientificAgentConversationSessionService:
             session=self.session_projection(state),
             proposal=publication.proposal.model_dump(mode="json"),
             plan_summary=summary,
+        )
+
+    def _handle_existing_execution(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        run_id: str,
+        state: dict[str, Any],
+    ) -> ScientificAgentConversationTurnResult:
+        """Project an active Controller without replanning or advancing it.
+
+        Gate, remote approval, recovery, and unknown-outcome states are
+        separate authority boundaries.  A normal chat message must therefore
+        preserve the exact proposal/start/controller binding until a dedicated
+        authority operation handles it.
+        """
+
+        proposal_id = str(state.get("proposal_id") or "")
+        controller_execution_id = str(state.get("controller_execution_id") or "")
+        if not proposal_id or not controller_execution_id:
+            raise ScientificAgentConversationStaleAuthority(
+                "active execution binding is incomplete"
+            )
+        publication = self._read_active_publication(state, project_id)
+        try:
+            controller_result = self.controller.get(
+                project_id=project_id,
+                controller_execution_id=controller_execution_id,
+            )
+        except (FileNotFoundError, ScientificAgentHarnessControllerError, ValueError) as exc:
+            raise ScientificAgentConversationSessionError(
+                "active Controller execution is unavailable"
+            ) from exc
+        expected_controller_digest = str(state.get("controller_execution_digest") or "")
+        if (
+            expected_controller_digest
+            and controller_result.execution.execution_digest != expected_controller_digest
+        ):
+            raise ScientificAgentConversationStaleAuthority(
+                "active Controller execution digest no longer matches the session"
+            )
+        status = str(state.get("status") or "unknown")
+        message = {
+            "running": "当前运行仍由 Harness Controller 管理；普通对话不会改写当前计划。",
+            "waiting_gate": "当前运行正在等待独立 Gate authority；普通对话不会批准或改写当前计划。",
+            "waiting_remote_approval": "当前运行正在等待独立远程资源批准；普通对话不会批准或改写当前计划。",
+            "recovery_required": "当前运行需要显式恢复 authority；普通对话不会重试或改写当前计划。",
+            "unknown": "当前运行结果未知；需要显式恢复或重新规划，普通对话不会改写当前 Controller 绑定。",
+        }.get(status, "当前运行仍由 Harness Controller 管理；普通对话不会改写当前计划。")
+        decision = {
+            "project_id": project_id,
+            "run_id": str(state.get("run_id") or run_id),
+            "status": "active_scientific_agent_session",
+            "decision": "active_scientific_agent_session",
+            "summary": message,
+            "modeling_plan_payload": {},
+            "questions": [],
+            "pending_cited_target_evidence": [],
+            "next_actions": ["use_the_separate_current_authority_operation"],
+            "blocked_reasons": [str(state.get("reason_code") or "ACTIVE_SESSION")],
+            "requires_user_response": True,
+            "executable": False,
+        }
+        return ScientificAgentConversationTurnResult(
+            decision=decision,
+            assistant_message=message,
+            assistant_source="scientific_agent_session",
+            llm_used=False,
+            session=self.session_projection(state),
+            proposal=publication.proposal.model_dump(mode="json"),
+            plan_summary=self._plan_summary(publication),
+            controller=_controller_public(controller_result),
         )
 
     @staticmethod
