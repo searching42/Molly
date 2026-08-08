@@ -2,7 +2,7 @@
 
 This document freezes the narrow PR-BJ source contract that unblocks the
 representative M3 validation cases. It does not make validation claims;
-[`../todo.md`](../todo.md) remains authoritative for evidence maturity and
+[`roadmap.md`](roadmap.md) remains authoritative for evidence maturity and
 execution order.
 
 ## Compatibility decision
