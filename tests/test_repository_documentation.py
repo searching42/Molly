@@ -36,24 +36,24 @@ RETIRED_IMPLEMENTATION_PLAN_FILES = (
 def _public_markdown_files() -> list[Path]:
     return [
         REPOSITORY_ROOT / "README.md",
-        REPOSITORY_ROOT / "CLAUDE.md",
-        REPOSITORY_ROOT / "todo.md",
         *sorted((REPOSITORY_ROOT / "docs").rglob("*.md")),
     ]
 
 
 def test_repository_entry_documents_define_current_authority_and_boundaries() -> None:
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
-    claude = (REPOSITORY_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    todo = (REPOSITORY_ROOT / "todo.md").read_text(encoding="utf-8")
+    development = (REPOSITORY_ROOT / "docs" / "development-guidance.md").read_text(
+        encoding="utf-8"
+    )
+    roadmap = (REPOSITORY_ROOT / "docs" / "roadmap.md").read_text(encoding="utf-8")
     normalized_readme = " ".join(readme.split())
-    normalized_claude = " ".join(claude.split())
+    normalized_development = " ".join(development.split())
 
     assert "Same-process B1 orchestration layer" not in readme
     assert "long-horizon AI4S agent" in readme
     assert (
-        "`todo.md` is the normative source for roadmap, milestone status, priorities, "
-        "and execution order."
+        "`docs/roadmap.md` is the normative public source for roadmap scope, "
+        "milestone status, priorities, acceptance boundaries, and execution order."
     ) in normalized_readme
     for heading in (
         "## Capability overview",
@@ -75,17 +75,35 @@ def test_repository_entry_documents_define_current_authority_and_boundaries() ->
         "Public-repository boundary",
         "Do not create a second",
     ):
-        assert required in normalized_claude
+        assert required in normalized_development
     for stale in (
         "same-process B1",
         "8 atomic tasks",
         "lambda_em/plqy/mw",
     ):
-        assert stale.lower() not in claude.lower()
+        assert stale.lower() not in development.lower()
 
-    assert "唯一规范性来源" in todo
-    assert "legacy-private PR N" in todo
-    assert "GitHub PR 编号从公开仓库重新开始" in todo
+    assert "唯一规范性来源" in roadmap
+    assert "legacy-private PR N" in roadmap
+    assert "GitHub PR 编号从公开仓库重新开始" in roadmap
+
+
+def test_local_working_context_files_are_ignored_and_not_public_authority() -> None:
+    ignored = {
+        line.strip()
+        for line in (REPOSITORY_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    for filename in ("CLAUDE.md", "todo.md"):
+        assert filename in ignored
+        assert not (REPOSITORY_ROOT / filename).exists()
+
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    security = (REPOSITORY_ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    assert "docs/development-guidance.md" in readme
+    assert "docs/roadmap.md" in readme
+    assert "docs/development-guidance.md" in security
+    assert "docs/roadmap.md" in security
 
 
 def test_retired_plans_and_b1_documents_are_absent() -> None:
