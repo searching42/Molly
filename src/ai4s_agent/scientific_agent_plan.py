@@ -33,10 +33,7 @@ from ai4s_agent.observability_correlation import (
     privacy_safe_telemetry_attributes,
 )
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
-from ai4s_agent.resource_profiles import (
-    ResourceProfileStore,
-    server_owned_br1_resource_defaults,
-)
+from ai4s_agent.resource_profiles import ResourceProfileStore
 from ai4s_agent.schemas import (
     AgentArtifactObservation,
     AgentBudgetObservation,
@@ -928,7 +925,7 @@ class AgentProjectObservationBuilder:
         except ValueError:
             br1_runtime = False
         for profile_id, profile in sorted(store.execution_profiles.items()):
-            configured_resource_defaults = (
+            resource_limit_envelope = (
                 {
                     "gpu_count": int(profile.resource_limits.gpu_count_max),
                     "cpu_threads": int(profile.resource_limits.cpu_threads_max),
@@ -989,8 +986,8 @@ class AgentProjectObservationBuilder:
                 "profile_digest": profile.digest(),
                 "connections": sorted(matching_connections, key=lambda item: item["connection_digest"]),
             }
-            if configured_resource_defaults:
-                capability_material["configured_resource_defaults"] = configured_resource_defaults
+            if resource_limit_envelope:
+                capability_material["resource_limit_envelope"] = resource_limit_envelope
             observations.append(
                 AgentExecutionProfileObservation(
                     profile_id=profile_id,
@@ -1260,9 +1257,46 @@ def _profile_matches_requirement(
 class AgentExecutionPlanCompiler:
     """Compile validated LLM suggestions through the existing task registry."""
 
-    def __init__(self, *, registry: AtomicTaskRegistry | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        registry: AtomicTaskRegistry | None = None,
+        resource_authority_policy_store: Any | None = None,
+    ) -> None:
         self.registry = registry or AtomicTaskRegistry()
         self.option_compiler = PlannerOptionCompiler()
+        self.resource_authority_policy_store = resource_authority_policy_store
+
+    def _configured_remote_resources(
+        self,
+        *,
+        task_id: str,
+        profile_id: str | None,
+        remote_task_type: str,
+    ) -> dict[str, int] | None:
+        """Read the exact owner-configured request, never a profile envelope."""
+
+        if self.resource_authority_policy_store is None or not profile_id:
+            return None
+        try:
+            policy = self.resource_authority_policy_store.read()
+        except (FileNotFoundError, OSError, ValueError):
+            return None
+        matches = [
+            entry
+            for entry in policy.entries
+            if entry.enabled
+            and entry.execution_profile_id == profile_id
+            and entry.remote_task_type == remote_task_type
+            and task_id in entry.allowed_task_ids
+        ]
+        if len(matches) > 1:
+            raise ScientificAgentPlanError(
+                f"remote task has ambiguous server resource policies: {task_id}"
+            )
+        if not matches:
+            return None
+        return matches[0].configured_resources.model_dump(mode="json")
 
     def compile(
         self,
@@ -1508,43 +1542,50 @@ class AgentExecutionPlanCompiler:
                     f"remote task has ambiguous logical profile bindings: {planned_task.task_id}"
                 )
             runtime_limit = parsed.limits.get("max_runtime_sec")
-            configured_defaults = (
-                server_owned_br1_resource_defaults(matching_profiles[0].profile_id)
-                if matching_profiles
-                and any(
-                    item.task_id == "predict_private_unimol_v1"
-                    for item in self.registry.list_tasks()
+            br1_real_registry = any(
+                item.task_id == "predict_private_unimol_v1"
+                for item in self.registry.list_tasks()
+            )
+            configured_resources = (
+                self._configured_remote_resources(
+                    task_id=planned_task.task_id,
+                    profile_id=(
+                        matching_profiles[0].profile_id if matching_profiles else None
+                    ),
+                    remote_task_type=remote_task_type,
                 )
-                else {}
+                if br1_real_registry
+                else None
             )
             walltime_sec: int | None = None
-            if configured_defaults:
-                authority_walltime = configured_defaults["walltime_sec"]
-                if runtime_limit is None:
-                    walltime_sec = authority_walltime
-                elif (
-                    isinstance(runtime_limit, int)
-                    and not isinstance(runtime_limit, bool)
-                ):
-                    if runtime_limit > authority_walltime:
-                        raise ScientificAgentPlanError(
-                            "requested remote walltime exceeds the server-owned profile default"
-                        )
-                    walltime_sec = int(runtime_limit)
-            elif isinstance(runtime_limit, int) and not isinstance(runtime_limit, bool):
+            if not br1_real_registry and isinstance(runtime_limit, int) and not isinstance(
+                runtime_limit, bool
+            ):
                 walltime_sec = int(runtime_limit)
             resource_status = (
                 "configured"
-                if configured_defaults and walltime_sec is not None
+                if configured_resources is not None
                 else "partial"
                 if walltime_sec is not None
                 else "not_configured"
             )
             resources = AgentRemoteResourceRequestIntent(
                 status=resource_status,
-                gpu_count=(configured_defaults.get("gpu_count") if configured_defaults else None),
-                cpu_threads=(configured_defaults.get("cpu_threads") if configured_defaults else None),
-                walltime_sec=walltime_sec,
+                gpu_count=(
+                    configured_resources.get("gpu_count")
+                    if configured_resources is not None
+                    else None
+                ),
+                cpu_threads=(
+                    configured_resources.get("cpu_threads")
+                    if configured_resources is not None
+                    else None
+                ),
+                walltime_sec=(
+                    configured_resources.get("walltime_sec")
+                    if configured_resources is not None
+                    else walltime_sec
+                ),
             )
             dispatch_intents.append(
                 AgentTaskDispatchIntent(
@@ -1720,6 +1761,7 @@ class ScientificAgentPlanService:
         registry: AtomicTaskRegistry | None = None,
         observation_builder: AgentProjectObservationBuilder | None = None,
         proposal_store: "ScientificAgentPlanProposalStore" | None = None,
+        resource_authority_policy_store: Any | None = None,
         tracer: HarnessTracer | None = None,
         clock: Callable[[], str] = now_iso,
     ) -> None:
@@ -1731,12 +1773,21 @@ class ScientificAgentPlanService:
             resource_profiles=resource_profiles,
             clock=clock,
         )
-        self.compiler = AgentExecutionPlanCompiler(registry=self.registry)
+        self.compiler = AgentExecutionPlanCompiler(
+            registry=self.registry,
+            resource_authority_policy_store=resource_authority_policy_store,
+        )
         self.proposal_store = proposal_store or ScientificAgentPlanProposalStore(
             storage=storage,
             observation_builder=self.observation_builder,
             registry=self.registry,
+            resource_authority_policy_store=resource_authority_policy_store,
         )
+        if (
+            resource_authority_policy_store is not None
+            and getattr(self.proposal_store, "resource_authority_policy_store", None) is None
+        ):
+            self.proposal_store.resource_authority_policy_store = resource_authority_policy_store
         self.tracer = tracer or NoopHarnessTracer()
         self.clock = clock
 
@@ -1969,11 +2020,13 @@ class ScientificAgentPlanProposalStore:
         storage: Any,
         observation_builder: AgentProjectObservationBuilder | None = None,
         registry: AtomicTaskRegistry | None = None,
+        resource_authority_policy_store: Any | None = None,
         fault_injector: Callable[[str], None] | None = None,
     ) -> None:
         self.storage = storage
         self.observation_builder = observation_builder
         self.registry = registry or getattr(observation_builder, "registry", None) or AtomicTaskRegistry()
+        self.resource_authority_policy_store = resource_authority_policy_store
         self.fault_injector = fault_injector
 
     def _fault(self, phase: str) -> None:
@@ -2572,7 +2625,10 @@ class ScientificAgentPlanProposalStore:
         proposal: AgentExecutionPlanProposal,
     ) -> None:
         try:
-            expected = AgentExecutionPlanCompiler(registry=self.registry).compile(
+            expected = AgentExecutionPlanCompiler(
+                registry=self.registry,
+                resource_authority_policy_store=self.resource_authority_policy_store,
+            ).compile(
                 observation=observation,
                 response=llm_response,
                 invocation=proposal.llm_invocation,

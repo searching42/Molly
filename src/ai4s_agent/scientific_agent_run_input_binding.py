@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from ai4s_agent._utils import write_json
-from ai4s_agent.br1_acceptance_readiness import FREEZE_SCHEMA, _validate_schema
+from ai4s_agent.br1_acceptance_readiness import (
+    BR1AcceptanceReadinessError,
+    FREEZE_SCHEMA,
+    _validate_schema,
+    require_br1_acceptance_owner_approval,
+)
 from ai4s_agent.generation_publication import read_regular_file_bound
 from ai4s_agent.storage import ProjectStorage
 from ai4s_agent.structured_dataset_confirmation import digest_json
@@ -20,10 +28,85 @@ _SAFE_RELATIVE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 _MAX_DATASET_BYTES = 32 * 1024 * 1024
 _MAX_JSON_BYTES = 8 * 1024 * 1024
 _MAX_TEMPLATE_BYTES = 16 * 1024 * 1024
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+_PROPOSAL_PACKAGE_BINDING_KEYS = (
+    "freeze_package_id",
+    "freeze_package_digest",
+    "repository_commit",
+    "worker_implementation_digest",
+    "provider_name",
+    "expected_provider_version",
+    "execution_profile_id",
+    "execution_profile_digest",
+    "raw_dataset_digest",
+    "source_dataset_manifest_digest",
+    "mapping_policy_digest",
+    "canonical_source_dataset_digest",
+    "canonical_provider_input_digest",
+    "source_publication_digest",
+    "source_publication_registry_digest",
+    "source_authority_digest",
+    "source_authority_file_digest",
+    "report_digest",
+    "summary_digest",
+    "input_row_count",
+    "claim_boundary",
+)
 
 
 class ScientificAgentRunInputBindingError(ValueError):
     """A logical input bundle is not eligible for an immutable run binding."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str = "BR1_INPUT_BUNDLE_UNAVAILABLE",
+        bundle_ids: tuple[str, ...] = (),
+    ) -> None:
+        self.reason_code = reason_code
+        self.bundle_ids = tuple(bundle_ids)
+        super().__init__(message)
+
+
+def resolve_server_br1_deployment_identity() -> tuple[str, str]:
+    """Resolve the deployment identity used to reject stale frozen bundles."""
+
+    commit = str(os.environ.get("MOLLY_REPOSITORY_COMMIT") or "").strip().lower()
+    if not commit:
+        repository_root = Path(__file__).resolve().parents[2]
+        try:
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repository_root,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip().lower()
+        except (OSError, subprocess.SubprocessError):
+            commit = ""
+    worker_digest = str(
+        os.environ.get("MOLLY_WORKER_IMPLEMENTATION_DIGEST") or ""
+    ).strip().lower()
+    if not worker_digest:
+        worker_path = Path(__file__).with_name("molly_worker.py")
+        try:
+            _worker_bytes, worker_hex = read_regular_file_bound(
+                worker_path, max_bytes=32 * 1024 * 1024
+            )
+        except (OSError, ValueError) as exc:
+            raise ScientificAgentRunInputBindingError(
+                "current BR1 worker implementation identity is unavailable",
+                reason_code="BR1_DEPLOYMENT_IDENTITY_UNAVAILABLE",
+            ) from exc
+        worker_digest = "sha256:" + worker_hex
+    if _COMMIT.fullmatch(commit) is None or _DIGEST.fullmatch(worker_digest) is None:
+        raise ScientificAgentRunInputBindingError(
+            "current BR1 deployment identity is invalid",
+            reason_code="BR1_DEPLOYMENT_IDENTITY_UNAVAILABLE",
+        )
+    return commit, worker_digest
 
 
 def _safe_id(value: Any, *, field: str) -> str:
@@ -59,14 +142,16 @@ def _read_json(path: Path, *, label: str) -> tuple[dict[str, Any], str]:
 def _safe_source_file(root: Path, relative_path: str, *, label: str) -> Path:
     if not _SAFE_RELATIVE.fullmatch(relative_path):
         raise ScientificAgentRunInputBindingError(f"{label} path is not allowlisted")
-    path = (root / relative_path).resolve()
-    if not path.is_relative_to(root.resolve()):
-        raise ScientificAgentRunInputBindingError(f"{label} path escapes the bundle")
-    current = path
-    while current != root.resolve():
+    root_path = root.resolve()
+    raw_path = root / relative_path
+    current = raw_path
+    while current != root_path:
         if current.is_symlink():
             raise ScientificAgentRunInputBindingError(f"{label} path is unsafe")
         current = current.parent
+    path = raw_path.resolve()
+    if not path.is_relative_to(root_path):
+        raise ScientificAgentRunInputBindingError(f"{label} path escapes the bundle")
     return path
 
 
@@ -79,26 +164,77 @@ class ScientificAgentRunInputBindingService:
         storage: ProjectStorage,
         bundles_root: Path | None = None,
         require_reinvent4_template: bool = False,
+        trusted_owner_ids: set[str] | Callable[[], set[str]] | None = None,
+        deployment_identity: Callable[[], tuple[str, str]] | None = None,
     ) -> None:
         self.storage = storage
         self.bundles_root = None if bundles_root is None else Path(bundles_root).resolve()
         self.require_reinvent4_template = bool(require_reinvent4_template)
+        self._trusted_owner_ids_source = trusted_owner_ids
+        self._deployment_identity_source = deployment_identity
 
-    def _bundle_dir(self, project_id: str, bundle_id: str) -> Path:
+    def _trusted_owner_ids(self) -> set[str]:
+        source = self._trusted_owner_ids_source
+        if callable(source):
+            values = source()
+        elif source is not None:
+            values = source
+        else:
+            values = {
+                item.strip()
+                for item in str(os.environ.get("MOLLY_BR1_TRUSTED_OWNER_IDS") or "").split(",")
+                if item.strip()
+            }
+        return {
+            str(item).strip()
+            for item in values
+            if _SAFE_ID.fullmatch(str(item).strip()) is not None
+        }
+
+    def _current_deployment_identity(self) -> tuple[str, str]:
+        source = self._deployment_identity_source
+        try:
+            identity = source() if source is not None else resolve_server_br1_deployment_identity()
+            commit, worker_digest = identity
+        except ScientificAgentRunInputBindingError:
+            raise
+        except Exception as exc:
+            raise ScientificAgentRunInputBindingError(
+                "current BR1 deployment identity is unavailable",
+                reason_code="BR1_DEPLOYMENT_IDENTITY_UNAVAILABLE",
+            ) from exc
+        commit = str(commit or "").strip().lower()
+        worker_digest = str(worker_digest or "").strip().lower()
+        if _COMMIT.fullmatch(commit) is None or _DIGEST.fullmatch(worker_digest) is None:
+            raise ScientificAgentRunInputBindingError(
+                "current BR1 deployment identity is invalid",
+                reason_code="BR1_DEPLOYMENT_IDENTITY_UNAVAILABLE",
+            )
+        return commit, worker_digest
+
+    def _bundle_roots(self, project_id: str) -> list[Path]:
         project = _safe_id(project_id, field="project_id")
-        bundle = _safe_id(bundle_id, field="input_bundle_id")
         if self.bundles_root is None:
             project_root = self.storage.project_dir(project)
-            roots = [
+            return [
                 project_root / "br1-input-bundles",
                 project_root / "assets" / "br1-input-bundles",
             ]
-        else:
-            roots = [self.bundles_root / project]
+        return [self.bundles_root / project]
+
+    def _bundle_dir(self, project_id: str, bundle_id: str) -> Path:
+        _safe_id(project_id, field="project_id")
+        bundle = _safe_id(bundle_id, field="input_bundle_id")
+        roots = self._bundle_roots(project_id)
         candidates: list[tuple[Path, Path]] = []
         for candidate_root in roots:
+            if candidate_root.is_symlink():
+                raise ScientificAgentRunInputBindingError("input bundle root is unsafe")
             root = candidate_root.resolve()
-            path = (root / bundle).resolve()
+            raw_path = root / bundle
+            if raw_path.is_symlink():
+                raise ScientificAgentRunInputBindingError("input bundle is unavailable")
+            path = raw_path.resolve()
             if not path.is_relative_to(root):
                 raise ScientificAgentRunInputBindingError(
                     "input bundle escapes the server root"
@@ -113,6 +249,138 @@ class ScientificAgentRunInputBindingService:
         if path.is_symlink() or not path.is_dir():
             raise ScientificAgentRunInputBindingError("input bundle is unavailable")
         return path
+
+    def _verify_owner_approval(
+        self, *, bundle_dir: Path, package: dict[str, Any]
+    ) -> None:
+        proposal_path = _safe_source_file(
+            bundle_dir,
+            "owner_acceptance_proposal.json",
+            label="owner acceptance proposal",
+        )
+        proposal, _proposal_file_digest = _read_json(
+            proposal_path, label="owner acceptance proposal"
+        )
+        approval_path = _safe_source_file(
+            bundle_dir,
+            "owner_acceptance_approval.json",
+            label="owner acceptance approval",
+        )
+        approval: dict[str, Any] | None
+        if approval_path.exists():
+            approval, _approval_file_digest = _read_json(
+                approval_path, label="owner acceptance approval"
+            )
+        else:
+            approval = None
+        try:
+            require_br1_acceptance_owner_approval(
+                approval,
+                proposal=proposal,
+                trusted_owner_ids=self._trusted_owner_ids(),
+            )
+        except BR1AcceptanceReadinessError as exc:
+            message = str(exc)
+            reason_code = (
+                "BR1_OWNER_APPROVAL_REQUIRED"
+                if message.startswith("WAITING_OWNER:")
+                else "BR1_OWNER_APPROVAL_INVALID"
+            )
+            raise ScientificAgentRunInputBindingError(
+                "exact BR1 owner approval is not valid",
+                reason_code=reason_code,
+            ) from exc
+        for key in _PROPOSAL_PACKAGE_BINDING_KEYS:
+            package_key = "package_id" if key == "freeze_package_id" else key
+            if proposal.get(key) != package.get(package_key):
+                raise ScientificAgentRunInputBindingError(
+                    "owner acceptance proposal does not bind this freeze package",
+                    reason_code="BR1_OWNER_APPROVAL_INVALID",
+                )
+        current_commit, current_worker_digest = self._current_deployment_identity()
+        if (
+            package.get("repository_commit") != current_commit
+            or package.get("worker_implementation_digest") != current_worker_digest
+        ):
+            raise ScientificAgentRunInputBindingError(
+                "frozen BR1 package is stale for the current deployment",
+                reason_code="BR1_FREEZE_STALE",
+            )
+
+    def _verify_bundle(
+        self, *, bundle_dir: Path, project_id: str, bundle_id: str
+    ) -> tuple[dict[str, Any], dict[str, bytes], dict[str, str]]:
+        package, payloads, digests = self._verify_freeze_package(
+            bundle_dir=bundle_dir,
+            project_id=project_id,
+            bundle_id=bundle_id,
+        )
+        self._verify_owner_approval(bundle_dir=bundle_dir, package=package)
+        return package, payloads, digests
+
+    def list_eligible_bundle_ids(self, *, project_id: str) -> list[str]:
+        """Return only safe logical IDs for currently owner-approved bundles."""
+
+        project = _safe_id(project_id, field="project_id")
+        eligible: set[str] = set()
+        for candidate_root in self._bundle_roots(project):
+            if not candidate_root.exists():
+                continue
+            if candidate_root.is_symlink() or not candidate_root.is_dir():
+                raise ScientificAgentRunInputBindingError("input bundle root is unsafe")
+            for path in candidate_root.iterdir():
+                bundle_id = path.name
+                if _SAFE_ID.fullmatch(bundle_id) is None or path.is_symlink() or not path.is_dir():
+                    continue
+                try:
+                    self._verify_bundle(
+                        bundle_dir=path,
+                        project_id=project,
+                        bundle_id=bundle_id,
+                    )
+                except ScientificAgentRunInputBindingError:
+                    continue
+                eligible.add(bundle_id)
+        return sorted(eligible)
+
+    def _read_existing_binding(self, *, project_id: str, run_id: str) -> dict[str, Any] | None:
+        registry = self.storage.read_artifact_registry(project_id, run_id)
+        relative = registry.get("br1_input_binding")
+        if relative is None:
+            return None
+        if relative != "inputs/br1/binding.json":
+            raise ScientificAgentRunInputBindingError(
+                "logical BR1 input binding path is invalid",
+                reason_code="INPUT_BINDING_IMMUTABLE",
+            )
+        run_dir = self.storage.run_dir(project_id, run_id)
+        raw_path = run_dir / relative
+        if raw_path.is_symlink():
+            raise ScientificAgentRunInputBindingError(
+                "logical BR1 input binding is unavailable",
+                reason_code="INPUT_BINDING_IMMUTABLE",
+            )
+        path = raw_path.resolve()
+        if not path.is_relative_to(run_dir.resolve()) or not path.is_file():
+            raise ScientificAgentRunInputBindingError(
+                "logical BR1 input binding is unavailable",
+                reason_code="INPUT_BINDING_IMMUTABLE",
+            )
+        binding, _binding_file_digest = _read_json(path, label="input binding")
+        claimed = binding.get("binding_digest")
+        material = dict(binding)
+        material.pop("binding_digest", None)
+        if binding.get("schema_version") != INPUT_BINDING_SCHEMA or claimed != digest_json(material):
+            raise ScientificAgentRunInputBindingError(
+                "logical BR1 input binding digest is invalid",
+                reason_code="INPUT_BINDING_IMMUTABLE",
+            )
+        if binding.get("project_id") != project_id or binding.get("run_id") != run_id:
+            raise ScientificAgentRunInputBindingError(
+                "logical BR1 input binding scope is invalid",
+                reason_code="INPUT_BINDING_IMMUTABLE",
+            )
+        return binding
 
     @staticmethod
     def _verify_freeze_package(
@@ -253,8 +521,14 @@ class ScientificAgentRunInputBindingService:
         project = _safe_id(project_id, field="project_id")
         run = _safe_id(run_id, field="run_id")
         bundle = _safe_id(input_bundle_id, field="input_bundle_id")
+        existing_binding = self._read_existing_binding(project_id=project, run_id=run)
+        if existing_binding is not None and existing_binding.get("input_bundle_id") != bundle:
+            raise ScientificAgentRunInputBindingError(
+                "an immutable BR1 input binding already exists for this run",
+                reason_code="INPUT_BINDING_IMMUTABLE",
+            )
         bundle_dir = self._bundle_dir(project, bundle)
-        package, payloads, digests = self._verify_freeze_package(
+        package, payloads, digests = self._verify_bundle(
             bundle_dir=bundle_dir,
             project_id=project,
             bundle_id=bundle,
@@ -348,9 +622,53 @@ class ScientificAgentRunInputBindingService:
             "idempotent": not bool(missing),
         }
 
+    def bind_eligible(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        input_bundle_id: str = "",
+    ) -> dict[str, Any]:
+        """Bind an explicit logical ID or the sole eligible server-owned bundle."""
+
+        project = _safe_id(project_id, field="project_id")
+        run = _safe_id(run_id, field="run_id")
+        requested = str(input_bundle_id or "").strip()
+        if requested:
+            return self.bind(
+                project_id=project,
+                run_id=run,
+                input_bundle_id=requested,
+            )
+        existing = self._read_existing_binding(project_id=project, run_id=run)
+        if existing is not None:
+            return self.bind(
+                project_id=project,
+                run_id=run,
+                input_bundle_id=str(existing["input_bundle_id"]),
+            )
+        eligible = self.list_eligible_bundle_ids(project_id=project)
+        if not eligible:
+            raise ScientificAgentRunInputBindingError(
+                "no owner-approved BR1 input bundle is available",
+                reason_code="BR1_INPUT_BUNDLE_REQUIRED",
+            )
+        if len(eligible) > 1:
+            raise ScientificAgentRunInputBindingError(
+                "more than one owner-approved BR1 input bundle is available",
+                reason_code="BR1_INPUT_BUNDLE_SELECTION_REQUIRED",
+                bundle_ids=tuple(eligible),
+            )
+        return self.bind(
+            project_id=project,
+            run_id=run,
+            input_bundle_id=eligible[0],
+        )
+
 
 __all__ = [
     "INPUT_BINDING_SCHEMA",
     "ScientificAgentRunInputBindingError",
     "ScientificAgentRunInputBindingService",
+    "resolve_server_br1_deployment_identity",
 ]

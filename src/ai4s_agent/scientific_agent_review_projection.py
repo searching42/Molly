@@ -49,8 +49,6 @@ _PROJECTION_KEYS = frozenset(
         "excluded_count",
         "duplicate_count",
         "conflict_count",
-        "retained_count",
-        "unresolved_count",
         "counts",
         "reason_code_counts",
         "confirmation_required",
@@ -123,8 +121,6 @@ def validate_review_projection(value: Mapping[str, Any]) -> dict[str, Any]:
         "excluded",
         "duplicates",
         "conflicts",
-        "retained",
-        "unresolved",
     }
     if set(counts) != expected_count_keys:
         raise ScientificAgentReviewProjectionError("review projection count roster is invalid")
@@ -153,7 +149,7 @@ def project_verified_review_snapshot(
         raise ScientificAgentReviewProjectionError("review snapshot row roster is unavailable")
 
     reason_counts: Counter[str] = Counter()
-    included = excluded = duplicate = conflict = unresolved = 0
+    included = excluded = duplicate = conflict = 0
     for item in rows:
         if not isinstance(item, Mapping):
             raise ScientificAgentReviewProjectionError("review snapshot row roster is invalid")
@@ -178,8 +174,6 @@ def project_verified_review_snapshot(
             duplicate += 1
         if any("conflict" in reason for reason in clean_reasons):
             conflict += 1
-        if clean_reasons:
-            unresolved += 1
 
     scope = review.get("confirmation_scope")
     if not isinstance(scope, Mapping):
@@ -197,8 +191,6 @@ def project_verified_review_snapshot(
         "excluded": excluded,
         "duplicates": duplicate,
         "conflicts": conflict,
-        "retained": included,
-        "unresolved": unresolved,
     }
     projection = {
         "schema_version": REVIEW_PROJECTION_SCHEMA,
@@ -223,8 +215,6 @@ def project_verified_review_snapshot(
         "excluded_count": excluded,
         "duplicate_count": duplicate,
         "conflict_count": conflict,
-        "retained_count": included,
-        "unresolved_count": unresolved,
         "counts": counts,
         "reason_code_counts": dict(sorted(reason_counts.items())),
         "confirmation_required": True,

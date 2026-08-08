@@ -434,7 +434,12 @@ BR1_REAL_TOOL_EXECUTION_PROFILE_IDS = frozenset(
 
 
 def server_owned_br1_resource_defaults(profile_id: str) -> dict[str, int]:
-    """Return the bounded defaults for the v3 BR1 logical profiles only."""
+    """Return the BR1 profile maximum envelope, never a request default.
+
+    Actual remote request dimensions come from the owner-authored resource
+    authority policy.  This helper remains for profile capability snapshots and
+    compatibility with existing callers that need the upper bound.
+    """
 
     clean = str(profile_id or "").strip()
     if clean not in {
@@ -934,7 +939,7 @@ class ResourceProfileStore:
                     else {}
                 )
                 if configured_defaults:
-                    profile_capability_material["configured_resource_defaults"] = (
+                    profile_capability_material["resource_limit_envelope"] = (
                         configured_defaults
                     )
                 profile_capability_digest = _sha256(

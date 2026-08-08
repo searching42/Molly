@@ -30,6 +30,12 @@ from ai4s_agent.execution_agent import (
     ExecutionAgentStale,
 )
 from ai4s_agent.llm_provider import LLMProvider
+from ai4s_agent.remote_resource_authority import (
+    RemoteResourceAuthorityDenied,
+    RemoteResourceAuthorityError,
+    RemoteResourceAuthorityStale,
+    RemoteResourceAuthorityUnavailable,
+)
 from ai4s_agent.scientific_agent_authorization import (
     ApproveAndStartResult,
     ScientificAgentAuthorizationConflict,
@@ -69,6 +75,7 @@ from ai4s_agent.schemas import (
     AgentHarnessGateApprovalRequest,
     AgentHarnessRemoteApprovalRequest,
     AgentPlanAuthorizationRequest,
+    AgentRemoteResourceAuthorityRequest,
     AgentToolCallApplicationOutcome,
     AgentToolCallApplicationRequest,
     AgentToolCallProposalRequest,
@@ -169,6 +176,7 @@ def _safe_message(role: str, content: str) -> dict[str, str]:
 def _static_status_message(status: str, *, task_id: str = "") -> str:
     messages = {
         "needs_clarification": "还需要一些信息来确定目标和约束。",
+        "needs_input": "还需要选择一个已获准的 BR1 输入版本。",
         "approval_required": "计划已生成，等待确认。",
         "authorized": "计划已授权。",
         "running": "运行已启动。",
@@ -269,6 +277,7 @@ class ScientificAgentConversationSessionService:
         controller: ScientificAgentHarnessController,
         execution_agent: ExecutionAgentService,
         input_binding_service: ScientificAgentRunInputBindingService | None = None,
+        resource_authority_service: Any | None = None,
     ) -> None:
         self.projects = projects
         self.conversations = conversations
@@ -278,6 +287,7 @@ class ScientificAgentConversationSessionService:
         self.controller = controller
         self.execution_agent = execution_agent
         self.input_binding_service = input_binding_service
+        self.resource_authority_service = resource_authority_service
         self.projector = ScientificAgentConversationSessionEventProjector(service=self)
 
     def _root(self, project_id: str, conversation_id: str, *, create: bool) -> Path:
@@ -314,6 +324,8 @@ class ScientificAgentConversationSessionService:
             "message": "",
             "revision": 0,
             "conversation_digest": "",
+            "input_bundle_id": "",
+            "input_binding_digest": "",
             "proposal_id": "",
             "proposal_digest": "",
             "authorization_id": "",
@@ -329,6 +341,8 @@ class ScientificAgentConversationSessionService:
             "snapshot_id": "",
             "snapshot_digest": "",
             "remote_request_sha256": "",
+            "resource_authority_status": "",
+            "resource_authority_reason_codes": [],
             "review_projection": {},
             "updated_at": "",
             "executable": False,
@@ -470,6 +484,8 @@ class ScientificAgentConversationSessionService:
                 "reason_code",
                 "message",
                 "revision",
+                "input_bundle_id",
+                "input_binding_digest",
                 "proposal_id",
                 "proposal_digest",
                 "authorization_id",
@@ -482,6 +498,8 @@ class ScientificAgentConversationSessionService:
                 "snapshot_id",
                 "snapshot_digest",
                 "remote_request_sha256",
+                "resource_authority_status",
+                "resource_authority_reason_codes",
                 "review_projection",
                 "updated_at",
                 "executable",
@@ -502,6 +520,8 @@ class ScientificAgentConversationSessionService:
                 "message",
                 "revision",
                 "conversation_digest",
+                "input_bundle_id",
+                "input_binding_digest",
                 "proposal_id",
                 "proposal_digest",
                 "authorization_id",
@@ -517,6 +537,8 @@ class ScientificAgentConversationSessionService:
                 "snapshot_id",
                 "snapshot_digest",
                 "remote_request_sha256",
+                "resource_authority_status",
+                "resource_authority_reason_codes",
                 "review_projection",
                 "updated_at",
                 "executable",
@@ -542,6 +564,13 @@ class ScientificAgentConversationSessionService:
                 raise ScientificAgentConversationSessionError(
                     "conversation review projection is invalid"
                 ) from exc
+        if not isinstance(result.get("resource_authority_reason_codes"), list) or any(
+            not isinstance(item, str) or re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None
+            for item in result["resource_authority_reason_codes"]
+        ):
+            raise ScientificAgentConversationSessionError(
+                "conversation resource authority projection is invalid"
+            )
         if result["project_id"] != project_id or result["conversation_id"] != conversation_id:
             raise ScientificAgentConversationSessionError("conversation session identity mismatch")
         return result
@@ -678,6 +707,142 @@ class ScientificAgentConversationSessionService:
             project_id=project_id,
             run_id=run_id,
             input_bundle_id=input_bundle_id,
+        )
+
+    def _resolve_input_bundle_for_planning(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        state: dict[str, Any],
+        requested_bundle_id: str,
+        last_user: str,
+    ) -> dict[str, Any] | None:
+        """Resolve BR1 inputs on the server boundary before LLM planning."""
+
+        service = self.input_binding_service
+        if service is None or not service.require_reinvent4_template:
+            return None
+        requested = str(requested_bundle_id or state.get("input_bundle_id") or "").strip()
+        if not requested:
+            candidate = str(last_user or "").strip()
+            if candidate in service.list_eligible_bundle_ids(project_id=project_id):
+                requested = candidate
+        return service.bind_eligible(
+            project_id=project_id,
+            run_id=run_id,
+            input_bundle_id=requested,
+        )
+
+    @staticmethod
+    def _resource_authority_reason_codes(exc: Exception) -> tuple[str, ...]:
+        if isinstance(exc, RemoteResourceAuthorityDenied):
+            values = list(exc.decision.reason_codes)
+        elif isinstance(exc, RemoteResourceAuthorityUnavailable):
+            values = [exc.reason_code]
+        elif isinstance(exc, RemoteResourceAuthorityStale):
+            values = ["REMOTE_RESOURCE_AUTHORITY_STALE"]
+        else:
+            values = ["REMOTE_RESOURCE_AUTHORITY_UNAVAILABLE"]
+        safe = sorted(
+            {
+                code
+                for code in (str(item).strip().upper() for item in values)
+                if re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", code)
+            }
+        )
+        if len(safe) > 1:
+            safe = [
+                code
+                for code in safe
+                if code
+                not in {
+                    "REMOTE_RESOURCE_AUTHORITY_CONFIGURED",
+                    "REMOTE_RESOURCE_AUTHORITY_NOT_REQUIRED",
+                }
+            ]
+        return tuple(safe or ["REMOTE_RESOURCE_AUTHORITY_UNAVAILABLE"])
+
+    def _ensure_remote_resource_authority(
+        self,
+        *,
+        project_id: str,
+        publication: ScientificAgentPlanPublication,
+    ) -> tuple[bool, tuple[str, ...]]:
+        remote_dispatches = [
+            item
+            for item in publication.proposal.dispatch_intents
+            if item.execution_route == "remote_execution_service"
+        ]
+        if not remote_dispatches:
+            return True, ()
+        if self.resource_authority_service is None:
+            return False, ("REMOTE_RESOURCE_AUTHORITY_UNAVAILABLE",)
+        request = AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=publication.proposal.proposal_digest,
+            client_request_id=_request_id(
+                "conversation-resource-authority",
+                project_id,
+                publication.proposal.proposal_id,
+                publication.proposal.proposal_digest,
+            ),
+        )
+        try:
+            self.resource_authority_service.publish(
+                project_id=project_id,
+                proposal_id=publication.proposal.proposal_id,
+                request=request,
+            )
+        except RemoteResourceAuthorityDenied as exc:
+            return False, self._resource_authority_reason_codes(exc)
+        except (
+            RemoteResourceAuthorityUnavailable,
+            RemoteResourceAuthorityStale,
+            RemoteResourceAuthorityError,
+            ScientificAgentPlanSourceChanged,
+            FileNotFoundError,
+            ValueError,
+        ) as exc:
+            return False, self._resource_authority_reason_codes(exc)
+        return True, ()
+
+    def _resource_authority_required_result(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        decision: dict[str, Any],
+        state: dict[str, Any],
+        publication: ScientificAgentPlanPublication,
+        reason_codes: tuple[str, ...],
+        llm_used: bool,
+        updates: dict[str, Any] | None = None,
+    ) -> ScientificAgentConversationTurnResult:
+        message = (
+            "远程资源 authority 尚未闭合："
+            + "、".join(reason_codes)
+            + "。请先由服务器配置有效的资源 authority，再确认执行。"
+        )
+        state = self._transition(
+            project_id=project_id,
+            conversation_id=conversation_id,
+            status="plan_review",
+            reason_code="REMOTE_RESOURCE_AUTHORITY_REQUIRED",
+            updates={
+                **(updates or {}),
+                "resource_authority_status": "required",
+                "resource_authority_reason_codes": list(reason_codes),
+            },
+            event_type="remote_resource_authority.required",
+            message=message,
+        )
+        return self._plan_result(
+            decision=decision,
+            state=state,
+            publication=publication,
+            assistant_message=message,
+            assistant_source="scientific_agent_session",
+            llm_used=llm_used,
         )
 
     def _messages(
@@ -856,9 +1021,10 @@ class ScientificAgentConversationSessionService:
             project_id=clean_project,
             conversation_id=clean_conversation,
         )
+        input_binding: dict[str, Any] | None = None
         if input_bundle_id:
             try:
-                self.bind_input_bundle(
+                input_binding = self.bind_input_bundle(
                     project_id=clean_project,
                     run_id=clean_run,
                     input_bundle_id=input_bundle_id,
@@ -999,6 +1165,48 @@ class ScientificAgentConversationSessionService:
                 llm_used=provider is not None,
             )
 
+        try:
+            input_binding = self._resolve_input_bundle_for_planning(
+                project_id=clean_project,
+                run_id=clean_run,
+                state=state,
+                requested_bundle_id=input_bundle_id,
+                last_user=last_user,
+            ) or input_binding
+        except ScientificAgentRunInputBindingError as exc:
+            bundle_ids = tuple(exc.bundle_ids)
+            if bundle_ids:
+                message = (
+                    "检测到多个已批准的 BR1 输入版本，请在对话中选择一个："
+                    + "、".join(bundle_ids)
+                    + "。"
+                )
+            elif exc.reason_code == "BR1_INPUT_BUNDLE_REQUIRED":
+                message = "当前没有可用于 BR1 runtime 的 owner-approved 输入版本。"
+            else:
+                message = "当前 BR1 输入版本不可用或已过期，请选择有效的 owner-approved 输入版本。"
+            state = self._transition(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+                status="needs_input",
+                reason_code=exc.reason_code,
+                updates={
+                    "run_id": clean_run,
+                    "conversation_digest": digest,
+                    "proposal_id": "",
+                    "proposal_digest": "",
+                },
+                event_type="input.binding_required",
+                message=message,
+            )
+            return ScientificAgentConversationTurnResult(
+                decision=decision_payload,
+                assistant_message=message,
+                assistant_source="scientific_agent_session",
+                llm_used=provider is not None,
+                session=self.session_projection(state),
+            )
+
         if provider is None:
             state = self._transition(
                 project_id=clean_project,
@@ -1046,12 +1254,53 @@ class ScientificAgentConversationSessionService:
                 "the scientific Agent could not publish a reviewable plan proposal"
             ) from exc
 
+        resource_authority_ready, resource_authority_reasons = (
+            self._ensure_remote_resource_authority(
+                project_id=clean_project,
+                publication=publication,
+            )
+        )
+        input_updates = (
+            {
+                "input_bundle_id": str(input_binding.get("input_bundle_id") or ""),
+                "input_binding_digest": str(input_binding.get("binding_digest") or ""),
+            }
+            if input_binding is not None
+            else {}
+        )
+        if not resource_authority_ready:
+            return self._resource_authority_required_result(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+                decision=decision_payload,
+                state=state,
+                publication=publication,
+                reason_codes=resource_authority_reasons,
+                llm_used=True,
+                updates={
+                    **input_updates,
+                    "run_id": clean_run,
+                    "conversation_digest": digest,
+                    "proposal_id": proposal.proposal_id,
+                    "proposal_digest": proposal.proposal_digest,
+                    "authorization_id": "",
+                    "authorization_digest": "",
+                    "start_intent_id": "",
+                    "start_intent_digest": "",
+                    "controller_execution_id": "",
+                    "controller_execution_digest": "",
+                    "controller_status": "",
+                    "current_task_id": "",
+                },
+            )
+
         state = self._transition(
             project_id=clean_project,
             conversation_id=clean_conversation,
             status="approval_required",
             reason_code="PLAN_APPROVAL_REQUIRED",
             updates={
+                **input_updates,
                 "run_id": clean_run,
                 "conversation_digest": digest,
                 "proposal_id": proposal.proposal_id,
@@ -1064,6 +1313,8 @@ class ScientificAgentConversationSessionService:
                 "controller_execution_digest": "",
                 "controller_status": "",
                 "current_task_id": "",
+                "resource_authority_status": "configured",
+                "resource_authority_reason_codes": [],
             },
             event_type="plan.generated",
             event_data={
@@ -1310,6 +1561,11 @@ class ScientificAgentConversationSessionService:
                 "snapshot_id": "",
                 "snapshot_digest": "",
                 "remote_request_sha256": "",
+                **(
+                    {"review_projection": {}}
+                    if is_dataset
+                    else {}
+                ),
             },
             event_type="authority.approved",
             event_data={
@@ -1361,6 +1617,22 @@ class ScientificAgentConversationSessionService:
             )
         publication = self._read_pending_publication(state, project_id)
         proposal = publication.proposal
+        resource_authority_ready, resource_authority_reasons = (
+            self._ensure_remote_resource_authority(
+                project_id=project_id,
+                publication=publication,
+            )
+        )
+        if not resource_authority_ready:
+            return self._resource_authority_required_result(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                decision=decision,
+                state=state,
+                publication=publication,
+                reason_codes=resource_authority_reasons,
+                llm_used=provider is not None,
+            )
         approval_request_id = _request_id(
             "conversation-approval",
             project_id,
@@ -1443,6 +1715,8 @@ class ScientificAgentConversationSessionService:
                 "controller_execution_digest": controller_result.execution.execution_digest,
                 "controller_status": controller_result.inspection.status.value,
                 "current_task_id": controller_result.inspection.current_task_id,
+                "resource_authority_status": "configured",
+                "resource_authority_reason_codes": [],
             },
             event_type="run.started",
             event_data={

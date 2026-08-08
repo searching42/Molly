@@ -79,6 +79,7 @@ def test_br1_input_binding_uses_bundle_id_and_rejects_replacement(
     tmp_path: Path,
 ) -> None:
     frozen, _result, _report, _summary = _candidate(tmp_path)
+    _write_owner_approval(frozen, owner_id="br1-owner")
     storage = ProjectStorage(workspace_dir=tmp_path / "workspace")
     storage.create_project("project-1", name="Project", created_at="2026-08-08T00:00:00Z")
     bundle_dir = (
@@ -91,7 +92,11 @@ def test_br1_input_binding_uses_bundle_id_and_rejects_replacement(
         encoding="utf-8",
     )
 
-    service = ScientificAgentRunInputBindingService(storage=storage)
+    service = ScientificAgentRunInputBindingService(
+        storage=storage,
+        trusted_owner_ids={"br1-owner"},
+        deployment_identity=lambda: ("a" * 40, "sha256:" + "b" * 64),
+    )
     bound = service.bind(
         project_id="project-1",
         run_id="conversation-run",
@@ -128,6 +133,44 @@ def test_br1_input_binding_uses_bundle_id_and_rejects_replacement(
             run_id="conversation-run-3",
             input_bundle_id="../outside",
         )
+
+
+def test_br1_input_binding_rejects_freeze_only_and_stale_deployment(
+    tmp_path: Path,
+) -> None:
+    frozen, _result, _report, _summary = _candidate(tmp_path / "candidate")
+    storage = ProjectStorage(workspace_dir=tmp_path / "workspace")
+    storage.create_project("project-1", name="Project", created_at="2026-08-08T00:00:00Z")
+    bundles = storage.project_dir("project-1") / "br1-input-bundles"
+    bundles.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(frozen.package_dir, bundles / "bundle-waiting")
+    service = ScientificAgentRunInputBindingService(
+        storage=storage,
+        trusted_owner_ids={"br1-owner"},
+        deployment_identity=lambda: ("a" * 40, "sha256:" + "b" * 64),
+    )
+    with pytest.raises(ScientificAgentRunInputBindingError) as waiting:
+        service.bind(
+            project_id="project-1",
+            run_id="run-waiting",
+            input_bundle_id="bundle-waiting",
+        )
+    assert waiting.value.reason_code == "BR1_OWNER_APPROVAL_REQUIRED"
+
+    _write_owner_approval(frozen, owner_id="br1-owner")
+    shutil.copytree(frozen.package_dir, bundles / "bundle-stale")
+    stale = ScientificAgentRunInputBindingService(
+        storage=storage,
+        trusted_owner_ids={"br1-owner"},
+        deployment_identity=lambda: ("c" * 40, "sha256:" + "b" * 64),
+    )
+    with pytest.raises(ScientificAgentRunInputBindingError) as stale_error:
+        stale.bind(
+            project_id="project-1",
+            run_id="run-stale",
+            input_bundle_id="bundle-stale",
+        )
+    assert stale_error.value.reason_code == "BR1_FREEZE_STALE"
 
 
 def test_review_projection_is_aggregate_only_and_rejects_private_fields() -> None:
@@ -171,8 +214,6 @@ def test_review_projection_is_aggregate_only_and_rejects_private_fields() -> Non
         "excluded": 2,
         "duplicates": 1,
         "conflicts": 0,
-        "retained": 1,
-        "unresolved": 2,
     }
     serialized = json.dumps(projection, ensure_ascii=False)
     assert "row_id" not in serialized
@@ -182,7 +223,35 @@ def test_review_projection_is_aggregate_only_and_rejects_private_fields() -> Non
         validate_review_projection({**projection, "raw_rows": []})
 
 
-def _valid_frozen_br1_candidate(tmp_path: Path):
+def _write_owner_approval(frozen, *, owner_id: str) -> None:
+    proposal = json.loads(frozen.proposal_path.read_text(encoding="utf-8"))
+    approval = {
+        "schema_version": "br1_owner_acceptance_approval.v1",
+        "decision_status": "APPROVED",
+        "decision": "ACCEPT_EXACT_PROPOSAL",
+        "owner_id": owner_id,
+        "decided_at": "2026-08-08T00:01:00Z",
+        "proposal_digest": proposal["proposal_digest"],
+        "repository_commit": proposal["repository_commit"],
+        "raw_dataset_digest": proposal["raw_dataset_digest"],
+        "source_dataset_manifest_digest": proposal["source_dataset_manifest_digest"],
+        "mapping_policy_digest": proposal["mapping_policy_digest"],
+        "report_digest": proposal["report_digest"],
+        "summary_digest": proposal["summary_digest"],
+        "freeze_package_id": proposal["freeze_package_id"],
+        "freeze_package_digest": proposal["freeze_package_digest"],
+    }
+    (frozen.package_dir / "owner_acceptance_approval.json").write_bytes(
+        canonical_json_bytes(approval) + b"\n"
+    )
+
+
+def _valid_frozen_br1_candidate(
+    tmp_path: Path,
+    *,
+    repository_commit: str = "a" * 40,
+    worker_implementation_digest: str = "sha256:" + "b" * 64,
+):
     """Build a BR1 fixture whose source evidence is valid for review v2."""
     inputs = tmp_path / "inputs"
     rows = []
@@ -220,7 +289,7 @@ def _valid_frozen_br1_candidate(tmp_path: Path):
             "observed_canonical_provider_input_digest"
         ],
     }
-    return freeze_br1_acceptance_candidate(
+    frozen = freeze_br1_acceptance_candidate(
         raw_dataset=raw_path,
         source_manifest=inputs / "source.json",
         mapping_policy=inputs / "mapping.json",
@@ -232,14 +301,16 @@ def _valid_frozen_br1_candidate(tmp_path: Path):
         output_dir=tmp_path / "frozen",
         package_id="br1-freeze-runtime-fixture",
         proposal_id="br1-runtime-proposal-fixture",
-        repository_commit="a" * 40,
-        worker_implementation_digest="sha256:" + "b" * 64,
+        repository_commit=repository_commit,
+        worker_implementation_digest=worker_implementation_digest,
         expected_provider_version="0.1.5",
         execution_profile_id="unimol-train-br1-v2",
         execution_profile_digest=result.report["execution_profile_digest"],
         created_at="2026-08-08T00:00:00Z",
         expected_stable_identities=expected,
     )
+    _write_owner_approval(frozen, owner_id="br1-owner")
+    return frozen
 
 
 _BR1_TASK_IDS = [
@@ -608,8 +679,13 @@ def _configure_br1_runtime(app) -> _FakeBR1Transport:
         "predict_private_unimol_v1": ("model_inference", "unimol-predict-br1-v1"),
     }
     entries = []
+    configured_by_profile = {
+        "unimol-train-br1-v2": {"gpu_count": 1, "cpu_threads": 8, "walltime_sec": 2 * 3600},
+        "reinvent4-br1-v2": {"gpu_count": 0, "cpu_threads": 1, "walltime_sec": 3600},
+        "unimol-predict-br1-v1": {"gpu_count": 1, "cpu_threads": 4, "walltime_sec": 2 * 3600},
+    }
     for index, (task_id, (task_type, profile_id)) in enumerate(profile_by_task.items(), start=1):
-        defaults = server_owned_br1_resource_defaults(profile_id)
+        configured = configured_by_profile[profile_id]
         entries.append(
             RemoteResourceAuthorityPolicyEntry(
                 policy_id=f"br1-fake-policy-{index}",
@@ -618,11 +694,11 @@ def _configure_br1_runtime(app) -> _FakeBR1Transport:
                 execution_profile_id=profile_id,
                 remote_task_type=task_type,
                 allowed_task_ids=[task_id],
-                configured_resources=AgentConfiguredRemoteResources(**defaults),
+                configured_resources=AgentConfiguredRemoteResources(**configured),
                 budget_limits=AgentRemoteResourceBudgetLimits(
-                    max_runtime_sec=defaults["walltime_sec"],
+                    max_runtime_sec=configured["walltime_sec"],
                     max_gpu_hours=(
-                        defaults["gpu_count"] * defaults["walltime_sec"] / 3600
+                        configured["gpu_count"] * configured["walltime_sec"] / 3600
                     ),
                 ),
             )
@@ -646,6 +722,8 @@ def test_br1_conversation_front_door_drives_synthetic_remote_chain(
         scientific_task_registry=private_structured_dataset_real_tool_task_registry_v3(),
     )
     app.config["AI4S_AGENT_AUTHORIZATION_OWNER"] = "br1-owner"
+    app.config["AI4S_AGENT_REPOSITORY_COMMIT"] = "a" * 40
+    app.config["AI4S_AGENT_WORKER_IMPLEMENTATION_DIGEST"] = "sha256:" + "b" * 64
     transport = _configure_br1_runtime(app)
     client = app.test_client()
 
@@ -672,13 +750,6 @@ def test_br1_conversation_front_door_drives_synthetic_remote_chain(
         "/api/projects/br1-project/conversations/"
         "br1-conversation/agent-session"
     )
-    bound = client.post(
-        endpoint + "/input-bindings",
-        json={"run_id": "br1-run", "input_bundle_id": "bundle-current"},
-    )
-    assert bound.status_code == 200, bound.get_json()
-    assert "/" not in json.dumps(bound.get_json()["binding"])
-
     assert client.post(
         "/api/projects/br1-project/conversations/br1-conversation/messages",
         json={
@@ -694,7 +765,20 @@ def test_br1_conversation_front_door_drives_synthetic_remote_chain(
     assert planned.status_code == 200, planned.get_json()
     planned_body = planned.get_json()
     assert planned_body["session"]["status"] == "approval_required"
+    assert planned_body["session"]["input_bundle_id"] == "bundle-current"
+    assert planned_body["session"]["resource_authority_status"] == "configured"
     assert [item["task_id"] for item in planned_body["plan_summary"]["tasks"]] == _BR1_TASK_IDS
+    remote_resources = {
+        item["task_id"]: item["requested_resources"]
+        for item in planned_body["plan_summary"]["dispatch_intents"]
+        if item["execution_route"] == "remote_execution_service"
+    }
+    assert remote_resources["train_private_unimol_v1"] == {
+        "status": "configured",
+        "gpu_count": 1,
+        "cpu_threads": 8,
+        "walltime_sec": 2 * 3600,
+    }
     identity = {
         key: planned_body["session"][key]
         for key in (
@@ -704,15 +788,6 @@ def test_br1_conversation_front_door_drives_synthetic_remote_chain(
         )
     }
     proposal_id = planned_body["proposal"]["proposal_id"]
-    resource_authority = client.post(
-        f"/api/projects/br1-project/agent-plan-proposals/{proposal_id}/remote-resource-authorities",
-        json={
-            "expected_proposal_digest": planned_body["proposal"]["proposal_digest"],
-            "client_request_id": "br1-resource-authority",
-        },
-    )
-    assert resource_authority.status_code == 201, resource_authority.get_json()
-    assert resource_authority.get_json()["outcome"] == "CONFIGURED"
 
     def user_turn(content: str, client_message_id: str) -> dict[str, Any]:
         appended = client.post(
