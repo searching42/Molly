@@ -275,6 +275,31 @@ def test_conversation_without_configured_llm_is_explicitly_deterministic(
     assert response.json["assistant_message"] == response.json["decision"]["summary"]
 
 
+def test_preference_only_llm_settings_keep_conversation_deterministic(
+    tmp_path: Path,
+) -> None:
+    client = _app(tmp_path).test_client()
+    enabled = client.patch(
+        "/api/settings/llm",
+        json={"external_llm_data_sharing_enabled": True},
+    )
+    assert enabled.status_code == 200
+    assert enabled.json["config"] is None
+
+    response = client.post(
+        "/api/agent/conversation/next-turn",
+        json={
+            "project_id": "proj-preference-only",
+            "run_id": "run-preference-only",
+            "messages": [{"role": "user", "content": "Train OLED PLQY."}],
+        },
+    )
+
+    assert response.status_code == 200, response.get_json()
+    assert response.json["llm_used"] is False
+    assert response.json["assistant_source"] == "deterministic_rules"
+
+
 @pytest.mark.pr_fast
 def test_llm_conversation_and_probe_failures_are_redacted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

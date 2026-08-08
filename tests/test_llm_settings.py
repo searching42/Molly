@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 
 from ai4s_agent.app import create_app
-from ai4s_agent.llm_settings import LLMSettingsStore
+from ai4s_agent.llm_settings import (
+    LLM_SETTINGS_TRULY_UNCONFIGURED,
+    LLMSettingsStore,
+)
 
 
 class PasswordDeleteError(Exception):
@@ -106,6 +109,19 @@ def test_external_llm_data_sharing_preference_is_persistent_user_state(
     )
     assert disabled.status_code == 200
     assert disabled.json["external_llm_data_sharing_enabled"] is False
+
+
+def test_preference_only_document_is_still_truly_unconfigured(tmp_path: Path) -> None:
+    store = LLMSettingsStore(
+        workspace_dir=tmp_path / "workspace",
+        config_dir=tmp_path / "config",
+    )
+
+    store.patch({"external_llm_data_sharing_enabled": True})
+
+    status, config = store.resolve()
+    assert status == LLM_SETTINGS_TRULY_UNCONFIGURED
+    assert config is None
 
 
 def test_existing_profile_migration_defaults_external_sharing_to_false(

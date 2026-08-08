@@ -57,14 +57,14 @@ class LLMSettingsStore:
     def resolve(self) -> tuple[str, LLMProviderConfig | None]:
         """Resolve the active profile without conflating absence with failure."""
 
-        profile = self._read_profile()
-        if profile is None:
-            status = (
-                LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE
-                if self.path.exists() or self.legacy_path.exists()
-                else LLM_SETTINGS_TRULY_UNCONFIGURED
-            )
-            return status, None
+        document = self._read_document()
+        raw_profile = document.get("active_profile")
+        if raw_profile is None:
+            return LLM_SETTINGS_TRULY_UNCONFIGURED, None
+        try:
+            profile = self._validated_profile(raw_profile)
+        except (TypeError, ValueError):
+            return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
         resolved = dict(profile)
         resolved_secret = self._resolve_secret(profile)
         if not resolved_secret:

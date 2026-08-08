@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import ai4s_agent.scientific_agent_conversation as session_module
 from ai4s_agent.app import create_app
 from ai4s_agent.schemas import (
+    AgentHarnessControllerAction,
     AgentExecutionPlanLLMResponse,
     AgentHarnessControllerActionBoundaryClass,
+    AgentHarnessControllerStatus,
+    AgentToolCallApplicationOutcome,
+    _agent_digest,
 )
+from tests.execution_agent_test_support import CountingStubProvider
 
 
 pytestmark = pytest.mark.integration
@@ -67,6 +73,47 @@ def _stub_provider() -> dict[str, object]:
         "model": "stub",
         "stub_response": _plan_response(),
     }
+
+
+def _start_waiting_gate_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    app, client = _create_conversation(tmp_path)
+    endpoint = "/api/projects/conversation-project/conversations/conversation-one/agent-session"
+    first = client.post(
+        endpoint + "/turn",
+        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
+    )
+    assert first.status_code == 200, first.get_json()
+    service = app.extensions["scientific_agent_conversation_session_service"]
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.USER_GATE_APPROVAL,
+    )
+    appended = client.post(
+        "/api/projects/conversation-project/conversations/conversation-one/messages",
+        json={
+            "role": "user",
+            "content": "确认执行",
+            "client_message_id": "user-message-auto-progress-boundary",
+        },
+    )
+    assert appended.status_code == 201
+    approved = client.post(
+        endpoint + "/turn",
+        json={"run_id": "conversation-run", "llm_provider": _stub_provider()},
+    )
+    assert approved.status_code == 200, approved.get_json()
+    body = approved.get_json()
+    assert body["session"]["status"] == "waiting_gate"
+    state = service.read_session(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+    )
+    controller_result = service.controller.get(
+        project_id="conversation-project",
+        controller_execution_id=state["controller_execution_id"],
+    )
+    return service, state, controller_result
 
 
 def test_conversation_turn_publishes_real_review_only_scientific_proposal_and_sse(
@@ -344,6 +391,102 @@ def test_plan_approval_does_not_auto_approve_a_later_gate(
     assert body["session"]["status"] == "waiting_gate"
     assert body["session"]["reason_code"] == "USER_GATE_APPROVAL_REQUIRED"
     assert execution_agent_calls == []
+
+
+def test_execution_agent_pause_stops_the_outer_auto_progress_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, state, controller_result = _start_waiting_gate_session(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+    )
+    provider = CountingStubProvider(
+        response={
+            "selected_tool_id": "agent.pause_current.v1",
+            "decision_summary": "Pause this bounded turn.",
+        }
+    )
+
+    _controller_result, updated, stop_reason = service._auto_progress(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        state=state,
+        controller_result=controller_result,
+        provider=provider,
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+
+    assert provider.calls == 1
+    assert stop_reason == "paused"
+    assert updated["status"] == "running"
+    assert updated["reason_code"] == "EXECUTION_AGENT_PAUSED"
+    assert updated["controller_execution_id"] == state["controller_execution_id"]
+    assert updated["controller_status"] == controller_result.inspection.status.value
+    assert updated["reason_code"] != "AUTO_PROGRESS_BOUND_EXCEEDED"
+
+
+def test_running_remote_stops_the_outer_auto_progress_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, state, controller_result = _start_waiting_gate_session(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+    )
+    calls = {"create": 0, "apply": 0}
+    proposal = SimpleNamespace(
+        tool_call_proposal_id="tool-call-proposal-remote",
+        tool_call_proposal_digest=_agent_digest({"proposal": "remote"}),
+    )
+    remote_inspection = SimpleNamespace(
+        status=AgentHarnessControllerStatus.RUNNING_REMOTE,
+        next_action=AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
+        current_task_id="remote-training",
+        inspection_digest=_agent_digest({"inspection": "remote"}),
+    )
+    remote_result = SimpleNamespace(
+        execution=controller_result.execution,
+        inspection=remote_inspection,
+        receipt=None,
+    )
+
+    def create_proposal(*_args, **_kwargs):
+        calls["create"] += 1
+        return SimpleNamespace(publication=SimpleNamespace(proposal=proposal))
+
+    def apply_proposal(*_args, **_kwargs):
+        calls["apply"] += 1
+        return SimpleNamespace(
+            application_receipt=SimpleNamespace(
+                outcome=AgentToolCallApplicationOutcome.APPLIED
+            ),
+            controller_result=remote_result,
+        )
+
+    monkeypatch.setattr(service.execution_agent, "create_proposal", create_proposal)
+    monkeypatch.setattr(service.execution_agent, "apply_proposal", apply_proposal)
+
+    _controller_result, updated, stop_reason = service._auto_progress(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        state=state,
+        controller_result=controller_result,
+        provider=object(),
+        provider_binding_digest="sha256:stub-provider",
+    )
+
+    assert calls == {"create": 1, "apply": 1}
+    assert stop_reason == "remote_running"
+    assert updated["status"] == "running"
+    assert updated["reason_code"] == "REMOTE_EXECUTION_RUNNING"
+    assert updated["controller_status"] == "running_remote"
+    assert updated["current_task_id"] == "remote-training"
+    assert updated["reason_code"] != "AUTO_PROGRESS_BOUND_EXCEEDED"
 
 
 @pytest.mark.parametrize(

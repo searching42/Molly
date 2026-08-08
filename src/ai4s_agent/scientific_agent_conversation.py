@@ -56,6 +56,7 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerStatus,
     AgentHarnessControllerStartRequest,
     AgentPlanAuthorizationRequest,
+    AgentToolCallApplicationOutcome,
     AgentToolCallApplicationRequest,
     AgentToolCallProposalRequest,
     _agent_digest,
@@ -1311,6 +1312,47 @@ class ScientificAgentConversationSessionService:
                 project_id=project_id,
                 controller_execution_id=controller_result.execution.controller_execution_id,
             )
+            application_outcome = applied.application_receipt.outcome
+            if application_outcome == AgentToolCallApplicationOutcome.PAUSED:
+                state = self._transition(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    status="running",
+                    reason_code="EXECUTION_AGENT_PAUSED",
+                    updates={
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                    },
+                    event_type="execution.paused",
+                    message="当前有界步骤已暂停，等待下一次 Agent session 更新。",
+                    event_data={
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                        "next_action": controller_result.inspection.next_action.value,
+                        "phase": "execution_agent",
+                    },
+                )
+                return controller_result, state, "paused"
+            if controller_result.inspection.status == AgentHarnessControllerStatus.RUNNING_REMOTE:
+                state = self._transition(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    status="running",
+                    reason_code="REMOTE_EXECUTION_RUNNING",
+                    updates={
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                    },
+                    event_type="remote.running",
+                    message="远程任务仍在运行，等待下一次状态更新。",
+                    event_data={
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                        "next_action": controller_result.inspection.next_action.value,
+                        "phase": "remote_lifecycle",
+                    },
+                )
+                return controller_result, state, "remote_running"
         state = self._transition(
             project_id=project_id,
             conversation_id=conversation_id,
