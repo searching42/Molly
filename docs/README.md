@@ -3,20 +3,22 @@
 This directory contains durable technical contracts, operator guidance,
 machine-readable schemas, examples, and reviewed evidence summaries.
 
-[`../todo.md`](../todo.md) is the only normative source for roadmap scope,
+[`roadmap.md`](roadmap.md) is the only normative source for public roadmap scope,
 milestone status, priorities, execution order, and decisions. Documents here
 may describe how a capability works or how it is accepted; they do not supersede
-the current state recorded in `todo.md`.
+the current state recorded in `roadmap.md`. Local `todo.md` and `CLAUDE.md` are
+Git-ignored working-context files and are not public documentation authority.
 
 ## Core technical guides
 
 | Area | Entry points |
 |---|---|
+| Repository development | [Development guidance](development-guidance.md), [public roadmap](roadmap.md) |
 | Execution and human gates | [Resume-intent validation](resume-intent-validation-semantics.md), [user-confirmed replan application](user-confirmed-replan-application-semantics.md), [generic confirmation acceptance](generic-run-plan-confirmation-success-acceptance.md) |
 | Session, recovery, publication, and replay | [Bounded discovery session](oled-bounded-discovery-session.md), [bounded controller](oled-bounded-discovery-controller.md), [remote execution lifecycle](stage6b-remote-execution-lifecycle.md) |
 | Literature intake and parsing | [Literature intake](literature-intake.md), [document parsing providers](document-parsing-providers.md), [real PDF ingestion](real-pdf-ingestion.md) |
 | Remote resources | [Local deployment](local_deployment.md), [remote worker setup](remote_worker_setup.md), [resource profiles](stage6a-resource-profiles.md) |
-| Observation and trajectory integrity | [Unified Scientific Agent run inspection](scientific_agent_run_inspection_v1.md), [privacy-safe Harness observability](scientific_agent_observability_v1.md), [Control-plane event projection and SSE](control-plane-event-projection.md), [deterministic trajectory audit metrics](oled-scientific-agent-trajectory-audit-metrics.md), [failure attribution](oled-scientific-agent-failure-attribution.md), and [read-only trajectory inspection](oled-scientific-agent-trajectory-inspection.md); current status remains in `todo.md` under M2/M3/M3.5 |
+| Observation and trajectory integrity | [Unified Scientific Agent run inspection](scientific_agent_run_inspection_v1.md), [privacy-safe Harness observability](scientific_agent_observability_v1.md), [Control-plane event projection and SSE](control-plane-event-projection.md), [deterministic trajectory audit metrics](oled-scientific-agent-trajectory-audit-metrics.md), [failure attribution](oled-scientific-agent-failure-attribution.md), and [read-only trajectory inspection](oled-scientific-agent-trajectory-inspection.md); current status remains in `roadmap.md` under M3/M3.5 |
 | Scientific workflow | [Structured Dataset Canary v1](structured_dataset_canary_v1.md), [Phase 3 to Phase 1 pipeline](phase-3-to-phase-1-pipeline.md), [OLED bounded discovery session](oled-bounded-discovery-session.md), [OLED inverse design](oled-inverse-design.md) |
 | Acceptance and operations | [Private Structured Dataset Canary runbook](private_structured_dataset_canary_runbook.md), [OLED MVP quickstart](oled-mvp-demo-quickstart.md), [queued-canary rollback runbook](queued-canary-operational-rollback-runbook.md), [Uni-Mol compatibility acceptance](manual-real-unimol-acceptance.md) |
 
@@ -60,5 +62,5 @@ their original history for authorized review.
 - Use logical resource IDs and synthetic examples; never publish resolved
   machine paths, credentials, private source material, or raw runtime bundles.
 - Mark historical snapshots as non-normative.
-- Update `todo.md`, not a topic document, when roadmap status or execution order
-  changes.
+- Update `roadmap.md`, not a topic document or ignored local working file, when
+  public roadmap status or execution order changes.
