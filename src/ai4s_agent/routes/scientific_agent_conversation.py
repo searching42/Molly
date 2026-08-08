@@ -261,6 +261,87 @@ def register_scientific_agent_conversation_routes(
                 409,
             )
 
+    @app.post(base + "/tick")
+    def scientific_agent_conversation_tick(project_id: str, conversation_id: str):
+        """Trigger one bounded continuation without making SSE executable."""
+
+        _no_store()
+        try:
+            payload = _json_object()
+            allowed = {"run_id", "llm_provider", "external_llm_approved"}
+            if set(payload).difference(allowed):
+                raise ValueError("conversation session tick contains an unsupported field")
+            session = service.read_session(
+                project_id=project_id,
+                conversation_id=conversation_id,
+            )
+            run_id = str(payload.get("run_id") or session.get("run_id") or "").strip()
+            if not run_id:
+                run_id = f"conversation-{conversation_id}"
+            try:
+                resolution = resolve_llm_provider_payload(
+                    payload,
+                    settings=llm_settings,
+                    providers=llm_providers,
+                )
+            except (LLMProviderError, ValueError) as exc:
+                # Remote observation and adoption are deterministic Controller
+                # authority.  If an LLM is unavailable, still allow a tick to
+                # observe a worker that remains remote-running; the service
+                # will stop safely before any Execution Agent data is sent.
+                if not _approval_provider_fallback_allowed(exc):
+                    raise
+                resolution = resolve_llm_provider_payload(
+                    {"llm_provider": None},
+                    settings=llm_settings,
+                    providers=llm_providers,
+                )
+            with resolution.provider_context as provider:
+                result = service.tick(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    provider=provider,
+                    provider_binding_digest=resolution.provider_binding_digest,
+                )
+            return jsonify({"ok": True, **result.as_dict()})
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "conversation not found"}), 404
+        except LLMProviderError as exc:
+            return _provider_error(exc)
+        except ScientificAgentConversationStaleAuthority:
+            return _fixed_error(
+                "stale_authority",
+                "The current scientific Agent session binding is stale and must be reviewed again.",
+                409,
+            )
+        except ScientificAgentConversationSessionError:
+            return _fixed_error(
+                "session_state_unavailable",
+                "The scientific Agent session is unavailable.",
+                409,
+            )
+        except ValueError as exc:
+            if _provider_boundary_error(exc):
+                return _provider_error(exc)
+            return _fixed_error(
+                "invalid_conversation_session_request",
+                "Invalid conversation session request.",
+                400,
+            )
+        except Exception:
+            app.logger.warning("scientific_agent_conversation_tick_failed")
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error_code": "scientific_agent_session_failed",
+                        "error": "The scientific Agent session could not continue safely.",
+                    }
+                ),
+                409,
+            )
+
     @app.get(base + "/events")
     def stream_scientific_agent_conversation_events(project_id: str, conversation_id: str):
         try:

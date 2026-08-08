@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -75,7 +76,21 @@ def _stub_provider() -> dict[str, object]:
     }
 
 
-def _start_waiting_gate_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def _execution_agent_stub_provider(tool_id: str) -> dict[str, object]:
+    return {
+        "provider": "stub",
+        "model": "stub",
+        "stub_response": {
+            "selected_tool_id": tool_id,
+            "decision_summary": f"Select {tool_id} for this bounded turn.",
+        },
+    }
+
+
+def _start_waiting_gate_session_with_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     app, client = _create_conversation(tmp_path)
     endpoint = "/api/projects/conversation-project/conversations/conversation-one/agent-session"
     first = client.post(
@@ -112,6 +127,14 @@ def _start_waiting_gate_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     controller_result = service.controller.get(
         project_id="conversation-project",
         controller_execution_id=state["controller_execution_id"],
+    )
+    return app, client, service, state, controller_result
+
+
+def _start_waiting_gate_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _app, _client, service, state, controller_result = _start_waiting_gate_session_with_client(
+        tmp_path,
+        monkeypatch,
     )
     return service, state, controller_result
 
@@ -428,6 +451,191 @@ def test_execution_agent_pause_stops_the_outer_auto_progress_loop(
     assert updated["reason_code"] != "AUTO_PROGRESS_BOUND_EXCEEDED"
 
 
+def test_paused_execution_agent_resumes_on_the_next_conversation_turn_without_replanning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, client, service, state, controller_result = _start_waiting_gate_session_with_client(
+        tmp_path,
+        monkeypatch,
+    )
+    endpoint = "/api/projects/conversation-project/conversations/conversation-one/agent-session"
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+    )
+    first_pause = CountingStubProvider(
+        response={
+            "selected_tool_id": "agent.pause_current.v1",
+            "decision_summary": "Pause this bounded turn.",
+        }
+    )
+    _controller_result, paused, stop_reason = service._auto_progress(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        state=state,
+        controller_result=controller_result,
+        provider=first_pause,
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+    assert stop_reason == "paused"
+    assert paused["reason_code"] == "EXECUTION_AGENT_PAUSED"
+
+    plan_calls: list[bool] = []
+    execution_agent_calls: list[bool] = []
+    original_plan = service.plan_service.create_proposal
+    original_execution_agent = service.execution_agent.create_proposal
+
+    def spy_plan(*args, **kwargs):
+        plan_calls.append(True)
+        return original_plan(*args, **kwargs)
+
+    def spy_execution_agent(*args, **kwargs):
+        execution_agent_calls.append(True)
+        return original_execution_agent(*args, **kwargs)
+
+    monkeypatch.setattr(service.plan_service, "create_proposal", spy_plan)
+    monkeypatch.setattr(service.execution_agent, "create_proposal", spy_execution_agent)
+    appended = client.post(
+        "/api/projects/conversation-project/conversations/conversation-one/messages",
+        json={
+            "role": "user",
+            "content": "继续当前有界步骤",
+            "client_message_id": "user-message-resume-paused-agent",
+        },
+    )
+    assert appended.status_code == 201
+
+    assert service.classify_turn(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+    ) == "paused"
+    resumed = client.post(
+        endpoint + "/turn",
+        json={
+            "run_id": "conversation-run",
+            "llm_provider": _execution_agent_stub_provider("agent.pause_current.v1"),
+        },
+    )
+    assert resumed.status_code == 200, resumed.get_json()
+    body = resumed.get_json()
+    assert body["session"]["reason_code"] == "EXECUTION_AGENT_PAUSED"
+    assert body["session"]["status"] == "running"
+    for field in (
+        "proposal_id",
+        "authorization_id",
+        "start_intent_id",
+        "controller_execution_id",
+    ):
+        assert body["session"][field] == paused[field]
+    assert execution_agent_calls == [True]
+    assert plan_calls == []
+
+
+def test_remote_session_tick_refreshes_once_then_adopts_and_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, client, service, state, controller_result = _start_waiting_gate_session_with_client(
+        tmp_path,
+        monkeypatch,
+    )
+    endpoint = "/api/projects/conversation-project/conversations/conversation-one/agent-session"
+    execution = controller_result.execution
+    remote_inspection = SimpleNamespace(
+        status=AgentHarnessControllerStatus.RUNNING_REMOTE,
+        next_action=AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
+        current_task_id="remote-training",
+        inspection_digest=_agent_digest({"inspection": "remote-running"}),
+    )
+    running_result = SimpleNamespace(
+        execution=execution,
+        inspection=remote_inspection,
+        receipt=None,
+    )
+    adopted_inspection = SimpleNamespace(
+        status=AgentHarnessControllerStatus.ACTIVE,
+        next_action=AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS,
+        current_task_id="remote-training",
+        inspection_digest=_agent_digest({"inspection": "remote-succeeded"}),
+    )
+    adopted_result = SimpleNamespace(
+        execution=execution,
+        inspection=adopted_inspection,
+        receipt=None,
+    )
+    terminal_inspection = SimpleNamespace(
+        status=AgentHarnessControllerStatus.SUCCEEDED,
+        next_action=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+        current_task_id="remote-training",
+        inspection_digest=_agent_digest({"inspection": "terminal"}),
+    )
+    terminal_result = SimpleNamespace(
+        execution=execution,
+        inspection=terminal_inspection,
+        receipt=None,
+    )
+    remote_state = service._transition(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        status="running",
+        reason_code="REMOTE_EXECUTION_RUNNING",
+        updates={
+            "controller_status": AgentHarnessControllerStatus.RUNNING_REMOTE.value,
+            "current_task_id": "remote-training",
+        },
+        event_type="test.remote.running",
+    )
+
+    class FakeController:
+        def __init__(self) -> None:
+            self.advance_calls: list[Any] = []
+
+        def get(self, **_kwargs):
+            return adopted_result if self.advance_calls else running_result
+
+        def advance(self, **kwargs):
+            self.advance_calls.append(kwargs)
+            return [running_result, terminal_result][len(self.advance_calls) - 1]
+
+    fake_controller = FakeController()
+    monkeypatch.setattr(service, "controller", fake_controller)
+    execution_agent_calls: list[bool] = []
+    monkeypatch.setattr(
+        service.execution_agent,
+        "create_proposal",
+        lambda *_args, **_kwargs: execution_agent_calls.append(True),
+    )
+
+    still_running = client.post(
+        endpoint + "/tick",
+        json={"run_id": "conversation-run"},
+    )
+    assert still_running.status_code == 200, still_running.get_json()
+    first_body = still_running.get_json()
+    assert first_body["session"]["status"] == "running"
+    assert first_body["session"]["reason_code"] == "REMOTE_EXECUTION_RUNNING"
+    assert len(fake_controller.advance_calls) == 1
+    assert "conversation-remote-refresh" in fake_controller.advance_calls[0]["request"].client_request_id
+    assert execution_agent_calls == []
+    assert first_body["session"]["reason_code"] != "AUTO_PROGRESS_BOUND_EXCEEDED"
+
+    completed = client.post(
+        endpoint + "/tick",
+        json={"run_id": "conversation-run"},
+    )
+    assert completed.status_code == 200, completed.get_json()
+    completed_body = completed.get_json()
+    assert completed_body["session"]["status"] == "succeeded"
+    assert completed_body["session"]["reason_code"] == "RUN_SUCCEEDED"
+    assert len(fake_controller.advance_calls) == 2
+    assert "conversation-remote-adopt" in fake_controller.advance_calls[1]["request"].client_request_id
+    assert execution_agent_calls == []
+    assert completed_body["session"]["proposal_id"] == remote_state["proposal_id"]
+    assert completed_body["session"]["controller_execution_id"] == remote_state["controller_execution_id"]
+
+
 def test_running_remote_stops_the_outer_auto_progress_loop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -655,6 +863,14 @@ def test_agent_session_routes_return_fixed_errors_without_exception_details(
     invalid_turn = client.post(endpoint + "/turn", json={"secret": "internal"})
     assert invalid_turn.status_code == 400
     assert invalid_turn.get_json() == {
+        "ok": False,
+        "error_code": "invalid_conversation_session_request",
+        "error": "Invalid conversation session request.",
+    }
+
+    invalid_tick = client.post(endpoint + "/tick", json={"secret": "internal"})
+    assert invalid_tick.status_code == 400
+    assert invalid_tick.get_json() == {
         "ok": False,
         "error_code": "invalid_conversation_session_request",
         "error": "Invalid conversation session request.",

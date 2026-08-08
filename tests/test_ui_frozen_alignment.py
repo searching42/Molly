@@ -126,6 +126,7 @@ def test_conversation_is_the_scientific_agent_front_door(
     assert "persistModelWorkflowState" not in html
     assert "restoreModelWorkflowState" not in html
     assert 'agent-session/turn' in html
+    assert 'agent-session/tick' in html
     assert 'agent-session/events' in html
     assert "new EventSource(url)" in html
     assert "function renderScientificAgentPlan(summary)" in html

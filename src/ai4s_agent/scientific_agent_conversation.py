@@ -52,7 +52,9 @@ from ai4s_agent.scientific_agent_plan import (
 )
 from ai4s_agent.schemas import (
     AgentAuthorizationMode,
+    AgentHarnessControllerAction,
     AgentHarnessControllerActionBoundaryClass,
+    AgentHarnessControllerAdvanceRequest,
     AgentHarnessControllerStatus,
     AgentHarnessControllerStartRequest,
     AgentPlanAuthorizationRequest,
@@ -655,6 +657,8 @@ class ScientificAgentConversationSessionService:
             conversation_id=clean_conversation,
         )
         if state.get("status") in ACTIVE_SESSION_STATUSES:
+            if state.get("reason_code") == "EXECUTION_AGENT_PAUSED":
+                return "paused"
             return "active"
         if state.get("proposal_id") and state.get("status") in {
             "approval_required",
@@ -723,6 +727,8 @@ class ScientificAgentConversationSessionService:
                 conversation_id=clean_conversation,
                 run_id=clean_run,
                 state=state,
+                provider=provider,
+                provider_binding_digest=provider_binding_digest,
             )
         messages = self._messages(
             project_id=clean_project,
@@ -1086,6 +1092,192 @@ class ScientificAgentConversationSessionService:
             controller=_controller_public(controller_result) if controller_result else None,
         )
 
+    def _advance_controller_once(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        state: dict[str, Any],
+        controller_result: ControllerAdvanceResult,
+        operation: str,
+    ) -> ControllerAdvanceResult:
+        """Select at most one deterministic Controller action.
+
+        Continuation uses the same digest-bound Controller authority as the
+        Execution Agent.  The session coordinator owns only the trigger and
+        projection; it never calls a scientific adapter or remote transport.
+        Including the session revision in the request id makes a later tick a
+        fresh observation while preserving retry idempotency for the same tick.
+        """
+
+        execution = controller_result.execution
+        inspection = controller_result.inspection
+        request = AgentHarnessControllerAdvanceRequest(
+            expected_controller_execution_digest=execution.execution_digest,
+            client_request_id=_request_id(
+                f"conversation-{operation}",
+                project_id,
+                conversation_id,
+                execution.controller_execution_id,
+                inspection.inspection_digest,
+                str(state.get("revision") or 0),
+            ),
+        )
+        return self.controller.advance(
+            project_id=project_id,
+            controller_execution_id=execution.controller_execution_id,
+            request=request,
+            expected_inspection_digest=inspection.inspection_digest,
+        )
+
+    def tick(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        run_id: str,
+        provider: LLMProvider | None,
+        provider_binding_digest: str,
+    ) -> ScientificAgentConversationTurnResult:
+        """Perform one bounded continuation of a remote-running session.
+
+        A tick is deliberately not part of the SSE projector.  It performs
+        one Controller-selected remote refresh, returns immediately if the
+        worker is still running, and performs at most one output adoption
+        before handing the next bounded step to the existing Execution Agent.
+        """
+
+        clean_project = _clean_id(project_id, field="project_id")
+        clean_conversation = _clean_id(conversation_id, field="conversation_id")
+        clean_run = _clean_id(run_id, field="run_id")
+        root = self._root(clean_project, clean_conversation, create=True)
+        with self._lock(root):
+            self.conversations.get_conversation(clean_project, clean_conversation)
+            state = self.read_session(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+            )
+            if state.get("reason_code") != "REMOTE_EXECUTION_RUNNING":
+                return self._handle_existing_execution(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    run_id=clean_run,
+                    state=state,
+                    provider=None,
+                    provider_binding_digest="",
+                )
+
+            proposal_id = str(state.get("proposal_id") or "")
+            controller_execution_id = str(state.get("controller_execution_id") or "")
+            if not proposal_id or not controller_execution_id:
+                raise ScientificAgentConversationStaleAuthority(
+                    "remote continuation binding is incomplete"
+                )
+            publication = self._read_active_publication(state, clean_project)
+            try:
+                controller_result = self.controller.get(
+                    project_id=clean_project,
+                    controller_execution_id=controller_execution_id,
+                )
+                expected_controller_digest = str(
+                    state.get("controller_execution_digest") or ""
+                )
+                if (
+                    expected_controller_digest
+                    and controller_result.execution.execution_digest
+                    != expected_controller_digest
+                ):
+                    raise ScientificAgentConversationStaleAuthority(
+                        "active Controller execution digest no longer matches the session"
+                    )
+
+                # A worker may have completed between ticks.  In that case
+                # _inspect already exposes ADOPT_REMOTE_OUTPUTS and no stale
+                # refresh is issued.  Otherwise this tick owns exactly one
+                # refresh action.
+                if (
+                    controller_result.inspection.status
+                    == AgentHarnessControllerStatus.RUNNING_REMOTE
+                    and controller_result.inspection.next_action
+                    == AgentHarnessControllerAction.REFRESH_REMOTE_TASK
+                ):
+                    controller_result = self._advance_controller_once(
+                        project_id=clean_project,
+                        conversation_id=clean_conversation,
+                        state=state,
+                        controller_result=controller_result,
+                        operation="remote-refresh",
+                    )
+
+                if (
+                    controller_result.inspection.next_action
+                    == AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS
+                ):
+                    controller_result = self._advance_controller_once(
+                        project_id=clean_project,
+                        conversation_id=clean_conversation,
+                        state=state,
+                        controller_result=controller_result,
+                        operation="remote-adopt",
+                    )
+            except ScientificAgentConversationStaleAuthority:
+                raise
+            except (ScientificAgentHarnessControllerError, ValueError) as exc:
+                raise ScientificAgentConversationSessionError(
+                    "remote continuation is unavailable"
+                ) from exc
+
+            if controller_result.inspection.status == AgentHarnessControllerStatus.RUNNING_REMOTE:
+                state = self._transition(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    status="running",
+                    reason_code="REMOTE_EXECUTION_RUNNING",
+                    updates={
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                    },
+                    event_type="remote.running",
+                    message="远程任务仍在运行，等待下一次状态更新。",
+                    event_data={
+                        "controller_status": controller_result.inspection.status.value,
+                        "current_task_id": controller_result.inspection.current_task_id,
+                        "next_action": controller_result.inspection.next_action.value,
+                        "phase": "remote_lifecycle",
+                    },
+                )
+                return self._active_execution_result(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    run_id=clean_run,
+                    state=state,
+                    publication=publication,
+                    controller_result=controller_result,
+                    llm_used=False,
+                )
+
+            controller_result, state, _stop_reason = self._auto_progress(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+                state=state,
+                controller_result=controller_result,
+                provider=provider,
+                provider_binding_digest=provider_binding_digest,
+            )
+            if controller_result is None:
+                raise ScientificAgentConversationSessionError(
+                    "remote continuation did not return a Controller projection"
+                )
+            return self._active_execution_result(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+                run_id=clean_run,
+                state=state,
+                publication=publication,
+                controller_result=controller_result,
+                llm_used=provider is not None,
+            )
+
     def _auto_progress(
         self,
         *,
@@ -1233,6 +1425,7 @@ class ScientificAgentConversationSessionService:
                 conversation_id,
                 controller_result.execution.execution_digest,
                 inspection.inspection_digest,
+                str(state.get("revision") or 0),
             )
             try:
                 proposal_result = self.execution_agent.create_proposal(
@@ -1383,6 +1576,60 @@ class ScientificAgentConversationSessionService:
             plan_summary=summary,
         )
 
+    @staticmethod
+    def _active_execution_message(state: dict[str, Any]) -> str:
+        if state.get("reason_code") == "EXECUTION_AGENT_PAUSED":
+            return "当前有界步骤已暂停；下一条对话将恢复当前 Controller 的 Execution Agent 决策。"
+        if state.get("reason_code") == "REMOTE_EXECUTION_RUNNING":
+            return "远程任务仍在运行，Molly 会通过有界状态更新继续观察。"
+        status = str(state.get("status") or "unknown")
+        if status in {"succeeded", "failed", "cancelled"}:
+            return _static_status_message(status, task_id=str(state.get("current_task_id") or ""))
+        return {
+            "running": "当前运行仍由 Harness Controller 管理；普通对话不会改写当前计划。",
+            "waiting_gate": "当前运行正在等待独立 Gate authority；普通对话不会批准或改写当前计划。",
+            "waiting_remote_approval": "当前运行正在等待独立远程资源批准；普通对话不会批准或改写当前计划。",
+            "recovery_required": "当前运行需要显式恢复 authority；普通对话不会重试或改写当前计划。",
+            "unknown": "当前运行结果未知；需要显式恢复或重新规划，普通对话不会改写当前 Controller 绑定。",
+        }.get(status, "当前运行仍由 Harness Controller 管理；普通对话不会改写当前计划。")
+
+    def _active_execution_result(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        run_id: str,
+        state: dict[str, Any],
+        publication: ScientificAgentPlanPublication,
+        controller_result: ControllerAdvanceResult,
+        llm_used: bool,
+    ) -> ScientificAgentConversationTurnResult:
+        message = self._active_execution_message(state)
+        decision = {
+            "project_id": project_id,
+            "run_id": str(state.get("run_id") or run_id),
+            "status": "active_scientific_agent_session",
+            "decision": "active_scientific_agent_session",
+            "summary": message,
+            "modeling_plan_payload": {},
+            "questions": [],
+            "pending_cited_target_evidence": [],
+            "next_actions": ["use_the_separate_current_authority_operation"],
+            "blocked_reasons": [str(state.get("reason_code") or "ACTIVE_SESSION")],
+            "requires_user_response": True,
+            "executable": False,
+        }
+        return ScientificAgentConversationTurnResult(
+            decision=decision,
+            assistant_message=message,
+            assistant_source="scientific_agent_session",
+            llm_used=llm_used,
+            session=self.session_projection(state),
+            proposal=publication.proposal.model_dump(mode="json"),
+            plan_summary=self._plan_summary(publication),
+            controller=_controller_public(controller_result),
+        )
+
     def _handle_existing_execution(
         self,
         *,
@@ -1390,13 +1637,17 @@ class ScientificAgentConversationSessionService:
         conversation_id: str,
         run_id: str,
         state: dict[str, Any],
+        provider: LLMProvider | None,
+        provider_binding_digest: str,
     ) -> ScientificAgentConversationTurnResult:
-        """Project an active Controller without replanning or advancing it.
+        """Project or resume an active Controller without replanning.
 
         Gate, remote approval, recovery, and unknown-outcome states are
         separate authority boundaries.  A normal chat message must therefore
-        preserve the exact proposal/start/controller binding until a dedicated
-        authority operation handles it.
+        preserve the exact proposal/start/controller binding.  The sole
+        conversational continuation exception is an Execution Agent pause:
+        the next turn may ask the existing Execution Agent for one new bounded
+        decision, still against the same Controller execution.
         """
 
         proposal_id = str(state.get("proposal_id") or "")
@@ -1423,37 +1674,36 @@ class ScientificAgentConversationSessionService:
             raise ScientificAgentConversationStaleAuthority(
                 "active Controller execution digest no longer matches the session"
             )
-        status = str(state.get("status") or "unknown")
-        message = {
-            "running": "当前运行仍由 Harness Controller 管理；普通对话不会改写当前计划。",
-            "waiting_gate": "当前运行正在等待独立 Gate authority；普通对话不会批准或改写当前计划。",
-            "waiting_remote_approval": "当前运行正在等待独立远程资源批准；普通对话不会批准或改写当前计划。",
-            "recovery_required": "当前运行需要显式恢复 authority；普通对话不会重试或改写当前计划。",
-            "unknown": "当前运行结果未知；需要显式恢复或重新规划，普通对话不会改写当前 Controller 绑定。",
-        }.get(status, "当前运行仍由 Harness Controller 管理；普通对话不会改写当前计划。")
-        decision = {
-            "project_id": project_id,
-            "run_id": str(state.get("run_id") or run_id),
-            "status": "active_scientific_agent_session",
-            "decision": "active_scientific_agent_session",
-            "summary": message,
-            "modeling_plan_payload": {},
-            "questions": [],
-            "pending_cited_target_evidence": [],
-            "next_actions": ["use_the_separate_current_authority_operation"],
-            "blocked_reasons": [str(state.get("reason_code") or "ACTIVE_SESSION")],
-            "requires_user_response": True,
-            "executable": False,
-        }
-        return ScientificAgentConversationTurnResult(
-            decision=decision,
-            assistant_message=message,
-            assistant_source="scientific_agent_session",
+        if state.get("reason_code") == "EXECUTION_AGENT_PAUSED" and provider is not None:
+            controller_result, resumed_state, _stop_reason = self._auto_progress(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                state=state,
+                controller_result=controller_result,
+                provider=provider,
+                provider_binding_digest=provider_binding_digest,
+            )
+            if controller_result is None:
+                raise ScientificAgentConversationSessionError(
+                    "paused Agent session did not return a Controller projection"
+                )
+            return self._active_execution_result(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                run_id=run_id,
+                state=resumed_state,
+                publication=publication,
+                controller_result=controller_result,
+                llm_used=True,
+            )
+        return self._active_execution_result(
+            project_id=project_id,
+            conversation_id=conversation_id,
+            run_id=run_id,
+            state=state,
+            publication=publication,
+            controller_result=controller_result,
             llm_used=False,
-            session=self.session_projection(state),
-            proposal=publication.proposal.model_dump(mode="json"),
-            plan_summary=self._plan_summary(publication),
-            controller=_controller_public(controller_result),
         )
 
     @staticmethod

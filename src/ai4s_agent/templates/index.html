@@ -539,6 +539,9 @@
       let currentConfirmedDataset = null;
       let agentSessionEventSource = null;
       let agentSessionEventCursor = 0;
+      let agentSessionTickTimer = null;
+      let agentSessionTickInFlight = false;
+      let agentSessionTickGeneration = 0;
       const renderedAgentSessionEvents = new Set();
       const fileLaunchWarning = document.getElementById("file-launch-warning");
       if (window.location.protocol === "file:") {
@@ -1303,13 +1306,54 @@
       }
 
       function closeAgentSessionStream() {
+        agentSessionTickGeneration += 1;
+        agentSessionTickInFlight = false;
+        if (agentSessionTickTimer) {
+          clearTimeout(agentSessionTickTimer);
+          agentSessionTickTimer = null;
+        }
         if (agentSessionEventSource) {
           agentSessionEventSource.close();
           agentSessionEventSource = null;
         }
       }
 
-      function renderAgentSessionEvent(event) {
+      function scheduleAgentSessionTick(context, delayMs = 3000) {
+        if (agentSessionTickTimer) {
+          clearTimeout(agentSessionTickTimer);
+          agentSessionTickTimer = null;
+        }
+        if (!isConversationContextCurrent(context) || window.location.protocol === "file:") return;
+        const tickGeneration = agentSessionTickGeneration;
+        agentSessionTickTimer = setTimeout(async () => {
+          agentSessionTickTimer = null;
+          if (
+            tickGeneration !== agentSessionTickGeneration
+            || !isConversationContextCurrent(context)
+            || agentSessionTickInFlight
+          ) return;
+          agentSessionTickInFlight = true;
+          try {
+            const response = await postJSON(
+              `/api/projects/${encodeURIComponent(context.projectId)}/conversations/${encodeURIComponent(context.conversationId)}/agent-session/tick`,
+              { run_id: currentRunId },
+            );
+            if (!isConversationContextCurrent(context)) return;
+            renderAgentSessionSnapshot(response.session, context);
+          } catch (err) {
+            if (isConversationContextCurrent(context)) {
+              setText("conversation-status", "远程任务状态暂时无法更新，Molly 会稍后重试。");
+              scheduleAgentSessionTick(context, 5000);
+            }
+          } finally {
+            if (tickGeneration === agentSessionTickGeneration) {
+              agentSessionTickInFlight = false;
+            }
+          }
+        }, Math.max(1000, Number(delayMs) || 3000));
+      }
+
+      function renderAgentSessionEvent(event, context = null) {
         const eventId = String(event?.event_id || "");
         if (eventId && renderedAgentSessionEvents.has(eventId)) return;
         if (eventId) {
@@ -1319,15 +1363,31 @@
         const data = event?.data || {};
         const message = String(data.message || "").trim();
         if (message) appendConversationMessage("system", message);
+        if (context && data.reason_code === "REMOTE_EXECUTION_RUNNING") {
+          scheduleAgentSessionTick(context);
+        } else if (context && data.reason_code) {
+          if (agentSessionTickTimer) {
+            clearTimeout(agentSessionTickTimer);
+            agentSessionTickTimer = null;
+          }
+        }
       }
 
-      function renderAgentSessionSnapshot(snapshot) {
+      function renderAgentSessionSnapshot(snapshot, context = null) {
         const session = snapshot || {};
         if (session.run_id) {
           currentRunId = String(session.run_id);
           syncRunId(currentRunId);
         }
         if (session.message) setText("conversation-status", String(session.message));
+        if (context && session.reason_code === "REMOTE_EXECUTION_RUNNING") {
+          scheduleAgentSessionTick(context);
+        } else if (context && session.reason_code) {
+          if (agentSessionTickTimer) {
+            clearTimeout(agentSessionTickTimer);
+            agentSessionTickTimer = null;
+          }
+        }
       }
 
       function connectAgentSessionStream(context) {
@@ -1340,11 +1400,11 @@
         agentSessionEventSource = source;
         source.addEventListener("snapshot", (event) => {
           if (!isConversationContextCurrent(context)) return;
-          try { renderAgentSessionSnapshot(JSON.parse(event.data || "{}").snapshot); } catch (_err) {}
+          try { renderAgentSessionSnapshot(JSON.parse(event.data || "{}").snapshot, context); } catch (_err) {}
         });
         source.addEventListener("agent.status", (event) => {
           if (!isConversationContextCurrent(context)) return;
-          try { renderAgentSessionEvent(JSON.parse(event.data || "{}")); } catch (_err) {}
+          try { renderAgentSessionEvent(JSON.parse(event.data || "{}"), context); } catch (_err) {}
         });
         source.onerror = () => {
           if (isConversationContextCurrent(context)) setText("conversation-status", "Agent 状态流暂时断开，浏览器会自动重连并按 durable cursor 恢复。");
@@ -1564,7 +1624,10 @@
           const agentSession = await getJSON(
             `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(currentConversationId)}/agent-session`,
           );
-          renderAgentSessionSnapshot(agentSession.session);
+          renderAgentSessionSnapshot(agentSession.session, {
+            projectId,
+            conversationId: currentConversationId,
+          });
           if (agentSession.plan_summary) renderScientificAgentPlan(agentSession.plan_summary);
           connectAgentSessionStream({ projectId, conversationId: currentConversationId });
         } catch (err) {

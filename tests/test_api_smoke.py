@@ -88,6 +88,7 @@ def test_index_page_wires_project_chat_to_scientific_agent_session(
     assert "pending_cited_target_evidence" in html
     assert "agent_questions" in html
     assert 'agent-session/turn' in html
+    assert 'agent-session/tick' in html
     assert 'agent-session/events' in html
     assert "new EventSource(url)" in html
     assert 'postJSON("/api/run-plan/execute"' not in html
