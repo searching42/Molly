@@ -1547,7 +1547,10 @@ class ExecutionAgentService:
         observation: AgentExecutionAgentObservation,
         catalog: AgentExecutionToolCatalog,
     ) -> None:
-        current_catalog, boundary = build_execution_tool_catalog(snapshot)
+        current_catalog, boundary = build_execution_tool_catalog(
+            snapshot,
+            option_schema=snapshot.option_schema,
+        )
         current_observation = build_execution_agent_observation(
             snapshot=snapshot,
             tool_catalog=current_catalog,

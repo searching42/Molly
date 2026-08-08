@@ -1562,11 +1562,15 @@ def private_structured_dataset_real_tool_task_registry_v3() -> AtomicTaskRegistr
             backend_remote_task_types={},
             optional_input_artifacts=[],
             input_artifact_alternatives=[],
-            accepted_input_trust_classes_by_artifact=trust(
-                "confirmed_training_dataset",
-                "model_package",
-                "reinvent4_config_template",
-            ),
+            accepted_input_trust_classes_by_artifact={
+                **trust("confirmed_training_dataset", "model_package"),
+                "reinvent4_config_template": [
+                    "content_bound_input",
+                    "confirmed_scientific_input",
+                    "registered_intermediate",
+                    "verified_output",
+                ],
+            },
             budget_dimensions=["max_records"],
             supports_plan_preapproval=False,
             idempotency_policy="server_checked",

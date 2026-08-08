@@ -535,8 +535,6 @@
       let currentLiteratureIntake = null;
       let currentLLMConfig = {};
       let currentComputeSettings = { connections: [], environments: [] };
-      let currentRawDataset = null;
-      let currentConfirmedDataset = null;
       let agentSessionEventSource = null;
       let agentSessionEventCursor = 0;
       let agentSessionTickTimer = null;
@@ -693,14 +691,11 @@
             currentResearchSourceProposal = null;
             latestLiteratureMessageId = "";
             currentLiteratureIntake = null;
-            currentRawDataset = null;
-            currentConfirmedDataset = null;
             syncProjectId("");
             syncRunId("");
             renderProjectList([]);
             renderConversationList([]);
             renderPendingConversationAttachments();
-            renderDatasetReview();
             const stream = document.getElementById("conversation-stream");
             if (stream) stream.innerHTML = "";
             setText("conversation-status", "");
@@ -842,9 +837,6 @@
         currentResearchSourceProposal = null;
         latestLiteratureMessageId = "";
         currentLiteratureIntake = null;
-        currentRawDataset = null;
-        currentConfirmedDataset = null;
-        renderDatasetReview();
         document.getElementById("approve-literature-button").hidden = true;
         syncRunId("");
         const stream = document.getElementById("conversation-stream");
@@ -978,183 +970,6 @@
         });
       }
 
-      function datasetAvailableInputs() {
-        return Array.isArray(currentRawDataset?.available_inputs)
-          ? currentRawDataset.available_inputs.map((item) => String(item || "").trim()).filter(Boolean)
-          : [];
-      }
-
-      function replaceSelectOptions(selectId, values, selectedValue = "") {
-        const select = document.getElementById(selectId);
-        if (!select) return;
-        const previous = String(selectedValue || select.value || "");
-        select.innerHTML = "";
-        (values || []).forEach((value) => {
-          const option = document.createElement("option");
-          option.value = String(value);
-          option.textContent = String(value);
-          select.appendChild(option);
-        });
-        if (previous && (values || []).includes(previous)) select.value = previous;
-      }
-
-      function propertyIdFromColumn(column) {
-        const normalized = String(column || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-        if (["quantum_yield", "photoluminescence_quantum_yield", "plqy", "qy"].includes(normalized)) return "plqy";
-        return normalized || "target";
-      }
-
-      function renderDatasetReview() {
-        const root = document.getElementById("chat-review-artifacts");
-        if (!root) return;
-        root.querySelectorAll('[data-review-kind="dataset"]')
-          .forEach((item) => item.remove());
-        if (!currentRawDataset) {
-          root.hidden = !root.childElementCount;
-          return;
-        }
-        root.hidden = false;
-        const article = document.createElement("article");
-        article.className = "review-section";
-        article.dataset.reviewKind = "dataset";
-        const heading = document.createElement("h3");
-        heading.textContent = "数据集输入审阅";
-        article.appendChild(heading);
-        const profile = currentRawDataset.dataset_profile || {};
-        const headers = Array.isArray(profile.headers) ? profile.headers.map(String) : [];
-        const candidates = Array.isArray(currentRawDataset.property_candidates)
-          ? currentRawDataset.property_candidates : [];
-        const preferredTarget = String(
-          currentConfirmedDataset?.mapping?.target_column
-          || candidates.find((item) => /quantum\s*yield|plqy|\bqy\b/i.test(String(item?.source_column || item?.property_id || "")))?.source_column
-          || candidates[0]?.source_column
-          || headers.find((item) => item !== profile.smiles_col)
-          || ""
-        );
-        const sourceName = currentRawDataset.source_attachment?.original_name || currentRawDataset.dataset_id;
-        const state = document.createElement("p");
-        state.className = "small";
-        if (currentConfirmedDataset) {
-          const summary = currentConfirmedDataset.summary || {};
-          state.textContent = `${sourceName} · confirmed dataset · ${summary.row_count || 0} 行 · ${summary.numeric_label_count || 0} 个数值标签 · 属性 ${currentConfirmedDataset.mapping?.property_id || ""}`;
-        } else {
-          state.textContent = `${sourceName} · raw dataset · ${profile.row_count || 0} 行 / ${profile.column_count || headers.length} 列。请核对列映射后明确确认。`;
-        }
-        article.appendChild(state);
-        if (!currentConfirmedDataset) {
-          const form = document.createElement("form");
-          form.className = "dataset-review-form";
-          const selectField = (labelText, name, selected) => {
-            const wrapper = document.createElement("label");
-            wrapper.textContent = labelText;
-            const select = document.createElement("select");
-            select.name = name;
-            select.required = true;
-            headers.forEach((header) => {
-              const option = document.createElement("option");
-              option.value = header;
-              option.textContent = header;
-              option.selected = header === selected;
-              select.appendChild(option);
-            });
-            wrapper.appendChild(select);
-            return { wrapper, select };
-          };
-          const smiles = selectField("SMILES 列", "smiles_column", profile.smiles_col || headers[0] || "");
-          const target = selectField("目标列", "target_column", preferredTarget);
-          form.appendChild(smiles.wrapper);
-          form.appendChild(target.wrapper);
-          const property = document.createElement("input");
-          property.name = "property_id";
-          property.required = true;
-          property.pattern = "[a-z][a-z0-9_]*";
-          property.value = currentConfirmedDataset?.mapping?.property_id || propertyIdFromColumn(preferredTarget);
-          property.setAttribute("aria-label", "规范属性 ID");
-          form.appendChild(property);
-          target.select.addEventListener("change", () => {
-            property.value = propertyIdFromColumn(target.select.value);
-          });
-          const confirmedBy = document.createElement("input");
-          confirmedBy.name = "confirmed_by";
-          confirmedBy.required = true;
-          confirmedBy.value = "local-user";
-          confirmedBy.setAttribute("aria-label", "确认人");
-          form.appendChild(confirmedBy);
-          const strictLabel = document.createElement("label");
-          strictLabel.className = "checkbox-row";
-          const strict = document.createElement("input");
-          strict.type = "checkbox";
-          strict.name = "strict_smiles_cleaning";
-          strict.checked = true;
-          strictLabel.appendChild(strict);
-          const strictText = document.createElement("span");
-          strictText.textContent = "严格验证并规范化 SMILES";
-          strictLabel.appendChild(strictText);
-          form.appendChild(strictLabel);
-          const submit = document.createElement("button");
-          submit.type = "submit";
-          submit.textContent = "确认数据集输入";
-          form.appendChild(submit);
-          form.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            const payload = {
-              smiles_column: smiles.select.value.trim(),
-              target_column: target.select.value.trim(),
-              property_id: property.value.trim(),
-              confirmed_by: confirmedBy.value.trim(),
-              strict_smiles_cleaning: strict.checked,
-              drop_empty_target_rows: true,
-            };
-            try {
-              const response = await postJSON(
-                `/api/projects/${encodeURIComponent(activeProject.project_id)}/datasets/${encodeURIComponent(currentRawDataset.dataset_id)}/confirm`,
-                payload,
-              );
-              currentConfirmedDataset = response.confirmed_dataset || null;
-              renderDatasetReview();
-              appendConversationMessage(
-                "assistant",
-                `数据集已由 ${payload.confirmed_by} 确认：${payload.smiles_column} → SMILES，${payload.target_column} → ${payload.property_id}。现在可以在对话中描述下一步科学目标。`,
-              );
-            } catch (err) {
-              appendConversationMessage("system", `数据集确认失败：${normalizeErrorForRender(err).error}`);
-              render(err);
-            }
-          });
-          article.appendChild(form);
-        }
-        root.prepend(article);
-      }
-
-      async function loadProjectDatasets(projectId = activeProject.project_id) {
-        try {
-          const response = await getJSON(`/api/projects/${encodeURIComponent(projectId)}/datasets`);
-          const datasets = Array.isArray(response.datasets) ? response.datasets : [];
-          currentRawDataset = datasets[0] || null;
-          const confirmations = Array.isArray(currentRawDataset?.confirmations) ? currentRawDataset.confirmations : [];
-          currentConfirmedDataset = confirmations[confirmations.length - 1] || null;
-          renderDatasetReview();
-          return response;
-        } catch (err) {
-          renderDatasetReview();
-          return normalizeErrorForRender(err);
-        }
-      }
-
-      async function inspectDatasetAttachment(attachment) {
-        const name = String(attachment?.original_name || "").toLowerCase();
-        const mediaType = String(attachment?.media_type || "").toLowerCase();
-        if (!name.endsWith(".csv") && !mediaType.includes("csv")) return null;
-        const response = await postJSON(
-          `/api/projects/${encodeURIComponent(activeProject.project_id)}/datasets/inspect-attachment`,
-          { artifact_id: attachment.artifact_id },
-        );
-        currentRawDataset = response.dataset || null;
-        currentConfirmedDataset = null;
-        renderDatasetReview();
-        return response.dataset;
-      }
-
       function renderConversationArtifact(title, payload) {
         const root = document.getElementById("chat-review-artifacts");
         if (!root) return;
@@ -1216,6 +1031,50 @@
         });
         if (tags.childElementCount) article.appendChild(tags);
         root.appendChild(article);
+      }
+
+      function renderScientificAgentReviewProjection(projection) {
+        const root = document.getElementById("chat-review-artifacts");
+        if (!root) return;
+        root.querySelectorAll('[data-review-kind="scientific-dataset-authority"]')
+          .forEach((item) => item.remove());
+        if (!projection || projection.read_only !== true) {
+          root.hidden = !root.childElementCount;
+          return;
+        }
+        root.hidden = false;
+        const article = document.createElement("article");
+        article.className = "review-section";
+        article.dataset.reviewKind = "scientific-dataset-authority";
+        const heading = document.createElement("h3");
+        heading.textContent = "当前 BR1 数据集审阅（只读）";
+        article.appendChild(heading);
+        const note = document.createElement("p");
+        note.className = "small";
+        note.textContent = "审阅投影不包含原始行、SMILES 或执行细节。批准当前快照请在对话中发送：确认当前数据集";
+        article.appendChild(note);
+        const counts = projection.counts || {};
+        appendReviewSection(article, "VerifiedReviewSnapshot", [
+          ["review kind", projection.review_kind],
+          ["task", projection.current_task_id],
+          ["Gate", projection.gate_id],
+          ["snapshot", projection.snapshot_id],
+          ["snapshot digest", projection.snapshot_digest],
+          ["review snapshot", projection.review_snapshot_id],
+          ["target property", projection.target_property],
+          ["scientific scope", projection.scientific_scope],
+          ["comparability policy", projection.comparability_policy],
+          ["rows", counts.row],
+          ["included", counts.included],
+          ["excluded", counts.excluded],
+          ["duplicates", counts.duplicates],
+          ["conflicts", counts.conflicts],
+          ["retained", counts.retained],
+          ["unresolved", counts.unresolved],
+          ["reason codes", projection.reason_code_counts],
+          ["confirmation required", projection.confirmation_required],
+        ], ["server-verified", "aggregate-only", "read-only"]);
+        root.prepend(article);
       }
 
       function renderAgentReviewCard(card) {
@@ -1375,6 +1234,7 @@
 
       function renderAgentSessionSnapshot(snapshot, context = null) {
         const session = snapshot || {};
+        renderScientificAgentReviewProjection(session.review_projection);
         if (session.run_id) {
           currentRunId = String(session.run_id);
           syncRunId(currentRunId);
@@ -1620,7 +1480,6 @@
               `已恢复等待 Gate 的 ${currentLiteratureIntake.sources?.length || 0} 篇 PDF corpus。`,
             );
           }
-          await loadProjectDatasets(projectId);
           const agentSession = await getJSON(
             `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(currentConversationId)}/agent-session`,
           );
@@ -2131,6 +1990,9 @@
           renderConversationArtifact("conversation_turn_decision", currentConversationDecision);
           if (currentModelingPlanPayload) renderConversationArtifact("modeling_plan_payload", currentModelingPlanPayload);
           if (response.plan_summary) renderScientificAgentPlan(response.plan_summary);
+          renderScientificAgentReviewProjection(
+            response.review_projection || response.session?.review_projection,
+          );
           renderAgentQuestions(agentQuestions);
           render(response);
         } catch (err) {
@@ -2167,17 +2029,10 @@
               pendingConversationAttachments.push(attachment);
             }
           });
-          const inspected = [];
-          for (const attachment of uploaded) {
-            const dataset = await inspectDatasetAttachment(attachment);
-            if (dataset) inspected.push(dataset);
-          }
           renderPendingConversationAttachments();
           setText(
             "conversation-status",
-            inspected.length
-              ? `已注册 ${uploaded.length} 个附件，并将 ${inspected.length} 个 CSV 登记为 raw dataset；请在对话中的数据集审阅卡确认列映射。`
-              : `已注册 ${uploaded.length} 个附件 artifact；发送消息时会绑定其 SHA-256 引用。`,
+            `已注册 ${uploaded.length} 个附件 artifact；发送消息时会绑定其 SHA-256 引用。`,
           );
         } catch (err) {
           setText("conversation-status", `附件上传失败：${normalizeErrorForRender(err).error}`);

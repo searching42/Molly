@@ -33,7 +33,10 @@ from ai4s_agent.observability_correlation import (
     privacy_safe_telemetry_attributes,
 )
 from ai4s_agent.planner import AtomicTaskRegistry, expand_run_plan
-from ai4s_agent.resource_profiles import ResourceProfileStore
+from ai4s_agent.resource_profiles import (
+    ResourceProfileStore,
+    server_owned_br1_resource_defaults,
+)
 from ai4s_agent.schemas import (
     AgentArtifactObservation,
     AgentBudgetObservation,
@@ -914,7 +917,26 @@ class AgentProjectObservationBuilder:
         connections = store.list_connections(include_disabled=True)
         observations: list[AgentExecutionProfileObservation] = []
         private_material: list[dict[str, Any]] = []
+        br1_resource_profiles = {
+            "reinvent4-br1-v2",
+            "unimol-predict-br1-v1",
+            "unimol-train-br1-v2",
+        }
+        try:
+            self.registry.get("predict_private_unimol_v1")
+            br1_runtime = True
+        except ValueError:
+            br1_runtime = False
         for profile_id, profile in sorted(store.execution_profiles.items()):
+            configured_resource_defaults = (
+                {
+                    "gpu_count": int(profile.resource_limits.gpu_count_max),
+                    "cpu_threads": int(profile.resource_limits.cpu_threads_max),
+                    "walltime_sec": int(profile.resource_limits.walltime_sec_max),
+                }
+                if br1_runtime and profile_id in br1_resource_profiles
+                else {}
+            )
             matching_connections: list[dict[str, Any]] = []
             declared_ready_connections: list[str] = []
             verified_ready_connections: list[str] = []
@@ -967,6 +989,8 @@ class AgentProjectObservationBuilder:
                 "profile_digest": profile.digest(),
                 "connections": sorted(matching_connections, key=lambda item: item["connection_digest"]),
             }
+            if configured_resource_defaults:
+                capability_material["configured_resource_defaults"] = configured_resource_defaults
             observations.append(
                 AgentExecutionProfileObservation(
                     profile_id=profile_id,
@@ -1484,16 +1508,42 @@ class AgentExecutionPlanCompiler:
                     f"remote task has ambiguous logical profile bindings: {planned_task.task_id}"
                 )
             runtime_limit = parsed.limits.get("max_runtime_sec")
-            walltime_sec = (
-                int(runtime_limit)
-                if isinstance(runtime_limit, int) and not isinstance(runtime_limit, bool)
-                else None
+            configured_defaults = (
+                server_owned_br1_resource_defaults(matching_profiles[0].profile_id)
+                if matching_profiles
+                and any(
+                    item.task_id == "predict_private_unimol_v1"
+                    for item in self.registry.list_tasks()
+                )
+                else {}
             )
-            resource_status = "partial" if walltime_sec is not None else "not_configured"
+            walltime_sec: int | None = None
+            if configured_defaults:
+                authority_walltime = configured_defaults["walltime_sec"]
+                if runtime_limit is None:
+                    walltime_sec = authority_walltime
+                elif (
+                    isinstance(runtime_limit, int)
+                    and not isinstance(runtime_limit, bool)
+                ):
+                    if runtime_limit > authority_walltime:
+                        raise ScientificAgentPlanError(
+                            "requested remote walltime exceeds the server-owned profile default"
+                        )
+                    walltime_sec = int(runtime_limit)
+            elif isinstance(runtime_limit, int) and not isinstance(runtime_limit, bool):
+                walltime_sec = int(runtime_limit)
+            resource_status = (
+                "configured"
+                if configured_defaults and walltime_sec is not None
+                else "partial"
+                if walltime_sec is not None
+                else "not_configured"
+            )
             resources = AgentRemoteResourceRequestIntent(
                 status=resource_status,
-                gpu_count=None,
-                cpu_threads=None,
+                gpu_count=(configured_defaults.get("gpu_count") if configured_defaults else None),
+                cpu_threads=(configured_defaults.get("cpu_threads") if configured_defaults else None),
                 walltime_sec=walltime_sec,
             )
             dispatch_intents.append(

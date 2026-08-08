@@ -600,6 +600,10 @@ class RemoteResourceAuthorityService:
         task_decisions: list[AgentRemoteResourceTaskDecision] = []
         authorities: list[AgentRemoteResourceAuthority] = []
         global_findings: list[AgentRemoteResourceAuthorityFinding] = []
+        server_owned_br1_runtime = any(
+            task.task_id == "predict_private_unimol_v1"
+            for task in proposal.run_plan.tasks
+        )
 
         allowed_resource_questions = {
             f"remote_resources_{item.task_id}" for item in remote_dispatches
@@ -697,6 +701,7 @@ class RemoteResourceAuthorityService:
                     snapshot = self.resource_profiles.authority_snapshot(
                         entry.connection_id,
                         execution_profile_id=entry.execution_profile_id,
+                        include_server_owned_resource_defaults=server_owned_br1_runtime,
                     )
                 except ValueError:
                     findings.append(_finding("REMOTE_RESOURCE_CONNECTION_MISSING", task_id))
@@ -775,7 +780,13 @@ class RemoteResourceAuthorityService:
                 else:
                     if intent.walltime_sec is not None and resources.walltime_sec > intent.walltime_sec:
                         findings.append(_finding("REMOTE_RESOURCE_LIMIT_EXCEEDED", task_id))
-                    if intent.gpu_count is not None or intent.cpu_threads is not None:
+                    if (
+                        intent.gpu_count is not None
+                        and resources.gpu_count != intent.gpu_count
+                    ) or (
+                        intent.cpu_threads is not None
+                        and resources.cpu_threads != intent.cpu_threads
+                    ):
                         findings.append(_finding("REMOTE_RESOURCE_SOURCE_CHANGED", task_id))
                 derived_gpu_hours = resources.gpu_count * resources.walltime_sec / 3600.0
                 if resources.walltime_sec > entry.budget_limits.max_runtime_sec:

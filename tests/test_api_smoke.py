@@ -152,7 +152,7 @@ def test_index_page_keeps_chat_run_id_stable_across_turns(rendered_index_html: s
     assert "currentRunId = \"\";" in html
 
 
-def test_index_page_replaces_wizard_submit_with_conversational_dataset_review(
+def test_index_page_uses_read_only_conversational_dataset_projection(
     rendered_index_html: str,
 ) -> None:
     html = rendered_index_html
@@ -160,8 +160,10 @@ def test_index_page_replaces_wizard_submit_with_conversational_dataset_review(
     assert 'id="run-confirmation-form"' not in html
     assert 'id="data-confirmation-form"' not in html
     assert 'id="dataset-confirmation-form"' not in html
-    assert "function renderDatasetReview" in html
-    assert "renderdatasetreview" in html.lower()
+    assert "function renderScientificAgentReviewProjection(projection)" in html
+    assert "确认当前数据集" in html
+    assert "function renderDatasetReview" not in html
+    assert "dataset-review-form" not in html
     assert 'postJSON("/api/run-plan/execute"' not in html
     assert "input_artifacts: { uploaded_dataset: datasetPath }" not in html
 

@@ -66,6 +66,9 @@ from ai4s_agent.scientific_agent_replanner import ScientificAgentReplannerServic
 from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationSessionService,
 )
+from ai4s_agent.scientific_agent_run_input_binding import (
+    ScientificAgentRunInputBindingService,
+)
 from ai4s_agent.routes.scientific_agent_conversation import (
     register_scientific_agent_conversation_routes,
 )
@@ -241,6 +244,11 @@ def register_routes(
         proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
         tracer=harness_tracer,
     )
+    input_binding_service = ScientificAgentRunInputBindingService(
+        storage=projects,
+        require_reinvent4_template=br1_real_tool_registry,
+    )
+    app.extensions["scientific_agent_run_input_binding_service"] = input_binding_service
     conversation_session_service = ScientificAgentConversationSessionService(
         projects=projects,
         conversations=conversations,
@@ -249,6 +257,7 @@ def register_routes(
         authorization_service=app.extensions["scientific_agent_authorization_service"],
         controller=harness_controller,
         execution_agent=execution_agent,
+        input_binding_service=input_binding_service,
     )
     register_scientific_agent_conversation_routes(
         app,
