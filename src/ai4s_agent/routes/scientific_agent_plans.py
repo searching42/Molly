@@ -42,6 +42,7 @@ def register_scientific_agent_plan_routes(
     *,
     projects: ProjectStorage,
     resource_profiles: Any,
+    resource_authority_policy_store: Any | None = None,
     llm_settings: LLMSettingsStore,
     llm_providers: LLMProviderManager,
     registry: AtomicTaskRegistry | None = None,
@@ -56,6 +57,7 @@ def register_scientific_agent_plan_routes(
         storage=projects,
         observation_builder=observation_builder,
         registry=registry,
+        resource_authority_policy_store=resource_authority_policy_store,
     )
     app.extensions["scientific_agent_plan_observation_builder"] = observation_builder
     app.extensions["scientific_agent_plan_proposal_store"] = proposal_store
@@ -101,6 +103,7 @@ def register_scientific_agent_plan_routes(
                     storage=projects,
                     registry=registry,
                     resource_profiles=resource_profiles,
+                    resource_authority_policy_store=resource_authority_policy_store,
                     observation_builder=observation_builder,
                     proposal_store=proposal_store,
                     tracer=tracer,

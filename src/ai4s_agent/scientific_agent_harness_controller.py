@@ -766,6 +766,97 @@ class ScientificAgentHarnessController:
                 inspection=self._read_only_inspection(execution),
             )
 
+    def current_authority_boundary(
+        self, *, project_id: str, controller_execution_id: str
+    ) -> dict[str, str]:
+        """Resolve the one exact approval boundary currently exposed by Controller.
+
+        This is a read-only bridge for conversation clients.  It deliberately
+        returns only logical IDs and digests; the approval methods below still
+        re-inspect and verify every binding under their own request locks.
+        """
+
+        result = self.get(
+            project_id=project_id,
+            controller_execution_id=controller_execution_id,
+        )
+        execution = result.execution
+        inspection = result.inspection
+        if inspection.next_action == AgentHarnessControllerAction.WAIT_FOR_GATE:
+            slot = self._current_slot(execution, inspection)
+            authorization = self._authorization(execution, verify_current=False)
+            spec = self.executor.registry.get(slot.task_id)
+            stage = self.storage.read_stage_state(execution.project_id, execution.run_id)
+            snapshot = self._stage_snapshot(stage, slot.task_id)
+            if not snapshot:
+                raise ScientificAgentHarnessControllerConflict(
+                    "current Gate snapshot is unavailable"
+                )
+            pending = [
+                gate_id
+                for gate_id in spec.gates
+                if gate_id
+                not in self._gate_decisions(
+                    execution,
+                    slot,
+                    {
+                        "snapshot_id": snapshot["snapshot_id"],
+                        "snapshot_hash": snapshot["snapshot_digest"].split(":", 1)[1],
+                    },
+                    spec.gates,
+                )
+            ]
+            if len(pending) != 1:
+                raise ScientificAgentHarnessControllerConflict(
+                    "current Gate authority is ambiguous"
+                )
+            if pending[0] not in authorization.pending_gates:
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "current Gate is not pending in the exact authorization"
+                )
+            return {
+                "authority_kind": (
+                    "dataset_confirmation_gate"
+                    if slot.task_id == "confirm_structured_dataset_canary"
+                    else "gate"
+                ),
+                "controller_execution_id": execution.controller_execution_id,
+                "controller_execution_digest": execution.execution_digest,
+                "task_id": slot.task_id,
+                "gate_id": pending[0],
+                "snapshot_id": snapshot["snapshot_id"],
+                "snapshot_digest": snapshot["snapshot_digest"],
+                "inspection_digest": inspection.inspection_digest,
+            }
+        if inspection.next_action == AgentHarnessControllerAction.WAIT_FOR_REMOTE_APPROVAL:
+            slot = self._current_slot(execution, inspection)
+            binding = self._remote_slot_binding(execution, slot)
+            remote = self._remote_inspection_or_none(execution, slot)
+            request_id = ""
+            if isinstance(remote, dict) and isinstance(remote.get("request"), dict):
+                request_id = str(remote["request"].get("request_id") or "")
+            if not request_id or not binding.request_sha256:
+                raise ScientificAgentHarnessControllerConflict(
+                    "current remote request authority is unavailable"
+                )
+            return {
+                "authority_kind": "remote_approval",
+                "controller_execution_id": execution.controller_execution_id,
+                "controller_execution_digest": execution.execution_digest,
+                "task_id": slot.task_id,
+                "slot_id": slot.slot_id,
+                "request_id": request_id,
+                "request_sha256": binding.request_sha256,
+                "inspection_digest": inspection.inspection_digest,
+            }
+        return {
+            "authority_kind": "",
+            "controller_execution_id": execution.controller_execution_id,
+            "controller_execution_digest": execution.execution_digest,
+            "task_id": inspection.current_task_id,
+            "inspection_digest": inspection.inspection_digest,
+        }
+
     def read_execution_agent_snapshot(
         self,
         *,
@@ -965,7 +1056,8 @@ class ScientificAgentHarnessController:
                 raise ScientificAgentHarnessControllerVerificationError(
                     "preauthorized Gate cannot be approved through the stepwise route"
                 )
-            self._verify_local_task_authority(execution, slot)
+            if slot.execution_route == "local_executor":
+                self._verify_local_task_authority(execution, slot)
             gate_decision = self.executor.commit_one_task_gate_decision(
                 project_id=project_id,
                 run_plan=authorization.run_plan,
@@ -1609,6 +1701,47 @@ class ScientificAgentHarnessController:
     def _inspect_remote_action(self, execution: Any, slot: Any, facts: list[Any]):
         remote = self._remote_inspection_or_none(execution, slot)
         if remote is None:
+            authorization = self._authorization(execution, verify_current=False)
+            task = authorization.run_plan.tasks[slot.planned_task_index]
+            spec = self.executor.registry.get(task.task_id)
+            if spec.gates:
+                stage = self.storage.read_stage_state(
+                    execution.project_id, execution.run_id
+                )
+                if (
+                    stage is None
+                    or stage.stage != task.task_id
+                    or stage.status != RunStatus.WAITING_USER
+                ):
+                    return self._inspection(
+                        execution,
+                        AgentHarnessControllerStatus.ACTIVE,
+                        slot,
+                        AgentHarnessControllerAction.PREPARE_LOCAL_GATE,
+                        facts,
+                    )
+                snapshot = stage.details.get("execution_snapshot")
+                if not isinstance(snapshot, dict):
+                    raise ScientificAgentHarnessControllerVerificationError(
+                        "waiting Gate snapshot is unavailable"
+                    )
+                decisions = self._gate_decisions(execution, slot, snapshot, spec.gates)
+                if len(decisions) != len(spec.gates):
+                    return self._inspection(
+                        execution,
+                        AgentHarnessControllerStatus.WAITING_GATE,
+                        slot,
+                        AgentHarnessControllerAction.WAIT_FOR_GATE,
+                        facts,
+                    )
+                if any(not item.approved for item in decisions.values()):
+                    return self._inspection(
+                        execution,
+                        AgentHarnessControllerStatus.FAILED,
+                        slot,
+                        AgentHarnessControllerAction.STOP_GATE_REJECTED,
+                        facts,
+                    )
             return self._inspection(execution, AgentHarnessControllerStatus.ACTIVE, slot, AgentHarnessControllerAction.PREPARE_REMOTE_REQUEST, facts)
         state = str(remote["effective_status"])
         request = remote["request"]
@@ -2563,13 +2696,18 @@ class ScientificAgentHarnessController:
             )
 
     def _prepare_local_gate(self, execution: Any, slot: Any) -> dict[str, Any]:
-        self._verify_local_task_authority(execution, slot)
+        if slot.execution_route == "local_executor":
+            self._verify_local_task_authority(execution, slot)
         authorization = self._authorization(execution, verify_current=False)
-        binding = self.executor.derive_one_task_server_binding(
-            project_id=execution.project_id, run_plan=authorization.run_plan,
-            task_index=slot.planned_task_index,
-            task_options=authorization.compiled_task_options[slot.task_id],
-        )
+        if slot.execution_route == "local_executor":
+            binding = self.executor.derive_one_task_server_binding(
+                project_id=execution.project_id,
+                run_plan=authorization.run_plan,
+                task_index=slot.planned_task_index,
+                task_options=authorization.compiled_task_options[slot.task_id],
+            )
+        else:
+            binding = {"input_artifacts_digest": slot.input_artifacts_digest}
         return self.executor.prepare_one_task_gate(
             project_id=execution.project_id, run_plan=authorization.run_plan,
             task_index=slot.planned_task_index, task_id=slot.task_id,
@@ -3650,6 +3788,26 @@ class ScientificAgentHarnessController:
                 and stage.status == RunStatus.SUCCEEDED
                 and stage.next_stage == decision.task_id
             )
+            continuing_remote_task = bool(
+                decision.action_kind
+                in {
+                    AgentHarnessControllerAction.DISPATCH_REMOTE_TASK,
+                    AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
+                    AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS,
+                }
+                and latest is not None
+                and latest.action_kind
+                in {
+                    AgentHarnessControllerAction.PREPARE_REMOTE_REQUEST,
+                    AgentHarnessControllerAction.DISPATCH_REMOTE_TASK,
+                    AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
+                }
+                and latest.task_index == decision.task_index
+                and latest.after_stage_digest == stage_digest
+                and latest.after_artifact_registry_digest == registry_digest
+                and stage.status == RunStatus.SUCCEEDED
+                and stage.next_stage == decision.task_id
+            )
             adopted_remote_exact_successor = bool(
                 decision.action_kind
                 in {
@@ -3664,7 +3822,11 @@ class ScientificAgentHarnessController:
                 and latest.after_stage_digest == stage_digest
                 and latest.after_artifact_registry_digest == registry_digest
             )
-            if not (preparing_exact_successor or adopted_remote_exact_successor):
+            if not (
+                preparing_exact_successor
+                or continuing_remote_task
+                or adopted_remote_exact_successor
+            ):
                 raise ScientificAgentHarnessControllerVerificationError(
                     "unreceipted StageState belongs to another task"
                 )

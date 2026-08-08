@@ -20,9 +20,15 @@ from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationSessionService,
     ScientificAgentConversationStaleAuthority,
 )
+from ai4s_agent.scientific_agent_run_input_binding import (
+    ScientificAgentRunInputBindingError,
+)
 
 
 _POLL_SECONDS = 0.75
+_AUTHORITY_TURN_MODES = frozenset(
+    {"approval", "dataset_gate_approval", "gate_approval", "remote_approval"}
+)
 
 
 def _json_object() -> dict[str, Any]:
@@ -149,7 +155,12 @@ def register_scientific_agent_conversation_routes(
         _no_store()
         try:
             payload = _json_object()
-            allowed = {"run_id", "llm_provider", "external_llm_approved"}
+            allowed = {
+                "run_id",
+                "llm_provider",
+                "external_llm_approved",
+                "input_bundle_id",
+            }
             if set(payload).difference(allowed):
                 raise ValueError("conversation session turn contains an unsupported field")
             turn_mode = service.classify_turn(
@@ -177,7 +188,7 @@ def register_scientific_agent_conversation_routes(
                         providers=llm_providers,
                     )
                 except (LLMProviderError, ValueError) as exc:
-                    if turn_mode != "approval" or not _approval_provider_fallback_allowed(exc):
+                    if turn_mode not in _AUTHORITY_TURN_MODES or not _approval_provider_fallback_allowed(exc):
                         raise
                     resolution = resolve_llm_provider_payload(
                         {"llm_provider": None},
@@ -186,7 +197,7 @@ def register_scientific_agent_conversation_routes(
                     )
             actor = resolve_authenticated_actor(
                 request,
-                required=turn_mode == "approval",
+                required=turn_mode in _AUTHORITY_TURN_MODES,
             )
 
             def run_turn(resolved):
@@ -198,12 +209,13 @@ def register_scientific_agent_conversation_routes(
                         provider=provider,
                         provider_binding_digest=resolved.provider_binding_digest,
                         actor=actor,
+                        input_bundle_id=str(payload.get("input_bundle_id") or "").strip(),
                     )
 
             try:
                 result = run_turn(resolution)
             except (LLMProviderError, ValueError) as exc:
-                if turn_mode != "approval" or not _approval_provider_fallback_allowed(exc):
+                if turn_mode not in _AUTHORITY_TURN_MODES or not _approval_provider_fallback_allowed(exc):
                     raise
                 fallback = resolve_llm_provider_payload(
                     {"llm_provider": None},
@@ -232,6 +244,12 @@ def register_scientific_agent_conversation_routes(
             return _fixed_error(
                 "scientific_agent_planning_failed",
                 "The scientific Agent could not publish a reviewable plan proposal.",
+                409,
+            )
+        except ScientificAgentRunInputBindingError:
+            return _fixed_error(
+                "input_binding_unavailable",
+                "The requested server-owned BR1 input bundle is unavailable or not eligible.",
                 409,
             )
         except ScientificAgentConversationSessionError:
@@ -303,7 +321,7 @@ def register_scientific_agent_conversation_routes(
                     run_id=run_id,
                     provider=provider,
                     provider_binding_digest=resolution.provider_binding_digest,
-                )
+            )
             return jsonify({"ok": True, **result.as_dict()})
         except FileNotFoundError:
             return jsonify({"ok": False, "error": "conversation not found"}), 404
@@ -340,6 +358,53 @@ def register_scientific_agent_conversation_routes(
                     }
                 ),
                 409,
+            )
+
+    @app.post(base + "/input-bindings")
+    def bind_scientific_agent_input_bundle(project_id: str, conversation_id: str):
+        """Bind a server-owned BR1 bundle using only its logical ID."""
+
+        _no_store()
+        try:
+            payload = _json_object()
+            allowed = {"run_id", "input_bundle_id"}
+            if set(payload).difference(allowed):
+                raise ValueError("input binding contains an unsupported field")
+            session = service.read_session(
+                project_id=project_id,
+                conversation_id=conversation_id,
+            )
+            run_id = str(payload.get("run_id") or session.get("run_id") or "").strip()
+            if not run_id:
+                run_id = f"conversation-{conversation_id}"
+            bundle_id = str(payload.get("input_bundle_id") or "").strip()
+            if not bundle_id:
+                raise ValueError("input_bundle_id is required")
+            binding = service.bind_input_bundle(
+                project_id=project_id,
+                run_id=run_id,
+                input_bundle_id=bundle_id,
+            )
+            return jsonify({"ok": True, "binding": binding})
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "conversation not found"}), 404
+        except ScientificAgentRunInputBindingError:
+            return _fixed_error(
+                "input_binding_unavailable",
+                "The requested server-owned BR1 input bundle is unavailable or not eligible.",
+                409,
+            )
+        except ScientificAgentConversationSessionError:
+            return _fixed_error(
+                "session_state_unavailable",
+                "The scientific Agent session is unavailable.",
+                409,
+            )
+        except ValueError:
+            return _fixed_error(
+                "invalid_conversation_session_request",
+                "Invalid conversation input binding request.",
+                400,
             )
 
     @app.get(base + "/events")
