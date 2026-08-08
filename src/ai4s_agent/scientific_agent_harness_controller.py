@@ -59,6 +59,7 @@ from ai4s_agent.scientific_agent_permissions import (
     IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
     IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
     MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    OPTION_POLICY_PERMISSION_POLICY_VERSION,
     derive_local_task_authority_material,
 )
 from ai4s_agent.scientific_agent_plan import (
@@ -286,6 +287,10 @@ class ControllerAdvanceResult:
     inspection: AgentHarnessControllerInspection
     decision: AgentHarnessControllerDecision | None = None
     receipt: AgentHarnessControllerActionReceipt | None = None
+    # Registered option schema of the pending scientific task, projected for
+    # the Execution Agent's bounded selection context.  It is informational:
+    # tools remain argument-free and option changes require replan/authorization.
+    option_schema: dict[str, Any] | None = None
 
 
 class AgentHarnessControllerStore:
@@ -795,10 +800,21 @@ class ScientificAgentHarnessController:
             expected_execution_digest=expected_controller_execution_digest,
             allow_historical=True,
         ) as execution:
+            inspection = self._read_only_inspection(execution)
+            option_schema: dict[str, Any] | None = None
+            task_id = inspection.current_task_id
+            if task_id:
+                try:
+                    spec = self.executor.registry.get(task_id)
+                except ValueError:
+                    spec = None
+                if spec is not None:
+                    option_schema = getattr(spec, "option_schema", None)
             yield ControllerAdvanceResult(
                 execution=execution,
-                inspection=self._read_only_inspection(execution),
+                inspection=inspection,
                 receipt=self._latest_receipt(execution),
+                option_schema=option_schema,
             )
 
     @contextmanager
@@ -1243,6 +1259,7 @@ class ScientificAgentHarnessController:
                     IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
                     IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
                     MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+                    OPTION_POLICY_PERMISSION_POLICY_VERSION,
                 }:
                     raise ScientificAgentHarnessControllerVerificationError(
                         "local Controller tasks require implementation-bound permission authority"
@@ -1356,7 +1373,27 @@ class ScientificAgentHarnessController:
             ),
             task_authority_digests=authorization.task_authority_digests,
             dispatch_intent_digests=dispatch_digests,
-            compiled_task_options_digest=_agent_digest(authorization.compiled_task_options),
+            # ``compiled_task_options_digest`` keeps its original v1 semantics:
+            # an exact digest of the compiled option values, recorded for
+            # audit under both controller policies.  The v2 execution identity
+            # binds the task-authority roster through
+            # ``task_authority_roster_digest`` (each authority digest already
+            # carries the registered option policy), so bounded in-workflow
+            # choices validated against the registered schema do not
+            # invalidate the execution identity.
+            compiled_task_options_digest=_agent_digest(
+                authorization.compiled_task_options
+            ),
+            task_authority_roster_digest=_agent_digest(
+                {
+                    "schema_version": (
+                        "agent_harness_controller_task_authority_roster.v1"
+                    ),
+                    "task_authority_digests": (
+                        authorization.task_authority_digests
+                    ),
+                }
+            ),
             artifact_binding_digest=_agent_digest(
                 [item.model_dump(mode="json") for item in authorization.artifact_bindings]
             ),
@@ -3600,14 +3637,34 @@ class ScientificAgentHarnessController:
                 in {
                     AgentHarnessControllerAction.PREPARE_LOCAL_GATE,
                     AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+                    AgentHarnessControllerAction.PREPARE_REMOTE_REQUEST,
+                    AgentHarnessControllerAction.DISPATCH_REMOTE_TASK,
+                    AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
+                    AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS,
                 }
                 and latest is not None
                 and latest.after_stage_digest == stage_digest
                 and latest.after_artifact_registry_digest == registry_digest
+                and latest.task_index is not None
+                and decision.task_index == latest.task_index + 1
                 and stage.status == RunStatus.SUCCEEDED
                 and stage.next_stage == decision.task_id
             )
-            if not preparing_exact_successor:
+            adopted_remote_exact_successor = bool(
+                decision.action_kind
+                in {
+                    AgentHarnessControllerAction.PREPARE_LOCAL_GATE,
+                    AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+                    AgentHarnessControllerAction.PREPARE_REMOTE_REQUEST,
+                }
+                and latest is not None
+                and latest.action_kind == AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS
+                and latest.task_index is not None
+                and decision.task_index == latest.task_index + 1
+                and latest.after_stage_digest == stage_digest
+                and latest.after_artifact_registry_digest == registry_digest
+            )
+            if not (preparing_exact_successor or adopted_remote_exact_successor):
                 raise ScientificAgentHarnessControllerVerificationError(
                     "unreceipted StageState belongs to another task"
                 )

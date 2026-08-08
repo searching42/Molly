@@ -65,8 +65,7 @@ from ai4s_agent.scientific_agent_plan import (
 )
 from ai4s_agent.scientific_agent_permissions import (
     IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
-    IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
-    MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+    OPTION_POLICY_PERMISSION_POLICY_VERSION,
     PERMISSION_POLICY_DIGEST,
     RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
     RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
@@ -892,11 +891,7 @@ def test_configured_authority_enables_exact_non_dispatched_authorization_chain(
         expected_proposal_digest=proposal.proposal_digest,
     )
     assert permission.outcome == AgentPermissionOutcome.REQUIRE_APPROVAL
-    assert permission.policy_version == (
-        MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
-        if task_type == "model_inference"
-        else IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
-    )
+    assert permission.policy_version == OPTION_POLICY_PERMISSION_POLICY_VERSION
     request = AgentPlanAuthorizationRequest(
         expected_proposal_digest=proposal.proposal_digest,
         authorization_mode=AgentAuthorizationMode.STEPWISE,
@@ -980,10 +975,10 @@ def test_pr_bm2_v2_decision_authorization_and_start_intent_exact_replay(
         "sha256:e5279fe137409cf3490beac8b29c32c3c3212537f67e924fdd875aebe4d6d124"
     )
     assert authorization_decision.task_decisions[0].task_authority_digest == (
-        "sha256:24acc3e767361f83490a4c0b17341b03d5e7f35d181a5f58c129fdc679516ae0"
+        "sha256:6cf899737bfe06ae99ab63edee4df4a3b9a994a676a8d304ccd2983a9d0b1274"
     )
     assert authorization_decision.decision_digest == (
-        "sha256:07a366c61dfcc547fe8265bebc0fb52df2fcf217919e2ebe033e7f2bb22081b9"
+        "sha256:65c53c7f137f630c4808c10d75f8cae0816be4c72f3605b2a28319f3cb995424"
     )
     authorization_service.control_store.publish_permission_decision(
         authorization_decision
@@ -1022,10 +1017,10 @@ def test_pr_bm2_v2_decision_authorization_and_start_intent_exact_replay(
     )
     authorization_service.control_store.publish_start_intent(start_intent)
     assert authorization.authorization_digest == (
-        "sha256:39318e0b268d4dd70836be756b7152c9d3dd57108c7b6f12877255dc2f85b3bd"
+        "sha256:cb4b246b329436f97a3af5c279cef7b631145a7ad61e3d5f849bed5c7f680cf9"
     )
     assert start_intent.start_intent_digest == (
-        "sha256:f09d3283927c0cee00d0ab971e7ef5521d61f0d5260044886ccd07a4e31fdca8"
+        "sha256:885ff532c6987295d177974cdcc36164c212e59d7ab7e5b00d34778e3c500870"
     )
     assert authorization_service.verify_authorization(
         project_id="project-1",

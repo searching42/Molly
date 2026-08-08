@@ -1,0 +1,14 @@
+{
+  "catalog_digest": "sha256:0956e5ae55627f1383147b0e5241546361b778aa49d41f670c4d00cd787f4904",
+  "executable": false,
+  "invocation_id": "invocation-14315e3a930348e4818ac15f8db90c2a",
+  "observation_digest": "sha256:803ddc90c3ecb0e56689b2202a4d04b26e8485103e9966fa14fa1db1a74f0805",
+  "proposal_digest": "sha256:b1ed6a4e73fbcda43179d99570bb4f9f4e1043cf81c1d65b01be1e73c2c228ad",
+  "proposal_id": "proposal-f1d88a31e6863245e4bb05883745a925",
+  "publication_id": "proposal-f1d88a31e6863245e4bb05883745a925",
+  "schema_version": "agent_plan_proposal_verification.v1",
+  "semantic_plan_digest": "sha256:1671513e9da19eb19e045759f9463a8f390e5c47e7b306cfc1201be6d601d164",
+  "semantic_plan_id": "semantic-plan-1671513e9da19eb19e045759f9463a8f",
+  "validated_output_digest": "sha256:d347826a62ec5bd440ac6fd5936108e7f2104065182a8ce5396ca3a3508b171d",
+  "verified": true
+}

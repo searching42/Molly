@@ -1,0 +1,23 @@
+{
+  "schema_version": "agent_execution_tool_catalog.v1",
+  "tool_catalog_digest": "sha256:1be217d220c656ec064c88b27d260b819d9f568fa749d69ad9b64f8f7ceec26d",
+  "tool_catalog_id": "execution-tool-catalog-1be217d220c656ec064c88b27d260b81",
+  "tools": [
+    {
+      "application_eligible": true,
+      "controller_action_boundary_class": "ordinary_advance",
+      "schema_version": "agent_execution_tool_spec.v1",
+      "server_compiled_operation": "no_effect_pause",
+      "tool_id": "agent.pause_current.v1",
+      "user_boundary_kind": "none"
+    },
+    {
+      "application_eligible": true,
+      "controller_action_boundary_class": "ordinary_advance",
+      "schema_version": "agent_execution_tool_spec.v1",
+      "server_compiled_operation": "controller_advance",
+      "tool_id": "controller.advance_current.v1",
+      "user_boundary_kind": "none"
+    }
+  ]
+}

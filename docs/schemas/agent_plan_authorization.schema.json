@@ -350,8 +350,11 @@
   "description": "Exact immutable user authority for one verified proposal; never executable.",
   "properties": {
     "schema_version": {
-      "const": "agent_plan_authorization.v1",
       "default": "agent_plan_authorization.v1",
+      "enum": [
+        "agent_plan_authorization.v1",
+        "agent_plan_authorization.v2"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
@@ -398,6 +401,11 @@
     },
     "run_plan_digest": {
       "title": "Run Plan Digest",
+      "type": "string"
+    },
+    "authorization_scope_digest": {
+      "default": "",
+      "title": "Authorization Scope Digest",
       "type": "string"
     },
     "run_plan": {

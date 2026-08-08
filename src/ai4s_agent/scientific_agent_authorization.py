@@ -38,6 +38,7 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerActionReceipt,
     AgentHarnessControllerDecision,
     AgentHarnessControllerExecution,
+    AGENT_EXECUTION_PLAN_PROPOSAL_V2,
     AGENT_HARNESS_CONTROLLER_POLICY_VERSION_V2,
     AgentHarnessLocalDispatchReceipt,
     AgentHarnessLocalExecutionPublication,
@@ -49,6 +50,8 @@ from ai4s_agent.schemas import (
     AgentRemoteResourceAuthorityDecision,
     AgentRemoteResourceAuthoritySet,
     AgentPlanAuthorization,
+    AGENT_PLAN_AUTHORIZATION_V1,
+    AGENT_PLAN_AUTHORIZATION_V2,
     AgentPlanAuthorizationRequest,
     AgentPlanStartIntent,
     _agent_digest,
@@ -1280,10 +1283,19 @@ class ScientificAgentAuthorizationService:
             raise ScientificAgentAuthorizationVerificationError(
                 "authorization permission decision binding is invalid"
             )
+        if authorization.authorization_scope_digest != (
+            publication.proposal.authorization_scope_digest
+        ):
+            raise ScientificAgentAuthorizationVerificationError(
+                "authorization scope no longer matches the verified proposal"
+            )
         regenerated_decision = self.permission_engine.evaluate(
             publication=publication,
             phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
             expected_proposal_digest=authorization.proposal_digest,
+            expected_authorization_scope_digest=(
+                authorization.authorization_scope_digest
+            ),
             authorization_mode=authorization.authorization_mode,
             requested_preauthorized_gate_ids=authorization.preauthorized_operational_gates,
             actor=authorization.actor,
@@ -1825,6 +1837,11 @@ class ScientificAgentAuthorizationService:
         preauthorized = sorted(request.requested_preauthorized_gate_ids)
         pending = sorted(set(proposal.required_gates).difference(preauthorized))
         return AgentPlanAuthorization(
+            schema_version=(
+                AGENT_PLAN_AUTHORIZATION_V2
+                if proposal.schema_version == AGENT_EXECUTION_PLAN_PROPOSAL_V2
+                else AGENT_PLAN_AUTHORIZATION_V1
+            ),
             project_id=proposal.project_id,
             run_id=proposal.run_id,
             proposal_id=proposal.proposal_id,
@@ -1835,6 +1852,7 @@ class ScientificAgentAuthorizationService:
             observation_digest=proposal.observation_digest,
             tool_catalog_digest=proposal.tool_catalog_digest,
             run_plan_digest=_agent_digest(proposal.run_plan.model_dump(mode="json")),
+            authorization_scope_digest=proposal.authorization_scope_digest,
             run_plan=proposal.run_plan,
             task_ids=[item.task_id for item in proposal.run_plan.tasks],
             task_authority_digests={

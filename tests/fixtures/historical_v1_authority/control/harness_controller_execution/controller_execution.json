@@ -1,0 +1,94 @@
+{
+  "actor": "alice",
+  "actor_source": "config:AI4S_AGENT_AUTHORIZATION_OWNER",
+  "aggregate_budget_digest": "sha256:a7918bc5d4c5032f76f779266bc65cb80b1ef276c19f4c83c62956e848f03ecf",
+  "artifact_binding_digest": "sha256:046264c0f2c802216726eba0cf8c432f567967d926216569019e892b65f6eaf1",
+  "authorization_digest": "sha256:ced2487b4f5a6fe518430b398f42a38f58b77b78f86809556794697c38c53c3f",
+  "authorization_id": "authorization-ced2487b4f5a6fe518430b398f42a38f",
+  "authorization_mode": "stepwise",
+  "budget_binding_digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "client_request_id": "historical-v1-source-request",
+  "compiled_task_options_digest": "sha256:c0731b3dafe2fd644ba7b91bda46df9e8294ab8f9908b4c59cc09b4e077d90ec",
+  "controller_execution_id": "controller-f1e2231b5702b11cf570db068ee9d5d5",
+  "controller_policy_digest": "sha256:044fe7aa0f725f5cf622665f8a936ab1bf9294f057b0eba1c0d4d0a519bbb48c",
+  "controller_policy_version": "scientific-agent-harness-controller-policy.v1",
+  "created_at": "2026-08-01T00:00:00Z",
+  "dispatch_intent_digests": {
+    "inspect_dataset": "sha256:67325a671dc009271cf756da560bd86b2a0117f55b57e0a466e78be2dd8f326d"
+  },
+  "executable": true,
+  "execution_digest": "sha256:f1e2231b5702b11cf570db068ee9d5d56b695abf1d6611626608da3cfba2a6d4",
+  "gate_binding_digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "observation_digest": "sha256:803ddc90c3ecb0e56689b2202a4d04b26e8485103e9966fa14fa1db1a74f0805",
+  "observation_id": "observation-803ddc90c3ecb0e56689b2202a4d04b2",
+  "ordered_task_ids": [
+    "inspect_dataset"
+  ],
+  "permission_decision_digest": "sha256:9b0d9a57798b35072ef0c70feaf75d7ee7b6c182e06c2a47ae5e9d331ed88b57",
+  "permission_decision_id": "permission-9b0d9a57798b35072ef0c70feaf75d7e",
+  "permission_policy_digest": "sha256:5a8f37a6d35be67a6532267d79ab7aca21cd53ddd30c0dcceb8457b620a66dff",
+  "permission_policy_version": "scientific-agent-permission-policy.v3",
+  "project_id": "project-1",
+  "proposal_digest": "sha256:b1ed6a4e73fbcda43179d99570bb4f9f4e1043cf81c1d65b01be1e73c2c228ad",
+  "proposal_id": "proposal-f1d88a31e6863245e4bb05883745a925",
+  "remote_authority_roster_digest": "",
+  "remote_authority_set_digest": "",
+  "remote_authority_set_id": "",
+  "request_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "run_id": "run-1",
+  "run_plan_digest": "sha256:4649fe71d1d1f89dccb142f9763d9f67e95d18b2d4b33a7b9691f046427c7eb3",
+  "schema_version": "agent_harness_controller_execution.v1",
+  "semantic_plan_digest": "sha256:1671513e9da19eb19e045759f9463a8f390e5c47e7b306cfc1201be6d601d164",
+  "semantic_plan_id": "semantic-plan-1671513e9da19eb19e045759f9463a8f",
+  "source_bindings": [
+    {
+      "authority_class": "authoritative",
+      "name": "start_intent",
+      "source_digest": "sha256:0bd24ff387a5f9de807d6ab218ce3d1ffe36b0ab2098bea944c5f5e89fd2b52a",
+      "source_id": "start-intent-80aa85ced6ec378e97341ec68ce043c4"
+    },
+    {
+      "authority_class": "authoritative",
+      "name": "authorization",
+      "source_digest": "sha256:ced2487b4f5a6fe518430b398f42a38f58b77b78f86809556794697c38c53c3f",
+      "source_id": "authorization-ced2487b4f5a6fe518430b398f42a38f"
+    },
+    {
+      "authority_class": "authoritative",
+      "name": "permission",
+      "source_digest": "sha256:9b0d9a57798b35072ef0c70feaf75d7ee7b6c182e06c2a47ae5e9d331ed88b57",
+      "source_id": "permission-9b0d9a57798b35072ef0c70feaf75d7e"
+    },
+    {
+      "authority_class": "authoritative",
+      "name": "proposal",
+      "source_digest": "sha256:b1ed6a4e73fbcda43179d99570bb4f9f4e1043cf81c1d65b01be1e73c2c228ad",
+      "source_id": "proposal-f1d88a31e6863245e4bb05883745a925"
+    }
+  ],
+  "source_bindings_digest": "sha256:0094d5fdc338396d13a3e5d7904c62933d29f98b6c21c4830200091e22c94f40",
+  "start_intent_digest": "sha256:0bd24ff387a5f9de807d6ab218ce3d1ffe36b0ab2098bea944c5f5e89fd2b52a",
+  "start_intent_id": "start-intent-80aa85ced6ec378e97341ec68ce043c4",
+  "task_authority_digests": {
+    "inspect_dataset": "sha256:e19c5267368fd998b8fd54acb3bd09944e61988c6960ce086280673b6d33addc"
+  },
+  "task_roster_digest": "sha256:8d1a36e49c207058364c70818d6291adbc92c5ccad67a62e1fb0bd833d2a73f7",
+  "task_slots": [
+    {
+      "attempt": 0,
+      "compiled_options_digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "dispatch_intent_digest": "sha256:67325a671dc009271cf756da560bd86b2a0117f55b57e0a466e78be2dd8f326d",
+      "execution_route": "local_executor",
+      "input_artifacts_digest": "sha256:42da00692e9006cc119c8c13d688fd1dd2a6ce2f130a49e86bdc347be9115add",
+      "local_adapter_execution_binding_digest": "sha256:1eab3706a5209628008bc2ba3ef9b4bcbbdece2a9ffacb9bf43deced580a5986",
+      "output_contract_digest": "sha256:0c333cb9142ab283a0fb225de58bcf2dc121b347cfaba800e19d1adc592e6d7b",
+      "planned_task_index": 0,
+      "remote_authority_digest": "",
+      "remote_authority_id": "",
+      "slot_id": "harness-slot-f90ce250bbd6cf440f12298a19f3ae62",
+      "task_authority_digest": "sha256:e19c5267368fd998b8fd54acb3bd09944e61988c6960ce086280673b6d33addc",
+      "task_id": "inspect_dataset"
+    }
+  ],
+  "tool_catalog_digest": "sha256:0956e5ae55627f1383147b0e5241546361b778aa49d41f670c4d00cd787f4904"
+}

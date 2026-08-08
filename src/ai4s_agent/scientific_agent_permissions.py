@@ -46,9 +46,15 @@ IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION = (
 MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION = (
     "scientific-agent-permission-policy.v5"
 )
+OPTION_POLICY_PERMISSION_POLICY_VERSION = (
+    "scientific-agent-permission-policy.v6"
+)
 TASK_EXECUTION_BINDING_VERSION = "agent-task-execution-binding.v1"
 TASK_AUTHORITY_BINDING_VERSION = "agent-task-authority-binding.v1"
 RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION = "agent-task-authority-binding.v2"
+OPTION_POLICY_TASK_AUTHORITY_BINDING_VERSION = (
+    "agent-task-authority-binding.v3"
+)
 
 RECOGNIZED_EFFECT_CLASSES = (
     "observe",
@@ -418,6 +424,32 @@ MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST = _agent_digest(
     MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL
 )
 
+OPTION_POLICY_PERMISSION_POLICY_MATERIAL: Mapping[str, Any] = {
+    **MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL,
+    "schema_version": "scientific_agent_permission_policy_material.v6",
+    "policy_version": OPTION_POLICY_PERMISSION_POLICY_VERSION,
+    "internal_dependency_rules": {
+        **MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL[
+            "internal_dependency_rules"
+        ],
+        "task_authority_binding_version": (
+            OPTION_POLICY_TASK_AUTHORITY_BINDING_VERSION
+        ),
+    },
+    "task_authority_binding_rules": {
+        **MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL[
+            "task_authority_binding_rules"
+        ],
+        "scope": "all_tasks",
+        "binding_version": OPTION_POLICY_TASK_AUTHORITY_BINDING_VERSION,
+        "caller_option_contract": "option_policy_digest_only",
+        "option_values": "validated_at_dispatch_not_prehashed",
+    },
+}
+OPTION_POLICY_PERMISSION_POLICY_DIGEST = _agent_digest(
+    OPTION_POLICY_PERMISSION_POLICY_MATERIAL
+)
+
 
 _OUTCOME_PRIORITY = {
     AgentPermissionOutcome.ALLOW: 1,
@@ -465,6 +497,12 @@ def permission_policy_identity(
             version=MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
             digest=MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST,
             material=MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL,
+        )
+    if version == OPTION_POLICY_PERMISSION_POLICY_VERSION:
+        return PermissionPolicyIdentity(
+            version=OPTION_POLICY_PERMISSION_POLICY_VERSION,
+            digest=OPTION_POLICY_PERMISSION_POLICY_DIGEST,
+            material=OPTION_POLICY_PERMISSION_POLICY_MATERIAL,
         )
     raise ValueError("unknown scientific agent permission policy version")
 
@@ -598,6 +636,7 @@ def _local_adapter_binding_version(policy_version: str) -> str:
         IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
         IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
         MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+        OPTION_POLICY_PERMISSION_POLICY_VERSION,
     }:
         return IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
     raise ValueError("unknown scientific agent permission policy version")
@@ -635,6 +674,37 @@ def _unavailable_execution_binding_digest(
     )
 
 
+def _option_policy_digest(
+    *,
+    option_schema: Mapping[str, Any] | None,
+    default_planner_options: Mapping[str, Any] | None,
+    backend_default_planner_options: Mapping[str, Mapping[str, Any]] | None,
+    review_required_option_ids: Sequence[str],
+    option_compiler_version: str,
+) -> str:
+    """Digest of the task option *policy* (schema and server defaults).
+
+    Option values chosen by the planner/LLM are deliberately excluded: they are
+    validated against this policy at dispatch time instead of being pre-hashed
+    into the task authority.  This establishes the stable scope identity that
+    would make future bounded in-workflow option revision possible; this PR
+    does not yet allow executing changed option values under an existing
+    authorization (the execution still binds the exact proposal).
+    """
+
+    material = {
+        "schema_version": "agent-task-option-policy.v1",
+        "option_schema": option_schema or {},
+        "default_planner_options": default_planner_options or {},
+        "backend_default_planner_options": (
+            backend_default_planner_options or {}
+        ),
+        "review_required_option_ids": sorted(set(review_required_option_ids)),
+        "option_compiler_version": str(option_compiler_version or ""),
+    }
+    return _agent_digest(material)
+
+
 def _task_authority_digest(
     *,
     task_id: str,
@@ -648,12 +718,26 @@ def _task_authority_digest(
     supports_plan_preapproval: bool,
     idempotency_policy: str,
     verification_policy: str,
-    effective_options: Mapping[str, Any] | None,
-    compiled_options: Mapping[str, Any] | None,
     execution_binding_digest: str,
     binding_version: str = TASK_AUTHORITY_BINDING_VERSION,
     budget_dimensions: Sequence[str] = (),
+    effective_options: Mapping[str, Any] | None = None,
+    compiled_options: Mapping[str, Any] | None = None,
+    option_policy_digest: str = "",
 ) -> str:
+    """Digest one task's exact authority under a versioned binding contract.
+
+    ``agent-task-authority-binding.v1``/``.v2`` keep the legacy material: the
+    concrete effective/compiled option values are part of the identity (plus
+    budget dimensions for the resource-aware v2).  The new
+    ``agent-task-authority-binding.v3`` replaces those values with the
+    registered option *policy* digest, so bounded in-workflow choices that
+    satisfy the schema no longer change the task authority.  Versioning is
+    mandatory here: replaying an old PermissionDecision must reproduce the
+    exact legacy digest, and new decisions must never silently reinterpret an
+    old binding version.
+    """
+
     material: dict[str, Any] = {
         "schema_version": binding_version,
         "task_id": task_id,
@@ -667,16 +751,26 @@ def _task_authority_digest(
         "supports_plan_preapproval": supports_plan_preapproval,
         "idempotency_policy": idempotency_policy,
         "verification_policy": verification_policy,
-        "caller_option_contract": {
+        "execution_binding_digest": execution_binding_digest,
+    }
+    if binding_version == OPTION_POLICY_TASK_AUTHORITY_BINDING_VERSION:
+        material["caller_option_contract"] = {
+            "kind": "planner_compiled" if planner_visible else "fixed_empty",
+            "option_policy_digest": option_policy_digest,
+        }
+        material["budget_dimensions"] = sorted(set(budget_dimensions))
+    elif binding_version in {
+        TASK_AUTHORITY_BINDING_VERSION,
+        RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION,
+    }:
+        material["caller_option_contract"] = {
             "kind": "planner_compiled" if planner_visible else "fixed_empty",
             "effective_options": effective_options,
             "compiled_options": compiled_options,
-        },
-        "execution_binding_digest": execution_binding_digest,
-    }
-    if binding_version == RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION:
-        material["budget_dimensions"] = sorted(set(budget_dimensions))
-    elif binding_version != TASK_AUTHORITY_BINDING_VERSION:
+        }
+        if binding_version == RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION:
+            material["budget_dimensions"] = sorted(set(budget_dimensions))
+    else:
         raise ValueError("unknown task authority binding version")
     return _agent_digest(material)
 
@@ -712,6 +806,7 @@ def derive_local_task_authority_material(
         IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
         IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
         MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+        OPTION_POLICY_PERMISSION_POLICY_VERSION,
     }:
         raise ValueError("unknown scientific agent permission policy version")
     proposal = publication.proposal
@@ -762,7 +857,30 @@ def derive_local_task_authority_material(
         RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
         IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
         MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+        OPTION_POLICY_PERMISSION_POLICY_VERSION,
     }
+    option_policy_binding = (
+        policy_version == OPTION_POLICY_PERMISSION_POLICY_VERSION
+    )
+    option_policy_digest = (
+        _option_policy_digest(
+            option_schema=getattr(registered, "option_schema", None),
+            default_planner_options=getattr(
+                registered, "default_planner_options", None
+            ),
+            backend_default_planner_options=getattr(
+                registered, "backend_default_planner_options", None
+            ),
+            review_required_option_ids=getattr(
+                registered, "review_required_option_ids", ()
+            ),
+            option_compiler_version=getattr(
+                registered, "option_compiler_version", ""
+            ),
+        )
+        if option_policy_binding
+        else ""
+    )
     task_authority = _task_authority_digest(
         task_id=task_id,
         planner_visible=planner_visible,
@@ -777,9 +895,12 @@ def derive_local_task_authority_material(
         verification_policy=verification_policy,
         effective_options=proposal.effective_planner_options.get(task_id),
         compiled_options=proposal.compiled_task_options.get(task_id),
+        option_policy_digest=option_policy_digest,
         execution_binding_digest=execution_binding,
         binding_version=(
-            RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
+            OPTION_POLICY_TASK_AUTHORITY_BINDING_VERSION
+            if option_policy_binding
+            else RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
             if resource_aware
             else TASK_AUTHORITY_BINDING_VERSION
         ),
@@ -821,6 +942,7 @@ class ScientificAgentPermissionEngine:
         publication: ScientificAgentPlanPublication,
         phase: AgentPermissionPhase,
         expected_proposal_digest: str | None = None,
+        expected_authorization_scope_digest: str | None = None,
         authorization_mode: AgentAuthorizationMode | None = None,
         requested_preauthorized_gate_ids: Sequence[str] = (),
         actor: str = "",
@@ -845,18 +967,18 @@ class ScientificAgentPermissionEngine:
             and item.remote_task_type == "model_inference"
             for item in proposal.dispatch_intents
         )
-        selected_policy_version = policy_version or (
-            MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
-            if has_remote_model_inference and self.resource_authority_resolver is not None
-            else IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
-            if has_remote_tasks and self.resource_authority_resolver is not None
-            else IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION
+        # New evaluations always write the current option-policy policy (v6);
+        # callers that replay a historical decision pass its recorded policy
+        # version explicitly so the legacy digest algorithms are preserved.
+        selected_policy_version = (
+            policy_version or OPTION_POLICY_PERMISSION_POLICY_VERSION
         )
         policy = permission_policy_identity(selected_policy_version)
         resource_aware = selected_policy_version in {
             RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
             IMPLEMENTATION_BOUND_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
             MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+            OPTION_POLICY_PERMISSION_POLICY_VERSION,
         }
 
         global_findings: list[AgentPermissionFinding] = []
@@ -880,6 +1002,19 @@ class ScientificAgentPermissionEngine:
                 "proposal_digest_mismatch",
                 AgentPermissionOutcome.DENY,
                 "Expected proposal digest does not match the verified publication.",
+            )
+        if (
+            expected_authorization_scope_digest is not None
+            and proposal.authorization_scope_digest
+            != expected_authorization_scope_digest
+        ):
+            add_global(
+                "authorization_scope_mismatch",
+                AgentPermissionOutcome.DENY,
+                (
+                    "Expected authorization scope digest does not match the "
+                    "verified publication scope."
+                ),
             )
         if proposal.executable is not False:
             add_global(
@@ -1160,6 +1295,47 @@ class ScientificAgentPermissionEngine:
                         "remote_task_type": remote_task_type,
                     }
                 )
+            option_policy_binding = (
+                selected_policy_version
+                == OPTION_POLICY_PERMISSION_POLICY_VERSION
+            )
+            option_policy_digest = (
+                _option_policy_digest(
+                    option_schema=(
+                        getattr(tool, "option_schema", None)
+                        if tool is not None
+                        else getattr(registered, "option_schema", None)
+                    ),
+                    default_planner_options=(
+                        getattr(tool, "default_planner_options", None)
+                        if tool is not None
+                        else getattr(registered, "default_planner_options", None)
+                    ),
+                    backend_default_planner_options=(
+                        getattr(tool, "backend_default_planner_options", None)
+                        if tool is not None
+                        else getattr(
+                            registered, "backend_default_planner_options", None
+                        )
+                    ),
+                    review_required_option_ids=(
+                        getattr(tool, "review_required_option_ids", ())
+                        if tool is not None
+                        else getattr(
+                            registered, "review_required_option_ids", ()
+                        )
+                    ),
+                    option_compiler_version=(
+                        getattr(tool, "option_compiler_version", "")
+                        if tool is not None
+                        else getattr(
+                            registered, "option_compiler_version", ""
+                        )
+                    ),
+                )
+                if option_policy_binding
+                else ""
+            )
             task_authority_digest = (
                 local_authority_material.task_authority_digest
                 if local_authority_material is not None
@@ -1175,11 +1351,16 @@ class ScientificAgentPermissionEngine:
                     supports_plan_preapproval=supports_plan_preapproval,
                     idempotency_policy=idempotency_policy,
                     verification_policy=verification_policy,
-                    effective_options=proposal.effective_planner_options.get(task_id),
+                    effective_options=proposal.effective_planner_options.get(
+                        task_id
+                    ),
                     compiled_options=proposal.compiled_task_options.get(task_id),
+                    option_policy_digest=option_policy_digest,
                     execution_binding_digest=execution_binding_digest,
                     binding_version=(
-                        RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
+                        OPTION_POLICY_TASK_AUTHORITY_BINDING_VERSION
+                        if option_policy_binding
+                        else RESOURCE_AWARE_TASK_AUTHORITY_BINDING_VERSION
                         if resource_aware
                         else TASK_AUTHORITY_BINDING_VERSION
                     ),
@@ -1268,7 +1449,10 @@ class ScientificAgentPermissionEngine:
                 recognized_remote_types = (
                     RECOGNIZED_REMOTE_TASK_TYPES_V2
                     if selected_policy_version
-                    == MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION
+                    in {
+                        MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION,
+                        OPTION_POLICY_PERMISSION_POLICY_VERSION,
+                    }
                     else RECOGNIZED_REMOTE_TASK_TYPES
                 )
                 if remote_task_type not in recognized_remote_types:
@@ -1603,6 +1787,10 @@ __all__ = [
     "MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_VERSION",
     "MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_DIGEST",
     "MODEL_INFERENCE_RESOURCE_AWARE_PERMISSION_POLICY_MATERIAL",
+    "OPTION_POLICY_PERMISSION_POLICY_VERSION",
+    "OPTION_POLICY_PERMISSION_POLICY_DIGEST",
+    "OPTION_POLICY_PERMISSION_POLICY_MATERIAL",
+    "OPTION_POLICY_TASK_AUTHORITY_BINDING_VERSION",
     "REASON_CODE_VOCABULARY",
     "PermissionPolicyIdentity",
     "permission_policy_identity",

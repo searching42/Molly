@@ -1,0 +1,8 @@
+{
+  "artifact_digest": "sha256:f1e2231b5702b11cf570db068ee9d5d56b695abf1d6611626608da3cfba2a6d4",
+  "artifact_id": "controller-f1e2231b5702b11cf570db068ee9d5d5",
+  "artifact_type": "harness_controller_execution",
+  "executable": false,
+  "schema_version": "agent_plan_control_verification.v1",
+  "verified": true
+}

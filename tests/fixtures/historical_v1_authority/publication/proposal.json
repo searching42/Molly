@@ -1,0 +1,121 @@
+{
+  "assumptions": [],
+  "client_request_id": "proposal-request-1",
+  "compiled_task_options": {
+    "inspect_dataset": {}
+  },
+  "created_at": "2026-08-01T00:00:00Z",
+  "dispatch_intents": [
+    {
+      "execution_route": "local_executor",
+      "logical_profile_id": null,
+      "remote_task_type": null,
+      "requested_resources": null,
+      "task_id": "inspect_dataset"
+    }
+  ],
+  "effective_planner_options": {
+    "inspect_dataset": {}
+  },
+  "executable": false,
+  "goal": "Inspect one exact dataset",
+  "invocation_id": "invocation-14315e3a930348e4818ac15f8db90c2a",
+  "limits": {},
+  "llm_invocation": {
+    "cost_usd": null,
+    "latency_ms": 0.6760840769857168,
+    "model": "stub",
+    "observation_digest": "sha256:803ddc90c3ecb0e56689b2202a4d04b26e8485103e9966fa14fa1db1a74f0805",
+    "prompt_version": "scientific-agent-long-horizon-plan.v1",
+    "provider": "stub",
+    "response_id": "stub",
+    "tool_catalog_digest": "sha256:0956e5ae55627f1383147b0e5241546361b778aa49d41f670c4d00cd787f4904",
+    "validated_output_digest": "sha256:d347826a62ec5bd440ac6fd5936108e7f2104065182a8ce5396ca3a3508b171d"
+  },
+  "missing_artifacts": [],
+  "observation_digest": "sha256:803ddc90c3ecb0e56689b2202a4d04b26e8485103e9966fa14fa1db1a74f0805",
+  "observation_id": "observation-803ddc90c3ecb0e56689b2202a4d04b2",
+  "option_compiler_version": "scientific-planner-option-compiler.v1",
+  "planner_backend": "stub",
+  "planner_options": {
+    "inspect_dataset": {}
+  },
+  "project_id": "project-1",
+  "prompt_version": "scientific-agent-long-horizon-plan.v1",
+  "proposal_digest": "sha256:b1ed6a4e73fbcda43179d99570bb4f9f4e1043cf81c1d65b01be1e73c2c228ad",
+  "proposal_id": "proposal-f1d88a31e6863245e4bb05883745a925",
+  "publication_id": "proposal-f1d88a31e6863245e4bb05883745a925",
+  "questions": [],
+  "rationales": [
+    "Execute the exact registered local task roster."
+  ],
+  "required_gates": [],
+  "run_id": "run-1",
+  "run_plan": {
+    "available_artifacts": [
+      "dataset_profile",
+      "property_catalog",
+      "uploaded_dataset"
+    ],
+    "missing_artifacts": [],
+    "requested_tasks": [
+      "inspect_dataset"
+    ],
+    "run_id": "run-1",
+    "tasks": [
+      {
+        "depends_on": [],
+        "output_artifacts": [
+          "dataset_profile",
+          "property_catalog"
+        ],
+        "required_artifacts": [
+          "uploaded_dataset"
+        ],
+        "task_id": "inspect_dataset",
+        "unresolved_requirements": []
+      }
+    ]
+  },
+  "schema_version": "agent_execution_plan_proposal.v1",
+  "selected_artifacts": [
+    "uploaded_dataset"
+  ],
+  "selected_profiles": [],
+  "semantic_plan_digest": "sha256:1671513e9da19eb19e045759f9463a8f390e5c47e7b306cfc1201be6d601d164",
+  "semantic_plan_id": "semantic-plan-1671513e9da19eb19e045759f9463a8f",
+  "status": "review_required",
+  "stop_conditions": [
+    "stop on validation failure"
+  ],
+  "success_criteria": [
+    "produce a dataset profile"
+  ],
+  "tool_catalog_digest": "sha256:0956e5ae55627f1383147b0e5241546361b778aa49d41f670c4d00cd787f4904",
+  "user_constraints": [],
+  "validated_llm_response": {
+    "assumptions": [],
+    "limits": {},
+    "questions": [],
+    "rationales": [
+      "Execute the exact registered local task roster."
+    ],
+    "requested_tool_ids": [
+      "inspect_dataset"
+    ],
+    "schema_version": "agent_execution_plan_llm_response.v1",
+    "selected_input_artifact_ids": [
+      "uploaded_dataset"
+    ],
+    "selected_logical_profile_ids": [],
+    "stop_conditions": [
+      "stop on validation failure"
+    ],
+    "success_criteria": [
+      "produce a dataset profile"
+    ],
+    "task_options": {
+      "inspect_dataset": {}
+    }
+  }
+}

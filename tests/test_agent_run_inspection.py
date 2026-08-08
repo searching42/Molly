@@ -896,6 +896,9 @@ def test_policy_v1_execution_with_current_proposal_is_historical_only(
             "client_request_id": "v1-history-legacy-controller-1",
         }
     )
+    # A real v1 historical execution predates the v2-only option policy
+    # identity; strip it to simulate the exact legacy byte shape.
+    legacy_payload.pop("task_authority_roster_digest", None)
     legacy = AgentHarnessControllerExecution.model_validate(legacy_payload)
     control_store._publish_model(
         project_id="project-1",

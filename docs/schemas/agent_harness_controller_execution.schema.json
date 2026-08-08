@@ -247,6 +247,11 @@
       "title": "Compiled Task Options Digest",
       "type": "string"
     },
+    "task_authority_roster_digest": {
+      "default": "",
+      "title": "Task Authority Roster Digest",
+      "type": "string"
+    },
     "artifact_binding_digest": {
       "title": "Artifact Binding Digest",
       "type": "string"

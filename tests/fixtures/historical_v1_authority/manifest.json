@@ -1,0 +1,17 @@
+{
+  "generated_from": "bf82cfd",
+  "project_id": "project-1",
+  "run_id": "run-1",
+  "proposal_id": "proposal-f1d88a31e6863245e4bb05883745a925",
+  "proposal_schema_version": "agent_execution_plan_proposal.v1",
+  "proposal_digest": "sha256:b1ed6a4e73fbcda43179d99570bb4f9f4e1043cf81c1d65b01be1e73c2c228ad",
+  "authorization_id": "authorization-ced2487b4f5a6fe518430b398f42a38f",
+  "authorization_schema_version": "agent_plan_authorization.v1",
+  "authorization_digest": "sha256:ced2487b4f5a6fe518430b398f42a38f58b77b78f86809556794697c38c53c3f",
+  "permission_decision_id": "permission-d30c2dc1f6c3fdf61a55c797e7ef7e99",
+  "permission_policy_version": "scientific-agent-permission-policy.v3",
+  "permission_decision_digest": "sha256:d30c2dc1f6c3fdf61a55c797e7ef7e9903aca06d1a433c33bc942dd65e67e93f",
+  "controller_execution_id": "controller-f1e2231b5702b11cf570db068ee9d5d5",
+  "controller_policy_version": "scientific-agent-harness-controller-policy.v1",
+  "execution_digest": "sha256:f1e2231b5702b11cf570db068ee9d5d56b695abf1d6611626608da3cfba2a6d4"
+}

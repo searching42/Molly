@@ -100,8 +100,11 @@
       "description": "Immutable review/control artifact.  It is never an execution authority.",
       "properties": {
         "schema_version": {
-          "const": "agent_execution_plan_proposal.v1",
           "default": "agent_execution_plan_proposal.v1",
+          "enum": [
+            "agent_execution_plan_proposal.v1",
+            "agent_execution_plan_proposal.v2"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -296,6 +299,11 @@
         "proposal_digest": {
           "default": "",
           "title": "Proposal Digest",
+          "type": "string"
+        },
+        "authorization_scope_digest": {
+          "default": "",
+          "title": "Authorization Scope Digest",
           "type": "string"
         },
         "executable": {

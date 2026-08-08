@@ -1,0 +1,25 @@
+{
+  "artifact_digest": "sha256:6dd504756eb829deca913221b960c35c1c92b5de78b3dbcb41195eff842287ce",
+  "artifact_id": "tool-call-proposal-6dd504756eb829deca913221b960c35c",
+  "artifact_type": "tool_call_proposal",
+  "complete": true,
+  "files": {
+    "observation.json": {
+      "sha256": "fa8706076e26dff527e6545ea4c1a1b34f5e8c7b2e89db6a6fcee9812b9b7d24",
+      "size_bytes": 3072
+    },
+    "tool_call_proposal.json": {
+      "sha256": "07e429a60a6d1eafb1e7b6a5146a69e3e3b6269c80945a6111c7f9e33e09227c",
+      "size_bytes": 3817
+    },
+    "tool_catalog.json": {
+      "sha256": "05e1ab00dc06a52b47c5839fa8748fad303abbf43b38319efaf80181f67fde58",
+      "size_bytes": 863
+    },
+    "verification.json": {
+      "sha256": "ed3671209003398e9b5c1792e501bbda8aa9d8836ebd933a55feb16bfe712069",
+      "size_bytes": 322
+    }
+  },
+  "schema_version": "execution_agent_publication_manifest.v1"
+}

@@ -262,6 +262,10 @@ def test_historical_v1_controller_execution_is_readable_but_immutable(
             "controller_policy_digest": "sha256:" + "b" * 64,
         }
     )
+    # A real v1 historical execution was published before the v2-only option
+    # policy identity existed; strip the v2-only field to simulate the exact
+    # legacy byte shape.
+    legacy_payload.pop("task_authority_roster_digest", None)
     legacy = AgentHarnessControllerExecution.model_validate(legacy_payload)
 
     with pytest.raises(

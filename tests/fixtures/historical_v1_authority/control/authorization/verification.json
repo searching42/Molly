@@ -1,0 +1,8 @@
+{
+  "artifact_digest": "sha256:ced2487b4f5a6fe518430b398f42a38f58b77b78f86809556794697c38c53c3f",
+  "artifact_id": "authorization-ced2487b4f5a6fe518430b398f42a38f",
+  "artifact_type": "authorization",
+  "executable": false,
+  "schema_version": "agent_plan_control_verification.v1",
+  "verified": true
+}

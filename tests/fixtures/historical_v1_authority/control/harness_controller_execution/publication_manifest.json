@@ -1,0 +1,17 @@
+{
+  "artifact_digest": "sha256:f1e2231b5702b11cf570db068ee9d5d56b695abf1d6611626608da3cfba2a6d4",
+  "artifact_id": "controller-f1e2231b5702b11cf570db068ee9d5d5",
+  "artifact_type": "harness_controller_execution",
+  "complete": true,
+  "files": {
+    "controller_execution.json": {
+      "sha256": "06cfcdf2eb523ceec765b93d188c86d0ea185aa757416c653c8603a8473e7d84",
+      "size_bytes": 5317
+    },
+    "verification.json": {
+      "sha256": "c566623027fa9eb43496acea313f3ae1fa6aea6f946cad030723990eb425607c",
+      "size_bytes": 315
+    }
+  },
+  "schema_version": "agent_plan_control_publication_manifest.v1"
+}

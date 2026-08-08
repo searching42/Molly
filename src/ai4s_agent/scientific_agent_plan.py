@@ -40,6 +40,7 @@ from ai4s_agent.schemas import (
     AgentExecutionPlanLLMResponse,
     AgentExecutionPlanProposal,
     AgentExecutionPlanQuestion,
+    AGENT_EXECUTION_PLAN_PROPOSAL_V2,
     AgentExecutionProfileObservation,
     AgentExistingPlanSummary,
     AgentLLMInvocationMetadata,
@@ -1248,6 +1249,7 @@ class AgentExecutionPlanCompiler:
         created_at: str | None = None,
         client_request_id: str | None = None,
         invocation_id: str | None = None,
+        schema_version: str = AGENT_EXECUTION_PLAN_PROPOSAL_V2,
     ) -> AgentExecutionPlanProposal:
         parsed = response if isinstance(response, AgentExecutionPlanLLMResponse) else AgentExecutionPlanLLMResponse.model_validate(response)
         if invocation.observation_digest != observation.observation_digest:
@@ -1567,6 +1569,7 @@ class AgentExecutionPlanCompiler:
             else f"invocation-{_canonical_digest(default_identity_material).split(':', 1)[1][:32]}"
         )
         return AgentExecutionPlanProposal(
+            schema_version=schema_version,
             project_id=observation.project_id,
             run_id=observation.run_id,
             goal=observation.goal_context,
@@ -2526,6 +2529,11 @@ class ScientificAgentPlanProposalStore:
                 created_at=proposal.created_at,
                 client_request_id=proposal.client_request_id,
                 invocation_id=proposal.invocation_id,
+                # Historical v1 proposals must recompile with their persisted
+                # schema version: the current writer is v2, and recompiling a
+                # v1 artifact as v2 would make every legacy publication
+                # unverifiable.
+                schema_version=proposal.schema_version,
             )
         except (ScientificAgentPlanError, ValueError) as exc:
             raise ScientificAgentPlanError("proposal is not a deterministic registry compilation") from exc

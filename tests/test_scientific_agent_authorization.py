@@ -46,6 +46,7 @@ from ai4s_agent.scientific_agent_authorization import (
 from ai4s_agent.scientific_agent_permissions import (
     IMPLEMENTATION_BOUND_PERMISSION_POLICY_DIGEST,
     IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION,
+    OPTION_POLICY_PERMISSION_POLICY_VERSION,
     PERMISSION_POLICY_DIGEST,
     PERMISSION_POLICY_MATERIAL,
     PERMISSION_POLICY_VERSION,
@@ -149,6 +150,7 @@ def _permission_complete_hidden_task(task_id: str) -> AtomicTaskSpec:
         default_planner_options={},
         backend_default_planner_options={},
         review_required_option_ids=[],
+        budget_dimensions=[],
         execution_route="local_executor",
         remote_task_type=None,
         backend_execution_routes={},
@@ -641,21 +643,46 @@ def test_complete_proposal_review_requires_exact_plan_authorization(
     assert [item.task_id for item in decision.task_decisions] == [
         item.task_id for item in proposal.run_plan.tasks
     ]
-    assert decision.policy_version == IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION
+    assert decision.policy_version == OPTION_POLICY_PERMISSION_POLICY_VERSION
     assert decision.policy_digest == (
-        "sha256:5a8f37a6d35be67a6532267d79ab7aca21cd53ddd30c0dcceb8457b620a66dff"
+        "sha256:3bc77b1ae27c7e504313061ed9ee34b8d9ad0f9f0dbc99dd9d25e352cdd809f5"
     )
     assert decision.task_decisions[0].task_authority_digest == (
-        "sha256:89fb2a426f7452ad71e685c001aeb84e39c893f70c980080d64a86a859ec851c"
+        "sha256:27c505c871e7a22b5ce0892d34ee7b8c8370c1e92081a932946f37fe17e82f9a"
     )
     assert decision.decision_digest == (
-        "sha256:86fb9bd5038f937e72b8bb0105a8aebd8621b27b2466690a95bee94246eeb312"
+        "sha256:f63cf9315870ee2bcca963ef1ccea8ca435c4c015c06b75c10c65d32b40ec9bd"
     )
-    persisted = _authorization_service(storage, proposal_store).control_store.read_permission_decision(
+
+
+def test_permission_scope_binding_accepts_same_scope_and_rejects_scope_drift(
+    tmp_path: Path,
+) -> None:
+    storage, proposal_store, proposal = _workspace_with_proposal(tmp_path)
+    service = _authorization_service(storage, proposal_store)
+    publication = proposal_store.read(
         project_id="project-1",
-        decision_id=decision.decision_id,
+        proposal_id=proposal.proposal_id,
+        verify_current=True,
     )
-    assert persisted.model_dump(mode="json") == decision.model_dump(mode="json")
+    matching = service.permission_engine.evaluate(
+        publication=publication,
+        phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
+        expected_proposal_digest=proposal.proposal_digest,
+        expected_authorization_scope_digest=proposal.authorization_scope_digest,
+        policy_version=PERMISSION_POLICY_VERSION,
+    )
+    assert "authorization_scope_mismatch" not in matching.reason_codes
+
+    drifted = service.permission_engine.evaluate(
+        publication=publication,
+        phase=AgentPermissionPhase.AUTHORIZATION_CANDIDATE,
+        expected_proposal_digest=proposal.proposal_digest,
+        expected_authorization_scope_digest="sha256:" + "f" * 64,
+        policy_version=PERMISSION_POLICY_VERSION,
+    )
+    assert drifted.outcome == AgentPermissionOutcome.DENY
+    assert "AUTHORIZATION_SCOPE_MISMATCH" in drifted.reason_codes
 
 
 def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
@@ -687,7 +714,7 @@ def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
         "sha256:8371df28ef5b9da579264579167bc37f1c087388e42a0a49500a057fb51c4378"
     )
     assert legacy_review.decision_digest == (
-        "sha256:1d385ff022577ec3e90781f3bb308ef25449752fb4b225f8b7d30ce7c9f676bf"
+        "sha256:949f874324cf3e873e62581f66c7fb58c51f8208069ffe5673bcb301d289bfb4"
     )
 
     request = _request(proposal, client_request_id="pr-bm-v1-authority")
@@ -738,10 +765,10 @@ def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
     service.control_store.publish_start_intent(start_intent)
 
     assert authorization.authorization_digest == (
-        "sha256:837c07aa3f29d39b76b81d2ab4ba4030670731729888a4dc3a882ebd819fc0bc"
+        "sha256:56e972a9857a41013647217e418269a8e302b5dff79355d525d2ed053dfb181c"
     )
     assert start_intent.start_intent_digest == (
-        "sha256:21a72b493b493b4fb5fba352aadeb517f852257410b786d7d481669e75c48b4f"
+        "sha256:89bbb6e97f02e10d7c63b9c95f644fa5c6f68bf0134c1b02556389b8d88faa73"
     )
 
     def replacement_adapter(payload):
@@ -785,7 +812,7 @@ def test_pr_bm_v1_decision_authorization_and_start_intent_exact_replay(
         ("artifact_binding_drift", "ARTIFACT_BINDING_DRIFT"),
         ("profile_binding_drift", "PROFILE_BINDING_DRIFT"),
         ("budget_expansion", "BUDGET_LIMIT_EXCEEDED"),
-        ("resource_partial", "REMOTE_RESOURCE_INTENT_INCOMPLETE"),
+        ("resource_partial", "REMOTE_RESOURCE_AUTHORITY_REQUIRED"),
     ],
 )
 def test_permission_engine_denies_adversarial_or_incomplete_bindings(
@@ -1614,7 +1641,7 @@ def test_same_id_callable_implementation_drift_invalidates_v3_authorization(
     )
     assert (
         authorization.permission_policy_version
-        == IMPLEMENTATION_BOUND_PERMISSION_POLICY_VERSION
+        == OPTION_POLICY_PERMISSION_POLICY_VERSION
     )
 
     def inspect_dataset_service(payload):
