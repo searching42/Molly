@@ -63,6 +63,13 @@ from ai4s_agent.scientific_agent_harness_controller import (
     ScientificAgentHarnessController,
 )
 from ai4s_agent.scientific_agent_replanner import ScientificAgentReplannerService
+from ai4s_agent.scientific_agent_conversation import (
+    ScientificAgentConversationSessionService,
+)
+from ai4s_agent.routes.scientific_agent_conversation import (
+    register_scientific_agent_conversation_routes,
+)
+from ai4s_agent.scientific_agent_plan import ScientificAgentPlanService
 from ai4s_agent.routes.worker_deployment import register_worker_deployment_routes
 from ai4s_agent.storage import ProjectStorage
 
@@ -224,6 +231,28 @@ def register_routes(
     register_execution_agent_routes(
         app,
         service=execution_agent,
+        llm_settings=llm_settings,
+        llm_providers=llm_providers,
+    )
+    conversation_plan_service = ScientificAgentPlanService(
+        storage=projects,
+        registry=app.extensions["scientific_agent_plan_proposal_store"].registry,
+        observation_builder=app.extensions["scientific_agent_plan_observation_builder"],
+        proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
+        tracer=harness_tracer,
+    )
+    conversation_session_service = ScientificAgentConversationSessionService(
+        projects=projects,
+        conversations=conversations,
+        plan_service=conversation_plan_service,
+        proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
+        authorization_service=app.extensions["scientific_agent_authorization_service"],
+        controller=harness_controller,
+        execution_agent=execution_agent,
+    )
+    register_scientific_agent_conversation_routes(
+        app,
+        service=conversation_session_service,
         llm_settings=llm_settings,
         llm_providers=llm_providers,
     )

@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 
 from ai4s_agent.app import create_app
+from ai4s_agent.llm_provider import LLMProviderConfig, LLMProviderManager
+from ai4s_agent.llm_provider_resolution import resolve_llm_provider_payload
+from ai4s_agent.llm_settings import LLMSettingsStore
 
 
 pytestmark = pytest.mark.integration
@@ -32,6 +35,15 @@ def _configure_external_llm(client) -> None:
         },
     )
     assert response.status_code == 200
+
+
+def _enable_external_data_sharing(client) -> None:
+    response = client.patch(
+        "/api/settings/llm",
+        json={"external_llm_data_sharing_enabled": True},
+    )
+    assert response.status_code == 200
+    assert response.json["external_llm_data_sharing_enabled"] is True
 
 
 @pytest.mark.pr_fast
@@ -74,7 +86,7 @@ def test_saved_llm_settings_can_be_verified_with_minimal_safe_probe(
 
 
 @pytest.mark.pr_fast
-def test_external_llm_conversation_requires_consent_then_returns_provider_reply(
+def test_external_llm_conversation_uses_persistent_user_consent_then_returns_provider_reply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _app(tmp_path)
@@ -100,13 +112,18 @@ def test_external_llm_conversation_requires_consent_then_returns_provider_reply(
     }
 
     blocked = client.post("/api/agent/conversation/next-turn", json=payload)
+    enabled = client.patch(
+        "/api/settings/llm",
+        json={"external_llm_data_sharing_enabled": True},
+    )
     allowed = client.post(
         "/api/agent/conversation/next-turn",
-        json={**payload, "external_llm_approved": True},
+        json=payload,
     )
 
     assert blocked.status_code == 400
-    assert blocked.json["error_code"] == "external_llm_approval_required"
+    assert blocked.json["error_code"] == "external_llm_data_sharing_required"
+    assert enabled.status_code == 200
     assert allowed.status_code == 200
     assert allowed.json["llm_used"] is True
     assert allowed.json["assistant_source"] == "configured_llm"
@@ -117,6 +134,127 @@ def test_external_llm_conversation_requires_consent_then_returns_provider_reply(
     assert prompt_version == "conversation-assistant-response.v1"
     assert messages[-1] == {"role": "user", "content": "我想研究发光材料。"}
     assert "deterministic decision" in messages[0]["content"].lower()
+
+
+@pytest.mark.pr_fast
+def test_saved_user_consent_survives_project_and_conversation_switches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _app(tmp_path)
+    client = app.test_client()
+    _configure_external_llm(client)
+    _enable_external_data_sharing(client)
+    calls: list[list[dict[str, str]]] = []
+
+    class ConversationProvider:
+        def complete_text(self, *, messages, prompt_version):
+            del prompt_version
+            calls.append(messages)
+            return "继续补充目标属性。"
+
+    @contextmanager
+    def fake_lease(_config):
+        yield ConversationProvider()
+
+    monkeypatch.setattr(app.extensions["llm_provider_manager"], "lease", fake_lease)
+    for project_id, conversation_id in (("project-a", "conversation-a"), ("project-b", "conversation-b")):
+        assert client.post("/api/projects", json={"project_id": project_id, "name": project_id}).status_code == 200
+        assert client.post(
+            f"/api/projects/{project_id}/conversations",
+            json={"conversation_id": conversation_id, "title": conversation_id},
+        ).status_code == 201
+        response = client.post(
+            "/api/agent/conversation/next-turn",
+            json={
+                "project_id": project_id,
+                "run_id": f"run-{project_id}",
+                "messages": [{"role": "user", "content": "我想研究发光材料。"}],
+            },
+        )
+        assert response.status_code == 200
+        assert response.json["llm_used"] is True
+
+    assert len(calls) == 2
+    assert client.get("/api/settings/llm").json["external_llm_data_sharing_enabled"] is True
+
+
+def test_configured_external_llm_is_blocked_before_provider_call_when_preference_is_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _app(tmp_path)
+    client = app.test_client()
+    _configure_external_llm(client)
+    calls: list[bool] = []
+
+    @contextmanager
+    def fake_lease(_config):
+        calls.append(True)
+        yield object()
+
+    monkeypatch.setattr(app.extensions["llm_provider_manager"], "lease", fake_lease)
+    response = client.post(
+        "/api/agent/conversation/next-turn",
+        json={
+            "project_id": "project-no-consent",
+            "run_id": "run-no-consent",
+            "messages": [{"role": "user", "content": "Train OLED PLQY."}],
+        },
+    )
+    assert response.status_code == 400
+    assert response.json["error_code"] == "external_llm_data_sharing_required"
+    assert calls == []
+
+
+def test_temporary_external_provider_is_not_trusted_by_saved_preference(tmp_path: Path) -> None:
+    settings = LLMSettingsStore(
+        tmp_path / "workspace",
+        config_dir=tmp_path / "config",
+    )
+    settings.patch({"external_llm_data_sharing_enabled": True})
+    providers = LLMProviderManager()
+    payload = {
+        "llm_provider": {
+            "provider": "openai_compatible",
+            "endpoint": "https://temporary.example.test/v1",
+            "model": "temporary-model",
+            "api_key": "temporary-secret",
+        }
+    }
+    with pytest.raises(ValueError, match="external_llm_approved=true"):
+        resolve_llm_provider_payload(payload, settings=settings, providers=providers)
+
+
+def test_loopback_provider_does_not_require_external_data_permission(tmp_path: Path) -> None:
+    settings = LLMSettingsStore(
+        tmp_path / "workspace",
+        config_dir=tmp_path / "config",
+    )
+    providers = LLMProviderManager()
+    payload = {
+        "llm_provider": {
+            "provider": "openai_compatible",
+            "endpoint": "http://127.0.0.1:8000/v1",
+            "model": "local-model",
+            "api_key": "local-secret",
+        }
+    }
+
+    class LoopbackProvider:
+        def close(self):
+            return None
+
+    def fake_provider(config: LLMProviderConfig):
+        assert config.endpoint.startswith("http://127.0.0.1")
+        return LoopbackProvider()
+
+    resolution = resolve_llm_provider_payload(
+        payload,
+        settings=settings,
+        providers=providers,
+        provider_factory=fake_provider,
+    )
+    with resolution.provider_context as provider:
+        assert provider is not None
 
 
 def test_conversation_without_configured_llm_is_explicitly_deterministic(
@@ -137,6 +275,31 @@ def test_conversation_without_configured_llm_is_explicitly_deterministic(
     assert response.json["assistant_message"] == response.json["decision"]["summary"]
 
 
+def test_preference_only_llm_settings_keep_conversation_deterministic(
+    tmp_path: Path,
+) -> None:
+    client = _app(tmp_path).test_client()
+    enabled = client.patch(
+        "/api/settings/llm",
+        json={"external_llm_data_sharing_enabled": True},
+    )
+    assert enabled.status_code == 200
+    assert enabled.json["config"] is None
+
+    response = client.post(
+        "/api/agent/conversation/next-turn",
+        json={
+            "project_id": "proj-preference-only",
+            "run_id": "run-preference-only",
+            "messages": [{"role": "user", "content": "Train OLED PLQY."}],
+        },
+    )
+
+    assert response.status_code == 200, response.get_json()
+    assert response.json["llm_used"] is False
+    assert response.json["assistant_source"] == "deterministic_rules"
+
+
 @pytest.mark.pr_fast
 def test_llm_conversation_and_probe_failures_are_redacted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -144,6 +307,7 @@ def test_llm_conversation_and_probe_failures_are_redacted(
     app = _app(tmp_path)
     client = app.test_client()
     _configure_external_llm(client)
+    _enable_external_data_sharing(client)
 
     class FailingProvider:
         def complete_text(self, *, messages, prompt_version):
@@ -163,7 +327,6 @@ def test_llm_conversation_and_probe_failures_are_redacted(
                 "project_id": "proj-failed-chat",
                 "run_id": "run-failed-chat",
                 "messages": [{"role": "user", "content": "Train OLED PLQY."}],
-                "external_llm_approved": True,
             },
         )
 
@@ -190,6 +353,7 @@ def test_configured_llm_with_unavailable_secret_fails_closed(
     app = _app(tmp_path)
     client = app.test_client()
     _configure_external_llm(client)
+    _enable_external_data_sharing(client)
     profile_path = tmp_path / "user-config" / "llm_profiles.json"
     profile_document = json.loads(profile_path.read_text(encoding="utf-8"))
     profile = profile_document["active_profile"]
@@ -208,7 +372,6 @@ def test_configured_llm_with_unavailable_secret_fails_closed(
                 "project_id": "proj-unavailable-llm",
                 "run_id": "run-unavailable-llm",
                 "messages": [{"role": "user", "content": "Train OLED PLQY."}],
-                "external_llm_approved": True,
             },
         )
 
@@ -223,21 +386,20 @@ def test_configured_llm_with_unavailable_secret_fails_closed(
 
 
 @pytest.mark.pr_fast
-def test_ui_probes_llm_and_requires_explicit_external_conversation_consent(
+def test_ui_probes_llm_and_uses_persistent_user_external_data_consent(
     tmp_path: Path,
 ) -> None:
     html = _app(tmp_path).test_client().get("/").get_data(as_text=True)
 
-    assert 'id="conversation-external-llm-approved"' in html
-    assert "external_llm_approved: document.getElementById" in html
+    assert 'id="external-llm-data-sharing-enabled"' in html
+    assert "external_llm_data_sharing_enabled" in html
+    assert "用户级偏好" in html
+    assert "跨项目和对话生效" in html
     assert "response.assistant_message || currentConversationDecision?.summary" in html
     assert 'postJSON("/api/settings/llm/probe", {})' in html
     assert "保存并测试 API 连接" in html
     assert "未配置可用 LLM，已使用确定性决策摘要" in html
-    assert "function resetExternalLLMApproval()" in html
-    select_project = html[
-        html.index("function selectProject(project)"):
-        html.index("async function loadProjects", html.index("function selectProject(project)"))
-    ]
-    assert "resetExternalLLMApproval();" in select_project
-    assert "if (nextConversationId !== currentConversationId) resetExternalLLMApproval();" in html
+    assert "function resetExternalLLMApproval()" not in html
+    assert "conversation-external-llm-approved" not in html
+    assert 'agent-session/turn' in html
+    assert 'new EventSource(url)' in html

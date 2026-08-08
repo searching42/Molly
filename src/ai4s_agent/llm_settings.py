@@ -19,6 +19,7 @@ _SECRET_SOURCES = {"environment", "keyring", "file", "auto"}
 LLM_SETTINGS_TRULY_UNCONFIGURED = "truly_unconfigured"
 LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE = "configured_but_unavailable"
 LLM_SETTINGS_AVAILABLE = "available"
+EXTERNAL_LLM_DATA_SHARING_FIELD = "external_llm_data_sharing_enabled"
 
 
 class LLMSettingsStore:
@@ -56,14 +57,14 @@ class LLMSettingsStore:
     def resolve(self) -> tuple[str, LLMProviderConfig | None]:
         """Resolve the active profile without conflating absence with failure."""
 
-        profile = self._read_profile()
-        if profile is None:
-            status = (
-                LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE
-                if self.path.exists() or self.legacy_path.exists()
-                else LLM_SETTINGS_TRULY_UNCONFIGURED
-            )
-            return status, None
+        document = self._read_document()
+        raw_profile = document.get("active_profile")
+        if raw_profile is None:
+            return LLM_SETTINGS_TRULY_UNCONFIGURED, None
+        try:
+            profile = self._validated_profile(raw_profile)
+        except (TypeError, ValueError):
+            return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
         resolved = dict(profile)
         resolved_secret = self._resolve_secret(profile)
         if not resolved_secret:
@@ -74,10 +75,45 @@ class LLMSettingsStore:
         except ValueError:
             return LLM_SETTINGS_CONFIGURED_BUT_UNAVAILABLE, None
 
-    def patch(self, payload: dict[str, Any]) -> LLMProviderConfig:
+    @property
+    def external_llm_data_sharing_enabled(self) -> bool:
+        """Return the durable user-level consent preference.
+
+        The preference intentionally has a security-conservative default.  A
+        legacy profile or an old project/conversation checkbox is not evidence
+        of durable user consent.
+        """
+
+        document = self._read_document()
+        preferences = document.get("preferences") if isinstance(document, dict) else None
+        return bool(
+            isinstance(preferences, dict)
+            and preferences.get(EXTERNAL_LLM_DATA_SHARING_FIELD) is True
+        )
+
+    def patch(self, payload: dict[str, Any]) -> LLMProviderConfig | None:
+        if not isinstance(payload, dict):
+            raise ValueError("settings payload must be an object")
         if "api_key" in payload and not str(payload.get("api_key") or "").strip():
             raise ValueError("api_key must be non-empty when supplied; use DELETE to remove it")
+        preference_supplied = EXTERNAL_LLM_DATA_SHARING_FIELD in payload
+        preference = self.external_llm_data_sharing_enabled
+        if preference_supplied:
+            value = payload.get(EXTERNAL_LLM_DATA_SHARING_FIELD)
+            if value is not True and value is not False:
+                raise ValueError(f"{EXTERNAL_LLM_DATA_SHARING_FIELD} must be a boolean")
+            preference = value
+
+        profile_payload = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"api_key", EXTERNAL_LLM_DATA_SHARING_FIELD}
+        }
         existing = self._read_profile()
+        old_preference = self.external_llm_data_sharing_enabled
+        if not profile_payload and "api_key" not in payload:
+            self._write_settings_document(existing, preference=preference)
+            return self.read()
         baseline = existing or {
             "profile_id": "default",
             "provider": "openai_compatible",
@@ -86,7 +122,7 @@ class LLMSettingsStore:
             "api_key_ref": "default",
             "api_key_env": "MOLLY_LLM_API_KEY",
         }
-        merged = {**baseline, **{key: value for key, value in payload.items() if key != "api_key"}}
+        merged = {**baseline, **profile_payload}
         profile = self._validated_profile(merged)
         supplied_key = str(payload.get("api_key") or "").strip()
         source = str(profile["api_key_source"])
@@ -116,7 +152,7 @@ class LLMSettingsStore:
         try:
             if secret_to_write and new_identity is not None:
                 self._write_managed_secret(new_identity, secret_to_write)
-            self._write_profile(profile)
+            self._write_profile(profile, preference=preference)
             destination_is_auto = source == "auto"
             if (
                 old_identity is not None
@@ -128,6 +164,7 @@ class LLMSettingsStore:
             rollback_errors = self._rollback_migration(
                 snapshots=snapshots,
                 old_profile=existing,
+                old_preference=old_preference,
                 restore_profile=True,
             )
             message = f"LLM secret migration failed: {exc}"
@@ -157,10 +194,15 @@ class LLMSettingsStore:
     def public_state(self) -> dict[str, Any]:
         profile = self._read_profile()
         if profile is None:
-            return {"configured": False, "config": None}
+            return {
+                "configured": False,
+                "config": None,
+                EXTERNAL_LLM_DATA_SHARING_FIELD: self.external_llm_data_sharing_enabled,
+            }
         secret, resolved_source = self._resolve_secret_with_source(profile)
         return {
             "configured": bool(profile.get("endpoint") and profile.get("model")),
+            EXTERNAL_LLM_DATA_SHARING_FIELD: self.external_llm_data_sharing_enabled,
             "config": {
                 "profile_id": profile["profile_id"],
                 "provider": profile["provider"],
@@ -181,16 +223,20 @@ class LLMSettingsStore:
             },
         }
 
-    def _read_profile(self) -> dict[str, Any] | None:
+    def _read_document(self) -> dict[str, Any]:
         if not self.path.exists():
             self._migrate_legacy_profile()
         if not self.path.exists():
-            return None
+            return {}
         try:
             loaded = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return None
-        profile = loaded.get("active_profile") if isinstance(loaded, dict) else None
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def _read_profile(self) -> dict[str, Any] | None:
+        loaded = self._read_document()
+        profile = loaded.get("active_profile")
         if not isinstance(profile, dict):
             return None
         try:
@@ -198,13 +244,40 @@ class LLMSettingsStore:
         except ValueError:
             return None
 
-    def _write_profile(self, profile: dict[str, Any]) -> None:
+    def _write_settings_document(
+        self,
+        profile: dict[str, Any] | None,
+        *,
+        preference: bool,
+    ) -> None:
         self._secure_directory(self.config_dir)
+        document: dict[str, Any] = {
+            "version": 2,
+            "updated_at": now_iso(),
+            "preferences": {EXTERNAL_LLM_DATA_SHARING_FIELD: bool(preference)},
+        }
+        if profile is not None:
+            document["active_profile"] = profile
         write_json(
             self.path,
-            {"version": 2, "updated_at": now_iso(), "active_profile": profile},
+            document,
         )
         self._chmod(self.path, 0o600)
+
+    def _write_profile(
+        self,
+        profile: dict[str, Any],
+        *,
+        preference: bool | None = None,
+    ) -> None:
+        self._write_settings_document(
+            profile,
+            preference=(
+                self.external_llm_data_sharing_enabled
+                if preference is None
+                else preference
+            ),
+        )
 
     def _migrate_legacy_profile(self) -> None:
         if not self.legacy_path.exists():
@@ -230,7 +303,7 @@ class LLMSettingsStore:
         secret = str(legacy.get("api_key") or "")
         if secret:
             self._store_secret(profile, secret)
-        self._write_profile(profile)
+        self._write_profile(profile, preference=False)
         if secret:
             redacted = dict(legacy)
             redacted["api_key"] = ""
@@ -359,6 +432,7 @@ class LLMSettingsStore:
         *,
         snapshots: dict[tuple[str, str], str | None],
         old_profile: dict[str, Any] | None,
+        old_preference: bool,
         restore_profile: bool,
     ) -> list[str]:
         errors: list[str] = []
@@ -376,7 +450,7 @@ class LLMSettingsStore:
                     self.path.unlink(missing_ok=True)
                     self._fsync_directory(self.config_dir)
                 else:
-                    self._write_profile(old_profile)
+                    self._write_profile(old_profile, preference=old_preference)
             except Exception as exc:
                 errors.append(f"profile: {exc}")
         return errors
