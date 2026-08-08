@@ -32,8 +32,8 @@ validation, and experimental validation remain distinct claim levels.
 - Evidence-aware modeling, diagnostics, candidate generation and screening,
   review, and controlled asset promotion.
 
-The exact implementation, test, and validation status of these areas is kept in
-[`todo.md`](todo.md), not duplicated here.
+The public implementation, evidence-maturity, and milestone status of these
+areas is kept in the [public roadmap](docs/roadmap.md), not duplicated here.
 
 ## Trusted execution boundaries
 
@@ -208,9 +208,11 @@ action rosters therefore fails closed even when all nested digests agree.
 
 ## Documentation
 
-Start with the [documentation map](docs/README.md). Key technical entry points
-include:
+Start with the [documentation map](docs/README.md). Repository-wide public
+contracts are separated from local working context:
 
+- [Development guidance](docs/development-guidance.md)
+- [Public roadmap and status](docs/roadmap.md)
 - [Literature intake](docs/literature-intake.md)
 - [Bounded discovery sessions and recovery](docs/oled-bounded-discovery-session.md)
 - [Control-plane event projection and SSE](docs/control-plane-event-projection.md)
@@ -224,9 +226,15 @@ second project history.
 
 ## Roadmap and status
 
-`todo.md` is the normative source for roadmap, milestone status, priorities,
-and execution order. Topic documents explain contracts and operations but must
-not maintain a competing status table or decision log.
+[`docs/roadmap.md`](docs/roadmap.md) is the normative public source for roadmap
+scope, milestone status, priorities, acceptance boundaries, and execution
+order. Topic documents explain contracts and operations but must not maintain a
+competing current-status table or decision log.
+
+Local `todo.md` and `CLAUDE.md` are intentionally Git-ignored working-context
+files. They may contain private scratch planning or machine-specific agent
+instructions, but public CI, documentation, and runtime behavior must not depend
+on their presence or contents.
 
 References written as `legacy-private PR N` identify authorized records in the
 pre-migration private audit archive. They are not links to public pull requests.

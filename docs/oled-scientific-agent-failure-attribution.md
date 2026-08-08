@@ -2,7 +2,7 @@
 
 This document freezes the PR-BG contract for tasks `M3-018` through `M3-022`.
 It extends the observer-only trajectory audit; it does not change scientific
-execution, recovery, authorization, or roadmap authority. [`../todo.md`](../todo.md)
+execution, recovery, authorization, or roadmap authority. [`roadmap.md`](roadmap.md)
 remains the sole source for milestone status and execution order.
 
 ## Authority and observer-only boundary

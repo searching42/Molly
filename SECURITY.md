@@ -17,6 +17,11 @@ synthetic fixtures, and sanitized evidence. Runtime state, real user/project
 data, private papers, secrets, hostnames, usernames, absolute infrastructure
 paths, and machine-specific profiles must remain in user-scoped private storage.
 
+Local `CLAUDE.md` and `todo.md` are intentionally Git-ignored working-context
+files. Public tests, runtime code, packaging, and documentation must not depend
+on their presence or contents. Durable public guidance lives in
+`docs/development-guidance.md` and `docs/roadmap.md`.
+
 The supported development line is `main`.
 
 ## Optional exact-value audit
@@ -50,4 +55,5 @@ string in a new commit does not remove it from existing public Git objects,
 clones, caches, or mirrors. Any public-history cleanup requires a separately
 coordinated repository rewrite or rebuild and explicit downstream remediation.
 Until that work is reviewed and completed, repository privacy risk must not be
-described as closed, and `R11-001` retains its existing status in `todo.md`.
+described as closed; the current public risk and acceptance state is recorded
+in `docs/roadmap.md`.

@@ -1,8 +1,8 @@
 # Authorization scope refactor change list
 
 > Status: active working change list for the authorization-scope refactor.
-> This is a task-tracking document for the refactor only; `../todo.md` remains
-> the sole normative source for roadmap scope and status.
+> This is a task-tracking document for the refactor only; [`roadmap.md`](roadmap.md)
+> remains the sole normative source for public roadmap scope and status.
 
 > 2026-08-06 progress: Steps 1-4 complete (see checkboxes). Full suite
 > `6770 passed, 5 skipped`. One follow-up is explicitly deferred and requires
