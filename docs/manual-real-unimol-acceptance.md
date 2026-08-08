@@ -4,7 +4,7 @@
 > `train_model_unimol_legacy_adapter` and
 > `predict_candidates_unimol_legacy_adapter`. It is not Molly's default
 > architecture, an active roadmap, or permission to bypass `RunPlanExecutor`.
-> Current priorities and status are defined only in `todo.md`.
+> Current public priorities and status are defined only in [`roadmap.md`](roadmap.md).
 
 This acceptance is manual because it can consume approved remote compute,
 private runtime configuration, and project-specific data. Only sanitized
