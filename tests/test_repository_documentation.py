@@ -51,9 +51,10 @@ def test_repository_entry_documents_define_current_authority_and_boundaries() ->
 
     assert "Same-process B1 orchestration layer" not in readme
     assert "long-horizon AI4S agent" in readme
+    assert "docs/roadmap.md" in readme
     assert (
-        "`docs/roadmap.md` is the normative public source for roadmap scope, "
-        "milestone status, priorities, acceptance boundaries, and execution order."
+        "is the normative public source for roadmap scope, milestone status, "
+        "priorities, acceptance boundaries, and execution order."
     ) in normalized_readme
     for heading in (
         "## Capability overview",
