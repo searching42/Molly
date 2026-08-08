@@ -1,7 +1,7 @@
 # Scientific agent trajectory audit metrics v1
 
 This document defines the durable PR-BF artifact and metric contract. It does
-not define roadmap status; [`../todo.md`](../todo.md) remains authoritative for
+not define roadmap status; [`roadmap.md`](roadmap.md) remains authoritative for
 scope, evidence maturity, priority, and execution order.
 
 ## Authority boundary
