@@ -500,6 +500,7 @@ def test_agent_plan_route_uses_server_settings_without_browser_secret(tmp_path, 
             "total_timeout_sec": 180,
             "max_connect_retries": 2,
             "retry_backoff_sec": 0.5,
+            "external_llm_data_sharing_enabled": True,
         },
     ).status_code == 200
 
