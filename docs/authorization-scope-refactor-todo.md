@@ -81,10 +81,10 @@ happened remain exact.
 ### Step 2: Controller checks from content equality to scope validation (#6-#9)
 
 - [x] #6 `scientific_agent_harness_controller.py` `_build_execution` +
-  `schemas.py`: execution identity binds the option *policy* digest
-  (`agent_harness_controller_option_policy.v1`) and strips per-slot option
-  values from the execution digest material; per-attempt option values remain
-  recorded for dispatch audit.
+  `schemas.py`: execution identity binds the task-authority roster digest
+  (`agent_harness_controller_task_authority_roster.v1`) and strips per-slot
+  option values from the execution digest material; per-attempt option values
+  remain recorded for dispatch audit.
 - [x] #7 `_inspect`: verified no code change needed. The authorized-input
   content check covers only `authorization.artifact_bindings` (pre-existing
   approved inputs). Workflow-produced artifacts registered during execution
