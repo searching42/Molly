@@ -433,6 +433,31 @@ BR1_REAL_TOOL_EXECUTION_PROFILE_IDS = frozenset(
 )
 
 
+def server_owned_br1_resource_defaults(profile_id: str) -> dict[str, int]:
+    """Return the BR1 profile maximum envelope, never a request default.
+
+    Actual remote request dimensions come from the owner-authored resource
+    authority policy.  This helper remains for profile capability snapshots and
+    compatibility with existing callers that need the upper bound.
+    """
+
+    clean = str(profile_id or "").strip()
+    if clean not in {
+        "reinvent4-br1-v2",
+        "unimol-predict-br1-v1",
+        "unimol-train-br1-v2",
+    }:
+        return {}
+    profile = EXECUTION_PROFILES.get(clean)
+    if profile is None:
+        return {}
+    return {
+        "gpu_count": int(profile.resource_limits.gpu_count_max),
+        "cpu_threads": int(profile.resource_limits.cpu_threads_max),
+        "walltime_sec": int(profile.resource_limits.walltime_sec_max),
+    }
+
+
 LEGACY_PINNED_PROFILE_BINDINGS: dict[str, tuple[str, str]] = {
     "molly-gpu-main-gpu_worker_main-reinvent4-v2": ("gpu-worker-main", "reinvent4-cpu-v1"),
     "molly-compute-main-compute_worker_main-reinvent4-v1": ("compute-worker-main", "reinvent4-cpu-v1"),
@@ -813,6 +838,7 @@ class ResourceProfileStore:
         connection_id: str,
         *,
         execution_profile_id: str | None = None,
+        include_server_owned_resource_defaults: bool = False,
     ) -> ResourceProfileAuthoritySnapshot:
         """Read one connection and its last probe under the same process lock.
 
@@ -899,17 +925,25 @@ class ResourceProfileStore:
                             "verified_ready": verified_ready,
                         }
                     )
-                profile_capability_digest = _sha256(
-                    _canonical_bytes(
-                        {
-                            "profile_id": execution_profile.profile_id,
-                            "profile_digest": execution_profile.digest(),
-                            "connections": sorted(
-                                matching_connections,
-                                key=lambda item: item["connection_digest"],
-                            ),
-                        }
+                profile_capability_material = {
+                    "profile_id": execution_profile.profile_id,
+                    "profile_digest": execution_profile.digest(),
+                    "connections": sorted(
+                        matching_connections,
+                        key=lambda item: item["connection_digest"],
+                    ),
+                }
+                configured_defaults = (
+                    server_owned_br1_resource_defaults(execution_profile.profile_id)
+                    if include_server_owned_resource_defaults
+                    else {}
+                )
+                if configured_defaults:
+                    profile_capability_material["resource_limit_envelope"] = (
+                        configured_defaults
                     )
+                profile_capability_digest = _sha256(
+                    _canonical_bytes(profile_capability_material)
                 )
                 source_material["profile_capability_digest"] = profile_capability_digest
         return ResourceProfileAuthoritySnapshot(

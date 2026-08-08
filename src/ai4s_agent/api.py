@@ -66,6 +66,10 @@ from ai4s_agent.scientific_agent_replanner import ScientificAgentReplannerServic
 from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationSessionService,
 )
+from ai4s_agent.scientific_agent_run_input_binding import (
+    ScientificAgentRunInputBindingService,
+    resolve_server_br1_deployment_identity,
+)
 from ai4s_agent.routes.scientific_agent_conversation import (
     register_scientific_agent_conversation_routes,
 )
@@ -194,6 +198,7 @@ def register_routes(
         app,
         projects=projects,
         resource_profiles=resource_profiles,
+        resource_authority_policy_store=resource_authority_policies,
         llm_settings=llm_settings,
         llm_providers=llm_providers,
         registry=scientific_task_registry,
@@ -239,8 +244,32 @@ def register_routes(
         registry=app.extensions["scientific_agent_plan_proposal_store"].registry,
         observation_builder=app.extensions["scientific_agent_plan_observation_builder"],
         proposal_store=app.extensions["scientific_agent_plan_proposal_store"],
+        resource_authority_policy_store=resource_authority_policies,
         tracer=harness_tracer,
     )
+    input_binding_service = ScientificAgentRunInputBindingService(
+        storage=projects,
+        require_reinvent4_template=br1_real_tool_registry,
+        trusted_owner_ids=lambda: {
+            owner_id
+            for owner_id in [
+                str(app.config.get("AI4S_AGENT_AUTHORIZATION_OWNER") or "").strip()
+            ]
+            if owner_id
+        },
+        deployment_identity=lambda: (
+            (
+                str(app.config.get("AI4S_AGENT_REPOSITORY_COMMIT") or "").strip(),
+                str(
+                    app.config.get("AI4S_AGENT_WORKER_IMPLEMENTATION_DIGEST") or ""
+                ).strip(),
+            )
+            if app.config.get("AI4S_AGENT_REPOSITORY_COMMIT")
+            and app.config.get("AI4S_AGENT_WORKER_IMPLEMENTATION_DIGEST")
+            else resolve_server_br1_deployment_identity()
+        ),
+    )
+    app.extensions["scientific_agent_run_input_binding_service"] = input_binding_service
     conversation_session_service = ScientificAgentConversationSessionService(
         projects=projects,
         conversations=conversations,
@@ -249,6 +278,8 @@ def register_routes(
         authorization_service=app.extensions["scientific_agent_authorization_service"],
         controller=harness_controller,
         execution_agent=execution_agent,
+        input_binding_service=input_binding_service,
+        resource_authority_service=app.extensions["remote_resource_authority_service"],
     )
     register_scientific_agent_conversation_routes(
         app,

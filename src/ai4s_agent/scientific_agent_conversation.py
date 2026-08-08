@@ -30,6 +30,12 @@ from ai4s_agent.execution_agent import (
     ExecutionAgentStale,
 )
 from ai4s_agent.llm_provider import LLMProvider
+from ai4s_agent.remote_resource_authority import (
+    RemoteResourceAuthorityDenied,
+    RemoteResourceAuthorityError,
+    RemoteResourceAuthorityStale,
+    RemoteResourceAuthorityUnavailable,
+)
 from ai4s_agent.scientific_agent_authorization import (
     ApproveAndStartResult,
     ScientificAgentAuthorizationConflict,
@@ -42,6 +48,15 @@ from ai4s_agent.scientific_agent_harness_controller import (
     ScientificAgentHarnessController,
     ScientificAgentHarnessControllerError,
     controller_action_boundary_class,
+)
+from ai4s_agent.scientific_agent_review_projection import (
+    ScientificAgentReviewProjectionError,
+    project_current_dataset_review,
+    validate_review_projection,
+)
+from ai4s_agent.scientific_agent_run_input_binding import (
+    ScientificAgentRunInputBindingError,
+    ScientificAgentRunInputBindingService,
 )
 from ai4s_agent.scientific_agent_plan import (
     ScientificAgentPlanError,
@@ -57,7 +72,10 @@ from ai4s_agent.schemas import (
     AgentHarnessControllerAdvanceRequest,
     AgentHarnessControllerStatus,
     AgentHarnessControllerStartRequest,
+    AgentHarnessGateApprovalRequest,
+    AgentHarnessRemoteApprovalRequest,
     AgentPlanAuthorizationRequest,
+    AgentRemoteResourceAuthorityRequest,
     AgentToolCallApplicationOutcome,
     AgentToolCallApplicationRequest,
     AgentToolCallProposalRequest,
@@ -130,6 +148,8 @@ class ScientificAgentConversationTurnResult:
             payload["plan_summary"] = self.plan_summary
         if self.controller is not None:
             payload["controller"] = self.controller
+        if self.session.get("review_projection"):
+            payload["review_projection"] = self.session["review_projection"]
         return payload
 
 
@@ -156,6 +176,7 @@ def _safe_message(role: str, content: str) -> dict[str, str]:
 def _static_status_message(status: str, *, task_id: str = "") -> str:
     messages = {
         "needs_clarification": "还需要一些信息来确定目标和约束。",
+        "needs_input": "还需要选择一个已获准的 BR1 输入版本。",
         "approval_required": "计划已生成，等待确认。",
         "authorized": "计划已授权。",
         "running": "运行已启动。",
@@ -255,6 +276,8 @@ class ScientificAgentConversationSessionService:
         authorization_service: ScientificAgentAuthorizationService,
         controller: ScientificAgentHarnessController,
         execution_agent: ExecutionAgentService,
+        input_binding_service: ScientificAgentRunInputBindingService | None = None,
+        resource_authority_service: Any | None = None,
     ) -> None:
         self.projects = projects
         self.conversations = conversations
@@ -263,6 +286,8 @@ class ScientificAgentConversationSessionService:
         self.authorization_service = authorization_service
         self.controller = controller
         self.execution_agent = execution_agent
+        self.input_binding_service = input_binding_service
+        self.resource_authority_service = resource_authority_service
         self.projector = ScientificAgentConversationSessionEventProjector(service=self)
 
     def _root(self, project_id: str, conversation_id: str, *, create: bool) -> Path:
@@ -299,6 +324,8 @@ class ScientificAgentConversationSessionService:
             "message": "",
             "revision": 0,
             "conversation_digest": "",
+            "input_bundle_id": "",
+            "input_binding_digest": "",
             "proposal_id": "",
             "proposal_digest": "",
             "authorization_id": "",
@@ -309,6 +336,14 @@ class ScientificAgentConversationSessionService:
             "controller_execution_digest": "",
             "controller_status": "",
             "current_task_id": "",
+            "authority_kind": "",
+            "gate_id": "",
+            "snapshot_id": "",
+            "snapshot_digest": "",
+            "remote_request_sha256": "",
+            "resource_authority_status": "",
+            "resource_authority_reason_codes": [],
+            "review_projection": {},
             "updated_at": "",
             "executable": False,
         }
@@ -449,6 +484,8 @@ class ScientificAgentConversationSessionService:
                 "reason_code",
                 "message",
                 "revision",
+                "input_bundle_id",
+                "input_binding_digest",
                 "proposal_id",
                 "proposal_digest",
                 "authorization_id",
@@ -456,6 +493,14 @@ class ScientificAgentConversationSessionService:
                 "controller_execution_id",
                 "controller_status",
                 "current_task_id",
+                "authority_kind",
+                "gate_id",
+                "snapshot_id",
+                "snapshot_digest",
+                "remote_request_sha256",
+                "resource_authority_status",
+                "resource_authority_reason_codes",
+                "review_projection",
                 "updated_at",
                 "executable",
             )
@@ -475,6 +520,8 @@ class ScientificAgentConversationSessionService:
                 "message",
                 "revision",
                 "conversation_digest",
+                "input_bundle_id",
+                "input_binding_digest",
                 "proposal_id",
                 "proposal_digest",
                 "authorization_id",
@@ -485,6 +532,14 @@ class ScientificAgentConversationSessionService:
                 "controller_execution_digest",
                 "controller_status",
                 "current_task_id",
+                "authority_kind",
+                "gate_id",
+                "snapshot_id",
+                "snapshot_digest",
+                "remote_request_sha256",
+                "resource_authority_status",
+                "resource_authority_reason_codes",
+                "review_projection",
                 "updated_at",
                 "executable",
             )
@@ -500,6 +555,22 @@ class ScientificAgentConversationSessionService:
         for key, value in state.items():
             if key in result:
                 result[key] = value
+        if result.get("review_projection"):
+            try:
+                result["review_projection"] = validate_review_projection(
+                    result["review_projection"]
+                )
+            except ScientificAgentReviewProjectionError as exc:
+                raise ScientificAgentConversationSessionError(
+                    "conversation review projection is invalid"
+                ) from exc
+        if not isinstance(result.get("resource_authority_reason_codes"), list) or any(
+            not isinstance(item, str) or re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None
+            for item in result["resource_authority_reason_codes"]
+        ):
+            raise ScientificAgentConversationSessionError(
+                "conversation resource authority projection is invalid"
+            )
         if result["project_id"] != project_id or result["conversation_id"] != conversation_id:
             raise ScientificAgentConversationSessionError("conversation session identity mismatch")
         return result
@@ -609,6 +680,8 @@ class ScientificAgentConversationSessionService:
             conversation_id=conversation_id,
         )
         payload: dict[str, Any] = {"session": self.session_projection(state)}
+        if state.get("review_projection"):
+            payload["review_projection"] = state["review_projection"]
         if state.get("proposal_id"):
             try:
                 publication = (
@@ -622,6 +695,155 @@ class ScientificAgentConversationSessionService:
                 payload["proposal"] = publication.proposal.model_dump(mode="json")
                 payload["plan_summary"] = self._plan_summary(publication)
         return payload
+
+    def bind_input_bundle(
+        self, *, project_id: str, run_id: str, input_bundle_id: str
+    ) -> dict[str, Any]:
+        if self.input_binding_service is None:
+            raise ScientificAgentRunInputBindingError(
+                "server-owned BR1 input binding is not configured"
+            )
+        return self.input_binding_service.bind(
+            project_id=project_id,
+            run_id=run_id,
+            input_bundle_id=input_bundle_id,
+        )
+
+    def _resolve_input_bundle_for_planning(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        state: dict[str, Any],
+        requested_bundle_id: str,
+        last_user: str,
+    ) -> dict[str, Any] | None:
+        """Resolve BR1 inputs on the server boundary before LLM planning."""
+
+        service = self.input_binding_service
+        if service is None or not service.require_reinvent4_template:
+            return None
+        requested = str(requested_bundle_id or state.get("input_bundle_id") or "").strip()
+        if not requested:
+            candidate = str(last_user or "").strip()
+            if candidate in service.list_eligible_bundle_ids(project_id=project_id):
+                requested = candidate
+        return service.bind_eligible(
+            project_id=project_id,
+            run_id=run_id,
+            input_bundle_id=requested,
+        )
+
+    @staticmethod
+    def _resource_authority_reason_codes(exc: Exception) -> tuple[str, ...]:
+        if isinstance(exc, RemoteResourceAuthorityDenied):
+            values = list(exc.decision.reason_codes)
+        elif isinstance(exc, RemoteResourceAuthorityUnavailable):
+            values = [exc.reason_code]
+        elif isinstance(exc, RemoteResourceAuthorityStale):
+            values = ["REMOTE_RESOURCE_AUTHORITY_STALE"]
+        else:
+            values = ["REMOTE_RESOURCE_AUTHORITY_UNAVAILABLE"]
+        safe = sorted(
+            {
+                code
+                for code in (str(item).strip().upper() for item in values)
+                if re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", code)
+            }
+        )
+        if len(safe) > 1:
+            safe = [
+                code
+                for code in safe
+                if code
+                not in {
+                    "REMOTE_RESOURCE_AUTHORITY_CONFIGURED",
+                    "REMOTE_RESOURCE_AUTHORITY_NOT_REQUIRED",
+                }
+            ]
+        return tuple(safe or ["REMOTE_RESOURCE_AUTHORITY_UNAVAILABLE"])
+
+    def _ensure_remote_resource_authority(
+        self,
+        *,
+        project_id: str,
+        publication: ScientificAgentPlanPublication,
+    ) -> tuple[bool, tuple[str, ...]]:
+        remote_dispatches = [
+            item
+            for item in publication.proposal.dispatch_intents
+            if item.execution_route == "remote_execution_service"
+        ]
+        if not remote_dispatches:
+            return True, ()
+        if self.resource_authority_service is None:
+            return False, ("REMOTE_RESOURCE_AUTHORITY_UNAVAILABLE",)
+        request = AgentRemoteResourceAuthorityRequest(
+            expected_proposal_digest=publication.proposal.proposal_digest,
+            client_request_id=_request_id(
+                "conversation-resource-authority",
+                project_id,
+                publication.proposal.proposal_id,
+                publication.proposal.proposal_digest,
+            ),
+        )
+        try:
+            self.resource_authority_service.publish(
+                project_id=project_id,
+                proposal_id=publication.proposal.proposal_id,
+                request=request,
+            )
+        except RemoteResourceAuthorityDenied as exc:
+            return False, self._resource_authority_reason_codes(exc)
+        except (
+            RemoteResourceAuthorityUnavailable,
+            RemoteResourceAuthorityStale,
+            RemoteResourceAuthorityError,
+            ScientificAgentPlanSourceChanged,
+            FileNotFoundError,
+            ValueError,
+        ) as exc:
+            return False, self._resource_authority_reason_codes(exc)
+        return True, ()
+
+    def _resource_authority_required_result(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        decision: dict[str, Any],
+        state: dict[str, Any],
+        publication: ScientificAgentPlanPublication,
+        reason_codes: tuple[str, ...],
+        llm_used: bool,
+        updates: dict[str, Any] | None = None,
+    ) -> ScientificAgentConversationTurnResult:
+        message = (
+            "远程资源 authority 尚未闭合："
+            + "、".join(reason_codes)
+            + "。请先由服务器配置有效的资源 authority，再确认执行。"
+        )
+        state = self._transition(
+            project_id=project_id,
+            conversation_id=conversation_id,
+            status="plan_review",
+            reason_code="REMOTE_RESOURCE_AUTHORITY_REQUIRED",
+            updates={
+                **(updates or {}),
+                "resource_authority_status": "required",
+                "resource_authority_reason_codes": list(reason_codes),
+            },
+            event_type="remote_resource_authority.required",
+            message=message,
+        )
+        return self._plan_result(
+            decision=decision,
+            state=state,
+            publication=publication,
+            assistant_message=message,
+            assistant_source="scientific_agent_session",
+            llm_used=llm_used,
+        )
 
     def _messages(
         self,
@@ -659,6 +881,25 @@ class ScientificAgentConversationSessionService:
         if state.get("status") in ACTIVE_SESSION_STATUSES:
             if state.get("reason_code") == "EXECUTION_AGENT_PAUSED":
                 return "paused"
+            messages = self._messages(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+            )
+            last_user = next(
+                (
+                    item["content"]
+                    for item in reversed(messages)
+                    if item["role"] == "user"
+                ),
+                "",
+            )
+            authority_mode = self._authority_turn_mode(
+                project_id=clean_project,
+                state=state,
+                content=last_user,
+            )
+            if authority_mode:
+                return authority_mode
             return "active"
         if state.get("proposal_id") and state.get("status") in {
             "approval_required",
@@ -680,6 +921,62 @@ class ScientificAgentConversationSessionService:
                 return "approval"
         return "ordinary"
 
+    def _resolve_authority_boundary(
+        self, *, project_id: str, state: dict[str, Any]
+    ) -> dict[str, str]:
+        controller_execution_id = str(state.get("controller_execution_id") or "")
+        if not controller_execution_id:
+            return {}
+        resolver = getattr(self.controller, "current_authority_boundary", None)
+        if resolver is None:
+            return {}
+        try:
+            boundary = resolver(
+                project_id=project_id,
+                controller_execution_id=controller_execution_id,
+            )
+        except (ScientificAgentHarnessControllerError, FileNotFoundError, ValueError):
+            return {}
+        if not isinstance(boundary, dict):
+            return {}
+        expected_digest = str(state.get("controller_execution_digest") or "")
+        current_digest = str(boundary.get("controller_execution_digest") or "")
+        if expected_digest and current_digest and expected_digest != current_digest:
+            raise ScientificAgentConversationStaleAuthority(
+                "active Controller execution digest no longer matches the session"
+            )
+        return {str(key): str(value) for key, value in boundary.items()}
+
+    def _authority_turn_mode(
+        self, *, project_id: str, state: dict[str, Any], content: str
+    ) -> str:
+        if not any(
+            (
+                ConversationAgent.recognize_dataset_gate_approval(content),
+                ConversationAgent.recognize_gate_approval(content),
+                ConversationAgent.recognize_remote_approval(content),
+            )
+        ):
+            return ""
+        try:
+            boundary = self._resolve_authority_boundary(
+                project_id=project_id,
+                state=state,
+            )
+        except ScientificAgentConversationStaleAuthority:
+            return ""
+        authority_kind = boundary.get("authority_kind")
+        if authority_kind == "dataset_confirmation_gate" and (
+            ConversationAgent.recognize_dataset_gate_approval(content)
+            or ConversationAgent.recognize_gate_approval(content)
+        ):
+            return "dataset_gate_approval"
+        if authority_kind == "gate" and ConversationAgent.recognize_gate_approval(content):
+            return "gate_approval"
+        if authority_kind == "remote_approval" and ConversationAgent.recognize_remote_approval(content):
+            return "remote_approval"
+        return ""
+
     def handle_turn(
         self,
         *,
@@ -689,6 +986,7 @@ class ScientificAgentConversationSessionService:
         provider: LLMProvider | None,
         provider_binding_digest: str,
         actor: ActorContext | None = None,
+        input_bundle_id: str = "",
     ) -> ScientificAgentConversationTurnResult:
         clean_project = _clean_id(project_id, field="project_id")
         clean_conversation = _clean_id(conversation_id, field="conversation_id")
@@ -701,6 +999,7 @@ class ScientificAgentConversationSessionService:
                 provider=provider,
                 provider_binding_digest=provider_binding_digest,
                 actor=actor,
+                input_bundle_id=input_bundle_id,
             )
 
     def _handle_turn_locked(
@@ -712,6 +1011,7 @@ class ScientificAgentConversationSessionService:
         provider: LLMProvider | None,
         provider_binding_digest: str,
         actor: ActorContext | None = None,
+        input_bundle_id: str = "",
     ) -> ScientificAgentConversationTurnResult:
         clean_project = _clean_id(project_id, field="project_id")
         clean_conversation = _clean_id(conversation_id, field="conversation_id")
@@ -721,7 +1021,51 @@ class ScientificAgentConversationSessionService:
             project_id=clean_project,
             conversation_id=clean_conversation,
         )
+        input_binding: dict[str, Any] | None = None
+        if input_bundle_id:
+            try:
+                input_binding = self.bind_input_bundle(
+                    project_id=clean_project,
+                    run_id=clean_run,
+                    input_bundle_id=input_bundle_id,
+                )
+            except ScientificAgentRunInputBindingError:
+                raise
         if state.get("status") in ACTIVE_SESSION_STATUSES:
+            messages = self._messages(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+            )
+            last_user = next(
+                (
+                    item["content"]
+                    for item in reversed(messages)
+                    if item["role"] == "user"
+                ),
+                "",
+            )
+            authority_mode = self._authority_turn_mode(
+                project_id=clean_project,
+                state=state,
+                content=last_user,
+            )
+            if authority_mode:
+                decision_payload = self._authority_decision(
+                    project_id=clean_project,
+                    run_id=clean_run,
+                    mode=authority_mode,
+                )
+                return self._approve_current_authority(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    run_id=clean_run,
+                    state=state,
+                    decision=decision_payload,
+                    provider=provider,
+                    provider_binding_digest=provider_binding_digest,
+                    actor=actor,
+                    authority_mode=authority_mode,
+                )
             return self._handle_existing_execution(
                 project_id=clean_project,
                 conversation_id=clean_conversation,
@@ -821,6 +1165,48 @@ class ScientificAgentConversationSessionService:
                 llm_used=provider is not None,
             )
 
+        try:
+            input_binding = self._resolve_input_bundle_for_planning(
+                project_id=clean_project,
+                run_id=clean_run,
+                state=state,
+                requested_bundle_id=input_bundle_id,
+                last_user=last_user,
+            ) or input_binding
+        except ScientificAgentRunInputBindingError as exc:
+            bundle_ids = tuple(exc.bundle_ids)
+            if bundle_ids:
+                message = (
+                    "检测到多个已批准的 BR1 输入版本，请在对话中选择一个："
+                    + "、".join(bundle_ids)
+                    + "。"
+                )
+            elif exc.reason_code == "BR1_INPUT_BUNDLE_REQUIRED":
+                message = "当前没有可用于 BR1 runtime 的 owner-approved 输入版本。"
+            else:
+                message = "当前 BR1 输入版本不可用或已过期，请选择有效的 owner-approved 输入版本。"
+            state = self._transition(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+                status="needs_input",
+                reason_code=exc.reason_code,
+                updates={
+                    "run_id": clean_run,
+                    "conversation_digest": digest,
+                    "proposal_id": "",
+                    "proposal_digest": "",
+                },
+                event_type="input.binding_required",
+                message=message,
+            )
+            return ScientificAgentConversationTurnResult(
+                decision=decision_payload,
+                assistant_message=message,
+                assistant_source="scientific_agent_session",
+                llm_used=provider is not None,
+                session=self.session_projection(state),
+            )
+
         if provider is None:
             state = self._transition(
                 project_id=clean_project,
@@ -868,12 +1254,53 @@ class ScientificAgentConversationSessionService:
                 "the scientific Agent could not publish a reviewable plan proposal"
             ) from exc
 
+        resource_authority_ready, resource_authority_reasons = (
+            self._ensure_remote_resource_authority(
+                project_id=clean_project,
+                publication=publication,
+            )
+        )
+        input_updates = (
+            {
+                "input_bundle_id": str(input_binding.get("input_bundle_id") or ""),
+                "input_binding_digest": str(input_binding.get("binding_digest") or ""),
+            }
+            if input_binding is not None
+            else {}
+        )
+        if not resource_authority_ready:
+            return self._resource_authority_required_result(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+                decision=decision_payload,
+                state=state,
+                publication=publication,
+                reason_codes=resource_authority_reasons,
+                llm_used=True,
+                updates={
+                    **input_updates,
+                    "run_id": clean_run,
+                    "conversation_digest": digest,
+                    "proposal_id": proposal.proposal_id,
+                    "proposal_digest": proposal.proposal_digest,
+                    "authorization_id": "",
+                    "authorization_digest": "",
+                    "start_intent_id": "",
+                    "start_intent_digest": "",
+                    "controller_execution_id": "",
+                    "controller_execution_digest": "",
+                    "controller_status": "",
+                    "current_task_id": "",
+                },
+            )
+
         state = self._transition(
             project_id=clean_project,
             conversation_id=clean_conversation,
             status="approval_required",
             reason_code="PLAN_APPROVAL_REQUIRED",
             updates={
+                **input_updates,
                 "run_id": clean_run,
                 "conversation_digest": digest,
                 "proposal_id": proposal.proposal_id,
@@ -886,6 +1313,8 @@ class ScientificAgentConversationSessionService:
                 "controller_execution_digest": "",
                 "controller_status": "",
                 "current_task_id": "",
+                "resource_authority_status": "configured",
+                "resource_authority_reason_codes": [],
             },
             event_type="plan.generated",
             event_data={
@@ -962,6 +1391,214 @@ class ScientificAgentConversationSessionService:
             )
         return publication
 
+    @staticmethod
+    def _authority_decision(
+        *, project_id: str, run_id: str, mode: str
+    ) -> dict[str, Any]:
+        decision_name = {
+            "dataset_gate_approval": "current_dataset_gate_approval",
+            "gate_approval": "current_gate_approval",
+            "remote_approval": "current_remote_approval",
+        }.get(mode, "current_authority_approval")
+        return {
+            "project_id": project_id,
+            "run_id": run_id,
+            "status": "authority_approval",
+            "decision": decision_name,
+            "summary": "The exact current server-owned authority boundary will be approved.",
+            "modeling_plan_payload": {},
+            "questions": [],
+            "pending_cited_target_evidence": [],
+            "next_actions": ["continue_the_bound_controller_loop"],
+            "blocked_reasons": [],
+            "requires_user_response": False,
+            "executable": False,
+        }
+
+    def _authority_updates_for_controller(
+        self, *, project_id: str, controller_result: ControllerAdvanceResult
+    ) -> dict[str, Any]:
+        resolver = getattr(self.controller, "current_authority_boundary", None)
+        if resolver is None:
+            return {}
+        try:
+            boundary = resolver(
+                project_id=project_id,
+                controller_execution_id=controller_result.execution.controller_execution_id,
+            )
+        except (ScientificAgentHarnessControllerError, FileNotFoundError, ValueError):
+            return {}
+        if not isinstance(boundary, dict) or not boundary.get("authority_kind"):
+            return {}
+        updates: dict[str, Any] = {
+            "authority_kind": str(boundary.get("authority_kind") or ""),
+            "gate_id": str(boundary.get("gate_id") or ""),
+            "snapshot_id": str(boundary.get("snapshot_id") or ""),
+            "snapshot_digest": str(boundary.get("snapshot_digest") or ""),
+            "remote_request_sha256": str(boundary.get("request_sha256") or ""),
+        }
+        if boundary.get("authority_kind") == "dataset_confirmation_gate":
+            try:
+                projection = project_current_dataset_review(
+                    storage=self.projects,
+                    project_id=project_id,
+                    run_id=controller_result.execution.run_id,
+                    current_task_id=str(boundary.get("task_id") or ""),
+                    gate_id=str(boundary.get("gate_id") or ""),
+                    snapshot_id=str(boundary.get("snapshot_id") or ""),
+                    snapshot_digest=str(boundary.get("snapshot_digest") or ""),
+                )
+            except ScientificAgentReviewProjectionError as exc:
+                raise ScientificAgentConversationSessionError(
+                    "the current verified dataset review projection is unavailable"
+                ) from exc
+            updates["review_projection"] = projection
+        return updates
+
+    def _approve_current_authority(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        run_id: str,
+        state: dict[str, Any],
+        decision: dict[str, Any],
+        provider: LLMProvider | None,
+        provider_binding_digest: str,
+        actor: ActorContext | None,
+        authority_mode: str,
+    ) -> ScientificAgentConversationTurnResult:
+        if actor is None or not actor.actor:
+            raise ScientificAgentConversationAuthorizationRequired(
+                "conversational authority approval requires a server-resolved actor"
+            )
+        boundary = self._resolve_authority_boundary(
+            project_id=project_id,
+            state=state,
+        )
+        authority_kind = boundary.get("authority_kind")
+        is_dataset = authority_kind == "dataset_confirmation_gate"
+        is_gate = authority_kind in {"dataset_confirmation_gate", "gate"}
+        if authority_mode in {"dataset_gate_approval", "gate_approval"} and not is_gate:
+            raise ScientificAgentConversationStaleAuthority(
+                "the current conversational Gate authority is no longer pending"
+            )
+        if authority_mode == "remote_approval" and authority_kind != "remote_approval":
+            raise ScientificAgentConversationStaleAuthority(
+                "the current conversational remote authority is no longer pending"
+            )
+        if not boundary.get("controller_execution_id"):
+            raise ScientificAgentConversationStaleAuthority(
+                "the current authority boundary is unavailable"
+            )
+        try:
+            if is_gate:
+                controller_result = self.controller.approve_gate(
+                    project_id=project_id,
+                    controller_execution_id=boundary["controller_execution_id"],
+                    gate_id=boundary["gate_id"],
+                    request=AgentHarnessGateApprovalRequest(
+                        expected_snapshot_id=boundary["snapshot_id"],
+                        expected_snapshot_hash=boundary["snapshot_digest"],
+                        client_request_id=_request_id(
+                            "conversation-gate-approval",
+                            project_id,
+                            conversation_id,
+                            boundary["gate_id"],
+                            boundary["snapshot_id"],
+                            boundary["snapshot_digest"],
+                            actor.actor,
+                        ),
+                        note=(
+                            "Explicit conversational approval of the current verified dataset snapshot."
+                            if is_dataset
+                            else "Explicit conversational approval of the current Gate."
+                        ),
+                    ),
+                    actor=actor.actor,
+                )
+            else:
+                controller_result = self.controller.approve_remote(
+                    project_id=project_id,
+                    controller_execution_id=boundary["controller_execution_id"],
+                    request=AgentHarnessRemoteApprovalRequest(
+                        expected_remote_request_sha256=boundary["request_sha256"],
+                        client_request_id=_request_id(
+                            "conversation-remote-approval",
+                            project_id,
+                            conversation_id,
+                            boundary["request_id"],
+                            boundary["request_sha256"],
+                            actor.actor,
+                        ),
+                        note="Explicit conversational approval of the current remote execution request.",
+                    ),
+                    actor=actor.actor,
+                )
+        except ScientificAgentHarnessControllerError as exc:
+            state = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status="stale_authority",
+                reason_code="CONVERSATIONAL_AUTHORITY_STALE",
+                event_type="authority.approval_failed",
+            )
+            raise ScientificAgentConversationStaleAuthority(
+                "the current conversational authority could not be approved exactly"
+            ) from exc
+
+        state = self._transition(
+            project_id=project_id,
+            conversation_id=conversation_id,
+            status="running",
+            reason_code="CONVERSATIONAL_AUTHORITY_APPROVED",
+            updates={
+                "run_id": run_id,
+                "controller_status": controller_result.inspection.status.value,
+                "current_task_id": controller_result.inspection.current_task_id,
+                "authority_kind": "",
+                "gate_id": "",
+                "snapshot_id": "",
+                "snapshot_digest": "",
+                "remote_request_sha256": "",
+                **(
+                    {"review_projection": {}}
+                    if is_dataset
+                    else {}
+                ),
+            },
+            event_type="authority.approved",
+            event_data={
+                "controller_execution_id": controller_result.execution.controller_execution_id,
+                "controller_status": controller_result.inspection.status.value,
+                "current_task_id": controller_result.inspection.current_task_id,
+                "phase": "conversational_authority",
+            },
+        )
+        controller_result, state, _stop_reason = self._auto_progress(
+            project_id=project_id,
+            conversation_id=conversation_id,
+            state=state,
+            controller_result=controller_result,
+            provider=provider,
+            provider_binding_digest=provider_binding_digest,
+        )
+        publication = self._read_active_publication(state, project_id)
+        final_status = str(state.get("status") or "running")
+        return ScientificAgentConversationTurnResult(
+            decision=decision,
+            assistant_message=_static_status_message(
+                final_status,
+                task_id=str(state.get("current_task_id") or ""),
+            ),
+            assistant_source="scientific_agent_session",
+            llm_used=provider is not None,
+            session=self.session_projection(state),
+            proposal=publication.proposal.model_dump(mode="json"),
+            plan_summary=self._plan_summary(publication),
+            controller=_controller_public(controller_result),
+        )
+
     def _approve_and_progress(
         self,
         *,
@@ -980,6 +1617,22 @@ class ScientificAgentConversationSessionService:
             )
         publication = self._read_pending_publication(state, project_id)
         proposal = publication.proposal
+        resource_authority_ready, resource_authority_reasons = (
+            self._ensure_remote_resource_authority(
+                project_id=project_id,
+                publication=publication,
+            )
+        )
+        if not resource_authority_ready:
+            return self._resource_authority_required_result(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                decision=decision,
+                state=state,
+                publication=publication,
+                reason_codes=resource_authority_reasons,
+                llm_used=provider is not None,
+            )
         approval_request_id = _request_id(
             "conversation-approval",
             project_id,
@@ -1062,6 +1715,8 @@ class ScientificAgentConversationSessionService:
                 "controller_execution_digest": controller_result.execution.execution_digest,
                 "controller_status": controller_result.inspection.status.value,
                 "current_task_id": controller_result.inspection.current_task_id,
+                "resource_authority_status": "configured",
+                "resource_authority_reason_codes": [],
             },
             event_type="run.started",
             event_data={
@@ -1334,6 +1989,10 @@ class ScientificAgentConversationSessionService:
                 terminal_receipt_committed=controller_result.receipt is not None,
             )
             if boundary == AgentHarnessControllerActionBoundaryClass.USER_GATE_APPROVAL:
+                authority_updates = self._authority_updates_for_controller(
+                    project_id=project_id,
+                    controller_result=controller_result,
+                )
                 state = self._transition(
                     project_id=project_id,
                     conversation_id=conversation_id,
@@ -1342,6 +2001,7 @@ class ScientificAgentConversationSessionService:
                     updates={
                         "controller_status": status.value,
                         "current_task_id": inspection.current_task_id,
+                        **authority_updates,
                     },
                     event_type="gate.waiting",
                     event_data={
@@ -1353,6 +2013,10 @@ class ScientificAgentConversationSessionService:
                 )
                 return controller_result, state, "gate"
             if boundary == AgentHarnessControllerActionBoundaryClass.USER_REMOTE_APPROVAL:
+                authority_updates = self._authority_updates_for_controller(
+                    project_id=project_id,
+                    controller_result=controller_result,
+                )
                 state = self._transition(
                     project_id=project_id,
                     conversation_id=conversation_id,
@@ -1361,6 +2025,7 @@ class ScientificAgentConversationSessionService:
                     updates={
                         "controller_status": status.value,
                         "current_task_id": inspection.current_task_id,
+                        **authority_updates,
                     },
                     event_type="remote_approval.waiting",
                     event_data={
@@ -1748,6 +2413,24 @@ class ScientificAgentConversationSessionService:
             "goal": proposal.goal,
             "tasks": tasks,
             "selected_profiles": list(proposal.selected_profiles),
+            "dispatch_intents": [
+                {
+                    "task_id": item.task_id,
+                    "execution_route": str(item.execution_route),
+                    "remote_task_type": (
+                        str(item.remote_task_type)
+                        if item.remote_task_type is not None
+                        else None
+                    ),
+                    "logical_profile_id": item.logical_profile_id,
+                    "requested_resources": (
+                        item.requested_resources.model_dump(mode="json")
+                        if item.requested_resources is not None
+                        else None
+                    ),
+                }
+                for item in proposal.dispatch_intents
+            ],
             "task_options": proposal.compiled_task_options,
             "limits": proposal.limits,
             "required_gates": list(proposal.required_gates),

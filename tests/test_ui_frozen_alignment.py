@@ -131,7 +131,10 @@ def test_conversation_is_the_scientific_agent_front_door(
     assert "new EventSource(url)" in html
     assert "function renderScientificAgentPlan(summary)" in html
     assert "确认执行" in html
-    assert "数据集审阅卡" in html
+    assert "function renderScientificAgentReviewProjection(projection)" in html
+    assert "确认当前数据集" in html
+    assert "renderDatasetReview" not in html
+    assert "dataset-review-form" not in html
     assert "renderDatasetWorkflow" not in html
     assert html.count("if (!isConversationContextCurrent(context)) return;") >= 2
 

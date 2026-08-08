@@ -259,8 +259,9 @@ class RunPlanExecutor:
         run_plan: RunPlan,
         task_index: int,
         task_options: dict[str, Any],
+        allow_remote_dispatch: bool = False,
     ) -> dict[str, Any]:
-        """Derive the current server-only binding for one local task.
+        """Derive the current server-only binding for one task.
 
         The result contains only digests and registered logical IDs.  It is
         safe for Controller authority checks and contains no adapter name or
@@ -285,24 +286,27 @@ class RunPlanExecutor:
             # Controller dispatch intent remains the route authority; this
             # fallback only permits the callable registered local default.
             resolved_route = "local_executor"
-        if resolved_route != "local_executor":
+        if resolved_route != "local_executor" and not allow_remote_dispatch:
             raise ValueError("Controller one-task seam rejects remote dispatch intents")
-        adapter_name = self._adapter_name_for(
-            task.task_id,
-            spec.default_adapter,
-            options,
-        )
-        if adapter_name != spec.default_adapter:
-            raise ValueError("Controller one-task execution forbids adapter override")
-        adapter_binding = local_adapter_execution_binding_digest(
-            task_id=task.task_id,
-            default_adapter=spec.default_adapter,
-            binding_version=(
-                IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
-            ),
-        )
-        if adapter_binding is None:
-            raise ValueError("Controller local task has no callable server binding")
+        if resolved_route == "local_executor":
+            adapter_name = self._adapter_name_for(
+                task.task_id,
+                spec.default_adapter,
+                options,
+            )
+            if adapter_name != spec.default_adapter:
+                raise ValueError("Controller one-task execution forbids adapter override")
+            adapter_binding = local_adapter_execution_binding_digest(
+                task_id=task.task_id,
+                default_adapter=spec.default_adapter,
+                binding_version=(
+                    IMPLEMENTATION_BOUND_LOCAL_ADAPTER_EXECUTION_BINDING_VERSION
+                ),
+            )
+            if adapter_binding is None:
+                raise ValueError("Controller local task has no callable server binding")
+        else:
+            adapter_binding = ""
         run_dir = self.storage.run_dir(project_id, run_plan.run_id)
         artifact_paths = self._artifact_paths_from_registry(
             project_id,
@@ -330,10 +334,16 @@ class RunPlanExecutor:
             "run_id": run_plan.run_id,
             "task_id": task.task_id,
             "planned_task_index": task_index,
-            "execution_route": "local_executor",
+            "execution_route": resolved_route,
             "local_adapter_execution_binding_digest": adapter_binding,
             "compiled_options_digest": _agent_digest(options),
-            "input_artifacts_digest": _agent_digest(input_bindings),
+            "input_artifacts_digest": (
+                _agent_digest(input_bindings)
+                if resolved_route == "local_executor"
+                else _agent_digest(
+                    {"required_artifact_ids": list(task.required_artifacts)}
+                )
+            ),
             "output_contract_digest": _agent_digest(
                 {
                     "task_id": task.task_id,
@@ -409,6 +419,7 @@ class RunPlanExecutor:
             expected_compiled_options_digest=expected_compiled_options_digest,
             expected_input_artifacts_digest=expected_input_artifacts_digest,
             expected_output_contract_digest=expected_output_contract_digest,
+            allow_remote_dispatch=True,
         )
         del binding
         if not spec.gates:
@@ -683,6 +694,7 @@ class RunPlanExecutor:
         expected_compiled_options_digest: str,
         expected_input_artifacts_digest: str,
         expected_output_contract_digest: str,
+        allow_remote_dispatch: bool = False,
     ) -> tuple[Any, Any, dict[str, Any], Path, dict[str, str]]:
         task = self._planned_task_at(run_plan, task_index)
         if task.task_id != task_id:
@@ -692,6 +704,7 @@ class RunPlanExecutor:
             run_plan=run_plan,
             task_index=task_index,
             task_options=task_options,
+            allow_remote_dispatch=allow_remote_dispatch,
         )
         expected = {
             "local_adapter_execution_binding_digest": expected_local_adapter_execution_binding_digest,

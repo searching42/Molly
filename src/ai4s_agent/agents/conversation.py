@@ -51,6 +51,22 @@ class ConversationAgent:
         "execute this plan",
         "run this plan",
     )
+    DATASET_GATE_APPROVAL_PHRASES = (
+        "确认当前数据集",
+        "confirm current dataset",
+    )
+    GATE_APPROVAL_PHRASES = (
+        "批准当前 Gate",
+        "确认当前 Gate",
+        "approve current gate",
+        "confirm current gate",
+    )
+    REMOTE_APPROVAL_PHRASES = (
+        "批准当前远程执行",
+        "确认远程执行",
+        "approve current remote execution",
+        "confirm remote execution",
+    )
     PLAN_REVISION_TERMS = (
         "但",
         "但是",
@@ -249,10 +265,44 @@ class ConversationAgent:
             return False
         if any(term in raw for term in cls.PLAN_REVISION_TERMS):
             return False
+        return cls._recognize_exact_phrase(raw, cls.PLAN_APPROVAL_PHRASES)
+
+    @classmethod
+    def recognize_dataset_gate_approval(cls, content: str) -> bool:
+        """Recognize the exact approval for the current verified dataset snapshot."""
+
+        return cls._recognize_exact_phrase(
+            str(content or "").strip().lower(), cls.DATASET_GATE_APPROVAL_PHRASES
+        )
+
+    @classmethod
+    def recognize_gate_approval(cls, content: str) -> bool:
+        """Recognize only the exact generic current-Gate approval phrase."""
+
+        return cls._recognize_exact_phrase(
+            str(content or "").strip().lower(), cls.GATE_APPROVAL_PHRASES
+        )
+
+    @classmethod
+    def recognize_remote_approval(cls, content: str) -> bool:
+        """Recognize only the exact current remote-execution approval phrase."""
+
+        return cls._recognize_exact_phrase(
+            str(content or "").strip().lower(), cls.REMOTE_APPROVAL_PHRASES
+        )
+
+    @classmethod
+    def _recognize_exact_phrase(
+        cls, raw: str, phrases: tuple[str, ...]
+    ) -> bool:
+        if not raw or "?" in raw or "？" in raw:
+            return False
+        if any(term in raw for term in cls.PLAN_REVISION_TERMS):
+            return False
         normalized = re.sub(r"[\s,，。.!！:：;；]+", "", raw)
         normalized_phrases = {
             re.sub(r"[\s,，。.!！:：;；]+", "", phrase.lower())
-            for phrase in cls.PLAN_APPROVAL_PHRASES
+            for phrase in phrases
         }
         return normalized in normalized_phrases
 
