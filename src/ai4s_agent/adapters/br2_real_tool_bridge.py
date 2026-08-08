@@ -68,6 +68,21 @@ BR2_CONTEXTUAL_ALLOWED_CONTENT = frozenset(
     {"parsed_document_text", "parsed_tables", "evidence_packets"}
 )
 BR2_DOWNSTREAM_KEYS = ("training", "generation", "prediction", "ranking")
+BR2_CONTEXTUAL_READ_TIMEOUT_SEC = 300
+BR2_CONTEXTUAL_TOTAL_TIMEOUT_SEC = 600
+
+
+def bounded_br2_contextual_provider_config(config: Any) -> Any:
+    """Give the full-paper contextual call a finite, provider-compatible budget."""
+
+    return config.model_copy(
+        update={
+            "timeout_sec": max(int(config.timeout_sec), BR2_CONTEXTUAL_READ_TIMEOUT_SEC),
+            "total_timeout_sec": max(
+                float(config.total_timeout_sec), BR2_CONTEXTUAL_TOTAL_TIMEOUT_SEC
+            ),
+        }
+    )
 
 
 def parse_document_mineru_bridge_adapter(payload: dict[str, Any]) -> dict[str, Any]:
@@ -364,7 +379,8 @@ def map_oled_contextual_semantics_bridge_adapter(payload: dict[str, Any]) -> dic
         ) as span:
             span.set_attribute("prompt_version", request.prompt_version)
             started = time.monotonic()
-            with temporary_provider(config) as provider:
+            contextual_config = bounded_br2_contextual_provider_config(config)
+            with temporary_provider(contextual_config) as provider:
                 result = run_oled_llm_context_mapping(request, provider=provider)
             latency_ms = round((time.monotonic() - started) * 1000.0, 3)
             span.set_attribute("duration_ms", max(0, int(round(latency_ms))))

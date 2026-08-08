@@ -432,6 +432,7 @@ def run_oled_llm_context_mapping(
         invocation = provider.complete_json(
             messages=_mapping_messages(request),
             prompt_version=PROMPT_VERSION,
+            response_schema=OledLLMPaperMappingResponse.model_json_schema(),
         )
     except (LLMProviderError, OSError) as exc:
         return _failed_result(

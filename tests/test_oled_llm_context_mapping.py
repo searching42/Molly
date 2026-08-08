@@ -450,7 +450,8 @@ def test_response_evidence_outside_packet_and_document_context_fails_closed() ->
 
 def test_provider_error_is_reported_without_candidates() -> None:
     class BrokenProvider:
-        def complete_json(self, *, messages, prompt_version):
+        def complete_json(self, *, messages, prompt_version, response_model=None, response_schema=None):
+            del messages, prompt_version, response_model, response_schema
             raise LLMProviderError("endpoint unavailable")
 
     request = build_oled_llm_paper_mapping_request([_packet()], parsed_document=_parsed_document())

@@ -9,7 +9,10 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.pr_fast]
 
 from ai4s_agent.adapters.br2_real_tool_bridge import (
+    BR2_CONTEXTUAL_READ_TIMEOUT_SEC,
+    BR2_CONTEXTUAL_TOTAL_TIMEOUT_SEC,
     OledBr2ExternalLLMContentAuthorization,
+    bounded_br2_contextual_provider_config,
     extract_oled_evidence_bridge_adapter,
     parse_document_mineru_bridge_adapter,
     prepare_oled_candidate_raw_dataset_bridge_adapter,
@@ -20,11 +23,13 @@ from ai4s_agent.domains.oled_br2_candidate_raw_dataset import (
 from ai4s_agent.domains.oled_contracts import OledCausalLayer
 from ai4s_agent.domains.oled_llm_context_mapping import (
     OledLLMPaperMappingRequest,
+    OledLLMPaperMappingResponse,
     run_oled_llm_context_mapping,
 )
 from ai4s_agent.domains.oled_mineru_semantic_mapping import (
     OledSchemaCandidate,
     OledSchemaCandidateType,
+    OledSemanticMappingPacket,
 )
 from ai4s_agent.executor import RunPlanExecutor
 from ai4s_agent.harness_tracing import _validate_attribute
@@ -34,7 +39,13 @@ from ai4s_agent.scientific_agent_plan import (
     PlannerOptionCompiler,
     build_scientific_tool_catalog,
 )
-from ai4s_agent.schemas import ParsedDocument, ParsedDocumentElement, ParsedTable
+from ai4s_agent.schemas import (
+    LLMInvocationRecord,
+    LLMProviderConfig,
+    ParsedDocument,
+    ParsedDocumentElement,
+    ParsedTable,
+)
 from ai4s_agent.storage import ProjectStorage
 
 
@@ -333,6 +344,62 @@ def test_stub_contract_runs_extraction_mapping_and_candidate_package(tmp_path: P
         "prediction": False,
         "ranking": False,
     }
+
+
+def test_contextual_mapping_binds_current_response_model_and_timeout_contract() -> None:
+    from ai4s_agent.domains.oled_llm_context_mapping import build_oled_llm_paper_mapping_request
+
+    packet = OledSemanticMappingPacket(
+        packet_id="packet:response-model",
+        source_candidate_hash="source-response-model",
+        source_evidence_anchor="table:p13:response-model",
+        source_candidate_type="table",
+        paper_id="paper-br2-contract",
+        table_headers=["Emitter", "PLQY (%)"],
+        table_rows=[{"Emitter": "Molecule-A", "PLQY (%)": "82"}],
+        allowed_property_ids=["plqy"],
+        allowed_layers=[layer.value for layer in OledCausalLayer],
+    )
+    packet_payload = packet.model_dump(mode="json")
+    request = build_oled_llm_paper_mapping_request(
+        [packet],
+        parsed_document={
+            "paper_id": "paper-br2-contract",
+            "elements": [{"element_id": "e-response-model", "page": 13, "text": "context"}],
+        },
+    )
+    captured: dict[str, object] = {}
+
+    class CapturingProvider:
+        def complete_json(self, *, messages, prompt_version, response_model=None, response_schema=None):
+            del messages, prompt_version, response_model
+            captured["response_schema"] = response_schema
+            return LLMInvocationRecord(
+                provider="stub",
+                model="stub-contextual-provider",
+                prompt_version="oled.contextual_semantic_mapping.v5",
+                response_id="response-model-contract",
+                observation_digest="sha256:" + "1" * 64,
+                tool_catalog_digest="sha256:" + "2" * 64,
+                validated_output_digest="sha256:" + "3" * 64,
+                raw_response={},
+                parsed_output=_valid_response([packet_payload]),
+            )
+
+    result = run_oled_llm_context_mapping(request, provider=CapturingProvider())
+    assert result.status == "ready_for_human_review"
+    assert captured["response_schema"] == OledLLMPaperMappingResponse.model_json_schema()
+
+    config = LLMProviderConfig(
+        provider="openai_compatible",
+        endpoint="https://example.test/v1",
+        model="deepseek-v4-flash-ascend1",
+        timeout_sec=60,
+        total_timeout_sec=120,
+    )
+    bounded = bounded_br2_contextual_provider_config(config)
+    assert bounded.timeout_sec == BR2_CONTEXTUAL_READ_TIMEOUT_SEC
+    assert bounded.total_timeout_sec == BR2_CONTEXTUAL_TOTAL_TIMEOUT_SEC
 
 
 def test_invalid_contextual_response_fails_closed() -> None:
