@@ -82,8 +82,8 @@ The existing authoritative full path was then allowed to run without manual
 termination. It completed `PASS` after 898.3 seconds for all 1999 rows:
 1999 supported, 0 unsupported, 0 unresolved, and no reason codes. During the
 run, observed CPU utilization was 69.1--140.5%, RSS was 1039.5--1221.1 MiB,
-swap remained 0, the provider subprocess remained alive through the terminal
-sample, and the preflight exited 0. No training, generation, prediction,
+swap remained 0, the provider subprocess remained alive during processing and
+ended with the preflight, and the preflight exited 0. No training, generation, prediction,
 Controller, or owner-approval side effect occurred.
 
 The first live freeze attempt exposed a real readiness blocker: the CLI

@@ -27,7 +27,8 @@
       1221.1
     ],
     "swap_mb_observed_max": 0.0,
-    "provider_subprocess_alive_until_terminal_sample": true,
+    "provider_subprocess_alive_during_processing": true,
+    "provider_subprocess_ended_with_preflight": true,
     "preflight_abnormal_exit": false,
     "summary_written_only_at_terminal": true
   },
