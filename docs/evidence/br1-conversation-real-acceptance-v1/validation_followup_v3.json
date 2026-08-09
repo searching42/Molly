@@ -1,0 +1,14 @@
+{
+  "schema_version": "scientific_br1_real_conversation_validation_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "compileall": "pass",
+  "evidence_json_validation": {
+    "file_count": 18,
+    "status": "pass"
+  },
+  "git_diff_check": "pass",
+  "pr_fast": "previous_local_run_passed_before_v3_evidence_only_update",
+  "full_ci": "not_triggered_deployment_blocked",
+  "claim_boundary": "Validation covers repository syntax, evidence structure, and whitespace; the full scientific preflight did not complete.",
+  "status": "documentation_followup_validated"
+}

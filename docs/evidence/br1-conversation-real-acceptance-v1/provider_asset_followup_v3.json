@@ -1,0 +1,25 @@
+{
+  "schema_version": "scientific_br1_real_conversation_provider_asset_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "provider": "unimol-tools",
+  "provider_version": "0.1.5",
+  "asset": {
+    "name": "mol.dict.txt",
+    "source_repository": "dptech/Uni-Mol-Models",
+    "source_revision": "b6904ae",
+    "source_file_size_bytes": 91,
+    "deployed_size_bytes": 91,
+    "deployed_sha256": "sha256:94135cb9a9198f988de684cb61e2c372882a3bd59b8320effbae704c38057127",
+    "status": "present_and_digest_verified"
+  },
+  "adapter_contract": {
+    "status": "configured",
+    "compatible_execution_profiles": [
+      "unimol-train-br1-v2"
+    ],
+    "single_molecule_smoke": "SUPPORTED"
+  },
+  "network_download": "unavailable_due_worker_dns",
+  "claim_boundary": "Only the public provider dictionary asset and adapter discovery were repaired; no scientific result or acceptance run is claimed.",
+  "status": "provider_asset_repaired"
+}

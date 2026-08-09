@@ -64,3 +64,14 @@ This follow-up therefore remains deployment-blocked, not runtime-success
 evidence. The original v1 attempt remains the historical front-door
 fail-closed record; these v2 files document only the subsequent deployment,
 policy, authority, and preflight checks.
+
+After the initial v2 preflight, the missing public Uni-Mol dictionary asset was
+repaired from the reviewed `dptech/Uni-Mol-Models` source and its deployed
+91-byte digest was verified. Provider adapter discovery and bounded
+one-, 100-, and 500-row preprocessing checks all returned supported results.
+The complete 1999-row applicability preflight was then retried, but it did not
+write a new summary within the bounded eight-minute operator window and was
+stopped before any acceptance side effect. The prior blocked summary is not
+used as the result of this retry. The current gate is therefore full
+applicability-preflight completion; freeze, owner approval, Controller, remote
+dispatch, and scientific result projection remain unstarted.
