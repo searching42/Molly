@@ -89,6 +89,93 @@ def test_repository_entry_documents_define_current_authority_and_boundaries() ->
     assert "GitHub PR 编号从公开仓库重新开始" in roadmap
 
 
+def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
+    roadmap = (REPOSITORY_ROOT / "docs" / "roadmap.md").read_text(encoding="utf-8")
+
+    assert "### Roadmap checklist convention" in roadmap
+    assert "`QUEUED`: the work is planned and ordered, but its prerequisites are not yet satisfied." in roadmap
+    assert "Checkbox 只表达 roadmap item 是否完成，不能代替 runtime evidence。" in roadmap
+    assert "Structured Dataset real-tool canary (BR1) |" not in roadmap
+    assert "Autonomy does not create authority. Autonomy only consumes already-valid authority." in roadmap
+    assert "The LLM must not be the sole authority deciding whether its own proposed change requires fresh authorization." in roadmap
+    assert "BR2 v1 does not enter training, generation, Top-N, or experimental validation." in roadmap
+    assert "Current focus: M3.5-AUT-POLICY — Autonomy action classification" in roadmap
+
+    expected_items = (
+        "M3.5-BR1",
+        "M3.5-AUT-POLICY",
+        "M3.5-AUT-L1",
+        "M3.5-AUT-L2",
+        "M3.5-AUT-ACCEPT",
+        "M3.5-BR2-RUNTIME",
+        "M3.5-BR2-MAPPING",
+        "M3.5-BR2-ACCEPT",
+        "M3.5-UI",
+        "M3.5-V1-ACCEPT",
+    )
+    positions = []
+    for item in expected_items:
+        marker = f"**{item} —"
+        assert marker in roadmap
+        positions.append(roadmap.index(marker))
+    assert positions == sorted(positions)
+
+    assert "- [x] **M3.5-BR1 — Conversation-driven real BR1 acceptance**" in roadmap
+    assert "  - State: `DONE`" in roadmap
+    assert "  - Evidence: `I/T/V`" in roadmap
+
+    active_queue = roadmap.split("### Active execution queue", 1)[1].split(
+        "### BR1 acceptance closure", 1
+    )[0]
+
+    def item_block(section: str, item: str) -> str:
+        match = re.search(
+            rf"- \[[ x]\] \*\*{re.escape(item)} —.*?(?=\n- \[[ x]\] \*\*|\Z)",
+            section,
+            flags=re.DOTALL,
+        )
+        assert match, item
+        return match.group(0)
+
+    for item, state in (
+        ("M3.5-BR1", "DONE"),
+        ("M3.5-AUT-POLICY", "READY"),
+        ("M3.5-AUT-L1", "QUEUED"),
+        ("M3.5-AUT-L2", "QUEUED"),
+        ("M3.5-AUT-ACCEPT", "QUEUED"),
+        ("M3.5-BR2-RUNTIME", "QUEUED"),
+        ("M3.5-BR2-MAPPING", "QUEUED"),
+        ("M3.5-BR2-ACCEPT", "QUEUED"),
+        ("M3.5-UI", "DEFERRED"),
+        ("M3.5-V1-ACCEPT", "DEFERRED"),
+    ):
+        assert f"State: `{state}`" in item_block(active_queue, item)
+
+    gates = roadmap.split("## 7. Acceptance gates", 1)[1].split(
+        "## 8. Later research milestones", 1
+    )[0]
+    for item, state in (
+        ("GATE-BR1-REAL", "DONE"),
+        ("GATE-BR1-RECOVERY", "DONE"),
+        ("GATE-AUT-L1-L2", "QUEUED"),
+        ("GATE-BR2", "QUEUED"),
+        ("GATE-OBSERVABILITY", "QUEUED"),
+        ("GATE-UI-AUTHORITY", "DEFERRED"),
+        ("GATE-V1-OWNER", "DEFERRED"),
+    ):
+        assert f"State: `{state}`" in item_block(gates, item)
+
+    for action_class in ("AUTO_CONTINUE", "REQUIRE_HUMAN", "PROHIBITED"):
+        assert f"`{action_class}`" in roadmap
+    for budget in (
+        "maximum autonomous transitions",
+        "maximum autonomous LLM calls",
+        "maximum remote dispatches allowed by the current authorization",
+        "maximum wall-clock continuation window",
+    ):
+        assert budget in roadmap
+
+
 def test_local_working_context_files_are_ignored_and_not_public_authority() -> None:
     ignored = {
         line.strip()
