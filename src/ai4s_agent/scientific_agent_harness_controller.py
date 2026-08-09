@@ -766,6 +766,51 @@ class ScientificAgentHarnessController:
                 inspection=self._read_only_inspection(execution),
             )
 
+    def verified_remote_publications(
+        self, *, project_id: str, controller_execution_id: str
+    ) -> tuple[Any, ...]:
+        """Return remote publications only after a verified terminal inspection.
+
+        This is a read-only bridge for downstream result projection.  It does
+        not discover artifacts from the filesystem and it does not accept a
+        publication supplied by the browser; every returned publication has
+        passed the same Controller and remote-lifecycle binding checks used by
+        terminal execution success.
+        """
+
+        from ai4s_agent.remote_execution_lifecycle import RemotePublication
+
+        result = self.get(
+            project_id=project_id,
+            controller_execution_id=controller_execution_id,
+        )
+        if result.inspection.status != AgentHarnessControllerStatus.SUCCEEDED:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "verified remote publications require terminal Controller success"
+            )
+        publications: list[RemotePublication] = []
+        for slot in result.execution.task_slots:
+            if slot.execution_route != "remote_execution_service":
+                continue
+            remote = self._remote_inspection(result.execution, slot)
+            if (
+                str(remote.get("effective_status") or "") != "SUCCEEDED"
+                or str((remote.get("state") or {}).get("status") or "") != "SUCCEEDED"
+                or not isinstance(remote.get("publication"), dict)
+            ):
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "verified remote publication is unavailable"
+                )
+            publication = RemotePublication.model_validate(remote["publication"])
+            if publication.publication_sha256 != str(
+                remote.get("publication_digest") or ""
+            ):
+                raise ScientificAgentHarnessControllerVerificationError(
+                    "verified remote publication digest is not self-consistent"
+                )
+            publications.append(publication)
+        return tuple(publications)
+
     def current_authority_boundary(
         self, *, project_id: str, controller_execution_id: str
     ) -> dict[str, str]:

@@ -54,6 +54,11 @@ from ai4s_agent.scientific_agent_review_projection import (
     project_current_dataset_review,
     validate_review_projection,
 )
+from ai4s_agent.scientific_agent_result_projection import (
+    ScientificAgentResultProjectionError,
+    ScientificAgentResultProjectionService,
+    validate_result_projection,
+)
 from ai4s_agent.scientific_agent_run_input_binding import (
     ScientificAgentRunInputBindingError,
     ScientificAgentRunInputBindingService,
@@ -150,6 +155,9 @@ class ScientificAgentConversationTurnResult:
             payload["controller"] = self.controller
         if self.session.get("review_projection"):
             payload["review_projection"] = self.session["review_projection"]
+        if self.session.get("result_projections"):
+            payload["scientific_results"] = self.session["result_projections"]
+            payload["result_projections"] = self.session["result_projections"]
         return payload
 
 
@@ -194,6 +202,41 @@ def _static_status_message(status: str, *, task_id: str = "") -> str:
     if task_id:
         return f"{message} 当前步骤：{task_id}。"
     return message
+
+
+def _scientific_result_message(projections: Iterable[dict[str, Any]]) -> str:
+    """Render only server-generated, validated result projection facts."""
+
+    items = list(projections)
+    if not items:
+        return "运行成功。"
+    lines = ["运行成功。已生成经验证的科学结果投影。"]
+    for projection in items:
+        summary = projection.get("summary_statistics") or {}
+        task_type = str(projection.get("task_type") or "scientific_task")
+        candidate_count = int(summary.get("candidate_count") or 0)
+        ranked = projection.get("ranked_candidates") or []
+        candidate_lines: list[str] = []
+        for candidate in ranked[:5]:
+            candidate_id = str(candidate.get("candidate_id") or "candidate")
+            score_label = str(candidate.get("score_label") or "score")
+            score = candidate.get("score")
+            value = f"{score:.6g}" if isinstance(score, (int, float)) else str(score)
+            detail = f"{candidate_id}（{score_label}={value}）"
+            smiles = str(candidate.get("smiles") or "").strip()
+            if smiles:
+                detail += f"，SMILES={smiles}"
+            candidate_lines.append(detail)
+        lines.append(
+            f"{task_type}：候选 {candidate_count} 个；Top-{len(ranked[:5])}："
+            + ("；".join(candidate_lines) if candidate_lines else "无")
+        )
+        limitations = [
+            str(item) for item in (projection.get("scientific_limitations") or [])
+        ]
+        if limitations:
+            lines.append("科学限制：" + "；".join(limitations))
+    return "\n".join(lines)
 
 
 def _controller_public(result: ControllerAdvanceResult) -> dict[str, Any]:
@@ -278,6 +321,7 @@ class ScientificAgentConversationSessionService:
         execution_agent: ExecutionAgentService,
         input_binding_service: ScientificAgentRunInputBindingService | None = None,
         resource_authority_service: Any | None = None,
+        result_projection_service: ScientificAgentResultProjectionService | None = None,
     ) -> None:
         self.projects = projects
         self.conversations = conversations
@@ -288,6 +332,7 @@ class ScientificAgentConversationSessionService:
         self.execution_agent = execution_agent
         self.input_binding_service = input_binding_service
         self.resource_authority_service = resource_authority_service
+        self.result_projection_service = result_projection_service
         self.projector = ScientificAgentConversationSessionEventProjector(service=self)
 
     def _root(self, project_id: str, conversation_id: str, *, create: bool) -> Path:
@@ -344,6 +389,7 @@ class ScientificAgentConversationSessionService:
             "resource_authority_status": "",
             "resource_authority_reason_codes": [],
             "review_projection": {},
+            "result_projections": [],
             "updated_at": "",
             "executable": False,
         }
@@ -501,6 +547,7 @@ class ScientificAgentConversationSessionService:
                 "resource_authority_status",
                 "resource_authority_reason_codes",
                 "review_projection",
+                "result_projections",
                 "updated_at",
                 "executable",
             )
@@ -540,6 +587,7 @@ class ScientificAgentConversationSessionService:
                 "resource_authority_status",
                 "resource_authority_reason_codes",
                 "review_projection",
+                "result_projections",
                 "updated_at",
                 "executable",
             )
@@ -564,6 +612,19 @@ class ScientificAgentConversationSessionService:
                 raise ScientificAgentConversationSessionError(
                     "conversation review projection is invalid"
                 ) from exc
+        raw_results = result.get("result_projections")
+        if not isinstance(raw_results, list) or len(raw_results) > 16:
+            raise ScientificAgentConversationSessionError(
+                "conversation scientific result projection is invalid"
+            )
+        try:
+            result["result_projections"] = [
+                validate_result_projection(item) for item in raw_results
+            ]
+        except (ScientificAgentResultProjectionError, TypeError) as exc:
+            raise ScientificAgentConversationSessionError(
+                "conversation scientific result projection is invalid"
+            ) from exc
         if not isinstance(result.get("resource_authority_reason_codes"), list) or any(
             not isinstance(item, str) or re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None
             for item in result["resource_authority_reason_codes"]
@@ -596,6 +657,15 @@ class ScientificAgentConversationSessionService:
                 conversation_id=clean_conversation,
             )
             state.update(updates or {})
+            try:
+                state["result_projections"] = [
+                    validate_result_projection(item)
+                    for item in state.get("result_projections", [])
+                ]
+            except (ScientificAgentResultProjectionError, TypeError) as exc:
+                raise ScientificAgentConversationSessionError(
+                    "conversation scientific result projection is invalid"
+                ) from exc
             state.update(
                 {
                     "schema_version": SESSION_SCHEMA_VERSION,
@@ -640,7 +710,11 @@ class ScientificAgentConversationSessionService:
                     "next_action",
                     "boundary",
                     "phase",
+                    "scientific_results",
                 }:
+                    if key == "scientific_results":
+                        safe_data[key] = list(state.get("result_projections") or [])
+                        continue
                     if isinstance(value, (str, int, bool)):
                         safe_data[key] = value
             event = {
@@ -682,6 +756,9 @@ class ScientificAgentConversationSessionService:
         payload: dict[str, Any] = {"session": self.session_projection(state)}
         if state.get("review_projection"):
             payload["review_projection"] = state["review_projection"]
+        if state.get("result_projections"):
+            payload["scientific_results"] = state["result_projections"]
+            payload["result_projections"] = state["result_projections"]
         if state.get("proposal_id"):
             try:
                 publication = (
@@ -1584,13 +1661,9 @@ class ScientificAgentConversationSessionService:
             provider_binding_digest=provider_binding_digest,
         )
         publication = self._read_active_publication(state, project_id)
-        final_status = str(state.get("status") or "running")
         return ScientificAgentConversationTurnResult(
             decision=decision,
-            assistant_message=_static_status_message(
-                final_status,
-                task_id=str(state.get("current_task_id") or ""),
-            ),
+            assistant_message=self._active_execution_message(state),
             assistant_source="scientific_agent_session",
             llm_used=provider is not None,
             session=self.session_projection(state),
@@ -1735,10 +1808,9 @@ class ScientificAgentConversationSessionService:
             provider=provider,
             provider_binding_digest=provider_binding_digest,
         )
-        final_status = state.get("status") or "running"
         return ScientificAgentConversationTurnResult(
             decision=decision,
-            assistant_message=_static_status_message(final_status, task_id=str(state.get("current_task_id") or "")),
+            assistant_message=self._active_execution_message(state),
             assistant_source="scientific_agent_session",
             llm_used=provider is not None,
             session=self.session_projection(state),
@@ -1933,6 +2005,34 @@ class ScientificAgentConversationSessionService:
                 llm_used=provider is not None,
             )
 
+    def _project_verified_results(
+        self,
+        *,
+        project_id: str,
+        controller_result: ControllerAdvanceResult,
+    ) -> tuple[dict[str, Any], ...]:
+        service = self.result_projection_service
+        resolver = getattr(self.controller, "verified_remote_publications", None)
+        if service is None or resolver is None:
+            return ()
+        publications = resolver(
+            project_id=project_id,
+            controller_execution_id=controller_result.execution.controller_execution_id,
+        )
+        if not publications:
+            return ()
+        registry = self.projects.read_artifact_registry(
+            project_id,
+            controller_result.execution.run_id,
+        )
+        projections = service.project_verified_publications(
+            project_id=project_id,
+            run_id=controller_result.execution.run_id,
+            publications=publications,
+            artifact_registry=registry,
+        )
+        return tuple(item.model_dump(mode="json") for item in projections)
+
     def _auto_progress(
         self,
         *,
@@ -1947,6 +2047,22 @@ class ScientificAgentConversationSessionService:
             inspection = controller_result.inspection
             status = inspection.status
             if status == AgentHarnessControllerStatus.SUCCEEDED:
+                result_projections: tuple[dict[str, Any], ...] = ()
+                try:
+                    result_projections = self._project_verified_results(
+                        project_id=project_id,
+                        controller_result=controller_result,
+                    )
+                except (
+                    ScientificAgentResultProjectionError,
+                    ScientificAgentHarnessControllerError,
+                    FileNotFoundError,
+                    OSError,
+                    ValueError,
+                ):
+                    # Terminal execution remains authoritative, but the
+                    # conversation must never synthesize an unverified result.
+                    result_projections = ()
                 state = self._transition(
                     project_id=project_id,
                     conversation_id=conversation_id,
@@ -1955,10 +2071,25 @@ class ScientificAgentConversationSessionService:
                     updates={
                         "controller_status": status.value,
                         "current_task_id": inspection.current_task_id,
+                        "result_projections": list(result_projections),
                     },
                     event_type="run.succeeded",
                     event_data={"controller_status": status.value},
                 )
+                if result_projections:
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="succeeded",
+                        reason_code="RUN_SUCCEEDED",
+                        updates={"result_projections": list(result_projections)},
+                        event_type="scientific_result.available",
+                        message=_scientific_result_message(result_projections),
+                        event_data={
+                            "controller_status": status.value,
+                            "scientific_results": list(result_projections),
+                        },
+                    )
                 return controller_result, state, "terminal_success"
             if status == AgentHarnessControllerStatus.CANCELLED:
                 state = self._transition(
@@ -2249,6 +2380,8 @@ class ScientificAgentConversationSessionService:
             return "远程任务仍在运行，Molly 会通过有界状态更新继续观察。"
         status = str(state.get("status") or "unknown")
         if status in {"succeeded", "failed", "cancelled"}:
+            if status == "succeeded" and state.get("result_projections"):
+                return _scientific_result_message(state["result_projections"])
             return _static_status_message(status, task_id=str(state.get("current_task_id") or ""))
         return {
             "running": "当前运行仍由 Harness Controller 管理；普通对话不会改写当前计划。",
