@@ -2490,6 +2490,10 @@ for source_key, filename in (
     os.chmod(destination, 0o400)
 
 data_path = Path(payload["data_path"])
+prediction_data_path = scratch_path / "prediction-data.csv"
+with data_path.open("rb") as source, prediction_data_path.open("xb") as destination:
+    shutil.copyfileobj(source, destination)
+os.chmod(prediction_data_path, 0o400)
 with data_path.open("r", encoding="utf-8", newline="") as handle:
     rows = list(csv.DictReader(handle))
 if not rows:
@@ -2506,7 +2510,9 @@ if (
 
 from unimol_tools import MolPredict
 
-predicted = MolPredict(load_model=str(model_dir)).predict(data=str(data_path))
+predicted = MolPredict(load_model=str(model_dir)).predict(
+    data=str(prediction_data_path)
+)
 values = list(predicted.reshape(-1))
 if len(values) != len(candidate_ids):
     raise RuntimeError("Uni-Mol prediction result roster mismatch")
