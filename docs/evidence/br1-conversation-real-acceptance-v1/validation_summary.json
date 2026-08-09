@@ -1,16 +1,24 @@
 {
+  "schema_version": "scientific_br1_real_conversation_validation_summary.v1",
   "compileall": "pass",
+  "git_diff_check": "pass",
   "focused_tests": {
+    "status": "pass",
     "passed": 59,
     "selection": [
       "tests/test_repository_privacy.py",
       "tests/test_scientific_agent_conversation_session.py",
       "tests/test_br1_acceptance_readiness.py"
-    ],
-    "status": "pass"
+    ]
   },
-  "git_diff_check": "pass",
-  "pr_fast": "not_run",
-  "schema_version": "scientific_br1_real_conversation_validation_summary.v1",
-  "full_ci": "not_triggered_blocked_before_execution"
+  "pr_fast": {
+    "preceding_runtime_head_run": "31313877533",
+    "preceding_runtime_head_status": "success",
+    "current_evidence_head_status": "pending"
+  },
+  "full_ci": {
+    "status": "pending",
+    "label_present": false,
+    "trigger_mode": "manual_workflow_dispatch_without_pull_request_label"
+  }
 }

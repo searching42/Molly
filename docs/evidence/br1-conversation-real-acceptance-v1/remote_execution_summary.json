@@ -1,52 +1,67 @@
 {
+  "schema_version": "scientific_br1_real_conversation_remote_execution_summary.v1",
+  "status": "succeeded",
+  "dispatch_count": 3,
+  "provider_versions": {
+    "unimol-tools": "0.1.5",
+    "reinvent": "4.7.15"
+  },
+  "control_plane": {
+    "deployment_commit": "15a4365fb6597a231cbff5b083af23ad8b783c32",
+    "worker_implementation_digest": "sha256:7c07a21ff3a8d54ec126502369b92f3cbbb21d6cd266082f1bc312f154134b2a",
+    "status": "clean_reviewed_deployment"
+  },
   "configured_policy_entries": {
     "generation": {
+      "execution_profile_id": "reinvent4-br1-v2",
       "configured_resources": {
+        "gpu_count": 0,
         "cpu_threads": 1,
-        "gpu_count": 1,
         "walltime_sec": 21600
       },
-      "execution_profile_id": "reinvent4-br1-gpu-v1",
-      "status": "profile_unknown"
+      "status": "profile_resolved"
     },
     "prediction": {
+      "execution_profile_id": "unimol-predict-br1-v1",
       "configured_resources": {
-        "cpu_threads": 8,
         "gpu_count": 1,
+        "cpu_threads": 8,
         "walltime_sec": 43200
       },
-      "execution_profile_id": "unimol-predict-br1-v1",
       "status": "profile_resolved"
     },
     "training": {
+      "execution_profile_id": "unimol-train-br1-v2",
       "configured_resources": {
-        "cpu_threads": 8,
         "gpu_count": 1,
+        "cpu_threads": 8,
         "walltime_sec": 86400
       },
-      "execution_profile_id": "unimol-train-br1-v2",
       "status": "profile_resolved"
     }
   },
-  "dispatch_count": 0,
-  "provider_versions": {
-    "reinvent": "4.7.15",
-    "unimol-tools": "0.1.5"
-  },
-  "remote_worker": {
-    "capabilities": [
-      "cpu",
-      "gpu",
-      "reinvent4",
-      "unimol"
-    ],
-    "control_plane_worker_source_digest": "sha256:1445ee01fbb3748caea3ddf889726df48ad36d49e0bfb66b3d079d93d6f3aa72",
-    "deployed_worker_digest": "sha256:969a7ab342e0a045e3f3aea95102964c48d278b0a4aa7cad42a9c532b2779934",
-    "deployment_commit": "bf82cfd75d23abfe17328f362bd76b79b134b138",
-    "gpu_status": "available",
-    "gpu_type": "NVIDIA GeForce RTX 5090",
-    "pytorch_cuda_version": "13.0",
-    "status": "reachable_but_dirty_deployment"
-  },
-  "schema_version": "scientific_br1_real_conversation_remote_execution_summary.v1"
+  "remote_tasks": [
+    {
+      "task_type": "model_training",
+      "task_id": "train_private_unimol_v1",
+      "remote_request_id": "remote-d582d98e7b5cf1ecb7a2f16b0f4e1697",
+      "status": "succeeded",
+      "publication_verified": true
+    },
+    {
+      "task_type": "molecular_generation",
+      "task_id": "generate_private_reinvent4_v1",
+      "remote_request_id": "remote-9a92f21ba056436dce02f8ec5d79fb06",
+      "status": "succeeded",
+      "publication_verified": true
+    },
+    {
+      "task_type": "model_inference",
+      "task_id": "predict_private_unimol_v1",
+      "remote_request_id": "remote-f1fb05682ed1fb00163cce5c7e91eceb",
+      "status": "succeeded",
+      "publication_verified": true
+    }
+  ],
+  "privacy_boundary": "Only logical task identifiers, resource envelopes, provider versions, aggregate statuses, and verification flags are recorded; no host, command, credential, or raw artifact content is included."
 }

@@ -1,131 +1,105 @@
 # BR1 conversation-driven real acceptance v1
 
-This directory records a privacy-safe blocked acceptance attempt. It is not
-evidence of a completed real BR1 run and it makes no scientific-result claim.
+This directory is the privacy-safe checked-in summary for the BR1 real
+conversation acceptance. It preserves the earlier fail-closed preparation
+attempts while making the completed v11 runtime result the current record.
 
-The attempt used the exact natural-language front door on control-plane
-commit `ce1f4b6e0c849e6037dd3dc42944dccde7284557` with the server-owned
-`br1-private-real-tool-v3` registry. A fresh project, conversation, and
-conversation run were created. The user goal was submitted as conversation
-content, and the first `agent-session/turn` was allowed to resolve BR1 inputs
-server-side. No browser or client call bound an input bundle, created a plan
-proposal, published remote resource authority, approved execution, or
-dispatched a worker.
+## Current v11 result
 
-The server returned `needs_input` with
-`BR1_INPUT_BUNDLE_REQUIRED`: there was no eligible owner-approved BR1 input
-bundle. The owner-approval boundary therefore stopped the attempt before a
-Controller execution existed. This is an expected fail-closed result, not a
-runtime success.
+The fresh project, conversation, and run were driven from the natural-language
+conversation front door. The server resolved and auto-bound the sole eligible
+owner-approved input bundle. No browser call to the input-binding or remote-resource-authority operator APIs was used.
 
-The deployment preflight also found an independent resource-policy mismatch:
-the configured GPU REINVENT4 policy names `reinvent4-br1-gpu-v1`, which is not
-an allowlisted control-plane execution profile. The deployed worker was
-observed separately as a dirty working tree at commit
-`bf82cfd75d23abfe17328f362bd76b79b134b138`; its actual implementation digest
-was recorded, but it is not treated as a clean reviewed deployment.
+The run completed the reviewed BR1 chain:
 
-No prior Desktop artifacts, synthetic outputs, or historical run outputs were
-used. No Uni-Mol training, REINVENT4 generation, prediction, final evaluation,
-restart continuation, result projection, or `scientific_result.available`
-event was produced. The required next attempt needs a fresh clean worker
-deployment, an exact owner-approved bundle bound to the current deployment
-identity, and a corrected server-owned GPU generation profile/policy pair.
+```text
+conversation goal
+→ plan with evaluation top_n=3
+→ exact owner-approved input binding
+→ dataset confirmation Gate
+→ Uni-Mol training
+→ REINVENT4 generation
+→ current-model prediction
+→ final deterministic evaluation
+→ verified Computational Top-3
+→ scientific_result.available
+```
 
-All files here contain logical identifiers, aggregate status, digests, and
-privacy-safe metadata only. They contain no private rows, SMILES, raw files,
-hostnames, accounts, commands, credentials, model weights, or raw worker
-output.
+The final task was
+`evaluate_private_structured_dataset_canary_v1`, with output contract
+`computational-top-n-v1`. The server-generated projection is:
 
-## Follow-up v2 status
+```text
+projection_id: result-054adbf946ce441dabf477d222965031
+projection_digest: sha256:53ea970ceb890a39217151e406d268834fa7740787811591690b26a24fc7cae7
+verified candidates: 6
+requested Top-N: 3
+returned Top-N: 3
+scores: 0.766931, 0.452630, 0.283465
+```
 
-The same Draft PR records a follow-up preparation attempt under
-`br1-real-acceptance-20260809-v2`. The policy-bound worker was replaced with a
-clean packaged runtime whose implementation digest matches reviewed control
-plane commit `ce1f4b6e0c849e6037dd3dc42944dccde7284557`. Its public capability
-probe reported CPU, GPU, Uni-Mol, and REINVENT4 availability with provider
-versions `unimol-tools 0.1.5` and `REINVENT4 4.7.15`.
+These are model-predicted values in a verified deterministic Computational
+Top-N, not experimental measurements. The projection is bound to the verified
+model, validation, ranking, and evidence publications and does not guarantee
+synthesis, experimental performance, or applicability outside the verified
+scope.
 
-The isolated acceptance configuration now resolves the allowlisted
-`reinvent4-br1-v2` CPU-only profile (`0 GPU`, `1 CPU`, `21600 seconds`) and
-uniquely resolves the BR1 training, inference, and generation profiles. A
-fresh deployment-bound source authority chain was materialized against the
-new worker digest and reviewed profile.
+The result was emitted as one durable `scientific_result.available` event. The
+projection was replayed and produced the same digest. The checked-in summary
+contains only logical identifiers, digests, aggregate counts, resource
+envelopes, provider versions, and verification flags. It contains no private
+rows, SMILES, raw files, host information, commands, credentials, model
+weights, or raw worker output.
 
-The applicability preflight still failed closed because the configured
-`unimol-tools 0.1.5` environment has no `mol.dict.txt` provider asset. The
-result was `BLOCKED` for all 1999 rows with provider capability/adapter
-availability reason codes. No freeze package, owner proposal, exact owner
-approval, Controller execution, or remote dispatch was created. The
-REINVENT4 template was independently verified to contain the required output
-and seed placeholders, but it was not admitted into a bundle.
+## Restart and replay evidence
 
-This follow-up therefore remains deployment-blocked, not runtime-success
-evidence. The original v1 attempt remains the historical front-door
-fail-closed record; these v2 files document only the subsequent deployment,
-policy, authority, and preflight checks.
+An isolated real canary covered the required remote continuation boundary. The
+control-plane process was restarted while the Uni-Mol training request was
+running. The worker completed while the control plane was down. After restart,
+the same Controller execution and remote request were restored; the control
+plane performed `refresh_remote_task` and `adopt_remote_outputs`, both with
+`dispatch_occurred=false`. The dispatch count stayed at one, the publication
+was verified, and the run continued to model packaging and the next Gate.
 
-After the initial v2 preflight, the missing public Uni-Mol dictionary asset was
-repaired from the reviewed `dptech/Uni-Mol-Models` source and its deployed
-91-byte digest was verified. Provider adapter discovery and bounded
-one-, 100-, and 500-row preprocessing checks all returned supported results.
-The complete 1999-row applicability preflight was then retried, but it did not
-write a new summary within the bounded eight-minute operator window and was
-stopped before any acceptance side effect. The prior blocked summary is not
-used as the result of this retry. The current gate is therefore full
-applicability-preflight completion; freeze, owner approval, Controller, remote
-dispatch, and scientific result projection remain unstarted.
+This canary proves restart continuation and exactly-once remote adoption for a
+real training stage. It intentionally did not rerun the full scientific chain;
+the terminal v11 run supplies the full result evidence.
 
-## Full preflight and freeze follow-up v4
+## Deployment and preflight
 
-The existing authoritative full path was then allowed to run without manual
-termination. It completed `PASS` after 898.3 seconds for all 1999 rows:
-1999 supported, 0 unsupported, 0 unresolved, and no reason codes. During the
-run, observed CPU utilization was 69.1--140.5%, RSS was 1039.5--1221.1 MiB,
-swap remained 0, the provider subprocess remained alive during processing and
-ended with the preflight, and the preflight exited 0. No training, generation, prediction,
-Controller, or owner-approval side effect occurred.
+The v11 runtime used reviewed control-plane commit
+`15a4365fb6597a231cbff5b083af23ad8b783c32` and the recorded clean worker
+implementation digest. The authoritative 1999-row applicability preflight was
+`PASS`: 1999 supported, 0 unsupported, 0 unresolved. It completed in 898.3
+seconds with no swap and without training, generation, prediction, or
+Controller side effects.
 
-The first live freeze attempt exposed a real readiness blocker: the CLI
-default compared the fresh report against stale historical raw/source
-identities. The readiness code now derives live stable identities from the
-already verified report and raw bytes when no explicit historical identity is
-provided; explicit identity mismatch checks remain strict. Focused readiness
-and conversation-bridge tests pass.
+The resolved remote profiles were:
 
-The corrected CLI produced a private freeze package and owner proposal with
-status `FROZEN_WAITING_OWNER`. The REINVENT4 template has not yet been added,
-no exact owner approval exists, no eligible bundle has been assembled or
-counted, and no new project/conversation/run has started. The next permitted
-step is exact owner approval, followed by one-template bundle assembly and a
-fresh natural-language front-door run.
+```text
+reinvent4-br1-v2       0 GPU / 1 CPU / 21600 seconds
+unimol-predict-br1-v1  1 GPU / 8 CPU / 43200 seconds
+unimol-train-br1-v2    1 GPU / 8 CPU / 86400 seconds
+```
 
-## Independent live identity follow-up v5
+The exact owner was `searching42`; the recorded decision was
+`ACCEPT_EXACT_PROPOSAL` for the v11 proposal. The final result projection is
+server-generated and does not allow the LLM to invent scientific content.
 
-Review of the v4 implementation found that its default live identity path
-still copied the report's observed canonical source/provider digests into both
-sides of the comparison. That detected missing fields but did not independently
-bind those digests to the current Raw bytes. The old v4 package and proposal
-remain pre-fix readiness evidence and were not approved.
+## Historical fail-closed attempts
 
-The freeze implementation now uses the shared Raw CSV parser and the existing
-canonical source/provider serializers to derive `input_row_count`, the raw
-digest, the canonical source digest, and the canonical provider-input digest
-from the exact stable Raw bytes read for the freeze. The report's corresponding
-observed identities remain the `actual` side of the comparison. Explicit
-`expected_stable_identities` callers, including historical/trusted mode, retain
-their strict comparison behavior.
+Earlier evidence remains part of the history rather than being overwritten:
 
-Two adversarial tests now forge and re-sign a source canonical digest and a
-coherently re-signed provider canonical digest. Both are rejected by the
-default live freeze path. The existing 1999-row PASS report was not rerun; it
-remains bound by report digest
-`sha256:fc4a060583b63609c10f83d093d620db7c4d04f09b1a3b23123ae706cba00cd6`.
+- The initial natural-language attempt stopped at `BR1_INPUT_BUNDLE_REQUIRED`
+  before proposal, Controller, or remote dispatch.
+- The follow-up deployment/preflight attempt stopped on a missing provider
+  capability asset and did not create acceptance authority.
+- The complete authoritative preflight later passed for all 1999 rows.
+- The first freeze implementation was corrected to derive live canonical
+  identities independently from the frozen Raw bytes; forged source/provider
+  digest tests fail closed.
+- A new freeze/proposal and exact owner approval then enabled the v11 run.
 
-The fixed implementation regenerated a new private package and proposal:
-package `br1-real-acceptance-20260809-v2-freeze-v2` with digest
-`sha256:6af7a5e844a4852b5b15681970b05e91e770b9929d40322f872905b0794ba652`,
-and proposal `br1-real-acceptance-20260809-v2-owner-proposal-v2` with digest
-`sha256:17a04dd465587963355da86791f3edaa9fc9a675a5a1bc97fb4c321e34ee756b`.
-It is `FROZEN_WAITING_OWNER`; no approval, REINVENT4 template, eligible bundle,
-Controller execution, remote dispatch, or new conversation run exists.
+The evidence-only status still has no `full-ci` pull-request label. Full CI is
+the remaining final CI gate and is intended to run by manual workflow dispatch
+against the exact final commit.
