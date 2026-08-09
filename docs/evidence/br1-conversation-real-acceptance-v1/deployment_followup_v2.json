@@ -1,0 +1,28 @@
+{
+  "schema_version": "scientific_br1_real_conversation_deployment_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "control_plane_commit": "ce1f4b6e0c849e6037dd3dc42944dccde7284557",
+  "worker": {
+    "deployment_mode": "packaged_clean_runtime",
+    "implementation_digest": "sha256:1445ee01fbb3748caea3ddf889726df48ad36d49e0bfb66b3d079d93d6f3aa72",
+    "implementation_digest_matches_control_plane": true,
+    "source_checkout_status": "not_applicable_packaged_deployment",
+    "capability_probe_status": "available",
+    "capabilities": [
+      "cpu",
+      "gpu",
+      "reinvent4",
+      "unimol"
+    ],
+    "cpu_threads": 48,
+    "gpu_status": "available",
+    "gpu_type": "NVIDIA GeForce RTX 5090",
+    "pytorch_cuda_version": "12.8",
+    "provider_versions": {
+      "reinvent": "4.7.15",
+      "unimol-tools": "0.1.5"
+    }
+  },
+  "claim_boundary": "The worker package is clean and reviewed, but no scientific execution is claimed.",
+  "status": "clean_reviewed_worker_confirmed"
+}

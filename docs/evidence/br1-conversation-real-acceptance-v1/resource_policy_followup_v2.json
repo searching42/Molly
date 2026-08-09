@@ -1,0 +1,58 @@
+{
+  "schema_version": "scientific_br1_real_conversation_resource_policy_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "scope": "isolated_acceptance_config",
+  "global_policy_changed": false,
+  "policy_digest": "sha256:0288fe089f35f07e87e3fd8290186d9d6f7487b7cc7a37c01e70c287353f2a46",
+  "connection_id": "gpu-worker-wk1",
+  "profiles": [
+    {
+      "profile_id": "unimol-train-br1-v2",
+      "profile_digest": "sha256:8d700004761bcac419ef853828607a4ebad47a88892be22624ec551e52246ac5",
+      "task_type": "model_training",
+      "resource_limit_envelope": {
+        "gpu_count_max": 1,
+        "cpu_threads_max": 16,
+        "walltime_sec_max": 172800
+      },
+      "profile_capability_digest": "sha256:804a50517cc30ac04490af4296c07224ad0ae61d8f05444b7e9c1f4cae7cbe1a",
+      "probe_status": "available"
+    },
+    {
+      "profile_id": "unimol-predict-br1-v1",
+      "profile_digest": "sha256:0062eadf8822a331022d64715eb038a25ab015036ca592115dc1da898fb4122b",
+      "task_type": "model_inference",
+      "resource_limit_envelope": {
+        "gpu_count_max": 1,
+        "cpu_threads_max": 16,
+        "walltime_sec_max": 43200
+      },
+      "profile_capability_digest": "sha256:5f9b47f49e81de0add244efed055a2fa94aeb520b7936bb93d3a1fb2df57dd0a",
+      "probe_status": "available"
+    },
+    {
+      "profile_id": "reinvent4-br1-v2",
+      "profile_digest": "sha256:fac4cd716f79803333a2e13bd3747a531ef970d189c0f179f0a3647f1d837102",
+      "task_type": "molecular_generation",
+      "resource_limit_envelope": {
+        "gpu_count_max": 0,
+        "cpu_threads_max": 1,
+        "walltime_sec_max": 21600
+      },
+      "profile_capability_digest": "sha256:88a586142e56869ee5e55f585b19063f64565742c1a9f47a0ad3a6948bcfcc1c",
+      "probe_status": "available"
+    }
+  ],
+  "generation_policy": {
+    "policy_id": "br1-private-reinvent4-generation-v1",
+    "execution_profile_id": "reinvent4-br1-v2",
+    "configured_resources": {
+      "gpu_count": 0,
+      "cpu_threads": 1,
+      "walltime_sec": 21600
+    },
+    "status": "profile_resolved"
+  },
+  "claim_boundary": "The corrected policy was verified in an isolated acceptance configuration; it has not changed the user's global private configuration.",
+  "status": "all_required_profiles_uniquely_resolved"
+}

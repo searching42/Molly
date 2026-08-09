@@ -1,0 +1,37 @@
+{
+  "schema_version": "scientific_br1_real_conversation_applicability_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "execution_profile_id": "unimol-train-br1-v2",
+  "expected_provider_version": "0.1.5",
+  "control_plane_commit": "ce1f4b6e0c849e6037dd3dc42944dccde7284557",
+  "worker_implementation_digest": "sha256:1445ee01fbb3748caea3ddf889726df48ad36d49e0bfb66b3d079d93d6f3aa72",
+  "preflight": {
+    "status": "BLOCKED",
+    "report_digest": "sha256:88d9da2f393077a908def179a8abe4a716a5b16bb640ded0b3c04fd5f68d1917",
+    "input_row_count": 1999,
+    "supported_row_count": 0,
+    "unsupported_row_count": 0,
+    "unresolved_row_count": 1999,
+    "reason_counts": {
+      "PROVIDER_ADAPTER_CONTRACT_UNAVAILABLE": 1999,
+      "PROVIDER_CAPABILITY_UNAVAILABLE": 1999,
+      "PROVIDER_PREFLIGHT_API_UNAVAILABLE": 1999
+    }
+  },
+  "provider_asset_check": {
+    "provider": "unimol-tools",
+    "provider_version": "0.1.5",
+    "required_asset": "mol.dict.txt",
+    "present": false,
+    "worker_user_environment_match_count": 0
+  },
+  "side_effects": {
+    "training_dispatch_count": 0,
+    "generation_dispatch_count": 0,
+    "prediction_dispatch_count": 0,
+    "controller_execution_created": false,
+    "owner_approval_created": false
+  },
+  "claim_boundary": "The preflight failed closed because the configured provider environment lacks its required dictionary asset; no scientific applicability or acceptance result is claimed.",
+  "status": "blocked_at_provider_environment"
+}
