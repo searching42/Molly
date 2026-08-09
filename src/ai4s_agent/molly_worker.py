@@ -1915,6 +1915,7 @@ class MollyWorker:
                 identity, sha256 = _descriptor_digest(descriptor)
                 if request.output_contract in {
                     "reinvent4-generation-output-v1",
+                    "reinvent4-generation-output-v2",
                     "unimol-prediction-output-v1",
                 } and media_type == "text/csv":
                     os.lseek(descriptor, 0, os.SEEK_SET)
