@@ -454,8 +454,12 @@ def register_scientific_agent_conversation_routes(
                     cursor = int(event["event_id"])
                     yield _sse(
                         event=(
-                            "scientific_result.available"
-                            if event.get("event_type") == "scientific_result.available"
+                            event.get("event_type")
+                            if event.get("event_type")
+                            in {
+                                "scientific_result.available",
+                                "scientific_result.unavailable",
+                            }
                             else "agent.status"
                         ),
                         data=event,

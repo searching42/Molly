@@ -1087,12 +1087,14 @@
           return;
         }
         root.hidden = false;
-        items.forEach((projection) => {
+        items.slice().reverse().forEach((projection) => {
           const article = document.createElement("article");
           article.className = "review-section scientific-result-card";
           article.dataset.reviewKind = "scientific-result";
           const heading = document.createElement("h3");
-          heading.textContent = "Verified scientific result";
+          heading.textContent = projection.task_type === "evaluate_private_structured_dataset_canary_v1"
+            ? "Verified BR1 Computational Top-N"
+            : "Verified intermediate scientific evidence";
           article.appendChild(heading);
           const note = document.createElement("p");
           note.className = "small";
@@ -1102,6 +1104,7 @@
           appendReviewSection(article, "ResultSummary", [
             ["task type", projection.task_type],
             ["candidate count", summary.candidate_count],
+            ["requested top-n", summary.top_n],
             ["ranked top-n", summary.ranked_candidate_count],
             ["score field", summary.score_field],
             ["best score", summary.best_score],
@@ -1114,7 +1117,7 @@
           const candidateSection = document.createElement("section");
           candidateSection.className = "review-section";
           const candidateHeading = document.createElement("h4");
-          candidateHeading.textContent = "Top-N candidates";
+          candidateHeading.textContent = `Top-${summary.top_n || "N"} candidates`;
           candidateSection.appendChild(candidateHeading);
           const candidateList = document.createElement("ol");
           candidateList.className = "result-candidate-list";
@@ -1122,8 +1125,11 @@
             .forEach((candidate) => {
               const item = document.createElement("li");
               const score = candidate.score === undefined ? "" : String(candidate.score);
-              const smiles = candidate.smiles ? ` · SMILES=${candidate.smiles}` : "";
-              item.textContent = `${candidate.candidate_id} · ${candidate.score_label}=${score}${smiles}`;
+              const smiles = candidate.canonical_smiles || candidate.smiles
+                ? ` · SMILES=${candidate.canonical_smiles || candidate.smiles}`
+                : "";
+              const ad = candidate.ad_ood_status ? ` · AD=${candidate.ad_ood_status}` : "";
+              item.textContent = `${candidate.candidate_id} · ${candidate.score_label}=${score}${smiles}${ad}`;
               candidateList.appendChild(item);
             });
           if (!candidateList.childElementCount) {
@@ -1341,6 +1347,10 @@
           try { renderAgentSessionEvent(JSON.parse(event.data || "{}"), context); } catch (_err) {}
         });
         source.addEventListener("scientific_result.available", (event) => {
+          if (!isConversationContextCurrent(context)) return;
+          try { renderAgentSessionEvent(JSON.parse(event.data || "{}"), context); } catch (_err) {}
+        });
+        source.addEventListener("scientific_result.unavailable", (event) => {
           if (!isConversationContextCurrent(context)) return;
           try { renderAgentSessionEvent(JSON.parse(event.data || "{}"), context); } catch (_err) {}
         });

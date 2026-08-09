@@ -23,6 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ai4s_agent.remote_execution_lifecycle import RemoteOutputArtifact, RemotePublication
 from ai4s_agent.remote_execution_storage import PinnedExecutionTree
 from ai4s_agent.remote_output_contracts import verify_remote_output_contents
+from ai4s_agent.schemas import AgentHarnessVerifiedOutputBinding
+from ai4s_agent.structured_dataset_confirmation import verify_publication
 from ai4s_agent.storage import ProjectStorage
 from ai4s_agent._utils import write_json
 
@@ -35,6 +37,40 @@ RESULT_PROJECTION_ROOT = "scientific-result-projections"
 RESULT_PROJECTION_TOP_N = 5
 RESULT_PROJECTION_MAX_INPUT_BYTES = 64 * 1024 * 1024
 RESULT_PROJECTION_MAX_ROWS = 1_000_000
+BR1_FINAL_RESULT_TASK_TYPE = "evaluate_private_structured_dataset_canary_v1"
+BR1_FINAL_RESULT_OUTPUT_CONTRACT = "computational-top-n-v1"
+BR1_FINAL_RESULT_ARTIFACT_IDS = (
+    "candidate_validation",
+    "computational_top_n",
+    "ranking_publication",
+    "prediction_publication",
+    "structured_dataset_canary_evidence",
+)
+_BR1_FINAL_RESULT_SCHEMAS = frozenset(
+    {
+        "structured_dataset_computational_topn.v1",
+        "computational_top_n.v1",
+    }
+)
+_BR1_FINAL_RESULT_DIGEST_FIELDS = {
+    "candidate_validation": "publication_digest",
+    "computational_top_n": "publication_digest",
+    "ranking_publication": "publication_digest",
+    "prediction_publication": "publication_digest",
+    "structured_dataset_canary_evidence": "evidence_digest",
+}
+_BR1_FINAL_CANDIDATE_FIELDS = (
+    "canonical_smiles",
+    "predicted_property",
+    "ad_ood_status",
+    "nearest_neighbor_similarity",
+    "scaffold_novelty",
+    "validation_findings",
+    "model_binding",
+    "generation_binding",
+    "ranking_binding",
+    "provenance_digest",
+)
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
@@ -160,6 +196,16 @@ class ScientificAgentResultRankedCandidate(BaseModel):
     score: float
     score_label: str
     smiles: str | None = None
+    canonical_smiles: str | None = None
+    predicted_property: float | None = None
+    ad_ood_status: str | None = None
+    nearest_neighbor_similarity: float | None = None
+    scaffold_novelty: str | None = None
+    validation_findings: tuple[str, ...] = ()
+    model_binding: str | None = None
+    generation_binding: str | None = None
+    ranking_binding: str | None = None
+    provenance_digest: str | None = None
 
     @field_validator("rank", mode="before")
     @classmethod
@@ -195,6 +241,52 @@ class ScientificAgentResultRankedCandidate(BaseModel):
         if value is None or str(value).strip() == "":
             return None
         return _safe_text(value, "smiles", max_length=512)
+
+    @field_validator("canonical_smiles", mode="before")
+    @classmethod
+    def validate_canonical_smiles(cls, value: Any) -> str | None:
+        if value is None or str(value).strip() == "":
+            return None
+        return _safe_text(value, "canonical_smiles", max_length=512)
+
+    @field_validator("predicted_property", "nearest_neighbor_similarity", mode="before")
+    @classmethod
+    def validate_optional_numeric(cls, value: Any, info: Any) -> float | None:
+        if value is None:
+            return None
+        return _finite_float(value, info.field_name)
+
+    @field_validator("ad_ood_status", "scaffold_novelty", mode="before")
+    @classmethod
+    def validate_optional_text(cls, value: Any, info: Any) -> str | None:
+        if value is None or str(value).strip() == "":
+            return None
+        return _safe_text(value, info.field_name, max_length=128)
+
+    @field_validator("validation_findings", mode="before")
+    @classmethod
+    def validate_findings(cls, value: Any) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        if not isinstance(value, (list, tuple)) or len(value) > 32:
+            raise ValueError("validation_findings must be a bounded list")
+        result = tuple(_safe_text(item, "validation_finding", max_length=128) for item in value)
+        if len(result) != len(set(result)):
+            raise ValueError("validation_findings must be unique")
+        return result
+
+    @field_validator(
+        "model_binding",
+        "generation_binding",
+        "ranking_binding",
+        "provenance_digest",
+        mode="before",
+    )
+    @classmethod
+    def validate_optional_digest(cls, value: Any, info: Any) -> str | None:
+        if value is None or str(value).strip() == "":
+            return None
+        return _safe_digest(value, info.field_name)
 
 
 class ScientificAgentResultSummaryStatistics(BaseModel):
@@ -262,11 +354,16 @@ class ScientificAgentResultProjection(BaseModel):
     run_id: str
     source_publication_sha256: str
     artifact_registry_digest: str
-    task_type: Literal["predict_private_unimol_v1", "generate_private_reinvent4_v1"]
+    task_type: Literal[
+        "predict_private_unimol_v1",
+        "generate_private_reinvent4_v1",
+        "evaluate_private_structured_dataset_canary_v1",
+    ]
     output_contract: Literal[
         "unimol-prediction-output-v1",
         "reinvent4-generation-output-v1",
         "reinvent4-generation-output-v2",
+        "computational-top-n-v1",
     ]
     verification_status: Literal["verified"] = "verified"
     source_artifacts: tuple[ScientificAgentResultSourceArtifact, ...] = Field(
@@ -336,7 +433,9 @@ class ScientificAgentResultProjection(BaseModel):
         if self.projection_id != expected_id:
             raise ValueError("result projection identity mismatch")
         payload = self.model_dump(mode="json", exclude={"projection_digest"})
-        if self.projection_digest != _digest(payload):
+        if self.projection_digest != _digest(payload) and self.projection_digest != _digest(
+            _legacy_projection_payload(self)
+        ):
             raise ValueError("result projection digest mismatch")
         return self
 
@@ -344,7 +443,7 @@ class ScientificAgentResultProjection(BaseModel):
 def _projection_identity_material(
     projection: ScientificAgentResultProjection,
 ) -> dict[str, Any]:
-    return {
+    material = {
         "schema_version": RESULT_PROJECTION_SCHEMA_VERSION,
         "project_id": projection.project_id,
         "run_id": projection.run_id,
@@ -357,6 +456,21 @@ def _projection_identity_material(
         ],
         "artifact_digests": dict(sorted(projection.artifact_digests.items())),
     }
+    if projection.task_type == BR1_FINAL_RESULT_TASK_TYPE:
+        material["requested_top_n"] = projection.summary_statistics.top_n
+    return material
+
+
+def _legacy_projection_payload(
+    projection: ScientificAgentResultProjection,
+) -> dict[str, Any]:
+    """Accept v1 projections persisted before final-candidate fields existed."""
+
+    payload = projection.model_dump(mode="json", exclude={"projection_digest"})
+    for candidate in payload.get("ranked_candidates", []):
+        for field in _BR1_FINAL_CANDIDATE_FIELDS:
+            candidate.pop(field, None)
+    return payload
 
 
 def validate_result_projection(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -373,6 +487,7 @@ def validate_result_projection(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 ArtifactReader = Callable[[RemoteOutputArtifact, str], bytes]
+LocalArtifactReader = Callable[[str, str], bytes]
 
 
 class ScientificAgentResultProjectionService:
@@ -568,6 +683,494 @@ class ScientificAgentResultProjectionService:
                 )
             )
         return tuple(projections)
+
+    def project_verified_br1_final_result(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        terminal_result: Mapping[str, Any] | None = None,
+        task_id: str = BR1_FINAL_RESULT_TASK_TYPE,
+        task_options: Mapping[str, Any] | None = None,
+        source_publication_sha256: str = "",
+        artifact_registry_digest: str = "",
+        verified_outputs: Sequence[
+            AgentHarnessVerifiedOutputBinding | Mapping[str, Any]
+        ] = (),
+        artifact_registry: Mapping[str, str] | None = None,
+        artifact_reader: LocalArtifactReader | Mapping[str, bytes] | None = None,
+        persist: bool = True,
+    ) -> ScientificAgentResultProjection:
+        """Project the authoritative BR1 Computational Top-N publication.
+
+        The Controller supplies the exact local-task receipt, Registry snapshot,
+        and verified output bindings.  This adapter only checks those bindings,
+        validates the existing publication chain, and serializes the already
+        ranked Top-N rows.  It never ranks, filters, or truncates candidates.
+        """
+
+        if terminal_result is not None:
+            task_id = str(terminal_result.get("task_id") or task_id)
+            task_options = terminal_result.get("task_options") or task_options
+            source_publication_sha256 = str(
+                terminal_result.get("source_publication_sha256")
+                or terminal_result.get("publication_digest")
+                or source_publication_sha256
+            )
+            artifact_registry_digest = str(
+                terminal_result.get("artifact_registry_digest")
+                or artifact_registry_digest
+            )
+            verified_outputs = terminal_result.get("verified_outputs") or verified_outputs
+            artifact_registry = terminal_result.get("artifact_registry") or artifact_registry
+
+        clean_project = _safe_identifier(project_id, "project_id")
+        clean_run = _safe_identifier(run_id, "run_id")
+        if task_id != BR1_FINAL_RESULT_TASK_TYPE:
+            raise ScientificAgentResultProjectionUnsupported(
+                "verified terminal task is not the BR1 Computational Top-N task"
+            )
+        options = dict(task_options or {})
+        top_n = options.get("top_n")
+        if isinstance(top_n, bool) or not isinstance(top_n, int) or not 1 <= top_n <= 100:
+            raise ScientificAgentResultProjectionError(
+                "verified BR1 evaluation top_n is invalid"
+            )
+        source_digest = _safe_digest(source_publication_sha256, "source_publication_sha256")
+        registry = dict(
+            artifact_registry
+            if artifact_registry is not None
+            else self.projects.read_artifact_registry(clean_project, clean_run)
+        )
+        if not registry:
+            raise ScientificAgentResultProjectionError(
+                "verified Artifact Registry is unavailable"
+            )
+        registry_digest = _digest(dict(sorted(registry.items())))
+        if artifact_registry_digest and artifact_registry_digest != registry_digest:
+            raise ScientificAgentResultProjectionError(
+                "verified terminal Artifact Registry changed"
+            )
+
+        try:
+            bindings = tuple(
+                AgentHarnessVerifiedOutputBinding.model_validate(item)
+                for item in verified_outputs
+            )
+        except Exception as exc:
+            raise ScientificAgentResultProjectionError(
+                "verified terminal output binding is invalid"
+            ) from exc
+        by_id = {item.artifact_id: item for item in bindings}
+        if len(by_id) != len(bindings) or set(by_id) != set(BR1_FINAL_RESULT_ARTIFACT_IDS):
+            raise ScientificAgentResultProjectionError(
+                "verified terminal output contract is incomplete"
+            )
+        for item in bindings:
+            if item.producer_task_id != BR1_FINAL_RESULT_TASK_TYPE:
+                raise ScientificAgentResultProjectionError(
+                    "verified terminal output producer binding changed"
+                )
+            registered = registry.get(item.artifact_id)
+            if not registered or str(registered) != item.relative_path:
+                raise ScientificAgentResultProjectionError(
+                    "verified terminal output Registry binding changed"
+                )
+
+        expected_output_digest = _digest(
+            [item.model_dump(mode="json") for item in sorted(bindings, key=lambda value: value.artifact_id)]
+        )
+        expected_binding_digest = str(
+            (terminal_result or {}).get("verified_outputs_digest") or ""
+        )
+        if expected_binding_digest and expected_binding_digest != expected_output_digest:
+            raise ScientificAgentResultProjectionError(
+                "verified terminal output roster digest changed"
+            )
+
+        payloads: dict[str, dict[str, Any]] = {}
+        for artifact_id in sorted(BR1_FINAL_RESULT_ARTIFACT_IDS):
+            binding = by_id[artifact_id]
+            raw = self._read_local_artifact(
+                project_id=clean_project,
+                run_id=clean_run,
+                artifact_id=artifact_id,
+                registered_path=registry[artifact_id],
+                binding=binding,
+                artifact_reader=artifact_reader,
+            )
+            try:
+                parsed = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ScientificAgentResultProjectionError(
+                    "verified BR1 final artifact is not canonical JSON"
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise ScientificAgentResultProjectionError(
+                    "verified BR1 final artifact must be an object"
+                )
+            digest_field = _BR1_FINAL_RESULT_DIGEST_FIELDS[artifact_id]
+            try:
+                verify_publication(parsed, digest_field=digest_field)
+            except Exception as exc:
+                raise ScientificAgentResultProjectionError(
+                    "verified BR1 final publication digest is invalid"
+                ) from exc
+            if parsed.get("project_id") != clean_project or parsed.get("run_id") != clean_run:
+                raise ScientificAgentResultProjectionError(
+                    "verified BR1 final publication scope changed"
+                )
+            payloads[artifact_id] = parsed
+
+        topn = payloads["computational_top_n"]
+        if topn.get("schema_version") not in _BR1_FINAL_RESULT_SCHEMAS:
+            raise ScientificAgentResultProjectionUnsupported(
+                "verified BR1 Computational Top-N schema is unsupported"
+            )
+        if topn.get("artifact_name") != "Computational Top-N":
+            raise ScientificAgentResultProjectionError(
+                "verified BR1 final artifact is not Computational Top-N"
+            )
+        ranking = payloads["ranking_publication"]
+        prediction = payloads["prediction_publication"]
+        validation = payloads["candidate_validation"]
+        evidence = payloads["structured_dataset_canary_evidence"]
+        self._validate_br1_final_bindings(
+            topn=topn,
+            ranking=ranking,
+            prediction=prediction,
+            validation=validation,
+            evidence=evidence,
+            requested_top_n=top_n,
+        )
+        ranking_rows = ranking.get("ranked_candidates")
+        if not isinstance(ranking_rows, list):
+            raise ScientificAgentResultProjectionError(
+                "verified BR1 ranking publication has no candidate roster"
+            )
+        eligible_rows = [item for item in ranking_rows if isinstance(item, dict) and item.get("eligible") is True]
+        top_rows = topn.get("candidates")
+        if not isinstance(top_rows, list) or len(top_rows) > top_n:
+            raise ScientificAgentResultProjectionError(
+                "verified Computational Top-N exceeds the authorized top_n"
+            )
+        expected_ids = [str(item.get("candidate_id") or "") for item in eligible_rows[:top_n]]
+        actual_ids = [str(item.get("candidate_id") or "") for item in top_rows]
+        if actual_ids != expected_ids[: len(actual_ids)]:
+            raise ScientificAgentResultProjectionError(
+                "verified Computational Top-N is not bound to ranking publication"
+            )
+
+        ranked: list[ScientificAgentResultRankedCandidate] = []
+        scores: list[float] = []
+        seen_ids: set[str] = set()
+        for expected_rank, row in enumerate(top_rows, start=1):
+            candidate = self._final_candidate(row, expected_rank=expected_rank)
+            if candidate.candidate_id in seen_ids:
+                raise ScientificAgentResultProjectionError(
+                    "verified Computational Top-N contains duplicate candidates"
+                )
+            seen_ids.add(candidate.candidate_id)
+            if candidate.predicted_property is None:
+                raise ScientificAgentResultProjectionError(
+                    "verified Computational Top-N lacks predicted property"
+                )
+            scores.append(candidate.predicted_property)
+            ranked.append(candidate)
+
+        eligible_scores = [
+            _finite_float(item.get("predicted_property"), "predicted_property")
+            for item in eligible_rows
+        ]
+        summary = ScientificAgentResultSummaryStatistics(
+            candidate_count=len(eligible_rows),
+            ranked_candidate_count=len(ranked),
+            top_n=top_n,
+            score_field="predicted_property",
+            score_direction="descending",
+            best_score=max(eligible_scores) if eligible_scores else None,
+            worst_score=min(eligible_scores) if eligible_scores else None,
+        )
+        source_artifacts = tuple(
+            ScientificAgentResultSourceArtifact(
+                publication_sha256=source_digest,
+                artifact_id=item.artifact_id,
+                size_bytes=item.size_bytes,
+            )
+            for item in sorted(bindings, key=lambda value: value.artifact_id)
+        )
+        artifact_digests = {
+            item.artifact_id: item.content_sha256
+            for item in sorted(bindings, key=lambda value: value.artifact_id)
+        }
+        identity_material = {
+            "schema_version": RESULT_PROJECTION_SCHEMA_VERSION,
+            "project_id": clean_project,
+            "run_id": clean_run,
+            "source_publication_sha256": source_digest,
+            "artifact_registry_digest": registry_digest,
+            "task_type": BR1_FINAL_RESULT_TASK_TYPE,
+            "output_contract": BR1_FINAL_RESULT_OUTPUT_CONTRACT,
+            "source_artifacts": [item.model_dump(mode="json") for item in source_artifacts],
+            "artifact_digests": dict(sorted(artifact_digests.items())),
+            "requested_top_n": top_n,
+        }
+        projection_id = "result-" + hashlib.sha256(
+            _canonical_bytes(identity_material)
+        ).hexdigest()[:32]
+        limitations = (
+            "这是 evaluate_private_structured_dataset_canary_v1 已验证并确定性排序的 Computational Top-N。",
+            "Top-N 已绑定当前模型、候选 validation、ranking publication 和 evidence；投影不会重新排序或截断。",
+            "计算结果不等同于实验测量、可合成性确认或材料性能保证。",
+        )
+        unsigned = {
+            "schema_version": RESULT_PROJECTION_SCHEMA_VERSION,
+            "projection_id": projection_id,
+            "project_id": clean_project,
+            "run_id": clean_run,
+            "source_publication_sha256": source_digest,
+            "artifact_registry_digest": registry_digest,
+            "task_type": BR1_FINAL_RESULT_TASK_TYPE,
+            "output_contract": BR1_FINAL_RESULT_OUTPUT_CONTRACT,
+            "verification_status": "verified",
+            "source_artifacts": [item.model_dump(mode="json") for item in source_artifacts],
+            "artifact_digests": dict(sorted(artifact_digests.items())),
+            "summary_statistics": summary.model_dump(mode="json"),
+            "ranked_candidates": [item.model_dump(mode="json") for item in ranked],
+            "scientific_limitations": list(limitations),
+        }
+        projection = ScientificAgentResultProjection.model_validate(
+            {**unsigned, "projection_digest": _digest(unsigned)}
+        )
+        if persist:
+            return self.persist(projection)
+        return projection
+
+    def project_verified_terminal_result(
+        self,
+        **kwargs: Any,
+    ) -> ScientificAgentResultProjection:
+        """Compatibility name for the verified BR1 final-result adapter."""
+
+        return self.project_verified_br1_final_result(**kwargs)
+
+    def _read_local_artifact(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        artifact_id: str,
+        registered_path: str,
+        binding: AgentHarnessVerifiedOutputBinding,
+        artifact_reader: LocalArtifactReader | Mapping[str, bytes] | None,
+    ) -> bytes:
+        parts = PurePosixPath(str(registered_path)).parts
+        if (
+            not parts
+            or str(registered_path) != PurePosixPath(str(registered_path)).as_posix()
+            or any(part in {"", ".", ".."} for part in parts)
+            or str(registered_path).startswith("/")
+            or "\\" in str(registered_path)
+        ):
+            raise ScientificAgentResultProjectionError(
+                "verified local artifact Registry path is unsafe"
+            )
+        if artifact_reader is not None:
+            if isinstance(artifact_reader, Mapping):
+                payload = artifact_reader.get(str(registered_path))
+                if payload is None:
+                    payload = artifact_reader.get(binding.relative_path)
+                if payload is None:
+                    payload = artifact_reader.get(artifact_id)
+                if not isinstance(payload, bytes):
+                    raise ScientificAgentResultProjectionError(
+                        "verified local artifact reader did not provide the artifact"
+                    )
+            else:
+                try:
+                    payload = artifact_reader(artifact_id, str(registered_path))
+                except Exception as exc:
+                    raise ScientificAgentResultProjectionError(
+                        "verified local artifact reader failed"
+                    ) from exc
+                if not isinstance(payload, bytes):
+                    raise ScientificAgentResultProjectionError(
+                        "verified local artifact reader returned an invalid payload"
+                    )
+        else:
+            run_dir = self.projects.run_dir(project_id, run_id).resolve()
+            path = run_dir.joinpath(*parts)
+            try:
+                resolved = path.resolve(strict=True)
+            except OSError as exc:
+                raise ScientificAgentResultProjectionError(
+                    "verified local artifact is unavailable"
+                ) from exc
+            if not resolved.is_relative_to(run_dir) or path.is_symlink():
+                raise ScientificAgentResultProjectionError(
+                    "verified local artifact Registry path is unsafe"
+                )
+            try:
+                payload = resolved.read_bytes()
+            except OSError as exc:
+                raise ScientificAgentResultProjectionError(
+                    "verified local artifact is unavailable"
+                ) from exc
+        if len(payload) != binding.size_bytes or _bytes_digest(payload) != binding.content_sha256:
+            raise ScientificAgentResultProjectionError(
+                "verified local artifact digest changed"
+            )
+        return payload
+
+    @staticmethod
+    def _validate_br1_final_bindings(
+        *,
+        topn: Mapping[str, Any],
+        ranking: Mapping[str, Any],
+        prediction: Mapping[str, Any],
+        validation: Mapping[str, Any],
+        evidence: Mapping[str, Any],
+        requested_top_n: int,
+    ) -> None:
+        if topn.get("prediction_publication_digest") != prediction.get("publication_digest"):
+            raise ScientificAgentResultProjectionError(
+                "Computational Top-N prediction binding mismatch"
+            )
+        if topn.get("ranking_publication_digest") != ranking.get("publication_digest"):
+            raise ScientificAgentResultProjectionError(
+                "Computational Top-N ranking binding mismatch"
+            )
+        if topn.get("validation_publication_digest") != validation.get("publication_digest"):
+            raise ScientificAgentResultProjectionError(
+                "Computational Top-N validation binding mismatch"
+            )
+        if ranking.get("prediction_publication_digest") != prediction.get("publication_digest"):
+            raise ScientificAgentResultProjectionError(
+                "ranking publication prediction binding mismatch"
+            )
+        if ranking.get("validation_publication_digest") != validation.get("publication_digest"):
+            raise ScientificAgentResultProjectionError(
+                "ranking publication validation binding mismatch"
+            )
+        evaluation_configuration = topn.get("evaluation_configuration")
+        ranking_configuration = ranking.get("ranking_configuration")
+        if (
+            not isinstance(evaluation_configuration, dict)
+            or evaluation_configuration.get("top_n") != requested_top_n
+            or not isinstance(ranking_configuration, dict)
+            or ranking_configuration.get("top_n_size") != requested_top_n
+        ):
+            raise ScientificAgentResultProjectionError(
+                "Computational Top-N does not bind the authorized top_n"
+            )
+        if topn.get("evaluation_configuration_digest") != _digest(evaluation_configuration):
+            raise ScientificAgentResultProjectionError(
+                "Computational Top-N evaluation configuration digest mismatch"
+            )
+        if ranking.get("evaluation_configuration_digest") != _digest(evaluation_configuration):
+            raise ScientificAgentResultProjectionError(
+                "ranking evaluation configuration digest mismatch"
+            )
+        if ranking.get("ranking_digest") != _digest(
+            {"config": ranking_configuration, "rows": ranking.get("ranked_candidates")}
+        ):
+            raise ScientificAgentResultProjectionError(
+                "ranking publication digest binding mismatch"
+            )
+        evidence_bindings = evidence.get("bindings")
+        if not isinstance(evidence_bindings, dict):
+            raise ScientificAgentResultProjectionError(
+                "BR1 evidence binding roster is unavailable"
+            )
+        expected_evidence = {
+            "prediction": prediction.get("publication_digest"),
+            "validation": validation.get("publication_digest"),
+            "ranking": ranking.get("publication_digest"),
+            "topn": topn.get("publication_digest"),
+        }
+        for name, expected in expected_evidence.items():
+            item = evidence_bindings.get(name)
+            actual = (
+                item.get("object_digest")
+                if isinstance(item, dict)
+                else item
+            )
+            if actual != expected:
+                raise ScientificAgentResultProjectionError(
+                    "BR1 evidence binding roster mismatch"
+                )
+        semantic_bindings = {
+            name: item.get("object_digest") if isinstance(item, dict) else item
+            for name, item in evidence_bindings.items()
+            if isinstance(item, (dict, str))
+        }
+        if evidence.get("replay_digest") != _digest(semantic_bindings):
+            raise ScientificAgentResultProjectionError(
+                "BR1 evidence replay digest mismatch"
+            )
+        evidence_configuration = evidence.get("evaluation_configuration")
+        if evidence_configuration != evaluation_configuration:
+            raise ScientificAgentResultProjectionError(
+                "BR1 evidence evaluation configuration mismatch"
+            )
+        if evidence.get("evaluation_configuration_digest") != _digest(
+            evaluation_configuration
+        ):
+            raise ScientificAgentResultProjectionError(
+                "BR1 evidence evaluation configuration digest mismatch"
+            )
+
+    @staticmethod
+    def _final_candidate(
+        row: Mapping[str, Any],
+        *,
+        expected_rank: int,
+    ) -> ScientificAgentResultRankedCandidate:
+        if row.get("rank") != expected_rank:
+            raise ScientificAgentResultProjectionError(
+                "Computational Top-N rank is not contiguous"
+            )
+        candidate_id = str(row.get("candidate_id") or "")
+        canonical_smiles = _safe_text(
+            row.get("canonical_smiles"), "canonical_smiles", max_length=512
+        )
+        predicted = _finite_float(row.get("predicted_property"), "predicted_property")
+        validation_findings = row.get("validation_findings")
+        if validation_findings is None:
+            validation_findings = row.get("findings")
+        if not isinstance(validation_findings, list):
+            raise ScientificAgentResultProjectionError(
+                "Computational Top-N validation findings are invalid"
+            )
+        try:
+            candidate = ScientificAgentResultRankedCandidate(
+                rank=expected_rank,
+                candidate_id=candidate_id,
+                score=predicted,
+                score_label="predicted_property",
+                smiles=canonical_smiles,
+                canonical_smiles=canonical_smiles,
+                predicted_property=predicted,
+                ad_ood_status=row.get("ad_ood_status") or row.get("ad_status"),
+                nearest_neighbor_similarity=row.get("nearest_neighbor_similarity"),
+                scaffold_novelty=row.get("scaffold_novelty"),
+                validation_findings=validation_findings,
+                model_binding=row.get("model_binding"),
+                generation_binding=row.get("generation_binding"),
+                ranking_binding=row.get("ranking_binding"),
+                provenance_digest=row.get("provenance_digest"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ScientificAgentResultProjectionError(
+                "Computational Top-N candidate contract is invalid"
+            ) from exc
+        material = dict(row)
+        provenance = material.pop("provenance_digest", None)
+        if not isinstance(provenance, str) or _digest(material) != provenance:
+            raise ScientificAgentResultProjectionError(
+                "Computational Top-N candidate provenance digest mismatch"
+            )
+        return candidate
 
     def persist(
         self, projection: ScientificAgentResultProjection
@@ -819,6 +1422,9 @@ def source_artifacts_for_publication(
 
 
 __all__ = [
+    "BR1_FINAL_RESULT_ARTIFACT_IDS",
+    "BR1_FINAL_RESULT_OUTPUT_CONTRACT",
+    "BR1_FINAL_RESULT_TASK_TYPE",
     "RESULT_PROJECTION_MANIFEST_SCHEMA_VERSION",
     "RESULT_PROJECTION_ROOT",
     "RESULT_PROJECTION_SCHEMA_VERSION",
@@ -831,6 +1437,7 @@ __all__ = [
     "ScientificAgentResultRankedCandidate",
     "ScientificAgentResultSourceArtifact",
     "ScientificAgentResultSummaryStatistics",
+    "LocalArtifactReader",
     "source_artifacts_for_publication",
     "validate_result_projection",
 ]

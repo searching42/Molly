@@ -811,6 +811,106 @@ class ScientificAgentHarnessController:
             publications.append(publication)
         return tuple(publications)
 
+    def verified_terminal_result_artifacts(
+        self, *, project_id: str, controller_execution_id: str
+    ) -> dict[str, Any] | None:
+        """Return the exact verified BR1 final local-result artifact roster.
+
+        The bridge is intentionally narrower than a general Registry reader:
+        it resolves only the registered evaluation task, replays the existing
+        task-specific publication verifier, and binds the result to the one
+        immutable local completion publication.  Callers receive internal
+        bindings, not a browser-selectable artifact path or candidate payload.
+        """
+
+        result = self.get(
+            project_id=project_id,
+            controller_execution_id=controller_execution_id,
+        )
+        if result.inspection.status != AgentHarnessControllerStatus.SUCCEEDED:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "verified terminal result artifacts require terminal Controller success"
+            )
+        execution = result.execution
+        final_slots = [
+            item
+            for item in execution.task_slots
+            if item.task_id == "evaluate_private_structured_dataset_canary_v1"
+        ]
+        if not final_slots:
+            return None
+        if len(final_slots) != 1 or final_slots[0].execution_route != "local_executor":
+            raise ScientificAgentHarnessControllerVerificationError(
+                "BR1 final result task binding is not unique and local"
+            )
+        slot = final_slots[0]
+        authorization = self._authorization(execution, verify_current=False)
+        task_options = dict(
+            authorization.compiled_task_options.get(slot.task_id) or {}
+        )
+        try:
+            # Reuse the existing exact task-specific replay verifier.  The
+            # one-task dispatch seam is intentionally not used here: its
+            # input binding is anchored before earlier remote outputs exist,
+            # whereas terminal-result projection must verify the current
+            # completed Registry and immutable final publication chain.
+            self.executor._verify_structured_dataset_task(
+                project_id=execution.project_id,
+                run_id=execution.run_id,
+                task_id=slot.task_id,
+                task_options=task_options,
+                expected_compiled_options_digest=slot.compiled_options_digest,
+            )
+        except Exception as exc:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "verified BR1 final result publication replay failed"
+            ) from exc
+
+        _, registry, outputs = self._verified_local_outputs(
+            execution=execution,
+            slot=slot,
+            allow_history=True,
+        )
+        publications = [
+            item
+            for item in self.control_store.list_harness_local_execution_publications(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            )
+            if item.slot_id == slot.slot_id
+            and item.task_id == slot.task_id
+            and item.attempt_ordinal == slot.attempt
+        ]
+        if len(publications) != 1:
+            raise ScientificAgentHarnessControllerVerificationError(
+                "verified BR1 final result receipt is unavailable or conflicting"
+            )
+        publication = publications[0]
+        self._verify_local_execution_publication(
+            execution=execution,
+            slot=slot,
+            publication=publication,
+            allow_later_state=True,
+        )
+        if publication.artifact_registry_digest != _agent_digest(registry):
+            raise ScientificAgentHarnessControllerVerificationError(
+                "verified BR1 final result Registry digest changed"
+            )
+        verified_outputs = tuple(
+            item.model_dump(mode="json")
+            for item in sorted(outputs, key=lambda value: value.artifact_id)
+        )
+        return {
+            "task_id": slot.task_id,
+            "task_index": slot.planned_task_index,
+            "task_options": task_options,
+            "source_publication_sha256": publication.publication_digest,
+            "artifact_registry_digest": _agent_digest(registry),
+            "verified_outputs_digest": publication.verified_outputs_digest,
+            "artifact_registry": dict(registry),
+            "verified_outputs": verified_outputs,
+        }
+
     def current_authority_boundary(
         self, *, project_id: str, controller_execution_id: str
     ) -> dict[str, str]:
