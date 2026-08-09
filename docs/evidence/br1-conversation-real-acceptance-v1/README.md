@@ -99,3 +99,33 @@ no exact owner approval exists, no eligible bundle has been assembled or
 counted, and no new project/conversation/run has started. The next permitted
 step is exact owner approval, followed by one-template bundle assembly and a
 fresh natural-language front-door run.
+
+## Independent live identity follow-up v5
+
+Review of the v4 implementation found that its default live identity path
+still copied the report's observed canonical source/provider digests into both
+sides of the comparison. That detected missing fields but did not independently
+bind those digests to the current Raw bytes. The old v4 package and proposal
+remain pre-fix readiness evidence and were not approved.
+
+The freeze implementation now uses the shared Raw CSV parser and the existing
+canonical source/provider serializers to derive `input_row_count`, the raw
+digest, the canonical source digest, and the canonical provider-input digest
+from the exact stable Raw bytes read for the freeze. The report's corresponding
+observed identities remain the `actual` side of the comparison. Explicit
+`expected_stable_identities` callers, including historical/trusted mode, retain
+their strict comparison behavior.
+
+Two adversarial tests now forge and re-sign a source canonical digest and a
+coherently re-signed provider canonical digest. Both are rejected by the
+default live freeze path. The existing 1999-row PASS report was not rerun; it
+remains bound by report digest
+`sha256:fc4a060583b63609c10f83d093d620db7c4d04f09b1a3b23123ae706cba00cd6`.
+
+The fixed implementation regenerated a new private package and proposal:
+package `br1-real-acceptance-20260809-v2-freeze-v2` with digest
+`sha256:6af7a5e844a4852b5b15681970b05e91e770b9929d40322f872905b0794ba652`,
+and proposal `br1-real-acceptance-20260809-v2-owner-proposal-v2` with digest
+`sha256:17a04dd465587963355da86791f3edaa9fc9a675a5a1bc97fb4c321e34ee756b`.
+It is `FROZEN_WAITING_OWNER`; no approval, REINVENT4 template, eligible bundle,
+Controller execution, remote dispatch, or new conversation run exists.

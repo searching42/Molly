@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from ai4s_agent import br1_unimol_applicability as applicability
 from ai4s_agent.br1_acceptance_readiness import (
     BR1AcceptanceReadinessError,
     build_br1_owner_acceptance_proposal,
@@ -50,6 +51,19 @@ def _candidate(tmp_path: Path):
         created_at="2026-08-04T05:30:00Z",
     )
     return frozen, result, report_path, summary_path
+
+
+def _rewrite_report_and_summary(
+    report_path: Path,
+    summary_path: Path,
+    report: dict[str, object],
+) -> None:
+    """Re-sign a deliberately forged report using the existing report contract."""
+
+    report["report_digest"] = applicability._report_digest(report)
+    summary = applicability._public_summary(report)
+    report_path.write_bytes(canonical_json_bytes(report) + b"\n")
+    summary_path.write_bytes(canonical_json_bytes(summary) + b"\n")
 
 
 def test_freeze_copies_exact_bytes_and_builds_privacy_safe_waiting_owner_proposal(
@@ -111,6 +125,71 @@ def test_stable_identity_mismatch_fails_closed(tmp_path: Path) -> None:
                 "canonical_source_dataset_digest": "sha256:" + "e" * 64,
                 "canonical_provider_input_digest": "sha256:" + "d" * 64,
             },
+        )
+
+
+def test_live_freeze_rejects_forged_canonical_source_digest(
+    tmp_path: Path,
+) -> None:
+    _, result, report_path, summary_path = _candidate(tmp_path)
+    forged = copy.deepcopy(result.report)
+    forged["input_identity"]["observed_canonical_source_dataset_digest"] = (
+        "sha256:" + "c" * 64
+    )
+    _rewrite_report_and_summary(report_path, summary_path, forged)
+
+    with pytest.raises(BR1AcceptanceReadinessError, match="stable BR1 identity mismatch"):
+        freeze_br1_acceptance_candidate(
+            raw_dataset=tmp_path / "inputs" / "raw.csv",
+            source_manifest=tmp_path / "inputs" / "source.json",
+            mapping_policy=tmp_path / "inputs" / "mapping.json",
+            source_publication=tmp_path / "inputs" / "raw-publication.json",
+            source_publication_registry=tmp_path / "inputs" / "source-publication-registry.json",
+            source_authority=tmp_path / "inputs" / "source-authority.json",
+            report=report_path,
+            summary=summary_path,
+            output_dir=tmp_path / "forged-source-freeze",
+            package_id="br1-forged-source-freeze",
+            proposal_id="br1-forged-source-proposal",
+            repository_commit="a" * 40,
+            worker_implementation_digest="sha256:" + "b" * 64,
+            expected_provider_version="0.1.5",
+            execution_profile_id="unimol-train-br1-v2",
+            execution_profile_digest=result.report["execution_profile_digest"],
+            created_at="2026-08-04T05:30:00Z",
+        )
+
+
+def test_live_freeze_rejects_coherently_forged_canonical_provider_digest(
+    tmp_path: Path,
+) -> None:
+    _, result, report_path, summary_path = _candidate(tmp_path)
+    forged = copy.deepcopy(result.report)
+    forged_digest = "sha256:" + "d" * 64
+    forged["input_identity"]["observed_canonical_provider_input_digest"] = forged_digest
+    forged["input_identity"]["staged_provider_input_digest"] = forged_digest
+    forged["input_identity"]["provider_actual_input_digest"] = forged_digest
+    _rewrite_report_and_summary(report_path, summary_path, forged)
+
+    with pytest.raises(BR1AcceptanceReadinessError, match="stable BR1 identity mismatch"):
+        freeze_br1_acceptance_candidate(
+            raw_dataset=tmp_path / "inputs" / "raw.csv",
+            source_manifest=tmp_path / "inputs" / "source.json",
+            mapping_policy=tmp_path / "inputs" / "mapping.json",
+            source_publication=tmp_path / "inputs" / "raw-publication.json",
+            source_publication_registry=tmp_path / "inputs" / "source-publication-registry.json",
+            source_authority=tmp_path / "inputs" / "source-authority.json",
+            report=report_path,
+            summary=summary_path,
+            output_dir=tmp_path / "forged-provider-freeze",
+            package_id="br1-forged-provider-freeze",
+            proposal_id="br1-forged-provider-proposal",
+            repository_commit="a" * 40,
+            worker_implementation_digest="sha256:" + "b" * 64,
+            expected_provider_version="0.1.5",
+            execution_profile_id="unimol-train-br1-v2",
+            execution_profile_digest=result.report["execution_profile_digest"],
+            created_at="2026-08-04T05:30:00Z",
         )
 
 
