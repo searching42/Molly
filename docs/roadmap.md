@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: Post-BR1 roadmap sync and Autonomy L1/L2 scope freeze
+> Current focus: M3.5-AUT-POLICY — Autonomy action classification
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -27,6 +27,7 @@ Evidence maturity:
 Work state:
 
 - `READY`: prerequisites are satisfied and the work may start.
+- `QUEUED`: the work is planned and ordered, but its prerequisites are not yet satisfied.
 - `IN_PROGRESS`: the work is actively being implemented or accepted.
 - `BLOCKED`: a concrete technical or external blocker prevents progress.
 - `DEFERRED`: intentionally postponed; not a blocker.
@@ -38,7 +39,7 @@ Work state:
 
 - [x] 表示该 roadmap item 的当前 Definition of Done 已满足。
 - [ ] 表示尚未完成。
-- 未完成项必须同时标记 work state：`READY / IN_PROGRESS / BLOCKED / DEFERRED`。
+- 未完成项必须同时标记 work state：`READY / QUEUED / IN_PROGRESS / BLOCKED / DEFERRED`。
 - 已完成项标记 `DONE`。
 - Evidence maturity 独立记录为 `I/T/V`、`I/T/—` 等。
 - Checkbox 只表达 roadmap item 是否完成，不能代替 runtime evidence。
@@ -102,11 +103,19 @@ The post-BR1 execution order is frozen as:
 ```text
 M3.5-BR1 — Conversation-driven real BR1 acceptance                    DONE
         ↓
+M3.5-AUT-POLICY — Autonomy action classification
+        ↓
 M3.5-AUT-L1 — Bounded auto-continuation
         ↓
 M3.5-AUT-L2 — Bounded replanning
         ↓
-M3.5-BR2 — PDF / MinerU / LLM real acceptance
+M3.5-AUT-ACCEPT — L1/L2 adversarial and restart acceptance
+        ↓
+M3.5-BR2-RUNTIME — Real MinerU runtime closure
+        ↓
+M3.5-BR2-MAPPING — Contextual mapping and evidence binding
+        ↓
+M3.5-BR2-ACCEPT — Conversation-driven BR2 acceptance
         ↓
 M3.5-UI — Minimal unified UI
         ↓
@@ -133,42 +142,42 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Definition of Done: the `AUTO_CONTINUE` / `REQUIRE_HUMAN` / `PROHIBITED` policy contract, fail-closed rule, authority inputs, and materiality handoff are deterministic, documented, and covered by contract tests.
 
 - [ ] **M3.5-AUT-L1 — Bounded auto-continuation runtime**
-  - State: `READY`
+  - State: `QUEUED`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-POLICY`.
   - Target PR: #46.
   - Definition of Done: an approved plan may automatically consume only already-valid authority for bounded continuation; transition, LLM-call, dispatch, wall-clock, task-graph, and resource budgets are enforced; every boundary remains visible and all uncertain actions fail closed to a human boundary.
 
 - [ ] **M3.5-AUT-L2 — Bounded replanning and materiality boundary**
-  - State: `READY`
+  - State: `QUEUED`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-L1`.
   - Target PR: #47.
   - Definition of Done: verified failure or changed observation produces a successor proposal; deterministic materiality classification permits only non-material reuse of current authority, while every material change creates a new digest and requires fresh human authorization.
 
 - [ ] **M3.5-AUT-ACCEPT — L1/L2 adversarial and restart acceptance**
-  - State: `READY`
+  - State: `QUEUED`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-L2`.
   - Target PR: #48.
   - Definition of Done: representative bounded-autonomy, fail-closed, replay, restart, duplicate-dispatch, budget, and adversarial cases pass on exact reviewed code and preserve the existing authority chain.
 
 - [ ] **M3.5-BR2-RUNTIME — Real MinerU runtime closure**
-  - State: `READY`
+  - State: `QUEUED`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-ACCEPT`.
   - Target PR: #49.
   - Definition of Done: at least one real OLED PDF completes the real MinerU and parsed-document runtime stages without extending the BR2 terminal boundary.
 
 - [ ] **M3.5-BR2-MAPPING — Contextual mapping and evidence binding**
-  - State: `READY`
+  - State: `QUEUED`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-BR2-RUNTIME`.
   - Target PR: #50.
   - Definition of Done: deterministic extraction, LLM contextual mapping, schema validation, and evidence binding produce a confirmation-ready candidate raw dataset with privacy-safe provenance.
 
 - [ ] **M3.5-BR2-ACCEPT — Conversation-driven BR2 acceptance**
-  - State: `READY`
+  - State: `QUEUED`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-BR2-MAPPING`.
   - Target PR: #51.
@@ -438,19 +447,19 @@ The following gates are separate from the active execution queue, but use the sa
   - Completion criterion: one real training remote stage survives control-plane restart using the same Controller/request with no duplicate dispatch; this is not a claim about every task or failure mode.
 
 - [ ] **GATE-AUT-L1-L2 — Bounded autonomy acceptance**
-  - State: `READY`
+  - State: `QUEUED`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-ACCEPT`.
   - Completion criterion: L1/L2 action classification, budgets, fail-closed boundaries, materiality handling, adversarial cases, restart, replay, and duplicate-dispatch behavior pass on exact reviewed code.
 
 - [ ] **GATE-BR2 — PDF–MinerU–LLM real acceptance**
-  - State: `READY`
+  - State: `QUEUED`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-BR2-ACCEPT`.
   - Completion criterion: a real PDF reaches evidence-bound candidate raw data, human confirmation, and `WAITING_USER`, without entering downstream structured-data execution.
 
 - [ ] **GATE-OBSERVABILITY — OTel/LangSmith integrated final acceptance**
-  - State: `READY`
+  - State: `QUEUED`
   - Evidence: `I/T(partial)/—`
   - Dependency: after representative BR1/BR2 acceptance.
   - Completion criterion: telemetry is privacy-safe and observer-only, and exporter availability cannot affect authoritative execution bytes or outcomes.
