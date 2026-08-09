@@ -25,7 +25,8 @@
     "input_row_count": 1999,
     "supported_row_count": 1999,
     "unsupported_row_count": 0,
-    "unresolved_row_count": 0
+    "unresolved_row_count": 0,
+    "elapsed_seconds": 824.0
   },
   "expected_task_chain": [
     "prepare_private_structured_dataset_canary_v2",
@@ -74,10 +75,9 @@
     }
   ],
   "scientific_claim_boundary": "The result is a verified deterministic Computational Top-N projection of model-predicted values; it is not an experimental measurement, synthesis guarantee, or performance claim.",
-  "ci": {
-    "pr_fast_run": "31313877533",
-    "pr_fast_status": "success_on_runtime_head",
-    "full_ci_status": "pending",
-    "full_ci_label_present": false
+  "ci_status": {
+    "snapshot_policy": "external_to_immutable_acceptance_snapshot",
+    "authoritative_source": "PR #43 / GitHub Actions",
+    "pull_request_label_policy": "full-ci_label_not_required"
   }
 }

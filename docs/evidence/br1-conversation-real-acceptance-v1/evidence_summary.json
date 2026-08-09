@@ -24,7 +24,7 @@
     "supported_row_count": 1999,
     "unsupported_row_count": 0,
     "unresolved_row_count": 0,
-    "elapsed_seconds": 898.3,
+    "elapsed_seconds": 824.0,
     "swap_bytes": 0
   },
   "dispatch_counts": {
@@ -49,6 +49,9 @@
   },
   "privacy_review": "pass",
   "control_plane_commit": "15a4365fb6597a231cbff5b083af23ad8b783c32",
-  "full_ci_label_present": false,
-  "full_ci_status": "pending"
+  "ci_status": {
+    "snapshot_policy": "external_to_immutable_acceptance_snapshot",
+    "authoritative_source": "PR #43 / GitHub Actions",
+    "pull_request_label_policy": "full-ci_label_not_required"
+  }
 }

@@ -11,15 +11,9 @@
       "tests/test_br1_acceptance_readiness.py"
     ]
   },
-  "pr_fast": {
-    "preceding_runtime_head_run": "31313877533",
-    "preceding_runtime_head_status": "success",
-    "current_evidence_head_run": "31315917497",
-    "current_evidence_head_status": "success"
-  },
-  "full_ci": {
-    "status": "pending",
-    "label_present": false,
-    "trigger_mode": "manual_workflow_dispatch_without_pull_request_label"
+  "ci_status": {
+    "snapshot_policy": "external_to_immutable_acceptance_snapshot",
+    "authoritative_source": "PR #43 / GitHub Actions",
+    "pull_request_label_policy": "full-ci_label_not_required"
   }
 }

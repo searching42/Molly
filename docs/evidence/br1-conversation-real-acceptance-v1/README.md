@@ -70,7 +70,7 @@ the terminal v11 run supplies the full result evidence.
 The v11 runtime used reviewed control-plane commit
 `15a4365fb6597a231cbff5b083af23ad8b783c32` and the recorded clean worker
 implementation digest. The authoritative 1999-row applicability preflight was
-`PASS`: 1999 supported, 0 unsupported, 0 unresolved. It completed in 898.3
+`PASS`: 1999 supported, 0 unsupported, 0 unresolved. It completed in 824.0
 seconds with no swap and without training, generation, prediction, or
 Controller side effects.
 
@@ -100,6 +100,6 @@ Earlier evidence remains part of the history rather than being overwritten:
   digest tests fail closed.
 - A new freeze/proposal and exact owner approval then enabled the v11 run.
 
-The evidence-only status still has no `full-ci` pull-request label. Full CI is
-the remaining final CI gate and is intended to run by manual workflow dispatch
-against the exact final commit.
+CI status is external to this immutable acceptance snapshot. The authoritative
+current status is recorded on PR #43 and GitHub Actions; this snapshot does not
+copy a pending/success CI state, and no `full-ci` pull-request label is required.
