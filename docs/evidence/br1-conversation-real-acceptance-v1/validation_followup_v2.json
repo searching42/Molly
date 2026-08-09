@@ -7,7 +7,12 @@
     "status": "pass"
   },
   "git_diff_check": "pass",
-  "pr_fast": "not_run_before_evidence_update",
+  "pr_fast": {
+    "status": "pass",
+    "passed": 1224,
+    "deselected": 5602,
+    "selection": "(unit and not slow) or pr_fast"
+  },
   "full_ci": "not_triggered_deployment_blocked",
   "claim_boundary": "Validation covers repository syntax, evidence structure, and whitespace only; it is not scientific execution evidence.",
   "status": "documentation_followup_validated"
