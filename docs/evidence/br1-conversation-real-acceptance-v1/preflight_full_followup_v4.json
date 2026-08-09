@@ -1,0 +1,43 @@
+{
+  "schema_version": "scientific_br1_real_conversation_full_preflight_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "started_at": "2026-08-09T06:23:46Z",
+  "execution_profile_id": "unimol-train-br1-v2",
+  "control_plane_commit": "ce1f4b6e0c849e6037dd3dc42944dccde7284557",
+  "worker_implementation_digest": "sha256:1445ee01fbb3748caea3ddf889726df48ad36d49e0bfb66b3d079d93d6f3aa72",
+  "provider_version": "0.1.5",
+  "result": {
+    "status": "PASS",
+    "exit_code": 0,
+    "elapsed_seconds": 898.3,
+    "report_digest": "sha256:fc4a060583b63609c10f83d093d620db7c4d04f09b1a3b23123ae706cba00cd6",
+    "input_row_count": 1999,
+    "supported_row_count": 1999,
+    "unsupported_row_count": 0,
+    "unresolved_row_count": 0,
+    "reason_counts": {}
+  },
+  "runtime_observations": {
+    "cpu_pct_observed_range": [
+      69.1,
+      140.5
+    ],
+    "rss_mb_observed_range": [
+      1039.5,
+      1221.1
+    ],
+    "swap_mb_observed_max": 0.0,
+    "provider_subprocess_alive_until_terminal_sample": true,
+    "preflight_abnormal_exit": false,
+    "summary_written_only_at_terminal": true
+  },
+  "side_effects": {
+    "training_dispatch_count": 0,
+    "generation_dispatch_count": 0,
+    "prediction_dispatch_count": 0,
+    "controller_execution_created": false,
+    "owner_approval_created": false
+  },
+  "claim_boundary": "This is applicability preflight evidence only; it does not approve data, create a runtime authority, or claim a scientific result.",
+  "status": "PASS_WAITING_FREEZE"
+}

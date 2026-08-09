@@ -1,0 +1,20 @@
+{
+  "schema_version": "scientific_br1_real_conversation_freeze_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "preflight_report_digest": "sha256:fc4a060583b63609c10f83d093d620db7c4d04f09b1a3b23123ae706cba00cd6",
+  "package_id": "br1-real-acceptance-20260809-v2-freeze-v1",
+  "package_digest": "sha256:78fd1d6fef25962f9aac1079320f4614fcb13858ca0b1ad295484c17b3ef134d",
+  "proposal_id": "br1-real-acceptance-20260809-v2-owner-proposal-v1",
+  "proposal_digest": "sha256:d53e2223d12c229d889673d51adbc856946736fcd43e4810f520d8ff1ec59a39",
+  "proposal_status": "WAITING_OWNER",
+  "private_package_permissions": {
+    "directory": "0700",
+    "files": "0400"
+  },
+  "owner_approval_created": false,
+  "reinvent4_template_admitted": false,
+  "bundle_assembly_started": false,
+  "eligible_bundle_count_verified": false,
+  "claim_boundary": "Freeze and owner proposal preserve exact verified inputs but are not owner approval, dataset confirmation, execution authority, or BR1 completion.",
+  "status": "FROZEN_WAITING_OWNER"
+}

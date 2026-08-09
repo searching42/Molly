@@ -30,16 +30,6 @@ def _candidate(tmp_path: Path):
     report_path.write_bytes(canonical_json_bytes(result.report) + b"\n")
     summary_path.write_bytes(canonical_json_bytes(result.public_summary) + b"\n")
     raw_path = inputs / "raw.csv"
-    expected = {
-        "input_row_count": result.report["input_row_count"],
-        "raw_dataset_digest": digest_bytes(raw_path.read_bytes()),
-        "canonical_source_dataset_digest": result.report["input_identity"][
-            "observed_canonical_source_dataset_digest"
-        ],
-        "canonical_provider_input_digest": result.report["input_identity"][
-            "observed_canonical_provider_input_digest"
-        ],
-    }
     frozen = freeze_br1_acceptance_candidate(
         raw_dataset=raw_path,
         source_manifest=inputs / "source.json",
@@ -58,7 +48,6 @@ def _candidate(tmp_path: Path):
         execution_profile_id="unimol-train-br1-v2",
         execution_profile_digest=result.report["execution_profile_digest"],
         created_at="2026-08-04T05:30:00Z",
-        expected_stable_identities=expected,
     )
     return frozen, result, report_path, summary_path
 

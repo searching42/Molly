@@ -241,6 +241,42 @@ def _stable_identity_check(
         )
 
 
+def _current_report_stable_identities(
+    *,
+    report: Mapping[str, Any],
+    raw_dataset_digest: str,
+) -> dict[str, Any]:
+    """Bind a live freeze to the exact identities already verified in its report.
+
+    ``HISTORICAL_BR1_IDENTITIES`` remains available for explicit historical
+    callers, but a live acceptance must not silently compare a fresh
+    deployment-bound source against an unrelated historical Raw digest.
+    Authority-chain verification has already bound the report to the exact
+    Raw bytes and source materialization before this projection is used.
+    """
+
+    input_identity = report.get("input_identity")
+    if not isinstance(input_identity, Mapping):
+        raise BR1AcceptanceReadinessError(
+            "current report input identity is unavailable"
+        )
+    identities = {
+        "input_row_count": report.get("input_row_count"),
+        "raw_dataset_digest": raw_dataset_digest,
+        "canonical_source_dataset_digest": input_identity.get(
+            "observed_canonical_source_dataset_digest"
+        ),
+        "canonical_provider_input_digest": input_identity.get(
+            "observed_canonical_provider_input_digest"
+        ),
+    }
+    if any(value in (None, "") for value in identities.values()):
+        raise BR1AcceptanceReadinessError(
+            "current report stable identities are incomplete"
+        )
+    return identities
+
+
 def _verify_private_report_and_summary(
     report_path: Path,
     summary_path: Path,
@@ -530,7 +566,13 @@ def freeze_br1_acceptance_candidate(
         execution_profile_id=execution_profile_id,
         execution_profile_digest=execution_profile_digest,
     )
-    expected = dict(expected_stable_identities or HISTORICAL_BR1_IDENTITIES)
+    expected = dict(
+        expected_stable_identities
+        or _current_report_stable_identities(
+            report=report_payload,
+            raw_dataset_digest=raw_digest,
+        )
+    )
     _stable_identity_check(
         actual={
             "input_row_count": report_payload.get("input_row_count"),

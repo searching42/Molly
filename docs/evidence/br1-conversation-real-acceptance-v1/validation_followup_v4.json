@@ -1,0 +1,22 @@
+{
+  "schema_version": "scientific_br1_real_conversation_validation_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "compileall": "pass",
+  "focused_tests": {
+    "passed": 12,
+    "selection": [
+      "tests/test_br1_acceptance_readiness.py",
+      "tests/test_br1_conversation_runtime_bridge.py"
+    ],
+    "status": "pass"
+  },
+  "git_diff_check": "pass",
+  "pr_fast": {
+    "status": "pass",
+    "passed": 1224,
+    "deselected": 5602,
+    "selection": "(unit and not slow) or pr_fast"
+  },
+  "full_ci": "not_triggered_before_owner_approval_and_real_acceptance",
+  "status": "code_fix_focused_validated"
+}
