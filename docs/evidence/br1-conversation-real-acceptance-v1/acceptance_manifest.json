@@ -1,0 +1,29 @@
+{
+  "acceptance_id": null,
+  "conversation_id": "br1-real-conversation-20260809",
+  "control_plane_commit": "ce1f4b6e0c849e6037dd3dc42944dccde7284557",
+  "expected_task_chain": [
+    "prepare_private_structured_dataset_canary_v2",
+    "confirm_structured_dataset_canary",
+    "prepare_private_unimol_training_v1",
+    "train_private_unimol_v1",
+    "package_private_unimol_model_v1",
+    "prepare_private_reinvent4_generation_v1",
+    "generate_private_reinvent4_v1",
+    "package_private_reinvent4_generation_v1",
+    "predict_private_unimol_v1",
+    "evaluate_private_structured_dataset_canary_v1"
+  ],
+  "formal_acceptance_started": false,
+  "front_door_attempted": true,
+  "project_id": "br1-real-acceptance-20260809",
+  "reason_codes": [
+    "BR1_INPUT_BUNDLE_REQUIRED",
+    "REMOTE_RESOURCE_EXECUTION_PROFILE_UNKNOWN",
+    "DEPLOYED_WORKER_WORKTREE_DIRTY"
+  ],
+  "registry_id": "br1-private-real-tool-v3",
+  "run_id": "br1-real-run-20260809",
+  "schema_version": "scientific_br1_real_conversation_acceptance_manifest.v1",
+  "status": "blocked_before_proposal"
+}

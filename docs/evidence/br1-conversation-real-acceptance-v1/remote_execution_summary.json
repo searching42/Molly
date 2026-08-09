@@ -1,0 +1,52 @@
+{
+  "configured_policy_entries": {
+    "generation": {
+      "configured_resources": {
+        "cpu_threads": 1,
+        "gpu_count": 1,
+        "walltime_sec": 21600
+      },
+      "execution_profile_id": "reinvent4-br1-gpu-v1",
+      "status": "profile_unknown"
+    },
+    "prediction": {
+      "configured_resources": {
+        "cpu_threads": 8,
+        "gpu_count": 1,
+        "walltime_sec": 43200
+      },
+      "execution_profile_id": "unimol-predict-br1-v1",
+      "status": "profile_resolved"
+    },
+    "training": {
+      "configured_resources": {
+        "cpu_threads": 8,
+        "gpu_count": 1,
+        "walltime_sec": 86400
+      },
+      "execution_profile_id": "unimol-train-br1-v2",
+      "status": "profile_resolved"
+    }
+  },
+  "dispatch_count": 0,
+  "provider_versions": {
+    "reinvent": "4.7.15",
+    "unimol-tools": "0.1.5"
+  },
+  "remote_worker": {
+    "capabilities": [
+      "cpu",
+      "gpu",
+      "reinvent4",
+      "unimol"
+    ],
+    "control_plane_worker_source_digest": "sha256:1445ee01fbb3748caea3ddf889726df48ad36d49e0bfb66b3d079d93d6f3aa72",
+    "deployed_worker_digest": "sha256:969a7ab342e0a045e3f3aea95102964c48d278b0a4aa7cad42a9c532b2779934",
+    "deployment_commit": "bf82cfd75d23abfe17328f362bd76b79b134b138",
+    "gpu_status": "available",
+    "gpu_type": "NVIDIA GeForce RTX 5090",
+    "pytorch_cuda_version": "13.0",
+    "status": "reachable_but_dirty_deployment"
+  },
+  "schema_version": "scientific_br1_real_conversation_remote_execution_summary.v1"
+}

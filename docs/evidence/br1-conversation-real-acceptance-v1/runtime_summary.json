@@ -1,0 +1,21 @@
+{
+  "conversation_id": "br1-real-conversation-20260809",
+  "controller_execution_id": null,
+  "current_task_id": null,
+  "input_bundle_id": null,
+  "proposal_id": null,
+  "reason_code": "BR1_INPUT_BUNDLE_REQUIRED",
+  "result_projection_count": 0,
+  "run_id": "br1-real-run-20260809",
+  "schema_version": "scientific_br1_real_conversation_runtime_summary.v1",
+  "session_revision": 1,
+  "session_status": "needs_input",
+  "sse_events": [
+    {
+      "event_type": "input.binding_required",
+      "transport_event": "agent.status",
+      "durable": true
+    }
+  ],
+  "status": "blocked_before_controller"
+}

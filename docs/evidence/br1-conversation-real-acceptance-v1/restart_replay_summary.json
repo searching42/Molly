@@ -1,0 +1,8 @@
+{
+  "controller_execution_id": null,
+  "duplicate_dispatch_check": "not_applicable_no_dispatch",
+  "restart_continuation": "not_run",
+  "same_request_replayed": false,
+  "schema_version": "scientific_br1_real_conversation_restart_replay_summary.v1",
+  "status": "not_reached"
+}

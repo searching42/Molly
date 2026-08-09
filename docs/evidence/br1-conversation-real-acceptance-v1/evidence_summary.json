@@ -1,0 +1,34 @@
+{
+  "claim_boundary": "No completed real BR1 acceptance, remote execution, verified artifact, or scientific result is claimed.",
+  "control_plane_commit": "ce1f4b6e0c849e6037dd3dc42944dccde7284557",
+  "dispatch_counts": {
+    "generation": 0,
+    "prediction": 0,
+    "training": 0
+  },
+  "front_door": {
+    "browser_input_binding_api_called": false,
+    "browser_remote_authority_api_called": false,
+    "natural_language_goal_submitted": true,
+    "server_side_input_resolution_attempted": true,
+    "status": "blocked_before_proposal"
+  },
+  "llm": {
+    "external_call": false,
+    "model": "br1-plan-acceptance",
+    "provider": "stub",
+    "status": "used_for_front_door_request_only"
+  },
+  "policy_digest": "sha256:929e2436cf4d3469f3ece8727ec4255c0cf95be93abc36e2c2566cc9927bb094",
+  "privacy_review": "pass",
+  "project_id": "br1-real-acceptance-20260809",
+  "reason_codes": [
+    "BR1_INPUT_BUNDLE_REQUIRED",
+    "REMOTE_RESOURCE_EXECUTION_PROFILE_UNKNOWN",
+    "DEPLOYED_WORKER_WORKTREE_DIRTY"
+  ],
+  "registry_id": "br1-private-real-tool-v3",
+  "run_id": "br1-real-run-20260809",
+  "schema_version": "scientific_br1_real_conversation_blocked_evidence.v1",
+  "status": "blocked"
+}

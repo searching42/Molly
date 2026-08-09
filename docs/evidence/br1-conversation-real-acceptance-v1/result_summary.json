@@ -1,0 +1,11 @@
+{
+  "final_result_kind": "computational_top_n",
+  "projection_event": "scientific_result.available",
+  "projection_generated": false,
+  "projection_status": "not_reached",
+  "requested_top_n": 10,
+  "returned_top_n": null,
+  "scientific_result_status": "unavailable_before_execution",
+  "schema_version": "scientific_br1_real_conversation_result_summary.v1",
+  "source_artifact_count": 0
+}

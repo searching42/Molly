@@ -1,0 +1,15 @@
+{
+  "conversation_event_correlation": {
+    "durable_event_type": "input.binding_required",
+    "event_transport": "agent.status",
+    "status": "available"
+  },
+  "langsmith": {
+    "external_trace": false,
+    "status": "not_applicable_no_external_llm_call"
+  },
+  "otel": {
+    "status": "not_started_before_controller"
+  },
+  "schema_version": "scientific_br1_real_conversation_observability_summary.v1"
+}
