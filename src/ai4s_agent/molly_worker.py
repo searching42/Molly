@@ -2520,7 +2520,8 @@ output = Path(payload["predictions_output"])
 with output.open("x", encoding="utf-8", newline="") as handle:
     writer = csv.writer(handle, lineterminator="\n")
     writer.writerow(["candidate_id", "predicted_value"])
-    for candidate_id, value in zip(candidate_ids, values, strict=True):
+    for index, candidate_id in enumerate(candidate_ids):
+        value = values[index]
         numeric = float(value)
         if not __import__("math").isfinite(numeric):
             raise RuntimeError("Uni-Mol prediction is not finite")

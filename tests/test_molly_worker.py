@@ -791,6 +791,7 @@ def test_unimol_prediction_consumes_exact_model_directory_artifacts(
 def test_unimol_prediction_runner_materializes_named_csv_input(
     tmp_path: Path,
 ) -> None:
+    assert "strict=True" not in molly_worker_module._UNIMOL_PREDICTION_RUNNER
     provider_root = tmp_path / "provider"
     package = provider_root / "unimol_tools"
     package.mkdir(parents=True)
