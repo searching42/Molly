@@ -849,6 +849,49 @@ def test_submission_reprobes_and_rejects_missing_capability(tmp_path: Path) -> N
     assert transport.dispatches == 0
 
 
+def test_submission_preflight_prefers_non_mutating_live_probe(tmp_path: Path) -> None:
+    _, _, projects, profiles, manifest = _fixture(tmp_path)
+    transport = FakeTransport()
+
+    class LiveProbe(FakeProbe):
+        def __init__(self, profiles: ResourceProfileStore) -> None:
+            super().__init__(profiles)
+            self.live_calls = 0
+
+        def probe(self, connection_id: str) -> CapabilityProbeResult:
+            raise AssertionError("dispatch preflight must not persist a probe snapshot")
+
+        def probe_live(self, connection_id: str) -> CapabilityProbeResult:
+            self.live_calls += 1
+            connection = self.profiles.get_connection(connection_id)
+            return CapabilityProbeResult(
+                connection_id=connection.connection_id,
+                connection_profile_digest=connection.digest(),
+                status="available",
+                checked_at="2026-07-26T00:00:00Z",
+                hostname=connection.expected_hostname,
+                verified_capabilities=connection.declared_capabilities,
+            )
+
+    probe = LiveProbe(profiles)
+    service = RemoteExecutionLifecycleService(
+        projects=projects,
+        profiles=profiles,
+        transport=transport,
+        capability_probe=probe,
+    )
+    prepared = _prepare(service, manifest)
+    result = service.approve(
+        project_id="project-a",
+        run_id="remote-run-001",
+        request_sha256=prepared["request"]["request_sha256"],
+        actor="reviewer",
+    )
+
+    assert result["state"]["status"] == "ACCEPTED"
+    assert probe.live_calls == 2
+
+
 def test_registered_input_intermediate_symlink_fails_closed(tmp_path: Path) -> None:
     _, _, projects, profiles, manifest = _fixture(tmp_path)
     run_dir = projects.run_dir("project-a", "remote-run-001")
