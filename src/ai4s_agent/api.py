@@ -66,6 +66,9 @@ from ai4s_agent.scientific_agent_replanner import ScientificAgentReplannerServic
 from ai4s_agent.scientific_agent_conversation import (
     ScientificAgentConversationSessionService,
 )
+from ai4s_agent.scientific_agent_result_projection import (
+    ScientificAgentResultProjectionService,
+)
 from ai4s_agent.scientific_agent_run_input_binding import (
     ScientificAgentRunInputBindingService,
     resolve_server_br1_deployment_identity,
@@ -158,6 +161,9 @@ def register_routes(
         projects=projects,
         profiles=resource_profiles,
     )
+    result_projection_service = ScientificAgentResultProjectionService(
+        projects=projects,
+    )
     project_memory = ProjectMemory(workspace_dir=workspace)
     llm_settings = LLMSettingsStore(workspace_dir=workspace, config_dir=user_config_dir)
     llm_providers = LLMProviderManager()
@@ -178,6 +184,9 @@ def register_routes(
     app.extensions["dataset_workflow_service"] = datasets
     app.extensions["literature_intake_service"] = literature_intakes
     app.extensions["remote_execution_lifecycle"] = remote_executions
+    app.extensions["scientific_agent_result_projection_service"] = (
+        result_projection_service
+    )
     harness_tracer, telemetry_health = build_harness_observability()
     app.extensions["harness_tracer"] = harness_tracer
     app.extensions["harness_telemetry_health"] = telemetry_health
@@ -280,6 +289,7 @@ def register_routes(
         execution_agent=execution_agent,
         input_binding_service=input_binding_service,
         resource_authority_service=app.extensions["remote_resource_authority_service"],
+        result_projection_service=result_projection_service,
     )
     register_scientific_agent_conversation_routes(
         app,

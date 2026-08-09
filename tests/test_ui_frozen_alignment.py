@@ -132,6 +132,9 @@ def test_conversation_is_the_scientific_agent_front_door(
     assert "function renderScientificAgentPlan(summary)" in html
     assert "确认执行" in html
     assert "function renderScientificAgentReviewProjection(projection)" in html
+    assert "function renderScientificAgentResultProjections(projections)" in html
+    assert 'data-review-kind="scientific-result"' in html
+    assert 'source.addEventListener("scientific_result.available"' in html
     assert "确认当前数据集" in html
     assert "renderDatasetReview" not in html
     assert "dataset-review-form" not in html

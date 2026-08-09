@@ -329,7 +329,7 @@ _BR1_TASK_IDS = [
 
 def _br1_plan_response() -> dict[str, Any]:
     registry = private_structured_dataset_real_tool_task_registry_v3()
-    return AgentExecutionPlanLLMResponse(
+    response = AgentExecutionPlanLLMResponse(
         requested_tool_ids=list(_BR1_TASK_IDS),
         selected_input_artifact_ids=[
             "uploaded_dataset",
@@ -353,6 +353,12 @@ def _br1_plan_response() -> dict[str, Any]:
         assumptions=[],
         questions=[],
     ).model_dump(mode="json")
+    # Exercise a non-default authorized evaluation top_n so the final result
+    # projection cannot silently fall back to its intermediate default.
+    response["task_options"]["evaluate_private_structured_dataset_canary_v1"][
+        "top_n"
+    ] = 2
+    return response
 
 
 def _stub_plan_provider() -> dict[str, Any]:
@@ -858,3 +864,43 @@ def test_br1_conversation_front_door_drives_synthetic_remote_chain(
     assert completed["session"]["reason_code"] == "RUN_SUCCEEDED"
     assert completed["session"]["proposal_id"] == identity["proposal_id"]
     assert completed["session"]["proposal_digest"] == identity["proposal_digest"]
+    results = completed["scientific_results"]
+    assert results[0]["task_type"] == "evaluate_private_structured_dataset_canary_v1"
+    assert results[0]["output_contract"] == "computational-top-n-v1"
+    assert results[0]["summary_statistics"]["top_n"] == 2
+    assert results[0]["summary_statistics"]["ranked_candidate_count"] <= 2
+    assert all(
+        item["task_type"] in {
+            "evaluate_private_structured_dataset_canary_v1",
+            "generate_private_reinvent4_v1",
+            "predict_private_unimol_v1",
+        }
+        for item in results
+    )
+    assert {
+        item["task_type"] for item in results[1:]
+    } == {
+        "generate_private_reinvent4_v1",
+        "predict_private_unimol_v1",
+    }
+    assert all(item["verification_status"] == "verified" for item in results)
+    assert all(
+        item["summary_statistics"]["candidate_count"] == 2
+        for item in results[1:]
+    )
+    safe_result_text = json.dumps(results, ensure_ascii=False).lower()
+    assert all(
+        private not in safe_result_text
+        for private in (
+            "remote-executions",
+            "outputs/committed",
+            "hostname",
+            "command",
+            "credential",
+        )
+    )
+    stream = client.get(endpoint + "/events?once=true")
+    assert stream.status_code == 200
+    stream_body = stream.get_data(as_text=True)
+    assert "event: scientific_result.available" in stream_body
+    assert "remote-executions" not in stream_body

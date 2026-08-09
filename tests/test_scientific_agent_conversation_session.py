@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -634,6 +635,53 @@ def test_remote_session_tick_refreshes_once_then_adopts_and_continues(
     assert execution_agent_calls == []
     assert completed_body["session"]["proposal_id"] == remote_state["proposal_id"]
     assert completed_body["session"]["controller_execution_id"] == remote_state["controller_execution_id"]
+
+
+def test_successful_execution_emits_safe_unavailable_result_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, state, controller_result = _start_waiting_gate_session(tmp_path, monkeypatch)
+    terminal_inspection = controller_result.inspection.model_copy(
+        update={
+            "status": AgentHarnessControllerStatus.SUCCEEDED,
+            "next_action": AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+        }
+    )
+    terminal_result = replace(controller_result, inspection=terminal_inspection)
+
+    def fail_projection(**_kwargs):
+        raise ValueError("tampered verified artifact")
+
+    monkeypatch.setattr(service, "_project_verified_results", fail_projection)
+    _result, updated, stop_reason = service._auto_progress(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        state=state,
+        controller_result=terminal_result,
+        provider=None,
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+
+    assert stop_reason == "terminal_success"
+    assert updated["status"] == "succeeded"
+    assert updated["reason_code"] == "RUN_SUCCEEDED"
+    assert updated["scientific_result_status"] == "unavailable"
+    assert updated["scientific_result_reason_code"] == (
+        "RESULT_PROJECTION_VERIFICATION_FAILED"
+    )
+    event = next(
+        item
+        for item in service.read_events(
+            project_id="conversation-project",
+            conversation_id="conversation-one",
+        )
+        if item["event_type"] == "scientific_result.unavailable"
+    )
+    assert event["data"]["scientific_result_reason_code"] == (
+        "RESULT_PROJECTION_VERIFICATION_FAILED"
+    )
+    assert "tampered verified artifact" not in json.dumps(event, ensure_ascii=False)
 
 
 def test_running_remote_stops_the_outer_auto_progress_loop(

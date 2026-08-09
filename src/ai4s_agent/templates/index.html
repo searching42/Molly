@@ -119,6 +119,7 @@
       .review-section div { min-width: 0; }
       .review-section dt { color: var(--muted); font-size: 0.72rem; font-weight: 900; text-transform: uppercase; }
       .review-section dd { margin: 0.1rem 0 0; color: #26363e; font-size: 0.86rem; line-height: 1.42; word-break: break-word; }
+      .result-candidate-list { margin: 0.65rem 0 0; padding-left: 1.35rem; color: #26363e; font-size: 0.86rem; line-height: 1.5; }
       .review-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.65rem; }
       .sr-status { margin-top: 0.55rem; color: var(--muted); font-size: 0.82rem; }
       .launch-warning { display: none; margin: 0; border: 1px solid rgba(165, 77, 22, 0.35); border-radius: var(--radius); padding: 0.9rem 1rem; background: rgba(244, 216, 189, 0.72); color: #5f2b0e; line-height: 1.45; }
@@ -1075,6 +1076,81 @@
         root.prepend(article);
       }
 
+      function renderScientificAgentResultProjections(projections) {
+        const root = document.getElementById("chat-review-artifacts");
+        if (!root) return;
+        root.querySelectorAll('[data-review-kind="scientific-result"]')
+          .forEach((item) => item.remove());
+        const items = Array.isArray(projections) ? projections : [];
+        if (!items.length) {
+          root.hidden = !root.childElementCount;
+          return;
+        }
+        root.hidden = false;
+        items.slice().reverse().forEach((projection) => {
+          const article = document.createElement("article");
+          article.className = "review-section scientific-result-card";
+          article.dataset.reviewKind = "scientific-result";
+          const heading = document.createElement("h3");
+          heading.textContent = projection.task_type === "evaluate_private_structured_dataset_canary_v1"
+            ? "Verified BR1 Computational Top-N"
+            : "Verified intermediate scientific evidence";
+          article.appendChild(heading);
+          const note = document.createElement("p");
+          note.className = "small";
+          note.textContent = "结果由服务端根据已验证 artifact 生成；对话模型不会创建或修改这些科学数值。";
+          article.appendChild(note);
+          const summary = projection.summary_statistics || {};
+          appendReviewSection(article, "ResultSummary", [
+            ["task type", projection.task_type],
+            ["candidate count", summary.candidate_count],
+            ["requested top-n", summary.top_n],
+            ["ranked top-n", summary.ranked_candidate_count],
+            ["score field", summary.score_field],
+            ["best score", summary.best_score],
+            ["worst score", summary.worst_score],
+          ], [
+            "verified",
+            String(projection.projection_id || ""),
+            String(projection.projection_digest || ""),
+          ]);
+          const candidateSection = document.createElement("section");
+          candidateSection.className = "review-section";
+          const candidateHeading = document.createElement("h4");
+          candidateHeading.textContent = `Top-${summary.top_n || "N"} candidates`;
+          candidateSection.appendChild(candidateHeading);
+          const candidateList = document.createElement("ol");
+          candidateList.className = "result-candidate-list";
+          (Array.isArray(projection.ranked_candidates) ? projection.ranked_candidates : [])
+            .forEach((candidate) => {
+              const item = document.createElement("li");
+              const score = candidate.score === undefined ? "" : String(candidate.score);
+              const smiles = candidate.canonical_smiles || candidate.smiles
+                ? ` · SMILES=${candidate.canonical_smiles || candidate.smiles}`
+                : "";
+              const ad = candidate.ad_ood_status ? ` · AD=${candidate.ad_ood_status}` : "";
+              item.textContent = `${candidate.candidate_id} · ${candidate.score_label}=${score}${smiles}${ad}`;
+              candidateList.appendChild(item);
+            });
+          if (!candidateList.childElementCount) {
+            const empty = document.createElement("li");
+            empty.textContent = "无已验证候选输出";
+            candidateList.appendChild(empty);
+          }
+          candidateSection.appendChild(candidateList);
+          article.appendChild(candidateSection);
+          appendReviewSection(article, "Evidence", [
+            ["source publication digest", projection.source_publication_sha256],
+            ["source artifacts", (projection.source_artifacts || []).map((item) => `${item.artifact_id} (${item.size_bytes} bytes)`)],
+            ["artifact digests", Object.entries(projection.artifact_digests || {}).map(([id, digest]) => `${id}: ${digest}`)],
+          ], ["artifact-registry-bound", "digest-verified"]);
+          appendReviewSection(article, "Scientific limitations", [
+            ["limitations", projection.scientific_limitations],
+          ], []);
+          root.prepend(article);
+        });
+      }
+
       function renderAgentReviewCard(card) {
         const root = document.getElementById("agent-review-card-output");
         if (!root) return;
@@ -1218,6 +1294,9 @@
           agentSessionEventCursor = Math.max(agentSessionEventCursor, Number(eventId) || 0);
         }
         const data = event?.data || {};
+        if (Array.isArray(data.scientific_results)) {
+          renderScientificAgentResultProjections(data.scientific_results);
+        }
         const message = String(data.message || "").trim();
         if (message) appendConversationMessage("system", message);
         if (context && data.reason_code === "REMOTE_EXECUTION_RUNNING") {
@@ -1233,6 +1312,9 @@
       function renderAgentSessionSnapshot(snapshot, context = null) {
         const session = snapshot || {};
         renderScientificAgentReviewProjection(session.review_projection);
+        renderScientificAgentResultProjections(
+          session.result_projections || session.scientific_results,
+        );
         if (session.run_id) {
           currentRunId = String(session.run_id);
           syncRunId(currentRunId);
@@ -1261,6 +1343,14 @@
           try { renderAgentSessionSnapshot(JSON.parse(event.data || "{}").snapshot, context); } catch (_err) {}
         });
         source.addEventListener("agent.status", (event) => {
+          if (!isConversationContextCurrent(context)) return;
+          try { renderAgentSessionEvent(JSON.parse(event.data || "{}"), context); } catch (_err) {}
+        });
+        source.addEventListener("scientific_result.available", (event) => {
+          if (!isConversationContextCurrent(context)) return;
+          try { renderAgentSessionEvent(JSON.parse(event.data || "{}"), context); } catch (_err) {}
+        });
+        source.addEventListener("scientific_result.unavailable", (event) => {
           if (!isConversationContextCurrent(context)) return;
           try { renderAgentSessionEvent(JSON.parse(event.data || "{}"), context); } catch (_err) {}
         });
@@ -1990,6 +2080,9 @@
           if (response.plan_summary) renderScientificAgentPlan(response.plan_summary);
           renderScientificAgentReviewProjection(
             response.review_projection || response.session?.review_projection,
+          );
+          renderScientificAgentResultProjections(
+            response.scientific_results || response.session?.result_projections,
           );
           renderAgentQuestions(agentQuestions);
           render(response);
