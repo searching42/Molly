@@ -89,6 +89,51 @@ def test_repository_entry_documents_define_current_authority_and_boundaries() ->
     assert "GitHub PR 编号从公开仓库重新开始" in roadmap
 
 
+def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
+    roadmap = (REPOSITORY_ROOT / "docs" / "roadmap.md").read_text(encoding="utf-8")
+
+    assert "### Roadmap checklist convention" in roadmap
+    assert "Checkbox 只表达 roadmap item 是否完成，不能代替 runtime evidence。" in roadmap
+    assert "Structured Dataset real-tool canary (BR1) |" not in roadmap
+    assert "Autonomy does not create authority. Autonomy only consumes already-valid authority." in roadmap
+    assert "The LLM must not be the sole authority deciding whether its own proposed change requires fresh authorization." in roadmap
+    assert "BR2 v1 does not enter training, generation, Top-N, or experimental validation." in roadmap
+
+    expected_items = (
+        "M3.5-BR1",
+        "M3.5-AUT-POLICY",
+        "M3.5-AUT-L1",
+        "M3.5-AUT-L2",
+        "M3.5-AUT-ACCEPT",
+        "M3.5-BR2-RUNTIME",
+        "M3.5-BR2-MAPPING",
+        "M3.5-BR2-ACCEPT",
+        "M3.5-UI",
+        "M3.5-V1-ACCEPT",
+    )
+    positions = []
+    for item in expected_items:
+        marker = f"**{item} —"
+        assert marker in roadmap
+        positions.append(roadmap.index(marker))
+    assert positions == sorted(positions)
+
+    assert "- [x] **M3.5-BR1 — Conversation-driven real BR1 acceptance**" in roadmap
+    assert "  - State: `DONE`" in roadmap
+    assert "  - Evidence: `I/T/V`" in roadmap
+    for target_pr in ("#45", "#46", "#47", "#48", "#49", "#50", "#51", "#52", "#53"):
+        assert f"Target PR: {target_pr}." in roadmap
+    for action_class in ("AUTO_CONTINUE", "REQUIRE_HUMAN", "PROHIBITED"):
+        assert f"`{action_class}`" in roadmap
+    for budget in (
+        "maximum autonomous transitions",
+        "maximum autonomous LLM calls",
+        "maximum remote dispatches allowed by the current authorization",
+        "maximum wall-clock continuation window",
+    ):
+        assert budget in roadmap
+
+
 def test_local_working_context_files_are_ignored_and_not_public_authority() -> None:
     ignored = {
         line.strip()
