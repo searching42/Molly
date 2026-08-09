@@ -7,7 +7,10 @@ import json
 import os
 import re
 import stat
-import tomllib
+try:  # Python 3.11+ ships the TOML parser in the standard library.
+    import tomllib
+except ImportError:  # pragma: no cover - exercised by Python 3.10 deployments.
+    import tomli as tomllib  # type: ignore[no-redef]
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
