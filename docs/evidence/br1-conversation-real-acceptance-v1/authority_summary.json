@@ -1,0 +1,17 @@
+{
+  "dataset_gate": {
+    "status": "not_reached",
+    "owner_approval_is_separate_from_gate": true
+  },
+  "input_binding": {
+    "eligible_bundle_count": 0,
+    "exact_owner_approval_required": true,
+    "server_side_resolution": "blocked",
+    "status": "BR1_INPUT_BUNDLE_REQUIRED"
+  },
+  "remote_resource_authority": {
+    "policy_digest": "sha256:929e2436cf4d3469f3ece8727ec4255c0cf95be93abc36e2c2566cc9927bb094",
+    "status": "not_evaluated_due_to_input_blocker"
+  },
+  "schema_version": "scientific_br1_real_conversation_authority_summary.v1"
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": "scientific_br1_real_conversation_reinvent4_template_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "template_sha256": "sha256:b0babb6e42e5706d124c0151702b4c2edd900372e6f34935e462a191f8afae5b",
+  "required_placeholders": [
+    "{{molly_output_csv}}",
+    "{{molly_seed}}"
+  ],
+  "required_placeholders_present": true,
+  "bundle_admission": "deferred_until_applicability_pass_and_exact_owner_approval",
+  "status": "template_verified_not_admitted"
+}

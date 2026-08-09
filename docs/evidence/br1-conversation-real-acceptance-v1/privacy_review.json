@@ -1,0 +1,13 @@
+{
+  "environment_locator_values_present": false,
+  "private_dataset_rows_present": false,
+  "raw_artifact_contents_present": false,
+  "raw_commands_present": false,
+  "raw_credentials_present": false,
+  "raw_generated_roster_present": false,
+  "raw_paths_present": false,
+  "raw_smiles_present": false,
+  "raw_worker_stdout_present": false,
+  "schema_version": "scientific_br1_real_conversation_privacy_review.v1",
+  "status": "pass"
+}

@@ -973,7 +973,12 @@ class DescriptorRemoteExecutionLifecycleService:
         return connection, profile
 
     def _run_submission_preflight(self, request: Any, connection: ConnectionProfile) -> None:
-        result = self.capability_probe.probe(connection.connection_id)
+        live_probe = getattr(self.capability_probe, "probe_live", None)
+        result = (
+            live_probe(connection.connection_id)
+            if callable(live_probe)
+            else self.capability_probe.probe(connection.connection_id)
+        )
         profile = self.profiles.resolve_execution_profile(request.execution_profile_id)
         if (
             result.status != "available"

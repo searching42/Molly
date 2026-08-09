@@ -1915,6 +1915,7 @@ class MollyWorker:
                 identity, sha256 = _descriptor_digest(descriptor)
                 if request.output_contract in {
                     "reinvent4-generation-output-v1",
+                    "reinvent4-generation-output-v2",
                     "unimol-prediction-output-v1",
                 } and media_type == "text/csv":
                     os.lseek(descriptor, 0, os.SEEK_SET)
@@ -2489,6 +2490,10 @@ for source_key, filename in (
     os.chmod(destination, 0o400)
 
 data_path = Path(payload["data_path"])
+prediction_data_path = scratch_path / "prediction-data.csv"
+with data_path.open("rb") as source, prediction_data_path.open("xb") as destination:
+    shutil.copyfileobj(source, destination)
+os.chmod(prediction_data_path, 0o400)
 with data_path.open("r", encoding="utf-8", newline="") as handle:
     rows = list(csv.DictReader(handle))
 if not rows:
@@ -2505,7 +2510,9 @@ if (
 
 from unimol_tools import MolPredict
 
-predicted = MolPredict(load_model=str(model_dir)).predict(data=str(data_path))
+predicted = MolPredict(load_model=str(model_dir)).predict(
+    data=str(prediction_data_path)
+)
 values = list(predicted.reshape(-1))
 if len(values) != len(candidate_ids):
     raise RuntimeError("Uni-Mol prediction result roster mismatch")
@@ -2513,7 +2520,8 @@ output = Path(payload["predictions_output"])
 with output.open("x", encoding="utf-8", newline="") as handle:
     writer = csv.writer(handle, lineterminator="\n")
     writer.writerow(["candidate_id", "predicted_value"])
-    for candidate_id, value in zip(candidate_ids, values, strict=True):
+    for index, candidate_id in enumerate(candidate_ids):
+        value = values[index]
         numeric = float(value)
         if not __import__("math").isfinite(numeric):
             raise RuntimeError("Uni-Mol prediction is not finite")

@@ -1,0 +1,57 @@
+{
+  "schema_version": "scientific_br1_real_conversation_acceptance_evidence.v1",
+  "status": "succeeded",
+  "project_id": "br1-real-acceptance-20260809-v11",
+  "run_id": "br1-real-run-20260809-v11",
+  "claim_boundary": "The v11 real conversation run completed the verified BR1 computational workflow and emitted one server-generated scientific result projection. The projection reports model-ranked predicted values only; it makes no experimental, synthesis, or performance guarantee claim.",
+  "front_door": {
+    "natural_language_goal_submitted": true,
+    "server_side_input_resolution_attempted": true,
+    "sole_eligible_bundle_auto_bound": true,
+    "browser_input_binding_api_called": false,
+    "browser_remote_authority_api_called": false,
+    "status": "completed"
+  },
+  "owner_authority": {
+    "owner_id": "searching42",
+    "decision": "ACCEPT_EXACT_PROPOSAL",
+    "decision_status": "APPROVED",
+    "proposal_digest": "sha256:37047d987bb57542f5fbad04b7f550b614ebf5aca0e15de55834a14516d8c926"
+  },
+  "preflight": {
+    "status": "PASS",
+    "input_row_count": 1999,
+    "supported_row_count": 1999,
+    "unsupported_row_count": 0,
+    "unresolved_row_count": 0,
+    "elapsed_seconds": 824.0,
+    "swap_bytes": 0
+  },
+  "dispatch_counts": {
+    "training": 1,
+    "generation": 1,
+    "prediction": 1
+  },
+  "terminal_result": {
+    "task_type": "evaluate_private_structured_dataset_canary_v1",
+    "result_kind": "computational_top_n",
+    "projection_id": "result-054adbf946ce441dabf477d222965031",
+    "projection_digest": "sha256:53ea970ceb890a39217151e406d268834fa7740787811591690b26a24fc7cae7",
+    "requested_top_n": 3,
+    "returned_top_n": 3,
+    "verified_candidate_count": 6,
+    "sse_event_type": "scientific_result.available"
+  },
+  "restart_replay": {
+    "status": "verified",
+    "evidence_run_id": "br1-real-restart-run-20260809-v1",
+    "duplicate_dispatch_check": "pass"
+  },
+  "privacy_review": "pass",
+  "control_plane_commit": "15a4365fb6597a231cbff5b083af23ad8b783c32",
+  "ci_status": {
+    "snapshot_policy": "external_to_immutable_acceptance_snapshot",
+    "authoritative_source": "PR #43 / GitHub Actions",
+    "pull_request_label_policy": "full-ci_label_not_required"
+  }
+}

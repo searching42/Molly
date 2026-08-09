@@ -1,0 +1,40 @@
+{
+  "schema_version": "scientific_br1_real_conversation_result_summary.v1",
+  "status": "verified",
+  "scientific_result_status": "available",
+  "final_result_kind": "computational_top_n",
+  "final_task_type": "evaluate_private_structured_dataset_canary_v1",
+  "output_contract": "computational-top-n-v1",
+  "projection_event": "scientific_result.available",
+  "projection_generated": true,
+  "projection_status": "verified",
+  "projection_id": "result-054adbf946ce441dabf477d222965031",
+  "projection_digest": "sha256:53ea970ceb890a39217151e406d268834fa7740787811591690b26a24fc7cae7",
+  "source_publication_digest": "sha256:34482ad59a574dfe6932ee67fc72de5044713c783925a3222a1f08f42fa90a07",
+  "source_artifact_count": 5,
+  "source_artifacts": [
+    "candidate_validation",
+    "computational_top_n",
+    "prediction_publication",
+    "ranking_publication",
+    "structured_dataset_canary_evidence"
+  ],
+  "verified_candidate_count": 6,
+  "requested_top_n": 3,
+  "returned_top_n": 3,
+  "ranking": {
+    "score_field": "predicted_property",
+    "direction": "descending",
+    "top_scores": [
+      0.766931,
+      0.452630,
+      0.283465
+    ]
+  },
+  "scientific_limitations": [
+    "Values are model predictions from the verified deterministic evaluation task, not experimental measurements.",
+    "The ranking is bound to the verified model, validation, ranking, and evidence publications.",
+    "Computational Top-N does not guarantee synthesis success, experimental performance, or applicability outside the verified scope."
+  ],
+  "raw_artifact_disclosure": "none"
+}

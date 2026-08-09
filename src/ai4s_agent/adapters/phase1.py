@@ -15,7 +15,10 @@ import subprocess
 import statistics
 import sys
 import tempfile
-import tomllib
+try:  # Python 3.11+ ships the TOML parser in the standard library.
+    import tomllib
+except ImportError:  # pragma: no cover - exercised by Python 3.10 deployments.
+    import tomli as tomllib  # type: ignore[no-redef]
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path, PurePosixPath

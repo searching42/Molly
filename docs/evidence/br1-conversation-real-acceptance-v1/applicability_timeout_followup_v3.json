@@ -1,0 +1,45 @@
+{
+  "schema_version": "scientific_br1_real_conversation_applicability_timeout_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "execution_profile_id": "unimol-train-br1-v2",
+  "expected_provider_version": "0.1.5",
+  "control_plane_commit": "ce1f4b6e0c849e6037dd3dc42944dccde7284557",
+  "worker_implementation_digest": "sha256:1445ee01fbb3748caea3ddf889726df48ad36d49e0bfb66b3d079d93d6f3aa72",
+  "full_preflight": {
+    "input_row_count": 1999,
+    "status": "NOT_COMPLETED_WITHIN_BOUNDED_WINDOW",
+    "bounded_window_minutes": 8,
+    "phase": "provider_preprocessing",
+    "new_summary_written": false,
+    "new_report_accepted": false,
+    "previous_blocked_summary_reused": false
+  },
+  "aggregate_benchmarks": [
+    {
+      "row_count": 1,
+      "supported_count": 1,
+      "status": "SUPPORTED"
+    },
+    {
+      "row_count": 100,
+      "supported_count": 100,
+      "elapsed_seconds": 12.17,
+      "status": "SUPPORTED"
+    },
+    {
+      "row_count": 500,
+      "supported_count": 500,
+      "elapsed_seconds": 61.93,
+      "status": "SUPPORTED"
+    }
+  ],
+  "side_effects": {
+    "training_dispatch_count": 0,
+    "generation_dispatch_count": 0,
+    "prediction_dispatch_count": 0,
+    "controller_execution_created": false,
+    "owner_approval_created": false
+  },
+  "claim_boundary": "The provider adapter works on bounded samples, but the full applicability report did not complete; no PASS, freeze, owner approval, or scientific acceptance is claimed.",
+  "status": "blocked_at_full_preflight_completion"
+}

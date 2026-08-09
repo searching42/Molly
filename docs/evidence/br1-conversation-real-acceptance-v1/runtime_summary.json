@@ -1,0 +1,34 @@
+{
+  "schema_version": "scientific_br1_real_conversation_runtime_summary.v1",
+  "status": "succeeded",
+  "session_status": "succeeded",
+  "project_id": "br1-real-acceptance-20260809-v11",
+  "conversation_id": "br1-real-conversation-20260809-v11",
+  "run_id": "br1-real-run-20260809-v11",
+  "session_revision": 34,
+  "input_bundle_id": "br1-input-bundle-v1",
+  "input_binding_digest": "sha256:a7532b59146cf09ac9c565fdb347191ee7aef86d1bfb3cf85cdbec9498e68f40",
+  "proposal_id": "proposal-b40ab21ce8c8bb59f9e491fa830e817c",
+  "proposal_digest": "sha256:911962b287c8c68ce01a13ef2ac24b7a591a02b8f5988d7439f871bbe05b3d64",
+  "authorization_id": "authorization-101c43079b59d8af266cc1c68c3f1fe5",
+  "start_intent_id": "start-intent-de5855fb3aa8460fb95e2dbbaa9ee16f",
+  "controller_execution_id": "controller-114c7f99a86658069dae767f465c9768",
+  "controller_execution_digest": "sha256:114c7f99a86658069dae767f465c97680f7aa02b6e71df8bbe148e6b71c190df",
+  "controller_status": "succeeded",
+  "reason_code": "RUN_SUCCEEDED",
+  "current_task_id": "evaluate_private_structured_dataset_canary_v1",
+  "result_projection_count": 1,
+  "result_projection_id": "result-054adbf946ce441dabf477d222965031",
+  "result_projection_digest": "sha256:53ea970ceb890a39217151e406d268834fa7740787811591690b26a24fc7cae7",
+  "requested_top_n": 3,
+  "returned_top_n": 3,
+  "review_projection_at_terminal": {},
+  "sse_events": [
+    {
+      "event_type": "scientific_result.available",
+      "transport_event": "agent.status",
+      "durable": true,
+      "count": 1
+    }
+  ]
+}

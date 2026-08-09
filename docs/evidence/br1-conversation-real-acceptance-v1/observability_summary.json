@@ -1,0 +1,31 @@
+{
+  "schema_version": "scientific_br1_real_conversation_observability_summary.v1",
+  "status": "verified",
+  "conversation_event_correlation": {
+    "durable_event_type": "scientific_result.available",
+    "transport_event": "agent.status",
+    "event_count": 1,
+    "status": "available"
+  },
+  "projection_replay": {
+    "projection_id": "result-054adbf946ce441dabf477d222965031",
+    "first_digest": "sha256:53ea970ceb890a39217151e406d268834fa7740787811591690b26a24fc7cae7",
+    "replay_digest": "sha256:53ea970ceb890a39217151e406d268834fa7740787811591690b26a24fc7cae7",
+    "identical": true
+  },
+  "privacy_scan": {
+    "absolute_path": false,
+    "host_information": false,
+    "commands": false,
+    "credentials": false,
+    "raw_artifact_contents": false,
+    "status": "pass"
+  },
+  "langsmith": {
+    "external_trace": false,
+    "status": "not_applicable_stub_provider"
+  },
+  "otel": {
+    "status": "not_required_for_acceptance"
+  }
+}

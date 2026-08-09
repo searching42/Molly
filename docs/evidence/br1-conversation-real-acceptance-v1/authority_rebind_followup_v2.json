@@ -1,0 +1,31 @@
+{
+  "schema_version": "scientific_br1_real_conversation_authority_rebind_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "control_plane_commit": "ce1f4b6e0c849e6037dd3dc42944dccde7284557",
+  "worker_implementation_digest": "sha256:1445ee01fbb3748caea3ddf889726df48ad36d49e0bfb66b3d079d93d6f3aa72",
+  "execution_profile_id": "unimol-train-br1-v2",
+  "execution_profile_digest": "sha256:8d700004761bcac419ef853828607a4ebad47a88892be22624ec551e52246ac5",
+  "expected_provider_version": "0.1.5",
+  "source_publication_id": "br1-real-acceptance-20260809-v2-source-v1",
+  "source_publication_registry_id": "br1-real-acceptance-20260809-v2-registry-v1",
+  "materialization": {
+    "status": "MATERIALIZED",
+    "input_row_count": 1999,
+    "raw_dataset_digest": "sha256:d7266617d2aa079ae71839fdee0fe8f8b54a3bad02b177b3257262d5a0f82643",
+    "mapping_policy_digest": "sha256:0f58c28e37f436c77fd167577cdc88e0966fcd816e5afa1e0b94e314b63a6912",
+    "canonical_provider_input_digest": "sha256:d8770caf126c68c5b81788d256b985e7d72d60b6bfcbc7b82ca3fc790d8e2da5",
+    "canonical_source_digest": "sha256:c7640d4bf0e3682a362aca5c9b128624c3e66e8170cf99afa98971aeb5da7580",
+    "source_manifest_digest": "sha256:a494807bd5c6d1771f89829e63d57d272f707a28c7f1936b8598519a9b11f6fc",
+    "source_materialization_binding_digest": "sha256:00c1c603bcb096bc8d0795e7e387f30490e44ef359d59ad403e0ba7ae28a4b8d",
+    "source_publication_digest": "sha256:802c1c54cd31906ed2d351a49aa838c31e78c464647a3a660518f7c17e44eca0",
+    "source_publication_registry_digest": "sha256:71b24b372bc7eb21a9053158a64932110e1ebc45465e16222991f2b408bbdc5d",
+    "source_authority_digest": "sha256:272d7d2f2a2144212486ce3b0c31f780b352e34816ea5d214480551032fdb6f3"
+  },
+  "owner_approval": {
+    "freeze_package_created": false,
+    "proposal_created": false,
+    "exact_approval_created": false
+  },
+  "claim_boundary": "Deployment-bound source authority was materialized, but applicability did not pass and no acceptance bundle was admitted.",
+  "status": "rebound_but_not_eligible"
+}

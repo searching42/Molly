@@ -61,10 +61,11 @@ def _prepared_reinvent_worker(
     tmp_path: Path,
     *,
     template_payload: bytes | None = None,
+    profile_id: str = "reinvent4-cpu-v1",
 ) -> tuple[MollyWorker, Any, Any, dict[str, bytes]]:
     settings = _worker_settings(tmp_path)
     worker = MollyWorker(settings)
-    profile = EXECUTION_PROFILES["reinvent4-cpu-v1"]
+    profile = EXECUTION_PROFILES[profile_id]
     connection = _connection()
     source = tmp_path / "source"
     source.mkdir()
@@ -293,6 +294,43 @@ def test_stage_verify_execute_publish_and_fetch_are_content_bound(
             sha256=artifact.sha256,
             destination=io.BytesIO(),
         )
+
+
+def test_build_publication_v2_reads_reinvent4_csv_for_content_verification(
+    tmp_path: Path,
+) -> None:
+    worker, request, approval, _ = _prepared_reinvent_worker(
+        tmp_path,
+        profile_id="reinvent4-br1-v2",
+    )
+    candidates = worker.store.output_path(request.request_id, "candidates.csv")
+    candidates.write_bytes(b"SMILES,SMILES_state,NLL\nCC,1,0.5\n")
+    os.chmod(candidates, 0o600)
+    audit = worker.store.output_path(request.request_id, "generation_audit.json")
+    audit.write_text(
+        json.dumps(
+            {
+                "schema_version": "reinvent4_generation_audit.v1",
+                "remote_request": request.model_dump(mode="json"),
+                "request_id": request.request_id,
+                "request_sha256": request.request_sha256,
+                "input_manifest_sha256": request.input_manifest.manifest_sha256,
+                "effective_config_digest": "sha256:" + "a" * 64,
+                "provider_version": "4.7.15",
+                "seed": 7,
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(audit, 0o600)
+
+    publication = worker._build_publication(request, approval)
+
+    assert publication.output_contract == "reinvent4-generation-output-v2"
+    assert {item.artifact_id for item in publication.artifacts} == {
+        "reinvent4_candidates",
+        "reinvent4_generation_audit",
+    }
 
 
 @pytest.mark.pr_fast
@@ -748,6 +786,96 @@ def test_unimol_prediction_consumes_exact_model_directory_artifacts(
         "unimol_prediction_audit",
         "unimol_predictions",
     ]
+
+
+def test_unimol_prediction_runner_materializes_named_csv_input(
+    tmp_path: Path,
+) -> None:
+    assert "strict=True" not in molly_worker_module._UNIMOL_PREDICTION_RUNNER
+    provider_root = tmp_path / "provider"
+    package = provider_root / "unimol_tools"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        """
+from pathlib import Path
+
+
+class _Prediction:
+    def reshape(self, *_shape):
+        return [0.5]
+
+
+class MolPredict:
+    def __init__(self, *, load_model):
+        self.load_model = load_model
+
+    def predict(self, *, data):
+        path = Path(data)
+        assert path.suffix == ".csv"
+        assert path.read_text(encoding="utf-8") == "candidate_id,smiles\\ncandidate-1,CC\\n"
+        return _Prediction()
+""",
+        encoding="utf-8",
+    )
+    data_path = tmp_path / "descriptor-3"
+    data_path.write_text(
+        "candidate_id,smiles\ncandidate-1,CC\n",
+        encoding="utf-8",
+    )
+    model_config = tmp_path / "config.yaml"
+    model_config.write_text("task: regression\n", encoding="utf-8")
+    model_weights = tmp_path / "model_0.pth"
+    model_weights.write_bytes(b"weights")
+    target_scaler = tmp_path / "target_scaler.ss"
+    target_scaler.write_bytes(b"scaler")
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    output = tmp_path / "predictions.csv"
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "data_path": str(data_path),
+                "model_config_path": str(model_config),
+                "model_weights_path": str(model_weights),
+                "target_scaler_path": str(target_scaler),
+                "predictions_output": str(output),
+                "scratch_path": str(scratch),
+                "config": {
+                    "candidate_id_col": "candidate_id",
+                    "gpu_device": 0,
+                    "smiles_col": "smiles",
+                    "target_property": "PLQY",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner = tmp_path / "run_unimol_prediction.py"
+    runner.write_text(
+        molly_worker_module._UNIMOL_PREDICTION_RUNNER,
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(provider_root), environment.get("PYTHONPATH", "")]
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(runner), str(request)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert output.read_text(encoding="utf-8") == (
+        "candidate_id,predicted_value\ncandidate-1,0.5\n"
+    )
+    assert (scratch / "prediction-data.csv").read_text(encoding="utf-8") == (
+        "candidate_id,smiles\ncandidate-1,CC\n"
+    )
 
 
 @pytest.mark.pr_fast

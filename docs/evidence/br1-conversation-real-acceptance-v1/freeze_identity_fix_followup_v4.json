@@ -1,0 +1,22 @@
+{
+  "schema_version": "scientific_br1_real_conversation_freeze_identity_fix_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "proven_blocker": "The freeze CLI default compared a fresh PASS report against stale historical raw/source identities.",
+  "fix": {
+    "module": "src/ai4s_agent/br1_acceptance_readiness.py",
+    "behavior": "When no explicit expected_stable_identities are supplied, live freeze now derives stable raw/source/provider identities from the already verified current report and raw bytes.",
+    "explicit_identity_mismatch_check": "preserved",
+    "historical_identity_constant": "retained_for_explicit_historical_callers"
+  },
+  "verification": {
+    "focused_tests_passed": 12,
+    "selection": [
+      "tests/test_br1_acceptance_readiness.py",
+      "tests/test_br1_conversation_runtime_bridge.py"
+    ],
+    "compileall": "pass",
+    "git_diff_check": "pass",
+    "live_cli_freeze": "FROZEN_WAITING_OWNER"
+  },
+  "status": "PROVEN_BLOCKER_FIXED"
+}

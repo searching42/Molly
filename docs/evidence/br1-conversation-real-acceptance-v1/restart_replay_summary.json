@@ -1,0 +1,34 @@
+{
+  "schema_version": "scientific_br1_real_conversation_restart_replay_summary.v1",
+  "status": "verified",
+  "restart_continuation": "verified",
+  "same_request_replayed": true,
+  "verification_scope": "one real training remote stage",
+  "project_id": "br1-real-restart-20260809-v1",
+  "run_id": "br1-real-restart-run-20260809-v1",
+  "control_plane_restart_count": 1,
+  "worker_completed_while_control_plane_down": true,
+  "publication_verified_after_restart": true,
+  "controller_execution_id": "controller-1f98f41638fbeed89f06e320dbd56962",
+  "controller_execution_digest_before_restart": "sha256:1f98f41638fbeed89f06e320dbd5696206a5cd428bc2ec44f5ce38e2c6b15592",
+  "controller_execution_digest_after_restart": "sha256:1f98f41638fbeed89f06e320dbd5696206a5cd428bc2ec44f5ce38e2c6b15592",
+  "remote_request_id": "remote-67e9767b20fdc7630f0cc73618fd3415",
+  "remote_request_sha256": "sha256:6ab014040739a94eb20e09569f1bf3f1d504c792a19ef6bc86061e3ce857d918",
+  "controller_actions_after_restart": [
+    {
+      "action_kind": "refresh_remote_task",
+      "dispatch_occurred": false,
+      "receipt_digest": "sha256:5ad0324f794d35c9f0d2c691a7dd24e21af9832da5040d04de426ca0d268562b"
+    },
+    {
+      "action_kind": "adopt_remote_outputs",
+      "dispatch_occurred": false,
+      "receipt_digest": "sha256:591c989e42a9a891d87d1e1cbc23643aaee06ffda17934ed23377d75da96cdf9"
+    }
+  ],
+  "dispatch_count_before_restart": 1,
+  "dispatch_count_after_restart": 1,
+  "duplicate_dispatch_check": "pass",
+  "post_restart_progression": "model_packaged_then_generation_gate",
+  "scientific_result_projection": "not_in_scope_for_this_canary"
+}

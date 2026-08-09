@@ -1,0 +1,19 @@
+{
+  "schema_version": "scientific_br1_real_conversation_validation_summary.v1",
+  "compileall": "pass",
+  "git_diff_check": "pass",
+  "focused_tests": {
+    "status": "pass",
+    "passed": 59,
+    "selection": [
+      "tests/test_repository_privacy.py",
+      "tests/test_scientific_agent_conversation_session.py",
+      "tests/test_br1_acceptance_readiness.py"
+    ]
+  },
+  "ci_status": {
+    "snapshot_policy": "external_to_immutable_acceptance_snapshot",
+    "authoritative_source": "PR #43 / GitHub Actions",
+    "pull_request_label_policy": "full-ci_label_not_required"
+  }
+}

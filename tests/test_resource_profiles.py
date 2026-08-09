@@ -712,6 +712,38 @@ def test_capability_probe_uses_only_fixed_worker_probe_command(tmp_path: Path) -
     assert store.get_last_probe("compute-worker-main") == result
 
 
+def test_live_capability_probe_does_not_replace_authority_bound_snapshot(
+    tmp_path: Path,
+) -> None:
+    store = ResourceProfileStore(
+        workspace_dir=tmp_path / "workspace",
+        config_dir=tmp_path / "config",
+    )
+    store.save_connection(_connection())
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                {
+                    "hostname": "compute-worker-main",
+                    "capabilities": ["reinvent4", "cpu"],
+                    "details": {"cpu_threads": 32},
+                }
+            ).encode("utf-8"),
+            stderr=b"",
+        )
+
+    service = CapabilityProbeService(store=store, runner=runner)
+    persisted = service.probe("compute-worker-main")
+    live = service.probe_live("compute-worker-main")
+
+    assert live.status == "available"
+    assert live != persisted
+    assert store.get_last_probe("compute-worker-main") == persisted
+
+
 def test_capability_probe_fails_closed_on_hostname_mismatch_and_redacts_stderr(
     tmp_path: Path,
 ) -> None:

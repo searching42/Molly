@@ -1198,6 +1198,26 @@ class CapabilityProbeService:
         self.runner = runner
 
     def probe(self, connection_id: str) -> CapabilityProbeResult:
+        return self._probe(connection_id, persist=True)
+
+    def probe_live(self, connection_id: str) -> CapabilityProbeResult:
+        """Probe the worker without replacing an authority-bound snapshot.
+
+        Authority publication records the server-owned probe digest.  A
+        dispatch-time liveness check must not rewrite that snapshot between
+        authority verification and execution; doing so would make an
+        otherwise unchanged authority appear stale solely because its
+        ``checked_at`` changed.
+        """
+
+        return self._probe(connection_id, persist=False)
+
+    def _probe(
+        self,
+        connection_id: str,
+        *,
+        persist: bool,
+    ) -> CapabilityProbeResult:
         profile = self.store.get_connection(connection_id)
         if not profile.enabled:
             raise ValueError("connection profile is disabled")
@@ -1235,7 +1255,7 @@ class CapabilityProbeService:
                 checked_at=checked_at,
                 error_code="probe_transport_failed",
             )
-            return self.store.save_probe(result)
+            return self.store.save_probe(result) if persist else result
         stdout = bytes(completed.stdout or b"")
         if completed.returncode == 255:
             result = CapabilityProbeResult(
@@ -1245,7 +1265,7 @@ class CapabilityProbeService:
                 checked_at=checked_at,
                 error_code="probe_transport_failed",
             )
-            return self.store.save_probe(result)
+            return self.store.save_probe(result) if persist else result
         if completed.returncode != 0 or not stdout or len(stdout) > _MAX_PROBE_BYTES:
             result = CapabilityProbeResult(
                 connection_id=profile.connection_id,
@@ -1254,7 +1274,7 @@ class CapabilityProbeService:
                 checked_at=checked_at,
                 error_code="probe_response_unavailable",
             )
-            return self.store.save_probe(result)
+            return self.store.save_probe(result) if persist else result
         try:
             payload = json.loads(stdout.decode("utf-8"))
             if not isinstance(payload, dict):
@@ -1275,7 +1295,7 @@ class CapabilityProbeService:
                 checked_at=checked_at,
                 error_code="probe_response_invalid",
             )
-            return self.store.save_probe(result)
+            return self.store.save_probe(result) if persist else result
         status_value: Literal["available", "mismatch"] = (
             "available" if hostname == profile.expected_hostname else "mismatch"
         )
@@ -1289,7 +1309,7 @@ class CapabilityProbeService:
             details=details,
             error_code="" if status_value == "available" else "hostname_mismatch",
         )
-        return self.store.save_probe(result)
+        return self.store.save_probe(result) if persist else result
 
 
 @dataclass(frozen=True)

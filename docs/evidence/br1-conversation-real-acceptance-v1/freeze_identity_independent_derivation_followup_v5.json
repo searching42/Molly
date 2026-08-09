@@ -1,0 +1,58 @@
+{
+  "schema_version": "scientific_br1_real_conversation_freeze_identity_independent_derivation_followup.v1",
+  "acceptance_id": "br1-real-acceptance-20260809-v2",
+  "preflight_report_digest": "sha256:fc4a060583b63609c10f83d093d620db7c4d04f09b1a3b23123ae706cba00cd6",
+  "proven_blocker": "The default live freeze path self-compared report-provided canonical source/provider digests instead of independently deriving them from the current Raw bytes.",
+  "fix": {
+    "module": "src/ai4s_agent/br1_acceptance_readiness.py",
+    "shared_parser": "ai4s_agent.structured_dataset_confirmation._read_csv",
+    "canonical_serializers": [
+      "canonical_source_dataset_bytes",
+      "canonical_provider_input_bytes"
+    ],
+    "live_expected_identities": "Derived from the exact stable Raw bytes read by freeze",
+    "actual_identities": "Observed canonical identities from the verified report",
+    "explicit_identity_mode": "Preserved for historical/trusted expected_stable_identities callers"
+  },
+  "adversarial_tests": {
+    "forged_canonical_source_digest": "re-signed report and exact summary rejected",
+    "forged_canonical_provider_digest": "re-signed observed/staged/provider-actual identities and exact summary rejected",
+    "status": "pass"
+  },
+  "verification": {
+    "compileall": "pass",
+    "git_diff_check": "pass",
+    "focused_tests_passed": 14,
+    "focused_test_selection": [
+      "tests/test_br1_acceptance_readiness.py",
+      "tests/test_br1_conversation_runtime_bridge.py"
+    ],
+    "pr_fast": {
+      "status": "pass",
+      "passed": 1224,
+      "deselected": 5604,
+      "elapsed_seconds": 150.8,
+      "selection": "(unit and not slow) or pr_fast"
+    }
+  },
+  "regenerated_freeze": {
+    "package_id": "br1-real-acceptance-20260809-v2-freeze-v2",
+    "package_digest": "sha256:6af7a5e844a4852b5b15681970b05e91e770b9929d40322f872905b0794ba652",
+    "proposal_id": "br1-real-acceptance-20260809-v2-owner-proposal-v2",
+    "proposal_digest": "sha256:17a04dd465587963355da86791f3edaa9fc9a675a5a1bc97fb4c321e34ee756b",
+    "status": "FROZEN_WAITING_OWNER",
+    "private_package_permissions": {
+      "directory": "0700",
+      "files": "0400"
+    }
+  },
+  "authority_boundary": {
+    "owner_approval_created": false,
+    "reinvent4_template_admitted": false,
+    "eligible_bundle_count_verified": false,
+    "new_conversation_run_started": false,
+    "full_preflight_rerun": false,
+    "full_ci_triggered": false
+  },
+  "status": "FIXED_WAITING_EXACT_OWNER_APPROVAL"
+}
