@@ -164,7 +164,7 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Evidence: `I/T/V`
   - Dependency: after `M3.5-AUT-L2`.
   - Target PR: #48.
-  - Definition of Done: representative bounded-autonomy, fail-closed, replay, restart, duplicate-dispatch, budget, and adversarial cases pass on exact reviewed code and preserve the existing authority chain. The formal runner passes all 16 versioned scenarios on acceptance-code HEAD `358eed6da5aed2a6fb83e73c783f9ee40d8afbac`, including one separate-Python-process L2 restart/replay path; checked-in evidence is control-plane-only and privacy-safe.
+  - Definition of Done: representative bounded-autonomy, fail-closed, replay, restart, duplicate-dispatch, concurrent-replan, budget, and adversarial cases pass on exact reviewed code and preserve the existing authority chain. The formal runner passes all 16 versioned scenarios on acceptance-code HEAD `45fe085c4edead8c138e679cc186571cbca86475`, including one separate-Python-process L2 restart/replay path and one concurrent `/replan` reconciliation path; checked-in evidence is control-plane-only and privacy-safe.
   - Closed by: PR #48, [acceptance README](evidence/autonomy-l1-l2-acceptance-v1/README.md), [manifest](evidence/autonomy-l1-l2-acceptance-v1/acceptance_manifest.json), [scenario matrix](evidence/autonomy-l1-l2-acceptance-v1/scenario_matrix.json), [restart/replay summary](evidence/autonomy-l1-l2-acceptance-v1/restart_replay_summary.json), and [authority-boundary summary](evidence/autonomy-l1-l2-acceptance-v1/authority_boundary_summary.json).
 
 - [ ] **M3.5-BR2-RUNTIME — Real MinerU runtime closure**

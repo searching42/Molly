@@ -1,5 +1,5 @@
 {
-  "acceptance_code_head": "358eed6da5aed2a6fb83e73c783f9ee40d8afbac",
+  "acceptance_code_head": "45fe085c4edead8c138e679cc186571cbca86475",
   "scenario_roster_digest": "sha256:fb3d46268c924d061e34471b1f30559c5c7a1c50504a62641233b3c5de49325d",
   "scenarios": [
     {
@@ -251,6 +251,9 @@
     },
     {
       "authority_preserved": true,
+      "concurrent_provider_calls": 1,
+      "concurrent_replan": true,
+      "concurrent_successor_count": 1,
       "duplicate_successor": false,
       "expected_boundary": "REPLAY",
       "observed_reason_codes": [
@@ -268,6 +271,7 @@
       "scenario_id": "AUT-A15",
       "status": "PASS",
       "test_adapter": "tests/test_scientific_agent_replanner.py::test_application_recovers_successor_published_before_receipt",
+      "test_adapter_2": "tests/test_autonomy_acceptance_runtime.py::test_l2_concurrent_material_replan_publishes_one_successor",
       "title": "L2 provider and successor crash-window replay"
     },
     {

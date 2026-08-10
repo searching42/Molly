@@ -17,9 +17,11 @@ store paths. It uses only deterministic external-edge doubles (stub LLM,
 synthetic remote lifecycle, injected clock, and fault injection). One L2
 crash/replay scenario crosses separate Python processes; PR #43 remains the
 complementary evidence for the real BR1 remote restart substrate.
+The L2 replay scenario also drives two near-concurrent `/replan` requests and
+verifies one provider call and one successor publication.
 
 The acceptance code was frozen at
-`358eed6da5aed2a6fb83e73c783f9ee40d8afbac`; after that freeze, only this
+`45fe085c4edead8c138e679cc186571cbca86475`; after that freeze, only this
 evidence projection, its contract checks, and the roadmap were finalized. The
 final evidence commit is recorded in the pull request body.
 
