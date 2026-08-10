@@ -38,6 +38,8 @@ EXECUTION_AGENT_PUBLICATION_MANIFEST_VERSION = (
     "execution_agent_publication_manifest.v1"
 )
 EXECUTION_AGENT_VERIFICATION_VERSION = "execution_agent_publication_verification.v1"
+EXECUTION_AGENT_L1_BUDGET_ANCHOR_VERSION = "execution_agent_l1_budget_anchor.v1"
+_EXECUTION_AGENT_L1_BUDGET_ANCHOR_ROOT = "agent_execution_agent_l1_budget_epochs"
 _MAX_EXECUTION_AGENT_BYTES = 16 * 1024 * 1024
 
 
@@ -501,6 +503,241 @@ class ExecutionAgentStore:
         )
         return [receipt] if receipt is not None else []
 
+    def count_llm_calls_for_controller_execution(
+        self,
+        *,
+        project_id: str,
+        controller_execution_id: str,
+    ) -> int:
+        """Count provider-call checkpoints for one exact execution.
+
+        The request collection is immutable evidence of the external-call
+        boundary.  A started checkpoint is counted even when its outcome is
+        unknown or its response is invalid; callers must therefore fail closed
+        rather than treating an incomplete request as unused budget.
+        """
+
+        project = _safe_scope_id(project_id, field="project_id")
+        execution_id = _safe_scope_id(
+            controller_execution_id,
+            field="controller_execution_id",
+        )
+        anchor = self._read_l1_budget_anchor(
+            project_id=project,
+            controller_execution_id=execution_id,
+        )
+        root = self._nested_scope_root(
+            project_id=project,
+            root_name="agent_execution_agent_requests",
+            scope_id=execution_id,
+            create=False,
+        )
+        if root is None:
+            if anchor is not None:
+                raise ExecutionAgentStoreVerificationError(
+                    "L1 budget request collection disappeared after initialization"
+                )
+            return 0
+        requests = self._existing_directory(root, "requests")
+        if requests is None:
+            raise ExecutionAgentStoreVerificationError(
+                "execution agent request collection is incomplete"
+            )
+        children = sorted(requests.iterdir(), key=lambda item: item.name)
+        if len(children) > 4096:
+            raise ExecutionAgentStoreVerificationError(
+                "execution agent request collection exceeds its bounded roster"
+            )
+        count = 0
+        for child in children:
+            if child.is_symlink() or not child.is_dir():
+                raise ExecutionAgentStoreVerificationError(
+                    "execution agent request collection contains an unsafe entry"
+                )
+            request_dir = self._existing_directory(requests, child.name)
+            if request_dir is None:  # pragma: no cover - raced deletion
+                raise ExecutionAgentStoreVerificationError(
+                    "execution agent request checkpoint disappeared"
+                )
+            reservation = self.read_marker(request_dir / "reservation.json")
+            if (
+                reservation is None
+                or reservation.get("schema_version") != EXECUTION_AGENT_REQUEST_VERSION
+                or reservation.get("status") != "RESERVED"
+                or reservation.get("project_id") != project
+                or reservation.get("controller_execution_id") != execution_id
+                or reservation.get("client_request_id") != child.name
+            ):
+                raise ExecutionAgentStoreVerificationError(
+                    "execution agent request reservation binding is invalid"
+                )
+            started = self.read_marker(request_dir / "llm_request_started.json")
+            response = self.read_marker(request_dir / "llm_response_committed.json")
+            rejected = self.read_marker(request_dir / "llm_response_rejected.json")
+            proposal = self.read_marker(request_dir / "proposal_committed.json")
+            if started is None and any(
+                marker is not None for marker in (response, rejected, proposal)
+            ):
+                raise ExecutionAgentStoreVerificationError(
+                    "execution agent response evidence lacks its call checkpoint"
+                )
+            if started is None:
+                continue
+            if (
+                started.get("schema_version") != EXECUTION_AGENT_REQUEST_VERSION
+                or started.get("status") != "LLM_REQUEST_STARTED"
+                or started.get("project_id") != project
+                or started.get("controller_execution_id") != execution_id
+                or started.get("client_request_id") != child.name
+                or not isinstance(started.get("prompt_digest"), str)
+            ):
+                raise ExecutionAgentStoreVerificationError(
+                    "execution agent call checkpoint binding is invalid"
+                )
+            count += 1
+        return count
+
+    def initialize_l1_budget_evidence(
+        self,
+        *,
+        project_id: str,
+        controller_execution_id: str,
+        controller_execution_digest: str,
+    ) -> None:
+        """Initialize the durable, non-executable L1 LLM evidence anchor.
+
+        The anchor is independent from the request checkpoint collection.  On
+        first L1 use it also creates an empty request collection, so an empty
+        collection is distinguishable from a collection that disappeared
+        after LLM evidence was written.  Existing anchors never recreate a
+        missing collection; they fail closed instead.
+        """
+
+        project = _safe_scope_id(project_id, field="project_id")
+        execution_id = _safe_scope_id(
+            controller_execution_id,
+            field="controller_execution_id",
+        )
+        if (
+            not isinstance(controller_execution_digest, str)
+            or not controller_execution_digest
+        ):
+            raise ExecutionAgentStoreVerificationError(
+                "L1 budget anchor execution digest is incomplete"
+            )
+        expected_anchor = {
+            "schema_version": EXECUTION_AGENT_L1_BUDGET_ANCHOR_VERSION,
+            "project_id": project,
+            "controller_execution_id": execution_id,
+            "controller_execution_digest": controller_execution_digest,
+            "non_executable": True,
+        }
+        anchor_collection = self._root(
+            project_id=project,
+            name=_EXECUTION_AGENT_L1_BUDGET_ANCHOR_ROOT,
+            create=True,
+        )
+        if anchor_collection is None:  # pragma: no cover
+            raise ExecutionAgentStoreVerificationError(
+                "L1 budget anchor collection is unavailable"
+            )
+        lock = anchor_collection / f"{execution_id}.lock"
+        with _exclusive_process_lock(lock):
+            anchor = self._read_l1_budget_anchor(
+                project_id=project,
+                controller_execution_id=execution_id,
+            )
+            request_scope = self._nested_scope_root(
+                project_id=project,
+                root_name="agent_execution_agent_requests",
+                scope_id=execution_id,
+                create=False,
+            )
+            if anchor is not None:
+                if anchor != expected_anchor:
+                    raise ExecutionAgentStoreVerificationError(
+                        "L1 budget anchor binding is invalid"
+                    )
+                if request_scope is None or self._existing_directory(
+                    request_scope,
+                    "requests",
+                ) is None:
+                    raise ExecutionAgentStoreVerificationError(
+                        "L1 budget request collection disappeared after initialization"
+                    )
+                return
+
+            if request_scope is not None:
+                requests = self._existing_directory(request_scope, "requests")
+                if requests is None:
+                    raise ExecutionAgentStoreVerificationError(
+                        "pre-existing L1 request scope is incomplete"
+                    )
+                if any(requests.iterdir()):
+                    raise ExecutionAgentStoreVerificationError(
+                        "L1 request evidence predates its durable anchor"
+                    )
+
+            epoch = self._directory(anchor_collection, execution_id)
+            self.write_or_verify(
+                epoch / "anchor.json",
+                _pretty_json_bytes(expected_anchor),
+            )
+            if request_scope is None:
+                request_scope = self._nested_scope_root(
+                    project_id=project,
+                    root_name="agent_execution_agent_requests",
+                    scope_id=execution_id,
+                    create=True,
+                )
+            if request_scope is None:  # pragma: no cover
+                raise ExecutionAgentStoreVerificationError(
+                    "L1 request scope is unavailable"
+                )
+            self._directory(request_scope, "requests")
+
+    def _read_l1_budget_anchor(
+        self,
+        *,
+        project_id: str,
+        controller_execution_id: str,
+    ) -> dict[str, Any] | None:
+        collection = self._root(
+            project_id=project_id,
+            name=_EXECUTION_AGENT_L1_BUDGET_ANCHOR_ROOT,
+            create=False,
+        )
+        if collection is None:
+            return None
+        scope = self._existing_directory(collection, controller_execution_id)
+        if scope is None:
+            return None
+        anchor = self.read_marker(scope / "anchor.json")
+        if anchor is None:
+            raise ExecutionAgentStoreVerificationError(
+                "L1 budget anchor is incomplete"
+            )
+        if (
+            anchor.get("schema_version") != EXECUTION_AGENT_L1_BUDGET_ANCHOR_VERSION
+            or anchor.get("project_id") != project_id
+            or anchor.get("controller_execution_id") != controller_execution_id
+            or not isinstance(anchor.get("controller_execution_digest"), str)
+            or not anchor.get("controller_execution_digest")
+            or anchor.get("non_executable") is not True
+            or set(anchor)
+            != {
+                "schema_version",
+                "project_id",
+                "controller_execution_id",
+                "controller_execution_digest",
+                "non_executable",
+            }
+        ):
+            raise ExecutionAgentStoreVerificationError(
+                "L1 budget anchor failed exact validation"
+            )
+        return anchor
+
     def _proposal_payloads(
         self,
         publication: ExecutionAgentProposalPublication,
@@ -800,4 +1037,5 @@ __all__ = [
     "ExecutionAgentStoreError",
     "ExecutionAgentStoreRecoveryRequired",
     "ExecutionAgentStoreVerificationError",
+    "EXECUTION_AGENT_L1_BUDGET_ANCHOR_VERSION",
 ]

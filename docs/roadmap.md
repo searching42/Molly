@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: M3.5-AUT-L1 — Bounded auto-continuation runtime
+> Current focus: M3.5-AUT-L2 — Bounded replanning and materiality boundary
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -141,15 +141,16 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Closed by: PR #45.
   - Definition of Done: the typed `AUTO_CONTINUE` / `REQUIRE_HUMAN` / `PROHIBITED` policy has an explicit exhaustive Controller-action roster, fail-closed unknown-action behavior, exact execution/inspection bindings, non-executable decisions, and a deterministic materiality handoff covered by contract tests. This closes policy implementation and test evidence only; it does not enable runtime continuation.
 
-- [ ] **M3.5-AUT-L1 — Bounded auto-continuation runtime**
-  - State: `READY`
-  - Evidence: `—/—/—`
+- [x] **M3.5-AUT-L1 — Bounded auto-continuation runtime**
+  - State: `DONE`
+  - Evidence: `I/T/—`
   - Dependency: after `M3.5-AUT-POLICY`.
   - Target PR: #46.
-  - Definition of Done: an approved plan may automatically consume only already-valid authority for bounded continuation; transition, LLM-call, dispatch, wall-clock, task-graph, and resource budgets are enforced; every boundary remains visible and all uncertain actions fail closed to a human boundary.
+  - Closed by: PR #46.
+  - Definition of Done: an approved plan may automatically consume only already-valid authority for bounded continuation; every continuation recomputes the current PR #45 policy decision; cumulative transition, LLM-call, dispatch, wall-clock, task-graph, and resource boundaries are enforced from durable evidence; pause/tick continuation remains finite; every human, uncertain, stale, or prohibited condition fails closed before an LLM call or effect. This closes implementation and automated-test evidence only; it does not provide representative runtime acceptance (`V`).
 
 - [ ] **M3.5-AUT-L2 — Bounded replanning and materiality boundary**
-  - State: `QUEUED`
+  - State: `READY`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-L1`.
   - Target PR: #47.
@@ -218,8 +219,26 @@ without an explicit policy mapping and test update.
 Material changes to dataset, target property, scientific scope, Top-N, thresholds,
 task DAG, model/generator strategy, input authority, resource envelope, budget,
 or GPU allocation are not ordinary auto-continuation cases. They require a
-human/Replanner boundary and are handed off to `M3.5-AUT-L2`; this PR does not
-implement materiality classification or L1 runtime integration.
+human/Replanner boundary and are handed off to `M3.5-AUT-L2`; PR #45 froze this
+handoff without implementing materiality classification, and PR #46 implements
+only the bounded L1 continuation contract.
+
+### M3.5-AUT-L1 implementation closure
+
+PR #46 consumes the PR #45 policy through the existing conversation coordinator;
+it does not add a scheduler, Controller, or execution authority. Each mutating
+continuation recomputes the current typed Controller inspection and applies the
+server-owned L1 runtime policy before an Execution Agent call or Controller
+effect. The cumulative finite envelope is scoped to one
+`controller_execution_id`: Controller action receipts rebuild transition and
+dispatch usage, immutable Execution Agent request checkpoints rebuild LLM-call
+usage, `created_at` binds wall-clock usage, and the exact ordered task roster
+and resource/budget digests bind task-graph and resource boundaries. A bounded
+`tick()` may resume an Execution Agent pause or perform one remote refresh/adopt
+path, but Gate approval, remote approval, recovery, cancel, retry, unknown LLM
+outcomes, and material changes remain human/L2 boundaries. Read-only session,
+SSE, and telemetry projections remain non-authoritative. This is `I/T/—` only;
+representative L1/L2 runtime acceptance remains at `M3.5-AUT-ACCEPT`.
 
 ### BR1 acceptance closure
 
@@ -246,7 +265,9 @@ The restart/replay canary proves representative BR1 remote continuation and exac
 
 ## 4. Autonomy scope freeze
 
-This roadmap freezes the scope and contracts below. It does not implement runtime autonomy, change Controller behavior, or add execution authority.
+This section freezes the scope and contracts below. Its definitions do not change
+Controller behavior or add execution authority; implementation status is tracked
+in the active queue above.
 
 ### L0 — Current reference baseline
 
@@ -331,7 +352,14 @@ L1 is bounded by the existing authority and explicit continuation budgets. The c
 - existing resource authority and resource budget;
 - the existing task graph.
 
-This roadmap does not choose new default numeric values unless an existing deterministic contract already fixes them. If an action cannot be proven to belong to the current authority envelope, the system must fail closed and surface a human boundary. L1 must not add a second Controller, state machine, or execution path.
+PR #46 fixes the named, server-owned finite L1 runtime bounds as 128 cumulative
+Controller transitions, 64 Execution Agent LLM calls, 32 steps per invocation,
+and 86,400 seconds from execution creation; remote dispatches remain limited to
+the exact authorized remote task-slot roster. These limits are not client
+configurable and are a restrictive runtime envelope, not new authority. If an
+action cannot be proven to belong to the current authority envelope, the system
+must fail closed and surface a human boundary. L1 must not add a second
+Controller, state machine, or execution path.
 
 ### L2 — Bounded Replanning
 
