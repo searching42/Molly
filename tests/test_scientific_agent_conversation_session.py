@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -712,6 +714,87 @@ def test_remote_session_tick_refreshes_once_then_adopts_and_continues(
     assert execution_agent_calls == []
     assert completed_body["session"]["proposal_id"] == remote_state["proposal_id"]
     assert completed_body["session"]["controller_execution_id"] == remote_state["controller_execution_id"]
+
+
+def test_concurrent_l1_ticks_do_not_duplicate_controller_effect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, _client, service, _state, controller_result = (
+        _start_waiting_gate_session_with_client(tmp_path, monkeypatch)
+    )
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+    )
+    remote_inspection = _typed_controller_inspection_variant(
+        controller_result.inspection,
+        status=AgentHarnessControllerStatus.RUNNING_REMOTE,
+        action=AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
+    )
+    running_result = replace(
+        controller_result,
+        inspection=remote_inspection,
+        receipt=None,
+    )
+    terminal_inspection = _typed_controller_inspection_variant(
+        controller_result.inspection,
+        status=AgentHarnessControllerStatus.SUCCEEDED,
+        action=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+    )
+    terminal_result = replace(
+        controller_result,
+        inspection=terminal_inspection,
+        receipt=None,
+    )
+    service._transition(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        status="running",
+        reason_code="REMOTE_EXECUTION_RUNNING",
+        updates={
+            "controller_status": AgentHarnessControllerStatus.RUNNING_REMOTE.value,
+            "current_task_id": controller_result.inspection.current_task_id,
+        },
+        event_type="test.remote.concurrent",
+    )
+
+    class FakeController:
+        def __init__(self) -> None:
+            self.advance_calls: list[Any] = []
+            self._calls_lock = threading.Lock()
+            self.control_store = service.controller.control_store
+
+        def get(self, **_kwargs):
+            with self._calls_lock:
+                return terminal_result if self.advance_calls else running_result
+
+        def advance(self, **kwargs):
+            with self._calls_lock:
+                self.advance_calls.append(kwargs)
+            return terminal_result
+
+    fake_controller = FakeController()
+    monkeypatch.setattr(service, "controller", fake_controller)
+    start = threading.Barrier(2)
+
+    def concurrent_tick():
+        start.wait(timeout=5)
+        return service.tick(
+            project_id="conversation-project",
+            conversation_id="conversation-one",
+            run_id="conversation-run",
+            provider=None,
+            provider_binding_digest="",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: concurrent_tick(), (1, 2)))
+
+    assert len(fake_controller.advance_calls) == 1
+    assert all(result.session["status"] == "succeeded" for result in results)
+    assert all(result.session["reason_code"] == "RUN_SUCCEEDED" for result in results)
 
 
 def test_successful_execution_emits_safe_unavailable_result_event(
