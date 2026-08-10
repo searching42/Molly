@@ -528,7 +528,12 @@ class ExecutionAgentStore:
         )
         if root is None:
             return 0
-        children = sorted(root.iterdir(), key=lambda item: item.name)
+        requests = self._existing_directory(root, "requests")
+        if requests is None:
+            raise ExecutionAgentStoreVerificationError(
+                "execution agent request collection is incomplete"
+            )
+        children = sorted(requests.iterdir(), key=lambda item: item.name)
         if len(children) > 4096:
             raise ExecutionAgentStoreVerificationError(
                 "execution agent request collection exceeds its bounded roster"
@@ -539,7 +544,7 @@ class ExecutionAgentStore:
                 raise ExecutionAgentStoreVerificationError(
                     "execution agent request collection contains an unsafe entry"
                 )
-            request_dir = self._existing_directory(root, child.name)
+            request_dir = self._existing_directory(requests, child.name)
             if request_dir is None:  # pragma: no cover - raced deletion
                 raise ExecutionAgentStoreVerificationError(
                     "execution agent request checkpoint disappeared"

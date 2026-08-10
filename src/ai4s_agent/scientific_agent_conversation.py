@@ -2088,7 +2088,11 @@ class ScientificAgentConversationSessionService:
                     "L1 Controller receipt evidence is not exactly bound"
                 )
             receipt_ids.add(receipt.receipt_id)
-            if receipt.dispatch_occurred:
+            if (
+                receipt.dispatch_occurred
+                and receipt.action_kind
+                == AgentHarnessControllerAction.DISPATCH_REMOTE_TASK
+            ):
                 if receipt.task_id not in remote_task_ids:
                     raise AutonomyL1EvidenceError(
                         "L1 dispatch evidence is outside the authorized remote roster"
