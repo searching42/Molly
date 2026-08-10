@@ -1,6 +1,6 @@
 {
-  "acceptance_code_head": "45fe085c4edead8c138e679cc186571cbca86475",
-  "scenario_roster_digest": "sha256:fb3d46268c924d061e34471b1f30559c5c7a1c50504a62641233b3c5de49325d",
+  "acceptance_code_head": "d6ba7a8e6bcb85bdf235331bff2d642e5ac96d94",
+  "scenario_roster_digest": "sha256:98b1c034266ac859dd6f880d74024a1776b5752fc62d256490341bf60a1e5a2c",
   "scenarios": [
     {
       "authority_preserved": true,
@@ -42,7 +42,7 @@
       "remote_dispatch_count_after": 1,
       "remote_dispatch_count_before": 1,
       "replay_verified": true,
-      "restart_performed": true,
+      "restart_performed": false,
       "restart_scope": "durable-controller-receipt-crash-window",
       "runtime_phase": "L1",
       "same_controller": true,
@@ -50,7 +50,7 @@
       "scenario_id": "AUT-A03",
       "status": "PASS",
       "test_adapter": "tests/test_controller_remote_successor_crash_windows.py::test_adopt_effect_without_persisted_receipt_recovers_without_second_adoption",
-      "title": "Remote restart and exactly-once adoption"
+      "title": "Remote adoption crash-window exactly-once reconciliation"
     },
     {
       "authority_preserved": true,
@@ -73,10 +73,15 @@
       "authority_preserved": true,
       "automatic_cancel": false,
       "automatic_replan": false,
+      "controller_effect_call_count": 0,
+      "controller_receipt_count_delta": 0,
+      "execution_agent_proposal_call_count": 0,
       "expected_boundary": "BUDGET",
+      "next_effect_blocked": true,
       "observed_reason_codes": [
         "AUTONOMY_L1_TRANSITION_BUDGET_EXHAUSTED"
       ],
+      "runtime_entrypoint": "ScientificAgentConversationSessionService.tick",
       "runtime_phase": "L1",
       "scenario_id": "AUT-A05",
       "status": "PASS",
@@ -87,14 +92,17 @@
     },
     {
       "authority_preserved": true,
+      "execution_agent_checkpoint_count": 0,
       "expected_boundary": "BUDGET",
       "llm_call_limit": 64,
       "llm_calls_used": 64,
+      "llm_evidence_calls_at_limit": 64,
       "next_provider_call_blocked": true,
       "observed_reason_codes": [
         "AUTONOMY_L1_LLM_BUDGET_EXHAUSTED"
       ],
-      "provider_calls_at_limit": 64,
+      "provider_call_count": 0,
+      "runtime_entrypoint": "ScientificAgentConversationSessionService.tick",
       "runtime_phase": "L1",
       "scenario_id": "AUT-A06",
       "status": "PASS",
@@ -278,7 +286,8 @@
       "authority_preserved": true,
       "controller_a_to_controller_b": true,
       "expected_boundary": "FRESH_EPOCH",
-      "fresh_l1_epoch_scope": "new_controller_execution_id",
+      "fresh_l1_epoch_scope": "real_tick_new_controller_execution_id",
+      "fresh_l1_runtime_continuation": true,
       "new_budget_rebuilt_from_new_controller": true,
       "observed_reason_codes": [
         "AUTONOMY_L2_FRESH_AUTHORIZATION_REQUIRED"
@@ -288,7 +297,7 @@
       "runtime_phase": "L1_L2_HANDOFF",
       "scenario_id": "AUT-A16",
       "status": "PASS",
-      "test_adapter": "tests/test_scientific_agent_autonomy_l2.py::test_l2_material_successor_receives_fresh_authority_after_conversational_approval",
+      "test_adapter": "tests/test_autonomy_acceptance_runtime.py::test_l1_l2_handoff_starts_fresh_l1_budget_epoch",
       "title": "L1 to L2 to fresh L1 epoch handoff"
     }
   ],

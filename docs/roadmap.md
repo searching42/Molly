@@ -164,7 +164,7 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Evidence: `I/T/V`
   - Dependency: after `M3.5-AUT-L2`.
   - Target PR: #48.
-  - Definition of Done: representative bounded-autonomy, fail-closed, replay, restart, duplicate-dispatch, concurrent-replan, budget, and adversarial cases pass on exact reviewed code and preserve the existing authority chain. The formal runner passes all 16 versioned scenarios on acceptance-code HEAD `45fe085c4edead8c138e679cc186571cbca86475`, including one separate-Python-process L2 restart/replay path and one concurrent `/replan` reconciliation path; checked-in evidence is control-plane-only and privacy-safe.
+  - Definition of Done: representative bounded-autonomy, fail-closed, replay, restart, duplicate-dispatch, concurrent-replan, budget, and adversarial cases pass on exact reviewed code and preserve the existing authority chain. The formal runner passes all 16 versioned scenarios on acceptance-code HEAD `02deae19194a20c079253dabc917cfe7c9a05945`, including real conversation-tick budget stop-before-effect checks, a real fresh-L1 handoff tick, one separate-Python-process L2 restart/replay path, and one concurrent `/replan` reconciliation path; checked-in evidence is control-plane-only and privacy-safe. The L1 remote adoption case is explicitly a durable receipt crash-window reconciliation, not a process-boundary restart claim.
   - Closed by: PR #48, [acceptance README](evidence/autonomy-l1-l2-acceptance-v1/README.md), [manifest](evidence/autonomy-l1-l2-acceptance-v1/acceptance_manifest.json), [scenario matrix](evidence/autonomy-l1-l2-acceptance-v1/scenario_matrix.json), [restart/replay summary](evidence/autonomy-l1-l2-acceptance-v1/restart_replay_summary.json), and [authority-boundary summary](evidence/autonomy-l1-l2-acceptance-v1/authority_boundary_summary.json).
 
 - [ ] **M3.5-BR2-RUNTIME — Real MinerU runtime closure**
@@ -275,12 +275,12 @@ as `I/T/V` in the active queue.
 
 PR #48 closes the bounded autonomy acceptance gate with a finite runner over 16
 stable scenarios. The evidence covers human Gate and remote-approval stops,
-exactly-once remote lifecycle adoption, invocation and cumulative budgets,
+exactly-once remote lifecycle adoption and crash-window reconciliation, invocation and cumulative budgets,
 missing evidence and unknown LLM outcome fail-closed behavior, wall-clock/task-
 graph/resource boundaries, concurrent ticks, read-only zero-effect surfaces,
 the exact-`FAILED` L2 trigger, non-material stop, material successor fresh
 authority, process-boundary Replanner replay, successor reconciliation, and the
-L1→L2→fresh-L1 epoch handoff. `GATE-AUT-L1-L2` is closed by the same reviewed
+L1→L2→fresh-L1 epoch handoff through a real B-side tick. `GATE-AUT-L1-L2` is closed by the same reviewed
 evidence. This is a control-plane acceptance claim only; PR #48 does not rerun
 BR1, implement BR2, or change the scientific claim boundary.
 

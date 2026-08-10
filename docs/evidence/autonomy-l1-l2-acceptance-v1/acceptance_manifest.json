@@ -1,5 +1,5 @@
 {
-  "acceptance_code_head": "45fe085c4edead8c138e679cc186571cbca86475",
+  "acceptance_code_head": "d6ba7a8e6bcb85bdf235331bff2d642e5ac96d94",
   "acceptance_id": "autonomy-l1-l2-acceptance-v1",
   "authority_invariant_summary": {
     "automatic_cancel": false,
@@ -44,12 +44,12 @@
   },
   "remote_dispatch_summary": {
     "duplicate_dispatch_count": 0,
-    "remote_restart_dispatch_count": 1
+    "remote_exactly_once_dispatch_count": 1
   },
-  "restart_count": 2,
+  "restart_count": 1,
   "runtime_kind": "flask_control_plane_with_filesystem_authority_and_synthetic_external_edges",
   "scenario_count": 16,
-  "scenario_roster_digest": "sha256:fb3d46268c924d061e34471b1f30559c5c7a1c50504a62641233b3c5de49325d",
+  "scenario_roster_digest": "sha256:98b1c034266ac859dd6f880d74024a1776b5752fc62d256490341bf60a1e5a2c",
   "schema_version": "scientific_autonomy_l1_l2_acceptance_manifest.v1",
   "scientific_scope": "control_plane_autonomy_only",
   "status": "SUCCEEDED",

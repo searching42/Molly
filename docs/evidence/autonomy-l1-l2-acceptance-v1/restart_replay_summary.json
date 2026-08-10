@@ -1,6 +1,6 @@
 {
-  "acceptance_code_head": "45fe085c4edead8c138e679cc186571cbca86475",
-  "l1_remote_restart": {
+  "acceptance_code_head": "d6ba7a8e6bcb85bdf235331bff2d642e5ac96d94",
+  "l1_remote_adoption_crash_window": {
     "adopt_dispatch_occurred": false,
     "dispatch_after": 1,
     "dispatch_before": 1,
