@@ -6,7 +6,7 @@
 >
 > Current major milestone: M3.5 — Scientific Agent Harness integration and runtime closure
 >
-> Current focus: M3.5-AUT-POLICY — Autonomy action classification
+> Current focus: M3.5-AUT-L1 — Bounded auto-continuation runtime
 >
 > Local `todo.md` is intentionally Git-ignored working context. It may be used for private scratch planning, but it is not public repository authority.
 
@@ -134,15 +134,15 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Definition of Done: the sole eligible owner-approved bundle is resolved from the natural-language conversation front door; confirmation, fresh current-run model training, real generation, current-model prediction, deterministic final evaluation, verified Computational Top-N, and `scientific_result.available` complete with privacy-safe projection and exact replay.
   - Evidence: PR #43, merge commit `7264a78eeb320fa00e8d9acbd9e556bfcf3e8360`, [checked-in BR1 acceptance evidence](evidence/br1-conversation-real-acceptance-v1/README.md), [acceptance manifest](evidence/br1-conversation-real-acceptance-v1/acceptance_manifest.json), [result summary](evidence/br1-conversation-real-acceptance-v1/result_summary.json), and [restart/replay summary](evidence/br1-conversation-real-acceptance-v1/restart_replay_summary.json).
 
-- [ ] **M3.5-AUT-POLICY — Autonomy action classification**
-  - State: `READY`
-  - Evidence: `—/—/—`
+- [x] **M3.5-AUT-POLICY — Autonomy action classification**
+  - State: `DONE`
+  - Evidence: `I/T/—`
   - Dependency: after `M3.5-BR1`.
-  - Target PR: #45.
-  - Definition of Done: the `AUTO_CONTINUE` / `REQUIRE_HUMAN` / `PROHIBITED` policy contract, fail-closed rule, authority inputs, and materiality handoff are deterministic, documented, and covered by contract tests.
+  - Closed by: PR #45.
+  - Definition of Done: the typed `AUTO_CONTINUE` / `REQUIRE_HUMAN` / `PROHIBITED` policy has an explicit exhaustive Controller-action roster, fail-closed unknown-action behavior, exact execution/inspection bindings, non-executable decisions, and a deterministic materiality handoff covered by contract tests. This closes policy implementation and test evidence only; it does not enable runtime continuation.
 
 - [ ] **M3.5-AUT-L1 — Bounded auto-continuation runtime**
-  - State: `QUEUED`
+  - State: `READY`
   - Evidence: `—/—/—`
   - Dependency: after `M3.5-AUT-POLICY`.
   - Target PR: #46.
@@ -196,6 +196,30 @@ The following queue is the single active M3.5/v1 checklist. Target PR numbers ar
   - Dependency: after BR1, accepted Autonomy L1/L2, accepted BR2 backend, observability acceptance, and minimal UI closure.
   - Target PR: #53.
   - Definition of Done: repository-owner review binds representative BR1 and BR2 evidence, restart/recovery, exact replay, privacy, authority preservation, and integrated observability to the exact final review HEAD.
+
+### M3.5-AUT-POLICY contract closure
+
+The completed policy is a derived eligibility projection, not a new authority. Its
+decision is recomputable from the current verified Controller inspection and binds
+the Controller execution ID/digest, inspection digest, exact action, policy
+version/digest, canonical reason codes, and `executable: false`.
+A serialized decision is only a non-authoritative projection; any consumer must
+recompute and exact-verify it against the current typed inspection before using
+its eligibility.
+
+The typed Controller action roster is reviewed explicitly. The current v1 policy
+allows only the reviewed deterministic action classes to be eligible for
+`AUTO_CONTINUE`; Gate approval, remote approval, recovery, and cancel remain
+`REQUIRE_HUMAN`. No current typed Controller action is `PROHIBITED`, while an
+unknown, untyped, unsupported, or direct-effect bypass request is prohibited or
+fails closed. A new Controller action cannot inherit autonomous eligibility
+without an explicit policy mapping and test update.
+
+Material changes to dataset, target property, scientific scope, Top-N, thresholds,
+task DAG, model/generator strategy, input authority, resource envelope, budget,
+or GPU allocation are not ordinary auto-continuation cases. They require a
+human/Replanner boundary and are handed off to `M3.5-AUT-L2`; this PR does not
+implement materiality classification or L1 runtime integration.
 
 ### BR1 acceptance closure
 
@@ -271,7 +295,7 @@ The invariant is:
 - package already-verified outputs;
 - continue to the next already-authorized deterministic task;
 - retry read-only observation;
-- perform exact replay or recovery that creates no new authority.
+- perform an exact replay or read-only recovery operation that creates no new authority; the current typed `RECOVER_REMOTE_TASK` action remains `REQUIRE_HUMAN` until a later reviewed contract changes it.
 
 `REQUIRE_HUMAN` includes:
 
