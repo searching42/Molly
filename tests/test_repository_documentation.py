@@ -99,7 +99,7 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     assert "Autonomy does not create authority. Autonomy only consumes already-valid authority." in roadmap
     assert "The LLM must not be the sole authority deciding whether its own proposed change requires fresh authorization." in roadmap
     assert "BR2 v1 does not enter training, generation, Top-N, or experimental validation." in roadmap
-    assert "Current focus: M3.5-AUT-L1 — Bounded auto-continuation runtime" in roadmap
+    assert "Current focus: M3.5-AUT-L2 — Bounded replanning and materiality boundary" in roadmap
     assert "### M3.5-AUT-POLICY contract closure" in roadmap
     assert "A new Controller action cannot inherit autonomous eligibility" in roadmap
     assert "executable: false" in roadmap
@@ -145,8 +145,8 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     for item, state in (
         ("M3.5-BR1", "DONE"),
         ("M3.5-AUT-POLICY", "DONE"),
-        ("M3.5-AUT-L1", "READY"),
-        ("M3.5-AUT-L2", "QUEUED"),
+        ("M3.5-AUT-L1", "DONE"),
+        ("M3.5-AUT-L2", "READY"),
         ("M3.5-AUT-ACCEPT", "QUEUED"),
         ("M3.5-BR2-RUNTIME", "QUEUED"),
         ("M3.5-BR2-MAPPING", "QUEUED"),
@@ -156,6 +156,7 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     ):
         assert f"State: `{state}`" in item_block(active_queue, item)
     assert "Evidence: `I/T/—`" in item_block(active_queue, "M3.5-AUT-POLICY")
+    assert "Evidence: `I/T/—`" in item_block(active_queue, "M3.5-AUT-L1")
 
     gates = roadmap.split("## 7. Acceptance gates", 1)[1].split(
         "## 8. Later research milestones", 1

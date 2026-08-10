@@ -501,6 +501,87 @@ class ExecutionAgentStore:
         )
         return [receipt] if receipt is not None else []
 
+    def count_llm_calls_for_controller_execution(
+        self,
+        *,
+        project_id: str,
+        controller_execution_id: str,
+    ) -> int:
+        """Count provider-call checkpoints for one exact execution.
+
+        The request collection is immutable evidence of the external-call
+        boundary.  A started checkpoint is counted even when its outcome is
+        unknown or its response is invalid; callers must therefore fail closed
+        rather than treating an incomplete request as unused budget.
+        """
+
+        project = _safe_scope_id(project_id, field="project_id")
+        execution_id = _safe_scope_id(
+            controller_execution_id,
+            field="controller_execution_id",
+        )
+        root = self._nested_scope_root(
+            project_id=project,
+            root_name="agent_execution_agent_requests",
+            scope_id=execution_id,
+            create=False,
+        )
+        if root is None:
+            return 0
+        children = sorted(root.iterdir(), key=lambda item: item.name)
+        if len(children) > 4096:
+            raise ExecutionAgentStoreVerificationError(
+                "execution agent request collection exceeds its bounded roster"
+            )
+        count = 0
+        for child in children:
+            if child.is_symlink() or not child.is_dir():
+                raise ExecutionAgentStoreVerificationError(
+                    "execution agent request collection contains an unsafe entry"
+                )
+            request_dir = self._existing_directory(root, child.name)
+            if request_dir is None:  # pragma: no cover - raced deletion
+                raise ExecutionAgentStoreVerificationError(
+                    "execution agent request checkpoint disappeared"
+                )
+            reservation = self.read_marker(request_dir / "reservation.json")
+            if (
+                reservation is None
+                or reservation.get("schema_version") != EXECUTION_AGENT_REQUEST_VERSION
+                or reservation.get("status") != "RESERVED"
+                or reservation.get("project_id") != project
+                or reservation.get("controller_execution_id") != execution_id
+                or reservation.get("client_request_id") != child.name
+            ):
+                raise ExecutionAgentStoreVerificationError(
+                    "execution agent request reservation binding is invalid"
+                )
+            started = self.read_marker(request_dir / "llm_request_started.json")
+            response = self.read_marker(request_dir / "llm_response_committed.json")
+            rejected = self.read_marker(request_dir / "llm_response_rejected.json")
+            proposal = self.read_marker(request_dir / "proposal_committed.json")
+            if started is None and any(
+                marker is not None for marker in (response, rejected, proposal)
+            ):
+                raise ExecutionAgentStoreVerificationError(
+                    "execution agent response evidence lacks its call checkpoint"
+                )
+            if started is None:
+                continue
+            if (
+                started.get("schema_version") != EXECUTION_AGENT_REQUEST_VERSION
+                or started.get("status") != "LLM_REQUEST_STARTED"
+                or started.get("project_id") != project
+                or started.get("controller_execution_id") != execution_id
+                or started.get("client_request_id") != child.name
+                or not isinstance(started.get("prompt_digest"), str)
+            ):
+                raise ExecutionAgentStoreVerificationError(
+                    "execution agent call checkpoint binding is invalid"
+                )
+            count += 1
+        return count
+
     def _proposal_payloads(
         self,
         publication: ExecutionAgentProposalPublication,

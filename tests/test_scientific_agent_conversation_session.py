@@ -10,10 +10,12 @@ import pytest
 
 import ai4s_agent.scientific_agent_conversation as session_module
 from ai4s_agent.app import create_app
+from ai4s_agent.execution_agent import ExecutionAgentLLMOutcomeUnknown
 from ai4s_agent.schemas import (
     AgentHarnessControllerAction,
     AgentExecutionPlanLLMResponse,
     AgentHarnessControllerActionBoundaryClass,
+    AgentHarnessControllerInspection,
     AgentHarnessControllerStatus,
     AgentToolCallApplicationOutcome,
     _agent_digest,
@@ -138,6 +140,34 @@ def _start_waiting_gate_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         monkeypatch,
     )
     return service, state, controller_result
+
+
+def _typed_controller_inspection_variant(
+    base: AgentHarnessControllerInspection,
+    *,
+    status: AgentHarnessControllerStatus,
+    action: AgentHarnessControllerAction,
+) -> AgentHarnessControllerInspection:
+    payload = base.model_dump(mode="json")
+    payload.update(
+        {
+            "status": status.value,
+            "next_action": action.value,
+            "inspection_digest": "",
+        }
+    )
+    return AgentHarnessControllerInspection(**payload)
+
+
+def _auto_controller_result(controller_result):
+    return replace(
+        controller_result,
+        inspection=_typed_controller_inspection_variant(
+            controller_result.inspection,
+            status=AgentHarnessControllerStatus.ACTIVE,
+            action=AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+        ),
+    )
 
 
 def test_conversation_turn_publishes_real_review_only_scientific_proposal_and_sse(
@@ -368,8 +398,9 @@ def test_exact_conversational_approval_uses_authorization_start_intent_controlle
     assert body["session"]["authorization_id"]
     assert body["session"]["start_intent_id"]
     assert body["session"]["controller_execution_id"]
-    assert execution_agent_calls == [True]
-    assert body["session"]["status"] in {"failed", "unknown", "waiting_gate", "waiting_remote_approval", "recovery_required", "succeeded"}
+    assert execution_agent_calls == []
+    assert body["session"]["status"] == "waiting_gate"
+    assert body["session"]["autonomy_status"] == "human_boundary"
 
 
 def test_plan_approval_does_not_auto_approve_a_later_gate(
@@ -422,28 +453,44 @@ def test_execution_agent_pause_stops_the_outer_auto_progress_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, state, controller_result = _start_waiting_gate_session(tmp_path, monkeypatch)
+    controller_result = _auto_controller_result(controller_result)
     monkeypatch.setattr(
         session_module,
         "controller_action_boundary_class",
         lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
     )
-    provider = CountingStubProvider(
-        response={
-            "selected_tool_id": "agent.pause_current.v1",
-            "decision_summary": "Pause this bounded turn.",
-        }
+    calls = {"create": 0, "apply": 0}
+    proposal = SimpleNamespace(
+        tool_call_proposal_id="tool-call-proposal-pause",
+        tool_call_proposal_digest=_agent_digest({"proposal": "pause"}),
     )
+
+    def create_proposal(*_args, **_kwargs):
+        calls["create"] += 1
+        return SimpleNamespace(publication=SimpleNamespace(proposal=proposal))
+
+    def apply_proposal(*_args, **_kwargs):
+        calls["apply"] += 1
+        return SimpleNamespace(
+            application_receipt=SimpleNamespace(
+                outcome=AgentToolCallApplicationOutcome.PAUSED
+            ),
+            controller_result=controller_result,
+        )
+
+    monkeypatch.setattr(service.execution_agent, "create_proposal", create_proposal)
+    monkeypatch.setattr(service.execution_agent, "apply_proposal", apply_proposal)
 
     _controller_result, updated, stop_reason = service._auto_progress(
         project_id="conversation-project",
         conversation_id="conversation-one",
         state=state,
         controller_result=controller_result,
-        provider=provider,
+        provider=object(),
         provider_binding_digest=_agent_digest({"provider": "stub"}),
     )
 
-    assert provider.calls == 1
+    assert calls == {"create": 1, "apply": 1}
     assert stop_reason == "paused"
     assert updated["status"] == "running"
     assert updated["reason_code"] == "EXECUTION_AGENT_PAUSED"
@@ -452,86 +499,112 @@ def test_execution_agent_pause_stops_the_outer_auto_progress_loop(
     assert updated["reason_code"] != "AUTO_PROGRESS_BOUND_EXCEEDED"
 
 
-def test_paused_execution_agent_resumes_on_the_next_conversation_turn_without_replanning(
+def test_paused_execution_agent_resumes_on_a_mutating_tick_without_new_chat(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _app, client, service, state, controller_result = _start_waiting_gate_session_with_client(
+    _app, _client, service, state, controller_result = _start_waiting_gate_session_with_client(
         tmp_path,
         monkeypatch,
     )
-    endpoint = "/api/projects/conversation-project/conversations/conversation-one/agent-session"
+    controller_result = _auto_controller_result(controller_result)
     monkeypatch.setattr(
         session_module,
         "controller_action_boundary_class",
         lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
     )
-    first_pause = CountingStubProvider(
-        response={
-            "selected_tool_id": "agent.pause_current.v1",
-            "decision_summary": "Pause this bounded turn.",
-        }
+    calls = {"create": 0, "apply": 0}
+    proposal = SimpleNamespace(
+        tool_call_proposal_id="tool-call-proposal-pause",
+        tool_call_proposal_digest=_agent_digest({"proposal": "pause"}),
     )
+
+    def create_proposal(*_args, **_kwargs):
+        calls["create"] += 1
+        return SimpleNamespace(publication=SimpleNamespace(proposal=proposal))
+
+    def apply_proposal(*_args, **_kwargs):
+        calls["apply"] += 1
+        return SimpleNamespace(
+            application_receipt=SimpleNamespace(
+                outcome=AgentToolCallApplicationOutcome.PAUSED
+            ),
+            controller_result=controller_result,
+        )
+
+    monkeypatch.setattr(service.execution_agent, "create_proposal", create_proposal)
+    monkeypatch.setattr(service.execution_agent, "apply_proposal", apply_proposal)
     _controller_result, paused, stop_reason = service._auto_progress(
         project_id="conversation-project",
         conversation_id="conversation-one",
         state=state,
         controller_result=controller_result,
-        provider=first_pause,
+        provider=object(),
         provider_binding_digest=_agent_digest({"provider": "stub"}),
     )
     assert stop_reason == "paused"
     assert paused["reason_code"] == "EXECUTION_AGENT_PAUSED"
-
-    plan_calls: list[bool] = []
-    execution_agent_calls: list[bool] = []
-    original_plan = service.plan_service.create_proposal
-    original_execution_agent = service.execution_agent.create_proposal
-
-    def spy_plan(*args, **kwargs):
-        plan_calls.append(True)
-        return original_plan(*args, **kwargs)
-
-    def spy_execution_agent(*args, **kwargs):
-        execution_agent_calls.append(True)
-        return original_execution_agent(*args, **kwargs)
-
-    monkeypatch.setattr(service.plan_service, "create_proposal", spy_plan)
-    monkeypatch.setattr(service.execution_agent, "create_proposal", spy_execution_agent)
-    appended = client.post(
-        "/api/projects/conversation-project/conversations/conversation-one/messages",
-        json={
-            "role": "user",
-            "content": "继续当前有界步骤",
-            "client_message_id": "user-message-resume-paused-agent",
-        },
+    monkeypatch.setattr(
+        service.controller,
+        "get",
+        lambda **_kwargs: controller_result,
     )
-    assert appended.status_code == 201
-
-    assert service.classify_turn(
+    resumed = service.tick(
         project_id="conversation-project",
         conversation_id="conversation-one",
-    ) == "paused"
-    resumed = client.post(
-        endpoint + "/turn",
-        json={
-            "run_id": "conversation-run",
-            "llm_provider": _execution_agent_stub_provider("agent.pause_current.v1"),
-        },
+        run_id="conversation-run",
+        provider=object(),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
     )
-    assert resumed.status_code == 200, resumed.get_json()
-    body = resumed.get_json()
-    assert body["session"]["reason_code"] == "EXECUTION_AGENT_PAUSED"
-    assert body["session"]["status"] == "running"
-    for field in (
-        "proposal_id",
-        "authorization_id",
-        "start_intent_id",
-        "controller_execution_id",
-    ):
-        assert body["session"][field] == paused[field]
-    assert execution_agent_calls == [True]
-    assert plan_calls == []
+    assert resumed.session["reason_code"] == "EXECUTION_AGENT_PAUSED"
+    assert resumed.session["status"] == "running"
+    assert calls == {"create": 2, "apply": 2}
+    assert resumed.session["proposal_id"] == paused["proposal_id"]
+    assert resumed.session["controller_execution_id"] == paused[
+        "controller_execution_id"
+    ]
+
+
+def test_unknown_execution_agent_outcome_is_not_retried_by_a_later_tick(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, state, controller_result = _start_waiting_gate_session(tmp_path, monkeypatch)
+    controller_result = _auto_controller_result(controller_result)
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+    )
+    calls = {"create": 0}
+
+    def unknown_outcome(*_args, **_kwargs):
+        calls["create"] += 1
+        raise ExecutionAgentLLMOutcomeUnknown("unknown provider outcome")
+
+    monkeypatch.setattr(service.execution_agent, "create_proposal", unknown_outcome)
+    _controller_result, unknown, stop_reason = service._auto_progress(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        state=state,
+        controller_result=controller_result,
+        provider=object(),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+    assert stop_reason == "llm_unknown"
+    assert unknown["reason_code"] == "EXECUTION_AGENT_LLM_OUTCOME_UNKNOWN"
+    assert unknown["autonomy_stop_reason"] == "AUTONOMY_L1_LLM_OUTCOME_UNKNOWN"
+
+    monkeypatch.setattr(service.controller, "get", lambda **_kwargs: controller_result)
+    projected = service.tick(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        run_id="conversation-run",
+        provider=object(),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+    assert projected.session["reason_code"] == "EXECUTION_AGENT_LLM_OUTCOME_UNKNOWN"
+    assert calls == {"create": 1}
 
 
 def test_remote_session_tick_refreshes_once_then_adopts_and_continues(
@@ -543,37 +616,40 @@ def test_remote_session_tick_refreshes_once_then_adopts_and_continues(
         monkeypatch,
     )
     endpoint = "/api/projects/conversation-project/conversations/conversation-one/agent-session"
-    execution = controller_result.execution
-    remote_inspection = SimpleNamespace(
-        status=AgentHarnessControllerStatus.RUNNING_REMOTE,
-        next_action=AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
-        current_task_id="remote-training",
-        inspection_digest=_agent_digest({"inspection": "remote-running"}),
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
     )
-    running_result = SimpleNamespace(
-        execution=execution,
+    execution = controller_result.execution
+    remote_task_id = controller_result.inspection.current_task_id
+    remote_inspection = _typed_controller_inspection_variant(
+        controller_result.inspection,
+        status=AgentHarnessControllerStatus.RUNNING_REMOTE,
+        action=AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
+    )
+    running_result = replace(
+        controller_result,
         inspection=remote_inspection,
         receipt=None,
     )
-    adopted_inspection = SimpleNamespace(
+    adopted_inspection = _typed_controller_inspection_variant(
+        controller_result.inspection,
         status=AgentHarnessControllerStatus.ACTIVE,
-        next_action=AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS,
-        current_task_id="remote-training",
-        inspection_digest=_agent_digest({"inspection": "remote-succeeded"}),
+        action=AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS,
     )
-    adopted_result = SimpleNamespace(
-        execution=execution,
+    adopted_result = replace(
+        controller_result,
         inspection=adopted_inspection,
         receipt=None,
     )
-    terminal_inspection = SimpleNamespace(
+    terminal_inspection = _typed_controller_inspection_variant(
+        controller_result.inspection,
         status=AgentHarnessControllerStatus.SUCCEEDED,
-        next_action=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
-        current_task_id="remote-training",
-        inspection_digest=_agent_digest({"inspection": "terminal"}),
+        action=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
     )
-    terminal_result = SimpleNamespace(
-        execution=execution,
+    terminal_result = replace(
+        controller_result,
         inspection=terminal_inspection,
         receipt=None,
     )
@@ -584,7 +660,7 @@ def test_remote_session_tick_refreshes_once_then_adopts_and_continues(
         reason_code="REMOTE_EXECUTION_RUNNING",
         updates={
             "controller_status": AgentHarnessControllerStatus.RUNNING_REMOTE.value,
-            "current_task_id": "remote-training",
+            "current_task_id": remote_task_id,
         },
         event_type="test.remote.running",
     )
@@ -592,6 +668,7 @@ def test_remote_session_tick_refreshes_once_then_adopts_and_continues(
     class FakeController:
         def __init__(self) -> None:
             self.advance_calls: list[Any] = []
+            self.control_store = service.controller.control_store
 
         def get(self, **_kwargs):
             return adopted_result if self.advance_calls else running_result
@@ -689,6 +766,7 @@ def test_running_remote_stops_the_outer_auto_progress_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, state, controller_result = _start_waiting_gate_session(tmp_path, monkeypatch)
+    controller_result = _auto_controller_result(controller_result)
     monkeypatch.setattr(
         session_module,
         "controller_action_boundary_class",
@@ -699,14 +777,13 @@ def test_running_remote_stops_the_outer_auto_progress_loop(
         tool_call_proposal_id="tool-call-proposal-remote",
         tool_call_proposal_digest=_agent_digest({"proposal": "remote"}),
     )
-    remote_inspection = SimpleNamespace(
+    remote_inspection = _typed_controller_inspection_variant(
+        controller_result.inspection,
         status=AgentHarnessControllerStatus.RUNNING_REMOTE,
-        next_action=AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
-        current_task_id="remote-training",
-        inspection_digest=_agent_digest({"inspection": "remote"}),
+        action=AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
     )
-    remote_result = SimpleNamespace(
-        execution=controller_result.execution,
+    remote_result = replace(
+        controller_result,
         inspection=remote_inspection,
         receipt=None,
     )
@@ -741,7 +818,7 @@ def test_running_remote_stops_the_outer_auto_progress_loop(
     assert updated["status"] == "running"
     assert updated["reason_code"] == "REMOTE_EXECUTION_RUNNING"
     assert updated["controller_status"] == "running_remote"
-    assert updated["current_task_id"] == "remote-training"
+    assert updated["current_task_id"] == controller_result.inspection.current_task_id
     assert updated["reason_code"] != "AUTO_PROGRESS_BOUND_EXCEEDED"
 
 

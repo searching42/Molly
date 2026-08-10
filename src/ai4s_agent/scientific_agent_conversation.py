@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ai4s_agent._utils import now_iso, write_json
 from ai4s_agent.actor_identity import ActorContext
@@ -28,6 +29,20 @@ from ai4s_agent.execution_agent import (
     ExecutionAgentLLMUnavailable,
     ExecutionAgentService,
     ExecutionAgentStale,
+)
+from ai4s_agent.scientific_agent_autonomy_l1 import (
+    AUTONOMY_L1_PER_INVOCATION_MAX_STEPS,
+    AUTONOMY_L1_RUNTIME_POLICY_DIGEST,
+    AUTONOMY_L1_RUNTIME_POLICY_VERSION,
+    AutonomyL1BudgetSnapshot,
+    AutonomyL1EvidenceError,
+    budget_projection,
+    budget_stop_reason_codes,
+    build_l1_budget_snapshot,
+    validate_l1_execution_inspection,
+)
+from ai4s_agent.scientific_agent_autonomy_policy import (
+    classify_current_controller_inspection,
 )
 from ai4s_agent.llm_provider import LLMProvider
 from ai4s_agent.remote_resource_authority import (
@@ -74,9 +89,14 @@ from ai4s_agent.scientific_agent_plan import (
 )
 from ai4s_agent.schemas import (
     AgentAuthorizationMode,
+    AgentAutonomyActionClass,
+    AgentAutonomyPolicyDecision,
+    AgentHarnessControllerActionReceipt,
     AgentHarnessControllerAction,
     AgentHarnessControllerActionBoundaryClass,
     AgentHarnessControllerAdvanceRequest,
+    AgentHarnessControllerExecution,
+    AgentHarnessControllerInspection,
     AgentHarnessControllerStatus,
     AgentHarnessControllerStartRequest,
     AgentHarnessGateApprovalRequest,
@@ -95,7 +115,7 @@ SESSION_SCHEMA_VERSION = "scientific_agent_conversation_session.v1"
 SESSION_PROJECTION_SCHEMA_VERSION = "scientific_agent_session_event_projection.v1"
 SESSION_EVENT_SCHEMA_VERSION = "scientific_agent_session_event.v1"
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-MAX_AUTO_STEPS = 32
+MAX_AUTO_STEPS = AUTONOMY_L1_PER_INVOCATION_MAX_STEPS
 ACTIVE_SESSION_STATUSES = frozenset(
     {
         "running",
@@ -103,6 +123,26 @@ ACTIVE_SESSION_STATUSES = frozenset(
         "waiting_remote_approval",
         "recovery_required",
         "unknown",
+    }
+)
+AUTONOMY_L1_STATUSES = frozenset(
+    {
+        "",
+        "eligible",
+        "human_boundary",
+        "paused",
+        "budget_exhausted",
+        "prohibited",
+        "provider_unavailable",
+        "unknown_outcome",
+    }
+)
+_AUTONOMY_L1_PROJECTION_KEYS = frozenset(
+    {
+        "transitions",
+        "llm_calls",
+        "remote_dispatches",
+        "wall_clock_elapsed_seconds",
     }
 )
 
@@ -350,6 +390,7 @@ class ScientificAgentConversationSessionService:
         input_binding_service: ScientificAgentRunInputBindingService | None = None,
         resource_authority_service: Any | None = None,
         result_projection_service: ScientificAgentResultProjectionService | None = None,
+        clock: Callable[[], str] = now_iso,
     ) -> None:
         self.projects = projects
         self.conversations = conversations
@@ -361,6 +402,7 @@ class ScientificAgentConversationSessionService:
         self.input_binding_service = input_binding_service
         self.resource_authority_service = resource_authority_service
         self.result_projection_service = result_projection_service
+        self.clock = clock
         self.projector = ScientificAgentConversationSessionEventProjector(service=self)
 
     def _root(self, project_id: str, conversation_id: str, *, create: bool) -> Path:
@@ -420,6 +462,20 @@ class ScientificAgentConversationSessionService:
             "result_projections": [],
             "scientific_result_status": "",
             "scientific_result_reason_code": "",
+            "autonomy_level": "",
+            "autonomy_status": "",
+            "autonomy_policy_version": "",
+            "autonomy_policy_digest": "",
+            "autonomy_l1_runtime_policy_version": "",
+            "autonomy_l1_runtime_policy_digest": "",
+            "last_autonomy_decision_id": "",
+            "last_autonomy_decision_digest": "",
+            "last_autonomy_inspection_digest": "",
+            "autonomy_budget_usage": {},
+            "autonomy_budget_limits": {},
+            "autonomy_task_graph": {},
+            "autonomy_resource_binding_digest": "",
+            "autonomy_stop_reason": "",
             "updated_at": "",
             "executable": False,
         }
@@ -580,6 +636,20 @@ class ScientificAgentConversationSessionService:
                 "result_projections",
                 "scientific_result_status",
                 "scientific_result_reason_code",
+                "autonomy_level",
+                "autonomy_status",
+                "autonomy_policy_version",
+                "autonomy_policy_digest",
+                "autonomy_l1_runtime_policy_version",
+                "autonomy_l1_runtime_policy_digest",
+                "last_autonomy_decision_id",
+                "last_autonomy_decision_digest",
+                "last_autonomy_inspection_digest",
+                "autonomy_budget_usage",
+                "autonomy_budget_limits",
+                "autonomy_task_graph",
+                "autonomy_resource_binding_digest",
+                "autonomy_stop_reason",
                 "updated_at",
                 "executable",
             )
@@ -622,6 +692,20 @@ class ScientificAgentConversationSessionService:
                 "result_projections",
                 "scientific_result_status",
                 "scientific_result_reason_code",
+                "autonomy_level",
+                "autonomy_status",
+                "autonomy_policy_version",
+                "autonomy_policy_digest",
+                "autonomy_l1_runtime_policy_version",
+                "autonomy_l1_runtime_policy_digest",
+                "last_autonomy_decision_id",
+                "last_autonomy_decision_digest",
+                "last_autonomy_inspection_digest",
+                "autonomy_budget_usage",
+                "autonomy_budget_limits",
+                "autonomy_task_graph",
+                "autonomy_resource_binding_digest",
+                "autonomy_stop_reason",
                 "updated_at",
                 "executable",
             )
@@ -671,6 +755,95 @@ class ScientificAgentConversationSessionService:
         if result_reason and re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", result_reason) is None:
             raise ScientificAgentConversationSessionError(
                 "conversation scientific result reason is invalid"
+            )
+        autonomy_level = str(result.get("autonomy_level") or "")
+        if autonomy_level not in {"", "L1"}:
+            raise ScientificAgentConversationSessionError(
+                "conversation autonomy level is invalid"
+            )
+        autonomy_status = str(result.get("autonomy_status") or "")
+        if autonomy_status not in AUTONOMY_L1_STATUSES:
+            raise ScientificAgentConversationSessionError(
+                "conversation autonomy status is invalid"
+            )
+        for field in (
+            "autonomy_policy_version",
+            "autonomy_l1_runtime_policy_version",
+        ):
+            value = str(result.get(field) or "")
+            if value and re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,127}", value) is None:
+                raise ScientificAgentConversationSessionError(
+                    "conversation autonomy policy version is invalid"
+                )
+        for field in (
+            "autonomy_policy_digest",
+            "autonomy_l1_runtime_policy_digest",
+            "last_autonomy_decision_digest",
+            "last_autonomy_inspection_digest",
+            "autonomy_resource_binding_digest",
+        ):
+            value = str(result.get(field) or "")
+            if value and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+                raise ScientificAgentConversationSessionError(
+                    "conversation autonomy digest is invalid"
+                )
+        for field in ("last_autonomy_decision_id",):
+            value = str(result.get(field) or "")
+            if value and SESSION_ID_PATTERN.fullmatch(value) is None:
+                raise ScientificAgentConversationSessionError(
+                    "conversation autonomy decision identity is invalid"
+                )
+        usage = result.get("autonomy_budget_usage")
+        limits = result.get("autonomy_budget_limits")
+        if not isinstance(usage, dict) or not isinstance(limits, dict):
+            raise ScientificAgentConversationSessionError(
+                "conversation autonomy budget projection is invalid"
+            )
+        if set(usage).difference(_AUTONOMY_L1_PROJECTION_KEYS) or set(limits).difference(
+            {"transitions", "llm_calls", "remote_dispatches", "wall_clock_seconds"}
+        ):
+            raise ScientificAgentConversationSessionError(
+                "conversation autonomy budget projection contains unsupported fields"
+            )
+        for payload in (usage, limits):
+            for value in payload.values():
+                if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+                    raise ScientificAgentConversationSessionError(
+                        "conversation autonomy budget projection is invalid"
+                    )
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise ScientificAgentConversationSessionError(
+                        "conversation autonomy budget projection is invalid"
+                    )
+        task_graph = result.get("autonomy_task_graph")
+        if not isinstance(task_graph, dict):
+            raise ScientificAgentConversationSessionError(
+                "conversation autonomy task graph projection is invalid"
+            )
+        if set(task_graph).difference({"task_count", "task_roster_digest"}):
+            raise ScientificAgentConversationSessionError(
+                "conversation autonomy task graph projection contains unsupported fields"
+            )
+        if "task_count" in task_graph and (
+            isinstance(task_graph["task_count"], bool)
+            or not isinstance(task_graph["task_count"], int)
+            or task_graph["task_count"] < 0
+        ):
+            raise ScientificAgentConversationSessionError(
+                "conversation autonomy task graph projection is invalid"
+            )
+        if "task_roster_digest" in task_graph and re.fullmatch(
+            r"sha256:[0-9a-f]{64}", str(task_graph["task_roster_digest"])
+        ) is None:
+            raise ScientificAgentConversationSessionError(
+                "conversation autonomy task graph digest is invalid"
+            )
+        autonomy_stop_reason = str(result.get("autonomy_stop_reason") or "")
+        if autonomy_stop_reason and re.fullmatch(
+            r"[A-Z][A-Z0-9_]{0,127}", autonomy_stop_reason
+        ) is None:
+            raise ScientificAgentConversationSessionError(
+                "conversation autonomy stop reason is invalid"
             )
         if not isinstance(result.get("resource_authority_reason_codes"), list) or any(
             not isinstance(item, str) or re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None
@@ -1868,6 +2041,315 @@ class ScientificAgentConversationSessionService:
             controller=_controller_public(controller_result) if controller_result else None,
         )
 
+    def _l1_budget_snapshot(
+        self,
+        *,
+        controller_result: ControllerAdvanceResult,
+    ) -> AutonomyL1BudgetSnapshot:
+        """Rebuild L1 usage from exact Controller/Execution Agent evidence."""
+
+        execution = controller_result.execution
+        if not isinstance(execution, AgentHarnessControllerExecution):
+            raise AutonomyL1EvidenceError("L1 requires a typed Controller execution")
+        control_store = getattr(self.controller, "control_store", None)
+        list_receipts = getattr(
+            control_store,
+            "list_harness_controller_action_receipts",
+            None,
+        )
+        if not callable(list_receipts):
+            raise AutonomyL1EvidenceError(
+                "L1 Controller receipt evidence is unavailable"
+            )
+        raw_receipts = list_receipts(
+            project_id=execution.project_id,
+            controller_execution_id=execution.controller_execution_id,
+        )
+        if not isinstance(raw_receipts, list):
+            raise AutonomyL1EvidenceError("L1 Controller receipt evidence is invalid")
+        receipt_ids: set[str] = set()
+        remote_task_ids = {
+            slot.task_id
+            for slot in execution.task_slots
+            if slot.execution_route == "remote_execution_service"
+        }
+        remote_dispatches = 0
+        for receipt in raw_receipts:
+            if not isinstance(receipt, AgentHarnessControllerActionReceipt):
+                raise AutonomyL1EvidenceError(
+                    "L1 Controller receipt evidence is not typed"
+                )
+            if (
+                receipt.controller_execution_id != execution.controller_execution_id
+                or receipt.controller_execution_digest != execution.execution_digest
+                or receipt.receipt_id in receipt_ids
+            ):
+                raise AutonomyL1EvidenceError(
+                    "L1 Controller receipt evidence is not exactly bound"
+                )
+            receipt_ids.add(receipt.receipt_id)
+            if receipt.dispatch_occurred:
+                if receipt.task_id not in remote_task_ids:
+                    raise AutonomyL1EvidenceError(
+                        "L1 dispatch evidence is outside the authorized remote roster"
+                    )
+                remote_dispatches += 1
+        llm_counter = getattr(
+            getattr(self.execution_agent, "store", None),
+            "count_llm_calls_for_controller_execution",
+            None,
+        )
+        if not callable(llm_counter):
+            raise AutonomyL1EvidenceError(
+                "L1 Execution Agent call evidence is unavailable"
+            )
+        llm_calls = llm_counter(
+            project_id=execution.project_id,
+            controller_execution_id=execution.controller_execution_id,
+        )
+        return build_l1_budget_snapshot(
+            execution=execution,
+            transition_count=len(raw_receipts),
+            llm_call_count=llm_calls,
+            remote_dispatch_count=remote_dispatches,
+            now=self.clock(),
+        )
+
+    def _l1_policy_guard(
+        self,
+        *,
+        controller_result: ControllerAdvanceResult,
+        needs_llm: bool,
+    ) -> tuple[
+        AgentAutonomyPolicyDecision,
+        AutonomyL1BudgetSnapshot | None,
+        AgentHarnessControllerActionBoundaryClass,
+        tuple[str, ...],
+    ]:
+        """Recompute PR #45 eligibility and then apply the L1 safety floor."""
+
+        execution = controller_result.execution
+        inspection = controller_result.inspection
+        if not isinstance(execution, AgentHarnessControllerExecution) or not isinstance(
+            inspection, AgentHarnessControllerInspection
+        ):
+            raise AutonomyL1EvidenceError(
+                "L1 requires typed current Controller execution and inspection"
+            )
+        validate_l1_execution_inspection(
+            execution=execution,
+            inspection=inspection,
+        )
+        decision = classify_current_controller_inspection(inspection)
+        boundary = controller_action_boundary_class(
+            inspection.next_action,
+            terminal_receipt_committed=controller_result.receipt is not None,
+        )
+        user_boundaries = {
+            AgentHarnessControllerActionBoundaryClass.USER_GATE_APPROVAL,
+            AgentHarnessControllerActionBoundaryClass.USER_REMOTE_APPROVAL,
+            AgentHarnessControllerActionBoundaryClass.EXPLICIT_RECOVERY,
+        }
+        if boundary in user_boundaries:
+            # The existing Controller boundary remains a safety floor even if
+            # a future policy edit accidentally classifies the action as AUTO.
+            return (
+                decision,
+                None,
+                boundary,
+                ("AUTONOMY_L1_POLICY_HUMAN_BOUNDARY",),
+            )
+        if decision.classification is AgentAutonomyActionClass.REQUIRE_HUMAN:
+            return (
+                decision,
+                None,
+                boundary,
+                ("AUTONOMY_L1_POLICY_HUMAN_BOUNDARY",),
+            )
+        if decision.classification is AgentAutonomyActionClass.PROHIBITED:
+            return (
+                decision,
+                None,
+                boundary,
+                ("AUTONOMY_L1_POLICY_PROHIBITED",),
+            )
+        snapshot = self._l1_budget_snapshot(controller_result=controller_result)
+        return (
+            decision,
+            snapshot,
+            boundary,
+            budget_stop_reason_codes(
+                snapshot,
+                action=inspection.next_action,
+                needs_llm=needs_llm,
+            ),
+        )
+
+    @staticmethod
+    def _l1_projection_updates(
+        *,
+        decision: AgentAutonomyPolicyDecision,
+        snapshot: AutonomyL1BudgetSnapshot | None,
+        status: str,
+        stop_reason: str = "",
+    ) -> dict[str, Any]:
+        updates: dict[str, Any] = {
+            "autonomy_level": "L1",
+            "autonomy_status": status,
+            "autonomy_policy_version": str(decision.policy_version),
+            "autonomy_policy_digest": str(decision.policy_digest),
+            "autonomy_l1_runtime_policy_version": AUTONOMY_L1_RUNTIME_POLICY_VERSION,
+            "autonomy_l1_runtime_policy_digest": AUTONOMY_L1_RUNTIME_POLICY_DIGEST,
+            "last_autonomy_decision_id": str(decision.decision_id),
+            "last_autonomy_decision_digest": str(decision.decision_digest),
+            "last_autonomy_inspection_digest": str(decision.inspection_digest),
+            "autonomy_stop_reason": stop_reason,
+        }
+        if snapshot is not None:
+            projection = budget_projection(snapshot)
+            updates.update(
+                {
+                    "autonomy_budget_usage": projection["usage"],
+                    "autonomy_budget_limits": projection["limits"],
+                    "autonomy_task_graph": projection["task_graph"],
+                    "autonomy_resource_binding_digest": (
+                        snapshot.resource_binding_digest
+                    ),
+                }
+            )
+        return updates
+
+    @staticmethod
+    def _l1_human_state(
+        *,
+        action: AgentHarnessControllerAction,
+        boundary: AgentHarnessControllerActionBoundaryClass,
+    ) -> tuple[str, str, str]:
+        if boundary == AgentHarnessControllerActionBoundaryClass.USER_GATE_APPROVAL:
+            return "waiting_gate", "USER_GATE_APPROVAL_REQUIRED", "gate"
+        if boundary == AgentHarnessControllerActionBoundaryClass.USER_REMOTE_APPROVAL:
+            return (
+                "waiting_remote_approval",
+                "USER_REMOTE_APPROVAL_REQUIRED",
+                "remote_approval",
+            )
+        if boundary == AgentHarnessControllerActionBoundaryClass.EXPLICIT_RECOVERY:
+            return "recovery_required", "EXPLICIT_RECOVERY_REQUIRED", "recovery"
+        if action == AgentHarnessControllerAction.WAIT_FOR_GATE:
+            return "waiting_gate", "USER_GATE_APPROVAL_REQUIRED", "gate"
+        if action == AgentHarnessControllerAction.WAIT_FOR_REMOTE_APPROVAL:
+            return (
+                "waiting_remote_approval",
+                "USER_REMOTE_APPROVAL_REQUIRED",
+                "remote_approval",
+            )
+        return "recovery_required", "EXPLICIT_RECOVERY_REQUIRED", "recovery"
+
+    def _l1_guard_stop_state(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        state: dict[str, Any],
+        controller_result: ControllerAdvanceResult,
+        decision: AgentAutonomyPolicyDecision,
+        snapshot: AutonomyL1BudgetSnapshot | None,
+        boundary: AgentHarnessControllerActionBoundaryClass,
+        stop_reasons: tuple[str, ...],
+    ) -> tuple[dict[str, Any], str]:
+        """Persist a fail-closed L1 stop without performing an effect."""
+
+        if not stop_reasons:
+            raise ValueError("L1 stop state requires a reason")
+        first = stop_reasons[0]
+        inspection = controller_result.inspection
+        base_updates = {
+            "controller_status": inspection.status.value,
+            "current_task_id": inspection.current_task_id,
+        }
+        if first == "AUTONOMY_L1_POLICY_HUMAN_BOUNDARY":
+            status, reason_code, boundary_kind = self._l1_human_state(
+                action=inspection.next_action,
+                boundary=boundary,
+            )
+            updated = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status=status,
+                reason_code=reason_code,
+                updates={
+                    **base_updates,
+                    **self._l1_projection_updates(
+                        decision=decision,
+                        snapshot=snapshot,
+                        status="human_boundary",
+                        stop_reason=first,
+                    ),
+                },
+                event_type=(
+                    "gate.waiting"
+                    if boundary_kind == "gate"
+                    else "remote_approval.waiting"
+                    if boundary_kind == "remote_approval"
+                    else "recovery.required"
+                ),
+                event_data={
+                    "controller_status": inspection.status.value,
+                    "current_task_id": inspection.current_task_id,
+                    "next_action": inspection.next_action.value,
+                    "boundary": boundary.value,
+                },
+            )
+            return updated, boundary_kind
+        if first == "AUTONOMY_L1_POLICY_PROHIBITED":
+            updated = self._transition(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                status="unknown",
+                reason_code=first,
+                updates={
+                    **base_updates,
+                    **self._l1_projection_updates(
+                        decision=decision,
+                        snapshot=snapshot,
+                        status="prohibited",
+                        stop_reason=first,
+                    ),
+                },
+                event_type="autonomy.l1.prohibited",
+                event_data={
+                    "controller_status": inspection.status.value,
+                    "current_task_id": inspection.current_task_id,
+                    "next_action": inspection.next_action.value,
+                    "boundary": boundary.value,
+                },
+            )
+            return updated, "prohibited"
+        updated = self._transition(
+            project_id=project_id,
+            conversation_id=conversation_id,
+            status="running",
+            reason_code=first,
+            updates={
+                **base_updates,
+                **self._l1_projection_updates(
+                    decision=decision,
+                    snapshot=snapshot,
+                    status="budget_exhausted",
+                    stop_reason=first,
+                ),
+            },
+            event_type="autonomy.l1.budget_exhausted",
+            message="L1 自动继续已安全停止，未执行下一步；运行不会被自动取消或重新规划。",
+            event_data={
+                "controller_status": inspection.status.value,
+                "current_task_id": inspection.current_task_id,
+                "next_action": inspection.next_action.value,
+                "phase": "autonomy_l1",
+            },
+        )
+        return updated, "budget_exhausted"
+
     def _advance_controller_once(
         self,
         *,
@@ -1933,6 +2415,15 @@ class ScientificAgentConversationSessionService:
                 project_id=clean_project,
                 conversation_id=clean_conversation,
             )
+            if state.get("reason_code") == "EXECUTION_AGENT_PAUSED":
+                return self._handle_existing_execution(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    run_id=clean_run,
+                    state=state,
+                    provider=provider,
+                    provider_binding_digest=provider_binding_digest,
+                )
             if state.get("reason_code") != "REMOTE_EXECUTION_RUNNING":
                 return self._handle_existing_execution(
                     project_id=clean_project,
@@ -1977,6 +2468,64 @@ class ScientificAgentConversationSessionService:
                     and controller_result.inspection.next_action
                     == AgentHarnessControllerAction.REFRESH_REMOTE_TASK
                 ):
+                    try:
+                        (
+                            remote_policy_decision,
+                            remote_budget,
+                            remote_boundary,
+                            remote_stop_reasons,
+                        ) = self._l1_policy_guard(
+                            controller_result=controller_result,
+                            needs_llm=False,
+                        )
+                    except (AutonomyL1EvidenceError, ValueError) as exc:
+                        state = self._transition(
+                            project_id=clean_project,
+                            conversation_id=clean_conversation,
+                            status="running",
+                            reason_code="AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                            updates={
+                                "autonomy_level": "L1",
+                                "autonomy_status": "prohibited",
+                                "autonomy_l1_runtime_policy_version": (
+                                    AUTONOMY_L1_RUNTIME_POLICY_VERSION
+                                ),
+                                "autonomy_l1_runtime_policy_digest": (
+                                    AUTONOMY_L1_RUNTIME_POLICY_DIGEST
+                                ),
+                                "autonomy_stop_reason": "AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                            },
+                            event_type="autonomy.l1.prohibited",
+                        )
+                        return self._active_execution_result(
+                            project_id=clean_project,
+                            conversation_id=clean_conversation,
+                            run_id=clean_run,
+                            state=state,
+                            publication=publication,
+                            controller_result=controller_result,
+                            llm_used=False,
+                        )
+                    if remote_stop_reasons:
+                        state, _stop_reason = self._l1_guard_stop_state(
+                            project_id=clean_project,
+                            conversation_id=clean_conversation,
+                            state=state,
+                            controller_result=controller_result,
+                            decision=remote_policy_decision,
+                            snapshot=remote_budget,
+                            boundary=remote_boundary,
+                            stop_reasons=remote_stop_reasons,
+                        )
+                        return self._active_execution_result(
+                            project_id=clean_project,
+                            conversation_id=clean_conversation,
+                            run_id=clean_run,
+                            state=state,
+                            publication=publication,
+                            controller_result=controller_result,
+                            llm_used=False,
+                        )
                     controller_result = self._advance_controller_once(
                         project_id=clean_project,
                         conversation_id=clean_conversation,
@@ -1989,6 +2538,64 @@ class ScientificAgentConversationSessionService:
                     controller_result.inspection.next_action
                     == AgentHarnessControllerAction.ADOPT_REMOTE_OUTPUTS
                 ):
+                    try:
+                        (
+                            remote_policy_decision,
+                            remote_budget,
+                            remote_boundary,
+                            remote_stop_reasons,
+                        ) = self._l1_policy_guard(
+                            controller_result=controller_result,
+                            needs_llm=False,
+                        )
+                    except (AutonomyL1EvidenceError, ValueError):
+                        state = self._transition(
+                            project_id=clean_project,
+                            conversation_id=clean_conversation,
+                            status="running",
+                            reason_code="AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                            updates={
+                                "autonomy_level": "L1",
+                                "autonomy_status": "prohibited",
+                                "autonomy_l1_runtime_policy_version": (
+                                    AUTONOMY_L1_RUNTIME_POLICY_VERSION
+                                ),
+                                "autonomy_l1_runtime_policy_digest": (
+                                    AUTONOMY_L1_RUNTIME_POLICY_DIGEST
+                                ),
+                                "autonomy_stop_reason": "AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                            },
+                            event_type="autonomy.l1.prohibited",
+                        )
+                        return self._active_execution_result(
+                            project_id=clean_project,
+                            conversation_id=clean_conversation,
+                            run_id=clean_run,
+                            state=state,
+                            publication=publication,
+                            controller_result=controller_result,
+                            llm_used=False,
+                        )
+                    if remote_stop_reasons:
+                        state, _stop_reason = self._l1_guard_stop_state(
+                            project_id=clean_project,
+                            conversation_id=clean_conversation,
+                            state=state,
+                            controller_result=controller_result,
+                            decision=remote_policy_decision,
+                            snapshot=remote_budget,
+                            boundary=remote_boundary,
+                            stop_reasons=remote_stop_reasons,
+                        )
+                        return self._active_execution_result(
+                            project_id=clean_project,
+                            conversation_id=clean_conversation,
+                            run_id=clean_run,
+                            state=state,
+                            publication=publication,
+                            controller_result=controller_result,
+                            llm_used=False,
+                        )
                     controller_result = self._advance_controller_once(
                         project_id=clean_project,
                         conversation_id=clean_conversation,
@@ -2004,6 +2611,86 @@ class ScientificAgentConversationSessionService:
                 ) from exc
 
             if controller_result.inspection.status == AgentHarnessControllerStatus.RUNNING_REMOTE:
+                try:
+                    (
+                        next_policy_decision,
+                        next_budget,
+                        next_boundary,
+                        next_stop_reasons,
+                    ) = self._l1_policy_guard(
+                        controller_result=controller_result,
+                        needs_llm=False,
+                    )
+                except (AutonomyL1EvidenceError, ValueError):
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="running",
+                        reason_code="AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                        updates={
+                            "controller_status": controller_result.inspection.status.value,
+                            "current_task_id": controller_result.inspection.current_task_id,
+                            "autonomy_level": "L1",
+                            "autonomy_status": "prohibited",
+                            "autonomy_l1_runtime_policy_version": (
+                                AUTONOMY_L1_RUNTIME_POLICY_VERSION
+                            ),
+                            "autonomy_l1_runtime_policy_digest": (
+                                AUTONOMY_L1_RUNTIME_POLICY_DIGEST
+                            ),
+                            "autonomy_stop_reason": "AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                        },
+                        event_type="autonomy.l1.prohibited",
+                    )
+                    return controller_result, state, "l1_evidence"
+                if next_stop_reasons:
+                    if next_stop_reasons[0] == "AUTONOMY_L1_POLICY_HUMAN_BOUNDARY":
+                        boundary_status, boundary_reason, boundary_kind = self._l1_human_state(
+                            action=controller_result.inspection.next_action,
+                            boundary=next_boundary,
+                        )
+                        state = self._transition(
+                            project_id=project_id,
+                            conversation_id=conversation_id,
+                            status=boundary_status,
+                            reason_code=boundary_reason,
+                            updates={
+                                "controller_status": controller_result.inspection.status.value,
+                                "current_task_id": controller_result.inspection.current_task_id,
+                                **self._l1_projection_updates(
+                                    decision=next_policy_decision,
+                                    snapshot=next_budget,
+                                    status="human_boundary",
+                                    stop_reason=next_stop_reasons[0],
+                                ),
+                            },
+                            event_type=(
+                                "gate.waiting"
+                                if boundary_kind == "gate"
+                                else "remote_approval.waiting"
+                                if boundary_kind == "remote_approval"
+                                else "recovery.required"
+                            ),
+                        )
+                        return controller_result, state, boundary_kind
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="running",
+                        reason_code=next_stop_reasons[0],
+                        updates={
+                            "controller_status": controller_result.inspection.status.value,
+                            "current_task_id": controller_result.inspection.current_task_id,
+                            **self._l1_projection_updates(
+                                decision=next_policy_decision,
+                                snapshot=next_budget,
+                                status="budget_exhausted",
+                                stop_reason=next_stop_reasons[0],
+                            ),
+                        },
+                        event_type="autonomy.l1.budget_exhausted",
+                    )
+                    return controller_result, state, "budget_exhausted"
                 state = self._transition(
                     project_id=clean_project,
                     conversation_id=clean_conversation,
@@ -2012,6 +2699,11 @@ class ScientificAgentConversationSessionService:
                     updates={
                         "controller_status": controller_result.inspection.status.value,
                         "current_task_id": controller_result.inspection.current_task_id,
+                        **self._l1_projection_updates(
+                            decision=next_policy_decision,
+                            snapshot=next_budget,
+                            status="eligible",
+                        ),
                     },
                     event_type="remote.running",
                     message="远程任务仍在运行，等待下一次状态更新。",
@@ -2125,6 +2817,45 @@ class ScientificAgentConversationSessionService:
         for step in range(MAX_AUTO_STEPS):
             inspection = controller_result.inspection
             status = inspection.status
+            terminal_l1_updates: dict[str, Any] = {}
+            if status in {
+                AgentHarnessControllerStatus.SUCCEEDED,
+                AgentHarnessControllerStatus.CANCELLED,
+                AgentHarnessControllerStatus.FAILED,
+            }:
+                try:
+                    validate_l1_execution_inspection(
+                        execution=controller_result.execution,
+                        inspection=inspection,
+                    )
+                    terminal_decision = classify_current_controller_inspection(
+                        inspection
+                    )
+                except (AutonomyL1EvidenceError, ValueError):
+                    state = self._transition(
+                        project_id=project_id,
+                        conversation_id=conversation_id,
+                        status="unknown",
+                        reason_code="AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                        updates={
+                            "autonomy_level": "L1",
+                            "autonomy_status": "prohibited",
+                            "autonomy_l1_runtime_policy_version": (
+                                AUTONOMY_L1_RUNTIME_POLICY_VERSION
+                            ),
+                            "autonomy_l1_runtime_policy_digest": (
+                                AUTONOMY_L1_RUNTIME_POLICY_DIGEST
+                            ),
+                            "autonomy_stop_reason": "AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                        },
+                        event_type="autonomy.l1.prohibited",
+                    )
+                    return controller_result, state, "l1_evidence"
+                terminal_l1_updates = self._l1_projection_updates(
+                    decision=terminal_decision,
+                    snapshot=None,
+                    status="eligible",
+                )
             if status == AgentHarnessControllerStatus.SUCCEEDED:
                 result_projections: tuple[dict[str, Any], ...] = ()
                 result_projection_reason_code = ""
@@ -2167,6 +2898,7 @@ class ScientificAgentConversationSessionService:
                         "result_projections": list(result_projections),
                         "scientific_result_status": result_projection_status,
                         "scientific_result_reason_code": result_projection_reason_code,
+                        **terminal_l1_updates,
                     },
                     event_type="run.succeeded",
                     event_data={"controller_status": status.value},
@@ -2177,7 +2909,10 @@ class ScientificAgentConversationSessionService:
                         conversation_id=conversation_id,
                         status="succeeded",
                         reason_code="RUN_SUCCEEDED",
-                        updates={"result_projections": list(result_projections)},
+                        updates={
+                            "result_projections": list(result_projections),
+                            **terminal_l1_updates,
+                        },
                         event_type="scientific_result.available",
                         message=_scientific_result_message(result_projections),
                         event_data={
@@ -2194,6 +2929,7 @@ class ScientificAgentConversationSessionService:
                         updates={
                             "scientific_result_status": "unavailable",
                             "scientific_result_reason_code": result_projection_reason_code,
+                            **terminal_l1_updates,
                         },
                         event_type="scientific_result.unavailable",
                         message=_scientific_result_unavailable_message(
@@ -2212,7 +2948,10 @@ class ScientificAgentConversationSessionService:
                     conversation_id=conversation_id,
                     status="cancelled",
                     reason_code="RUN_CANCELLED",
-                    updates={"controller_status": status.value},
+                    updates={
+                        "controller_status": status.value,
+                        **terminal_l1_updates,
+                    },
                     event_type="run.cancelled",
                 )
                 return controller_result, state, "cancelled"
@@ -2225,16 +2964,45 @@ class ScientificAgentConversationSessionService:
                     updates={
                         "controller_status": status.value,
                         "current_task_id": inspection.current_task_id,
+                        **terminal_l1_updates,
                     },
                     event_type="run.failed",
                 )
                 return controller_result, state, "terminal_failure"
 
-            boundary = controller_action_boundary_class(
-                inspection.next_action,
-                terminal_receipt_committed=controller_result.receipt is not None,
-            )
-            if boundary == AgentHarnessControllerActionBoundaryClass.USER_GATE_APPROVAL:
+            try:
+                policy_decision, budget, boundary, stop_reasons = self._l1_policy_guard(
+                    controller_result=controller_result,
+                    needs_llm=provider is not None,
+                )
+            except (AutonomyL1EvidenceError, ValueError):
+                state = self._transition(
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    status="unknown",
+                    reason_code="AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                    updates={
+                        "controller_status": status.value,
+                        "current_task_id": inspection.current_task_id,
+                        "autonomy_level": "L1",
+                        "autonomy_status": "prohibited",
+                        "autonomy_l1_runtime_policy_version": (
+                            AUTONOMY_L1_RUNTIME_POLICY_VERSION
+                        ),
+                        "autonomy_l1_runtime_policy_digest": (
+                            AUTONOMY_L1_RUNTIME_POLICY_DIGEST
+                        ),
+                        "autonomy_stop_reason": "AUTONOMY_L1_EVIDENCE_UNAVAILABLE",
+                    },
+                    event_type="autonomy.l1.prohibited",
+                )
+                return controller_result, state, "l1_evidence"
+
+            if stop_reasons and stop_reasons[0] == "AUTONOMY_L1_POLICY_HUMAN_BOUNDARY":
+                boundary_status, boundary_reason, boundary_kind = self._l1_human_state(
+                    action=inspection.next_action,
+                    boundary=boundary,
+                )
                 authority_updates = self._authority_updates_for_controller(
                     project_id=project_id,
                     controller_result=controller_result,
@@ -2242,14 +3010,26 @@ class ScientificAgentConversationSessionService:
                 state = self._transition(
                     project_id=project_id,
                     conversation_id=conversation_id,
-                    status="waiting_gate",
-                    reason_code="USER_GATE_APPROVAL_REQUIRED",
+                    status=boundary_status,
+                    reason_code=boundary_reason,
                     updates={
                         "controller_status": status.value,
                         "current_task_id": inspection.current_task_id,
                         **authority_updates,
+                        **self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=budget,
+                            status="human_boundary",
+                            stop_reason=stop_reasons[0],
+                        ),
                     },
-                    event_type="gate.waiting",
+                    event_type=(
+                        "gate.waiting"
+                        if boundary_kind == "gate"
+                        else "remote_approval.waiting"
+                        if boundary_kind == "remote_approval"
+                        else "recovery.required"
+                    ),
                     event_data={
                         "controller_status": status.value,
                         "current_task_id": inspection.current_task_id,
@@ -2257,23 +3037,25 @@ class ScientificAgentConversationSessionService:
                         "boundary": boundary.value,
                     },
                 )
-                return controller_result, state, "gate"
-            if boundary == AgentHarnessControllerActionBoundaryClass.USER_REMOTE_APPROVAL:
-                authority_updates = self._authority_updates_for_controller(
-                    project_id=project_id,
-                    controller_result=controller_result,
-                )
+                return controller_result, state, boundary_kind
+
+            if stop_reasons and stop_reasons[0] == "AUTONOMY_L1_POLICY_PROHIBITED":
                 state = self._transition(
                     project_id=project_id,
                     conversation_id=conversation_id,
-                    status="waiting_remote_approval",
-                    reason_code="USER_REMOTE_APPROVAL_REQUIRED",
+                    status="unknown",
+                    reason_code="AUTONOMY_L1_POLICY_PROHIBITED",
                     updates={
                         "controller_status": status.value,
                         "current_task_id": inspection.current_task_id,
-                        **authority_updates,
+                        **self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=budget,
+                            status="prohibited",
+                            stop_reason=stop_reasons[0],
+                        ),
                     },
-                    event_type="remote_approval.waiting",
+                    event_type="autonomy.l1.prohibited",
                     event_data={
                         "controller_status": status.value,
                         "current_task_id": inspection.current_task_id,
@@ -2281,32 +3063,48 @@ class ScientificAgentConversationSessionService:
                         "boundary": boundary.value,
                     },
                 )
-                return controller_result, state, "remote_approval"
-            if boundary == AgentHarnessControllerActionBoundaryClass.EXPLICIT_RECOVERY:
+                return controller_result, state, "prohibited"
+            if stop_reasons:
+                reason = stop_reasons[0]
                 state = self._transition(
                     project_id=project_id,
                     conversation_id=conversation_id,
-                    status="recovery_required",
-                    reason_code="EXPLICIT_RECOVERY_REQUIRED",
+                    status="running",
+                    reason_code=reason,
                     updates={
                         "controller_status": status.value,
                         "current_task_id": inspection.current_task_id,
+                        **self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=budget,
+                            status="budget_exhausted",
+                            stop_reason=reason,
+                        ),
                     },
-                    event_type="recovery.required",
+                    event_type="autonomy.l1.budget_exhausted",
+                    message="L1 自动继续预算已耗尽，未执行下一步；运行不会被自动取消或重新规划。",
                     event_data={
                         "controller_status": status.value,
                         "current_task_id": inspection.current_task_id,
                         "next_action": inspection.next_action.value,
-                        "boundary": boundary.value,
+                        "phase": "autonomy_l1",
                     },
                 )
-                return controller_result, state, "recovery"
+                return controller_result, state, "budget_exhausted"
             if provider is None:
                 state = self._transition(
                     project_id=project_id,
                     conversation_id=conversation_id,
                     status="unknown",
                     reason_code="EXECUTION_AGENT_LLM_UNAVAILABLE",
+                    updates={
+                        **self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=budget,
+                            status="provider_unavailable",
+                            stop_reason="AUTONOMY_L1_PROVIDER_UNAVAILABLE",
+                        )
+                    },
                     event_type="run.failed",
                 )
                 return controller_result, state, "llm_unavailable"
@@ -2320,6 +3118,11 @@ class ScientificAgentConversationSessionService:
                 updates={
                     "controller_status": status.value,
                     "current_task_id": task_id,
+                    **self._l1_projection_updates(
+                        decision=policy_decision,
+                        snapshot=budget,
+                        status="eligible",
+                    ),
                 },
                 event_type="execution.status",
                 message=_static_status_message("running", task_id=task_id),
@@ -2373,6 +3176,12 @@ class ScientificAgentConversationSessionService:
                     conversation_id=conversation_id,
                     status="unknown",
                     reason_code="EXECUTION_AGENT_LLM_OUTCOME_UNKNOWN",
+                    updates=self._l1_projection_updates(
+                        decision=policy_decision,
+                        snapshot=budget,
+                        status="unknown_outcome",
+                        stop_reason="AUTONOMY_L1_LLM_OUTCOME_UNKNOWN",
+                    ),
                     event_type="run.failed",
                 )
                 return controller_result, state, "llm_unknown"
@@ -2382,6 +3191,12 @@ class ScientificAgentConversationSessionService:
                     conversation_id=conversation_id,
                     status="unknown",
                     reason_code="EXECUTION_AGENT_LLM_UNAVAILABLE",
+                    updates=self._l1_projection_updates(
+                        decision=policy_decision,
+                        snapshot=budget,
+                        status="provider_unavailable",
+                        stop_reason="AUTONOMY_L1_PROVIDER_UNAVAILABLE",
+                    ),
                     event_type="run.failed",
                 )
                 return controller_result, state, "llm_unavailable"
@@ -2391,6 +3206,12 @@ class ScientificAgentConversationSessionService:
                     conversation_id=conversation_id,
                     status="failed",
                     reason_code="EXECUTION_AGENT_LLM_FAILED",
+                    updates=self._l1_projection_updates(
+                        decision=policy_decision,
+                        snapshot=budget,
+                        status="unknown_outcome",
+                        stop_reason="EXECUTION_AGENT_LLM_FAILED",
+                    ),
                     event_type="run.failed",
                 )
                 return controller_result, state, "llm_failed"
@@ -2400,6 +3221,12 @@ class ScientificAgentConversationSessionService:
                     conversation_id=conversation_id,
                     status="stale_authority",
                     reason_code="EXECUTION_AGENT_STALE_AUTHORITY",
+                    updates=self._l1_projection_updates(
+                        decision=policy_decision,
+                        snapshot=budget,
+                        status="prohibited",
+                        stop_reason="EXECUTION_AGENT_STALE_AUTHORITY",
+                    ),
                     event_type="run.failed",
                 )
                 return controller_result, state, "stale"
@@ -2409,6 +3236,12 @@ class ScientificAgentConversationSessionService:
                     conversation_id=conversation_id,
                     status="failed",
                     reason_code="EXECUTION_AGENT_STEP_FAILED",
+                    updates=self._l1_projection_updates(
+                        decision=policy_decision,
+                        snapshot=budget,
+                        status="prohibited",
+                        stop_reason="EXECUTION_AGENT_STEP_FAILED",
+                    ),
                     event_type="run.failed",
                 )
                 return controller_result, state, "step_failed"
@@ -2417,6 +3250,12 @@ class ScientificAgentConversationSessionService:
                 controller_execution_id=controller_result.execution.controller_execution_id,
             )
             application_outcome = applied.application_receipt.outcome
+            try:
+                post_attempt_budget = self._l1_budget_snapshot(
+                    controller_result=controller_result
+                )
+            except AutonomyL1EvidenceError:
+                post_attempt_budget = budget
             if application_outcome == AgentToolCallApplicationOutcome.PAUSED:
                 state = self._transition(
                     project_id=project_id,
@@ -2426,9 +3265,14 @@ class ScientificAgentConversationSessionService:
                     updates={
                         "controller_status": controller_result.inspection.status.value,
                         "current_task_id": controller_result.inspection.current_task_id,
+                        **self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=post_attempt_budget,
+                            status="paused",
+                        ),
                     },
                     event_type="execution.paused",
-                    message="当前有界步骤已暂停，等待下一次 Agent session 更新。",
+                    message="当前有界步骤已暂停，等待下一次有界 tick 或 Agent session 更新。",
                     event_data={
                         "controller_status": controller_result.inspection.status.value,
                         "current_task_id": controller_result.inspection.current_task_id,
@@ -2446,6 +3290,11 @@ class ScientificAgentConversationSessionService:
                     updates={
                         "controller_status": controller_result.inspection.status.value,
                         "current_task_id": controller_result.inspection.current_task_id,
+                        **self._l1_projection_updates(
+                            decision=policy_decision,
+                            snapshot=post_attempt_budget,
+                            status="eligible",
+                        ),
                     },
                     event_type="remote.running",
                     message="远程任务仍在运行，等待下一次状态更新。",
@@ -2462,6 +3311,13 @@ class ScientificAgentConversationSessionService:
             conversation_id=conversation_id,
             status="unknown",
             reason_code="AUTO_PROGRESS_BOUND_EXCEEDED",
+            updates={
+                "autonomy_level": "L1",
+                "autonomy_status": "budget_exhausted",
+                "autonomy_l1_runtime_policy_version": AUTONOMY_L1_RUNTIME_POLICY_VERSION,
+                "autonomy_l1_runtime_policy_digest": AUTONOMY_L1_RUNTIME_POLICY_DIGEST,
+                "autonomy_stop_reason": "AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED",
+            },
             event_type="run.failed",
         )
         return controller_result, state, "step_bound"
@@ -2490,7 +3346,7 @@ class ScientificAgentConversationSessionService:
     @staticmethod
     def _active_execution_message(state: dict[str, Any]) -> str:
         if state.get("reason_code") == "EXECUTION_AGENT_PAUSED":
-            return "当前有界步骤已暂停；下一条对话将恢复当前 Controller 的 Execution Agent 决策。"
+            return "当前有界步骤已暂停；下一次有界 tick 或对话将恢复当前 Controller 的 Execution Agent 决策。"
         if state.get("reason_code") == "REMOTE_EXECUTION_RUNNING":
             return "远程任务仍在运行，Molly 会通过有界状态更新继续观察。"
         status = str(state.get("status") or "unknown")
