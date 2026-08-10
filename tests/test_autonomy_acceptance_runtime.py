@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from types import SimpleNamespace
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Barrier, Lock
+from types import SimpleNamespace
 
 import pytest
 
 import ai4s_agent.routes.scientific_agent_conversation as conversation_routes
+from ai4s_agent.llm_provider import StubLLMProvider
 from ai4s_agent.schemas import (
     AgentHarnessControllerAction,
     AgentHarnessControllerStatus,
@@ -41,6 +44,23 @@ class _CountingProvider:
 
     def close(self) -> None:
         return None
+
+
+class _CountingRevisionProvider(StubLLMProvider):
+    def __init__(self) -> None:
+        super().__init__(
+            response={
+                "rationale_summary": "Use one bounded concurrent revision.",
+                "option_patch": {"generate_candidates": {"count": 4}},
+            }
+        )
+        self.calls = 0
+        self._calls_lock = Lock()
+
+    def complete_json(self, **kwargs):
+        with self._calls_lock:
+            self.calls += 1
+        return super().complete_json(**kwargs)
 
 
 def test_non_failed_l2_trigger_matrix_rejects_before_provider_or_successor(
@@ -211,3 +231,85 @@ def test_l1_acceptance_rebuilds_64_llm_checkpoints_and_stops_before_provider(
         action=AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
         needs_llm=True,
     )
+
+
+def test_l2_concurrent_material_replan_publishes_one_successor(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _client, service, state, current = _start_waiting_gate_session_with_client(
+        tmp_path,
+        monkeypatch,
+    )
+    receipt = service.controller.control_store.list_harness_controller_action_receipts(
+        project_id="conversation-project",
+        controller_execution_id=state["controller_execution_id"],
+    )[-1]
+    failed = replace(
+        current,
+        receipt=receipt,
+        inspection=_typed_controller_inspection_variant(
+            current.inspection,
+            status=AgentHarnessControllerStatus.FAILED,
+            action=AgentHarnessControllerAction.STOP_TASK_TERMINAL,
+        ),
+    )
+    monkeypatch.setattr(
+        service.controller,
+        "read_execution_agent_snapshot",
+        lambda **_kwargs: failed,
+    )
+    provider = _CountingRevisionProvider()
+
+    def resolve(_payload, *, settings, providers):
+        del settings, providers
+        return SimpleNamespace(
+            provider_context=nullcontext(provider),
+            provider_binding_digest=_agent_digest(
+                {"provider": "acceptance-concurrent-replan"}
+            ),
+        )
+
+    monkeypatch.setattr(
+        conversation_routes,
+        "resolve_llm_provider_payload",
+        resolve,
+    )
+    endpoint = (
+        "/api/projects/conversation-project/conversations/"
+        "conversation-one/agent-session/replan"
+    )
+    payload = {
+        "run_id": state["run_id"],
+        "external_llm_approved": True,
+        "llm_provider": {
+            "provider": "stub",
+            "model": "stub",
+            "stub_response": {
+                "rationale_summary": "Use a bounded concurrent revision.",
+                "option_patch": {"generate_candidates": {"count": 4}},
+            },
+        },
+    }
+    start = Barrier(2)
+
+    def concurrent_replan():
+        with app.test_client() as concurrent_client:
+            start.wait(timeout=5)
+            response = concurrent_client.post(endpoint, json=payload)
+            return response.status_code, response.get_json()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: concurrent_replan(), (1, 2)))
+
+    assert [status for status, _body in results] == [200, 200]
+    bodies = [body for _status, body in results]
+    proposal_ids = {body["proposal"]["proposal_id"] for body in bodies}
+    assert len(proposal_ids) == 1
+    assert all(body["session"]["status"] == "approval_required" for body in bodies)
+    assert provider.calls == 1
+    session = service.read_session(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+    )
+    assert session["autonomy_l2_successor_proposal_id"] == next(iter(proposal_ids))

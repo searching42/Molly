@@ -123,6 +123,10 @@ def test_checked_in_acceptance_evidence_is_complete_and_digest_bound() -> None:
     assert restart["l2_provider_restart"]["provider_calls_before"] == 1
     assert restart["l2_provider_restart"]["provider_calls_after"] == 1
     assert restart["l2_successor_reconciliation"]["duplicate_successor"] is False
+    a15 = next(item for item in scenarios if item["scenario_id"] == "AUT-A15")
+    assert a15["concurrent_replan"] is True
+    assert a15["concurrent_provider_calls"] == 1
+    assert a15["concurrent_successor_count"] == 1
 
     assert authority["acceptance_code_head"] == manifest["acceptance_code_head"]
     for key in (

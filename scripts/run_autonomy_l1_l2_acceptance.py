@@ -381,6 +381,12 @@ def _scenario_a15(workspace: Path) -> dict[str, Any]:
         "test_application_recovers_successor_published_before_receipt",
         workspace / "application",
     )
+    concurrent = _invoke_test(
+        "tests.test_autonomy_acceptance_runtime",
+        "test_l2_concurrent_material_replan_publishes_one_successor",
+        workspace / "concurrent",
+        needs_monkeypatch=True,
+    )
     with tempfile.TemporaryDirectory(
         prefix="l2-process-replay-", dir=str(workspace)
     ) as raw:
@@ -432,6 +438,7 @@ def _scenario_a15(workspace: Path) -> dict[str, Any]:
             raise AssertionError("cross-process replay did not recover the revision")
     return {
         **application,
+        "test_adapter_2": concurrent["test_adapter"],
         "observed_reason_codes": ["REPLANNER_REQUEST_REPLAYED"],
         "provider_calls_before": 1,
         "provider_calls_after": 1,
@@ -440,6 +447,9 @@ def _scenario_a15(workspace: Path) -> dict[str, Any]:
         "same_successor": True,
         "same_application_receipt": True,
         "duplicate_successor": False,
+        "concurrent_replan": True,
+        "concurrent_provider_calls": 1,
+        "concurrent_successor_count": 1,
         "restart_performed": True,
         "restart_scope": "separate-python-process",
         "authority_preserved": True,
@@ -709,7 +719,8 @@ def _safe_scenario_record(scenario: Scenario, *, status: str, details: dict[str,
         "fresh_authorization", "fresh_start_intent", "fresh_controller",
         "baseline_authorization_can_start_successor", "provider_calls_before", "provider_calls_after",
         "same_revision", "same_canonical_diff", "same_successor", "same_application_receipt",
-        "duplicate_successor", "controller_a_to_controller_b", "fresh_l1_epoch_scope",
+        "duplicate_successor", "concurrent_replan", "concurrent_provider_calls",
+        "concurrent_successor_count", "controller_a_to_controller_b", "fresh_l1_epoch_scope",
         "old_l1_projection_authoritative", "old_budget_evidence_immutable", "new_budget_rebuilt_from_new_controller",
         "unknown_outcome_retry_count", "automatic_cancel", "automatic_replan",
     }
