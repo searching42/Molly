@@ -43,7 +43,6 @@ from ai4s_agent.schemas import _agent_digest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_RELATIVE = Path("docs/evidence/autonomy-l1-l2-acceptance-v1")
 ACCEPTANCE_ID = "autonomy-l1-l2-acceptance-v1"
 SCHEMA_VERSION = "scientific_autonomy_l1_l2_acceptance_manifest.v1"
 
@@ -107,19 +106,20 @@ def _scenario_a01(workspace: Path) -> dict[str, Any]:
 
 def _scenario_a02(workspace: Path) -> dict[str, Any]:
     result = _invoke_test(
-        "tests.test_scientific_agent_conversation_session",
-        "test_remote_session_tick_refreshes_once_then_adopts_and_continues",
+        "tests.test_scientific_agent_harness_controller",
+        "test_remote_controller_separates_prepare_approval_dispatch_refresh_and_adoption",
         workspace,
         needs_monkeypatch=True,
     )
     return {
         **result,
         "observed_reason_codes": [
+            "REMOTE_APPROVAL_REQUIRED",
             "REMOTE_EXECUTION_RUNNING",
-            "RUN_SUCCEEDED",
+            "REMOTE_OUTPUTS_ADOPTED",
         ],
         "provider_call_count": 0,
-        "remote_dispatch_count": 0,
+        "remote_dispatch_count": 1,
         "authority_preserved": True,
     }
 
@@ -167,21 +167,15 @@ def _scenario_a04(workspace: Path) -> dict[str, Any]:
 
 def _scenario_a05(workspace: Path) -> dict[str, Any]:
     result = _invoke_test(
-        "tests.test_scientific_agent_autonomy_l1",
-        "test_budget_exhaustion_is_checked_before_the_next_attempt",
+        "tests.test_autonomy_acceptance_runtime",
+        "test_l1_acceptance_rebuilds_128_transition_receipts_and_stops_before_effect",
         workspace,
     )
     return {
         **result,
-        "observed_reason_codes": [
-            "AUTONOMY_L1_TRANSITION_BUDGET_EXHAUSTED",
-            "AUTONOMY_L1_LLM_BUDGET_EXHAUSTED",
-            "AUTONOMY_L1_WALL_CLOCK_BUDGET_EXHAUSTED",
-        ],
+        "observed_reason_codes": ["AUTONOMY_L1_TRANSITION_BUDGET_EXHAUSTED"],
         "transitions_used": AUTONOMY_L1_MAX_TRANSITIONS,
         "transition_limit": AUTONOMY_L1_MAX_TRANSITIONS,
-        "llm_calls_used": AUTONOMY_L1_MAX_LLM_CALLS,
-        "llm_call_limit": AUTONOMY_L1_MAX_LLM_CALLS,
         "next_effect_blocked": True,
         "automatic_cancel": False,
         "automatic_replan": False,
@@ -191,8 +185,8 @@ def _scenario_a05(workspace: Path) -> dict[str, Any]:
 
 def _scenario_a06(workspace: Path) -> dict[str, Any]:
     result = _invoke_test(
-        "tests.test_scientific_agent_autonomy_l1",
-        "test_budget_rebuild_uses_execution_scope_and_exact_graph_resource_identity",
+        "tests.test_autonomy_acceptance_runtime",
+        "test_l1_acceptance_rebuilds_64_llm_checkpoints_and_stops_before_provider",
         workspace,
     )
     return {
@@ -247,8 +241,14 @@ def _scenario_a09(workspace: Path) -> dict[str, Any]:
         "test_invalid_clock_or_dispatch_evidence_fails_closed",
         workspace,
     )
+    graph_binding = _invoke_test(
+        "tests.test_scientific_agent_autonomy_l1",
+        "test_task_graph_and_execution_digest_are_exactly_bound",
+        workspace / "graph-binding",
+    )
     return {
         **result,
+        "test_adapter_2": graph_binding["test_adapter"],
         "observed_reason_codes": [
             "AUTONOMY_L1_WALL_CLOCK_BUDGET_EXHAUSTED",
             "AUTONOMY_L1_TASK_GRAPH_BOUNDARY",
@@ -259,6 +259,8 @@ def _scenario_a09(workspace: Path) -> dict[str, Any]:
         "clock_boundary_effect": "blocked_before_effect",
         "task_graph_mutation": False,
         "resource_expansion": False,
+        "task_graph_identity_verified": True,
+        "resource_evidence_fail_closed": True,
         "authority_preserved": True,
     }
 
@@ -383,7 +385,26 @@ def _scenario_a15(workspace: Path) -> dict[str, Any]:
         prefix="l2-process-replay-", dir=str(workspace)
     ) as raw:
         root = Path(raw)
-        metadata = _prepare_replanner_process_workspace(root)
+        phase_a = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--phase",
+                "l2-provider-crash",
+                "--workspace-root",
+                str(root),
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if phase_a.returncode != 0:
+            raise AssertionError("cross-process L2 crash phase failed")
+        metadata = {
+            key: Path(value)
+            for key, value in json.loads(phase_a.stdout).items()
+        }
         child = subprocess.run(
             [
                 sys.executable,
@@ -638,6 +659,14 @@ def _run_replanner_replay_phase(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_replanner_crash_phase(args: argparse.Namespace) -> int:
+    if not args.workspace_root:
+        raise SystemExit("crash phase requires workspace-root")
+    metadata = _prepare_replanner_process_workspace(Path(args.workspace_root))
+    print(json.dumps({key: str(value) for key, value in metadata.items()}, sort_keys=True))
+    return 0
+
+
 def _git_head() -> str:
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=REPOSITORY_ROOT,
@@ -661,7 +690,7 @@ def _assert_code_head(expected: str) -> str:
 
 def _safe_scenario_record(scenario: Scenario, *, status: str, details: dict[str, Any]) -> dict[str, Any]:
     allowed = {
-        "test_adapter", "observed_reason_codes", "provider_call_count", "provider_calls",
+        "test_adapter", "test_adapter_2", "observed_reason_codes", "provider_call_count", "provider_calls",
         "remote_dispatch_count", "remote_dispatch_count_before", "remote_dispatch_count_after",
         "same_controller", "same_remote_request", "replay_verified", "restart_performed",
         "restart_scope", "authority_preserved", "invocation_steps_before", "transitions_before",
@@ -670,6 +699,7 @@ def _safe_scenario_record(scenario: Scenario, *, status: str, details: dict[str,
         "next_provider_call_blocked", "usage_rebuilt_from", "anchor_initialized", "request_root_removed",
         "llm_calls_not_reset_to_zero", "controller_advanced", "wall_clock_limit_seconds",
         "clock_injected", "clock_boundary_effect", "task_graph_mutation", "resource_expansion",
+        "task_graph_identity_verified", "resource_evidence_fail_closed",
         "concurrency_scope", "effective_controller_transitions", "duplicate_remote_dispatch_count",
         "budget_bypass", "read_only_surface_effect_count", "events_may_drive_execution",
         "provider_call_count_delta", "controller_receipt_count_delta", "replanner_call_count_delta",
@@ -820,8 +850,13 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-code-head", default="")
     parser.add_argument("--output-dir", type=Path, default=Path("/tmp/molly-autonomy-acceptance"))
-    parser.add_argument("--phase", choices=("full", "l2-provider-replay"), default="full")
+    parser.add_argument(
+        "--phase",
+        choices=("full", "l2-provider-crash", "l2-provider-replay"),
+        default="full",
+    )
     parser.add_argument("--workspace", type=Path)
+    parser.add_argument("--workspace-root", type=Path)
     parser.add_argument("--payload-file", type=Path)
     parser.add_argument("--counter-file", type=Path)
     return parser
@@ -829,6 +864,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.phase == "l2-provider-crash":
+        return _run_replanner_crash_phase(args)
     if args.phase == "l2-provider-replay":
         if not args.workspace or not args.payload_file or not args.counter_file:
             raise SystemExit("replay phase requires workspace, payload, and counter files")
