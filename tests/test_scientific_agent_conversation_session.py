@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -13,8 +14,11 @@ import pytest
 import ai4s_agent.scientific_agent_conversation as session_module
 from ai4s_agent.app import create_app
 from ai4s_agent.execution_agent import ExecutionAgentLLMOutcomeUnknown
+from ai4s_agent.execution_agent_store import ExecutionAgentStore
+from ai4s_agent.scientific_agent_autonomy_l1 import AutonomyL1EvidenceError
 from ai4s_agent.schemas import (
     AgentHarnessControllerAction,
+    AgentHarnessControllerActionReceipt,
     AgentExecutionPlanLLMResponse,
     AgentHarnessControllerActionBoundaryClass,
     AgentHarnessControllerInspection,
@@ -565,6 +569,163 @@ def test_paused_execution_agent_resumes_on_a_mutating_tick_without_new_chat(
     assert resumed.session["controller_execution_id"] == paused[
         "controller_execution_id"
     ]
+
+
+def test_invocation_bound_pauses_and_resumes_on_the_next_tick(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, _client, service, state, controller_result = (
+        _start_waiting_gate_session_with_client(tmp_path, monkeypatch)
+    )
+    controller_result = _auto_controller_result(controller_result)
+    monkeypatch.setattr(
+        session_module,
+        "controller_action_boundary_class",
+        lambda *_args, **_kwargs: AgentHarnessControllerActionBoundaryClass.ORDINARY_ADVANCE,
+    )
+    calls = {"create": 0, "apply": 0}
+    receipts: list[AgentHarnessControllerActionReceipt] = []
+    proposal = SimpleNamespace(
+        tool_call_proposal_id="tool-call-proposal-invocation-bound",
+        tool_call_proposal_digest=_agent_digest({"proposal": "invocation-bound"}),
+    )
+
+    class SyntheticReceiptStore:
+        def list_harness_controller_action_receipts(self, **_kwargs):
+            return list(receipts)
+
+    monkeypatch.setattr(
+        service.controller,
+        "control_store",
+        SyntheticReceiptStore(),
+    )
+
+    def create_proposal(*_args, **_kwargs):
+        calls["create"] += 1
+        return SimpleNamespace(publication=SimpleNamespace(proposal=proposal))
+
+    def apply_proposal(*_args, **_kwargs):
+        calls["apply"] += 1
+        execution = controller_result.execution
+        receipts.append(
+            AgentHarnessControllerActionReceipt.model_construct(
+                receipt_id=f"synthetic-receipt-{len(receipts) + 1}",
+                controller_execution_id=execution.controller_execution_id,
+                controller_execution_digest=execution.execution_digest,
+                action_kind=AgentHarnessControllerAction.EXECUTE_LOCAL_TASK,
+                dispatch_occurred=False,
+            )
+        )
+        return SimpleNamespace(
+            application_receipt=SimpleNamespace(
+                outcome=AgentToolCallApplicationOutcome.APPLIED
+            ),
+            controller_result=controller_result,
+        )
+
+    monkeypatch.setattr(service.execution_agent, "create_proposal", create_proposal)
+    monkeypatch.setattr(service.execution_agent, "apply_proposal", apply_proposal)
+
+    _controller_result, paused, stop_reason = service._auto_progress(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        state=state,
+        controller_result=controller_result,
+        provider=object(),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+
+    assert stop_reason == "step_bound"
+    assert calls == {"create": session_module.MAX_AUTO_STEPS, "apply": session_module.MAX_AUTO_STEPS}
+    assert len(receipts) == session_module.MAX_AUTO_STEPS == 32
+    assert paused["status"] == "running"
+    assert paused["reason_code"] == "AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED"
+    assert paused["autonomy_status"] == "paused"
+    assert paused["autonomy_budget_usage"]["transitions"] == 32
+    assert paused["reason_code"] != "AUTO_PROGRESS_BOUND_EXCEEDED"
+
+    monkeypatch.setattr(
+        service.controller,
+        "get",
+        lambda **_kwargs: controller_result,
+    )
+    resumed = service.tick(
+        project_id="conversation-project",
+        conversation_id="conversation-one",
+        run_id="conversation-run",
+        provider=object(),
+        provider_binding_digest=_agent_digest({"provider": "stub"}),
+    )
+
+    assert calls == {
+        "create": session_module.MAX_AUTO_STEPS * 2,
+        "apply": session_module.MAX_AUTO_STEPS * 2,
+    }
+    assert len(receipts) == session_module.MAX_AUTO_STEPS * 2
+    assert resumed.session["status"] == "running"
+    assert resumed.session["reason_code"] == "AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED"
+    assert resumed.session["autonomy_status"] == "paused"
+    assert resumed.session["autonomy_budget_usage"]["transitions"] == 64
+    pause_events = [
+        event
+        for event in service.read_events(
+            project_id="conversation-project",
+            conversation_id="conversation-one",
+        )
+        if event["event_type"] == "autonomy.l1.paused"
+    ]
+    assert len(pause_events) >= 2
+    assert all(
+        event["data"]["reason_code"] == "AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED"
+        for event in pause_events
+    )
+
+
+def test_missing_l1_llm_evidence_fails_closed_after_store_recreation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _state, controller_result = _start_waiting_gate_session(tmp_path, monkeypatch)
+    store = service.execution_agent.store
+    snapshot = service._l1_budget_snapshot(controller_result=controller_result)
+    assert snapshot.llm_calls_used == 0
+
+    request_id = "l1-evidence-anchor-request"
+    with store.proposal_request_session(
+        project_id=controller_result.execution.project_id,
+        controller_execution_id=controller_result.execution.controller_execution_id,
+        client_request_id=request_id,
+        request_digest=_agent_digest({"request": request_id}),
+    ) as request_session:
+        store.write_marker(
+            request_session,
+            filename="llm_request_started.json",
+            status="LLM_REQUEST_STARTED",
+            values={"prompt_digest": _agent_digest({"prompt": "test"})},
+        )
+
+    counted = service._l1_budget_snapshot(controller_result=controller_result)
+    assert counted.llm_calls_used == 1
+    assert store.count_llm_calls_for_controller_execution(
+        project_id=controller_result.execution.project_id,
+        controller_execution_id=controller_result.execution.controller_execution_id,
+    ) == 1
+
+    requests_root = (
+        tmp_path
+        / "workspace"
+        / "projects"
+        / "conversation-project"
+        / "agent_execution_agent_requests"
+        / controller_result.execution.controller_execution_id
+        / "requests"
+    )
+    shutil.rmtree(requests_root)
+    service.execution_agent.store = ExecutionAgentStore(storage=store.storage)
+
+    with pytest.raises(AutonomyL1EvidenceError):
+        service._l1_budget_snapshot(controller_result=controller_result)
 
 
 def test_unknown_execution_agent_outcome_is_not_retried_by_a_later_tick(

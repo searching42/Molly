@@ -69,7 +69,10 @@ AUTONOMY_L1_RUNTIME_POLICY_MATERIAL: dict[str, Any] = {
     "budget_scope": "one_controller_execution_id",
     "evidence_sources": {
         "transitions": "verified_controller_action_receipts",
-        "llm_calls": "execution_agent_llm_request_started_checkpoints",
+        "llm_calls": (
+            "durable_l1_evidence_anchor_plus_"
+            "execution_agent_llm_request_started_checkpoints"
+        ),
         "dispatches": "verified_controller_action_receipts.dispatch_occurred",
         "wall_clock": "controller_execution.created_at_to_server_clock",
         "task_graph": "controller_execution.ordered_task_ids_and_task_roster_digest",
@@ -87,6 +90,7 @@ AUTONOMY_L1_RUNTIME_POLICY_MATERIAL: dict[str, Any] = {
         "read_only_surfaces_may_not_drive_execution": True,
         "events_may_drive_execution": False,
         "missing_or_ambiguous_evidence_fails_closed": True,
+        "llm_evidence_anchor_is_independent_and_non_executable": True,
         "material_change_owner": "M3.5-AUT-L2",
     },
 }

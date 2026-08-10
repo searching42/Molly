@@ -30,6 +30,7 @@ from ai4s_agent.execution_agent import (
     ExecutionAgentService,
     ExecutionAgentStale,
 )
+from ai4s_agent.execution_agent_store import ExecutionAgentStoreError
 from ai4s_agent.scientific_agent_autonomy_l1 import (
     AUTONOMY_L1_PER_INVOCATION_MAX_STEPS,
     AUTONOMY_L1_RUNTIME_POLICY_DIGEST,
@@ -116,6 +117,12 @@ SESSION_PROJECTION_SCHEMA_VERSION = "scientific_agent_session_event_projection.v
 SESSION_EVENT_SCHEMA_VERSION = "scientific_agent_session_event.v1"
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MAX_AUTO_STEPS = AUTONOMY_L1_PER_INVOCATION_MAX_STEPS
+AUTONOMY_L1_RESUMABLE_PAUSE_REASONS = frozenset(
+    {
+        "EXECUTION_AGENT_PAUSED",
+        "AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED",
+    }
+)
 ACTIVE_SESSION_STATUSES = frozenset(
     {
         "running",
@@ -2103,14 +2110,33 @@ class ScientificAgentConversationSessionService:
             "count_llm_calls_for_controller_execution",
             None,
         )
+        evidence_initializer = getattr(
+            getattr(self.execution_agent, "store", None),
+            "initialize_l1_budget_evidence",
+            None,
+        )
         if not callable(llm_counter):
             raise AutonomyL1EvidenceError(
                 "L1 Execution Agent call evidence is unavailable"
             )
-        llm_calls = llm_counter(
-            project_id=execution.project_id,
-            controller_execution_id=execution.controller_execution_id,
-        )
+        if not callable(evidence_initializer):
+            raise AutonomyL1EvidenceError(
+                "L1 Execution Agent evidence anchor is unavailable"
+            )
+        try:
+            evidence_initializer(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+                controller_execution_digest=execution.execution_digest,
+            )
+            llm_calls = llm_counter(
+                project_id=execution.project_id,
+                controller_execution_id=execution.controller_execution_id,
+            )
+        except (ExecutionAgentStoreError, OSError, ValueError) as exc:
+            raise AutonomyL1EvidenceError(
+                "L1 Execution Agent evidence could not be verified"
+            ) from exc
         return build_l1_budget_snapshot(
             execution=execution,
             transition_count=len(raw_receipts),
@@ -2419,7 +2445,7 @@ class ScientificAgentConversationSessionService:
                 project_id=clean_project,
                 conversation_id=clean_conversation,
             )
-            if state.get("reason_code") == "EXECUTION_AGENT_PAUSED":
+            if state.get("reason_code") in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS:
                 return self._handle_existing_execution(
                     project_id=clean_project,
                     conversation_id=clean_conversation,
@@ -3313,16 +3339,24 @@ class ScientificAgentConversationSessionService:
         state = self._transition(
             project_id=project_id,
             conversation_id=conversation_id,
-            status="unknown",
-            reason_code="AUTO_PROGRESS_BOUND_EXCEEDED",
+            status="running",
+            reason_code="AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED",
             updates={
-                "autonomy_level": "L1",
-                "autonomy_status": "budget_exhausted",
-                "autonomy_l1_runtime_policy_version": AUTONOMY_L1_RUNTIME_POLICY_VERSION,
-                "autonomy_l1_runtime_policy_digest": AUTONOMY_L1_RUNTIME_POLICY_DIGEST,
-                "autonomy_stop_reason": "AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED",
+                **self._l1_projection_updates(
+                    decision=policy_decision,
+                    snapshot=post_attempt_budget,
+                    status="paused",
+                    stop_reason="AUTONOMY_L1_INVOCATION_BOUND_EXHAUSTED",
+                ),
             },
-            event_type="run.failed",
+            event_type="autonomy.l1.paused",
+            message="本次 L1 有界调用已让出；下一次显式 tick 可在当前 authority 内继续。",
+            event_data={
+                "controller_status": controller_result.inspection.status.value,
+                "current_task_id": controller_result.inspection.current_task_id,
+                "next_action": controller_result.inspection.next_action.value,
+                "phase": "autonomy_l1",
+            },
         )
         return controller_result, state, "step_bound"
 
@@ -3349,7 +3383,7 @@ class ScientificAgentConversationSessionService:
 
     @staticmethod
     def _active_execution_message(state: dict[str, Any]) -> str:
-        if state.get("reason_code") == "EXECUTION_AGENT_PAUSED":
+        if state.get("reason_code") in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS:
             return "当前有界步骤已暂停；下一次有界 tick 或对话将恢复当前 Controller 的 Execution Agent 决策。"
         if state.get("reason_code") == "REMOTE_EXECUTION_RUNNING":
             return "远程任务仍在运行，Molly 会通过有界状态更新继续观察。"
@@ -3454,7 +3488,10 @@ class ScientificAgentConversationSessionService:
             raise ScientificAgentConversationStaleAuthority(
                 "active Controller execution digest no longer matches the session"
             )
-        if state.get("reason_code") == "EXECUTION_AGENT_PAUSED" and provider is not None:
+        if (
+            state.get("reason_code") in AUTONOMY_L1_RESUMABLE_PAUSE_REASONS
+            and provider is not None
+        ):
             controller_result, resumed_state, _stop_reason = self._auto_progress(
                 project_id=project_id,
                 conversation_id=conversation_id,
