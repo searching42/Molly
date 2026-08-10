@@ -1,0 +1,170 @@
+{
+  "$defs": {
+    "AgentAutonomyL2MaterialityClass": {
+      "description": "Deterministic materiality result for one verified plan revision.",
+      "enum": [
+        "non_material",
+        "material"
+      ],
+      "title": "AgentAutonomyL2MaterialityClass",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable, non-executable materiality projection for one revision.\n\nThis model is deliberately only a projection.  A serialized instance is\nnot trusted by a coordinator; the current verified revision and canonical\nplan diff must be recomputed before it can be used as a policy result.",
+  "properties": {
+    "authorization_scope_equal": {
+      "title": "Authorization Scope Equal",
+      "type": "boolean"
+    },
+    "baseline_authorization_digest": {
+      "title": "Baseline Authorization Digest",
+      "type": "string"
+    },
+    "baseline_authorization_id": {
+      "title": "Baseline Authorization Id",
+      "type": "string"
+    },
+    "baseline_authorization_scope_digest": {
+      "default": "",
+      "title": "Baseline Authorization Scope Digest",
+      "type": "string"
+    },
+    "baseline_projection_digest": {
+      "title": "Baseline Projection Digest",
+      "type": "string"
+    },
+    "baseline_proposal_digest": {
+      "title": "Baseline Proposal Digest",
+      "type": "string"
+    },
+    "baseline_proposal_id": {
+      "title": "Baseline Proposal Id",
+      "type": "string"
+    },
+    "baseline_semantic_plan_digest": {
+      "title": "Baseline Semantic Plan Digest",
+      "type": "string"
+    },
+    "classification": {
+      "$ref": "#/$defs/AgentAutonomyL2MaterialityClass"
+    },
+    "current_authority_reuse_eligible": {
+      "title": "Current Authority Reuse Eligible",
+      "type": "boolean"
+    },
+    "decision_digest": {
+      "default": "",
+      "title": "Decision Digest",
+      "type": "string"
+    },
+    "decision_id": {
+      "default": "",
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "executable": {
+      "const": false,
+      "default": false,
+      "title": "Executable",
+      "type": "boolean"
+    },
+    "fresh_authorization_required": {
+      "title": "Fresh Authorization Required",
+      "type": "boolean"
+    },
+    "fresh_permission_required": {
+      "title": "Fresh Permission Required",
+      "type": "boolean"
+    },
+    "material_change": {
+      "title": "Material Change",
+      "type": "boolean"
+    },
+    "plan_diff_digest": {
+      "title": "Plan Diff Digest",
+      "type": "string"
+    },
+    "plan_diff_id": {
+      "title": "Plan Diff Id",
+      "type": "string"
+    },
+    "policy_digest": {
+      "title": "Policy Digest",
+      "type": "string"
+    },
+    "policy_version": {
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "revision_digest": {
+      "title": "Revision Digest",
+      "type": "string"
+    },
+    "revision_id": {
+      "title": "Revision Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "agent_autonomy_l2_materiality_decision.v1",
+      "default": "agent_autonomy_l2_materiality_decision.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "successor_authorization_scope_digest": {
+      "default": "",
+      "title": "Successor Authorization Scope Digest",
+      "type": "string"
+    },
+    "successor_candidate_id": {
+      "default": "",
+      "title": "Successor Candidate Id",
+      "type": "string"
+    },
+    "successor_projection_digest": {
+      "title": "Successor Projection Digest",
+      "type": "string"
+    },
+    "successor_proposal_digest": {
+      "default": "",
+      "title": "Successor Proposal Digest",
+      "type": "string"
+    },
+    "successor_semantic_plan_digest": {
+      "default": "",
+      "title": "Successor Semantic Plan Digest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "policy_version",
+    "policy_digest",
+    "revision_id",
+    "revision_digest",
+    "plan_diff_id",
+    "plan_diff_digest",
+    "baseline_proposal_id",
+    "baseline_proposal_digest",
+    "baseline_semantic_plan_digest",
+    "baseline_projection_digest",
+    "baseline_authorization_id",
+    "baseline_authorization_digest",
+    "successor_projection_digest",
+    "authorization_scope_equal",
+    "classification",
+    "material_change",
+    "current_authority_reuse_eligible",
+    "fresh_permission_required",
+    "fresh_authorization_required",
+    "reason_codes"
+  ],
+  "title": "AgentAutonomyL2MaterialityDecision",
+  "type": "object"
+}

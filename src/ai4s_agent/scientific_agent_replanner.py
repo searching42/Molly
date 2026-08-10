@@ -116,6 +116,15 @@ class ReplannerApplyResult:
 
 
 @dataclass(frozen=True)
+class ReplannerL2FailureResult:
+    """One server-derived bounded L2 failure replan result."""
+
+    proposal: AgentPlanRevisionProposal
+    materiality_decision: Any
+    application: ReplannerApplyResult | None = None
+
+
+@dataclass(frozen=True)
 class _VerifiedBaseline:
     publication: ScientificAgentPlanPublication
     authorization: Any
@@ -592,6 +601,7 @@ class ScientificAgentReplannerService:
         actor: str,
         actor_source: str,
         provider: LLMProvider,
+        strict_controller_failure: bool = False,
     ) -> ReplannerCreateResult:
         clean_project = _safe_scope_id(project_id, field="project_id")
         request = AgentPlanReplanRequest(
@@ -629,13 +639,19 @@ class ScientificAgentReplannerService:
                     raise ScientificAgentReplannerConflict(
                         "committed replan revision digest mismatch"
                     )
-                self._verify_revision_current(revision)
+                self._verify_revision_current(
+                    revision,
+                    strict_controller_failure=strict_controller_failure,
+                )
                 return ReplannerCreateResult(revision, replayed=True)
             rejected = request_dir / "provider_rejected.json"
             if rejected.exists():
                 raise ScientificAgentReplannerResponseInvalid("provider response was rejected")
 
-            baseline = self._verify_baseline(request)
+            baseline = self._verify_baseline(
+                request,
+                strict_controller_failure=strict_controller_failure,
+            )
             observation = self._build_observation(request, baseline)
             outcome_path = request_dir / "provider_outcome.json"
             if outcome_path.exists():
@@ -791,12 +807,154 @@ class ScientificAgentReplannerService:
         self._verify_revision_current(revision)
         return revision
 
+    def create_current_controller_failure_revision(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        controller_execution_id: str,
+        controller_execution_digest: str,
+        actor: str,
+        actor_source: str,
+        provider: LLMProvider,
+    ) -> ReplannerL2FailureResult:
+        """Create/apply one exact server-derived L2 failure replan.
+
+        The caller supplies only the session's server-side Controller binding;
+        all request fields, baseline authority bindings, and request IDs are
+        derived here from a fresh read-only Controller snapshot.  Publication
+        is the only automatic L2 effect.  Authorization and execution remain
+        on the existing explicit approval path.
+        """
+
+        from ai4s_agent.scientific_agent_autonomy_l2 import (
+            classify_plan_revision_materiality,
+        )
+
+        clean_project = _safe_scope_id(project_id, field="project_id")
+        snapshot = self.controller.read_execution_agent_snapshot(
+            project_id=clean_project,
+            controller_execution_id=controller_execution_id,
+            expected_controller_execution_digest=controller_execution_digest,
+        )
+        if snapshot.inspection.status.value != "failed":
+            raise ScientificAgentReplannerStale(
+                "L2 failure replan requires the exact current FAILED Controller state"
+            )
+        if snapshot.execution.run_id != run_id:
+            raise ScientificAgentReplannerStale("Controller run binding is stale")
+        receipt = snapshot.receipt
+        if receipt is None:
+            raise ScientificAgentReplannerStale("current Controller failure receipt is unavailable")
+        decision = self.control_store.read_harness_controller_decision(
+            project_id=clean_project,
+            decision_id=receipt.decision_id,
+        )
+        if decision.decision_digest != receipt.decision_digest:
+            raise ScientificAgentReplannerStale("current Controller failure decision is stale")
+        proposal = self.proposal_store.read(
+            project_id=clean_project,
+            proposal_id=snapshot.execution.proposal_id,
+            verify_current=False,
+        ).proposal
+        authorization = self.authorization_service.verify_authorization(
+            project_id=clean_project,
+            authorization_id=snapshot.execution.authorization_id,
+            verify_current=False,
+        )
+        request_identity = {
+            "schema_version": "agent_autonomy_l2_controller_failure_request.v1",
+            "project_id": clean_project,
+            "run_id": run_id,
+            "trigger_kind": AgentPlanReplanTriggerKind.CONTROLLER_FAILED.value,
+            "controller_execution_id": snapshot.execution.controller_execution_id,
+            "controller_execution_digest": snapshot.execution.execution_digest,
+            "inspection_digest": snapshot.inspection.inspection_digest,
+            "controller_decision_id": decision.decision_id,
+            "controller_decision_digest": decision.decision_digest,
+            "controller_receipt_id": receipt.receipt_id,
+            "controller_receipt_digest": receipt.receipt_digest,
+            "baseline_proposal_id": proposal.proposal_id,
+            "baseline_proposal_digest": proposal.proposal_digest,
+            "baseline_authorization_id": authorization.authorization_id,
+            "baseline_authorization_digest": authorization.authorization_digest,
+        }
+        client_request_id = (
+            "l2-controller-failure-"
+            + _agent_digest(request_identity).split(":", 1)[1][:32]
+        )
+        payload = {
+            "run_id": run_id,
+            "client_request_id": client_request_id,
+            "trigger_kind": AgentPlanReplanTriggerKind.CONTROLLER_FAILED,
+            "baseline_proposal_id": proposal.proposal_id,
+            "baseline_proposal_digest": proposal.proposal_digest,
+            "baseline_semantic_plan_id": proposal.semantic_plan_id,
+            "baseline_semantic_plan_digest": proposal.semantic_plan_digest,
+            "baseline_run_plan_digest": _agent_digest(
+                proposal.run_plan.model_dump(mode="json")
+            ),
+            "baseline_authorization_id": authorization.authorization_id,
+            "baseline_authorization_digest": authorization.authorization_digest,
+            "controller_execution_id": snapshot.execution.controller_execution_id,
+            "controller_execution_digest": snapshot.execution.execution_digest,
+            "controller_decision_id": decision.decision_id,
+            "controller_decision_digest": decision.decision_digest,
+            "controller_receipt_id": receipt.receipt_id,
+            "controller_receipt_digest": receipt.receipt_digest,
+            "external_llm_approved": True,
+        }
+        created = self.create_revision(
+            project_id=clean_project,
+            payload=payload,
+            actor=actor,
+            actor_source=actor_source,
+            provider=provider,
+            strict_controller_failure=True,
+        )
+        revision = created.proposal
+        baseline = self._verify_baseline(
+            revision.replan_request,
+            strict_controller_failure=True,
+        )
+        materiality = classify_plan_revision_materiality(
+            revision,
+            baseline_proposal=baseline.publication.proposal,
+            baseline_authorization=baseline.authorization,
+        )
+        application = None
+        if materiality.classification.value == "material":
+            application_request_id = (
+                "l2-controller-failure-apply-"
+                + _agent_digest(
+                    {
+                        "revision_id": revision.revision_id,
+                        "revision_digest": revision.revision_digest,
+                    }
+                ).split(":", 1)[1][:32]
+            )
+            application = self.apply_revision(
+                project_id=clean_project,
+                revision_id=revision.revision_id,
+                request=AgentPlanRevisionApplicationRequest(
+                    expected_revision_digest=revision.revision_digest,
+                    client_request_id=application_request_id,
+                ),
+                strict_controller_failure=True,
+            )
+        return ReplannerL2FailureResult(
+            proposal=revision,
+            materiality_decision=materiality,
+            application=application,
+        )
+
     def apply_revision(
         self,
         *,
         project_id: str,
         revision_id: str,
         request: AgentPlanRevisionApplicationRequest,
+        strict_controller_failure: bool = False,
     ) -> ReplannerApplyResult:
         clean_project = _safe_scope_id(project_id, field="project_id")
         application_request_digest = _agent_digest(
@@ -881,7 +1039,10 @@ class ScientificAgentReplannerService:
                     receipt=committed,
                     replayed=True,
                 )
-            baseline = self._verify_baseline(revision.replan_request)
+            baseline = self._verify_baseline(
+                revision.replan_request,
+                strict_controller_failure=strict_controller_failure,
+            )
             observation = self._build_observation(revision.replan_request, baseline)
             rebuilt = self._compile_revision(
                 request=revision.replan_request,
@@ -1032,7 +1193,12 @@ class ScientificAgentReplannerService:
     ) -> AgentPlanRevisionApplicationReceipt:
         return self.store.read_application(project_id=project_id, receipt_id=receipt_id)
 
-    def _verify_baseline(self, request: AgentPlanReplanRequest) -> _VerifiedBaseline:
+    def _verify_baseline(
+        self,
+        request: AgentPlanReplanRequest,
+        *,
+        strict_controller_failure: bool = False,
+    ) -> _VerifiedBaseline:
         controller_snapshot = None
         controller_decision = None
         if request.controller_execution_id:
@@ -1075,9 +1241,12 @@ class ScientificAgentReplannerService:
                     "Controller does not bind the baseline authorization"
                 )
             controller_status = controller_snapshot.inspection.status.value
+            allowed_failure_states = (
+                {"failed"} if strict_controller_failure else {"failed", "recovery_required"}
+            )
             if (
                 request.trigger_kind == AgentPlanReplanTriggerKind.CONTROLLER_FAILED
-                and controller_status not in {"failed", "recovery_required"}
+                and controller_status not in allowed_failure_states
             ):
                 raise ScientificAgentReplannerStale(
                     "Controller failure trigger does not match current Controller state"
@@ -1443,8 +1612,16 @@ class ScientificAgentReplannerService:
             properties = tools[tool_id].option_schema.get("properties", {})
             if set(patch).difference(properties):
                 raise ScientificAgentReplannerResponseInvalid("revision contains an unknown option")
-    def _verify_revision_current(self, revision: AgentPlanRevisionProposal) -> None:
-        baseline = self._verify_baseline(revision.replan_request)
+    def _verify_revision_current(
+        self,
+        revision: AgentPlanRevisionProposal,
+        *,
+        strict_controller_failure: bool = False,
+    ) -> None:
+        baseline = self._verify_baseline(
+            revision.replan_request,
+            strict_controller_failure=strict_controller_failure,
+        )
         observation = self._build_observation(revision.replan_request, baseline)
         if observation.observation_digest != revision.observation.observation_digest:
             raise ScientificAgentReplannerStale("revision observation is no longer current")
@@ -1617,9 +1794,12 @@ def canonical_plan_diff(
                 )
             )
     changes.sort(key=lambda item: (item.dimension, item.path))
+    successor_semantic_plan_digest = (
+        successor.semantic_plan_digest if changes else baseline.semantic_plan_digest
+    )
     return AgentPlanDiff(
         baseline_semantic_plan_digest=baseline.semantic_plan_digest,
-        successor_semantic_plan_digest=successor.semantic_plan_digest,
+        successor_semantic_plan_digest=successor_semantic_plan_digest,
         baseline_projection_digest=_agent_digest(before),
         successor_projection_digest=_agent_digest(after),
         changes=changes,

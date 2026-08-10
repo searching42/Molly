@@ -88,6 +88,10 @@ from ai4s_agent.scientific_agent_plan import (
     ScientificAgentPlanService,
     ScientificAgentPlanSourceChanged,
 )
+from ai4s_agent.scientific_agent_replanner import (
+    ReplannerL2FailureResult,
+    ScientificAgentReplannerService,
+)
 from ai4s_agent.schemas import (
     AgentAuthorizationMode,
     AgentAutonomyActionClass,
@@ -397,6 +401,7 @@ class ScientificAgentConversationSessionService:
         input_binding_service: ScientificAgentRunInputBindingService | None = None,
         resource_authority_service: Any | None = None,
         result_projection_service: ScientificAgentResultProjectionService | None = None,
+        replanner: ScientificAgentReplannerService | None = None,
         clock: Callable[[], str] = now_iso,
     ) -> None:
         self.projects = projects
@@ -409,6 +414,7 @@ class ScientificAgentConversationSessionService:
         self.input_binding_service = input_binding_service
         self.resource_authority_service = resource_authority_service
         self.result_projection_service = result_projection_service
+        self.replanner = replanner
         self.clock = clock
         self.projector = ScientificAgentConversationSessionEventProjector(service=self)
 
@@ -483,6 +489,28 @@ class ScientificAgentConversationSessionService:
             "autonomy_task_graph": {},
             "autonomy_resource_binding_digest": "",
             "autonomy_stop_reason": "",
+            "autonomy_l2_materiality_class": "",
+            "autonomy_l2_decision_id": "",
+            "autonomy_l2_decision_digest": "",
+            "autonomy_l2_revision_id": "",
+            "autonomy_l2_revision_digest": "",
+            "autonomy_l2_plan_diff_id": "",
+            "autonomy_l2_plan_diff_digest": "",
+            "autonomy_l2_baseline_proposal_id": "",
+            "autonomy_l2_baseline_proposal_digest": "",
+            "autonomy_l2_baseline_authorization_id": "",
+            "autonomy_l2_baseline_authorization_digest": "",
+            "autonomy_l2_baseline_start_intent_id": "",
+            "autonomy_l2_baseline_start_intent_digest": "",
+            "autonomy_l2_baseline_controller_execution_id": "",
+            "autonomy_l2_baseline_controller_execution_digest": "",
+            "autonomy_l2_baseline_controller_decision_id": "",
+            "autonomy_l2_baseline_controller_decision_digest": "",
+            "autonomy_l2_baseline_controller_receipt_id": "",
+            "autonomy_l2_baseline_controller_receipt_digest": "",
+            "autonomy_l2_successor_proposal_id": "",
+            "autonomy_l2_successor_proposal_digest": "",
+            "autonomy_l2_reason_codes": [],
             "updated_at": "",
             "executable": False,
         }
@@ -657,6 +685,28 @@ class ScientificAgentConversationSessionService:
                 "autonomy_task_graph",
                 "autonomy_resource_binding_digest",
                 "autonomy_stop_reason",
+                "autonomy_l2_materiality_class",
+                "autonomy_l2_decision_id",
+                "autonomy_l2_decision_digest",
+                "autonomy_l2_revision_id",
+                "autonomy_l2_revision_digest",
+                "autonomy_l2_plan_diff_id",
+                "autonomy_l2_plan_diff_digest",
+                "autonomy_l2_baseline_proposal_id",
+                "autonomy_l2_baseline_proposal_digest",
+                "autonomy_l2_baseline_authorization_id",
+                "autonomy_l2_baseline_authorization_digest",
+                "autonomy_l2_baseline_start_intent_id",
+                "autonomy_l2_baseline_start_intent_digest",
+                "autonomy_l2_baseline_controller_execution_id",
+                "autonomy_l2_baseline_controller_execution_digest",
+                "autonomy_l2_baseline_controller_decision_id",
+                "autonomy_l2_baseline_controller_decision_digest",
+                "autonomy_l2_baseline_controller_receipt_id",
+                "autonomy_l2_baseline_controller_receipt_digest",
+                "autonomy_l2_successor_proposal_id",
+                "autonomy_l2_successor_proposal_digest",
+                "autonomy_l2_reason_codes",
                 "updated_at",
                 "executable",
             )
@@ -713,6 +763,28 @@ class ScientificAgentConversationSessionService:
                 "autonomy_task_graph",
                 "autonomy_resource_binding_digest",
                 "autonomy_stop_reason",
+                "autonomy_l2_materiality_class",
+                "autonomy_l2_decision_id",
+                "autonomy_l2_decision_digest",
+                "autonomy_l2_revision_id",
+                "autonomy_l2_revision_digest",
+                "autonomy_l2_plan_diff_id",
+                "autonomy_l2_plan_diff_digest",
+                "autonomy_l2_baseline_proposal_id",
+                "autonomy_l2_baseline_proposal_digest",
+                "autonomy_l2_baseline_authorization_id",
+                "autonomy_l2_baseline_authorization_digest",
+                "autonomy_l2_baseline_start_intent_id",
+                "autonomy_l2_baseline_start_intent_digest",
+                "autonomy_l2_baseline_controller_execution_id",
+                "autonomy_l2_baseline_controller_execution_digest",
+                "autonomy_l2_baseline_controller_decision_id",
+                "autonomy_l2_baseline_controller_decision_digest",
+                "autonomy_l2_baseline_controller_receipt_id",
+                "autonomy_l2_baseline_controller_receipt_digest",
+                "autonomy_l2_successor_proposal_id",
+                "autonomy_l2_successor_proposal_digest",
+                "autonomy_l2_reason_codes",
                 "updated_at",
                 "executable",
             )
@@ -764,7 +836,7 @@ class ScientificAgentConversationSessionService:
                 "conversation scientific result reason is invalid"
             )
         autonomy_level = str(result.get("autonomy_level") or "")
-        if autonomy_level not in {"", "L1"}:
+        if autonomy_level not in {"", "L1", "L2"}:
             raise ScientificAgentConversationSessionError(
                 "conversation autonomy level is invalid"
             )
@@ -851,6 +923,54 @@ class ScientificAgentConversationSessionService:
         ) is None:
             raise ScientificAgentConversationSessionError(
                 "conversation autonomy stop reason is invalid"
+            )
+        l2_class = str(result.get("autonomy_l2_materiality_class") or "")
+        if l2_class not in {"", "non_material", "material"}:
+            raise ScientificAgentConversationSessionError(
+                "conversation L2 materiality class is invalid"
+            )
+        for field in (
+            "autonomy_l2_decision_digest",
+            "autonomy_l2_revision_digest",
+            "autonomy_l2_plan_diff_digest",
+            "autonomy_l2_baseline_proposal_digest",
+            "autonomy_l2_baseline_authorization_digest",
+            "autonomy_l2_baseline_start_intent_digest",
+            "autonomy_l2_baseline_controller_execution_digest",
+            "autonomy_l2_baseline_controller_decision_digest",
+            "autonomy_l2_baseline_controller_receipt_digest",
+            "autonomy_l2_successor_proposal_digest",
+        ):
+            value = str(result.get(field) or "")
+            if value and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+                raise ScientificAgentConversationSessionError(
+                    "conversation L2 digest projection is invalid"
+                )
+        for field in (
+            "autonomy_l2_decision_id",
+            "autonomy_l2_revision_id",
+            "autonomy_l2_plan_diff_id",
+            "autonomy_l2_baseline_proposal_id",
+            "autonomy_l2_baseline_authorization_id",
+            "autonomy_l2_baseline_start_intent_id",
+            "autonomy_l2_baseline_controller_execution_id",
+            "autonomy_l2_baseline_controller_decision_id",
+            "autonomy_l2_baseline_controller_receipt_id",
+            "autonomy_l2_successor_proposal_id",
+        ):
+            value = str(result.get(field) or "")
+            if value and SESSION_ID_PATTERN.fullmatch(value) is None:
+                raise ScientificAgentConversationSessionError(
+                    "conversation L2 identity projection is invalid"
+                )
+        l2_reasons = result.get("autonomy_l2_reason_codes")
+        if not isinstance(l2_reasons, list) or len(l2_reasons) > 16 or any(
+            not isinstance(item, str)
+            or re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None
+            for item in l2_reasons
+        ):
+            raise ScientificAgentConversationSessionError(
+                "conversation L2 reason projection is invalid"
             )
         if not isinstance(result.get("resource_authority_reason_codes"), list) or any(
             not isinstance(item, str) or re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", item) is None
@@ -2774,6 +2894,222 @@ class ScientificAgentConversationSessionService:
                 publication=publication,
                 controller_result=controller_result,
                 llm_used=provider is not None,
+            )
+
+    def replan_current_controller_failure(
+        self,
+        *,
+        project_id: str,
+        conversation_id: str,
+        run_id: str,
+        provider: LLMProvider,
+        provider_binding_digest: str,
+        actor: ActorContext | None,
+    ) -> ScientificAgentConversationTurnResult:
+        """Run the one explicit, server-derived L2 failure replan operation."""
+
+        if self.replanner is None:
+            raise ScientificAgentConversationSessionError(
+                "L2 replanning is not configured"
+            )
+        if actor is None or not actor.actor:
+            raise ScientificAgentConversationAuthorizationRequired(
+                "L2 replanning requires a server-resolved actor"
+            )
+        clean_project = _clean_id(project_id, field="project_id")
+        clean_conversation = _clean_id(conversation_id, field="conversation_id")
+        clean_run = _clean_id(run_id, field="run_id")
+        root = self._root(clean_project, clean_conversation, create=True)
+        with self._lock(root):
+            self.conversations.get_conversation(clean_project, clean_conversation)
+            state = self.read_session(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+            )
+            bound_run = str(state.get("run_id") or "")
+            if bound_run and bound_run != clean_run:
+                raise ScientificAgentConversationStaleAuthority(
+                    "L2 replan run binding does not match the session"
+                )
+            if (
+                state.get("status") == "approval_required"
+                and state.get("autonomy_l2_materiality_class") == "material"
+                and state.get("autonomy_l2_successor_proposal_id")
+            ):
+                # A successor publication may have committed immediately
+                # before a control-plane/session write failed.  Reconcile the
+                # existing pending publication without another provider call
+                # or another publication attempt.
+                publication = self._read_pending_publication(state, clean_project)
+                decision_payload = {
+                    "schema_version": "agent_autonomy_l2_materiality_decision.v1",
+                    "classification": "material",
+                    "decision_id": str(state.get("autonomy_l2_decision_id") or ""),
+                    "decision_digest": str(
+                        state.get("autonomy_l2_decision_digest") or ""
+                    ),
+                    "revision_id": str(state.get("autonomy_l2_revision_id") or ""),
+                    "revision_digest": str(
+                        state.get("autonomy_l2_revision_digest") or ""
+                    ),
+                    "executable": False,
+                }
+                return ScientificAgentConversationTurnResult(
+                    decision=decision_payload,
+                    assistant_message="新的审阅计划已存在，等待用户确认后重新授权。",
+                    assistant_source="scientific_agent_l2",
+                    llm_used=False,
+                    session=self.session_projection(state),
+                    proposal=publication.proposal.model_dump(mode="json"),
+                    plan_summary=self._plan_summary(publication),
+                )
+            controller_execution_id = str(state.get("controller_execution_id") or "")
+            controller_execution_digest = str(
+                state.get("controller_execution_digest") or ""
+            )
+            if not controller_execution_id or not controller_execution_digest:
+                raise ScientificAgentConversationStaleAuthority(
+                    "L2 replan requires the exact current Controller binding"
+                )
+            result: ReplannerL2FailureResult = (
+                self.replanner.create_current_controller_failure_revision(
+                    project_id=clean_project,
+                    run_id=clean_run,
+                    controller_execution_id=controller_execution_id,
+                    controller_execution_digest=controller_execution_digest,
+                    actor=actor.actor,
+                    actor_source=actor.source,
+                    provider=provider,
+                )
+            )
+            decision = result.materiality_decision
+            l2_updates = {
+                "autonomy_level": "L2",
+                "autonomy_l2_materiality_class": decision.classification.value,
+                "autonomy_l2_decision_id": decision.decision_id,
+                "autonomy_l2_decision_digest": decision.decision_digest,
+                "autonomy_l2_revision_id": decision.revision_id,
+                "autonomy_l2_revision_digest": decision.revision_digest,
+                "autonomy_l2_plan_diff_id": decision.plan_diff_id,
+                "autonomy_l2_plan_diff_digest": decision.plan_diff_digest,
+                "autonomy_l2_baseline_proposal_id": decision.baseline_proposal_id,
+                "autonomy_l2_baseline_proposal_digest": decision.baseline_proposal_digest,
+                "autonomy_l2_baseline_authorization_id": decision.baseline_authorization_id,
+                "autonomy_l2_baseline_authorization_digest": decision.baseline_authorization_digest,
+                "autonomy_l2_baseline_start_intent_id": str(
+                    result.proposal.replan_request.controller_execution_id
+                    and state.get("start_intent_id")
+                    or ""
+                ),
+                "autonomy_l2_baseline_start_intent_digest": str(
+                    result.proposal.replan_request.controller_execution_id
+                    and state.get("start_intent_digest")
+                    or ""
+                ),
+                "autonomy_l2_baseline_controller_execution_id": result.proposal.replan_request.controller_execution_id,
+                "autonomy_l2_baseline_controller_execution_digest": result.proposal.replan_request.controller_execution_digest,
+                "autonomy_l2_baseline_controller_decision_id": result.proposal.replan_request.controller_decision_id,
+                "autonomy_l2_baseline_controller_decision_digest": result.proposal.replan_request.controller_decision_digest,
+                "autonomy_l2_baseline_controller_receipt_id": result.proposal.replan_request.controller_receipt_id,
+                "autonomy_l2_baseline_controller_receipt_digest": result.proposal.replan_request.controller_receipt_digest,
+                "autonomy_l2_successor_proposal_id": decision.successor_candidate_id,
+                "autonomy_l2_successor_proposal_digest": decision.successor_proposal_digest,
+                "autonomy_l2_reason_codes": list(decision.reason_codes),
+            }
+            decision_payload = decision.model_dump(mode="json")
+            if result.application is None:
+                try:
+                    current = self.controller.read_execution_agent_snapshot(
+                        project_id=clean_project,
+                        controller_execution_id=controller_execution_id,
+                        expected_controller_execution_digest=controller_execution_digest,
+                    )
+                except (FileNotFoundError, ScientificAgentHarnessControllerError, ValueError) as exc:
+                    raise ScientificAgentConversationStaleAuthority(
+                        "current failed Controller projection is unavailable"
+                    ) from exc
+                state = self._transition(
+                    project_id=clean_project,
+                    conversation_id=clean_conversation,
+                    status="failed",
+                    reason_code="AUTONOMY_L2_NO_MATERIAL_CHANGE",
+                    updates={
+                        **l2_updates,
+                        "run_id": clean_run,
+                        "controller_status": current.inspection.status.value,
+                        "current_task_id": current.inspection.current_task_id,
+                        "autonomy_status": "paused",
+                        "autonomy_stop_reason": "AUTONOMY_L2_NO_MATERIAL_CHANGE",
+                    },
+                    event_type="autonomy.l2.no_material_change",
+                    message="当前失败没有产生可执行的计划变化；运行保持停止状态。",
+                    event_data={
+                        "controller_status": current.inspection.status.value,
+                        "current_task_id": current.inspection.current_task_id,
+                        "phase": "autonomy_l2",
+                    },
+                )
+                publication = self._read_active_publication(state, clean_project)
+                return ScientificAgentConversationTurnResult(
+                    decision=decision_payload,
+                    assistant_message="当前失败没有产生可执行的计划变化；运行保持停止状态。",
+                    assistant_source="scientific_agent_l2",
+                    llm_used=True,
+                    session=self.session_projection(state),
+                    proposal=publication.proposal.model_dump(mode="json"),
+                    plan_summary=self._plan_summary(publication),
+                    controller=_controller_public(current),
+                )
+
+            successor = result.application.successor
+            # The publication is review-only.  Clear every live authority
+            # binding before exposing the successor as a pending proposal.
+            state = self._transition(
+                project_id=clean_project,
+                conversation_id=clean_conversation,
+                status="approval_required",
+                reason_code="AUTONOMY_L2_FRESH_AUTHORIZATION_REQUIRED",
+                updates={
+                    **l2_updates,
+                    "run_id": clean_run,
+                    "proposal_id": successor.proposal_id,
+                    "proposal_digest": successor.proposal_digest,
+                    "authorization_id": "",
+                    "authorization_digest": "",
+                    "start_intent_id": "",
+                    "start_intent_digest": "",
+                    "controller_execution_id": "",
+                    "controller_execution_digest": "",
+                    "controller_status": "",
+                    "current_task_id": "",
+                    "authority_kind": "",
+                    "gate_id": "",
+                    "snapshot_id": "",
+                    "snapshot_digest": "",
+                    "remote_request_sha256": "",
+                    "resource_authority_status": "",
+                    "resource_authority_reason_codes": [],
+                    "review_projection": {},
+                    "autonomy_status": "human_boundary",
+                    "autonomy_stop_reason": "AUTONOMY_L2_FRESH_AUTHORIZATION_REQUIRED",
+                },
+                event_type="autonomy.l2.successor_proposed",
+                message="原计划已失败；新的审阅计划已生成，等待用户确认后重新授权。",
+                event_data={
+                    "proposal_id": successor.proposal_id,
+                    "proposal_digest": successor.proposal_digest,
+                    "phase": "autonomy_l2",
+                },
+            )
+            publication = self._read_pending_publication(state, clean_project)
+            return ScientificAgentConversationTurnResult(
+                decision=decision_payload,
+                assistant_message="原计划已失败；新的审阅计划已生成，等待用户确认后重新授权。",
+                assistant_source="scientific_agent_l2",
+                llm_used=True,
+                session=self.session_projection(state),
+                proposal=publication.proposal.model_dump(mode="json"),
+                plan_summary=self._plan_summary(publication),
             )
 
     def _project_verified_results(
