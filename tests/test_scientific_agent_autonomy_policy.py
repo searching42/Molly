@@ -21,9 +21,12 @@ from ai4s_agent.scientific_agent_autonomy_policy import (
     AUTONOMY_POLICY_MATERIAL,
     AUTONOMY_POLICY_VERSION,
     AutonomyPolicyInputError,
+    AutonomyPolicyVerificationError,
     _AUTONOMY_CLASS_BY_CONTROLLER_ACTION,
     classify_controller_action,
     classify_current_controller_inspection,
+    classify_untrusted_action_token,
+    verify_autonomy_policy_decision,
 )
 from ai4s_agent.scientific_agent_harness_controller import controller_action_boundary_class
 
@@ -57,13 +60,54 @@ _EXPECTED_HUMAN_ACTIONS = {
 }
 
 
-def _decision(action: AgentHarnessControllerAction | str):
+def _decision(action: AgentHarnessControllerAction):
     return classify_controller_action(
         action,
         controller_execution_id="controller-execution-a",
         controller_execution_digest=_EXECUTION_DIGEST,
         inspection_digest=_INSPECTION_DIGEST,
     )
+
+
+def _token_decision(token: str):
+    return classify_untrusted_action_token(
+        token,
+        controller_execution_id="controller-execution-a",
+        controller_execution_digest=_EXECUTION_DIGEST,
+        inspection_digest=_INSPECTION_DIGEST,
+    )
+
+
+def _inspection(
+    action: AgentHarnessControllerAction = AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
+) -> AgentHarnessControllerInspection:
+    fact = AgentHarnessControllerInspectionFact(
+        name="controller_execution",
+        authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
+        source_id="controller-execution-a",
+        source_digest=_EXECUTION_DIGEST,
+        state="verified",
+    )
+    return AgentHarnessControllerInspection(
+        controller_execution_id="controller-execution-a",
+        controller_execution_digest=_EXECUTION_DIGEST,
+        status=AgentHarnessControllerStatus.ACTIVE,
+        next_action=action,
+        facts=[fact],
+        source_roster_digest=_agent_digest([fact.model_dump(mode="json")]),
+        inspected_at=_NOW,
+    )
+
+
+def _forged_decision(
+    inspection: AgentHarnessControllerInspection,
+    **changes: str | list[str],
+) -> AgentAutonomyPolicyDecision:
+    payload = classify_current_controller_inspection(inspection).model_dump(mode="json")
+    payload.update(changes)
+    payload["decision_id"] = ""
+    payload["decision_digest"] = ""
+    return AgentAutonomyPolicyDecision(**payload)
 
 
 def test_policy_mapping_is_explicit_and_exhaustive() -> None:
@@ -140,7 +184,7 @@ def test_terminal_boundary_remains_derived_from_controller_receipt() -> None:
 
 
 def test_unknown_action_is_prohibited_and_untyped_input_fails_closed() -> None:
-    unknown = _decision("future_controller_action")
+    unknown = _token_decision("future_controller_action")
     assert unknown.classification is AgentAutonomyActionClass.PROHIBITED
     assert unknown.reason_codes == ["AUTONOMY_ACTION_UNRECOGNIZED"]
 
@@ -153,9 +197,13 @@ def test_unknown_action_is_prohibited_and_untyped_input_fails_closed() -> None:
         AgentAutonomyPolicyDecision(**direct_unknown)
 
     with pytest.raises(AutonomyPolicyInputError):
+        _decision("dispatch_remote_task")  # type: ignore[arg-type]
+    with pytest.raises(AutonomyPolicyInputError):
+        _token_decision("dispatch_remote_task")
+    with pytest.raises(AutonomyPolicyInputError):
         _decision(object())
     with pytest.raises(AutonomyPolicyInputError):
-        _decision("/bin/sh")
+        _token_decision("/bin/sh")
 
 
 def test_same_exact_input_is_deterministic() -> None:
@@ -192,23 +240,7 @@ def test_decision_digest_binds_execution_inspection_and_action() -> None:
 
 
 def test_current_inspection_is_the_recomputation_binding() -> None:
-    fact = AgentHarnessControllerInspectionFact(
-        name="controller_execution",
-        authority_class=AgentHarnessAuthorityClass.AUTHORITATIVE,
-        source_id="controller-execution-a",
-        source_digest=_EXECUTION_DIGEST,
-        state="verified",
-    )
-    inspection = AgentHarnessControllerInspection(
-        controller_execution_id="controller-execution-a",
-        controller_execution_digest=_EXECUTION_DIGEST,
-        status=AgentHarnessControllerStatus.RUNNING_REMOTE,
-        next_action=AgentHarnessControllerAction.REFRESH_REMOTE_TASK,
-        facts=[fact],
-        source_roster_digest=_agent_digest([fact.model_dump(mode="json")]),
-        inspected_at=_NOW,
-    )
-
+    inspection = _inspection()
     decision = classify_current_controller_inspection(inspection)
 
     assert decision.controller_execution_id == inspection.controller_execution_id
@@ -216,6 +248,56 @@ def test_current_inspection_is_the_recomputation_binding() -> None:
     assert decision.inspection_digest == inspection.inspection_digest
     assert decision.controller_action == inspection.next_action.value
     assert decision.executable is False
+
+
+def test_policy_verifier_accepts_only_current_canonical_decision() -> None:
+    inspection = _inspection()
+    expected = classify_current_controller_inspection(inspection)
+
+    verified = verify_autonomy_policy_decision(
+        inspection=inspection,
+        decision=expected,
+    )
+
+    assert verified == expected
+
+
+@pytest.mark.parametrize(
+    "action",
+    sorted(_EXPECTED_HUMAN_ACTIONS, key=lambda item: item.value),
+)
+def test_policy_verifier_rejects_forged_human_boundary_as_auto(
+    action: AgentHarnessControllerAction,
+) -> None:
+    inspection = _inspection(action)
+    forged = _forged_decision(
+        inspection,
+        classification=AgentAutonomyActionClass.AUTO_CONTINUE.value,
+        reason_codes=["AUTONOMY_ACTION_AUTO_CONTINUE"],
+    )
+    parsed = AgentAutonomyPolicyDecision.model_validate_json(forged.model_dump_json())
+
+    with pytest.raises(AutonomyPolicyVerificationError):
+        verify_autonomy_policy_decision(inspection=inspection, decision=parsed)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("policy_version", "scientific-agent-autonomy-policy.v999"),
+        ("policy_digest", _OTHER_EXECUTION_DIGEST),
+        ("inspection_digest", _OTHER_INSPECTION_DIGEST),
+    ),
+)
+def test_policy_verifier_rejects_forged_policy_identity_or_inspection(
+    field: str,
+    value: str,
+) -> None:
+    inspection = _inspection()
+    forged = _forged_decision(inspection, **{field: value})
+
+    with pytest.raises(AutonomyPolicyVerificationError):
+        verify_autonomy_policy_decision(inspection=inspection, decision=forged)
 
 
 def test_decision_is_immutable_non_executable_and_privacy_safe() -> None:
@@ -262,7 +344,7 @@ def test_materiality_is_handed_off_without_implementing_l2() -> None:
     assert handoff["future_owner"] == "M3.5-AUT-L2"
     assert handoff["reason_code"] == "AUTONOMY_MATERIAL_CHANGE_REQUIRES_REPLAN"
     for token in ("change_top_n", "replace_dataset", "expand_resource_envelope"):
-        decision = _decision(token)
+        decision = _token_decision(token)
         assert decision.classification is AgentAutonomyActionClass.PROHIBITED
 
 

@@ -103,6 +103,7 @@ def test_active_roadmap_checklist_freezes_post_br1_autonomy_scope() -> None:
     assert "### M3.5-AUT-POLICY contract closure" in roadmap
     assert "A new Controller action cannot inherit autonomous eligibility" in roadmap
     assert "executable: false" in roadmap
+    assert "A serialized decision is only a non-authoritative projection" in roadmap
 
     expected_items = (
         "M3.5-BR1",

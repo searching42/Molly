@@ -203,6 +203,9 @@ The completed policy is a derived eligibility projection, not a new authority. I
 decision is recomputable from the current verified Controller inspection and binds
 the Controller execution ID/digest, inspection digest, exact action, policy
 version/digest, canonical reason codes, and `executable: false`.
+A serialized decision is only a non-authoritative projection; any consumer must
+recompute and exact-verify it against the current typed inspection before using
+its eligibility.
 
 The typed Controller action roster is reviewed explicitly. The current v1 policy
 allows only the reviewed deterministic action classes to be eligible for

@@ -44,6 +44,10 @@ class AutonomyPolicyInputError(ValueError):
     """Privacy-safe fail-closed error for an untyped policy input."""
 
 
+class AutonomyPolicyVerificationError(AutonomyPolicyInputError):
+    """A serialized policy projection did not match current recomputation."""
+
+
 # This is intentionally a literal roster rather than a projection of the
 # Controller boundary class.  A newly added Controller action must be reviewed
 # here before it can receive any autonomous eligibility.
@@ -146,7 +150,8 @@ AUTONOMY_POLICY_MATERIAL: dict[str, Any] = {
         for action in sorted(AgentHarnessControllerAction, key=lambda item: item.value)
     },
     "reason_codes": list(AGENT_AUTONOMY_REASON_CODES),
-    "unknown_action_policy": "prohibited_or_fail_closed",
+    "typed_controller_action_required": True,
+    "unknown_action_policy": "untrusted_raw_tokens_prohibited_or_fail_closed",
     "decision_policy": {
         "executable": False,
         "recompute_against_current_inspection": True,
@@ -199,45 +204,56 @@ def _build_decision(
 
 
 def classify_controller_action(
-    action: AgentHarnessControllerAction | str,
+    action: AgentHarnessControllerAction,
     *,
     controller_execution_id: str,
     controller_execution_digest: str,
     inspection_digest: str,
 ) -> AgentAutonomyPolicyDecision:
-    """Classify one exact Controller action without performing any effect.
+    """Classify one typed exact Controller action without performing any effect."""
 
-    Unknown safe tokens are represented as ``PROHIBITED``.  Untyped or unsafe
-    inputs raise ``AutonomyPolicyInputError`` instead of receiving a default.
-    """
-
-    if isinstance(action, AgentHarnessControllerAction):
-        controller_action = action.value
-        classification = _AUTONOMY_CLASS_BY_CONTROLLER_ACTION[action]
-        reason_codes = _REASON_CODES_BY_CONTROLLER_ACTION[action]
-    else:
-        controller_action = _safe_action_token(action)
-        try:
-            typed_action = AgentHarnessControllerAction(controller_action)
-        except ValueError:
-            return _build_decision(
-                controller_action=controller_action,
-                classification=AgentAutonomyActionClass.PROHIBITED,
-                reason_codes=("AUTONOMY_ACTION_UNRECOGNIZED",),
-                controller_execution_id=controller_execution_id,
-                controller_execution_digest=controller_execution_digest,
-                inspection_digest=inspection_digest,
-            )
-        classification = _AUTONOMY_CLASS_BY_CONTROLLER_ACTION[typed_action]
-        reason_codes = _REASON_CODES_BY_CONTROLLER_ACTION[typed_action]
-
+    if not isinstance(action, AgentHarnessControllerAction):
+        raise AutonomyPolicyInputError(
+            "autonomy policy requires a typed Controller action"
+        )
     return _build_decision(
-        controller_action=controller_action,
-        classification=classification,
-        reason_codes=reason_codes,
+        controller_action=action.value,
+        classification=_AUTONOMY_CLASS_BY_CONTROLLER_ACTION[action],
+        reason_codes=_REASON_CODES_BY_CONTROLLER_ACTION[action],
         controller_execution_id=controller_execution_id,
         controller_execution_digest=controller_execution_digest,
         inspection_digest=inspection_digest,
+    )
+
+
+def classify_untrusted_action_token(
+    token: str,
+    *,
+    controller_execution_id: str,
+    controller_execution_digest: str,
+    inspection_digest: str,
+) -> AgentAutonomyPolicyDecision:
+    """Classify an untrusted token without ever granting autonomous eligibility.
+
+    A safe unknown token becomes a prohibited projection.  A raw token that
+    names a known Controller action, or an unsafe token, fails closed instead
+    of being coerced into the typed action surface.
+    """
+
+    action_token = _safe_action_token(token)
+    try:
+        AgentHarnessControllerAction(action_token)
+    except ValueError:
+        return _build_decision(
+            controller_action=action_token,
+            classification=AgentAutonomyActionClass.PROHIBITED,
+            reason_codes=("AUTONOMY_ACTION_UNRECOGNIZED",),
+            controller_execution_id=controller_execution_id,
+            controller_execution_digest=controller_execution_digest,
+            inspection_digest=inspection_digest,
+        )
+    raise AutonomyPolicyInputError(
+        "a raw token naming a Controller action cannot receive autonomous eligibility"
     )
 
 
@@ -258,6 +274,32 @@ def classify_current_controller_inspection(
     )
 
 
+def verify_autonomy_policy_decision(
+    *,
+    inspection: AgentHarnessControllerInspection,
+    decision: AgentAutonomyPolicyDecision,
+) -> AgentAutonomyPolicyDecision:
+    """Recompute and exact-compare a projection against current inspection.
+
+    A structurally valid serialized decision is not trusted eligibility.  The
+    returned object is the canonical recomputation only after every serialized
+    field, including policy identity and decision digest, matches exactly.
+    """
+
+    if not isinstance(inspection, AgentHarnessControllerInspection) or not isinstance(
+        decision, AgentAutonomyPolicyDecision
+    ):
+        raise AutonomyPolicyVerificationError(
+            "autonomy policy verification requires typed inspection and decision"
+        )
+    expected = classify_current_controller_inspection(inspection)
+    if decision.model_dump(mode="json") != expected.model_dump(mode="json"):
+        raise AutonomyPolicyVerificationError(
+            "autonomy policy decision does not match current inspection"
+        )
+    return expected
+
+
 __all__ = [
     "AUTONOMY_MATERIAL_CHANGE_DIMENSIONS",
     "AUTONOMY_POLICY_DIGEST",
@@ -265,6 +307,9 @@ __all__ = [
     "AUTONOMY_POLICY_SCHEMA_VERSION",
     "AUTONOMY_POLICY_VERSION",
     "AutonomyPolicyInputError",
+    "AutonomyPolicyVerificationError",
     "classify_controller_action",
     "classify_current_controller_inspection",
+    "classify_untrusted_action_token",
+    "verify_autonomy_policy_decision",
 ]
